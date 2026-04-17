@@ -323,6 +323,14 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 		}
 	}
 
+	async openOmniWindow(windowId: number | undefined): Promise<void> {
+		await this.windowsMainService.openOmniWindow({
+			context: OpenContext.API,
+			contextWindowId: windowId,
+			cli: this.environmentMainService.args
+		});
+	}
+
 	async isFullScreen(windowId: number | undefined, options?: INativeHostOptions): Promise<boolean> {
 		const window = this.windowById(options?.targetWindowId, windowId);
 		return window?.isFullScreen ?? false;

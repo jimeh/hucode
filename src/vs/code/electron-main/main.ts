@@ -255,7 +255,9 @@ class CodeMain {
 		// Protocol (instantiated early and not using sync descriptor for security reasons)
 		services.set(IProtocolMainService, new ProtocolMainService(environmentMainService, userDataProfilesMainService, logService));
 
-		return [new InstantiationService(services, true), instanceEnvironment, environmentMainService, configurationService, stateService, bufferLogger, productService, userDataProfilesMainService];
+		const instantiationService = new InstantiationService(services, true);
+
+		return [instantiationService, instanceEnvironment, environmentMainService, configurationService, stateService, bufferLogger, productService, userDataProfilesMainService];
 	}
 
 	private patchEnvironment(environmentMainService: IEnvironmentMainService): IProcessEnvironment {

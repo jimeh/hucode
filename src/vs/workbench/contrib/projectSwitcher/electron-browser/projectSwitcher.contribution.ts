@@ -4,8 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/projectSwitcher.css';
+import * as dom from '../../../../base/browser/dom.js';
 import { $, append } from '../../../../base/browser/dom.js';
-import { IAction, Separator, toAction } from
+import { getZoomFactor } from '../../../../base/browser/browser.js';
+import { IMouseEvent } from '../../../../base/browser/mouseEvent.js';
+import {
+	IContextMenuItem,
+	IPopupOptions,
+} from '../../../../base/parts/contextmenu/common/contextmenu.js';
+import { popup } from
+	'../../../../base/parts/contextmenu/electron-browser/contextmenu.js';
+import { IAction, Separator, SubmenuAction, toAction } from
 	'../../../../base/common/actions.js';
 import {
 	IListVirtualDelegate,
@@ -74,6 +83,11 @@ import { ViewPaneContainer } from
 import { IViewletViewOptions } from
 	'../../../browser/parts/views/viewsViewlet.js';
 import {
+	IWorkbenchContribution,
+	registerWorkbenchContribution2,
+	WorkbenchPhase,
+} from '../../../common/contributions.js';
+import {
 	Extensions as ViewExtensions,
 	IViewContainersRegistry,
 	IViewDescriptor,
@@ -85,6 +99,8 @@ import {
 	ViewContainerLocation,
 } from '../../../common/views.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { INativeWorkbenchEnvironmentService } from
+	'../../../services/environment/electron-browser/environmentService.js';
 import { IWorkspaceContextService, WorkbenchState } from
 	'../../../../platform/workspace/common/workspace.js';
 import { ICommandService } from
@@ -96,8 +112,8 @@ import {
 	WorktreeRecord,
 } from '../../../../platform/projectManager/common/projectManager.js';
 
-const PROJECT_SWITCHER_CONTAINER_ID = 'workbench.hucode.projectSwitcher';
-const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
+export const PROJECT_SWITCHER_CONTAINER_ID = 'workbench.hucode.projectSwitcher';
+export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
 const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
 const OPEN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.openProject';
@@ -167,9 +183,11 @@ function encodeWorktreeHandle(projectId: string, worktreePath: string): string {
 function getTreeItemHandle(
 	arg?: TreeViewItemHandleArg | TreeViewPaneHandleArg
 ): string | undefined {
-	return arg && hasKey(arg, '$treeItemHandle')
-		? arg.$treeItemHandle
-		: undefined;
+	if (!arg || !hasKey(arg, { $treeItemHandle: true })) {
+		return undefined;
+	}
+
+	return arg.$treeItemHandle;
 }
 
 function parseProjectHandle(handle: string | undefined): string | undefined {
@@ -229,6 +247,11 @@ interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
 
 interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
 	readonly kind: 'separator';
+}
+
+export interface IProjectSwitcherSelectionTarget {
+	readonly projectId: string;
+	readonly worktreePath: string;
 }
 
 type ProjectSwitcherItem =
@@ -706,6 +729,8 @@ class ProjectSwitcherViewPane extends ViewPane {
 		private readonly commandService: ICommandService,
 		@IStorageService
 		private readonly storageService: IStorageService,
+		@INativeWorkbenchEnvironmentService
+		private readonly environmentService: INativeWorkbenchEnvironmentService,
 	) {
 		super(
 			{
@@ -821,6 +846,24 @@ class ProjectSwitcherViewPane extends ViewPane {
 	override focus(): void {
 		super.focus();
 		this.tree?.domFocus();
+	}
+
+	getSelectionTarget(): IProjectSwitcherSelectionTarget | undefined {
+		const item = this.tree?.getFocus()[0] ?? this.tree?.getSelection()[0] ?? undefined;
+		if (isWorktreeItem(item)) {
+			return {
+				projectId: item.projectId,
+				worktreePath: item.worktreePath,
+			};
+		}
+
+		if (isProjectItem(item)) {
+			return this.getProjectSelectionTarget(item.projectId);
+		}
+
+		return this.projects[0]
+			? this.getProjectSelectionTarget(this.projects[0].id)
+			: undefined;
 	}
 
 	collapseAll(): void {
@@ -975,6 +1018,28 @@ class ProjectSwitcherViewPane extends ViewPane {
 		return { element: item };
 	}
 
+	private getProjectSelectionTarget(
+		projectId: string
+	): IProjectSwitcherSelectionTarget | undefined {
+		const project = this.projects.find(entry => entry.id === projectId);
+		if (!project) {
+			return undefined;
+		}
+
+		const worktree = project.worktrees.find(entry =>
+			project.lastActiveWorktreePath !== undefined &&
+			pathsEqual(entry.path, project.lastActiveWorktreePath)
+		) ?? project.worktrees.find(entry => entry.isMain) ?? project.worktrees[0];
+		if (!worktree) {
+			return undefined;
+		}
+
+		return {
+			projectId,
+			worktreePath: worktree.path,
+		};
+	}
+
 	private updateItemContext(): void {
 		const item = this.tree?.getFocus()[0] ?? this.tree?.getSelection()[0];
 		this.viewItemContext?.set(item?.contextValue ?? '');
@@ -983,6 +1048,13 @@ class ProjectSwitcherViewPane extends ViewPane {
 	private async onDidOpenItem(
 		item: ProjectSwitcherItem | undefined
 	): Promise<void> {
+		if (this.environmentService.isOmniWindow) {
+			await this.commandService.executeCommand(
+				'workbench.action.omniWindow.openSelectedInOmniWindow'
+			);
+			return;
+		}
+
 		if (isProjectItem(item)) {
 			await this.commandService.executeCommand(
 				OPEN_PROJECT_COMMAND_ID,
@@ -1019,6 +1091,11 @@ class ProjectSwitcherViewPane extends ViewPane {
 			return;
 		}
 
+		if (this.environmentService.isOmniWindow) {
+			this.showNativeContextMenu(event, actions);
+			return;
+		}
+
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => event.anchor,
 			getActions: () => actions,
@@ -1028,6 +1105,75 @@ class ProjectSwitcherViewPane extends ViewPane {
 				}
 			},
 		});
+	}
+
+	private showNativeContextMenu(
+		event: ITreeContextMenuEvent<ProjectSwitcherItem | null>,
+		actions: readonly IAction[]
+	): void {
+		const items = this.toNativeContextMenuItems(actions);
+		if (!items.length) {
+			return;
+		}
+
+		popup(
+			items,
+			this.getNativeContextMenuPopupOptions(event.anchor),
+			() => dom.ModifierKeyEmitter.getInstance().resetKeyStatus()
+		);
+	}
+
+	private toNativeContextMenuItems(
+		actions: readonly IAction[]
+	): IContextMenuItem[] {
+		const items: IContextMenuItem[] = [];
+
+		for (const action of actions) {
+			if (action instanceof Separator) {
+				items.push({ type: 'separator' });
+				continue;
+			}
+
+			if (action instanceof SubmenuAction) {
+				items.push({
+					label: action.label,
+					submenu: this.toNativeContextMenuItems(action.actions),
+				});
+				continue;
+			}
+
+			items.push({
+				label: action.label,
+				enabled: action.enabled,
+				checked: action.checked,
+				type: action.checked ? 'checkbox' : undefined,
+				click: () => void action.run(),
+			});
+		}
+
+		return items;
+	}
+
+	private getNativeContextMenuPopupOptions(
+		anchor: HTMLElement | IMouseEvent
+	): IPopupOptions | undefined {
+		if (dom.isHTMLElement(anchor)) {
+			const targetWindow = dom.getWindow(anchor);
+			const clientRect = anchor.getBoundingClientRect();
+			const zoom = getZoomFactor(targetWindow) *
+				dom.getDomNodeZoomLevel(anchor);
+
+			return {
+				x: Math.floor(clientRect.left * zoom),
+				y: Math.floor(clientRect.bottom * zoom),
+			};
+		}
+
+		const zoom = getZoomFactor(dom.getActiveWindow());
+		return {
+			x: Math.floor(anchor.posx * zoom),
+			y: Math.floor(anchor.posy * zoom),
+		};
 	}
 
 	private getContextActions(item: ProjectSwitcherItem): IAction[] {
@@ -1259,14 +1405,53 @@ class ProjectSwitcherViewPane extends ViewPane {
 	}
 }
 
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
+const PROJECT_SWITCHER_VIEW_DESCRIPTOR: IViewDescriptor = {
 	id: PROJECT_SWITCHER_VIEW_ID,
 	name: localize2('hucodeProjectSwitcher', 'Projects'),
 	ctorDescriptor: new SyncDescriptor(ProjectSwitcherViewPane),
 	canToggleVisibility: true,
 	canMoveView: true,
 	collapsed: false,
-} satisfies IViewDescriptor], VIEW_CONTAINER);
+};
+
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
+	[PROJECT_SWITCHER_VIEW_DESCRIPTOR],
+	VIEW_CONTAINER
+);
+
+class HostedOmniProjectSwitcherVisibilityContribution
+	implements IWorkbenchContribution {
+	static readonly ID =
+		'workbench.contrib.hucode.hostedOmniProjectSwitcherVisibility';
+
+	constructor(
+		@INativeWorkbenchEnvironmentService
+		environmentService: INativeWorkbenchEnvironmentService,
+	) {
+		if (!environmentService.isHostedOmniWorkspace) {
+			return;
+		}
+
+		const viewsRegistry = Registry.as<IViewsRegistry>(
+			ViewExtensions.ViewsRegistry
+		);
+		const viewContainersRegistry = Registry.as<IViewContainersRegistry>(
+			ViewExtensions.ViewContainersRegistry
+		);
+
+		viewsRegistry.deregisterViews(
+			[PROJECT_SWITCHER_VIEW_DESCRIPTOR],
+			VIEW_CONTAINER
+		);
+		viewContainersRegistry.deregisterViewContainer(VIEW_CONTAINER);
+	}
+}
+
+registerWorkbenchContribution2(
+	HostedOmniProjectSwitcherVisibilityContribution.ID,
+	HostedOmniProjectSwitcherVisibilityContribution,
+	WorkbenchPhase.BlockStartup
+);
 
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViewWelcomeContent(
 	PROJECT_SWITCHER_VIEW_ID,
@@ -1320,6 +1505,12 @@ registerAction2(class extends Action2 {
 		}
 	}
 });
+
+export function getSelectedProjectSwitcherTarget():
+	| IProjectSwitcherSelectionTarget
+	| undefined {
+	return currentProjectSwitcherViewPane?.getSelectionTarget();
+}
 
 registerAction2(class extends Action2 {
 	constructor() {

@@ -43,6 +43,9 @@ import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
 import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
 import { PROJECT_MANAGER_CHANNEL_NAME } from '../../platform/projectManager/common/projectManager.js';
+import { HUCODE_SHELL_CHANNEL_NAME } from '../../hucode/common/omniWindow.js';
+import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
+import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { isLaunchedFromCli } from '../../platform/environment/node/argvHelper.js';
@@ -163,6 +166,7 @@ export class CodeApplication extends Disposable {
 	private windowsMainService: IWindowsMainService | undefined;
 	private auxiliaryWindowsMainService: IAuxiliaryWindowsMainService | undefined;
 	private nativeHostMainService: INativeHostMainService | undefined;
+	private hucodeShellMainService: IHucodeShellMainService | undefined;
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -269,6 +273,18 @@ export class CodeApplication extends Disposable {
 				}
 			}
 
+			const webContentsId = (
+				details as Electron.OnBeforeRequestListenerDetails & {
+					readonly webContentsId?: number;
+				}
+			).webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
+			}
+
 			return false;
 		};
 
@@ -289,6 +305,18 @@ export class CodeApplication extends Disposable {
 						return true;
 					}
 				}
+			}
+
+			const webContentsId = (
+				details as Electron.OnBeforeRequestListenerDetails & {
+					readonly webContentsId?: number;
+				}
+			).webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
 			}
 
 			return false;
@@ -658,6 +686,7 @@ export class CodeApplication extends Disposable {
 
 	private async setupProtocolUrlHandlers(accessor: ServicesAccessor, mainProcessElectronServer: ElectronIPCServer): Promise<IInitialProtocolUrls | undefined> {
 		const windowsMainService = this.windowsMainService = accessor.get(IWindowsMainService);
+		this.hucodeShellMainService = accessor.get(IHucodeShellMainService);
 		const urlService = accessor.get(IURLService);
 		const nativeHostMainService = this.nativeHostMainService = accessor.get(INativeHostMainService);
 		const dialogMainService = accessor.get(IDialogMainService);
@@ -1079,6 +1108,7 @@ export class CodeApplication extends Disposable {
 		// Windows
 		services.set(IWindowsMainService, new SyncDescriptor(WindowsMainService, [machineId, sqmId, devDeviceId, this.userEnv], false));
 		services.set(IAuxiliaryWindowsMainService, new SyncDescriptor(AuxiliaryWindowsMainService, undefined, false));
+		services.set(IHucodeShellMainService, new SyncDescriptor(HucodeShellMainService, undefined, false));
 
 		// Dialogs
 		const dialogMainService = new DialogMainService(this.logService, this.productService);
@@ -1312,6 +1342,16 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel(
 			PROJECT_MANAGER_CHANNEL_NAME,
 			projectManagerChannel
+		);
+
+		// Hucode Omni Shell
+		const hucodeShellChannel = ProxyChannel.fromService(
+			accessor.get(IHucodeShellMainService),
+			disposables
+		);
+		mainProcessElectronServer.registerChannel(
+			HUCODE_SHELL_CHANNEL_NAME,
+			hucodeShellChannel
 		);
 
 		// Signing
