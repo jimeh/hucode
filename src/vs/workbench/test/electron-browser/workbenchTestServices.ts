@@ -104,6 +104,7 @@ export class TestNativeHostService implements INativeHostService {
 	}
 
 	async openAgentsWindow(): Promise<void> { }
+	async openOmniWindow(): Promise<void> { }
 
 	async toggleFullScreen(): Promise<void> { }
 	async isMaximized(): Promise<boolean> { return true; }

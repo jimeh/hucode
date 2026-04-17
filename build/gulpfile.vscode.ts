@@ -68,6 +68,7 @@ const vscodeResourceIncludes = [
 	// Workbench
 	'out-build/vs/code/electron-browser/workbench/workbench.html',
 	'out-build/vs/sessions/electron-browser/sessions.html',
+	'out-build/vs/hucode/electron-browser/omni.html',
 
 	// Electron Preload
 	'out-build/vs/base/parts/sandbox/electron-browser/preload.js',
@@ -338,7 +339,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			'vs/sessions/sessions.desktop.main.js',
 			'vs/sessions/sessions.desktop.main.css',
 			'vs/sessions/electron-browser/sessions.html',
-			'vs/sessions/electron-browser/sessions.js'
+			'vs/sessions/electron-browser/sessions.js',
+			'vs/hucode/omni.desktop.main.js',
+			'vs/hucode/omni.desktop.main.css',
+			'vs/hucode/electron-browser/omni.html',
+			'vs/hucode/electron-browser/omni.js'
 		]);
 
 		const src = gulp.src(out + '/**', { base: '.' })

@@ -35,6 +35,28 @@ export interface IRectangle extends IPoint {
 	readonly height: number;
 }
 
+export interface IWindowRendererReplyTarget {
+	readonly kind: 'window';
+	readonly windowId: number;
+}
+
+export interface IWebContentsRendererReplyTarget {
+	readonly kind: 'webContents';
+	readonly webContentsId: number;
+	readonly ownerWindowId: number;
+}
+
+export type IRendererReplyTarget =
+	| IWindowRendererReplyTarget
+	| IWebContentsRendererReplyTarget;
+
+export interface IOmniWorkspaceRestoreEntry {
+	readonly projectId?: string;
+	readonly worktreePath: string;
+	readonly lastActiveAt?: number;
+	readonly state?: 'active' | 'loaded';
+}
+
 export interface IBaseOpenWindowsOptions {
 
 	/**
@@ -467,6 +489,12 @@ export interface INativeWindowConfiguration extends IWindowConfiguration, Native
 	policiesData?: IStringDictionary<{ definition: PolicyDefinition; value: PolicyValue }>;
 
 	isSessionsWindow?: boolean;
+	isOmniWindow?: boolean;
+	isHostedOmniWorkspace?: boolean;
+	hostedWebContentsId?: number;
+	hostedInstanceId?: string;
+	omniActiveWorktreePath?: string;
+	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
 }
 
 /**

@@ -8,7 +8,7 @@ import { IWindowOpenable } from '../../../platform/window/common/window.js';
 import { IDialogService } from '../../../platform/dialogs/common/dialogs.js';
 import { MenuRegistry, MenuId, Action2, registerAction2 } from '../../../platform/actions/common/actions.js';
 import { KeyChord, KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
-import { IsMainWindowFullscreenContext, IsSessionsWindowContext } from '../../common/contextkeys.js';
+import { IsMainWindowFullscreenContext, IsOmniWindowContext, IsSessionsWindowContext } from '../../common/contextkeys.js';
 import { IsMacNativeContext, IsDevelopmentContext, IsWebContext, IsIOSContext } from '../../../platform/contextkey/common/contextkeys.js';
 import { Categories } from '../../../platform/action/common/actionCommonCategories.js';
 import { KeybindingsRegistry, KeybindingWeight } from '../../../platform/keybinding/common/keybindingsRegistry.js';
@@ -35,6 +35,7 @@ import { IConfigurationService } from '../../../platform/configuration/common/co
 import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
 import { isFolderBackupInfo, isWorkspaceBackupInfo } from '../../../platform/backup/common/backup.js';
 import { getActiveElement, getActiveWindow, isHTMLElement } from '../../../base/browser/dom.js';
+import { INativeHostService } from '../../../platform/native/common/native.js';
 
 export const inRecentFilesPickerContextKey = 'inRecentFilesPicker';
 
@@ -444,6 +445,41 @@ class NewWindowAction extends Action2 {
 	}
 }
 
+class NewOmniWindowAction extends Action2 {
+
+	constructor() {
+		super({
+			id: 'workbench.action.newOmniWindow',
+			title: {
+				...localize2('newOmniWindow', 'New Omni-Window'),
+				mnemonicTitle: localize(
+					{ key: 'miNewOmniWindow', comment: ['&& denotes a mnemonic'] },
+					'New O&&mni-Window'
+				),
+			},
+			f1: true,
+			precondition: ContextKeyExpr.and(
+				IsSessionsWindowContext.negate(),
+				IsOmniWindowContext.negate(),
+				IsMacNativeContext
+			),
+			menu: {
+				id: MenuId.MenubarFileMenu,
+				group: '1_new',
+				order: 5,
+				when: ContextKeyExpr.and(
+					IsSessionsWindowContext.negate(),
+					IsMacNativeContext
+				)
+			}
+		});
+	}
+
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(INativeHostService).openOmniWindow();
+	}
+}
+
 class BlurAction extends Action2 {
 
 	constructor() {
@@ -464,6 +500,7 @@ class BlurAction extends Action2 {
 // --- Actions Registration
 
 registerAction2(NewWindowAction);
+registerAction2(NewOmniWindowAction);
 registerAction2(ToggleFullScreenAction);
 registerAction2(QuickPickRecentAction);
 registerAction2(OpenRecentAction);

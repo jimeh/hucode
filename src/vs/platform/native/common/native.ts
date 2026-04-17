@@ -130,6 +130,7 @@ export interface ICommonNativeHostService {
 	openWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void>;
 
 	openAgentsWindow(): Promise<void>;
+	openOmniWindow(): Promise<void>;
 
 	isFullScreen(options?: INativeHostOptions): Promise<boolean>;
 	toggleFullScreen(options?: INativeHostOptions): Promise<void>;
