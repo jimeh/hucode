@@ -1,0 +1,260 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as cp from 'child_process';
+import { promises as fs } from 'fs';
+import { basename, dirname, join } from '../../../base/common/path.js';
+import { isEqual } from '../../../base/common/extpath.js';
+import { isLinux } from '../../../base/common/platform.js';
+import { ILogService } from '../../log/common/log.js';
+import { WorktreeRecord } from '../common/projectManager.js';
+
+type ExecGitResult = {
+	readonly stdout: string;
+	readonly stderr: string;
+};
+
+export type ExecGitFn = (
+	args: readonly string[],
+	cwd: string
+) => Promise<ExecGitResult>;
+
+export type PathExistsFn = (path: string) => Promise<boolean>;
+export type EnsureDirFn = (path: string) => Promise<void>;
+
+export class GitCommandError extends Error {
+	constructor(
+		message: string,
+		readonly stderr: string
+	) {
+		super(message);
+	}
+}
+
+/**
+ * Thin main-process git wrapper for Hucode project/worktree flows.
+ */
+export class GitWorktreeService {
+
+	constructor(
+		@ILogService private readonly logService: ILogService,
+		private readonly execGit: ExecGitFn = (args, cwd) =>
+			GitWorktreeService.execGit(args, cwd),
+		private readonly pathExists: PathExistsFn = path =>
+			GitWorktreeService.pathExists(path),
+		private readonly ensureDir: EnsureDirFn = path =>
+			GitWorktreeService.ensureDir(path),
+	) {
+	}
+
+	async resolveProjectRoot(cwd: string): Promise<string> {
+		const topLevel = (await this.runGit(
+			['rev-parse', '--show-toplevel'],
+			cwd
+		)).stdout.trim();
+		const commonDir = (await this.runGit(
+			['rev-parse', '--path-format=absolute', '--git-common-dir'],
+			cwd
+		)).stdout.trim();
+
+		if (basename(commonDir) === '.git') {
+			return dirname(commonDir);
+		}
+
+		return topLevel;
+	}
+
+	async listWorktrees(projectRoot: string): Promise<readonly WorktreeRecord[]> {
+		const result = await this.runGit(
+			['worktree', 'list', '--porcelain'],
+			projectRoot
+		);
+
+		return GitWorktreeService.parseWorktreeList(
+			projectRoot,
+			result.stdout
+		);
+	}
+
+	async createWorktree(
+		projectRoot: string,
+		options: { branchName: string; startPoint?: string; path?: string },
+		existingPaths: readonly string[],
+	): Promise<string> {
+		const branchName = options.branchName.trim();
+		const startPoint = options.startPoint?.trim() || 'HEAD';
+		const branchSlug = GitWorktreeService.sanitizeBranchName(branchName);
+		const defaultBasePath = join(
+			dirname(projectRoot),
+			`${basename(projectRoot)}.worktrees`,
+			branchSlug
+		);
+		const requestedPath = options.path?.trim() || defaultBasePath;
+		const worktreePath = await this.ensureUniquePath(
+			requestedPath,
+			existingPaths
+		);
+
+		await this.ensureDir(dirname(worktreePath));
+		await this.runGit(
+			['worktree', 'add', '-b', branchName, worktreePath, startPoint],
+			projectRoot
+		);
+
+		return worktreePath;
+	}
+
+	async removeWorktree(
+		projectRoot: string,
+		worktreePath: string
+	): Promise<void> {
+		await this.runGit(
+			['worktree', 'remove', worktreePath],
+			projectRoot
+		);
+	}
+
+	private async ensureUniquePath(
+		basePath: string,
+		existingPaths: readonly string[]
+	): Promise<string> {
+		if (!(await this.isPathTaken(basePath, existingPaths))) {
+			return basePath;
+		}
+
+		let counter = 2;
+		while (true) {
+			const candidate = `${basePath}-${counter++}`;
+			if (!(await this.isPathTaken(candidate, existingPaths))) {
+				return candidate;
+			}
+		}
+	}
+
+	private async isPathTaken(
+		targetPath: string,
+		existingPaths: readonly string[]
+	): Promise<boolean> {
+		if (existingPaths.some(path =>
+			GitWorktreeService.pathsEqual(path, targetPath)
+		)) {
+			return true;
+		}
+
+		return this.pathExists(targetPath);
+	}
+
+	private async runGit(
+		args: readonly string[],
+		cwd: string
+	): Promise<ExecGitResult> {
+		this.logService.trace(
+			`[GitWorktreeService] git ${args.join(' ')} (cwd: ${cwd})`
+		);
+
+		return this.execGit(args, cwd);
+	}
+
+	static parseWorktreeList(
+		projectRoot: string,
+		stdout: string
+	): readonly WorktreeRecord[] {
+		const entries: WorktreeRecord[] = [];
+		const blocks = stdout.trim()
+			? stdout.trim().split(/\n\n+/)
+			: [];
+
+		for (const block of blocks) {
+			let worktreePath: string | undefined;
+			let branch: string | undefined;
+			let isDetached = false;
+
+			for (const line of block.split('\n')) {
+				if (line.startsWith('worktree ')) {
+					worktreePath = line.slice('worktree '.length);
+				} else if (line.startsWith('branch ')) {
+					branch = line.slice('branch '.length)
+						.replace(/^refs\/heads\//, '');
+				} else if (line === 'detached') {
+					isDetached = true;
+				}
+			}
+
+			if (!worktreePath) {
+				continue;
+			}
+
+			const isMain = GitWorktreeService.pathsEqual(
+				worktreePath,
+				projectRoot
+			);
+			const label = branch || basename(worktreePath);
+			entries.push({
+				path: worktreePath,
+				label,
+				branch,
+				isMain,
+				isDetached,
+			});
+		}
+
+		return entries.sort((a, b) => {
+			if (a.isMain !== b.isMain) {
+				return a.isMain ? -1 : 1;
+			}
+
+			return a.label.localeCompare(b.label) ||
+				a.path.localeCompare(b.path);
+		});
+	}
+
+	static sanitizeBranchName(branchName: string): string {
+		const sanitized = branchName
+			.replace(/[\\/]/g, '-')
+			.replace(/[^A-Za-z0-9._-]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+
+		return sanitized || 'worktree';
+	}
+
+	private static execGit(
+		args: readonly string[],
+		cwd: string
+	): Promise<ExecGitResult> {
+		return new Promise((resolve, reject) => {
+			cp.execFile(
+				'git',
+				[...args],
+				{ cwd, encoding: 'utf8' },
+				(err, stdout, stderr) => {
+					if (err) {
+						const message = stderr.trim() || err.message;
+						reject(new GitCommandError(message, stderr));
+						return;
+					}
+
+					resolve({ stdout, stderr });
+				}
+			);
+		});
+	}
+
+	private static async pathExists(path: string): Promise<boolean> {
+		try {
+			await fs.access(path);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private static async ensureDir(path: string): Promise<void> {
+		await fs.mkdir(path, { recursive: true });
+	}
+
+	private static pathsEqual(pathA: string, pathB: string): boolean {
+		return isEqual(pathA, pathB, !isLinux);
+	}
+}

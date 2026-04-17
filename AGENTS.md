@@ -13,3 +13,6 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hucode product identity is applied through the tracked overlay under
   `build/hucode/mixin/stable/` and staged into the working tree only for
   Hucode-specific wrapper commands. Keep root `product.json` as upstream OSS.
+- Workbench `TreeView` selection/reveal paths operate on the live `ITreeItem`
+  instances in the tree model, not synthetic `{ handle }` placeholders. Cache
+  and reuse the provider-produced items when restoring selection.

@@ -96,6 +96,7 @@ import '../platform/agentHost/electron-browser/agentHostService.js';
 import './services/browserView/electron-browser/playwrightWorkbenchService.js';
 import './services/process/electron-browser/processService.js';
 import './services/power/electron-browser/powerService.js';
+import '../platform/projectManager/electron-browser/projectManagerService.js';
 
 import { registerSingleton } from '../platform/instantiation/common/extensions.js';
 import { IUserDataInitializationService, UserDataInitializationService } from './services/userData/browser/userDataInit.js';
@@ -180,6 +181,9 @@ import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 
 // Chat
 import './contrib/chat/electron-browser/chat.contribution.js';
+
+// Hucode Project Switcher
+import './contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
 
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';

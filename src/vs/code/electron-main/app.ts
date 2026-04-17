@@ -42,6 +42,8 @@ import { ipcBrowserViewChannelName } from '../../platform/browserView/common/bro
 import { ipcBrowserViewGroupChannelName } from '../../platform/browserView/common/browserViewGroup.js';
 import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/browserView/electron-main/browserViewMainService.js';
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
+import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import { PROJECT_MANAGER_CHANNEL_NAME } from '../../platform/projectManager/common/projectManager.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { isLaunchedFromCli } from '../../platform/environment/node/argvHelper.js';
@@ -1282,6 +1284,16 @@ export class CodeApplication extends Disposable {
 		const browserViewGroupChannel = ProxyChannel.fromService(accessor.get(IBrowserViewGroupMainService), disposables);
 		mainProcessElectronServer.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel);
 		sharedProcessClient.then(client => client.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel));
+
+		// Hucode Project Manager
+		const projectManagerChannel = ProxyChannel.fromService(
+			accessor.get(IProjectManagerMainService),
+			disposables
+		);
+		mainProcessElectronServer.registerChannel(
+			PROJECT_MANAGER_CHANNEL_NAME,
+			projectManagerChannel
+		);
 
 		// Signing
 		const signChannel = ProxyChannel.fromService(accessor.get(ISignService), disposables);
