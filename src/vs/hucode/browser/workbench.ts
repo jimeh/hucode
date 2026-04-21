@@ -61,6 +61,8 @@ import { IMarkdownRendererService } from '../../platform/markdown/browser/markdo
 import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import { TitleService } from './parts/titlebarPart.js';
+import { PROJECT_SWITCHER_CONTAINER_ID } from
+	'../../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
 
 //#region Workbench Options
 
@@ -628,9 +630,17 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 
 		for (const { location, visible } of partsToRestore) {
 			if (visible) {
-				const defaultViewContainer = this.viewDescriptorService.getDefaultViewContainer(location);
-				if (defaultViewContainer) {
-					this.paneCompositeService.openPaneComposite(defaultViewContainer.id, location);
+				const containerId =
+					location === ViewContainerLocation.Sidebar
+						? PROJECT_SWITCHER_CONTAINER_ID
+						: this.viewDescriptorService.getDefaultViewContainer(
+							location
+						)?.id;
+				if (containerId) {
+					this.paneCompositeService.openPaneComposite(
+						containerId,
+						location
+					);
 				}
 			}
 		}

@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for
- *  license information.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import './media/omniHost.css';
@@ -64,7 +63,6 @@ import { Codicon } from '../../base/common/codicons.js';
 import { INativeWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/electron-browser/environmentService.js';
 import {
-	PROJECT_SWITCHER_CONTAINER_ID,
 	PROJECT_SWITCHER_VIEW_ID,
 	getSelectedProjectSwitcherTarget,
 } from '../../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
@@ -383,7 +381,6 @@ class OmniWindowShellContribution extends Disposable
 				).then(() => undefined),
 		}));
 
-		void this.viewsService.openViewContainer(PROJECT_SWITCHER_CONTAINER_ID, false);
 	}
 }
 

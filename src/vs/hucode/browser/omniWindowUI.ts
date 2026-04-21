@@ -6,9 +6,14 @@
 import { IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { localize2 } from '../../nls.js';
 import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
+import type { IAction2Options } from '../../platform/actions/common/actions.js';
 import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
 import { createDecorator, ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { IsOmniWindowContext } from '../../workbench/common/contextkeys.js';
+import { IsDevelopmentContext } from '../../platform/contextkey/common/contextkeys.js';
+import { ContextKeyExpr } from '../../platform/contextkey/common/contextkey.js';
+import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
+import { KeybindingWeight } from '../../platform/keybinding/common/keybindingsRegistry.js';
 
 interface IHucodeOmniWindowUIDelegate {
 	focusProjectPane(): void;
@@ -86,12 +91,17 @@ registerSingleton(
 );
 
 abstract class BaseOmniWindowAction extends Action2 {
-	constructor(id: string, title: string) {
+	constructor(
+		id: string,
+		title: string,
+		keybinding?: IAction2Options['keybinding']
+	) {
 		super({
 			id,
 			title: localize2(id, title),
 			f1: true,
-			precondition: IsOmniWindowContext
+			precondition: IsOmniWindowContext,
+			keybinding
 		});
 	}
 }
@@ -152,7 +162,15 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.reloadWorkspace',
-			'Omni-Window: Reload Workspace'
+			'Omni-Window: Reload Workspace',
+			{
+				weight: KeybindingWeight.WorkbenchContrib + 50,
+				when: ContextKeyExpr.and(
+					IsDevelopmentContext,
+					IsOmniWindowContext
+				),
+				primary: KeyMod.CtrlCmd | KeyCode.KeyR
+			}
 		);
 	}
 

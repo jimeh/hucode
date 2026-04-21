@@ -53,3 +53,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - `getSingleFolderWorkspaceIdentifier()` returns `undefined` for local folders
   unless you pass a real `fs.Stats`. For hosted/local single-folder workspaces,
   resolve the stat first or the workbench will boot as "No Folder Opened".
+- Hosted Omni workspaces currently boot through
+  `vs/workbench/workbench.desktop.main.js`, not `vs/hucode/omni.desktop.main.js`.
+  Hosted-only commands or services must be imported into the standard desktop
+  workbench bundle if they need to appear inside the embedded workspace.
+- Omni sidebar startup should open `workbench.hucode.projectSwitcher`
+  directly. Restoring the generic default sidebar container can briefly render
+  Explorer/"No Folder Opened" before Projects replaces it.

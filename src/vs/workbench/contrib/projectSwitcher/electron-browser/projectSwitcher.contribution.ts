@@ -74,8 +74,12 @@ import { IQuickInputService } from
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from
 	'../../../../platform/theme/common/iconRegistry.js';
+import { asCssVariable } from
+	'../../../../platform/theme/common/colorUtils.js';
 import { IThemeService } from
 	'../../../../platform/theme/common/themeService.js';
+import { sessionsSidebarBackground } from
+	'../../../../hucode/common/theme.js';
 import { ViewPane, ViewPaneShowActions } from
 	'../../../browser/parts/views/viewPane.js';
 import { ViewPaneContainer } from
@@ -111,6 +115,10 @@ import {
 	ProjectRecord,
 	WorktreeRecord,
 } from '../../../../platform/projectManager/common/projectManager.js';
+import {
+	IHucodeHostedWorkspaceState,
+	IHucodeShellService,
+} from '../../../../hucode/common/omniWindow.js';
 
 export const PROJECT_SWITCHER_CONTAINER_ID = 'workbench.hucode.projectSwitcher';
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
@@ -124,6 +132,7 @@ const UNPIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.unpinProject';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const CREATE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.createWorktree';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
+const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
 const REFRESH_PROJECTS_COMMAND_ID = 'hucode.projectSwitcher.refresh';
 const COLLAPSE_ALL_PROJECTS_COMMAND_ID =
 	'hucode.projectSwitcher.collapseAll';
@@ -178,6 +187,17 @@ const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(
 
 function encodeWorktreeHandle(projectId: string, worktreePath: string): string {
 	return `worktree:${projectId}:${encodeURIComponent(worktreePath)}`;
+}
+
+function getWorktreeItemId(
+	projectId: string,
+	worktreePath: string,
+	hostedWorkbenchInstanceId?: string
+): string {
+	const handle = encodeWorktreeHandle(projectId, worktreePath);
+	return hostedWorkbenchInstanceId
+		? `${handle}:loaded:${hostedWorkbenchInstanceId}`
+		: `${handle}:idle`;
 }
 
 function getTreeItemHandle(
@@ -243,6 +263,8 @@ interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
 	readonly projectId: string;
 	readonly worktreePath: string;
 	readonly isMain: boolean;
+	readonly hostedWorkbenchInstanceId?: string;
+	readonly isActive: boolean;
 }
 
 interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
@@ -340,7 +362,7 @@ interface ProjectSwitcherTemplate {
 	readonly label: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
 	readonly action: HTMLButtonElement;
-	currentProject?: ProjectSwitcherProjectItem;
+	currentAction?: () => void;
 	readonly disposables: readonly (() => void)[];
 }
 
@@ -380,16 +402,7 @@ class ProjectSwitcherRenderer
 		};
 		const onClick = (event: MouseEvent) => {
 			stopPropagation(event);
-
-			const project = template.currentProject;
-			if (!project) {
-				return;
-			}
-
-			void this.commandService.executeCommand(
-				project.pinned ? UNPIN_PROJECT_COMMAND_ID : PIN_PROJECT_COMMAND_ID,
-				toHandleArg(project)
-			);
+			template.currentAction?.();
 		};
 		action.addEventListener('mousedown', stopPropagation);
 		action.addEventListener('dblclick', stopPropagation);
@@ -418,6 +431,10 @@ class ProjectSwitcherRenderer
 		templateData: ProjectSwitcherTemplate
 	): void {
 		const item = node.element;
+		const row = templateData.container.closest('.monaco-list-row');
+
+		row?.classList.remove('hucode-project-switcher-active-row');
+		row?.removeAttribute('aria-current');
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
@@ -429,7 +446,7 @@ class ProjectSwitcherRenderer
 		templateData.action.style.display = 'none';
 		templateData.action.title = '';
 		templateData.action.setAttribute('aria-label', '');
-		templateData.currentProject = undefined;
+		templateData.currentAction = undefined;
 
 		if (isSeparatorItem(item)) {
 			templateData.container.classList.add(
@@ -454,7 +471,62 @@ class ProjectSwitcherRenderer
 			templateData.action.classList.add(
 				...ThemeIcon.asClassNameArray(icon)
 			);
-			templateData.currentProject = item;
+			templateData.currentAction = () => {
+				void this.commandService.executeCommand(
+					item.pinned ? UNPIN_PROJECT_COMMAND_ID : PIN_PROJECT_COMMAND_ID,
+					toHandleArg(item)
+				);
+			};
+		}
+
+		if (isWorktreeItem(item)) {
+			if (item.isActive) {
+				row?.classList.add('hucode-project-switcher-active-row');
+				row?.setAttribute('aria-current', 'true');
+			}
+
+			if (item.hostedWorkbenchInstanceId) {
+				const label = localize('unloadWorkbenchButton', 'Unload');
+				templateData.container.classList.add(
+					'hucode-project-switcher-worktree-loaded'
+				);
+				templateData.action.style.display = '';
+				templateData.action.title = label;
+				templateData.action.setAttribute('aria-label', label);
+				templateData.action.classList.add(
+					...ThemeIcon.asClassNameArray(Codicon.chromeMinimize)
+				);
+				templateData.currentAction = () => {
+					void this.commandService.executeCommand(
+						UNLOAD_WORKTREE_COMMAND_ID,
+						toHandleArg(item)
+					);
+				};
+			} else {
+				templateData.container.classList.add(
+					'hucode-project-switcher-worktree-unloaded'
+				);
+				if (!item.isMain) {
+					const label = localize(
+						'removeWorktreeButton',
+						'Remove Worktree'
+					);
+					templateData.action.style.display = '';
+					templateData.action.title = label;
+					templateData.action.setAttribute('aria-label', label);
+					templateData.action.classList.add(
+						...ThemeIcon.asClassNameArray(Codicon.close)
+					);
+					templateData.currentAction = () => {
+						void this.commandService.executeCommand(
+							REMOVE_WORKTREE_COMMAND_ID,
+							toHandleArg(item)
+						);
+					};
+				}
+			}
+		} else {
+			templateData.container.removeAttribute('aria-current');
 		}
 
 		templateData.icon.style.display = '';
@@ -707,6 +779,9 @@ class ProjectSwitcherViewPane extends ViewPane {
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private collapsedProjectIds = new Set<string>();
+	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
+		instances: [],
+	};
 
 	constructor(
 		options: IViewletViewOptions,
@@ -731,6 +806,8 @@ class ProjectSwitcherViewPane extends ViewPane {
 		private readonly storageService: IStorageService,
 		@INativeWorkbenchEnvironmentService
 		private readonly environmentService: INativeWorkbenchEnvironmentService,
+		@IHucodeShellService
+		private readonly shellService: IHucodeShellService,
 	) {
 		super(
 			{
@@ -775,6 +852,15 @@ class ProjectSwitcherViewPane extends ViewPane {
 				this.layoutBody(this.bodyHeight, this.bodyWidth);
 			}
 		}));
+		if (this.environmentService.isOmniWindow) {
+			this._register(this.shellService.onDidChangeWindowState(change => {
+				if (change.windowId !== this.environmentService.window.id) {
+					return;
+				}
+
+				this.updateOmniHostedWorkspaceState(change.state);
+			}));
+		}
 	}
 
 	override shouldShowWelcome(): boolean {
@@ -802,11 +888,15 @@ class ProjectSwitcherViewPane extends ViewPane {
 				keyboardNavigationLabelProvider: {
 					getKeyboardNavigationLabel: item => item.label,
 				},
+				expandOnlyOnTwistieClick: true,
 				multipleSelectionSupport: false,
 				dnd: this.instantiationService.createInstance(
 					ProjectSwitcherDragAndDrop
 				),
-				overrideStyles: this.getLocationBasedColors().listOverrideStyles,
+				overrideStyles: {
+					...this.getLocationBasedColors().listOverrideStyles,
+					listBackground: asCssVariable(sessionsSidebarBackground),
+				},
 			}
 		));
 		this.viewItemContext = this.tree.contextKeyService.createKey(
@@ -834,6 +924,9 @@ class ProjectSwitcherViewPane extends ViewPane {
 		}));
 
 		void this.loadCachedProjects();
+		if (this.environmentService.isOmniWindow) {
+			void this.initializeOmniHostedWorkspaceState();
+		}
 	}
 
 	protected override layoutBody(height: number, width: number): void {
@@ -858,7 +951,15 @@ class ProjectSwitcherViewPane extends ViewPane {
 		}
 
 		if (isProjectItem(item)) {
+			if (this.environmentService.isOmniWindow) {
+				return undefined;
+			}
+
 			return this.getProjectSelectionTarget(item.projectId);
+		}
+
+		if (this.environmentService.isOmniWindow) {
+			return undefined;
 		}
 
 		return this.projects[0]
@@ -898,6 +999,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 	}
 
 	private async handleWorkspaceContextChange(): Promise<void> {
+		this.renderProjects(this.projects);
 		await this.syncCurrentWorkspace(this.projects);
 		await this.updateCurrentWorktreeSelection(this.projects);
 	}
@@ -909,6 +1011,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 		this.hasProjects = projects.length > 0;
 		this.itemsById = itemsById;
 		this.tree?.setChildren(null, roots);
+		this.tree?.rerender();
 
 		if (previousHasProjects !== this.hasProjects) {
 			this._onDidChangeViewWelcomeState.fire();
@@ -932,7 +1035,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 				label: localize('pinnedProjects', 'Pinned'),
 				contextValue: PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE,
 			};
-			itemsById.set(separator.id, separator);
+			itemsById.set(separator.handle, separator);
 			roots.push({ element: separator });
 
 			for (const project of pinnedProjects) {
@@ -948,7 +1051,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 				label: localize('unpinnedProjects', 'Unpinned'),
 				contextValue: PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE,
 			};
-			itemsById.set(separator.id, separator);
+			itemsById.set(separator.handle, separator);
 			roots.push({ element: separator });
 		}
 
@@ -978,9 +1081,9 @@ class ProjectSwitcherViewPane extends ViewPane {
 			contextValue: project.pinned
 				? PINNED_PROJECT_CONTEXT_VALUE
 				: PROJECT_CONTEXT_VALUE,
-			themeIcon: Codicon.repo,
+			themeIcon: Codicon.folder,
 		};
-		itemsById.set(item.id, item);
+		itemsById.set(item.handle, item);
 
 		return {
 			element: item,
@@ -997,24 +1100,34 @@ class ProjectSwitcherViewPane extends ViewPane {
 		worktree: WorktreeRecord,
 		itemsById: Map<string, ProjectSwitcherItem>
 	): IObjectTreeElement<ProjectSwitcherItem> {
+		const hostedWorkbenchInstanceId = this.getHostedWorkbenchInstanceId(
+			worktree.path
+		);
+		const isActive = this.isActiveWorktree(worktree.path);
 		const item: ProjectSwitcherWorktreeItem = {
-			id: encodeWorktreeHandle(project.id, worktree.path),
+			id: getWorktreeItemId(
+				project.id,
+				worktree.path,
+				hostedWorkbenchInstanceId
+			),
 			handle: encodeWorktreeHandle(project.id, worktree.path),
 			kind: 'worktree',
 			projectId: project.id,
 			worktreePath: worktree.path,
 			isMain: worktree.isMain,
-			label: worktree.label,
-			description: worktree.isMain
+			hostedWorkbenchInstanceId,
+			isActive,
+			label: worktree.isMain
 				? localize('mainWorktree', 'Main')
 				: basename(worktree.path),
+			description: worktree.label,
 			tooltip: worktree.path,
 			contextValue: worktree.isMain
 				? MAIN_WORKTREE_CONTEXT_VALUE
 				: WORKTREE_CONTEXT_VALUE,
 			themeIcon: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
 		};
-		itemsById.set(item.id, item);
+		itemsById.set(item.handle, item);
 		return { element: item };
 	}
 
@@ -1049,6 +1162,11 @@ class ProjectSwitcherViewPane extends ViewPane {
 		item: ProjectSwitcherItem | undefined
 	): Promise<void> {
 		if (this.environmentService.isOmniWindow) {
+			if (isProjectItem(item)) {
+				this.toggleProjectCollapsed(item);
+				return;
+			}
+
 			await this.commandService.executeCommand(
 				'workbench.action.omniWindow.openSelectedInOmniWindow'
 			);
@@ -1069,6 +1187,84 @@ class ProjectSwitcherViewPane extends ViewPane {
 				item.worktreePath
 			);
 		}
+	}
+
+	private async initializeOmniHostedWorkspaceState(): Promise<void> {
+		try {
+			this.updateOmniHostedWorkspaceState(
+				await this.shellService.getWindowState(
+					this.environmentService.window.id
+				)
+			);
+		} catch (error) {
+			this.notificationService.error(String(error));
+		}
+	}
+
+	private updateOmniHostedWorkspaceState(
+		state: IHucodeHostedWorkspaceState
+	): void {
+		this.omniHostedWorkspaceState = state;
+		if (!this.tree) {
+			return;
+		}
+
+		this.renderProjects(this.projects);
+		this.updateItemContext();
+	}
+
+	private getHostedWorkbenchInstanceId(
+		worktreePath: string
+	): string | undefined {
+		if (!this.environmentService.isOmniWindow) {
+			return undefined;
+		}
+
+		return this.omniHostedWorkspaceState.instances.find(instance =>
+			pathsEqual(instance.worktreePath, worktreePath)
+		)?.instanceId;
+	}
+
+	private isActiveWorktree(worktreePath: string): boolean {
+		const activeWorktreePath = this.getActiveWorktreePath();
+		return typeof activeWorktreePath === 'string' &&
+			pathsEqual(activeWorktreePath, worktreePath);
+	}
+
+	private getActiveWorktreePath(): string | undefined {
+		if (this.environmentService.isOmniWindow) {
+			const activeInstanceId = this.omniHostedWorkspaceState.activeInstanceId;
+			if (!activeInstanceId) {
+				return undefined;
+			}
+
+			return this.omniHostedWorkspaceState.instances.find(instance =>
+				instance.instanceId === activeInstanceId
+			)?.worktreePath;
+		}
+
+		if (this.workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
+			return undefined;
+		}
+
+		const folderUri = this.workspaceContextService.getWorkspace().folders[0]?.uri;
+		return folderUri?.scheme === 'file' ? folderUri.fsPath : undefined;
+	}
+
+	private toggleProjectCollapsed(item: ProjectSwitcherProjectItem): void {
+		if (!this.tree) {
+			return;
+		}
+
+		const collapsed = this.tree.isCollapsed(item);
+		if (collapsed) {
+			this.tree.expand(item);
+			this.setProjectCollapsed(item.projectId, false);
+			return;
+		}
+
+		this.tree.collapse(item);
+		this.setProjectCollapsed(item.projectId, true);
 	}
 
 	private onContextMenu(
@@ -1229,6 +1425,8 @@ class ProjectSwitcherViewPane extends ViewPane {
 
 		if (isWorktreeItem(item)) {
 			const worktreeHandle = toHandleArg(item);
+			const hostedWorkbenchInstanceId =
+				this.getHostedWorkbenchInstanceId(item.worktreePath);
 			const actions: IAction[] = [
 				toAction({
 					id: REFRESH_PROJECTS_COMMAND_ID,
@@ -1239,6 +1437,16 @@ class ProjectSwitcherViewPane extends ViewPane {
 					),
 				}),
 			];
+			if (hostedWorkbenchInstanceId) {
+				actions.push(toAction({
+					id: UNLOAD_WORKTREE_COMMAND_ID,
+					label: localize('unloadWorkbench', 'Unload'),
+					run: () => this.commandService.executeCommand(
+						UNLOAD_WORKTREE_COMMAND_ID,
+						worktreeHandle
+					),
+				}));
+			}
 			if (!item.isMain) {
 				actions.push(new Separator());
 				actions.push(toAction({
@@ -1929,6 +2137,54 @@ registerAction2(class extends Action2 {
 			await projectManagerService.removeWorktree(
 				parsed.projectId,
 				parsed.worktreePath
+			);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_WORKTREE_COMMAND_ID,
+			title: localize2('unloadWorkbench', 'Unload'),
+		});
+	}
+
+	async run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<void> {
+		const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+		if (!parsed) {
+			return;
+		}
+
+		const environmentService = accessor.get(
+			INativeWorkbenchEnvironmentService
+		);
+		if (!environmentService.isOmniWindow) {
+			return;
+		}
+
+		const shellService = accessor.get(IHucodeShellService);
+		const notificationService = accessor.get(INotificationService);
+
+		try {
+			const state = await shellService.getWindowState(
+				environmentService.window.id
+			);
+			const instance = state.instances.find(entry =>
+				pathsEqual(entry.worktreePath, parsed.worktreePath)
+			);
+			if (!instance) {
+				return;
+			}
+
+			await shellService.closeWorkspace(
+				environmentService.window.id,
+				instance.instanceId
 			);
 		} catch (error) {
 			notificationService.error(String(error));
