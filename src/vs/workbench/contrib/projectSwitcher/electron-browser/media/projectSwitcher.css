@@ -38,11 +38,40 @@
 	opacity: 0.7;
 }
 
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row {
+	background: var(--vscode-list-inactiveSelectionBackground) !important;
+	color: var(--vscode-list-inactiveSelectionForeground) !important;
+	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-label {
+	font-weight: 600;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-description {
+	opacity: 0.9;
+}
+
+.hucode-project-switcher-worktree-unloaded {
+	opacity: 0.66;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-worktree-unloaded {
+	opacity: 1;
+}
+
 .hucode-project-switcher-action-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	flex: 0 0 auto;
 	width: 18px;
 	height: 18px;
 	margin-left: auto;
+	margin-right: 6px;
 	padding: 0;
 	border: 0;
 	border-radius: 4px;
