@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for
- *  license information.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../nls.js';
@@ -139,6 +138,12 @@ import { SessionsWorkspaceContextService } from
 	'../../sessions/services/workspace/browser/workspaceContextService.js';
 import { getWorkspaceIdentifier } from
 	'../../workbench/services/workspaces/browser/workspaces.js';
+import {
+	HUCODE_SHELL_CHANNEL_NAME,
+	IHucodeShellService,
+} from '../common/omniWindow.js';
+import { ShutdownReason } from
+	'../../workbench/services/lifecycle/common/lifecycle.js';
 
 export class OmniMain extends Disposable {
 
@@ -197,7 +202,11 @@ export class OmniMain extends Disposable {
 			extraClasses: this.getExtraClasses(),
 		}, services.serviceCollection, services.logService);
 
-		this.registerListeners(workbench, services.storageService);
+		this.registerListeners(
+			workbench,
+			services.storageService,
+			services.shellService
+		);
 
 		const instantiationService = workbench.startup();
 
@@ -237,8 +246,25 @@ export class OmniMain extends Disposable {
 
 	private registerListeners(
 		workbench: OmniWorkbench,
-		storageService: NativeWorkbenchStorageService
+		storageService: NativeWorkbenchStorageService,
+		shellService?: IHucodeShellService
 	): void {
+		if (shellService) {
+			this._register(workbench.onWillShutdown(event => event.join(
+				shellService.shutdownWindowWorkspaces(
+					this.configuration.windowId,
+					event.reason as ShutdownReason
+				),
+				{
+					id: 'join.shutdownHostedOmniWorkspaces',
+					label: localize(
+						'join.shutdownHostedOmniWorkspaces',
+						'Saving hosted workspace state'
+					),
+				}
+			)));
+		}
+
 		this._register(workbench.onWillShutdown(event => event.join(
 			storageService.close(),
 			{
@@ -254,6 +280,7 @@ export class OmniMain extends Disposable {
 		logService: ILogService;
 		storageService: NativeWorkbenchStorageService;
 		configurationService: ConfigurationService;
+		shellService: IHucodeShellService;
 	}> {
 		const serviceCollection = new ServiceCollection();
 
@@ -355,6 +382,10 @@ export class OmniMain extends Disposable {
 			mainProcessService.getChannel('sign')
 		);
 		serviceCollection.set(ISignService, signService);
+
+		const shellService = ProxyChannel.toService<IHucodeShellService>(
+			mainProcessService.getChannel(HUCODE_SHELL_CHANNEL_NAME)
+		);
 
 		const fileService = this._register(new FileService(logService));
 		serviceCollection.set(IFileService, fileService);
@@ -511,6 +542,7 @@ export class OmniMain extends Disposable {
 			logService,
 			storageService,
 			configurationService,
+			shellService,
 		};
 	}
 

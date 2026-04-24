@@ -61,6 +61,7 @@ import { IMarkdownRendererService } from '../../platform/markdown/browser/markdo
 import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import { TitleService } from './parts/titlebarPart.js';
+import { OmniHostPart } from './parts/omniHostPart.js';
 import { PROJECT_SWITCHER_CONTAINER_ID } from
 	'../../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
 
@@ -258,6 +259,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private editorService!: IEditorService;
 	private paneCompositeService!: IPaneCompositePartService;
 	private viewDescriptorService!: IViewDescriptorService;
+	private omniHostPart!: OmniHostPart;
 
 	//#endregion
 
@@ -347,7 +349,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 				setBaseLayerHoverDelegate(hoverService);
 
 				// Layout
-				this.initLayout(accessor);
+				this.initLayout(accessor, instantiationService);
 
 				// Registries - this creates and registers all parts
 				Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).start(accessor);
@@ -625,7 +627,6 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			{ location: ViewContainerLocation.Sidebar, visible: this.partVisibility.sidebar },
 			{ location: ViewContainerLocation.Panel, visible: this.partVisibility.panel },
 			{ location: ViewContainerLocation.AuxiliaryBar, visible: this.partVisibility.auxiliaryBar },
-			{ location: ViewContainerLocation.ChatBar, visible: this.partVisibility.chatBar },
 		];
 
 		for (const { location, visible } of partsToRestore) {
@@ -650,7 +651,10 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 
 	//#region Initialization
 
-	initLayout(accessor: ServicesAccessor): void {
+	initLayout(
+		accessor: ServicesAccessor,
+		instantiationService: IInstantiationService
+	): void {
 		// Services - accessing these triggers their instantiation
 		// which creates and registers the parts
 		this.editorGroupService = accessor.get(IEditorGroupsService);
@@ -658,6 +662,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		this.paneCompositeService = accessor.get(IPaneCompositePartService);
 		this.viewDescriptorService = accessor.get(IViewDescriptorService);
 		accessor.get(ITitleService);
+		this.omniHostPart = instantiationService.createInstance(OmniHostPart);
 
 		// Register layout listeners
 		this.registerLayoutListeners();
@@ -785,8 +790,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	 * - Sidebar (left, spans full height from top to bottom)
 	 * - Right section (vertical):
 	 *   - Titlebar (top of right section)
-	 *   - Top right (horizontal): Chat Bar | Auxiliary Bar
-	 *   - Panel (below chat and auxiliary bar only)
+	 *   - Top right (horizontal): Workspace Host | Auxiliary Bar
+	 *   - Panel (below workspace host and auxiliary bar only)
 	 */
 	private createGridDescriptor(): ISerializedGrid {
 		const { width, height } = this._mainContainerDimension;
@@ -875,6 +880,15 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	//#region Layout Methods
 
 	layout(): void {
+		const previousContainerWidth = this._mainContainerDimension?.width ?? 0;
+		const shouldPreserveSidebarWidth =
+			!!this.workbenchGrid
+			&& this.partVisibility.sidebar
+			&& previousContainerWidth > 0;
+		const sidebarWidth = shouldPreserveSidebarWidth
+			? this.workbenchGrid.getViewSize(this.sideBarPartView).width
+			: undefined;
+
 		this._mainContainerDimension = getClientArea(
 			this.mainWindowFullscreen ? mainWindow.document.body : this.parent
 		);
@@ -884,6 +898,18 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 
 		// Layout the grid widget
 		this.workbenchGrid.layout(this._mainContainerDimension.width, this._mainContainerDimension.height);
+		if (
+			typeof sidebarWidth === 'number'
+			&& previousContainerWidth !== this._mainContainerDimension.width
+		) {
+			const currentSidebarSize = this.workbenchGrid.getViewSize(
+				this.sideBarPartView
+			);
+			this.workbenchGrid.resizeView(this.sideBarPartView, {
+				width: sidebarWidth,
+				height: currentSidebarSize.height,
+			});
+		}
 
 		// Emit as event
 		this.handleContainerDidLayout(this.mainContainer, this._mainContainerDimension);
@@ -960,7 +986,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)?.focus();
 				break;
 			case Parts.CHATBAR_PART:
-				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.ChatBar)?.focus();
+				this.omniHostPart.focus();
 				break;
 			default: {
 				const container = this.getContainer(targetWindow, part);
@@ -1157,20 +1183,6 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 
 		// Propagate to grid
 		this.workbenchGrid.setViewVisible(this.chatBarPartView, !hidden);
-
-		// If chat bar becomes hidden, also hide the current active pane composite
-		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.ChatBar)) {
-			this.paneCompositeService.hideActivePaneComposite(ViewContainerLocation.ChatBar);
-		}
-
-		// If chat bar becomes visible, show last active pane composite or default
-		if (!hidden && !this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.ChatBar)) {
-			const paneCompositeToOpen = this.paneCompositeService.getLastActivePaneCompositeId(ViewContainerLocation.ChatBar) ??
-				this.viewDescriptorService.getDefaultViewContainer(ViewContainerLocation.ChatBar)?.id;
-			if (paneCompositeToOpen) {
-				this.paneCompositeService.openPaneComposite(paneCompositeToOpen, ViewContainerLocation.ChatBar);
-			}
-		}
 	}
 
 	//#endregion

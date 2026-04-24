@@ -53,44 +53,6 @@ class ToggleSidebarVisibilityAction extends Action2 {
 	}
 }
 
-class ToggleSecondarySidebarVisibilityAction extends Action2 {
-
-	static readonly ID = 'workbench.action.omniToggleSecondarySidebarVisibility';
-
-	constructor() {
-		super({
-			id: ToggleSecondarySidebarVisibilityAction.ID,
-			title: localize2('toggleSecondarySidebar', 'Toggle Secondary Side Bar Visibility'),
-			icon: panelCloseIcon,
-			metadata: {
-				description: localize('openAndCloseSecondarySidebar', 'Open/Show and Close/Hide Secondary Side Bar'),
-			},
-			category: Categories.View,
-			f1: true,
-			menu: [
-				{
-					id: Menus.TitleBarContext,
-					order: 1,
-					when: IsAuxiliaryWindowContext.toNegated()
-				}
-			]
-		});
-	}
-
-	run(accessor: ServicesAccessor): void {
-		const layoutService = accessor.get(IWorkbenchLayoutService);
-		const isCurrentlyVisible = layoutService.isVisible(Parts.AUXILIARYBAR_PART);
-
-		layoutService.setPartHidden(isCurrentlyVisible, Parts.AUXILIARYBAR_PART);
-
-		// Announce visibility change to screen readers
-		const alertMessage = isCurrentlyVisible
-			? localize('secondarySidebarHidden', "Secondary Side Bar hidden")
-			: localize('secondarySidebarVisible', "Secondary Side Bar shown");
-		alert(alertMessage);
-	}
-}
-
 class TogglePanelVisibilityAction extends Action2 {
 
 	static readonly ID = 'workbench.action.omniTogglePanelVisibility';
@@ -120,7 +82,6 @@ class TogglePanelVisibilityAction extends Action2 {
 }
 
 registerAction2(ToggleSidebarVisibilityAction);
-registerAction2(ToggleSecondarySidebarVisibilityAction);
 registerAction2(TogglePanelVisibilityAction);
 
 // Floating window controls: always-on-top

@@ -20,6 +20,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
   should be anchored in the sidebar title toolbar, not a body-level overlay or
   the right-hand titlebar part. The top-left traffic-light strip behaves
   differently enough that floating controls there are brittle.
+- The Omni right-hand workspace surface should be a dedicated Hucode `Part`,
+  not a `ViewContainerLocation.ChatBar` pane-composite. Reusing the chatbar
+  scaffold leaks sessions/chat title menus and secondary-sidebar affordances
+  into the Omni shell.
 - The Omni Projects sidebar should keep a real minimum width. Letting it shrink
   too far effectively hides it and strands the macOS traffic-light area.
 - The Omni shell now owns its forked workbench and pane parts under
@@ -46,6 +50,18 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Omni windows also must not import `sessions.desktop.main.ts` wholesale. If
   they need the sessions shell layout, wire only the required shell pieces and
   explicitly override `IPaneCompositePartService`.
+- Omni shell should stay close to a real workbench window bootstrap.
+  Suppressing unsupported shell affordances like Settings belongs at the
+  command/menu/keybinding layer, not by replacing core window, layout, or
+  editor services with shell-only stubs.
+- Hosted Omni workbenches need the normal renderer unload handshake before
+  their `WebContentsView` is destroyed. If you tear them down directly from the
+  shell main process without sending `vscode:onBeforeUnload` /
+  `vscode:onWillUnload`, workspace UI state can reopen from stale storage.
+- Omni window close and app quit need to join hosted-workspace shutdown from
+  the shell renderer's own `onWillShutdown` path. If the shell only destroys
+  hosted `WebContentsView`s after the window starts going away, the child
+  workbenches can miss their final state flush.
 - Hosted Omni workspaces run in their own `WebContentsView`, so Electron's
   `vscode-file://` and `vscode-webview://` request filters will block the
   nested workbench unless that hosted renderer is explicitly added to the

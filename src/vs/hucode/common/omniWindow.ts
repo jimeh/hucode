@@ -6,6 +6,7 @@
 import { Event } from '../../base/common/event.js';
 import { createDecorator } from '../../platform/instantiation/common/instantiation.js';
 import { IRectangle } from '../../platform/window/common/window.js';
+import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
@@ -76,4 +77,8 @@ export interface IHucodeShellService {
 	focusShell(windowId: number): Promise<void>;
 	reloadWorkspace(windowId: number): Promise<void>;
 	layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void>;
+	shutdownWindowWorkspaces(
+		windowId: number,
+		reason: ShutdownReason
+	): Promise<void>;
 }
