@@ -130,7 +130,6 @@ export class OmniChatBarPart extends AbstractPaneCompositePart {
 			ViewContainerLocation.ChatBar,
 			Extensions.ChatBar,
 			Menus.ChatBarTitle,
-			undefined,
 			notificationService,
 			storageService,
 			contextMenuService,
