@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for
- *  license information.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '../../base/common/event.js';
@@ -29,7 +28,6 @@ import {
 	InstantiationType,
 	registerSingleton,
 } from '../../platform/instantiation/common/extensions.js';
-import { OmniChatBarPart } from './parts/omniChatBarPart.js';
 
 export class OmniPaneCompositePartService extends Disposable
 	implements IPaneCompositePartService {
@@ -73,10 +71,6 @@ export class OmniPaneCompositePartService extends Disposable
 		this.registerPart(
 			ViewContainerLocation.AuxiliaryBar,
 			instantiationService.createInstance(AuxiliaryBarPart)
-		);
-		this.registerPart(
-			ViewContainerLocation.ChatBar,
-			instantiationService.createInstance(OmniChatBarPart)
 		);
 	}
 

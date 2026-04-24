@@ -5,6 +5,7 @@
 
 import { WebContentsView } from 'electron';
 import { statSync } from 'fs';
+import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { FileAccess } from '../../base/common/network.js';
@@ -19,7 +20,10 @@ import {
 } from '../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
-import { ICodeWindow } from '../../platform/window/electron-main/window.js';
+import {
+	ICodeWindow,
+	UnloadReason,
+} from '../../platform/window/electron-main/window.js';
 import {
 	INativeWindowConfiguration,
 	IOmniWorkspaceRestoreEntry,
@@ -36,6 +40,7 @@ import {
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
 import { IHucodeShellMainService } from './omniWindow.js';
+import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
 
 interface IHostedWorkbenchInstance {
 	instanceId: string;
@@ -53,12 +58,16 @@ interface IHostedWorkbenchInstance {
 }
 
 class ResidentHostedWorkspacesController extends Disposable {
+	private static readonly BEFORE_UNLOAD_TIMEOUT_MS = 5000;
+	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
+
 	private readonly instancesById = new Map<string, IHostedWorkbenchInstance>();
 	private readonly instanceIdsByPath = new Map<string, string>();
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private activeInstanceId: string | undefined;
 	private restored = false;
+	private oneTimeListenerTokenGenerator = 0;
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -310,7 +319,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
-			await this.destroyInstance(instance, false);
+			await this.destroyInstance(instance, false, false);
 			throw error;
 		}
 	}
@@ -515,7 +524,11 @@ class ResidentHostedWorkspacesController extends Disposable {
 				)[0];
 		}
 
-		await this.destroyInstance(target, true);
+		const closed = await this.destroyInstance(target, true);
+		if (!closed) {
+			return;
+		}
+
 		if (wasActive) {
 			this.activeInstanceId = undefined;
 			if (nextActive) {
@@ -530,8 +543,34 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	private async destroyInstance(
 		instance: IHostedWorkbenchInstance,
-		removeFromMaps: boolean
-	): Promise<void> {
+		removeFromMaps: boolean,
+		graceful: boolean = true,
+		reason: UnloadReason = UnloadReason.CLOSE,
+		ignoreUnloadVeto: boolean = false
+	): Promise<boolean> {
+		if (graceful) {
+			const veto = await this.unloadInRenderer(
+				instance,
+				reason,
+				ignoreUnloadVeto
+			);
+			if (veto) {
+				if (!ignoreUnloadVeto) {
+					this.logService.trace(
+						'[HucodeShellMainService] Hosted workspace unload ' +
+						`vetoed for ${instance.worktreePath}.`
+					);
+					return false;
+				}
+
+				this.logService.warn(
+					'[HucodeShellMainService] Ignoring hosted workspace ' +
+					`unload veto during Omni shutdown for ` +
+					`${instance.worktreePath}.`
+				);
+			}
+		}
+
 		instance.disposed = true;
 		instance.state = 'unloaded';
 		instance.focused = false;
@@ -552,6 +591,166 @@ class ResidentHostedWorkspacesController extends Disposable {
 			this.instancesById.delete(instance.instanceId);
 			this.instanceIdsByPath.delete(instance.worktreePath);
 		}
+
+		return true;
+	}
+
+	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		const instances = Array.from(this.instancesById.values());
+		for (const instance of instances) {
+			if (instance.disposed) {
+				continue;
+			}
+
+			await this.destroyInstance(instance, false, true, reason, true);
+		}
+	}
+
+	private async unloadInRenderer(
+		instance: IHostedWorkbenchInstance,
+		reason: UnloadReason,
+		ignoreBeforeUnloadVeto: boolean = false
+	): Promise<boolean> {
+		const webContents = instance.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		const beforeUnloadVeto = await this.onBeforeUnloadInRenderer(
+			webContents,
+			instance,
+			reason
+		);
+		if (beforeUnloadVeto) {
+			if (ignoreBeforeUnloadVeto) {
+				await this.onWillUnloadInRenderer(
+					webContents,
+					instance,
+					reason
+				);
+			}
+			return true;
+		}
+
+		await this.onWillUnloadInRenderer(webContents, instance, reason);
+		return false;
+	}
+
+	private onBeforeUnloadInRenderer(
+		webContents: Electron.WebContents,
+		instance: IHostedWorkbenchInstance,
+		reason: UnloadReason
+	): Promise<boolean> {
+		return new Promise<boolean>(resolve => {
+			const oneTimeEventToken = this.oneTimeListenerTokenGenerator++;
+			const okChannel = `vscode:ok${oneTimeEventToken}`;
+			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
+
+			let settled = false;
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+			const handleOk = () => complete(false);
+			const handleCancel = () => complete(true);
+			const handleDestroyed = () => complete(false);
+
+			const complete = (veto: boolean) => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				if (timeoutHandle) {
+					clearTimeout(timeoutHandle);
+				}
+
+				validatedIpcMain.removeListener(okChannel, handleOk);
+				validatedIpcMain.removeListener(cancelChannel, handleCancel);
+				webContents.removeListener('destroyed', handleDestroyed);
+
+				resolve(veto);
+			};
+
+			validatedIpcMain.once(okChannel, handleOk);
+			validatedIpcMain.once(cancelChannel, handleCancel);
+			webContents.once('destroyed', handleDestroyed);
+			timeoutHandle = setTimeout(() => {
+				this.logService.warn(
+					'[HucodeShellMainService] Timed out waiting for hosted ' +
+					`workspace before-unload reply for ${instance.worktreePath}.`
+				);
+				complete(false);
+			}, ResidentHostedWorkspacesController.BEFORE_UNLOAD_TIMEOUT_MS);
+
+			try {
+				webContents.send('vscode:onBeforeUnload', {
+					okChannel,
+					cancelChannel,
+					reason
+				});
+			} catch (error) {
+				this.logService.warn(
+					'[HucodeShellMainService] Failed to send hosted workspace ' +
+					`before-unload for ${instance.worktreePath}: ${error}`
+				);
+				complete(false);
+			}
+		});
+	}
+
+	private onWillUnloadInRenderer(
+		webContents: Electron.WebContents,
+		instance: IHostedWorkbenchInstance,
+		reason: UnloadReason
+	): Promise<void> {
+		return new Promise<void>(resolve => {
+			const oneTimeEventToken = this.oneTimeListenerTokenGenerator++;
+			const replyChannel = `vscode:reply${oneTimeEventToken}`;
+
+			let settled = false;
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+			const handleReply = () => complete();
+			const handleDestroyed = () => complete();
+
+			const complete = () => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				if (timeoutHandle) {
+					clearTimeout(timeoutHandle);
+				}
+
+				validatedIpcMain.removeListener(replyChannel, handleReply);
+				webContents.removeListener('destroyed', handleDestroyed);
+
+				resolve();
+			};
+
+			validatedIpcMain.once(replyChannel, handleReply);
+			webContents.once('destroyed', handleDestroyed);
+			timeoutHandle = setTimeout(() => {
+				this.logService.warn(
+					'[HucodeShellMainService] Timed out waiting for hosted ' +
+					`workspace will-unload reply for ${instance.worktreePath}.`
+				);
+				complete();
+			}, ResidentHostedWorkspacesController.WILL_UNLOAD_TIMEOUT_MS);
+
+			try {
+				webContents.send('vscode:onWillUnload', {
+					replyChannel,
+					reason
+				});
+			} catch (error) {
+				this.logService.warn(
+					'[HucodeShellMainService] Failed to send hosted workspace ' +
+					`will-unload for ${instance.worktreePath}: ${error}`
+				);
+				complete();
+			}
+		});
 	}
 
 	focusWorkspace(): void {
@@ -568,7 +767,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	override dispose(): void {
 		for (const instance of Array.from(this.instancesById.values())) {
-			void this.destroyInstance(instance, true);
+			void this.destroyInstance(instance, true, false);
 		}
 
 		super.dispose();
@@ -662,6 +861,34 @@ export class HucodeShellMainService extends Disposable
 
 	async layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void> {
 		this.getOrCreateController(windowId).layout(bounds);
+	}
+
+	async shutdownWindowWorkspaces(
+		windowId: number,
+		reason: ShutdownReason
+	): Promise<void> {
+		const controller = this.controllers.get(windowId);
+		if (!controller) {
+			return;
+		}
+
+		await controller.shutdownAllWorkspaces(
+			this.toUnloadReason(reason)
+		);
+	}
+
+	private toUnloadReason(reason: ShutdownReason): UnloadReason {
+		switch (reason) {
+			case ShutdownReason.QUIT:
+				return UnloadReason.QUIT;
+			case ShutdownReason.RELOAD:
+				return UnloadReason.RELOAD;
+			case ShutdownReason.LOAD:
+				return UnloadReason.LOAD;
+			case ShutdownReason.CLOSE:
+			default:
+				return UnloadReason.CLOSE;
+		}
 	}
 
 	private getOrCreateController(

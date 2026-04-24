@@ -106,6 +106,30 @@ abstract class BaseOmniWindowAction extends Action2 {
 	}
 }
 
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.omniWindow.ignoreOpenSettings',
+			title: localize2(
+				'omniWindowIgnoreOpenSettings',
+				'Omni-Window: Ignore Open Settings Shortcut'
+			),
+			precondition: IsOmniWindowContext,
+			keybinding: {
+				weight: KeybindingWeight.WorkbenchContrib + 100,
+				when: IsOmniWindowContext,
+				primary: KeyMod.CtrlCmd | KeyCode.Comma
+			}
+		});
+	}
+
+	override run(): void {
+		// The Omni shell has no editor surface for settings. Let hosted
+		// workbenches handle Cmd+, when they have focus, and otherwise
+		// swallow the shell shortcut.
+	}
+});
+
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(

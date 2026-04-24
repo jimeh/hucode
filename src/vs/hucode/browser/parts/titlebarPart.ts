@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for
- *  license information.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import '../../../workbench/browser/parts/titlebar/media/titlebarpart.css';
@@ -27,7 +26,6 @@ import {
 } from '../../../platform/window/common/window.js';
 import { IContextMenuService } from
 	'../../../platform/contextview/browser/contextView.js';
-import { StandardMouseEvent } from '../../../base/browser/mouseEvent.js';
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
@@ -146,7 +144,7 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		id: string,
 		targetWindow: CodeWindow,
 		@IContextMenuService
-		private readonly contextMenuService: IContextMenuService,
+		_contextMenuService: IContextMenuService,
 		@IConfigurationService
 		protected readonly configurationService: IConfigurationService,
 		@IInstantiationService
@@ -156,7 +154,7 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		@IWorkbenchLayoutService
 		layoutService: IWorkbenchLayoutService,
 		@IContextKeyService
-		private readonly contextKeyService: IContextKeyService,
+		_contextKeyService: IContextKeyService,
 		@IHostService
 		private readonly hostService: IHostService,
 	) {
@@ -212,7 +210,6 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 			EventType.CONTEXT_MENU,
 			event => {
 				EventHelper.stop(event);
-				this.onContextMenu(event);
 			}
 		));
 
@@ -322,18 +319,6 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 
 		const titleForeground = this.getColor(chatBarTitleForeground);
 		this.element.style.color = titleForeground || '';
-	}
-
-	private onContextMenu(event: MouseEvent): void {
-		const mouseEvent = new StandardMouseEvent(getWindow(this.element), event);
-		this.contextMenuService.showContextMenu({
-			getAnchor: () => mouseEvent,
-			menuId: Menus.TitleBarContext,
-			contextKeyService: this.contextKeyService,
-			domForShadowRoot: isMacintosh && isNative
-				? mouseEvent.target
-				: undefined,
-		});
 	}
 
 	get hasZoomableElements(): boolean {
