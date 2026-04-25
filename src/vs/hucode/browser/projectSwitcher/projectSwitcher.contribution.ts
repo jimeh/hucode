@@ -77,6 +77,8 @@ import {
 	WorktreeRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
+	HucodeHostedWorkbenchLifecycleState,
+	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
@@ -197,6 +199,7 @@ interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
 	readonly worktreePath: string;
 	readonly isMain: boolean;
 	readonly hostedWorkbenchInstanceId?: string;
+	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
 }
 
@@ -419,22 +422,27 @@ class ProjectSwitcherRenderer
 			}
 
 			if (item.hostedWorkbenchInstanceId) {
-				const label = localize('unloadWorkbenchButton', 'Unload');
 				templateData.container.classList.add(
-					'hucode-project-switcher-worktree-loaded'
+					item.hostedWorkbenchState === 'loading'
+						? 'hucode-project-switcher-worktree-loading'
+						: 'hucode-project-switcher-worktree-loaded'
 				);
-				templateData.action.style.display = '';
-				templateData.action.title = label;
-				templateData.action.setAttribute('aria-label', label);
-				templateData.action.classList.add(
-					...ThemeIcon.asClassNameArray(Codicon.chromeMinimize)
-				);
-				templateData.currentAction = () => {
-					void this.commandService.executeCommand(
-						UNLOAD_WORKTREE_COMMAND_ID,
-						toHandleArg(item)
+
+				if (item.hostedWorkbenchState !== 'loading') {
+					const label = localize('unloadWorkbenchButton', 'Unload');
+					templateData.action.style.display = '';
+					templateData.action.title = label;
+					templateData.action.setAttribute('aria-label', label);
+					templateData.action.classList.add(
+						...ThemeIcon.asClassNameArray(Codicon.chromeMinimize)
 					);
-				};
+					templateData.currentAction = () => {
+						void this.commandService.executeCommand(
+							UNLOAD_WORKTREE_COMMAND_ID,
+							toHandleArg(item)
+						);
+					};
+				}
 			} else {
 				templateData.container.classList.add(
 					'hucode-project-switcher-worktree-unloaded'
@@ -1020,7 +1028,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		worktree: WorktreeRecord,
 		itemsById: Map<string, ProjectSwitcherItem>
 	): IObjectTreeElement<ProjectSwitcherItem> {
-		const hostedWorkbenchInstanceId = this.getHostedWorkbenchInstanceId(
+		const hostedWorkbenchInstance = this.getHostedWorkbenchInstance(
 			worktree.path
 		);
 		const isActive = this.isActiveWorktree(worktree.path);
@@ -1028,14 +1036,15 @@ export class ProjectSwitcherWidget extends Disposable {
 			id: getWorktreeItemId(
 				project.id,
 				worktree.path,
-				hostedWorkbenchInstanceId
+				hostedWorkbenchInstance?.instanceId
 			),
 			handle: encodeWorktreeHandle(project.id, worktree.path),
 			kind: 'worktree',
 			projectId: project.id,
 			worktreePath: worktree.path,
 			isMain: worktree.isMain,
-			hostedWorkbenchInstanceId,
+			hostedWorkbenchInstanceId: hostedWorkbenchInstance?.instanceId,
+			hostedWorkbenchState: hostedWorkbenchInstance?.state,
 			isActive,
 			label: worktree.isMain
 				? localize('mainWorktree', 'Main')
@@ -1133,16 +1142,16 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.updateItemContext();
 	}
 
-	private getHostedWorkbenchInstanceId(
+	private getHostedWorkbenchInstance(
 		worktreePath: string
-	): string | undefined {
+	): IHucodeHostedWorkbenchInstance | undefined {
 		if (!this.environmentService.isOmniWindow) {
 			return undefined;
 		}
 
 		return this.omniHostedWorkspaceState.instances.find(instance =>
 			pathsEqual(instance.worktreePath, worktreePath)
-		)?.instanceId;
+		);
 	}
 
 	private isActiveWorktree(worktreePath: string): boolean {
@@ -1273,7 +1282,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (isWorktreeItem(item)) {
 			const worktreeHandle = toHandleArg(item);
 			const hostedWorkbenchInstanceId =
-				this.getHostedWorkbenchInstanceId(item.worktreePath);
+				this.getHostedWorkbenchInstance(item.worktreePath)?.instanceId;
 			const actions: IAction[] = [
 				toAction({
 					id: REFRESH_PROJECTS_COMMAND_ID,

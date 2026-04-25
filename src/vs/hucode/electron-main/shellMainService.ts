@@ -186,6 +186,25 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
+	notifyHostedWorkspaceReady(instanceId: string): void {
+		const instance = this.instancesById.get(instanceId);
+		if (
+			!instance
+			|| instance.disposed
+			|| instance.state === 'crashed'
+			|| instance.state === 'unloaded'
+		) {
+			return;
+		}
+
+		const state: HucodeHostedWorkbenchLifecycleState =
+			instance.instanceId === this.activeInstanceId ? 'active' : 'loaded';
+		this.updateInstanceState(instance, { state });
+		if (state === 'active') {
+			this.bringInstanceToFront(instance);
+		}
+	}
+
 	private setViewVisible(
 		instance: IHostedWorkbenchInstance,
 		visible: boolean
@@ -333,7 +352,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			if (makeActive) {
 				this.activateInstance(instance);
 			} else {
-				this.updateInstanceState(instance, { state: 'loaded' });
+				this.emitState();
 			}
 
 			return instance;
@@ -489,7 +508,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 			this.updateInstanceState(previousActive, {
 				state: previousActive.state === 'crashed'
 					? 'crashed'
-					: 'loaded',
+					: previousActive.state === 'loading'
+						? 'loading'
+						: 'loaded',
 				focused: false,
 			});
 		}
@@ -498,7 +519,11 @@ class ResidentHostedWorkspacesController extends Disposable {
 		instance.lastActiveAt = Date.now();
 		this.setViewVisible(instance, true);
 		this.updateInstanceState(instance, {
-			state: instance.state === 'crashed' ? 'crashed' : 'active',
+			state: instance.state === 'crashed'
+				? 'crashed'
+				: instance.state === 'loading'
+					? 'loading'
+					: 'active',
 			visible: true,
 			lastActiveAt: instance.lastActiveAt,
 		});
@@ -869,6 +894,13 @@ export class HucodeShellMainService extends Disposable
 		const controller = this.getOrCreateController(windowId);
 		await controller.closeWorkspace(instanceId);
 		return controller.getState();
+	}
+
+	async notifyHostedWorkspaceReady(
+		windowId: number,
+		instanceId: string
+	): Promise<void> {
+		this.controllers.get(windowId)?.notifyHostedWorkspaceReady(instanceId);
 	}
 
 	async focusWorkspace(windowId: number): Promise<void> {

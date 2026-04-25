@@ -85,3 +85,6 @@ For detailed project overview, architecture, coding guidelines, and validation s
   not a registered workbench view/container. Keep Explorer/SCM/Search out of the
   Omni sidebar by routing Projects focus through the shell part and leaving
   sidebar pane-composite opens as no-ops in the Omni pane-composite service.
+- Hosted Omni workspaces should only transition from `loading` to `loaded` or
+  `active` after the child workbench reports `LifecyclePhase.Restored`. An
+  Electron `loadURL()` completion only means the renderer document loaded.

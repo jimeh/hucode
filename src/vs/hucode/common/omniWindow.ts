@@ -73,6 +73,13 @@ export interface IHucodeShellService {
 		windowId: number,
 		instanceId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/**
+	 * Marks a hosted workspace as ready after its workbench reaches Restored.
+	 */
+	notifyHostedWorkspaceReady(
+		windowId: number,
+		instanceId: string
+	): Promise<void>;
 	focusWorkspace(windowId: number): Promise<void>;
 	focusShell(windowId: number): Promise<void>;
 	reloadWorkspace(windowId: number): Promise<void>;
