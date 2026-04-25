@@ -184,9 +184,6 @@ import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 // Chat
 import './contrib/chat/electron-browser/chat.contribution.js';
 
-// Hucode Project Switcher
-import './contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
-
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';
 

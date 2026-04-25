@@ -81,3 +81,7 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Omni sidebar startup should open `workbench.hucode.projectSwitcher`
   directly. Restoring the generic default sidebar container can briefly render
   Explorer/"No Folder Opened" before Projects replaces it.
+- Omni Projects is shell-owned under `src/vs/hucode/browser/parts/projectsPart.ts`,
+  not a registered workbench view/container. Keep Explorer/SCM/Search out of the
+  Omni sidebar by routing Projects focus through the shell part and leaving
+  sidebar pane-composite opens as no-ops in the Omni pane-composite service.

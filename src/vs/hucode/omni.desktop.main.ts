@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for
- *  license information.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 
@@ -148,7 +147,7 @@ import '../workbench/contrib/mergeEditor/electron-browser/mergeEditor.contributi
 import '../workbench/contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 import '../workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 import '../workbench/contrib/chat/electron-browser/chat.contribution.js';
-import '../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
+import './browser/projectSwitcher/projectSwitcher.contribution.js';
 import '../workbench/contrib/encryption/electron-browser/encryption.contribution.js';
 import '../workbench/contrib/emergencyAlert/electron-browser/emergencyAlert.contribution.js';
 import '../workbench/contrib/mcp/electron-browser/mcp.contribution.js';

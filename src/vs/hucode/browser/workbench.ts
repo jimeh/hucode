@@ -62,8 +62,7 @@ import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/mar
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import { TitleService } from './parts/titlebarPart.js';
 import { OmniHostPart } from './parts/omniHostPart.js';
-import { PROJECT_SWITCHER_CONTAINER_ID } from
-	'../../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
+import { ProjectsPart } from './parts/projectsPart.js';
 
 //#region Workbench Options
 
@@ -233,6 +232,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private auxiliaryBarPartView!: ISerializableView;
 
 	private chatBarPartView!: ISerializableView;
+	private projectsPart!: ProjectsPart;
 
 	private readonly partVisibility: IPartVisibilityState = {
 		sidebar: true,
@@ -622,21 +622,18 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	private restoreParts(): void {
-		// Open default view containers for each visible part
+		// Open default view containers for pane-composite backed visible parts.
+		// Projects is shell-owned and is created with the sidebar part directly.
 		const partsToRestore: { location: ViewContainerLocation; visible: boolean }[] = [
-			{ location: ViewContainerLocation.Sidebar, visible: this.partVisibility.sidebar },
 			{ location: ViewContainerLocation.Panel, visible: this.partVisibility.panel },
 			{ location: ViewContainerLocation.AuxiliaryBar, visible: this.partVisibility.auxiliaryBar },
 		];
 
 		for (const { location, visible } of partsToRestore) {
 			if (visible) {
-				const containerId =
-					location === ViewContainerLocation.Sidebar
-						? PROJECT_SWITCHER_CONTAINER_ID
-						: this.viewDescriptorService.getDefaultViewContainer(
-							location
-						)?.id;
+				const containerId = this.viewDescriptorService.getDefaultViewContainer(
+					location
+				)?.id;
 				if (containerId) {
 					this.paneCompositeService.openPaneComposite(
 						containerId,
@@ -662,6 +659,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		this.paneCompositeService = accessor.get(IPaneCompositePartService);
 		this.viewDescriptorService = accessor.get(IViewDescriptorService);
 		accessor.get(ITitleService);
+		this.projectsPart = instantiationService.createInstance(ProjectsPart);
 		this.omniHostPart = instantiationService.createInstance(OmniHostPart);
 
 		// Register layout listeners
@@ -980,7 +978,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)?.focus();
 				break;
 			case Parts.SIDEBAR_PART:
-				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Sidebar)?.focus();
+				this.projectsPart.focus();
 				break;
 			case Parts.AUXILIARYBAR_PART:
 				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)?.focus();

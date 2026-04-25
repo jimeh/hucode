@@ -4,29 +4,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/projectSwitcher.css';
-import * as dom from '../../../../base/browser/dom.js';
-import { $, append } from '../../../../base/browser/dom.js';
-import { getZoomFactor } from '../../../../base/browser/browser.js';
-import { IMouseEvent } from '../../../../base/browser/mouseEvent.js';
-import {
-	IContextMenuItem,
-	IPopupOptions,
-} from '../../../../base/parts/contextmenu/common/contextmenu.js';
-import { popup } from
-	'../../../../base/parts/contextmenu/electron-browser/contextmenu.js';
-import { IAction, Separator, SubmenuAction, toAction } from
-	'../../../../base/common/actions.js';
+import * as dom from '../../../base/browser/dom.js';
+import { mainWindow } from '../../../base/browser/window.js';
+import { IAction, Separator, toAction } from
+	'../../../base/common/actions.js';
 import {
 	IListVirtualDelegate,
 	ListDragOverEffectPosition,
 	ListDragOverEffectType,
-} from '../../../../base/browser/ui/list/list.js';
+} from '../../../base/browser/ui/list/list.js';
 import {
 	ElementsDragAndDropData,
 	ListViewTargetSector,
-} from '../../../../base/browser/ui/list/listView.js';
+} from '../../../base/browser/ui/list/listView.js';
 import { IListAccessibilityProvider } from
-	'../../../../base/browser/ui/list/listWidget.js';
+	'../../../base/browser/ui/list/listWidget.js';
 import {
 	IObjectTreeElement,
 	ITreeContextMenuEvent,
@@ -34,93 +26,61 @@ import {
 	ITreeDragOverReaction,
 	ITreeNode,
 	ITreeRenderer,
-} from '../../../../base/browser/ui/tree/tree.js';
-import { Codicon } from '../../../../base/common/codicons.js';
-import { isEqual } from '../../../../base/common/extpath.js';
-import { toDisposable } from '../../../../base/common/lifecycle.js';
-import { basename } from '../../../../base/common/path.js';
-import { isLinux } from '../../../../base/common/platform.js';
-import { ThemeIcon } from '../../../../base/common/themables.js';
-import { hasKey } from '../../../../base/common/types.js';
-import { URI } from '../../../../base/common/uri.js';
-import { localize, localize2 } from '../../../../nls.js';
-import { Action2, MenuId, registerAction2 } from
-	'../../../../platform/actions/common/actions.js';
-import { IConfigurationService } from
-	'../../../../platform/configuration/common/configuration.js';
-import { IContextKey, ContextKeyExpr, IContextKeyService } from
-	'../../../../platform/contextkey/common/contextkey.js';
+} from '../../../base/browser/ui/tree/tree.js';
+import { Codicon } from '../../../base/common/codicons.js';
+import { isEqual } from '../../../base/common/extpath.js';
+import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { basename } from '../../../base/common/path.js';
+import { isLinux } from '../../../base/common/platform.js';
+import { ThemeIcon } from '../../../base/common/themables.js';
+import { hasKey } from '../../../base/common/types.js';
+import { URI } from '../../../base/common/uri.js';
+import { localize, localize2 } from '../../../nls.js';
+import { Action2, registerAction2 } from
+	'../../../platform/actions/common/actions.js';
+import { IContextKey } from
+	'../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from
-	'../../../../platform/contextview/browser/contextView.js';
+	'../../../platform/contextview/browser/contextView.js';
 import { IFileDialogService, IDialogService } from
-	'../../../../platform/dialogs/common/dialogs.js';
-import { IHoverService } from '../../../../platform/hover/browser/hover.js';
+	'../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService, ServicesAccessor } from
-	'../../../../platform/instantiation/common/instantiation.js';
-import { SyncDescriptor } from
-	'../../../../platform/instantiation/common/descriptors.js';
-import { IKeybindingService } from
-	'../../../../platform/keybinding/common/keybinding.js';
+	'../../../platform/instantiation/common/instantiation.js';
 import { WorkbenchObjectTree } from
-	'../../../../platform/list/browser/listService.js';
+	'../../../platform/list/browser/listService.js';
 import { INotificationService } from
-	'../../../../platform/notification/common/notification.js';
-import { IOpenerService } from
-	'../../../../platform/opener/common/opener.js';
+	'../../../platform/notification/common/notification.js';
 import { IStorageService, StorageScope, StorageTarget } from
-	'../../../../platform/storage/common/storage.js';
+	'../../../platform/storage/common/storage.js';
 import { IQuickInputService } from
-	'../../../../platform/quickinput/common/quickInput.js';
-import { Registry } from '../../../../platform/registry/common/platform.js';
-import { registerIcon } from
-	'../../../../platform/theme/common/iconRegistry.js';
+	'../../../platform/quickinput/common/quickInput.js';
 import { asCssVariable } from
-	'../../../../platform/theme/common/colorUtils.js';
-import { IThemeService } from
-	'../../../../platform/theme/common/themeService.js';
+	'../../../platform/theme/common/colorUtils.js';
 import { sessionsSidebarBackground } from
-	'../../../../hucode/common/theme.js';
-import { ViewPane, ViewPaneShowActions } from
-	'../../../browser/parts/views/viewPane.js';
-import { ViewPaneContainer } from
-	'../../../browser/parts/views/viewPaneContainer.js';
-import { IViewletViewOptions } from
-	'../../../browser/parts/views/viewsViewlet.js';
+	'../../common/theme.js';
 import {
-	IWorkbenchContribution,
-	registerWorkbenchContribution2,
-	WorkbenchPhase,
-} from '../../../common/contributions.js';
-import {
-	Extensions as ViewExtensions,
-	IViewContainersRegistry,
-	IViewDescriptor,
-	IViewDescriptorService,
-	IViewsRegistry,
 	TreeViewItemHandleArg,
 	TreeViewPaneHandleArg,
-	ViewContainer,
-	ViewContainerLocation,
-} from '../../../common/views.js';
-import { IHostService } from '../../../services/host/browser/host.js';
-import { INativeWorkbenchEnvironmentService } from
-	'../../../services/environment/electron-browser/environmentService.js';
+} from '../../../workbench/common/views.js';
+import { Menus } from '../menus.js';
+import { IHostService } from '../../../workbench/services/host/browser/host.js';
+import { IWorkbenchEnvironmentService } from
+	'../../../workbench/services/environment/common/environmentService.js';
 import { IWorkspaceContextService, WorkbenchState } from
-	'../../../../platform/workspace/common/workspace.js';
+	'../../../platform/workspace/common/workspace.js';
 import { ICommandService } from
-	'../../../../platform/commands/common/commands.js';
+	'../../../platform/commands/common/commands.js';
 import {
 	CreateWorktreeOptions,
 	IProjectManagerService,
 	ProjectRecord,
 	WorktreeRecord,
-} from '../../../../platform/projectManager/common/projectManager.js';
+} from '../../../platform/projectManager/common/projectManager.js';
 import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
-} from '../../../../hucode/common/omniWindow.js';
+} from '../../common/omniWindow.js';
 
-export const PROJECT_SWITCHER_CONTAINER_ID = 'workbench.hucode.projectSwitcher';
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
 const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
@@ -156,34 +116,7 @@ interface ProjectSwitcherViewState {
 	collapsedProjectIds?: string[];
 }
 
-let currentProjectSwitcherViewPane: ProjectSwitcherViewPane | undefined;
-
-const projectSwitcherIcon = registerIcon(
-	'hucode-project-switcher-view-icon',
-	Codicon.repo,
-	localize(
-		'projectSwitcherViewIcon',
-		'View icon of the Hucode project switcher.'
-	)
-);
-
-const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(
-	ViewExtensions.ViewContainersRegistry
-).registerViewContainer({
-	id: PROJECT_SWITCHER_CONTAINER_ID,
-	title: localize2('hucodeProjectSwitcher', 'Projects'),
-	icon: projectSwitcherIcon,
-	order: 1,
-	ctorDescriptor: new SyncDescriptor(
-		ViewPaneContainer,
-		[
-			PROJECT_SWITCHER_CONTAINER_ID,
-			{ mergeViewWithContainerWhenSingleView: true },
-		]
-	),
-	storageId: PROJECT_SWITCHER_CONTAINER_ID,
-	hideIfEmpty: false,
-}, ViewContainerLocation.Sidebar, { doNotRegisterOpenCommand: true });
+let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
 
 function encodeWorktreeHandle(projectId: string, worktreePath: string): string {
 	return `worktree:${projectId}:${encodeURIComponent(worktreePath)}`;
@@ -379,20 +312,20 @@ class ProjectSwitcherRenderer
 	}
 
 	renderTemplate(container: HTMLElement): ProjectSwitcherTemplate {
-		const item = append(container, $('.hucode-project-switcher-item'));
-		const icon = append(item, $('.hucode-project-switcher-icon'));
-		const text = append(item, $('.hucode-project-switcher-text'));
-		const label = append(
+		const item = dom.append(container, dom.$('.hucode-project-switcher-item'));
+		const icon = dom.append(item, dom.$('.hucode-project-switcher-icon'));
+		const text = dom.append(item, dom.$('.hucode-project-switcher-text'));
+		const label = dom.append(
 			text,
-			$('span.hucode-project-switcher-label')
+			dom.$('span.hucode-project-switcher-label')
 		) as HTMLSpanElement;
-		const description = append(
+		const description = dom.append(
 			text,
-			$('span.hucode-project-switcher-description')
+			dom.$('span.hucode-project-switcher-description')
 		) as HTMLSpanElement;
-		const action = append(
+		const action = dom.append(
 			item,
-			$('button.hucode-project-switcher-action-button')
+			dom.$('button.hucode-project-switcher-action-button')
 		) as HTMLButtonElement;
 		action.type = 'button';
 
@@ -768,7 +701,7 @@ class ProjectSwitcherDragAndDrop
 	}
 }
 
-class ProjectSwitcherViewPane extends ViewPane {
+export class ProjectSwitcherWidget extends Disposable {
 	private tree: WorkbenchObjectTree<ProjectSwitcherItem, void> | undefined;
 	private viewItemContext:
 		| IContextKey<string>
@@ -776,24 +709,20 @@ class ProjectSwitcherViewPane extends ViewPane {
 	private itemsById = new Map<string, ProjectSwitcherItem>();
 	private projects: readonly ProjectRecord[] = [];
 	private hasProjects = false;
-	private bodyHeight = 0;
-	private bodyWidth = 0;
+	private treeContainer: HTMLElement | undefined;
+	private emptyContainer: HTMLElement | undefined;
+	private height = 0;
+	private width = 0;
 	private collapsedProjectIds = new Set<string>();
 	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
 		instances: [],
 	};
 
 	constructor(
-		options: IViewletViewOptions,
-		@IContextMenuService contextMenuService: IContextMenuService,
-		@IKeybindingService keybindingService: IKeybindingService,
-		@IConfigurationService configurationService: IConfigurationService,
-		@IContextKeyService contextKeyService: IContextKeyService,
-		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
-		@IInstantiationService instantiationService: IInstantiationService,
-		@IOpenerService openerService: IOpenerService,
-		@IThemeService themeService: IThemeService,
-		@IHoverService hoverService: IHoverService,
+		@IInstantiationService
+		private readonly instantiationService: IInstantiationService,
+		@IContextMenuService
+		private readonly contextMenuService: IContextMenuService,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@IWorkspaceContextService
@@ -804,32 +733,18 @@ class ProjectSwitcherViewPane extends ViewPane {
 		private readonly commandService: ICommandService,
 		@IStorageService
 		private readonly storageService: IStorageService,
-		@INativeWorkbenchEnvironmentService
-		private readonly environmentService: INativeWorkbenchEnvironmentService,
+		@IWorkbenchEnvironmentService
+		private readonly environmentService: IWorkbenchEnvironmentService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
 	) {
-		super(
-			{
-				...options,
-				titleMenuId: MenuId.ViewTitle,
-				showActions: ViewPaneShowActions.Always,
-			},
-			keybindingService,
-			contextMenuService,
-			configurationService,
-			contextKeyService,
-			viewDescriptorService,
-			instantiationService,
-			openerService,
-			themeService,
-			hoverService,
-		);
-		currentProjectSwitcherViewPane = this;
+		super();
+		currentProjectSwitcherWidget = this;
 		this.loadViewState();
 		this._register(toDisposable(() => {
-			if (currentProjectSwitcherViewPane === this) {
-				currentProjectSwitcherViewPane = undefined;
+			this.saveState();
+			if (currentProjectSwitcherWidget === this) {
+				currentProjectSwitcherWidget = undefined;
 			}
 		}));
 
@@ -842,19 +757,9 @@ class ProjectSwitcherViewPane extends ViewPane {
 		this._register(this.workspaceContextService.onDidChangeWorkbenchState(() => {
 			void this.handleWorkspaceContextChange();
 		}));
-		this._register(this.onDidChangeBodyVisibility(visible => {
-			if (visible) {
-				void this.refreshProjects();
-			}
-		}));
-		this._register(this.onDidChangeViewWelcomeState(() => {
-			if (this.tree) {
-				this.layoutBody(this.bodyHeight, this.bodyWidth);
-			}
-		}));
 		if (this.environmentService.isOmniWindow) {
 			this._register(this.shellService.onDidChangeWindowState(change => {
-				if (change.windowId !== this.environmentService.window.id) {
+				if (change.windowId !== this.windowId) {
 					return;
 				}
 
@@ -863,23 +768,42 @@ class ProjectSwitcherViewPane extends ViewPane {
 		}
 	}
 
-	override shouldShowWelcome(): boolean {
-		return !this.hasProjects;
+	private get windowId(): number {
+		return dom.getWindowId(mainWindow);
 	}
 
-	protected override renderBody(container: HTMLElement): void {
-		super.renderBody(container);
-
+	render(container: HTMLElement): void {
 		container.classList.add('hucode-project-switcher-view');
-		const treeContainer = append(
+		this.treeContainer = dom.append(
 			container,
-			$('.hucode-project-switcher-tree.file-icon-themable-tree')
+			dom.$('.hucode-project-switcher-tree.file-icon-themable-tree')
 		);
+		this.emptyContainer = dom.append(
+			container,
+			dom.$('.hucode-project-switcher-empty')
+		);
+		const emptyMessage = dom.append(
+			this.emptyContainer,
+			dom.$('div.hucode-project-switcher-empty-message')
+		);
+		emptyMessage.textContent = localize(
+			'projectSwitcherEmpty',
+			'No projects have been added yet.'
+		);
+		const addButton = dom.append(
+			this.emptyContainer,
+			dom.$('button.hucode-project-switcher-empty-button')
+		) as HTMLButtonElement;
+		addButton.type = 'button';
+		addButton.textContent = localize('addProjectLink', 'Add Project');
+		this._register(dom.addDisposableListener(addButton, 'click', () => {
+			void this.commandService.executeCommand(ADD_PROJECT_COMMAND_ID);
+		}));
 
 		this.tree = this._register(this.instantiationService.createInstance(
 			WorkbenchObjectTree<ProjectSwitcherItem, void>,
 			PROJECT_SWITCHER_VIEW_ID,
-			treeContainer,
+			this.treeContainer,
 			new ProjectSwitcherDelegate(),
 			[this.instantiationService.createInstance(ProjectSwitcherRenderer)],
 			{
@@ -894,7 +818,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 					ProjectSwitcherDragAndDrop
 				),
 				overrideStyles: {
-					...this.getLocationBasedColors().listOverrideStyles,
 					listBackground: asCssVariable(sessionsSidebarBackground),
 				},
 			}
@@ -922,6 +845,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 		this._register(this.tree.onDidOpen(event => {
 			void this.onDidOpenItem(event.element);
 		}));
+		this.updateEmptyState();
 
 		void this.loadCachedProjects();
 		if (this.environmentService.isOmniWindow) {
@@ -929,15 +853,13 @@ class ProjectSwitcherViewPane extends ViewPane {
 		}
 	}
 
-	protected override layoutBody(height: number, width: number): void {
-		super.layoutBody(height, width);
-		this.bodyHeight = height;
-		this.bodyWidth = width;
+	layout(width: number, height: number): void {
+		this.height = height;
+		this.width = width;
 		this.tree?.layout(height, width);
 	}
 
-	override focus(): void {
-		super.focus();
+	focus(): void {
 		this.tree?.domFocus();
 	}
 
@@ -981,14 +903,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 		}
 	}
 
-	private async refreshProjects(): Promise<void> {
-		try {
-			await this.projectManagerService.refresh();
-		} catch (error) {
-			this.notificationService.error(String(error));
-		}
-	}
-
 	private async handleProjectsChanged(
 		projects: readonly ProjectRecord[]
 	): Promise<void> {
@@ -1006,16 +920,22 @@ class ProjectSwitcherViewPane extends ViewPane {
 
 	private renderProjects(projects: readonly ProjectRecord[]): void {
 		this.captureTreeExpansionState();
-		const previousHasProjects = this.hasProjects;
 		const { roots, itemsById } = this.buildRoots(projects);
 		this.hasProjects = projects.length > 0;
 		this.itemsById = itemsById;
 		this.tree?.setChildren(null, roots);
 		this.tree?.rerender();
+		this.updateEmptyState();
+		this.layout(this.width, this.height);
+	}
 
-		if (previousHasProjects !== this.hasProjects) {
-			this._onDidChangeViewWelcomeState.fire();
+	private updateEmptyState(): void {
+		if (!this.treeContainer || !this.emptyContainer) {
+			return;
 		}
+
+		this.treeContainer.classList.toggle('hidden', !this.hasProjects);
+		this.emptyContainer.classList.toggle('hidden', this.hasProjects);
 	}
 
 	private buildRoots(projects: readonly ProjectRecord[]): {
@@ -1193,7 +1113,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 		try {
 			this.updateOmniHostedWorkspaceState(
 				await this.shellService.getWindowState(
-					this.environmentService.window.id
+					this.windowId
 				)
 			);
 		} catch (error) {
@@ -1287,11 +1207,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 			return;
 		}
 
-		if (this.environmentService.isOmniWindow) {
-			this.showNativeContextMenu(event, actions);
-			return;
-		}
-
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => event.anchor,
 			getActions: () => actions,
@@ -1301,75 +1216,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 				}
 			},
 		});
-	}
-
-	private showNativeContextMenu(
-		event: ITreeContextMenuEvent<ProjectSwitcherItem | null>,
-		actions: readonly IAction[]
-	): void {
-		const items = this.toNativeContextMenuItems(actions);
-		if (!items.length) {
-			return;
-		}
-
-		popup(
-			items,
-			this.getNativeContextMenuPopupOptions(event.anchor),
-			() => dom.ModifierKeyEmitter.getInstance().resetKeyStatus()
-		);
-	}
-
-	private toNativeContextMenuItems(
-		actions: readonly IAction[]
-	): IContextMenuItem[] {
-		const items: IContextMenuItem[] = [];
-
-		for (const action of actions) {
-			if (action instanceof Separator) {
-				items.push({ type: 'separator' });
-				continue;
-			}
-
-			if (action instanceof SubmenuAction) {
-				items.push({
-					label: action.label,
-					submenu: this.toNativeContextMenuItems(action.actions),
-				});
-				continue;
-			}
-
-			items.push({
-				label: action.label,
-				enabled: action.enabled,
-				checked: action.checked,
-				type: action.checked ? 'checkbox' : undefined,
-				click: () => void action.run(),
-			});
-		}
-
-		return items;
-	}
-
-	private getNativeContextMenuPopupOptions(
-		anchor: HTMLElement | IMouseEvent
-	): IPopupOptions | undefined {
-		if (dom.isHTMLElement(anchor)) {
-			const targetWindow = dom.getWindow(anchor);
-			const clientRect = anchor.getBoundingClientRect();
-			const zoom = getZoomFactor(targetWindow) *
-				dom.getDomNodeZoomLevel(anchor);
-
-			return {
-				x: Math.floor(clientRect.left * zoom),
-				y: Math.floor(clientRect.bottom * zoom),
-			};
-		}
-
-		const zoom = getZoomFactor(dom.getActiveWindow());
-		return {
-			x: Math.floor(anchor.posx * zoom),
-			y: Math.floor(anchor.posy * zoom),
-		};
 	}
 
 	private getContextActions(item: ProjectSwitcherItem): IAction[] {
@@ -1546,7 +1392,7 @@ class ProjectSwitcherViewPane extends ViewPane {
 		return undefined;
 	}
 
-	override saveState(): void {
+	saveState(): void {
 		this.captureTreeExpansionState();
 		const state: ProjectSwitcherViewState = {
 			version: PROJECT_SWITCHER_VIEW_STATE_VERSION,
@@ -1558,7 +1404,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 			StorageScope.PROFILE,
 			StorageTarget.MACHINE
 		);
-		super.saveState();
 	}
 
 	private loadViewState(): void {
@@ -1613,68 +1458,6 @@ class ProjectSwitcherViewPane extends ViewPane {
 	}
 }
 
-const PROJECT_SWITCHER_VIEW_DESCRIPTOR: IViewDescriptor = {
-	id: PROJECT_SWITCHER_VIEW_ID,
-	name: localize2('hucodeProjectSwitcher', 'Projects'),
-	ctorDescriptor: new SyncDescriptor(ProjectSwitcherViewPane),
-	canToggleVisibility: true,
-	canMoveView: true,
-	collapsed: false,
-};
-
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
-	[PROJECT_SWITCHER_VIEW_DESCRIPTOR],
-	VIEW_CONTAINER
-);
-
-class HostedOmniProjectSwitcherVisibilityContribution
-	implements IWorkbenchContribution {
-	static readonly ID =
-		'workbench.contrib.hucode.hostedOmniProjectSwitcherVisibility';
-
-	constructor(
-		@INativeWorkbenchEnvironmentService
-		environmentService: INativeWorkbenchEnvironmentService,
-	) {
-		if (!environmentService.isHostedOmniWorkspace) {
-			return;
-		}
-
-		const viewsRegistry = Registry.as<IViewsRegistry>(
-			ViewExtensions.ViewsRegistry
-		);
-		const viewContainersRegistry = Registry.as<IViewContainersRegistry>(
-			ViewExtensions.ViewContainersRegistry
-		);
-
-		viewsRegistry.deregisterViews(
-			[PROJECT_SWITCHER_VIEW_DESCRIPTOR],
-			VIEW_CONTAINER
-		);
-		viewContainersRegistry.deregisterViewContainer(VIEW_CONTAINER);
-	}
-}
-
-registerWorkbenchContribution2(
-	HostedOmniProjectSwitcherVisibilityContribution.ID,
-	HostedOmniProjectSwitcherVisibilityContribution,
-	WorkbenchPhase.BlockStartup
-);
-
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViewWelcomeContent(
-	PROJECT_SWITCHER_VIEW_ID,
-	{
-		content: localize(
-			'projectSwitcherEmpty',
-			'No projects have been added yet.\n[{0}](command:{1})',
-			localize('addProjectLink', 'Add Project'),
-			ADD_PROJECT_COMMAND_ID
-		),
-		when: ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-		order: 1,
-	}
-);
-
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
@@ -1682,8 +1465,7 @@ registerAction2(class extends Action2 {
 			title: localize2('addProject', 'Add Project'),
 			icon: Codicon.add,
 			menu: {
-				id: MenuId.ViewTitle,
-				when: ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
+				id: Menus.SidebarTitle,
 				group: 'navigation',
 			},
 			f1: true,
@@ -1717,7 +1499,7 @@ registerAction2(class extends Action2 {
 export function getSelectedProjectSwitcherTarget():
 	| IProjectSwitcherSelectionTarget
 	| undefined {
-	return currentProjectSwitcherViewPane?.getSelectionTarget();
+	return currentProjectSwitcherWidget?.getSelectionTarget();
 }
 
 registerAction2(class extends Action2 {
@@ -1727,8 +1509,7 @@ registerAction2(class extends Action2 {
 			title: localize2('refreshProjects', 'Refresh Projects'),
 			icon: Codicon.refresh,
 			menu: {
-				id: MenuId.ViewTitle,
-				when: ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
+				id: Menus.SidebarTitle,
 				group: 'navigation',
 				order: 10,
 			},
@@ -1761,8 +1542,7 @@ registerAction2(class extends Action2 {
 			title: localize2('collapseAllProjects', 'Collapse All'),
 			icon: Codicon.collapseAll,
 			menu: {
-				id: MenuId.ViewTitle,
-				when: ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
+				id: Menus.SidebarTitle,
 				group: 'navigation',
 				order: 20,
 			},
@@ -1771,7 +1551,7 @@ registerAction2(class extends Action2 {
 	}
 
 	async run(): Promise<void> {
-		currentProjectSwitcherViewPane?.collapseAll();
+		currentProjectSwitcherWidget?.collapseAll();
 	}
 });
 
@@ -1861,14 +1641,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: RENAME_PROJECT_COMMAND_ID,
 			title: localize2('renameProject', 'Rename Project'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.regex('viewItem', /^hucode-project/)
-				),
-				group: '0_manage',
-			},
 		});
 	}
 
@@ -1915,14 +1687,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: PIN_PROJECT_COMMAND_ID,
 			title: localize2('pinProject', 'Pin Project'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.equals('viewItem', PROJECT_CONTEXT_VALUE)
-				),
-				group: '0_manage',
-			},
 		});
 	}
 
@@ -1941,14 +1705,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: UNPIN_PROJECT_COMMAND_ID,
 			title: localize2('unpinProject', 'Unpin Project'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.equals('viewItem', PINNED_PROJECT_CONTEXT_VALUE)
-				),
-				group: '0_manage',
-			},
 		});
 	}
 
@@ -1967,14 +1723,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: REMOVE_PROJECT_COMMAND_ID,
 			title: localize2('removeProject', 'Remove Project'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.regex('viewItem', /^hucode-project/)
-				),
-				group: '9_remove',
-			},
 		});
 	}
 
@@ -2023,14 +1771,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: CREATE_WORKTREE_COMMAND_ID,
 			title: localize2('createWorktree', 'Create Worktree'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.regex('viewItem', /^hucode-project/)
-				),
-				group: '1_create',
-			},
 		});
 	}
 
@@ -2082,14 +1822,6 @@ registerAction2(class extends Action2 {
 		super({
 			id: REMOVE_WORKTREE_COMMAND_ID,
 			title: localize2('removeWorktree', 'Remove Worktree'),
-			menu: {
-				id: MenuId.ViewItemContext,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('view', PROJECT_SWITCHER_VIEW_ID),
-					ContextKeyExpr.equals('viewItem', WORKTREE_CONTEXT_VALUE)
-				),
-				group: '9_remove',
-			},
 		});
 	}
 
@@ -2161,9 +1893,7 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
-		const environmentService = accessor.get(
-			INativeWorkbenchEnvironmentService
-		);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		if (!environmentService.isOmniWindow) {
 			return;
 		}
@@ -2173,7 +1903,7 @@ registerAction2(class extends Action2 {
 
 		try {
 			const state = await shellService.getWindowState(
-				environmentService.window.id
+				dom.getWindowId(mainWindow)
 			);
 			const instance = state.instances.find(entry =>
 				pathsEqual(entry.worktreePath, parsed.worktreePath)
@@ -2183,7 +1913,7 @@ registerAction2(class extends Action2 {
 			}
 
 			await shellService.closeWorkspace(
-				environmentService.window.id,
+				dom.getWindowId(mainWindow),
 				instance.instanceId
 			);
 		} catch (error) {

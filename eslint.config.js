@@ -1978,7 +1978,27 @@ export default tseslint.config(
 						'vs/workbench/api/~',
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
-						'vs/workbench/workbench.common.main.js'
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/electron-browser/omniWindowService.js',
+						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/omni.desktop.main.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/*/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/~'
 					]
 				},
 				{

@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '../../base/common/event.js';
-import { assertReturnsDefined } from '../../base/common/types.js';
 import { IInstantiationService } from
 	'../../platform/instantiation/common/instantiation.js';
 import { IProgressIndicator } from
@@ -14,14 +13,16 @@ import { ViewContainerLocation } from '../../workbench/common/views.js';
 import { IPaneCompositePartService } from
 	'../../workbench/services/panecomposite/browser/panecomposite.js';
 import { Disposable } from '../../base/common/lifecycle.js';
-import { PaneCompositeDescriptor } from
+import {
+	Extensions as PaneCompositeExtensions,
+	PaneCompositeDescriptor,
+} from
 	'../../workbench/browser/panecomposite.js';
 import { IPaneCompositePart } from
 	'../../workbench/browser/parts/paneCompositePart.js';
-import { SINGLE_WINDOW_PARTS } from
+import { Parts, SINGLE_WINDOW_PARTS } from
 	'../../workbench/services/layout/browser/layoutService.js';
 import { PanelPart } from './parts/panelPart.js';
-import { SidebarPart } from './parts/sidebarPart.js';
 import { AuxiliaryBarPart } from
 	'./parts/auxiliaryBarPart.js';
 import {
@@ -65,10 +66,6 @@ export class OmniPaneCompositePartService extends Disposable
 			instantiationService.createInstance(PanelPart)
 		);
 		this.registerPart(
-			ViewContainerLocation.Sidebar,
-			instantiationService.createInstance(SidebarPart)
-		);
-		this.registerPart(
 			ViewContainerLocation.AuxiliaryBar,
 			instantiationService.createInstance(AuxiliaryBarPart)
 		);
@@ -94,11 +91,19 @@ export class OmniPaneCompositePartService extends Disposable
 	}
 
 	getRegistryId(viewContainerLocation: ViewContainerLocation): string {
-		return this.getPartByLocation(viewContainerLocation).registryId;
+		return this.getPartByLocation(viewContainerLocation)?.registryId
+			?? this.getRegistryIdByLocation(viewContainerLocation);
 	}
 
 	getPartId(viewContainerLocation: ViewContainerLocation): SINGLE_WINDOW_PARTS {
-		return this.getPartByLocation(viewContainerLocation).partId;
+		const part = this.getPartByLocation(viewContainerLocation);
+		if (part) {
+			return part.partId;
+		}
+
+		return viewContainerLocation === ViewContainerLocation.ChatBar
+			? Parts.CHATBAR_PART
+			: Parts.SIDEBAR_PART;
 	}
 
 	openPaneComposite(
@@ -107,14 +112,14 @@ export class OmniPaneCompositePartService extends Disposable
 		focus?: boolean
 	): Promise<IPaneComposite | undefined> {
 		return this.getPartByLocation(viewContainerLocation)
-			.openPaneComposite(id, focus);
+			?.openPaneComposite(id, focus) ?? Promise.resolve(undefined);
 	}
 
 	getActivePaneComposite(
 		viewContainerLocation: ViewContainerLocation
 	): IPaneComposite | undefined {
 		return this.getPartByLocation(viewContainerLocation)
-			.getActivePaneComposite();
+			?.getActivePaneComposite();
 	}
 
 	getPaneComposite(
@@ -122,35 +127,35 @@ export class OmniPaneCompositePartService extends Disposable
 		viewContainerLocation: ViewContainerLocation
 	): PaneCompositeDescriptor | undefined {
 		return this.getPartByLocation(viewContainerLocation)
-			.getPaneComposite(id);
+			?.getPaneComposite(id);
 	}
 
 	getPaneComposites(
 		viewContainerLocation: ViewContainerLocation
 	): PaneCompositeDescriptor[] {
 		return this.getPartByLocation(viewContainerLocation)
-			.getPaneComposites();
+			?.getPaneComposites() ?? [];
 	}
 
 	getPinnedPaneCompositeIds(
 		viewContainerLocation: ViewContainerLocation
 	): string[] {
 		return this.getPartByLocation(viewContainerLocation)
-			.getPinnedPaneCompositeIds();
+			?.getPinnedPaneCompositeIds() ?? [];
 	}
 
 	getVisiblePaneCompositeIds(
 		viewContainerLocation: ViewContainerLocation
 	): string[] {
 		return this.getPartByLocation(viewContainerLocation)
-			.getVisiblePaneCompositeIds();
+			?.getVisiblePaneCompositeIds() ?? [];
 	}
 
 	getPaneCompositeIds(
 		viewContainerLocation: ViewContainerLocation
 	): string[] {
 		return this.getPartByLocation(viewContainerLocation)
-			.getPaneCompositeIds();
+			?.getPaneCompositeIds() ?? [];
 	}
 
 	getProgressIndicator(
@@ -158,26 +163,39 @@ export class OmniPaneCompositePartService extends Disposable
 		viewContainerLocation: ViewContainerLocation
 	): IProgressIndicator | undefined {
 		return this.getPartByLocation(viewContainerLocation)
-			.getProgressIndicator(id);
+			?.getProgressIndicator(id);
 	}
 
 	hideActivePaneComposite(viewContainerLocation: ViewContainerLocation): void {
-		this.getPartByLocation(viewContainerLocation).hideActivePaneComposite();
+		this.getPartByLocation(viewContainerLocation)?.hideActivePaneComposite();
 	}
 
 	getLastActivePaneCompositeId(
 		viewContainerLocation: ViewContainerLocation
 	): string {
 		return this.getPartByLocation(viewContainerLocation)
-			.getLastActivePaneCompositeId();
+			?.getLastActivePaneCompositeId() ?? '';
 	}
 
 	private getPartByLocation(
 		viewContainerLocation: ViewContainerLocation
-	): IPaneCompositePart {
-		return assertReturnsDefined(this.paneCompositeParts.get(
-			viewContainerLocation
-		));
+	): IPaneCompositePart | undefined {
+		return this.paneCompositeParts.get(viewContainerLocation);
+	}
+
+	private getRegistryIdByLocation(
+		viewContainerLocation: ViewContainerLocation
+	): string {
+		switch (viewContainerLocation) {
+			case ViewContainerLocation.Sidebar:
+				return PaneCompositeExtensions.Viewlets;
+			case ViewContainerLocation.Panel:
+				return PaneCompositeExtensions.Panels;
+			case ViewContainerLocation.AuxiliaryBar:
+				return PaneCompositeExtensions.Auxiliary;
+			case ViewContainerLocation.ChatBar:
+				return PaneCompositeExtensions.ChatBar;
+		}
 	}
 }
 

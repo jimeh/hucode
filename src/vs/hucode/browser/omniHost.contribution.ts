@@ -5,6 +5,8 @@
 
 import { Disposable } from '../../base/common/lifecycle.js';
 import { URI } from '../../base/common/uri.js';
+import { getWindowId } from '../../base/browser/dom.js';
+import { mainWindow } from '../../base/browser/window.js';
 import { localize } from '../../nls.js';
 import { INotificationService } from
 	'../../platform/notification/common/notification.js';
@@ -14,14 +16,13 @@ import {
 	WorkbenchPhase,
 } from '../../workbench/common/contributions.js';
 import { IHostService } from '../../workbench/services/host/browser/host.js';
-import { IViewsService } from
-	'../../workbench/services/views/common/viewsService.js';
-import { INativeWorkbenchEnvironmentService } from
-	'../../workbench/services/environment/electron-browser/environmentService.js';
+import { IWorkbenchLayoutService, Parts } from
+	'../../workbench/services/layout/browser/layoutService.js';
+import { IWorkbenchEnvironmentService } from
+	'../../workbench/services/environment/common/environmentService.js';
 import {
-	PROJECT_SWITCHER_VIEW_ID,
 	getSelectedProjectSwitcherTarget,
-} from '../../workbench/contrib/projectSwitcher/electron-browser/projectSwitcher.contribution.js';
+} from './projectSwitcher/projectSwitcher.contribution.js';
 import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
@@ -74,12 +75,12 @@ class OmniWindowShellContribution extends Disposable
 	static readonly ID = 'hucode.omniWindowShell';
 
 	constructor(
-		@INativeWorkbenchEnvironmentService
-		private readonly environmentService: INativeWorkbenchEnvironmentService,
+		@IWorkbenchEnvironmentService
+		private readonly environmentService: IWorkbenchEnvironmentService,
 		@IHucodeOmniWindowUIService
 		private readonly omniWindowUIService: IHucodeOmniWindowUIService,
-		@IViewsService
-		private readonly viewsService: IViewsService,
+		@IWorkbenchLayoutService
+		private readonly layoutService: IWorkbenchLayoutService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
 		@IHostService
@@ -95,17 +96,17 @@ class OmniWindowShellContribution extends Disposable
 
 		this._register(this.omniWindowUIService.registerDelegate({
 			focusProjectPane: () => {
-				void this.viewsService.openView(PROJECT_SWITCHER_VIEW_ID, true);
+				this.layoutService.focusPart(Parts.SIDEBAR_PART);
 			},
 			openSelectedInOmni: async () => {
 				const nextState = await openSelectedInOmniWindow(
-					this.environmentService.window.id,
+					this.windowId,
 					this.shellService,
 					this.notificationService
 				);
 				if (nextState) {
 					await this.shellService.focusWorkspace(
-						this.environmentService.window.id
+						this.windowId
 					);
 				}
 			},
@@ -115,18 +116,22 @@ class OmniWindowShellContribution extends Disposable
 			),
 			focusWorkspace: () =>
 				this.shellService.focusWorkspace(
-					this.environmentService.window.id
+					this.windowId
 				),
 			reloadWorkspace: () =>
 				this.shellService.reloadWorkspace(
-					this.environmentService.window.id
+					this.windowId
 				),
 			closeWorkspace: () =>
 				this.shellService.closeWorkspace(
-					this.environmentService.window.id
+					this.windowId
 				).then(() => undefined),
 		}));
 
+	}
+
+	private get windowId(): number {
+		return getWindowId(mainWindow);
 	}
 }
 

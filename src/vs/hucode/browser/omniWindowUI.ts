@@ -5,8 +5,13 @@
 
 import { IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { localize2 } from '../../nls.js';
-import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
-import type { IAction2Options } from '../../platform/actions/common/actions.js';
+import {
+	Action2,
+	registerAction2,
+	type IAction2Options,
+} from '../../platform/actions/common/actions.js';
+import type { ILocalizedString } from
+	'../../platform/action/common/action.js';
 import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
 import { createDecorator, ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { IsOmniWindowContext } from '../../workbench/common/contextkeys.js';
@@ -93,12 +98,12 @@ registerSingleton(
 abstract class BaseOmniWindowAction extends Action2 {
 	constructor(
 		id: string,
-		title: string,
+		title: ILocalizedString,
 		keybinding?: IAction2Options['keybinding']
 	) {
 		super({
 			id,
-			title: localize2(id, title),
+			title,
 			f1: true,
 			precondition: IsOmniWindowContext,
 			keybinding
@@ -133,8 +138,57 @@ registerAction2(class extends Action2 {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
+			'workbench.action.omniWindow.focusProjectsFromExplorerShortcut',
+			localize2(
+				'omniWindowFocusProjectsFromExplorerShortcut',
+				'Omni-Window: Focus Projects From Explorer Shortcut'
+			),
+			{
+				weight: KeybindingWeight.WorkbenchContrib + 100,
+				when: IsOmniWindowContext,
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyE
+			}
+		);
+	}
+
+	override run(accessor: ServicesAccessor): void {
+		accessor.get(IHucodeOmniWindowUIService).focusProjectPane();
+	}
+});
+
+registerAction2(class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			'workbench.action.omniWindow.focusProjectsFromSourceControlShortcut',
+			localize2(
+				'omniWindowFocusProjectsFromSourceControlShortcut',
+				'Omni-Window: Focus Projects From Source Control Shortcut'
+			),
+			{
+				weight: KeybindingWeight.WorkbenchContrib + 100,
+				when: IsOmniWindowContext,
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyG,
+				mac: {
+					primary: KeyMod.WinCtrl | KeyMod.Shift | KeyCode.KeyG,
+					secondary: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyG]
+				}
+			}
+		);
+	}
+
+	override run(accessor: ServicesAccessor): void {
+		accessor.get(IHucodeOmniWindowUIService).focusProjectPane();
+	}
+});
+
+registerAction2(class extends BaseOmniWindowAction {
+	constructor() {
+		super(
 			'workbench.action.omniWindow.focusProjectPane',
-			'Omni-Window: Focus Project Pane'
+			localize2(
+				'omniWindowFocusProjectPane',
+				'Omni-Window: Focus Project Pane'
+			)
 		);
 	}
 
@@ -147,7 +201,10 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.openSelectedInOmniWindow',
-			'Omni-Window: Open Selected Worktree'
+			localize2(
+				'omniWindowOpenSelectedInOmniWindow',
+				'Omni-Window: Open Selected Worktree'
+			)
 		);
 	}
 
@@ -160,7 +217,10 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.openSelectedInNewWindow',
-			'Omni-Window: Open Selected Worktree In New Window'
+			localize2(
+				'omniWindowOpenSelectedInNewWindow',
+				'Omni-Window: Open Selected Worktree In New Window'
+			)
 		);
 	}
 
@@ -173,7 +233,10 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.focusWorkspace',
-			'Omni-Window: Focus Workspace'
+			localize2(
+				'omniWindowFocusWorkspace',
+				'Omni-Window: Focus Workspace'
+			)
 		);
 	}
 
@@ -186,7 +249,10 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.reloadWorkspace',
-			'Omni-Window: Reload Workspace',
+			localize2(
+				'omniWindowReloadWorkspace',
+				'Omni-Window: Reload Workspace'
+			),
 			{
 				weight: KeybindingWeight.WorkbenchContrib + 50,
 				when: ContextKeyExpr.and(
@@ -207,7 +273,10 @@ registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			'workbench.action.omniWindow.closeWorkspace',
-			'Omni-Window: Close Workspace'
+			localize2(
+				'omniWindowCloseWorkspace',
+				'Omni-Window: Close Workspace'
+			)
 		);
 	}
 
