@@ -192,6 +192,25 @@ class ResidentHostedWorkspacesController extends Disposable {
 	): void {
 		instance.visible = visible;
 		instance.view?.setVisible(visible);
+		if (visible) {
+			this.bringInstanceToFront(instance);
+		}
+	}
+
+	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
+		if (!instance.view || !this.window.win) {
+			return;
+		}
+
+		// Re-adding an attached Electron View moves it above its siblings.
+		this.window.win.contentView.addChildView(instance.view);
+	}
+
+	private bringActiveInstanceToFront(): void {
+		const activeInstance = this.getActiveInstance();
+		if (activeInstance?.visible) {
+			this.bringInstanceToFront(activeInstance);
+		}
 	}
 
 	private trustView(instance: IHostedWorkbenchInstance): void {
@@ -502,6 +521,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		for (const instance of this.instancesById.values()) {
 			instance.view?.setBounds(viewBounds);
 		}
+		this.bringActiveInstanceToFront();
 	}
 
 	async closeWorkspace(instanceId?: string): Promise<void> {
@@ -647,7 +667,6 @@ class ResidentHostedWorkspacesController extends Disposable {
 			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
 
 			let settled = false;
-			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
 			const handleOk = () => complete(false);
 			const handleCancel = () => complete(true);
@@ -673,7 +692,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			validatedIpcMain.once(okChannel, handleOk);
 			validatedIpcMain.once(cancelChannel, handleCancel);
 			webContents.once('destroyed', handleDestroyed);
-			timeoutHandle = setTimeout(() => {
+			const timeoutHandle = setTimeout(() => {
 				this.logService.warn(
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace before-unload reply for ${instance.worktreePath}.`
@@ -707,7 +726,6 @@ class ResidentHostedWorkspacesController extends Disposable {
 			const replyChannel = `vscode:reply${oneTimeEventToken}`;
 
 			let settled = false;
-			let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
 			const handleReply = () => complete();
 			const handleDestroyed = () => complete();
@@ -730,7 +748,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 			validatedIpcMain.once(replyChannel, handleReply);
 			webContents.once('destroyed', handleDestroyed);
-			timeoutHandle = setTimeout(() => {
+			const timeoutHandle = setTimeout(() => {
 				this.logService.warn(
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace will-unload reply for ${instance.worktreePath}.`
@@ -754,7 +772,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	focusWorkspace(): void {
-		this.getActiveInstance()?.view?.webContents.focus();
+		const activeInstance = this.getActiveInstance();
+		if (!activeInstance?.view) {
+			return;
+		}
+
+		this.bringInstanceToFront(activeInstance);
+		activeInstance.view.webContents.focus();
 	}
 
 	focusShell(): void {

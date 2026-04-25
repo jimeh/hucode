@@ -11,6 +11,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.titlebar {
 	box-shadow: none;
+	pointer-events: none;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
@@ -18,7 +19,8 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.titlebar > .titlebar-container {
 	background: transparent !important;
-	-webkit-app-region: drag;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
@@ -27,6 +29,8 @@
 	position: relative;
 	z-index: 2501;
 	align-items: center;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
@@ -35,6 +39,8 @@
 	flex: 1 1 auto;
 	min-width: 0;
 	height: 100%;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
@@ -46,6 +52,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-left
 	.action-label {
+	pointer-events: auto;
 	-webkit-app-region: no-drag;
 }
 

@@ -115,7 +115,8 @@
 	box-shadow: none;
 }
 
-/* macOS native: the spacer uses window-controls-container but should not block dragging */
-.hucode-omni-workbench.mac .part.titlebar .window-controls-container {
-	-webkit-app-region: drag;
+/* macOS native: the hosted workbench owns the titlebar hit-testing here. */
+.hucode-omni-workbench.mac.hucode-omni-window .part.titlebar .window-controls-container {
+	pointer-events: none;
+	-webkit-app-region: no-drag;
 }

@@ -1851,6 +1851,22 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
 					'target': 'src/vs/sessions/electron-browser/sessions.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
