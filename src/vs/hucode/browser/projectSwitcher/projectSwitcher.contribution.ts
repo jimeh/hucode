@@ -1210,6 +1210,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => event.anchor,
 			getActions: () => actions,
+			forceNative: this.environmentService.isOmniWindow,
 			onHide: (wasCancelled?: boolean) => {
 				if (wasCancelled) {
 					this.tree?.domFocus();
