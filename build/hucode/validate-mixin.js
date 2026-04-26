@@ -52,6 +52,7 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(generated.dataFolderName, '.hucode');
 	assert.strictEqual(generated.urlProtocol, 'hucode');
 	assert.strictEqual(generated.darwinBundleIdentifier, 'dev.hucode.app');
+	assert.strictEqual(generated.darwinAssetsCar, 'resources/darwin/Assets.car');
 	assert.strictEqual(generated.win32AppUserModelId, 'dev.hucode.app');
 	assert.strictEqual(generated.embedderIdentifier, 'dev.hucode.app');
 	assert.strictEqual(

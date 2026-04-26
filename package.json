@@ -16,6 +16,7 @@
 		"hucode:watch": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run watch",
 		"hucode:run": "npm run hucode:prepare && ./scripts/hucode.sh",
 		"hucode:cli": "npm run hucode:prepare && ./scripts/hucode-cli.sh",
+		"hucode:generate-icons": "node build/hucode/generate-darwin-icon.js",
 		"hucode:build:production": "node build/hucode/release-build.js",
 		"hucode:build:release": "node build/hucode/release-build.js --archive",
 		"test-browser": "npx playwright install && node test/unit/browser/index.js",

@@ -13,6 +13,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hucode product identity is applied through the tracked overlay under
   `build/hucode/mixin/stable/` and staged into the working tree only for
   Hucode-specific wrapper commands. Keep root `product.json` as upstream OSS.
+- Hucode macOS app icons are sourced from `build/hucode/icons/darwin/` and
+  generated into the stable mixin overlay. Keep `resources/darwin/code.icns`
+  upstream OSS; run `npm run hucode:generate-icons` to refresh Hucode
+  `code.icns` and `Assets.car`.
 - Hucode's app release version lives in the overlay as `hucodeVersion`.
   Keep upstream `version` for VS Code compatibility and extension checks.
 - Workbench `TreeView` selection/reveal paths operate on the live `ITreeItem`
