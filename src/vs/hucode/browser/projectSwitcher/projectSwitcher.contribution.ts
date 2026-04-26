@@ -91,6 +91,8 @@ const OPEN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.openWorktree';
 const RENAME_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.renameProject';
 const PIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.pinProject';
 const UNPIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.unpinProject';
+const PIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.pinWorktree';
+const UNPIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unpinWorktree';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const CREATE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.createWorktree';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
@@ -113,12 +115,24 @@ const PROJECT_SWITCHER_VIEW_STATE_VERSION = 1;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 
+type ProjectSwitcherSection = 'pinned' | 'unpinned';
+
+const PINNED_SECTION: ProjectSwitcherSection = 'pinned';
+const UNPINNED_SECTION: ProjectSwitcherSection = 'unpinned';
+
 interface ProjectSwitcherViewState {
 	version?: number;
 	collapsedProjectIds?: string[];
 }
 
 let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
+
+function encodeProjectHandle(
+	projectId: string,
+	section: ProjectSwitcherSection
+): string {
+	return `project:${section}:${projectId}`;
+}
 
 function encodeWorktreeHandle(projectId: string, worktreePath: string): string {
 	return `worktree:${projectId}:${encodeURIComponent(worktreePath)}`;
@@ -148,6 +162,13 @@ function getTreeItemHandle(
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
 		return undefined;
+	}
+
+	const [, section, projectId] = handle.split(':', 3);
+	if ((section === PINNED_SECTION || section === UNPINNED_SECTION) &&
+		projectId
+	) {
+		return projectId;
 	}
 
 	return handle.slice('project:'.length);
@@ -190,6 +211,7 @@ interface ProjectSwitcherProjectItem extends ProjectSwitcherBaseItem {
 	readonly kind: 'project';
 	readonly projectId: string;
 	readonly pinned: boolean;
+	readonly section: ProjectSwitcherSection;
 	readonly rootPath: string;
 }
 
@@ -198,6 +220,8 @@ interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
 	readonly projectId: string;
 	readonly worktreePath: string;
 	readonly isMain: boolean;
+	readonly pinned: boolean;
+	readonly section: ProjectSwitcherSection;
 	readonly hostedWorkbenchInstanceId?: string;
 	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
@@ -590,11 +614,10 @@ class ProjectSwitcherDragAndDrop
 			);
 		}
 
-		if (!isProjectItem(target) || target.projectId === source.projectId) {
-			return false;
-		}
-
-		if (target.pinned !== source.pinned) {
+		if (!isProjectItem(target) ||
+			target.projectId === source.projectId ||
+			target.section !== source.section
+		) {
 			return false;
 		}
 
@@ -616,6 +639,7 @@ class ProjectSwitcherDragAndDrop
 		}
 
 		if (target.projectId !== source.projectId ||
+			target.section !== source.section ||
 			pathsEqual(target.worktreePath, source.worktreePath)
 		) {
 			return false;
@@ -652,7 +676,7 @@ class ProjectSwitcherDragAndDrop
 			return;
 		}
 
-		if (!isProjectItem(target) || target.pinned !== source.pinned) {
+		if (!isProjectItem(target) || target.section !== source.section) {
 			return;
 		}
 
@@ -672,6 +696,7 @@ class ProjectSwitcherDragAndDrop
 		}
 
 		if (target.projectId !== source.projectId ||
+			target.section !== source.section ||
 			pathsEqual(target.worktreePath, source.worktreePath)
 		) {
 			return;
@@ -847,7 +872,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				return;
 			}
 
-			this.setProjectCollapsed(item.projectId, event.node.collapsed);
+			this.setProjectCollapsed(item, event.node.collapsed);
 		}));
 		this._register(this.tree.onContextMenu(event => this.onContextMenu(event)));
 		this._register(this.tree.onDidOpen(event => {
@@ -929,7 +954,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private renderProjects(projects: readonly ProjectRecord[]): void {
 		this.captureTreeExpansionState();
 		const { roots, itemsById } = this.buildRoots(projects);
-		this.hasProjects = projects.length > 0;
+		this.hasProjects = roots.length > 0;
 		this.itemsById = itemsById;
 		this.tree?.setChildren(null, roots);
 		this.tree?.rerender();
@@ -952,10 +977,36 @@ export class ProjectSwitcherWidget extends Disposable {
 	} {
 		const itemsById = new Map<string, ProjectSwitcherItem>();
 		const roots: IObjectTreeElement<ProjectSwitcherItem>[] = [];
-		const pinnedProjects = projects.filter(project => project.pinned);
-		const unpinnedProjects = projects.filter(project => !project.pinned);
+		const pinnedProjectElements: IObjectTreeElement<ProjectSwitcherItem>[] = [];
+		const unpinnedProjectElements: IObjectTreeElement<ProjectSwitcherItem>[] = [];
 
-		if (pinnedProjects.length) {
+		for (const project of projects) {
+			const pinnedWorktrees = project.pinned
+				? project.worktrees
+				: project.worktrees.filter(worktree => worktree.pinned);
+			const unpinnedWorktrees = project.pinned
+				? []
+				: project.worktrees.filter(worktree => !worktree.pinned);
+
+			if (pinnedWorktrees.length) {
+				pinnedProjectElements.push(this.toProjectElement(
+					project,
+					pinnedWorktrees,
+					PINNED_SECTION,
+					itemsById
+				));
+			}
+			if (unpinnedWorktrees.length) {
+				unpinnedProjectElements.push(this.toProjectElement(
+					project,
+					unpinnedWorktrees,
+					UNPINNED_SECTION,
+					itemsById
+				));
+			}
+		}
+
+		if (pinnedProjectElements.length) {
 			const separator: ProjectSwitcherSeparatorItem = {
 				id: PINNED_SEPARATOR_HANDLE,
 				handle: PINNED_SEPARATOR_HANDLE,
@@ -965,13 +1016,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			};
 			itemsById.set(separator.handle, separator);
 			roots.push({ element: separator });
-
-			for (const project of pinnedProjects) {
-				roots.push(this.toProjectElement(project, itemsById));
-			}
+			roots.push(...pinnedProjectElements);
 		}
 
-		if (pinnedProjects.length && unpinnedProjects.length) {
+		if (pinnedProjectElements.length && unpinnedProjectElements.length) {
 			const separator: ProjectSwitcherSeparatorItem = {
 				id: UNPINNED_SEPARATOR_HANDLE,
 				handle: UNPINNED_SEPARATOR_HANDLE,
@@ -983,25 +1031,27 @@ export class ProjectSwitcherWidget extends Disposable {
 			roots.push({ element: separator });
 		}
 
-		for (const project of unpinnedProjects) {
-			roots.push(this.toProjectElement(project, itemsById));
-		}
+		roots.push(...unpinnedProjectElements);
 
 		return { roots, itemsById };
 	}
 
 	private toProjectElement(
 		project: ProjectRecord,
+		worktrees: readonly WorktreeRecord[],
+		section: ProjectSwitcherSection,
 		itemsById: Map<string, ProjectSwitcherItem>
 	): IObjectTreeElement<ProjectSwitcherItem> {
 		const rootUri = URI.revive(project.rootUri);
 		const rootPath = rootUri.fsPath;
+		const handle = encodeProjectHandle(project.id, section);
 		const item: ProjectSwitcherProjectItem = {
-			id: `project:${project.id}`,
-			handle: `project:${project.id}`,
+			id: handle,
+			handle,
 			kind: 'project',
 			projectId: project.id,
 			pinned: project.pinned,
+			section,
 			rootPath,
 			label: project.label,
 			description: basename(rootPath),
@@ -1016,9 +1066,10 @@ export class ProjectSwitcherWidget extends Disposable {
 		return {
 			element: item,
 			collapsible: true,
-			collapsed: this.collapsedProjectIds.has(project.id),
-			children: project.worktrees.map(worktree =>
-				this.toWorktreeElement(project, worktree, itemsById)
+			collapsed: this.collapsedProjectIds.has(item.id) ||
+				this.collapsedProjectIds.has(project.id),
+			children: worktrees.map(worktree =>
+				this.toWorktreeElement(project, worktree, section, itemsById)
 			),
 		};
 	}
@@ -1026,6 +1077,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private toWorktreeElement(
 		project: ProjectRecord,
 		worktree: WorktreeRecord,
+		section: ProjectSwitcherSection,
 		itemsById: Map<string, ProjectSwitcherItem>
 	): IObjectTreeElement<ProjectSwitcherItem> {
 		const hostedWorkbenchInstance = this.getHostedWorkbenchInstance(
@@ -1043,6 +1095,8 @@ export class ProjectSwitcherWidget extends Disposable {
 			projectId: project.id,
 			worktreePath: worktree.path,
 			isMain: worktree.isMain,
+			pinned: !!worktree.pinned,
+			section,
 			hostedWorkbenchInstanceId: hostedWorkbenchInstance?.instanceId,
 			hostedWorkbenchState: hostedWorkbenchInstance?.state,
 			isActive,
@@ -1188,12 +1242,12 @@ export class ProjectSwitcherWidget extends Disposable {
 		const collapsed = this.tree.isCollapsed(item);
 		if (collapsed) {
 			this.tree.expand(item);
-			this.setProjectCollapsed(item.projectId, false);
+			this.setProjectCollapsed(item, false);
 			return;
 		}
 
 		this.tree.collapse(item);
-		this.setProjectCollapsed(item.projectId, true);
+		this.setProjectCollapsed(item, true);
 	}
 
 	private onContextMenu(
@@ -1285,6 +1339,20 @@ export class ProjectSwitcherWidget extends Disposable {
 				this.getHostedWorkbenchInstance(item.worktreePath)?.instanceId;
 			const actions: IAction[] = [
 				toAction({
+					id: item.pinned
+						? UNPIN_WORKTREE_COMMAND_ID
+						: PIN_WORKTREE_COMMAND_ID,
+					label: item.pinned
+						? localize('unpinWorktree', 'Unpin Worktree')
+						: localize('pinWorktree', 'Pin Worktree'),
+					run: () => this.commandService.executeCommand(
+						item.pinned
+							? UNPIN_WORKTREE_COMMAND_ID
+							: PIN_WORKTREE_COMMAND_ID,
+						worktreeHandle
+					),
+				}),
+				toAction({
 					id: REFRESH_PROJECTS_COMMAND_ID,
 					label: localize('refreshProject', 'Refresh Project'),
 					run: () => this.commandService.executeCommand(
@@ -1360,11 +1428,14 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 
 		const projectItem = this.itemsById.get(
-			`project:${currentWorktree.projectId}`
+			encodeProjectHandle(
+				currentWorktree.projectId,
+				currentWorktree.section
+			)
 		);
 		if (isProjectItem(projectItem)) {
 			this.tree.expand(projectItem);
-			this.setProjectCollapsed(projectItem.projectId, false);
+			this.setProjectCollapsed(projectItem, false);
 		}
 
 		await this.tree.reveal(currentWorktree);
@@ -1376,18 +1447,14 @@ export class ProjectSwitcherWidget extends Disposable {
 	private getCurrentWorktreeItem(
 		projects: readonly ProjectRecord[]
 	): ProjectSwitcherWorktreeItem | undefined {
-		if (this.workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
-			return undefined;
-		}
-
-		const folderUri = this.workspaceContextService.getWorkspace().folders[0]?.uri;
-		if (!folderUri || folderUri.scheme !== 'file') {
+		const activeWorktreePath = this.getActiveWorktreePath();
+		if (!activeWorktreePath) {
 			return undefined;
 		}
 
 		for (const project of projects) {
 			const worktree = project.worktrees.find(entry =>
-				pathsEqual(entry.path, folderUri.fsPath)
+				pathsEqual(entry.path, activeWorktreePath)
 			);
 			if (worktree) {
 				const item = this.itemsById.get(
@@ -1454,17 +1521,22 @@ export class ProjectSwitcherWidget extends Disposable {
 				continue;
 			}
 
-			this.setProjectCollapsed(item.projectId, this.tree.isCollapsed(item));
+			this.setProjectCollapsed(item, this.tree.isCollapsed(item));
 		}
 	}
 
-	private setProjectCollapsed(projectId: string, collapsed: boolean): void {
+	private setProjectCollapsed(
+		item: ProjectSwitcherProjectItem,
+		collapsed: boolean
+	): void {
 		if (collapsed) {
-			this.collapsedProjectIds.add(projectId);
+			this.collapsedProjectIds.delete(item.projectId);
+			this.collapsedProjectIds.add(item.id);
 			return;
 		}
 
-		this.collapsedProjectIds.delete(projectId);
+		this.collapsedProjectIds.delete(item.id);
+		this.collapsedProjectIds.delete(item.projectId);
 	}
 }
 
@@ -1725,6 +1797,50 @@ registerAction2(class extends Action2 {
 		}
 
 		await accessor.get(IProjectManagerService).setPinned(projectId, false);
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: PIN_WORKTREE_COMMAND_ID,
+			title: localize2('pinWorktree', 'Pin Worktree'),
+		});
+	}
+
+	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
+		const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+		if (!parsed) {
+			return;
+		}
+
+		await accessor.get(IProjectManagerService).setWorktreePinned(
+			parsed.projectId,
+			parsed.worktreePath,
+			true
+		);
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: UNPIN_WORKTREE_COMMAND_ID,
+			title: localize2('unpinWorktree', 'Unpin Worktree'),
+		});
+	}
+
+	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
+		const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+		if (!parsed) {
+			return;
+		}
+
+		await accessor.get(IProjectManagerService).setWorktreePinned(
+			parsed.projectId,
+			parsed.worktreePath,
+			false
+		);
 	}
 });
 

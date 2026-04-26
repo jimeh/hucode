@@ -108,14 +108,59 @@ export class ProjectManagerMainService extends Disposable
 	async setPinned(id: string, pinned: boolean): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(id);
-		project.pinned = pinned;
-		project.order = this.storedProjects.reduce((max, entry) => {
-			if (entry.id === project.id || entry.pinned !== pinned) {
-				return max;
-			}
+		if (project.pinned === pinned) {
+			return;
+		}
 
-			return Math.max(max, entry.order);
-		}, 0) + 1;
+		project.pinned = pinned;
+		const orderedProjectIds = this.storedProjects
+			.filter(entry => entry.id !== project.id)
+			.sort((a, b) => a.order - b.order)
+			.map(entry => entry.id);
+		orderedProjectIds.push(project.id);
+		this.setProjectOrder(orderedProjectIds);
+		this.saveState();
+		this.emitChange();
+	}
+
+	async setWorktreePinned(
+		projectId: string,
+		worktreePath: string,
+		pinned: boolean
+	): Promise<void> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.refreshProject(project);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+
+		const pinnedWorktreePaths = project.pinnedWorktreePaths ?? [];
+		const hasPinnedWorktree = pinnedWorktreePaths.some(path =>
+			this.pathsEqual(path, worktree.path)
+		);
+		if (pinned === hasPinnedWorktree) {
+			return;
+		}
+
+		project.pinnedWorktreePaths = pinned
+			? [...pinnedWorktreePaths, worktree.path]
+			: this.filterWorktreePath(
+				pinnedWorktreePaths,
+				worktree.path
+			);
+		if (!project.pinnedWorktreePaths.length) {
+			project.pinnedWorktreePaths = undefined;
+		}
+
+		this.projectWorktrees.set(
+			project.id,
+			this.applyWorktreePins(project, worktrees)
+		);
 		this.saveState();
 		this.emitChange();
 	}
@@ -136,19 +181,15 @@ export class ProjectManagerMainService extends Disposable
 			? this.requireProject(beforeProjectId)
 			: undefined;
 
-		if (beforeProject && beforeProject.pinned !== project.pinned) {
-			throw new Error('Pinned and unpinned projects are reordered separately.');
-		}
-
 		const orderedProjects = this.storedProjects
-			.filter(entry => entry.id !== project.id && entry.pinned === project.pinned)
+			.filter(entry => entry.id !== project.id)
 			.sort((a, b) => a.order - b.order);
 		const insertIndex = beforeProject
 			? orderedProjects.findIndex(entry => entry.id === beforeProject.id)
 			: orderedProjects.length;
 		orderedProjects.splice(insertIndex, 0, project);
 
-		this.setProjectOrder(project.pinned, orderedProjects.map(entry => entry.id));
+		this.setProjectOrder(orderedProjects.map(entry => entry.id));
 		this.saveState();
 		this.emitChange();
 	}
@@ -263,7 +304,13 @@ export class ProjectManagerMainService extends Disposable
 
 		movableWorktrees.splice(insertIndex, 0, source);
 		project.worktreeOrder = movableWorktrees.map(entry => entry.path);
-		this.projectWorktrees.set(project.id, this.applyWorktreeOrder(project, worktrees));
+		this.projectWorktrees.set(
+			project.id,
+			this.applyWorktreePins(
+				project,
+				this.applyWorktreeOrder(project, worktrees)
+			)
+		);
 		this.saveState();
 		this.emitChange();
 	}
@@ -283,14 +330,16 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord
 	): Promise<readonly WorktreeRecord[]> {
 		try {
-			const worktrees = this.applyWorktreeOrder(
+			const orderedWorktrees = this.applyWorktreeOrder(
 				project,
 				await this.gitWorktreeService.listWorktrees(
 					project.rootPath
 				)
 			);
+			this.pruneWorktreeOrder(project, orderedWorktrees);
+			this.prunePinnedWorktreePaths(project, orderedWorktrees);
+			const worktrees = this.applyWorktreePins(project, orderedWorktrees);
 			this.projectWorktrees.set(project.id, worktrees);
-			this.pruneWorktreeOrder(project, worktrees);
 
 			if (project.lastActiveWorktreePath &&
 				!worktrees.some(worktree =>
@@ -314,13 +363,7 @@ export class ProjectManagerMainService extends Disposable
 	private toProjectRecords(): readonly ProjectRecord[] {
 		return this.storedProjects
 			.slice()
-			.sort((a, b) => {
-				if (a.pinned !== b.pinned) {
-					return a.pinned ? -1 : 1;
-				}
-
-				return a.order - b.order;
-			})
+			.sort((a, b) => a.order - b.order)
 			.map(project => this.toProjectRecord(project));
 	}
 
@@ -349,31 +392,16 @@ export class ProjectManagerMainService extends Disposable
 		this._onDidChangeProjects.fire(this.toProjectRecords());
 	}
 
-	private setProjectOrder(
-		pinned: boolean,
-		orderedProjectIds: readonly string[]
-	): void {
+	private setProjectOrder(orderedProjectIds: readonly string[]): void {
 		const orderedIdSet = new Set(orderedProjectIds);
-		const otherProjects = this.storedProjects
-			.filter(project => project.pinned !== pinned)
-			.sort((a, b) => {
-				if (a.pinned !== b.pinned) {
-					return a.pinned ? -1 : 1;
-				}
-
-				return a.order - b.order;
-			});
 		const reorderedProjects = orderedProjectIds.map(id => this.requireProject(id));
 		for (const project of this.storedProjects) {
-			if (project.pinned === pinned && !orderedIdSet.has(project.id)) {
+			if (!orderedIdSet.has(project.id)) {
 				reorderedProjects.push(project);
 			}
 		}
 
-		const orderedProjects = pinned
-			? [...reorderedProjects, ...otherProjects]
-			: [...otherProjects, ...reorderedProjects];
-		for (const [index, project] of orderedProjects.entries()) {
+		for (const [index, project] of reorderedProjects.entries()) {
 			project.order = index + 1;
 		}
 	}
@@ -412,6 +440,13 @@ export class ProjectManagerMainService extends Disposable
 
 	private getPathComparisonKey(path: string): string {
 		return isLinux ? path : path.toLowerCase();
+	}
+
+	private filterWorktreePath(
+		paths: readonly string[],
+		worktreePath: string
+	): string[] {
+		return paths.filter(path => !this.pathsEqual(path, worktreePath));
 	}
 
 	private applyWorktreeOrder(
@@ -453,6 +488,33 @@ export class ProjectManagerMainService extends Disposable
 		return [...mainWorktrees, ...linkedWorktrees];
 	}
 
+	private applyWorktreePins(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): readonly WorktreeRecord[] {
+		const pinnedPaths = new Set(
+			(project.pinnedWorktreePaths ?? []).map(path =>
+				this.getPathComparisonKey(path)
+			)
+		);
+		return worktrees.map(worktree => {
+			const unpinnedWorktree: WorktreeRecord = {
+				path: worktree.path,
+				label: worktree.label,
+				...(worktree.branch !== undefined
+					? { branch: worktree.branch }
+					: {}),
+				isMain: worktree.isMain,
+				isDetached: worktree.isDetached,
+			};
+			if (!pinnedPaths.has(this.getPathComparisonKey(worktree.path))) {
+				return unpinnedWorktree;
+			}
+
+			return { ...unpinnedWorktree, pinned: true };
+		});
+	}
+
 	private pruneWorktreeOrder(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
@@ -471,6 +533,25 @@ export class ProjectManagerMainService extends Disposable
 		);
 		project.worktreeOrder = worktreeOrder.length
 			? worktreeOrder
+			: undefined;
+	}
+
+	private prunePinnedWorktreePaths(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): void {
+		if (!project.pinnedWorktreePaths?.length) {
+			return;
+		}
+
+		const existingPaths = new Set(
+			worktrees.map(entry => this.getPathComparisonKey(entry.path))
+		);
+		const pinnedWorktreePaths = project.pinnedWorktreePaths.filter(path =>
+			existingPaths.has(this.getPathComparisonKey(path))
+		);
+		project.pinnedWorktreePaths = pinnedWorktreePaths.length
+			? pinnedWorktreePaths
 			: undefined;
 	}
 

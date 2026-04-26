@@ -29,6 +29,7 @@ export interface WorktreeRecord {
 	readonly branch?: string;
 	readonly isMain: boolean;
 	readonly isDetached: boolean;
+	readonly pinned?: boolean;
 }
 
 /**
@@ -55,6 +56,7 @@ export interface StoredProjectRecord {
 	order: number;
 	lastActiveWorktreePath?: string;
 	worktreeOrder?: readonly string[];
+	pinnedWorktreePaths?: readonly string[];
 }
 
 /**
@@ -89,6 +91,11 @@ export interface IProjectManagerService {
 	addProject(uri: URI): Promise<ProjectRecord>;
 	renameProject(id: string, label: string): Promise<void>;
 	setPinned(id: string, pinned: boolean): Promise<void>;
+	setWorktreePinned(
+		projectId: string,
+		worktreePath: string,
+		pinned: boolean
+	): Promise<void>;
 	removeProject(id: string): Promise<void>;
 	moveProject(id: string, beforeProjectId?: string): Promise<void>;
 	refresh(id?: string): Promise<readonly ProjectRecord[]>;

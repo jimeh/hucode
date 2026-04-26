@@ -255,7 +255,7 @@ suite('ProjectManagerMainService', () => {
 		}]);
 	});
 
-	test('persists metadata and keeps pinned projects first', async () => {
+	test('persists metadata and keeps project order global', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
 		gitWorktreeService.worktrees.set('/bravo', [createMainWorktree('/bravo')]);
@@ -276,16 +276,16 @@ suite('ProjectManagerMainService', () => {
 			lastActiveWorktreePath: project.lastActiveWorktreePath,
 		})), [
 			{
-				id: alpha.id,
-				label: 'Alpha Repo',
-				pinned: true,
-				lastActiveWorktreePath: '/alpha',
-			},
-			{
 				id: bravo.id,
 				label: 'bravo',
 				pinned: false,
 				lastActiveWorktreePath: undefined,
+			},
+			{
+				id: alpha.id,
+				label: 'Alpha Repo',
+				pinned: true,
+				lastActiveWorktreePath: '/alpha',
 			},
 		]);
 
@@ -300,18 +300,18 @@ suite('ProjectManagerMainService', () => {
 			lastActiveWorktreePath: project.lastActiveWorktreePath,
 		})), [
 			{
-				id: alpha.id,
-				label: 'Alpha Repo',
-				pinned: true,
-				order: 1,
-				lastActiveWorktreePath: '/alpha',
-			},
-			{
 				id: bravo.id,
 				label: 'bravo',
 				pinned: false,
 				order: 1,
 				lastActiveWorktreePath: undefined,
+			},
+			{
+				id: alpha.id,
+				label: 'Alpha Repo',
+				pinned: true,
+				order: 2,
+				lastActiveWorktreePath: '/alpha',
 			},
 		]);
 	});
@@ -383,7 +383,97 @@ suite('ProjectManagerMainService', () => {
 		);
 	});
 
-	test('reorders projects only within their pinned group', async () => {
+	test('persists worktree pinning separately from project pinning', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+
+		await service.setWorktreePinned(
+			project.id,
+			'/repo.worktrees/alpha',
+			true
+		);
+		await service.setPinned(project.id, true);
+		await service.setPinned(project.id, false);
+
+		assert.deepStrictEqual((await service.getProjects())[0].worktrees, [
+			createMainWorktree('/repo'),
+			{
+				...createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+				pinned: true,
+			},
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+
+		const reloadedService = createService(stateService, gitWorktreeService);
+		const reloadedProject = (await reloadedService.refresh())[0];
+
+		assert.deepStrictEqual({
+			projectPinned: reloadedProject.pinned,
+			worktrees: reloadedProject.worktrees,
+		}, {
+			projectPinned: false,
+			worktrees: [
+				createMainWorktree('/repo'),
+				{
+					...createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+					pinned: true,
+				},
+				createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+			],
+		});
+	});
+
+	test('applies persisted worktree pins using platform path rules', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [{
+				id: 'project-1',
+				label: 'Repo',
+				rootPath: '/repo',
+				pinned: false,
+				order: 1,
+				pinnedWorktreePaths: ['/REPO.WORKTREES/BRAVO'],
+			}],
+		} satisfies StoredProjectManagerState);
+
+		const service = createService(stateService, gitWorktreeService);
+		const projects = await service.getProjects();
+
+		assert.deepStrictEqual(
+			projects[0].worktrees.map(worktree => ({
+				path: worktree.path,
+				pinned: worktree.pinned,
+			})),
+			isLinux
+				? [
+					{ path: '/repo', pinned: undefined },
+					{ path: '/repo.worktrees/alpha', pinned: undefined },
+					{ path: '/repo.worktrees/bravo', pinned: undefined },
+				]
+				: [
+					{ path: '/repo', pinned: undefined },
+					{ path: '/repo.worktrees/alpha', pinned: undefined },
+					{ path: '/repo.worktrees/bravo', pinned: true },
+				]
+		);
+	});
+
+	test('reorders projects across pinned states', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
 		gitWorktreeService.worktrees.set('/one', [createMainWorktree('/one')]);
@@ -399,14 +489,71 @@ suite('ProjectManagerMainService', () => {
 		await service.moveProject(three.id, two.id);
 
 		assert.deepStrictEqual(
-			(await service.getProjects()).map(project => project.rootUri.fsPath),
-			['/one', '/three', '/two']
+			(await service.getProjects()).map(project => ({
+				path: project.rootUri.fsPath,
+				pinned: project.pinned,
+			})),
+			[
+				{ path: '/three', pinned: false },
+				{ path: '/two', pinned: false },
+				{ path: '/one', pinned: true },
+			]
 		);
 
-		await assert.rejects(
-			service.moveProject(two.id, one.id),
-			/Pinned and unpinned projects are reordered separately\./
+		await service.moveProject(one.id, three.id);
+
+		assert.deepStrictEqual(
+			(await service.getProjects()).map(project => ({
+				path: project.rootUri.fsPath,
+				pinned: project.pinned,
+			})),
+			[
+				{ path: '/one', pinned: true },
+				{ path: '/three', pinned: false },
+				{ path: '/two', pinned: false },
+			]
 		);
+	});
+
+	test('reorders worktree-pinned projects with pinned projects', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/one', [createMainWorktree('/one')]);
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const one = await service.addProject(URI.file('/one'));
+		const repo = await service.addProject(URI.file('/repo'));
+
+		await service.setPinned(one.id, true);
+		await service.setWorktreePinned(
+			repo.id,
+			'/repo.worktrees/alpha',
+			true
+		);
+		await service.moveProject(repo.id, one.id);
+
+		assert.deepStrictEqual((await service.getProjects()).map(project => ({
+			rootPath: project.rootUri.fsPath,
+			projectPinned: project.pinned,
+			pinnedWorktrees: project.worktrees
+				.filter(worktree => worktree.pinned)
+				.map(worktree => worktree.path),
+		})), [
+			{
+				rootPath: '/repo',
+				projectPinned: false,
+				pinnedWorktrees: ['/repo.worktrees/alpha'],
+			},
+			{
+				rootPath: '/one',
+				projectPinned: true,
+				pinnedWorktrees: [],
+			},
+		]);
 	});
 
 	test('reorders linked worktrees and keeps the main worktree first', async () => {
@@ -540,6 +687,37 @@ suite('ProjectManagerMainService', () => {
 			});
 		}
 	);
+
+	test('refresh prunes stale pinned worktree paths', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/feature-one', 'feature/one'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		await service.setWorktreePinned(
+			project.id,
+			'/repo.worktrees/feature-one',
+			true
+		);
+
+		gitWorktreeService.worktrees.set('/repo', [createMainWorktree('/repo')]);
+		const refreshed = await service.refresh(project.id);
+		const state = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+
+		assert.deepStrictEqual({
+			worktrees: refreshed[0].worktrees,
+			pinnedWorktreePaths: state?.projects[0].pinnedWorktreePaths,
+		}, {
+			worktrees: [createMainWorktree('/repo')],
+			pinnedWorktreePaths: undefined,
+		});
+	});
 });
 
 suite('ProjectManagerMainService state', () => {
