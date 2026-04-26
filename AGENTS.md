@@ -95,3 +95,6 @@ For detailed project overview, architecture, coding guidelines, and validation s
   `WebContentsView`. Use the hosted view only to calculate offsets and sync
   visibility/z-order from the Omni shell; nested parenting can leave browser
   contents visible but not hit-testable.
+- Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
+  archives are not valid Microsoft `vsce-sign` signatures; release builds need
+  `node-ovsx-sign` available in production dependencies to verify them.
