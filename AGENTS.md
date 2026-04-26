@@ -95,6 +95,14 @@ For detailed project overview, architecture, coding guidelines, and validation s
   `WebContentsView`. Use the hosted view only to calculate offsets and sync
   visibility/z-order from the Omni shell; nested parenting can leave browser
   contents visible but not hit-testable.
+- Omni shell native menu/action IPC arrives in the shell renderer. Keep
+  Projects-tree actions in the shell, and forward other `vscode:runAction` and
+  `vscode:runKeybinding` payloads from `NativeWindow` to the active hosted
+  workspace instead of routing them from the main-process menubar.
+- Hosted Omni paste cannot rely on `targetWindowId` alone:
+  `NativeHostMainService.triggerPaste()` resolves that id to the shell
+  `BrowserWindow.webContents`. Use the Hucode shell service to trigger native
+  paste on the active hosted `WebContentsView`.
 - Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
   archives are not valid Microsoft `vsce-sign` signatures; release builds need
   `node-ovsx-sign` available in production dependencies to verify them.

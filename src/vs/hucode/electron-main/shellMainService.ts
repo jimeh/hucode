@@ -7,7 +7,7 @@ import { WebContentsView } from 'electron';
 import { statSync } from 'fs';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { Emitter } from '../../base/common/event.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
 import { FileAccess } from '../../base/common/network.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
@@ -26,6 +26,8 @@ import {
 } from '../../platform/window/electron-main/window.js';
 import {
 	INativeWindowConfiguration,
+	INativeRunActionInWindowRequest,
+	INativeRunKeybindingInWindowRequest,
 	IOmniWorkspaceRestoreEntry,
 	IRectangle,
 } from '../../platform/window/common/window.js';
@@ -89,6 +91,25 @@ class ResidentHostedWorkspacesController extends Disposable {
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
 	) {
 		super();
+
+		const shellWebContents = this.window.win?.webContents;
+		if (shellWebContents) {
+			const onBeforeInput = (
+				_event: Electron.Event,
+				input: Electron.Input
+			) => {
+				if (!this.isPasteKeyDown(input) || !this.hasActiveWorkspace()) {
+					return;
+				}
+
+				_event.preventDefault();
+				this.triggerPasteInWorkspace();
+			};
+			shellWebContents.on('before-input-event', onBeforeInput);
+			this._register(toDisposable(() => {
+				shellWebContents.off('before-input-event', onBeforeInput);
+			}));
+		}
 	}
 
 	getState(): IHucodeHostedWorkspaceState {
@@ -425,6 +446,17 @@ class ResidentHostedWorkspacesController extends Disposable {
 			}
 
 			this.updateInstanceState(instance, { focused: false });
+		});
+		view.webContents.on('before-input-event', (_event, input) => {
+			if (
+				instance.instanceId !== this.activeInstanceId ||
+				!this.isPasteKeyDown(input)
+			) {
+				return;
+			}
+
+			_event.preventDefault();
+			this.triggerPasteInWorkspace();
 		});
 		view.webContents.on('did-start-loading', () => {
 			this.trustView(instance);
@@ -826,6 +858,74 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.getActiveInstance()?.view?.webContents.reload();
 	}
 
+	runActionInWorkspace(
+		request: INativeRunActionInWindowRequest
+	): boolean {
+		return this.sendToActiveWorkspace('vscode:runAction', request);
+	}
+
+	runKeybindingInWorkspace(
+		request: INativeRunKeybindingInWindowRequest
+	): boolean {
+		return this.sendToActiveWorkspace('vscode:runKeybinding', request);
+	}
+
+	triggerPasteInWorkspace(): boolean {
+		const activeInstance = this.getActiveInstance();
+		const webContents = activeInstance?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		try {
+			this.bringInstanceToFront(activeInstance);
+			webContents.focus();
+			webContents.paste();
+			return true;
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to trigger hosted ' +
+				`workspace paste: ${error}`
+			);
+			return false;
+		}
+	}
+
+	private sendToActiveWorkspace(channel: string, request: unknown): boolean {
+		const activeInstance = this.getActiveInstance();
+		const webContents = activeInstance?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		try {
+			this.bringInstanceToFront(activeInstance);
+			webContents.focus();
+			webContents.send(channel, request);
+			return true;
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to forward ' +
+				`hosted workspace ${channel}: ${error}`
+			);
+			return false;
+		}
+	}
+
+	private hasActiveWorkspace(): boolean {
+		const webContents = this.getActiveInstance()?.view?.webContents;
+		return !!webContents && !webContents.isDestroyed();
+	}
+
+	private isPasteKeyDown(input: Electron.Input): boolean {
+		return input.type === 'keyDown' &&
+			input.meta &&
+			!input.control &&
+			!input.alt &&
+			!input.shift &&
+			input.key.toLowerCase() === 'v';
+	}
+
 	override dispose(): void {
 		for (const instance of Array.from(this.instancesById.values())) {
 			void this.destroyInstance(instance, true, false);
@@ -927,6 +1027,25 @@ export class HucodeShellMainService extends Disposable
 
 	async reloadWorkspace(windowId: number): Promise<void> {
 		this.getOrCreateController(windowId).reloadWorkspace();
+	}
+
+	async runActionInWorkspace(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId).runActionInWorkspace(request);
+	}
+
+	async runKeybindingInWorkspace(
+		windowId: number,
+		request: INativeRunKeybindingInWindowRequest
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId)
+			.runKeybindingInWorkspace(request);
+	}
+
+	async triggerPasteInWorkspace(windowId: number): Promise<boolean> {
+		return this.getOrCreateController(windowId).triggerPasteInWorkspace();
 	}
 
 	async layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void> {

@@ -5,7 +5,11 @@
 
 import { Event } from '../../base/common/event.js';
 import { createDecorator } from '../../platform/instantiation/common/instantiation.js';
-import { IRectangle } from '../../platform/window/common/window.js';
+import {
+	INativeRunActionInWindowRequest,
+	INativeRunKeybindingInWindowRequest,
+	IRectangle,
+} from '../../platform/window/common/window.js';
 import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
@@ -82,6 +86,26 @@ export interface IHucodeShellService {
 	): Promise<void>;
 	focusWorkspace(windowId: number): Promise<void>;
 	focusShell(windowId: number): Promise<void>;
+	/**
+	 * Sends a native menu/action invocation from the shell to the active
+	 * hosted workspace.
+	 */
+	runActionInWorkspace(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean>;
+	/**
+	 * Sends a native menu keybinding invocation from the shell to the active
+	 * hosted workspace.
+	 */
+	runKeybindingInWorkspace(
+		windowId: number,
+		request: INativeRunKeybindingInWindowRequest
+	): Promise<boolean>;
+	/**
+	 * Triggers native paste in the active hosted workspace `WebContentsView`.
+	 */
+	triggerPasteInWorkspace(windowId: number): Promise<boolean>;
 	reloadWorkspace(windowId: number): Promise<void>;
 	layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void>;
 	shutdownWindowWorkspaces(

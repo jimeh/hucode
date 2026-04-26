@@ -80,6 +80,38 @@ import { DynamicWorkbenchSecurityConfiguration } from '../common/configuration.j
 import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
+import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
+
+const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
+
+const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
+	'hucode.projectSwitcher.',
+];
+
+const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
+	'workbench.action.omniWindow.focusProjectsFromExplorerShortcut',
+	'workbench.action.omniWindow.focusProjectsFromSourceControlShortcut',
+	'workbench.action.omniWindow.focusProjectPane',
+	'workbench.action.omniWindow.openSelectedInOmniWindow',
+	'workbench.action.omniWindow.openSelectedInNewWindow',
+]);
+
+const HUCODE_OMNI_SHELL_KEYBINDINGS = new Set([
+	'shift+cmd+e',
+	'cmd+shift+e',
+	'ctrl+shift+e',
+	'ctrl+shift+g',
+	'shift+cmd+g',
+	'cmd+shift+g',
+]);
+
+const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
+	['copy', 'editor.action.clipboardCopyAction'],
+	['cut', 'editor.action.clipboardCutAction'],
+]);
+
+const HUCODE_OMNI_PROJECTS_SELECTOR =
+	'.hucode-omni-projects-view, .hucode-project-switcher-view';
 
 export class NativeWindow extends BaseWindow {
 
@@ -130,6 +162,7 @@ export class NativeWindow extends BaseWindow {
 		@IUtilityProcessWorkerWorkbenchService private readonly utilityProcessWorkerWorkbenchService: IUtilityProcessWorkerWorkbenchService,
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
+		@IMainProcessService private readonly mainProcessService: IMainProcessService,
 	) {
 		super(mainWindow, undefined, hostService, nativeEnvironmentService, contextMenuService, layoutService);
 
@@ -154,9 +187,27 @@ export class NativeWindow extends BaseWindow {
 			}));
 		}
 
+		for (const [eventType, actionId] of HUCODE_OMNI_CLIPBOARD_ACTIONS) {
+			this._register(addDisposableListener(mainWindow.document, eventType, e => {
+				if (!this.shouldForwardOmniShellInvocation()) {
+					return;
+				}
+
+				EventHelper.stop(e, true);
+				void this.forwardOmniActionToWorkspace({
+					id: actionId,
+					from: 'menu'
+				});
+			}));
+		}
+
 		// Support `runAction` event
 		ipcRenderer.on('vscode:runAction', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunActionInWindowRequest;
+			if (await this.forwardOmniActionToWorkspace(request)) {
+				return;
+			}
+
 			const args: unknown[] = request.args || [];
 
 			// If we run an action from the touchbar, we fill in the currently active resource
@@ -183,8 +234,12 @@ export class NativeWindow extends BaseWindow {
 		});
 
 		// Support runKeybinding event
-		ipcRenderer.on('vscode:runKeybinding', (event: unknown, ...argsRaw: unknown[]) => {
+		ipcRenderer.on('vscode:runKeybinding', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
+			if (await this.forwardOmniKeybindingToWorkspace(request)) {
+				return;
+			}
+
 			const activeElement = getActiveElement();
 			if (activeElement) {
 				this.keybindingService.dispatchByUserSettingsLabel(request.userSettingsLabel, activeElement);
@@ -436,6 +491,96 @@ export class NativeWindow extends BaseWindow {
 		this._register(this.lifecycleService.onBeforeShutdown(e => this.onBeforeShutdown(e)));
 		this._register(this.lifecycleService.onBeforeShutdownError(e => this.onBeforeShutdownError(e)));
 		this._register(this.lifecycleService.onWillShutdown(e => this.onWillShutdown(e)));
+	}
+
+	private async forwardOmniActionToWorkspace(
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		if (!this.nativeEnvironmentService.isOmniWindow) {
+			return false;
+		}
+
+		if (this.isOmniProjectsFocus()) {
+			return false;
+		}
+
+		if (this.isOmniShellAction(request.id)) {
+			return false;
+		}
+
+		try {
+			return await this.callHucodeShellChannel<boolean>(
+				'runActionInWorkspace',
+				[this.nativeEnvironmentService.window.id, request]
+			);
+		} catch (error) {
+			this.logService.warn(
+				`Failed to forward Omni shell action ${request.id}: ${error}`
+			);
+			return false;
+		}
+	}
+
+	private async forwardOmniKeybindingToWorkspace(
+		request: INativeRunKeybindingInWindowRequest
+	): Promise<boolean> {
+		if (!this.nativeEnvironmentService.isOmniWindow) {
+			return false;
+		}
+
+		if (this.isOmniProjectsFocus()) {
+			return false;
+		}
+
+		if (this.isOmniShellKeybinding(request.userSettingsLabel)) {
+			return false;
+		}
+
+		try {
+			return await this.callHucodeShellChannel<boolean>(
+				'runKeybindingInWorkspace',
+				[this.nativeEnvironmentService.window.id, request]
+			);
+		} catch (error) {
+			this.logService.warn(
+				'Failed to forward Omni shell keybinding ' +
+				`${request.userSettingsLabel}: ${error}`
+			);
+			return false;
+		}
+	}
+
+	private async callHucodeShellChannel<T>(
+		command: string,
+		args: unknown[]
+	): Promise<T> {
+		return this.mainProcessService
+			.getChannel(HUCODE_SHELL_CHANNEL_NAME)
+			.call<T>(command, args);
+	}
+
+	private isOmniShellAction(commandId: string): boolean {
+		return HUCODE_OMNI_SHELL_ACTION_IDS.has(commandId) ||
+			HUCODE_OMNI_SHELL_ACTION_PREFIXES.some(prefix =>
+				commandId.startsWith(prefix)
+			);
+	}
+
+	private isOmniShellKeybinding(userSettingsLabel: string): boolean {
+		return HUCODE_OMNI_SHELL_KEYBINDINGS.has(
+			userSettingsLabel.toLowerCase().replace(/\s+/g, '')
+		);
+	}
+
+	private shouldForwardOmniShellInvocation(): boolean {
+		return this.nativeEnvironmentService.isOmniWindow &&
+			!this.isOmniProjectsFocus();
+	}
+
+	private isOmniProjectsFocus(): boolean {
+		const activeElement = getActiveElement();
+		return activeElement instanceof Element &&
+			!!activeElement.closest(HUCODE_OMNI_PROJECTS_SELECTOR);
 	}
 
 	private handleRepresentedFilename(part: IEditorPart): void {
