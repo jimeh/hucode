@@ -41,6 +41,8 @@ import {
 } from '../common/omniWindow.js';
 import { IHucodeShellMainService } from './omniWindow.js';
 import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
+import { IBrowserViewMainService } from
+	'../../platform/browserView/electron-main/browserViewMainService.js';
 
 interface IHostedWorkbenchInstance {
 	instanceId: string;
@@ -74,6 +76,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		private readonly environmentMainService: IEnvironmentMainService,
 		private readonly themeMainService: IThemeMainService,
 		private readonly logService: ILogService,
+		private readonly browserViewMainService: IBrowserViewMainService,
 		private readonly window: ICodeWindow,
 		private readonly trustHostedWorkspaceProcess:
 			(processId: number) => void,
@@ -211,6 +214,12 @@ class ResidentHostedWorkspacesController extends Disposable {
 	): void {
 		instance.visible = visible;
 		instance.view?.setVisible(visible);
+		if (instance.view) {
+			this.browserViewMainService.setHostedWebContentsVisible(
+				instance.view.webContents.id,
+				visible
+			);
+		}
 		if (visible) {
 			this.bringInstanceToFront(instance);
 		}
@@ -223,6 +232,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		// Re-adding an attached Electron View moves it above its siblings.
 		this.window.win.contentView.addChildView(instance.view);
+		this.browserViewMainService.bringHostedBrowserViewsToFront(
+			instance.view.webContents.id
+		);
 	}
 
 	private bringActiveInstanceToFront(): void {
@@ -853,6 +865,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly themeMainService: IThemeMainService,
 		@ILogService
 		private readonly logService: ILogService,
+		@IBrowserViewMainService
+		private readonly browserViewMainService: IBrowserViewMainService,
 	) {
 		super();
 
@@ -966,6 +980,7 @@ export class HucodeShellMainService extends Disposable
 				this.environmentMainService,
 				this.themeMainService,
 				this.logService,
+				this.browserViewMainService,
 				window,
 				processId => this.trackTrust(
 					this.trustedHostedWorkspaceProcessIds,

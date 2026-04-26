@@ -90,3 +90,8 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hosted Omni workspaces should only transition from `loading` to `loaded` or
   `active` after the child workbench reports `LifecyclePhase.Restored`. An
   Electron `loadURL()` completion only means the renderer document loaded.
+- Integrated browser `WebContentsView`s inside hosted Omni workbenches should
+  stay top-level `contentView` siblings, not children of the hosted workbench
+  `WebContentsView`. Use the hosted view only to calculate offsets and sync
+  visibility/z-order from the Omni shell; nested parenting can leave browser
+  contents visible but not hit-testable.

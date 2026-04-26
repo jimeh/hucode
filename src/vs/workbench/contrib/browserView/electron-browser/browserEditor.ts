@@ -43,6 +43,7 @@ import { logBrowserOpen } from '../../../../platform/browserView/common/browserV
 import { URI } from '../../../../base/common/uri.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
+import { INativeWorkbenchEnvironmentService } from '../../../services/environment/electron-browser/environmentService.js';
 
 export const CONTEXT_BROWSER_CAN_GO_BACK = new RawContextKey<boolean>('browserCanGoBack', false, localize('browser.canGoBack', "Whether the browser can go back"));
 export const CONTEXT_BROWSER_CAN_GO_FORWARD = new RawContextKey<boolean>('browserCanGoForward', false, localize('browser.canGoForward', "Whether the browser can go forward"));
@@ -378,6 +379,7 @@ export class BrowserEditor extends EditorPane {
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IEditorService private readonly editorService: IEditorService,
 		@ILayoutService private readonly layoutService: ILayoutService,
+		@INativeWorkbenchEnvironmentService private readonly environmentService: INativeWorkbenchEnvironmentService,
 	) {
 		super(BrowserEditorInput.EDITOR_ID, group, telemetryService, themeService, storageService);
 	}
@@ -1036,6 +1038,9 @@ export class BrowserEditor extends EditorPane {
 
 			void this._model.layout({
 				windowId: this.group.windowId,
+				hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
+					? this.environmentService.hostedWebContentsId
+					: undefined,
 				x: containerRect.left,
 				y: containerRect.top,
 				width: containerRect.width,

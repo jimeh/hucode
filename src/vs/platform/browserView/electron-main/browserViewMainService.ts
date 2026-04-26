@@ -33,6 +33,10 @@ export interface IBrowserViewMainService extends IBrowserViewService {
 
 	/** Create a new target, open it in an editor, and return it. */
 	createTarget(url: string, browserContextId?: string, windowId?: number): Promise<BrowserView>;
+
+	setHostedWebContentsVisible(hostedWebContentsId: number, visible: boolean): void;
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void;
 }
 
 export class BrowserViewMainService extends Disposable implements IBrowserViewMainService {
@@ -48,6 +52,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 
 	private readonly browserViews = this._register(new DisposableMap<string, BrowserView>());
 	private readonly _activeTokens = new Map<number, CancellationTokenSource>();
+	private readonly hostedWebContentsVisibility = new Map<number, boolean>();
 	private _keybindings: { [commandId: string]: string } = Object.create(null);
 
 	constructor(
@@ -159,11 +164,30 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	async layout(id: string, bounds: IBrowserViewBounds): Promise<void> {
-		return this._getBrowserView(id).layout(bounds);
+		const hostVisible = typeof bounds.hostedWebContentsId === 'number'
+			? this.hostedWebContentsVisibility.get(bounds.hostedWebContentsId) ?? true
+			: true;
+		return this._getBrowserView(id).layout(bounds, hostVisible);
 	}
 
 	async setVisible(id: string, visible: boolean): Promise<void> {
 		return this._getBrowserView(id).setVisible(visible);
+	}
+
+	setHostedWebContentsVisible(
+		hostedWebContentsId: number,
+		visible: boolean
+	): void {
+		this.hostedWebContentsVisibility.set(hostedWebContentsId, visible);
+		for (const view of this.browserViews.values()) {
+			view.setHostedWebContentsVisible(hostedWebContentsId, visible);
+		}
+	}
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
+		for (const view of this.browserViews.values()) {
+			view.bringToFrontForHostedWebContents(hostedWebContentsId);
+		}
 	}
 
 	async loadURL(id: string, url: string): Promise<void> {
@@ -445,7 +469,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			click: () => webContents.inspectElement(params.x, params.y)
 		}));
 
-		const viewBounds = view.getWebContentsView().getBounds();
+		const viewBounds = view.getWindowRelativeBounds();
 		menu.popup({
 			window: win,
 			x: viewBounds.x + params.x,

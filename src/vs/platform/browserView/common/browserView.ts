@@ -67,6 +67,7 @@ export interface IElementData {
 
 export interface IBrowserViewBounds {
 	windowId: number;
+	hostedWebContentsId?: number;
 	x: number;
 	y: number;
 	width: number;
