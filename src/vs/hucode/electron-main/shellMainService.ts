@@ -61,6 +61,8 @@ interface IHostedWorkbenchInstance {
 	disposed: boolean;
 }
 
+type OmniFocusedSurface = 'shell' | 'workspace';
+
 class ResidentHostedWorkspacesController extends Disposable {
 	private static readonly BEFORE_UNLOAD_TIMEOUT_MS = 5000;
 	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
@@ -72,6 +74,8 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private activeInstanceId: string | undefined;
 	private restored = false;
 	private oneTimeListenerTokenGenerator = 0;
+	private lastFocusedSurface: OmniFocusedSurface = 'shell';
+	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -94,6 +98,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
+			const onShellFocus = () => {
+				this.lastFocusedSurface = 'shell';
+			};
 			const onBeforeInput = (
 				_event: Electron.Event,
 				input: Electron.Input
@@ -105,9 +112,27 @@ class ResidentHostedWorkspacesController extends Disposable {
 				_event.preventDefault();
 				this.triggerPasteInWorkspace();
 			};
+			shellWebContents.on('focus', onShellFocus);
 			shellWebContents.on('before-input-event', onBeforeInput);
 			this._register(toDisposable(() => {
+				shellWebContents.off('focus', onShellFocus);
 				shellWebContents.off('before-input-event', onBeforeInput);
+			}));
+		}
+
+		if (this.window.win) {
+			const onWindowBlur = () => {
+				this.windowFocusRestoreSurface = this.getFocusedSurface();
+			};
+			const onWindowFocus = () => {
+				this.restoreWindowFocus();
+			};
+
+			this.window.win.on('blur', onWindowBlur);
+			this.window.win.on('focus', onWindowFocus);
+			this._register(toDisposable(() => {
+				this.window.win?.off('blur', onWindowBlur);
+				this.window.win?.off('focus', onWindowFocus);
 			}));
 		}
 	}
@@ -438,6 +463,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 				return;
 			}
 
+			this.lastFocusedSurface = 'workspace';
 			this.updateInstanceState(instance, { focused: true });
 		});
 		view.webContents.on('blur', () => {
@@ -846,11 +872,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		this.lastFocusedSurface = 'workspace';
 		this.bringInstanceToFront(activeInstance);
 		activeInstance.view.webContents.focus();
 	}
 
 	focusShell(): void {
+		this.lastFocusedSurface = 'shell';
 		this.window.win?.webContents.focus();
 	}
 
@@ -878,6 +906,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		try {
+			this.lastFocusedSurface = 'workspace';
 			this.bringInstanceToFront(activeInstance);
 			webContents.focus();
 			webContents.paste();
@@ -899,6 +928,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		try {
+			this.lastFocusedSurface = 'workspace';
 			this.bringInstanceToFront(activeInstance);
 			webContents.focus();
 			webContents.send(channel, request);
@@ -915,6 +945,41 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private hasActiveWorkspace(): boolean {
 		const webContents = this.getActiveInstance()?.view?.webContents;
 		return !!webContents && !webContents.isDestroyed();
+	}
+
+	private getFocusedSurface(): OmniFocusedSurface {
+		const activeWebContents = this.getActiveInstance()?.view?.webContents;
+		if (
+			activeWebContents &&
+			!activeWebContents.isDestroyed() &&
+			activeWebContents.isFocused()
+		) {
+			return 'workspace';
+		}
+
+		const shellWebContents = this.window.win?.webContents;
+		if (
+			shellWebContents &&
+			!shellWebContents.isDestroyed() &&
+			shellWebContents.isFocused()
+		) {
+			return 'shell';
+		}
+
+		return this.lastFocusedSurface;
+	}
+
+	private restoreWindowFocus(): void {
+		const surface =
+			this.windowFocusRestoreSurface ?? this.lastFocusedSurface;
+		this.windowFocusRestoreSurface = undefined;
+
+		if (surface === 'workspace' && this.hasActiveWorkspace()) {
+			this.focusWorkspace();
+			return;
+		}
+
+		this.focusShell();
 	}
 
 	private isPasteKeyDown(input: Electron.Input): boolean {
