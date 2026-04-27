@@ -16,7 +16,13 @@
 						}
 					],
 					"image-name": "thick-accent.svg",
-					"name": "thick-accent"
+					"name": "thick-accent",
+					"opacity-specializations": [
+						{
+							"appearance": "tinted",
+							"value": 0.5
+						}
+					]
 				},
 				{
 					"fill-specializations": [
@@ -44,7 +50,7 @@
 					"opacity-specializations": [
 						{
 							"appearance": "tinted",
-							"value": 0.5
+							"value": 1
 						}
 					]
 				}

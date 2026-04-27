@@ -16,7 +16,8 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hucode macOS app icons are sourced from `build/hucode/icons/darwin/` and
   generated into the stable mixin overlay. Keep `resources/darwin/code.icns`
   upstream OSS; run `npm run hucode:generate-icons` to refresh Hucode
-  `code.icns` and `Assets.car`.
+  `code.icns` and `Assets.car`. The legacy-inset `code.icns` comes from
+  `actool`'s generated compatibility ICNS.
 - Hucode's app release version lives in the overlay as `hucodeVersion`.
   Keep upstream `version` for VS Code compatibility and extension checks.
 - Workbench `TreeView` selection/reveal paths operate on the live `ITreeItem`
