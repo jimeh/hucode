@@ -14,6 +14,7 @@ import { Disposable, DisposableSet, IDisposable } from '../../../../base/common/
 import { NativeHostService } from '../../../../platform/native/common/nativeHostService.js';
 import { INativeWorkbenchEnvironmentService } from '../../environment/electron-browser/environmentService.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { disposableWindowInterval, getActiveDocument, getWindowId, getWindowsCount, hasWindow, onDidRegisterWindow } from '../../../../base/browser/dom.js';
 import { memoize } from '../../../../base/common/decorators.js';
 import { isAuxiliaryWindow } from '../../../../base/browser/window.js';
@@ -21,6 +22,32 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
+
+interface IHucodeHostedWorkbenchInstance {
+	readonly instanceId: string;
+	readonly state: string;
+	readonly visible: boolean;
+}
+
+interface IHucodeHostedWorkspaceState {
+	readonly activeInstanceId?: string;
+	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
+}
+
+interface IHucodeShellWindowStateChange {
+	readonly windowId: number;
+	readonly state: IHucodeHostedWorkspaceState;
+}
+
+interface IHucodeShellService {
+	readonly _serviceBrand: undefined;
+	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
+	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
+}
+
+const IHucodeShellService =
+	createDecorator<IHucodeShellService>('hucodeShellService');
 
 class WorkbenchNativeHostService extends NativeHostService {
 
@@ -36,18 +63,26 @@ class WorkbenchHostService extends Disposable implements IHostService {
 
 	declare readonly _serviceBrand: undefined;
 
+	private readonly _onDidChangeHostedOmniFocus = this._register(new Emitter<void>());
+	private hostedOmniOwnerWindowFocused = getActiveDocument().hasFocus();
+	private hostedOmniInstanceActiveAndVisible = false;
+
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ILabelService private readonly labelService: ILabelService,
-		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IHucodeShellService private readonly hucodeShellService: IHucodeShellService
 	) {
 		super();
+
+		this.registerHostedOmniFocusTracking();
 
 		this.onDidChangeFocus = Event.latch(
 			Event.any(
 				Event.map(Event.filter(this.nativeHostService.onDidFocusMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
 				Event.map(Event.filter(this.nativeHostService.onDidBlurMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
-				Event.map(this.onDidChangeActiveWindow, () => this.hasFocus, this._store)
+				Event.map(this.onDidChangeActiveWindow, () => this.hasFocus, this._store),
+				Event.map(this._onDidChangeHostedOmniFocus.event, () => this.hasFocus, this._store)
 			), undefined, this._store
 		);
 
@@ -71,7 +106,15 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	readonly onDidChangeFocus: Event<boolean>;
 
 	get hasFocus(): boolean {
-		return getActiveDocument().hasFocus();
+		if (!this.environmentService.isHostedOmniWorkspace) {
+			return getActiveDocument().hasFocus();
+		}
+
+		return this.hostedOmniInstanceActiveAndVisible &&
+			(
+				getActiveDocument().hasFocus() ||
+				this.hostedOmniOwnerWindowFocused
+			);
 	}
 
 	async hadLastFocus(): Promise<boolean> {
@@ -81,7 +124,102 @@ class WorkbenchHostService extends Disposable implements IHostService {
 			return false;
 		}
 
-		return activeWindowId === this.nativeHostService.windowId;
+		if (!this.environmentService.isHostedOmniWorkspace) {
+			return activeWindowId === this.nativeHostService.windowId;
+		}
+
+		const windowHadLastFocus = activeWindowId === this.nativeHostService.windowId;
+		this.updateHostedOmniOwnerWindowFocus(windowHadLastFocus);
+		if (!windowHadLastFocus) {
+			return false;
+		}
+
+		await this.updateHostedOmniWorkspaceState();
+		return this.hasFocus;
+	}
+
+	private registerHostedOmniFocusTracking(): void {
+		if (
+			!this.environmentService.isHostedOmniWorkspace ||
+			!this.environmentService.hostedInstanceId
+		) {
+			return;
+		}
+
+		this._register(Event.filter(
+			this.nativeHostService.onDidFocusMainOrAuxiliaryWindow,
+			id => id === this.nativeHostService.windowId,
+			this._store
+		)(() => this.updateHostedOmniOwnerWindowFocus(true)));
+
+		this._register(Event.filter(
+			this.nativeHostService.onDidBlurMainOrAuxiliaryWindow,
+			id => id === this.nativeHostService.windowId,
+			this._store
+		)(() => this.updateHostedOmniOwnerWindowFocus(false)));
+
+		this._register(Event.filter(
+			this.hucodeShellService.onDidChangeWindowState,
+			e => e.windowId === this.nativeHostService.windowId,
+			this._store
+		)(e => this.updateHostedOmniInstanceState(e.state)));
+
+		void this.nativeHostService.getActiveWindowId().then(activeWindowId => {
+			this.updateHostedOmniOwnerWindowFocus(
+				activeWindowId === this.nativeHostService.windowId
+			);
+		}).catch(onUnexpectedError);
+
+		void this.updateHostedOmniWorkspaceState().catch(onUnexpectedError);
+	}
+
+	private async updateHostedOmniWorkspaceState(): Promise<void> {
+		if (
+			!this.environmentService.isHostedOmniWorkspace ||
+			!this.environmentService.hostedInstanceId
+		) {
+			return;
+		}
+
+		const state = await this.hucodeShellService.getWindowState(
+			this.nativeHostService.windowId
+		);
+		this.updateHostedOmniInstanceState(state);
+	}
+
+	private updateHostedOmniOwnerWindowFocus(focused: boolean): void {
+		if (this.hostedOmniOwnerWindowFocused === focused) {
+			return;
+		}
+
+		const hadFocus = this.hasFocus;
+		this.hostedOmniOwnerWindowFocused = focused;
+		this.fireHostedOmniFocusChangeIfNeeded(hadFocus);
+	}
+
+	private updateHostedOmniInstanceState(state: IHucodeHostedWorkspaceState): void {
+		const instanceId = this.environmentService.hostedInstanceId;
+		const instance = state.instances.find(candidate =>
+			candidate.instanceId === instanceId
+		);
+		const activeAndVisible =
+			state.activeInstanceId === instanceId &&
+			instance?.state === 'active' &&
+			instance.visible;
+
+		if (this.hostedOmniInstanceActiveAndVisible === activeAndVisible) {
+			return;
+		}
+
+		const hadFocus = this.hasFocus;
+		this.hostedOmniInstanceActiveAndVisible = activeAndVisible;
+		this.fireHostedOmniFocusChangeIfNeeded(hadFocus);
+	}
+
+	private fireHostedOmniFocusChangeIfNeeded(hadFocus: boolean): void {
+		if (this.hasFocus !== hadFocus) {
+			this._onDidChangeHostedOmniFocus.fire();
+		}
 	}
 
 	//#endregion
