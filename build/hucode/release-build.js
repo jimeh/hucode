@@ -36,7 +36,7 @@ Options:
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
---skip-build         Copy/archive an existing ../VSCode-* package.
+--skip-build         Move/archive an existing ../VSCode-* package.
 -h, --help           Show this help.
 `);
 }
@@ -142,18 +142,28 @@ async function exists(filePath) {
 	}
 }
 
-async function copyPackage(source, destination) {
+async function movePackage(source, destination) {
 	if (!(await exists(source))) {
 		throw new Error(`Build output not found: ${source}`);
 	}
 
 	await fs.rm(destination, { recursive: true, force: true });
 	await fs.mkdir(path.dirname(destination), { recursive: true });
-	await fs.cp(source, destination, {
-		recursive: true,
-		force: true,
-		verbatimSymlinks: true
-	});
+
+	try {
+		await fs.rename(source, destination);
+	} catch (error) {
+		if (error?.code !== 'EXDEV') {
+			throw error;
+		}
+
+		await fs.cp(source, destination, {
+			recursive: true,
+			force: true,
+			verbatimSymlinks: true
+		});
+		await fs.rm(source, { recursive: true, force: true });
+	}
 }
 
 async function createArchive(source, archivePath) {
@@ -205,7 +215,7 @@ async function main() {
 		], repoRoot);
 	}
 
-	await copyPackage(buildOutput, distOutput);
+	await movePackage(buildOutput, distOutput);
 
 	if (options.archive) {
 		await createArchive(distOutput, archivePath);
