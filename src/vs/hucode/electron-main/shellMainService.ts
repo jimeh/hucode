@@ -6,6 +6,7 @@
 import { WebContentsView } from 'electron';
 import { statSync } from 'fs';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
+import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
 import { FileAccess } from '../../base/common/network.js';
@@ -74,6 +75,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private activeInstanceId: string | undefined;
 	private restored = false;
 	private oneTimeListenerTokenGenerator = 0;
+	private overlayOccluded = false;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
 
@@ -250,7 +252,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			instance.instanceId === this.activeInstanceId ? 'active' : 'loaded';
 		this.updateInstanceState(instance, { state });
 		if (state === 'active') {
-			this.bringInstanceToFront(instance);
+			this.applyViewVisibility(instance);
 		}
 	}
 
@@ -259,6 +261,22 @@ class ResidentHostedWorkspacesController extends Disposable {
 		visible: boolean
 	): void {
 		instance.visible = visible;
+		this.applyViewVisibility(instance);
+	}
+
+	private isViewActuallyVisible(instance: IHostedWorkbenchInstance): boolean {
+		return instance.visible
+			&& (
+				instance.instanceId !== this.activeInstanceId
+				|| !this.overlayOccluded
+			);
+	}
+
+	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
+		const visible = this.isViewActuallyVisible(instance);
+		if (!visible && instance.view?.webContents.isFocused()) {
+			this.window.win?.webContents.focus();
+		}
 		instance.view?.setVisible(visible);
 		if (instance.view) {
 			this.browserViewMainService.setHostedWebContentsVisible(
@@ -285,7 +303,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	private bringActiveInstanceToFront(): void {
 		const activeInstance = this.getActiveInstance();
-		if (activeInstance?.visible) {
+		if (activeInstance && this.isViewActuallyVisible(activeInstance)) {
 			this.bringInstanceToFront(activeInstance);
 		}
 	}
@@ -496,6 +514,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 				return;
 			}
 
+			if (instance.instanceId === this.activeInstanceId) {
+				this.setWorkspaceOverlayOcclusion(false);
+			}
 			this.untrustView(instance);
 			this.setViewVisible(instance, false);
 			this.updateInstanceState(instance, {
@@ -508,6 +529,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 			this.untrustView(instance);
 			if (!instance.disposed &&
 				this.instancesById.has(instance.instanceId)) {
+				if (instance.instanceId === this.activeInstanceId) {
+					this.setWorkspaceOverlayOcclusion(false);
+				}
 				this.setViewVisible(instance, false);
 				this.updateInstanceState(instance, {
 					state: 'crashed',
@@ -645,6 +669,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		if (wasActive) {
+			this.setWorkspaceOverlayOcclusion(false);
 			this.activeInstanceId = undefined;
 			if (nextActive) {
 				this.activateInstance(nextActive);
@@ -690,6 +715,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 		instance.state = 'unloaded';
 		instance.focused = false;
 		instance.visible = false;
+		if (instance.instanceId === this.activeInstanceId) {
+			this.setWorkspaceOverlayOcclusion(false);
+		}
 
 		if (instance.view) {
 			this.untrustView(instance);
@@ -884,6 +912,40 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	reloadWorkspace(): void {
 		this.getActiveInstance()?.view?.webContents.reload();
+	}
+
+	async captureWorkspaceScreenshot(
+		quality: number = 80
+	): Promise<VSBuffer | undefined> {
+		const webContents = this.getActiveInstance()?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return undefined;
+		}
+
+		try {
+			const image = await webContents.capturePage(undefined, {
+				stayHidden: true
+			});
+			return VSBuffer.wrap(image.toJPEG(quality));
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to capture hosted ' +
+				`workspace screenshot: ${error}`
+			);
+			return undefined;
+		}
+	}
+
+	setWorkspaceOverlayOcclusion(occluded: boolean): void {
+		if (this.overlayOccluded === occluded) {
+			return;
+		}
+
+		this.overlayOccluded = occluded;
+		const activeInstance = this.getActiveInstance();
+		if (activeInstance) {
+			this.applyViewVisibility(activeInstance);
+		}
 	}
 
 	runActionInWorkspace(
@@ -1115,6 +1177,22 @@ export class HucodeShellMainService extends Disposable
 
 	async layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void> {
 		this.getOrCreateController(windowId).layout(bounds);
+	}
+
+	async captureWorkspaceScreenshot(
+		windowId: number,
+		quality?: number
+	): Promise<VSBuffer | undefined> {
+		return this.getOrCreateController(windowId)
+			.captureWorkspaceScreenshot(quality);
+	}
+
+	async setWorkspaceOverlayOcclusion(
+		windowId: number,
+		occluded: boolean
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setWorkspaceOverlayOcclusion(occluded);
 	}
 
 	async shutdownWindowWorkspaces(

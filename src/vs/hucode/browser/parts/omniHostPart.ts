@@ -8,17 +8,20 @@ import {
 	$,
 	append,
 } from '../../../base/browser/dom.js';
+import { mainWindow } from '../../../base/browser/window.js';
+import { encodeBase64, VSBuffer } from '../../../base/common/buffer.js';
 import { Part } from '../../../workbench/browser/part.js';
 import { localize } from '../../../nls.js';
+import { BrowserOverlayManager } from
+	'../../../workbench/contrib/browserView/browser/overlayManager.js';
 import { Parts, IWorkbenchLayoutService } from
 	'../../../workbench/services/layout/browser/layoutService.js';
 import { IThemeService } from
 	'../../../platform/theme/common/themeService.js';
 import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
-import { INativeWorkbenchEnvironmentService } from
-	'../../../workbench/services/environment/electron-browser/environmentService.js';
 import {
+	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
@@ -40,19 +43,26 @@ export class OmniHostPart extends Part {
 
 	private surface: HTMLElement | undefined;
 	private emptyState: HTMLElement | undefined;
+	private screenshot: HTMLElement | undefined;
 	private state: IHucodeHostedWorkspaceState = {
 		instances: [],
 	};
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private layoutScheduled = false;
+	private screenshotRefreshHandle: ReturnType<typeof setTimeout> | undefined;
+	private screenshotCaptureInFlight: Promise<boolean> | undefined;
+	private hasScreenshot = false;
+	private overlayOccluded = false;
+	private overlayOcclusionToken = 0;
+	private activeInstanceId: string | undefined;
+	private readonly overlayManager =
+		this._register(new BrowserOverlayManager(mainWindow));
 
 	constructor(
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
-		@INativeWorkbenchEnvironmentService
-		private readonly environmentService: INativeWorkbenchEnvironmentService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
 	) {
@@ -64,7 +74,7 @@ export class OmniHostPart extends Part {
 			layoutService
 		);
 
-		this.windowId = this.environmentService.window.id;
+		this.windowId = mainWindow.vscodeWindowId;
 
 		this._register(this.shellService.onDidChangeWindowState(change => {
 			if (change.windowId !== this.windowId) {
@@ -76,9 +86,18 @@ export class OmniHostPart extends Part {
 			this.scheduleHostedWorkspaceLayout();
 		}));
 
+		this._register(this.overlayManager.onDidChangeOverlayState(() => {
+			void this.updateOverlayOcclusion();
+		}));
+
 		this._register(this.onDidVisibilityChange(visible => {
 			if (visible) {
 				this.scheduleHostedWorkspaceLayout();
+				this.updateScreenshotRefresh();
+				void this.updateOverlayOcclusion();
+			} else {
+				this.stopScreenshotRefresh();
+				this.clearOverlayOcclusion();
 			}
 		}));
 	}
@@ -88,6 +107,7 @@ export class OmniHostPart extends Part {
 
 		const content = append(parent, $('.content.hucode-omni-host-view'));
 		const root = append(content, $('.hucode-omni-host-root'));
+		this.screenshot = append(root, $('.hucode-omni-host-screenshot'));
 		this.surface = append(root, $('.hucode-omni-host-surface'));
 		this.emptyState = append(
 			root,
@@ -136,15 +156,26 @@ export class OmniHostPart extends Part {
 				instance.instanceId === this.state.activeInstanceId
 			)
 			: undefined;
+		const activeInstanceId = activeInstance?.instanceId;
+		const activeInstanceChanged = this.activeInstanceId !== activeInstanceId;
+		this.activeInstanceId = activeInstanceId;
+		if (activeInstanceChanged) {
+			this.clearOverlayOcclusion();
+			this.clearScreenshot();
+		}
 
 		if (activeInstance) {
 			this.emptyState.classList.add('hidden');
 			this.surface.classList.remove('hidden');
+			this.updateScreenshotRefresh();
 			return;
 		}
 
 		this.emptyState.classList.remove('hidden');
 		this.surface.classList.add('hidden');
+		this.stopScreenshotRefresh();
+		this.clearOverlayOcclusion();
+		this.clearScreenshot();
 	}
 
 	private scheduleHostedWorkspaceLayout(): void {
@@ -159,7 +190,7 @@ export class OmniHostPart extends Part {
 		}
 
 		this.layoutScheduled = true;
-		requestAnimationFrame(() => {
+		mainWindow.requestAnimationFrame(() => {
 			this.layoutScheduled = false;
 			void this.layoutHostedWorkspace();
 		});
@@ -178,14 +209,193 @@ export class OmniHostPart extends Part {
 			return;
 		}
 
-		const width = Math.max(0, window.innerWidth - rect.left);
-		const height = Math.max(0, window.innerHeight);
+		const width = Math.max(0, mainWindow.innerWidth - rect.left);
+		const height = Math.max(0, mainWindow.innerHeight);
+		this.layoutScreenshot(rect.left, width, height);
 
 		await this.shellService.layoutWorkspace(this.windowId, {
 			x: rect.left,
 			y: 0,
 			width,
 			height,
+		});
+		void this.updateOverlayOcclusion();
+		this.updateScreenshotRefresh();
+	}
+
+	private layoutScreenshot(
+		left: number,
+		width: number,
+		height: number
+	): void {
+		if (!this.screenshot) {
+			return;
+		}
+
+		this.screenshot.style.left = `${left}px`;
+		this.screenshot.style.top = '0';
+		this.screenshot.style.width = `${width}px`;
+		this.screenshot.style.height = `${height}px`;
+	}
+
+	private getActiveInstance(): IHucodeHostedWorkbenchInstance | undefined {
+		return this.state.activeInstanceId
+			? this.state.instances.find(instance =>
+				instance.instanceId === this.state.activeInstanceId
+			)
+			: undefined;
+	}
+
+	private hasVisibleHostedWorkspace(): boolean {
+		const activeInstance = this.getActiveInstance();
+		return !!activeInstance
+			&& activeInstance.visible
+			&& activeInstance.state !== 'crashed'
+			&& activeInstance.state !== 'unloaded'
+			&& this.layoutService.isVisible(Parts.CHATBAR_PART);
+	}
+
+	private updateScreenshotRefresh(): void {
+		if (!this.hasVisibleHostedWorkspace()) {
+			this.stopScreenshotRefresh();
+			return;
+		}
+
+		if (!this.screenshotRefreshHandle) {
+			this.screenshotRefreshHandle = setTimeout(() => {
+				this.screenshotRefreshHandle = undefined;
+				void this.refreshScreenshot().finally(() =>
+					this.updateScreenshotRefresh()
+				);
+			}, 1000);
+		}
+	}
+
+	private stopScreenshotRefresh(): void {
+		if (this.screenshotRefreshHandle) {
+			clearTimeout(this.screenshotRefreshHandle);
+			this.screenshotRefreshHandle = undefined;
+		}
+	}
+
+	private async refreshScreenshot(): Promise<boolean> {
+		if (!this.hasVisibleHostedWorkspace()) {
+			return this.hasScreenshot;
+		}
+
+		if (this.screenshotCaptureInFlight) {
+			return this.screenshotCaptureInFlight;
+		}
+
+		this.screenshotCaptureInFlight = this.doRefreshScreenshot();
+		try {
+			return await this.screenshotCaptureInFlight;
+		} finally {
+			this.screenshotCaptureInFlight = undefined;
+		}
+	}
+
+	private async doRefreshScreenshot(): Promise<boolean> {
+		let screenshot: VSBuffer | undefined;
+		try {
+			screenshot = await this.shellService.captureWorkspaceScreenshot(
+				this.windowId,
+				80
+			);
+		} catch {
+			screenshot = undefined;
+		}
+		if (!screenshot) {
+			return this.hasScreenshot;
+		}
+
+		this.setScreenshot(screenshot);
+		return true;
+	}
+
+	private setScreenshot(buffer: VSBuffer): void {
+		if (!this.screenshot) {
+			return;
+		}
+
+		const dataUrl = `data:image/jpeg;base64,${encodeBase64(buffer)}`;
+		this.screenshot.style.backgroundImage = `url('${dataUrl}')`;
+		this.hasScreenshot = true;
+		this.updateScreenshotVisibility();
+	}
+
+	private clearScreenshot(): void {
+		if (this.screenshot) {
+			this.screenshot.style.backgroundImage = '';
+		}
+		this.hasScreenshot = false;
+		this.updateScreenshotVisibility();
+	}
+
+	private updateScreenshotVisibility(): void {
+		this.screenshot?.classList.toggle(
+			'visible',
+			this.overlayOccluded && this.hasScreenshot
+		);
+	}
+
+	private clearOverlayOcclusion(): void {
+		this.overlayOcclusionToken++;
+		if (!this.overlayOccluded) {
+			this.updateScreenshotVisibility();
+			return;
+		}
+
+		this.overlayOccluded = false;
+		this.updateScreenshotVisibility();
+		void this.shellService.setWorkspaceOverlayOcclusion(
+			this.windowId,
+			false
+		);
+	}
+
+	private hasOverlappingShellOverlay(): boolean {
+		if (!this.screenshot || !this.hasVisibleHostedWorkspace()) {
+			return false;
+		}
+
+		return this.overlayManager
+			.getOverlappingOverlays(this.screenshot).length > 0;
+	}
+
+	private async updateOverlayOcclusion(): Promise<void> {
+		const occluded = this.hasOverlappingShellOverlay();
+		const token = ++this.overlayOcclusionToken;
+
+		if (!occluded) {
+			this.clearOverlayOcclusion();
+			return;
+		}
+
+		if (this.overlayOccluded) {
+			return;
+		}
+
+		const hasScreenshot = await this.refreshScreenshot();
+		if (
+			token !== this.overlayOcclusionToken
+			|| !hasScreenshot
+			|| !this.hasOverlappingShellOverlay()
+		) {
+			return;
+		}
+
+		this.overlayOccluded = true;
+		this.updateScreenshotVisibility();
+		mainWindow.requestAnimationFrame(() => {
+			if (!this.overlayOccluded) {
+				return;
+			}
+
+			void this.shellService.setWorkspaceOverlayOcclusion(
+				this.windowId,
+				true
+			);
 		});
 	}
 }

@@ -177,6 +177,25 @@
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-screenshot {
+	position: fixed;
+	background-image: none;
+	background-position: 0 0;
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+	pointer-events: none;
+	visibility: hidden;
+	opacity: 0;
+	z-index: 1;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-screenshot.visible {
+	visibility: visible;
+	opacity: 1;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-surface {
 	flex: 1;
 	min-height: 0;

@@ -10,6 +10,7 @@ import {
 	INativeRunKeybindingInWindowRequest,
 	IRectangle,
 } from '../../platform/window/common/window.js';
+import { VSBuffer } from '../../base/common/buffer.js';
 import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
@@ -108,6 +109,21 @@ export interface IHucodeShellService {
 	triggerPasteInWorkspace(windowId: number): Promise<boolean>;
 	reloadWorkspace(windowId: number): Promise<void>;
 	layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void>;
+	/**
+	 * Captures the active hosted workspace view for DOM fallback rendering.
+	 */
+	captureWorkspaceScreenshot(
+		windowId: number,
+		quality?: number
+	): Promise<VSBuffer | undefined>;
+	/**
+	 * Hides or restores the active hosted workspace view while shell overlays
+	 * need to render above it.
+	 */
+	setWorkspaceOverlayOcclusion(
+		windowId: number,
+		occluded: boolean
+	): Promise<void>;
 	shutdownWindowWorkspaces(
 		windowId: number,
 		reason: ShutdownReason

@@ -1730,6 +1730,8 @@ registerAction2(class extends Action2 {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const quickInputService = accessor.get(IQuickInputService);
 		const notificationService = accessor.get(INotificationService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 
 		try {
 			const projectId = parseProjectHandle(handle.$treeItemHandle);
@@ -1743,7 +1745,11 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			const label = await quickInputService.input({
+			if (environmentService.isOmniWindow) {
+				await shellService.focusShell(dom.getWindowId(mainWindow));
+			}
+
+			const labelPromise = quickInputService.input({
 				prompt: localize('renameProjectPrompt', 'Project label'),
 				value: project.label,
 				validateInput: async value => value.trim()
@@ -1753,6 +1759,13 @@ registerAction2(class extends Action2 {
 						'Project label is required.'
 					),
 			});
+			if (environmentService.isOmniWindow) {
+				mainWindow.requestAnimationFrame(() => {
+					quickInputService.focus();
+				});
+			}
+
+			const label = await labelPromise;
 			if (!label) {
 				return;
 			}
