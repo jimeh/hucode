@@ -27,6 +27,7 @@ import * as i18n from './lib/i18n.ts';
 import { getProductionDependencies } from './lib/dependencies.ts';
 import { config } from './lib/electron.ts';
 import { createAsar } from './lib/asar.ts';
+import { patchDarwinInfoPlistVersion } from './lib/darwinProductVersion.ts';
 import minimist from 'minimist';
 import { compileBuildWithoutManglingTask, compileBuildWithManglingTask } from './gulpfile.compile.ts';
 import { compileNonNativeExtensionsBuildTask, compileNativeExtensionsBuildTask, compileAllExtensionsBuildTask, compileExtensionMediaBuildTask, cleanExtensionsBuildTask, compileCopilotExtensionBuildTask } from './gulpfile.extensions.ts';
@@ -581,6 +582,19 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				...(platform === 'darwin' && !isInsiderOrExploration ? ['!**/Contents/Applications', '!**/Contents/Applications/**'] : []),
 				...(platform === 'win32' && !isInsiderOrExploration ? ['!**/electron_proxy.exe'] : []),
 			], { dot: true }));
+
+		if (platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[
+					`${product.nameLong}.app/Contents/Info.plist`,
+					...(embedded ? [
+						`${product.nameLong}.app/Contents/Applications/` +
+						`${embedded.nameLong}.app/Contents/Info.plist`
+					] : [])
+				]
+			));
+		}
 
 		if (platform === 'linux') {
 			result = es.merge(result, gulp.src('resources/completions/bash/code', { base: '.' })
