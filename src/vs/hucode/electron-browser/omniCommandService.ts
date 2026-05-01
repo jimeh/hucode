@@ -8,11 +8,11 @@ import { InstantiationType, registerSingleton } from '../../platform/instantiati
 import { IInstantiationService } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
-	INativeRunActionInWindowRequest,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellCommandForwardingDisabled,
 	isHucodeOmniShellLayoutAction,
-} from '../../platform/window/common/window.js';
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import { INativeRunActionInWindowRequest } from '../../platform/window/common/window.js';
 import { isHucodeOmniProjectsFocus } from '../browser/omniFocus.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
 import { CommandService } from '../../workbench/services/commands/common/commandService.js';

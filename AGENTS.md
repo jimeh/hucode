@@ -104,6 +104,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
   Projects-tree actions in the shell, and forward other `vscode:runAction` and
   `vscode:runKeybinding` payloads from `NativeWindow` to the active hosted
   workspace instead of routing them from the main-process menubar.
+- Keep Omni command-forwarding policy in Hucode-named helpers near the layer
+  that consumes them. Generic workbench files can import same-layer
+  `hucode*` helpers or lower-layer platform helpers, but should not import from
+  `src/vs/hucode/*`.
 - Omni shell DOM keybindings do not use the native menu IPC path. When Projects
   has focus, the shell renderer resolves shortcuts locally and calls
   `ICommandService.executeCommand`, so shortcut forwarding needs an Omni-local

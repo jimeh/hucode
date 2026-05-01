@@ -21,11 +21,6 @@ import {
 	INativeRunKeybindingInWindowRequest,
 	INativeOpenFileRequest,
 	hasNativeTitlebar,
-	isHucodeOmniShellAction,
-	isHucodeOmniShellKeybinding,
-	isHucodeOmniShellLayoutAction,
-	isHucodeOmniShellLayoutKeybinding,
-	withHucodeOmniShellCommandForwardingDisabled,
 } from '../../platform/window/common/window.js';
 import { ITitleService } from '../services/title/browser/titleService.js';
 import { IWorkbenchThemeService } from '../services/themes/common/workbenchThemeService.js';
@@ -94,25 +89,7 @@ import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
-
-const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
-
-const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
-	['copy', 'editor.action.clipboardCopyAction'],
-	['cut', 'editor.action.clipboardCutAction'],
-]);
-
-const HUCODE_OMNI_PROJECTS_SELECTOR =
-	'.hucode-omni-projects-view, .hucode-project-switcher-view';
-
-const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
-	'.quick-input-widget',
-	'.monaco-inputbox',
-	'input',
-	'textarea',
-	'select',
-	'[contenteditable="true"]',
-].join(', ');
+import { HUCODE_OMNI_CLIPBOARD_ACTIONS, HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
 
 export class NativeWindow extends BaseWindow {
 
@@ -123,6 +100,7 @@ export class NativeWindow extends BaseWindow {
 	private pendingFoldersToRemove: URI[] = [];
 
 	private isDocumentedEdited = false;
+	private readonly hucodeOmniCommandForwarding: HucodeOmniCommandForwarding;
 
 	constructor(
 		@IEditorService private readonly editorService: IEditorService,
@@ -163,10 +141,15 @@ export class NativeWindow extends BaseWindow {
 		@IUtilityProcessWorkerWorkbenchService private readonly utilityProcessWorkerWorkbenchService: IUtilityProcessWorkerWorkbenchService,
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
-		@IMainProcessService private readonly mainProcessService: IMainProcessService,
+		@IMainProcessService mainProcessService: IMainProcessService,
 	) {
 		super(mainWindow, undefined, hostService, nativeEnvironmentService, contextMenuService, layoutService);
 
+		this.hucodeOmniCommandForwarding = new HucodeOmniCommandForwarding(
+			nativeEnvironmentService,
+			mainProcessService,
+			logService,
+		);
 		this.configuredWindowZoomLevel = this.resolveConfiguredWindowZoomLevel();
 
 		this.registerListeners();
@@ -190,12 +173,12 @@ export class NativeWindow extends BaseWindow {
 
 		for (const [eventType, actionId] of HUCODE_OMNI_CLIPBOARD_ACTIONS) {
 			this._register(addDisposableListener(mainWindow.document, eventType, e => {
-				if (!this.shouldForwardOmniShellInvocation()) {
+				if (!this.hucodeOmniCommandForwarding.shouldForwardShellInvocation()) {
 					return;
 				}
 
 				EventHelper.stop(e, true);
-				void this.forwardOmniActionToWorkspace({
+				void this.hucodeOmniCommandForwarding.forwardActionToWorkspace({
 					id: actionId,
 					from: 'menu'
 				});
@@ -205,7 +188,7 @@ export class NativeWindow extends BaseWindow {
 		// Support `runAction` event
 		ipcRenderer.on('vscode:runAction', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunActionInWindowRequest;
-			if (await this.forwardOmniActionToWorkspace(request)) {
+			if (await this.hucodeOmniCommandForwarding.forwardActionToWorkspace(request)) {
 				return;
 			}
 
@@ -229,13 +212,8 @@ export class NativeWindow extends BaseWindow {
 				const executeCommand = () =>
 					this.commandService.executeCommand(request.id, ...args);
 
-				if (this.isForwardedFromOmniShell(request)) {
-					await withHucodeOmniShellCommandForwardingDisabled(
-						executeCommand
-					);
-				} else {
-					await executeCommand();
-				}
+				await this.hucodeOmniCommandForwarding
+					.runWithForwardingDisabledIfNeeded(request, executeCommand);
 
 				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from });
 			} catch (error) {
@@ -246,7 +224,7 @@ export class NativeWindow extends BaseWindow {
 		// Support runKeybinding event
 		ipcRenderer.on('vscode:runKeybinding', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
-			if (await this.forwardOmniKeybindingToWorkspace(request)) {
+			if (await this.hucodeOmniCommandForwarding.forwardKeybindingToWorkspace(request)) {
 				return;
 			}
 
@@ -258,11 +236,8 @@ export class NativeWindow extends BaseWindow {
 						activeElement
 					);
 
-				if (this.isForwardedFromOmniShell(request)) {
-					withHucodeOmniShellCommandForwardingDisabled(dispatch);
-				} else {
-					dispatch();
-				}
+				this.hucodeOmniCommandForwarding
+					.runWithForwardingDisabledIfNeeded(request, dispatch);
 			}
 		});
 
@@ -511,105 +486,6 @@ export class NativeWindow extends BaseWindow {
 		this._register(this.lifecycleService.onBeforeShutdown(e => this.onBeforeShutdown(e)));
 		this._register(this.lifecycleService.onBeforeShutdownError(e => this.onBeforeShutdownError(e)));
 		this._register(this.lifecycleService.onWillShutdown(e => this.onWillShutdown(e)));
-	}
-
-	private async forwardOmniActionToWorkspace(
-		request: INativeRunActionInWindowRequest
-	): Promise<boolean> {
-		if (
-			!this.nativeEnvironmentService.isOmniWindow ||
-			this.isForwardedFromOmniShell(request)
-		) {
-			return false;
-		}
-
-		if (isHucodeOmniShellAction(request.id)) {
-			return false;
-		}
-
-		const forwarded = await this.tryForwardOmniActionToWorkspace(request);
-		return forwarded || isHucodeOmniShellLayoutAction(request.id);
-	}
-
-	private async tryForwardOmniActionToWorkspace(
-		request: INativeRunActionInWindowRequest
-	): Promise<boolean> {
-		try {
-			return await this.callHucodeShellChannel<boolean>(
-				'runActionInWorkspace',
-				[this.nativeEnvironmentService.window.id, request]
-			);
-		} catch (error) {
-			this.logService.warn(
-				`Failed to forward Omni shell action ${request.id}: ${error}`
-			);
-			return false;
-		}
-	}
-
-	private async forwardOmniKeybindingToWorkspace(
-		request: INativeRunKeybindingInWindowRequest
-	): Promise<boolean> {
-		if (
-			!this.nativeEnvironmentService.isOmniWindow ||
-			this.isForwardedFromOmniShell(request)
-		) {
-			return false;
-		}
-
-		if (isHucodeOmniShellKeybinding(request.userSettingsLabel)) {
-			return false;
-		}
-
-		const forwarded = await this.tryForwardOmniKeybindingToWorkspace(request);
-		return forwarded ||
-			isHucodeOmniShellLayoutKeybinding(request.userSettingsLabel);
-	}
-
-	private async tryForwardOmniKeybindingToWorkspace(
-		request: INativeRunKeybindingInWindowRequest
-	): Promise<boolean> {
-		try {
-			return await this.callHucodeShellChannel<boolean>(
-				'runKeybindingInWorkspace',
-				[this.nativeEnvironmentService.window.id, request]
-			);
-		} catch (error) {
-			this.logService.warn(
-				'Failed to forward Omni shell keybinding ' +
-				`${request.userSettingsLabel}: ${error}`
-			);
-			return false;
-		}
-	}
-
-	private async callHucodeShellChannel<T>(
-		command: string,
-		args: unknown[]
-	): Promise<T> {
-		return this.mainProcessService
-			.getChannel(HUCODE_SHELL_CHANNEL_NAME)
-			.call<T>(command, args);
-	}
-
-	private isForwardedFromOmniShell(
-		request:
-			| INativeRunActionInWindowRequest
-			| INativeRunKeybindingInWindowRequest
-	): boolean {
-		return request.hucodeForwardedFromOmniShell === true;
-	}
-
-	private shouldForwardOmniShellInvocation(): boolean {
-		return this.nativeEnvironmentService.isOmniWindow &&
-			!this.isActiveElementInside(HUCODE_OMNI_PROJECTS_SELECTOR) &&
-			!this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
-	}
-
-	private isActiveElementInside(selector: string): boolean {
-		const activeElement = getActiveElement();
-		return activeElement instanceof Element &&
-			!!activeElement.closest(selector);
 	}
 
 	private handleRepresentedFilename(part: IEditorPart): void {
