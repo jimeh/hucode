@@ -416,12 +416,14 @@ export interface INativeOpenFileRequest extends IOpenFileRequest {
 
 export interface INativeRunActionInWindowRequest {
 	readonly id: string;
-	readonly from: 'menu' | 'touchbar' | 'mouse';
+	readonly from: 'menu' | 'touchbar' | 'mouse' | 'keybinding';
 	readonly args?: unknown[];
+	readonly hucodeForwardedFromOmniShell?: boolean;
 }
 
 export interface INativeRunKeybindingInWindowRequest {
 	readonly userSettingsLabel: string;
+	readonly hucodeForwardedFromOmniShell?: boolean;
 }
 
 export interface IColorScheme {

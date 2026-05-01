@@ -103,22 +103,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 			const onShellFocus = () => {
 				this.lastFocusedSurface = 'shell';
 			};
-			const onBeforeInput = (
-				_event: Electron.Event,
-				input: Electron.Input
-			) => {
-				if (!this.isPasteKeyDown(input) || !this.hasActiveWorkspace()) {
-					return;
-				}
-
-				_event.preventDefault();
-				this.triggerPasteInWorkspace();
-			};
 			shellWebContents.on('focus', onShellFocus);
-			shellWebContents.on('before-input-event', onBeforeInput);
 			this._register(toDisposable(() => {
 				shellWebContents.off('focus', onShellFocus);
-				shellWebContents.off('before-input-event', onBeforeInput);
 			}));
 		}
 
@@ -951,13 +938,19 @@ class ResidentHostedWorkspacesController extends Disposable {
 	runActionInWorkspace(
 		request: INativeRunActionInWindowRequest
 	): boolean {
-		return this.sendToActiveWorkspace('vscode:runAction', request);
+		return this.sendToActiveWorkspace(
+			'vscode:runAction',
+			this.withOmniForwardingMarker(request)
+		);
 	}
 
 	runKeybindingInWorkspace(
 		request: INativeRunKeybindingInWindowRequest
 	): boolean {
-		return this.sendToActiveWorkspace('vscode:runKeybinding', request);
+		return this.sendToActiveWorkspace(
+			'vscode:runKeybinding',
+			this.withOmniForwardingMarker(request)
+		);
 	}
 
 	triggerPasteInWorkspace(): boolean {
@@ -1002,6 +995,17 @@ class ResidentHostedWorkspacesController extends Disposable {
 			);
 			return false;
 		}
+	}
+
+	private withOmniForwardingMarker<
+		T extends
+		| INativeRunActionInWindowRequest
+		| INativeRunKeybindingInWindowRequest
+	>(request: T): T {
+		return {
+			...request,
+			hucodeForwardedFromOmniShell: true,
+		};
 	}
 
 	private hasActiveWorkspace(): boolean {

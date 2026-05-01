@@ -9,6 +9,7 @@ import vfs from 'vinyl-fs';
 import filter from 'gulp-filter';
 import * as util from './util.ts';
 import { getVersion } from './getVersion.ts';
+import { patchDarwinInfoPlistVersion } from './darwinProductVersion.ts';
 import electron from '@vscode/gulp-electron';
 import json from 'gulp-json-editor';
 
@@ -221,9 +222,18 @@ function getElectron(arch: string): () => NodeJS.ReadWriteStream {
 			keepDefaultApp: true
 		};
 
-		return vfs.src('package.json')
+		let result: NodeJS.ReadWriteStream = vfs.src('package.json')
 			.pipe(json({ name: product.nameShort }))
-			.pipe(electron(electronOpts))
+			.pipe(electron(electronOpts));
+
+		if (process.platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[`${product.nameLong}.app/Contents/Info.plist`]
+			));
+		}
+
+		return result
 			.pipe(filter(['**', '!**/app/package.json']))
 			.pipe(vfs.dest('.build/electron'));
 	};

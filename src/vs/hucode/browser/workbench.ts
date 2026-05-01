@@ -1089,6 +1089,11 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	private setAuxiliaryBarHidden(hidden: boolean): void {
+		if (!hidden) {
+			// The Omni shell does not expose its own secondary side bar.
+			return;
+		}
+
 		if (this.partVisibility.auxiliaryBar === !hidden) {
 			return;
 		}
@@ -1106,15 +1111,6 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)) {
 			this.paneCompositeService.hideActivePaneComposite(ViewContainerLocation.AuxiliaryBar);
 		}
-
-		// If auxiliary bar becomes visible, show last active pane composite or default
-		if (!hidden && !this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)) {
-			const paneCompositeToOpen = this.paneCompositeService.getLastActivePaneCompositeId(ViewContainerLocation.AuxiliaryBar) ??
-				this.viewDescriptorService.getDefaultViewContainer(ViewContainerLocation.AuxiliaryBar)?.id;
-			if (paneCompositeToOpen) {
-				this.paneCompositeService.openPaneComposite(paneCompositeToOpen, ViewContainerLocation.AuxiliaryBar);
-			}
-		}
 	}
 
 	private setEditorHidden(hidden: boolean): void {
@@ -1127,6 +1123,11 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	private setPanelHidden(hidden: boolean): void {
+		if (!hidden) {
+			// The hosted workbench owns panel visibility in Omni windows.
+			return;
+		}
+
 		if (this.partVisibility.panel === !hidden) {
 			return;
 		}
@@ -1155,19 +1156,6 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			if (panelHadFocus) {
 				this.focusPart(Parts.CHATBAR_PART);
 			}
-		}
-
-		// If panel becomes visible, show last active panel or default and focus it
-		if (!hidden) {
-			if (!this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
-				const panelToOpen = this.paneCompositeService.getLastActivePaneCompositeId(ViewContainerLocation.Panel) ??
-					this.viewDescriptorService.getDefaultViewContainer(ViewContainerLocation.Panel)?.id;
-				if (panelToOpen) {
-					this.paneCompositeService.openPaneComposite(panelToOpen, ViewContainerLocation.Panel);
-				}
-			}
-
-			this.focusPart(Parts.PANEL_PART);
 		}
 	}
 
