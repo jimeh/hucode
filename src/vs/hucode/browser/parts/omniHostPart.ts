@@ -44,6 +44,7 @@ export class OmniHostPart extends Part {
 	private surface: HTMLElement | undefined;
 	private emptyState: HTMLElement | undefined;
 	private screenshot: HTMLElement | undefined;
+	private screenshotImage: HTMLImageElement | undefined;
 	private state: IHucodeHostedWorkspaceState = {
 		instances: [],
 	};
@@ -108,6 +109,10 @@ export class OmniHostPart extends Part {
 		const content = append(parent, $('.content.hucode-omni-host-view'));
 		const root = append(content, $('.hucode-omni-host-root'));
 		this.screenshot = append(root, $('.hucode-omni-host-screenshot'));
+		this.screenshotImage = append(
+			this.screenshot,
+			$<HTMLImageElement>('img.hucode-omni-host-screenshot-image')
+		);
 		this.surface = append(root, $('.hucode-omni-host-surface'));
 		this.emptyState = append(
 			root,
@@ -314,19 +319,19 @@ export class OmniHostPart extends Part {
 	}
 
 	private setScreenshot(buffer: VSBuffer): void {
-		if (!this.screenshot) {
+		if (!this.screenshotImage) {
 			return;
 		}
 
 		const dataUrl = `data:image/jpeg;base64,${encodeBase64(buffer)}`;
-		this.screenshot.style.backgroundImage = `url('${dataUrl}')`;
+		this.screenshotImage.src = dataUrl;
 		this.hasScreenshot = true;
 		this.updateScreenshotVisibility();
 	}
 
 	private clearScreenshot(): void {
-		if (this.screenshot) {
-			this.screenshot.style.backgroundImage = '';
+		if (this.screenshotImage) {
+			this.screenshotImage.removeAttribute('src');
 		}
 		this.hasScreenshot = false;
 		this.updateScreenshotVisibility();
