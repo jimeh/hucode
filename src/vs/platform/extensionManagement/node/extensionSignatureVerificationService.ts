@@ -8,6 +8,7 @@ import { isDefined } from '../../../base/common/types.js';
 import { TargetPlatform } from '../../extensions/common/extensions.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService, LogLevel } from '../../log/common/log.js';
+import { IProductService } from '../../product/common/productService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { ExtensionSignatureVerificationCode } from '../common/extensionManagement.js';
 
@@ -38,6 +39,21 @@ declare namespace vsceSign {
 	export function verify(vsixFilePath: string, signatureArchiveFilePath: string, verbose: boolean): Promise<ExtensionSignatureVerificationResult>;
 }
 
+declare namespace ovsxSign {
+	export function verify(
+		vsixFilePath: string,
+		signatureArchiveFilePath: string,
+		verbose?: boolean,
+		options?: { verifySignatureManifest?: boolean }
+	): Promise<boolean>;
+}
+
+type OvsxSignError = {
+	readonly code?: unknown;
+	readonly didExecute?: unknown;
+	readonly output?: unknown;
+};
+
 /**
  * Extension signature verification result
  */
@@ -51,49 +67,72 @@ export interface ExtensionSignatureVerificationResult {
 export class ExtensionSignatureVerificationService implements IExtensionSignatureVerificationService {
 	declare readonly _serviceBrand: undefined;
 
-	private moduleLoadingPromise: Promise<typeof vsceSign> | undefined;
+	private vsceSignLoadingPromise: Promise<typeof vsceSign> | undefined;
+	private ovsxSignLoadingPromise: Promise<typeof ovsxSign> | undefined;
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
+		@IProductService private readonly productService: IProductService,
 	) { }
 
 	private vsceSign(): Promise<typeof vsceSign> {
-		if (!this.moduleLoadingPromise) {
-			this.moduleLoadingPromise = this.resolveVsceSign();
+		if (!this.vsceSignLoadingPromise) {
+			this.vsceSignLoadingPromise = this.resolveVsceSign();
 		}
 
-		return this.moduleLoadingPromise;
+		return this.vsceSignLoadingPromise;
 	}
 
-	private async resolveVsceSign(): Promise<typeof vsceSign> {
+	protected async resolveVsceSign(): Promise<typeof vsceSign> {
 		const mod = '@vscode/vsce-sign';
 		return import(mod);
 	}
 
+	private ovsxSign(): Promise<typeof ovsxSign> {
+		if (!this.ovsxSignLoadingPromise) {
+			this.ovsxSignLoadingPromise = this.resolveOvsxSign();
+		}
+
+		return this.ovsxSignLoadingPromise;
+	}
+
+	protected async resolveOvsxSign(): Promise<typeof ovsxSign> {
+		const mod = 'node-ovsx-sign';
+		return import(mod);
+	}
+
 	public async verify(extensionId: string, version: string, vsixFilePath: string, signatureArchiveFilePath: string, clientTargetPlatform?: TargetPlatform): Promise<IExtensionSignatureVerificationResult | undefined> {
-		let module: typeof vsceSign;
+		const useOvsxSign = this.useOvsxSign();
+		const verifierName = useOvsxSign ? 'node-ovsx-sign' : 'vsce-sign';
+		const startTime = new Date().getTime();
+		let module: typeof vsceSign | typeof ovsxSign;
 
 		try {
-			module = await this.vsceSign();
+			module = useOvsxSign ? await this.ovsxSign() : await this.vsceSign();
 		} catch (error) {
-			this.logService.error('Could not load vsce-sign module', getErrorMessage(error));
+			this.logService.error(`Could not load ${verifierName} module`, getErrorMessage(error));
 			this.logService.info(`Extension signature verification is not done: ${extensionId}`);
 			return undefined;
 		}
 
-		const startTime = new Date().getTime();
 		let result: ExtensionSignatureVerificationResult;
 
 		try {
-			this.logService.trace(`Verifying extension signature for ${extensionId}...`);
-			result = await module.verify(vsixFilePath, signatureArchiveFilePath, this.logService.getLevel() === LogLevel.Trace);
+			this.logService.trace(`Verifying extension signature for ${extensionId} with ${verifierName}...`);
+			if (useOvsxSign) {
+				result = await this.verifyWithOvsxSign(module as typeof ovsxSign, vsixFilePath, signatureArchiveFilePath);
+			} else {
+				result = await (module as typeof vsceSign).verify(vsixFilePath, signatureArchiveFilePath, this.logService.getLevel() === LogLevel.Trace);
+			}
 		} catch (e) {
-			result = {
-				code: ExtensionSignatureVerificationCode.UnknownError,
-				didExecute: false,
-				output: getErrorMessage(e)
-			};
+			result = useOvsxSign
+				? this.toOvsxSignResult(e)
+				: {
+					code: ExtensionSignatureVerificationCode.UnknownError,
+					didExecute: false,
+					output: getErrorMessage(e)
+				};
 		}
 
 		const duration = new Date().getTime() - startTime;
@@ -132,5 +171,85 @@ export class ExtensionSignatureVerificationService implements IExtensionSignatur
 		});
 
 		return { code: result.code };
+	}
+
+	private useOvsxSign(): boolean {
+		const serviceUrl = this.productService.extensionsGallery?.serviceUrl;
+		if (!serviceUrl) {
+			return false;
+		}
+
+		try {
+			return new URL(serviceUrl).hostname === 'open-vsx.org';
+		} catch {
+			return false;
+		}
+	}
+
+	private async verifyWithOvsxSign(module: typeof ovsxSign, vsixFilePath: string, signatureArchiveFilePath: string): Promise<ExtensionSignatureVerificationResult> {
+		const valid = await module.verify(
+			vsixFilePath,
+			signatureArchiveFilePath,
+			this.logService.getLevel() === LogLevel.Trace,
+			{ verifySignatureManifest: true }
+		);
+
+		return {
+			code: valid
+				? ExtensionSignatureVerificationCode.Success
+				: ExtensionSignatureVerificationCode.SignatureIsInvalid,
+			didExecute: true,
+		};
+	}
+
+	private toOvsxSignResult(error: unknown): ExtensionSignatureVerificationResult {
+		const code = this.toOvsxSignCode(error);
+		const ovsxSignError = this.getOvsxSignError(error);
+		const didExecute = ovsxSignError
+			? Boolean(ovsxSignError.didExecute)
+			: false;
+
+		return {
+			code,
+			didExecute,
+			output: this.getOvsxSignOutput(error)
+		};
+	}
+
+	private toOvsxSignCode(error: unknown): ExtensionSignatureVerificationCode {
+		const ovsxSignError = this.getOvsxSignError(error);
+		const code = typeof ovsxSignError?.code === 'string'
+			? ovsxSignError.code
+			: undefined;
+		const output = this.getOvsxSignOutput(error);
+
+		if (code === ExtensionSignatureVerificationCode.SignatureManifestIsInvalid && output.includes('signature is not valid')) {
+			return ExtensionSignatureVerificationCode.SignatureIsInvalid;
+		}
+
+		if (code === 'ExtensionManifestIsInvalid') {
+			return ExtensionSignatureVerificationCode.PackageIntegrityCheckFailed;
+		}
+
+		if (code && Object.values(ExtensionSignatureVerificationCode).includes(code as ExtensionSignatureVerificationCode)) {
+			return code as ExtensionSignatureVerificationCode;
+		}
+
+		return ExtensionSignatureVerificationCode.UnknownError;
+	}
+
+	private getOvsxSignOutput(error: unknown): string {
+		const ovsxSignError = this.getOvsxSignError(error);
+		if (typeof ovsxSignError?.output === 'string') {
+			return ovsxSignError.output;
+		}
+
+		return getErrorMessage(error);
+	}
+
+	private getOvsxSignError(error: unknown): OvsxSignError | undefined {
+		return typeof error === 'object' && error !== null
+			? error as OvsxSignError
+			: undefined;
 	}
 }
