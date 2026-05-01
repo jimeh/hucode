@@ -13,7 +13,20 @@ import { IFileService } from '../../platform/files/common/files.js';
 import { EditorResourceAccessor, IUntitledTextResourceEditorInput, SideBySideEditor, pathsToEditors, IResourceDiffEditorInput, IUntypedEditorInput, IEditorPane, isResourceEditorInput, IResourceMergeEditorInput } from '../common/editor.js';
 import { IEditorService } from '../services/editor/common/editorService.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
-import { WindowMinimumSize, IOpenFileRequest, IAddRemoveFoldersRequest, INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest, INativeOpenFileRequest, hasNativeTitlebar } from '../../platform/window/common/window.js';
+import {
+	WindowMinimumSize,
+	IOpenFileRequest,
+	IAddRemoveFoldersRequest,
+	INativeRunActionInWindowRequest,
+	INativeRunKeybindingInWindowRequest,
+	INativeOpenFileRequest,
+	hasNativeTitlebar,
+	isHucodeOmniShellAction,
+	isHucodeOmniShellKeybinding,
+	isHucodeOmniShellLayoutAction,
+	isHucodeOmniShellLayoutKeybinding,
+	withHucodeOmniShellCommandForwardingDisabled,
+} from '../../platform/window/common/window.js';
 import { ITitleService } from '../services/title/browser/titleService.js';
 import { IWorkbenchThemeService } from '../services/themes/common/workbenchThemeService.js';
 import { ApplyZoomTarget, applyZoom } from '../../platform/window/electron-browser/window.js';
@@ -84,27 +97,6 @@ import { IMainProcessService } from '../../platform/ipc/common/mainProcessServic
 
 const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
-const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
-	'hucode.projectSwitcher.',
-];
-
-const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
-	'workbench.action.omniWindow.focusProjectsFromExplorerShortcut',
-	'workbench.action.omniWindow.focusProjectsFromSourceControlShortcut',
-	'workbench.action.omniWindow.focusProjectPane',
-	'workbench.action.omniWindow.openSelectedInOmniWindow',
-	'workbench.action.omniWindow.openSelectedInNewWindow',
-]);
-
-const HUCODE_OMNI_SHELL_KEYBINDINGS = new Set([
-	'shift+cmd+e',
-	'cmd+shift+e',
-	'ctrl+shift+e',
-	'ctrl+shift+g',
-	'shift+cmd+g',
-	'cmd+shift+g',
-]);
-
 const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
 	['copy', 'editor.action.clipboardCopyAction'],
 	['cut', 'editor.action.clipboardCutAction'],
@@ -112,6 +104,15 @@ const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
 
 const HUCODE_OMNI_PROJECTS_SELECTOR =
 	'.hucode-omni-projects-view, .hucode-project-switcher-view';
+
+const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
+	'.quick-input-widget',
+	'.monaco-inputbox',
+	'input',
+	'textarea',
+	'select',
+	'[contenteditable="true"]',
+].join(', ');
 
 export class NativeWindow extends BaseWindow {
 
@@ -220,12 +221,21 @@ export class NativeWindow extends BaseWindow {
 						args.push(resource);
 					}
 				}
-			} else {
+			} else if (request.from !== 'keybinding') {
 				args.push({ from: request.from });
 			}
 
 			try {
-				await this.commandService.executeCommand(request.id, ...args);
+				const executeCommand = () =>
+					this.commandService.executeCommand(request.id, ...args);
+
+				if (this.isForwardedFromOmniShell(request)) {
+					await withHucodeOmniShellCommandForwardingDisabled(
+						executeCommand
+					);
+				} else {
+					await executeCommand();
+				}
 
 				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from });
 			} catch (error) {
@@ -242,7 +252,17 @@ export class NativeWindow extends BaseWindow {
 
 			const activeElement = getActiveElement();
 			if (activeElement) {
-				this.keybindingService.dispatchByUserSettingsLabel(request.userSettingsLabel, activeElement);
+				const dispatch = () =>
+					this.keybindingService.dispatchByUserSettingsLabel(
+						request.userSettingsLabel,
+						activeElement
+					);
+
+				if (this.isForwardedFromOmniShell(request)) {
+					withHucodeOmniShellCommandForwardingDisabled(dispatch);
+				} else {
+					dispatch();
+				}
 			}
 		});
 
@@ -496,18 +516,24 @@ export class NativeWindow extends BaseWindow {
 	private async forwardOmniActionToWorkspace(
 		request: INativeRunActionInWindowRequest
 	): Promise<boolean> {
-		if (!this.nativeEnvironmentService.isOmniWindow) {
+		if (
+			!this.nativeEnvironmentService.isOmniWindow ||
+			this.isForwardedFromOmniShell(request)
+		) {
 			return false;
 		}
 
-		if (this.isOmniProjectsFocus()) {
+		if (isHucodeOmniShellAction(request.id)) {
 			return false;
 		}
 
-		if (this.isOmniShellAction(request.id)) {
-			return false;
-		}
+		const forwarded = await this.tryForwardOmniActionToWorkspace(request);
+		return forwarded || isHucodeOmniShellLayoutAction(request.id);
+	}
 
+	private async tryForwardOmniActionToWorkspace(
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
 		try {
 			return await this.callHucodeShellChannel<boolean>(
 				'runActionInWorkspace',
@@ -524,18 +550,25 @@ export class NativeWindow extends BaseWindow {
 	private async forwardOmniKeybindingToWorkspace(
 		request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
-		if (!this.nativeEnvironmentService.isOmniWindow) {
+		if (
+			!this.nativeEnvironmentService.isOmniWindow ||
+			this.isForwardedFromOmniShell(request)
+		) {
 			return false;
 		}
 
-		if (this.isOmniProjectsFocus()) {
+		if (isHucodeOmniShellKeybinding(request.userSettingsLabel)) {
 			return false;
 		}
 
-		if (this.isOmniShellKeybinding(request.userSettingsLabel)) {
-			return false;
-		}
+		const forwarded = await this.tryForwardOmniKeybindingToWorkspace(request);
+		return forwarded ||
+			isHucodeOmniShellLayoutKeybinding(request.userSettingsLabel);
+	}
 
+	private async tryForwardOmniKeybindingToWorkspace(
+		request: INativeRunKeybindingInWindowRequest
+	): Promise<boolean> {
 		try {
 			return await this.callHucodeShellChannel<boolean>(
 				'runKeybindingInWorkspace',
@@ -559,28 +592,24 @@ export class NativeWindow extends BaseWindow {
 			.call<T>(command, args);
 	}
 
-	private isOmniShellAction(commandId: string): boolean {
-		return HUCODE_OMNI_SHELL_ACTION_IDS.has(commandId) ||
-			HUCODE_OMNI_SHELL_ACTION_PREFIXES.some(prefix =>
-				commandId.startsWith(prefix)
-			);
-	}
-
-	private isOmniShellKeybinding(userSettingsLabel: string): boolean {
-		return HUCODE_OMNI_SHELL_KEYBINDINGS.has(
-			userSettingsLabel.toLowerCase().replace(/\s+/g, '')
-		);
+	private isForwardedFromOmniShell(
+		request:
+			| INativeRunActionInWindowRequest
+			| INativeRunKeybindingInWindowRequest
+	): boolean {
+		return request.hucodeForwardedFromOmniShell === true;
 	}
 
 	private shouldForwardOmniShellInvocation(): boolean {
 		return this.nativeEnvironmentService.isOmniWindow &&
-			!this.isOmniProjectsFocus();
+			!this.isActiveElementInside(HUCODE_OMNI_PROJECTS_SELECTOR) &&
+			!this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}
 
-	private isOmniProjectsFocus(): boolean {
+	private isActiveElementInside(selector: string): boolean {
 		const activeElement = getActiveElement();
 		return activeElement instanceof Element &&
-			!!activeElement.closest(HUCODE_OMNI_PROJECTS_SELECTOR);
+			!!activeElement.closest(selector);
 	}
 
 	private handleRepresentedFilename(part: IEditorPart): void {

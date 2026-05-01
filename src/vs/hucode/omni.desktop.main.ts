@@ -16,6 +16,7 @@ import '../workbench/workbench.common.main.js';
 
 // Use the local Omni pane composite implementation for the Hucode shell layout.
 import './browser/paneCompositePartService.js';
+import './electron-browser/omniCommandService.js';
 
 //#endregion
 

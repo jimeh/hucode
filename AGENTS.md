@@ -104,14 +104,28 @@ For detailed project overview, architecture, coding guidelines, and validation s
   Projects-tree actions in the shell, and forward other `vscode:runAction` and
   `vscode:runKeybinding` payloads from `NativeWindow` to the active hosted
   workspace instead of routing them from the main-process menubar.
+- Omni shell DOM keybindings do not use the native menu IPC path. When Projects
+  has focus, the shell renderer resolves shortcuts locally and calls
+  `ICommandService.executeCommand`, so shortcut forwarding needs an Omni-local
+  command service route as well as the native `vscode:runKeybinding` handler.
+- Keep the Omni command-service route scoped to Projects focus. Shell QuickInput
+  widgets are renderer-local; forwarding their `quickInput.accept` or clipboard
+  commands breaks project rename and other shell prompts.
 - Hosted Omni paste cannot rely on `targetWindowId` alone:
   `NativeHostMainService.triggerPaste()` resolves that id to the shell
   `BrowserWindow.webContents`. Use the Hucode shell service to trigger native
   paste on the active hosted `WebContentsView`.
+- Do not catch shell `Cmd+V` in Electron `before-input-event`. That runs before
+  the renderer can inspect focused DOM and will steal paste from shell QuickInput
+  prompts. Let renderer keybinding/clipboard routing decide when Projects focus
+  should forward paste.
 - Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
   archives are not valid Microsoft `vsce-sign` signatures; release builds need
   `node-ovsx-sign` available in production dependencies to verify them.
-- `npm run hucode:run` intentionally runs `npm run hucode:compile` before
-  launch. Upstream `scripts/code.sh` only compiles when `out/` is missing, so
-  Hucode uses the explicit one-shot compile to avoid launching stale JS after
-  TypeScript edits.
+- `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
+  compiled output. Run `npm run hucode:watch` for incremental rebuilds while
+  developing, or `npm run hucode:compile` before launch for a full one-shot
+  rebuild.
+- `npm run hucode:compile` must build the client, built-in extension outputs,
+  and extension media. Using only `transpile-client` cleans `out/` but leaves
+  files like `extensions/git-base/out/extension.js` and `codicon.ttf` missing.
