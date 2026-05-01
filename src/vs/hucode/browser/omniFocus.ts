@@ -4,18 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { getActiveElement } from '../../base/browser/dom.js';
-
-const HUCODE_OMNI_PROJECTS_SELECTOR =
-	'.hucode-omni-projects-view, .hucode-project-switcher-view';
-
-const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
-	'.quick-input-widget',
-	'.monaco-inputbox',
-	'input',
-	'textarea',
-	'select',
-	'[contenteditable="true"]',
-].join(', ');
+import {
+	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
+	HUCODE_OMNI_PROJECTS_SELECTOR,
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
 
 /**
  * Returns whether keyboard focus is currently inside the Omni Projects UI.

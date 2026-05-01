@@ -7,6 +7,8 @@ import { getActiveElement } from '../../base/browser/dom.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import {
+	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
+	HUCODE_OMNI_PROJECTS_SELECTOR,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellKeybinding,
@@ -21,18 +23,6 @@ import {
 import { INativeWorkbenchEnvironmentService } from '../services/environment/electron-browser/environmentService.js';
 
 const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
-
-const HUCODE_OMNI_PROJECTS_SELECTOR =
-	'.hucode-omni-projects-view, .hucode-project-switcher-view';
-
-const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
-	'.quick-input-widget',
-	'.monaco-inputbox',
-	'input',
-	'textarea',
-	'select',
-	'[contenteditable="true"]',
-].join(', ');
 
 export const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
 	['copy', 'editor.action.clipboardCopyAction'],
@@ -59,7 +49,8 @@ export class HucodeOmniCommandForwarding {
 	): Promise<boolean> {
 		if (
 			!this.nativeEnvironmentService.isOmniWindow ||
-			isHucodeForwardedFromOmniShell(request)
+			isHucodeForwardedFromOmniShell(request) ||
+			this.isShellLocalInputFocused()
 		) {
 			return false;
 		}
@@ -77,7 +68,8 @@ export class HucodeOmniCommandForwarding {
 	): Promise<boolean> {
 		if (
 			!this.nativeEnvironmentService.isOmniWindow ||
-			isHucodeForwardedFromOmniShell(request)
+			isHucodeForwardedFromOmniShell(request) ||
+			this.isShellLocalInputFocused()
 		) {
 			return false;
 		}
@@ -150,5 +142,9 @@ export class HucodeOmniCommandForwarding {
 		const activeElement = getActiveElement();
 		return activeElement instanceof Element &&
 			!!activeElement.closest(selector);
+	}
+
+	private isShellLocalInputFocused(): boolean {
+		return this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}
 }

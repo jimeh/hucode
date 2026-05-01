@@ -52,6 +52,18 @@ const HUCODE_OMNI_SHELL_LAYOUT_KEYBINDINGS = new Set([
 	'ctrl+alt+b',
 ]);
 
+export const HUCODE_OMNI_PROJECTS_SELECTOR =
+	'.hucode-omni-projects-view, .hucode-project-switcher-view';
+
+export const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
+	'.quick-input-widget',
+	'.monaco-inputbox',
+	'input',
+	'textarea',
+	'select',
+	'[contenteditable="true"]',
+].join(', ');
+
 let hucodeOmniShellCommandForwardingDisabled = 0;
 
 /**
