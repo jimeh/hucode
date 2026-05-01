@@ -13,7 +13,10 @@ import {
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { INativeRunActionInWindowRequest } from '../../platform/window/common/window.js';
-import { isHucodeOmniProjectsFocus } from '../browser/omniFocus.js';
+import {
+	isHucodeOmniLocalInputFocus,
+	isHucodeOmniProjectsFocus,
+} from '../browser/omniFocus.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
 import { CommandService } from '../../workbench/services/commands/common/commandService.js';
 import { INativeWorkbenchEnvironmentService } from '../../workbench/services/environment/electron-browser/environmentService.js';
@@ -38,6 +41,7 @@ class OmniCommandService extends CommandService {
 		if (
 			!this.nativeEnvironmentService.isOmniWindow ||
 			!isHucodeOmniProjectsFocus() ||
+			isHucodeOmniLocalInputFocus() ||
 			isHucodeOmniShellCommandForwardingDisabled() ||
 			isHucodeOmniShellAction(id)
 		) {

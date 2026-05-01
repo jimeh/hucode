@@ -236,7 +236,7 @@ export class NativeWindow extends BaseWindow {
 						activeElement
 					);
 
-				this.hucodeOmniCommandForwarding
+				await this.hucodeOmniCommandForwarding
 					.runWithForwardingDisabledIfNeeded(request, dispatch);
 			}
 		});

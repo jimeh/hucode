@@ -113,6 +113,8 @@ export class OmniHostPart extends Part {
 			this.screenshot,
 			$<HTMLImageElement>('img.hucode-omni-host-screenshot-image')
 		);
+		this.screenshotImage.alt = '';
+		this.screenshotImage.setAttribute('aria-hidden', 'true');
 		this.surface = append(root, $('.hucode-omni-host-surface'));
 		this.emptyState = append(
 			root,

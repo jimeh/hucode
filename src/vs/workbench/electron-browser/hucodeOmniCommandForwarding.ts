@@ -91,17 +91,17 @@ export class HucodeOmniCommandForwarding {
 			isHucodeOmniShellLayoutKeybinding(request.userSettingsLabel);
 	}
 
-	runWithForwardingDisabledIfNeeded<T>(
+	async runWithForwardingDisabledIfNeeded<T>(
 		request:
 			| INativeRunActionInWindowRequest
 			| INativeRunKeybindingInWindowRequest,
-		callback: () => T
-	): T {
+		callback: () => T | Promise<T>
+	): Promise<T> {
 		if (isHucodeForwardedFromOmniShell(request)) {
-			return withHucodeOmniShellCommandForwardingDisabled(callback);
+			return await withHucodeOmniShellCommandForwardingDisabled(callback);
 		}
 
-		return callback();
+		return await callback();
 	}
 
 	private async tryForwardActionToWorkspace(

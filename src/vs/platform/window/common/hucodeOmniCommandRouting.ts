@@ -107,12 +107,12 @@ export function isHucodeForwardedFromOmniShell(
 /**
  * Runs work without the Omni shell command forwarder re-forwarding commands.
  */
-export function withHucodeOmniShellCommandForwardingDisabled<T>(
-	callback: () => T
-): T {
+export async function withHucodeOmniShellCommandForwardingDisabled<T>(
+	callback: () => T | Promise<T>
+): Promise<T> {
 	hucodeOmniShellCommandForwardingDisabled++;
 	try {
-		return callback();
+		return await callback();
 	} finally {
 		hucodeOmniShellCommandForwardingDisabled--;
 	}
