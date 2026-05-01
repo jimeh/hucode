@@ -14,6 +14,7 @@ import { hash } from '../../../base/common/hash.js';
 import { Event, Emitter } from '../../../base/common/event.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
+import { IRendererReplyTarget } from '../../window/common/window.js';
 
 export const IUtilityProcessWorkerMainService = createDecorator<IUtilityProcessWorkerMainService>('utilityProcessWorker');
 
@@ -38,7 +39,9 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 	}
 
 	async createWorker(configuration: IUtilityProcessWorkerCreateConfiguration): Promise<IOnDidTerminateUtilityrocessWorkerProcess> {
-		const workerLogId = `window: ${configuration.reply.windowId}, moduleId: ${configuration.process.moduleId}`;
+		const workerLogId =
+			`${this.getReplyTargetLabel(configuration.reply.target)}, ` +
+			`moduleId: ${configuration.process.moduleId}`;
 		this.logService.trace(`[UtilityProcessWorker]: createWorker(${workerLogId})`);
 
 		// Ensure to dispose any existing process for config
@@ -75,7 +78,7 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 	private hash(configuration: IUtilityProcessWorkerConfiguration): number {
 		return hash({
 			moduleId: configuration.process.moduleId,
-			windowId: configuration.reply.windowId
+			replyTarget: configuration.reply.target
 		});
 	}
 
@@ -86,11 +89,23 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 			return;
 		}
 
-		this.logService.trace(`[UtilityProcessWorker]: disposeWorker(window: ${configuration.reply.windowId}, moduleId: ${configuration.process.moduleId})`);
+		this.logService.trace(
+			`[UtilityProcessWorker]: disposeWorker(` +
+			`${this.getReplyTargetLabel(configuration.reply.target)}, ` +
+			`moduleId: ${configuration.process.moduleId})`
+		);
 
 		worker.kill();
 		worker.dispose();
 		this.workers.delete(workerId);
+	}
+
+	private getReplyTargetLabel(target: IRendererReplyTarget): string {
+		if (target.kind === 'window') {
+			return `window: ${target.windowId}`;
+		}
+
+		return `webContents: ${target.webContentsId}`;
 	}
 }
 
@@ -121,7 +136,10 @@ class UtilityProcessWorker extends Disposable {
 	}
 
 	spawn(): boolean {
-		const window = this.windowsMainService.getWindowById(this.configuration.reply.windowId);
+		const ownerWindowId = this.configuration.reply.target.kind === 'window'
+			? this.configuration.reply.target.windowId
+			: this.configuration.reply.target.ownerWindowId;
+		const window = this.windowsMainService.getWindowById(ownerWindowId);
 		const windowPid = window?.win?.webContents.getOSProcessId();
 
 		return this.utilityProcess.start({
@@ -130,8 +148,8 @@ class UtilityProcessWorker extends Disposable {
 			entryPoint: this.configuration.process.moduleId,
 			parentLifecycleBound: windowPid,
 			windowLifecycleBound: true,
-			correlationId: `${this.configuration.reply.windowId}`,
-			responseWindowId: this.configuration.reply.windowId,
+			correlationId: `${ownerWindowId}`,
+			responseTarget: this.configuration.reply.target,
 			responseChannel: this.configuration.reply.channel,
 			responseNonce: this.configuration.reply.nonce
 		});

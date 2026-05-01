@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { BrowserWindow, Details, MessageChannelMain, app, utilityProcess, UtilityProcess as ElectronUtilityProcess } from 'electron';
+import { BrowserWindow, Details, MessageChannelMain, WebContents, app, utilityProcess, UtilityProcess as ElectronUtilityProcess, webContents } from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { ILogService } from '../../log/common/log.js';
@@ -18,6 +18,7 @@ import { removeDangerousEnvVariables } from '../../../base/common/processes.js';
 import { deepClone } from '../../../base/common/objects.js';
 import { isWindows } from '../../../base/common/platform.js';
 import { isUNCAccessRestrictionsDisabled, getUNCHostAllowlist } from '../../../base/node/unc.js';
+import { IRendererReplyTarget } from '../../window/common/window.js';
 
 export interface IUtilityProcessConfiguration {
 
@@ -88,7 +89,7 @@ export interface IWindowUtilityProcessConfiguration extends IUtilityProcessConfi
 
 	// --- message port response related
 
-	readonly responseWindowId: number;
+	readonly responseTarget: IRendererReplyTarget;
 	readonly responseChannel: string;
 	readonly responseNonce: string;
 
@@ -112,7 +113,8 @@ export interface IWindowUtilityProcessConfiguration extends IUtilityProcessConfi
 function isWindowUtilityProcessConfiguration(config: IUtilityProcessConfiguration): config is IWindowUtilityProcessConfiguration {
 	const candidate = config as IWindowUtilityProcessConfiguration;
 
-	return typeof candidate.responseWindowId === 'number';
+	return typeof candidate.responseTarget === 'object' &&
+		!!candidate.responseTarget;
 }
 
 interface IUtilityProcessExitBaseEvent {
@@ -323,7 +325,14 @@ export class UtilityProcess extends Disposable {
 			this.processPid = process.pid;
 
 			if (typeof process.pid === 'number') {
-				UtilityProcess.all.set(process.pid, { pid: process.pid, name: isWindowUtilityProcessConfiguration(configuration) ? `${configuration.name} [${configuration.responseWindowId}]` : configuration.name });
+				UtilityProcess.all.set(process.pid, {
+					pid: process.pid,
+					name: isWindowUtilityProcessConfiguration(configuration)
+						? `${configuration.name} [` +
+						this.getResponseTargetLogLabel(configuration.responseTarget) +
+						`]`
+						: configuration.name
+				});
 			}
 
 			this.log('successfully created', Severity.Info);
@@ -460,6 +469,14 @@ export class UtilityProcess extends Disposable {
 			this.kill();
 		}
 	}
+
+	private getResponseTargetLogLabel(target: IRendererReplyTarget): string {
+		if (target.kind === 'window') {
+			return `window:${target.windowId}`;
+		}
+
+		return `webContents:${target.webContentsId}`;
+	}
 }
 
 export class WindowUtilityProcess extends UtilityProcess {
@@ -474,8 +491,8 @@ export class WindowUtilityProcess extends UtilityProcess {
 	}
 
 	override start(configuration: IWindowUtilityProcessConfiguration): boolean {
-		const responseWindow = this.windowsMainService.getWindowById(configuration.responseWindowId);
-		if (!responseWindow?.win || responseWindow.win.isDestroyed() || responseWindow.win.webContents.isDestroyed()) {
+		const resolvedTarget = this.resolveResponseTarget(configuration.responseTarget);
+		if (!resolvedTarget) {
 			this.log('Refusing to start utility process because requesting window cannot be found or is destroyed...', Severity.Error);
 
 			return true;
@@ -488,16 +505,62 @@ export class WindowUtilityProcess extends UtilityProcess {
 		}
 
 		// Register to window events
-		this.registerWindowListeners(responseWindow.win, configuration);
+		this.registerWindowListeners(
+			resolvedTarget.targetWindow,
+			configuration,
+			resolvedTarget.targetContents
+		);
 
 		// Establish & exchange message ports
 		const windowPort = this.connect(configuration.payload);
-		responseWindow.win.webContents.postMessage(configuration.responseChannel, configuration.responseNonce, [windowPort]);
+		resolvedTarget.targetContents.postMessage(
+			configuration.responseChannel,
+			configuration.responseNonce,
+			[windowPort]
+		);
 
 		return true;
 	}
 
-	private registerWindowListeners(window: BrowserWindow, configuration: IWindowUtilityProcessConfiguration): void {
+	private resolveResponseTarget(target: IRendererReplyTarget):
+		| {
+			window: NonNullable<ReturnType<IWindowsMainService['getWindowById']>>;
+			targetWindow: BrowserWindow;
+			targetContents: WebContents;
+		}
+		| undefined {
+		if (target.kind === 'window') {
+			const window = this.windowsMainService.getWindowById(target.windowId);
+			const targetWindow = window?.win;
+			if (!targetWindow || targetWindow.isDestroyed() ||
+				targetWindow.webContents.isDestroyed()) {
+				return undefined;
+			}
+
+			return {
+				window,
+				targetWindow,
+				targetContents: targetWindow.webContents,
+			};
+		}
+
+		const ownerWindow =
+			this.windowsMainService.getWindowById(target.ownerWindowId);
+		const targetWindow = ownerWindow?.win;
+		const targetContents = webContents.fromId(target.webContentsId);
+		if (!targetWindow || targetWindow.isDestroyed() ||
+			!targetContents || targetContents.isDestroyed()) {
+			return undefined;
+		}
+
+		return { window: ownerWindow, targetWindow, targetContents };
+	}
+
+	private registerWindowListeners(
+		window: BrowserWindow,
+		configuration: IWindowUtilityProcessConfiguration,
+		targetContents: WebContents
+	): void {
 
 		// If the lifecycle of the utility process is bound to the window,
 		// we terminate the process if the window closes or changes.
@@ -511,6 +574,10 @@ export class WindowUtilityProcess extends UtilityProcess {
 				: () => this.kill();
 			this._register(Event.filter(this.lifecycleMainService.onWillLoadWindow, e => e.window.win === window)(terminate));
 			this._register(Event.fromNodeEventEmitter(window, 'closed')(terminate));
+			this._register(Event.fromNodeEventEmitter(
+				targetContents,
+				'destroyed'
+			)(terminate));
 		}
 	}
 }

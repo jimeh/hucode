@@ -154,6 +154,27 @@ export class NativeWorkbenchEnvironmentService extends AbstractNativeEnvironment
 	@memoize
 	get isSessionsWindow(): boolean { return !!this.configuration.isSessionsWindow; }
 
+	@memoize
+	get isOmniWindow(): boolean { return !!this.configuration.isOmniWindow; }
+
+	@memoize
+	get isHostedOmniWorkspace(): boolean {
+		return !!this.configuration.isHostedOmniWorkspace;
+	}
+
+	@memoize
+	get hostedWebContentsId(): number | undefined {
+		return this.configuration.hostedWebContentsId;
+	}
+
+	@memoize
+	get hostedInstanceId(): string | undefined {
+		return this.configuration.hostedInstanceId;
+	}
+
+	@memoize
+	get agentPluginsHome(): URI { return URI.file(this.agentPluginsPath); }
+
 	constructor(
 		private readonly configuration: INativeWindowConfiguration,
 		productService: IProductService

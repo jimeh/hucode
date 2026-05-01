@@ -245,7 +245,18 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
 		}
 
 		const opts: IExtensionHostProcessOptions = {
-			responseWindowId: this._nativeHostService.windowId,
+			responseTarget:
+				this._environmentService.isHostedOmniWorkspace &&
+					typeof this._environmentService.hostedWebContentsId === 'number'
+					? {
+						kind: 'webContents',
+						webContentsId: this._environmentService.hostedWebContentsId,
+						ownerWindowId: this._nativeHostService.windowId
+					}
+					: {
+						kind: 'window',
+						windowId: this._nativeHostService.windowId
+					},
 			responseChannel: 'vscode:startExtensionHostMessagePortResult',
 			responseNonce: generateUuid(),
 			env,

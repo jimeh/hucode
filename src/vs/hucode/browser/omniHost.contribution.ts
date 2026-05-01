@@ -1,0 +1,142 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { Disposable } from '../../base/common/lifecycle.js';
+import { URI } from '../../base/common/uri.js';
+import { getWindowId } from '../../base/browser/dom.js';
+import { mainWindow } from '../../base/browser/window.js';
+import { localize } from '../../nls.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
+import {
+	IWorkbenchContribution,
+	registerWorkbenchContribution2,
+	WorkbenchPhase,
+} from '../../workbench/common/contributions.js';
+import { IHostService } from '../../workbench/services/host/browser/host.js';
+import { IWorkbenchLayoutService, Parts } from
+	'../../workbench/services/layout/browser/layoutService.js';
+import { IWorkbenchEnvironmentService } from
+	'../../workbench/services/environment/common/environmentService.js';
+import {
+	getSelectedProjectSwitcherTarget,
+} from './projectSwitcher/projectSwitcher.contribution.js';
+import {
+	IHucodeHostedWorkspaceState,
+	IHucodeShellService,
+} from '../common/omniWindow.js';
+import { IHucodeOmniWindowUIService } from './omniWindowUI.js';
+
+async function openSelectedInOmniWindow(
+	windowId: number,
+	shellService: IHucodeShellService,
+	notificationService: INotificationService
+): Promise<IHucodeHostedWorkspaceState | undefined> {
+	const selection = getSelectedProjectSwitcherTarget();
+	if (!selection) {
+		notificationService.info(localize(
+			'omniSelectWorktreeFirst',
+			'Select a project or worktree first.'
+		));
+		return undefined;
+	}
+
+	return shellService.openWorkspace(
+		windowId,
+		selection.worktreePath,
+		selection.projectId
+	);
+}
+
+async function openSelectedInStandaloneWindow(
+	hostService: IHostService,
+	notificationService: INotificationService
+): Promise<void> {
+	const selection = getSelectedProjectSwitcherTarget();
+	if (!selection) {
+		notificationService.info(localize(
+			'omniSelectWorktreeFirstStandalone',
+			'Select a project or worktree first.'
+		));
+		return;
+	}
+
+	await hostService.openWindow(
+		[{ folderUri: URI.file(selection.worktreePath) }],
+		{ forceNewWindow: true }
+	);
+}
+
+class OmniWindowShellContribution extends Disposable
+	implements IWorkbenchContribution {
+
+	static readonly ID = 'hucode.omniWindowShell';
+
+	constructor(
+		@IWorkbenchEnvironmentService
+		private readonly environmentService: IWorkbenchEnvironmentService,
+		@IHucodeOmniWindowUIService
+		private readonly omniWindowUIService: IHucodeOmniWindowUIService,
+		@IWorkbenchLayoutService
+		private readonly layoutService: IWorkbenchLayoutService,
+		@IHucodeShellService
+		private readonly shellService: IHucodeShellService,
+		@IHostService
+		private readonly hostService: IHostService,
+		@INotificationService
+		private readonly notificationService: INotificationService,
+	) {
+		super();
+
+		if (!this.environmentService.isOmniWindow) {
+			return;
+		}
+
+		this._register(this.omniWindowUIService.registerDelegate({
+			focusProjectPane: () => {
+				this.layoutService.focusPart(Parts.SIDEBAR_PART);
+			},
+			openSelectedInOmni: async () => {
+				const nextState = await openSelectedInOmniWindow(
+					this.windowId,
+					this.shellService,
+					this.notificationService
+				);
+				if (nextState) {
+					await this.shellService.focusWorkspace(
+						this.windowId
+					);
+				}
+			},
+			openSelectedInStandalone: () => openSelectedInStandaloneWindow(
+				this.hostService,
+				this.notificationService
+			),
+			focusWorkspace: () =>
+				this.shellService.focusWorkspace(
+					this.windowId
+				),
+			reloadWorkspace: () =>
+				this.shellService.reloadWorkspace(
+					this.windowId
+				),
+			closeWorkspace: () =>
+				this.shellService.closeWorkspace(
+					this.windowId
+				).then(() => undefined),
+		}));
+
+	}
+
+	private get windowId(): number {
+		return getWindowId(mainWindow);
+	}
+}
+
+registerWorkbenchContribution2(
+	OmniWindowShellContribution.ID,
+	OmniWindowShellContribution,
+	WorkbenchPhase.AfterRestored
+);
