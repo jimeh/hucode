@@ -172,9 +172,6 @@ export class NativeWorkbenchEnvironmentService extends AbstractNativeEnvironment
 		return this.configuration.hostedInstanceId;
 	}
 
-	@memoize
-	get agentPluginsHome(): URI { return URI.file(this.agentPluginsPath); }
-
 	constructor(
 		private readonly configuration: INativeWindowConfiguration,
 		productService: IProductService
