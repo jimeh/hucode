@@ -111,3 +111,7 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
   archives are not valid Microsoft `vsce-sign` signatures; release builds need
   `node-ovsx-sign` available in production dependencies to verify them.
+- `npm run hucode:run` intentionally runs `npm run hucode:compile` before
+  launch. Upstream `scripts/code.sh` only compiles when `out/` is missing, so
+  Hucode uses the explicit one-shot compile to avoid launching stale JS after
+  TypeScript edits.
