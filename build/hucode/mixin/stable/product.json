@@ -1,7 +1,7 @@
 {
 	"nameShort": "Hucode",
 	"nameLong": "Hucode",
-	"hucodeVersion": "0.0.0",
+	"hucodeVersion": "0.0.1",
 	"applicationName": "hucode",
 	"dataFolderName": ".hucode",
 	"win32MutexName": "hucode",
