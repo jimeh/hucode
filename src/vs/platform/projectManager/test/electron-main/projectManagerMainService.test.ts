@@ -16,9 +16,13 @@ import {
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
 	StoredProjectManagerState,
-	WorktreeRecord
+	WorktreeRecord,
+	WorktreeRefRecord
 } from '../../common/projectManager.js';
-import { GitWorktreeService } from '../../electron-main/gitWorktreeService.js';
+import {
+	GitCommandError,
+	GitWorktreeService
+} from '../../electron-main/gitWorktreeService.js';
 import { ProjectManagerMainService } from
 	'../../electron-main/projectManagerMainService.js';
 
@@ -70,6 +74,8 @@ class TestStateService implements IStateService {
 class TestGitWorktreeService {
 	readonly resolvedRoots = new Map<string, string>();
 	readonly worktrees = new Map<string, readonly WorktreeRecord[]>();
+	readonly refs = new Map<string, readonly WorktreeRefRecord[]>();
+	readonly validBranchNames = new Set<string>();
 	readonly createdCalls: {
 		projectRoot: string;
 		options: CreateWorktreeOptions;
@@ -85,6 +91,20 @@ class TestGitWorktreeService {
 		return this.worktrees.get(projectRoot) ?? [];
 	}
 
+	async listRefs(
+		projectRoot: string,
+		_worktrees: readonly WorktreeRecord[]
+	): Promise<readonly WorktreeRefRecord[]> {
+		return this.refs.get(projectRoot) ?? [];
+	}
+
+	async isValidBranchName(
+		_projectRoot: string,
+		branchName: string
+	): Promise<boolean> {
+		return this.validBranchNames.has(branchName);
+	}
+
 	async createWorktree(
 		projectRoot: string,
 		options: CreateWorktreeOptions,
@@ -94,10 +114,15 @@ class TestGitWorktreeService {
 
 		const worktreePath = options.path ??
 			`${projectRoot}.worktrees/` +
-			`${GitWorktreeService.sanitizeBranchName(options.branchName)}`;
+			`${GitWorktreeService.sanitizeBranchName(
+				options.branchName ?? options.startPoint ?? 'HEAD'
+			)}`;
 		this.worktrees.set(projectRoot, [
 			...(this.worktrees.get(projectRoot) ?? []),
-			createLinkedWorktree(worktreePath, options.branchName),
+			createLinkedWorktree(
+				worktreePath,
+				options.branchName ?? options.startPoint ?? 'HEAD'
+			),
 		]);
 		return worktreePath;
 	}
@@ -180,6 +205,159 @@ suite('GitWorktreeService', () => {
 		assert.strictEqual(
 			GitWorktreeService.sanitizeBranchName('feature/hello world'),
 			'feature-hello-world'
+		);
+	});
+
+	test('parseRefList marks local branches checked out in worktrees', () => {
+		const refs = GitWorktreeService.parseRefList(
+			[
+				[
+					'refs/remotes/origin/HEAD',
+					'1111111',
+					'',
+					'',
+					'origin main',
+				].join('\0'),
+				[
+					'refs/remotes/origin/feature/two',
+					'2222222',
+					'',
+					'',
+					'remote feature',
+				].join('\0'),
+				[
+					'refs/tags/v1.0.0',
+					'3333333',
+					'',
+					'',
+					'release',
+				].join('\0'),
+				[
+					'refs/heads/main',
+					'4444444',
+					'origin/main',
+					'',
+					'main branch',
+				].join('\0'),
+			].join('\n'),
+			[createMainWorktree('/repo')]
+		);
+
+		assert.deepStrictEqual(refs, [
+			{
+				name: 'main',
+				type: 'head',
+				commit: '4444444',
+				upstream: 'origin/main',
+				subject: 'main branch',
+				checkedOutPath: '/repo',
+			},
+			{
+				name: 'origin/feature/two',
+				type: 'remote',
+				commit: '2222222',
+				upstream: undefined,
+				subject: 'remote feature',
+				checkedOutPath: undefined,
+			},
+			{
+				name: 'v1.0.0',
+				type: 'tag',
+				commit: '3333333',
+				upstream: undefined,
+				subject: 'release',
+				checkedOutPath: undefined,
+			},
+		]);
+	});
+
+	test('createWorktree can add either a new branch or an existing ref', async () => {
+		const calls: { args: readonly string[]; cwd: string }[] = [];
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (args, cwd) => {
+				calls.push({ args, cwd });
+				return { stdout: '', stderr: '' };
+			},
+			async () => false,
+			async () => { },
+		);
+
+		await service.createWorktree(
+			'/repo',
+			{ branchName: 'feature/one' },
+			['/repo']
+		);
+		await service.createWorktree(
+			'/repo',
+			{ startPoint: 'feature/two' },
+			['/repo']
+		);
+
+		assert.deepStrictEqual(calls, [
+			{
+				args: [
+					'worktree',
+					'add',
+					'-b',
+					'feature/one',
+					'/repo.worktrees/feature-one',
+					'HEAD',
+				],
+				cwd: '/repo',
+			},
+			{
+				args: [
+					'worktree',
+					'add',
+					'/repo.worktrees/feature-two',
+					'feature/two',
+				],
+				cwd: '/repo',
+			},
+		]);
+	});
+
+	test('isValidBranchName delegates to git check-ref-format', async () => {
+		const checkedNames: string[] = [];
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (args, _cwd) => {
+				checkedNames.push(args[2]);
+				if (args[2] === 'feature/two') {
+					return { stdout: '', stderr: '' };
+				}
+
+				throw new Error('invalid branch name');
+			},
+			async () => false,
+			async () => { },
+		);
+
+		assert.strictEqual(
+			await service.isValidBranchName('/repo', 'feature/two'),
+			true
+		);
+		await assert.rejects(
+			service.isValidBranchName('/repo', 'feature two'),
+			/invalid branch name/
+		);
+		assert.deepStrictEqual(checkedNames, ['feature/two', 'feature two']);
+	});
+
+	test('isValidBranchName reports git validation failures as false', async () => {
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async () => {
+				throw new GitCommandError('invalid branch name', '');
+			},
+			async () => false,
+			async () => { },
+		);
+
+		assert.strictEqual(
+			await service.isValidBranchName('/repo', 'feature two'),
+			false
 		);
 	});
 

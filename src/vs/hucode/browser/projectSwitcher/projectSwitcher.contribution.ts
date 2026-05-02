@@ -52,8 +52,11 @@ import { INotificationService } from
 	'../../../platform/notification/common/notification.js';
 import { IStorageService, StorageScope, StorageTarget } from
 	'../../../platform/storage/common/storage.js';
-import { IQuickInputService } from
-	'../../../platform/quickinput/common/quickInput.js';
+import {
+	IQuickInputService,
+	IQuickPickItem,
+	QuickPickInput,
+} from '../../../platform/quickinput/common/quickInput.js';
 import { asCssVariable } from
 	'../../../platform/theme/common/colorUtils.js';
 import { sessionsSidebarBackground } from
@@ -75,6 +78,7 @@ import {
 	IProjectManagerService,
 	ProjectRecord,
 	WorktreeRecord,
+	WorktreeRefRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
@@ -248,6 +252,11 @@ type ProjectSwitcherItem =
 	| ProjectSwitcherWorktreeItem
 	| ProjectSwitcherSeparatorItem;
 
+type CreateWorktreeQuickPick = IQuickPickItem & (
+	| { readonly kind: 'createBranch' }
+	| { readonly kind: 'ref'; readonly ref: WorktreeRefRecord }
+);
+
 function isProjectItem(
 	item: ProjectSwitcherItem | undefined
 ): item is ProjectSwitcherProjectItem {
@@ -286,6 +295,137 @@ function toHandleArg(item: ProjectSwitcherItem): TreeViewItemHandleArg {
 		$treeViewId: PROJECT_SWITCHER_VIEW_ID,
 		$treeItemHandle: item.handle,
 	};
+}
+
+async function pickCreateWorktreeOptions(
+	projectId: string,
+	projectManagerService: IProjectManagerService,
+	quickInputService: IQuickInputService,
+	notificationService: INotificationService
+): Promise<CreateWorktreeOptions | undefined> {
+	const refs = await projectManagerService.getWorktreeRefs(projectId);
+	const createBranchPick: CreateWorktreeQuickPick = {
+		kind: 'createBranch',
+		label: `$(git-branch-create) ${localize('createWorktreeNewBranch', 'Create New Branch...')
+			}`,
+	};
+	const picks: QuickPickInput<CreateWorktreeQuickPick>[] = [
+		createBranchPick,
+		{ type: 'separator' },
+		...toCreateWorktreeRefPicks(refs, 'head'),
+		...toCreateWorktreeRefPicks(refs, 'remote'),
+		...toCreateWorktreeRefPicks(refs, 'tag'),
+	];
+	const choice = await quickInputService.pick(picks, {
+		placeHolder: localize(
+			'createWorktreePickRef',
+			'Select a branch or tag to create the new worktree from'
+		),
+	});
+	if (!choice) {
+		return undefined;
+	}
+
+	if (choice.kind === 'createBranch') {
+		const branchName = await quickInputService.input({
+			prompt: localize('createWorktreeBranch', 'Branch name'),
+			validateInput: value => validateCreateWorktreeBranchName(
+				projectId,
+				value,
+				refs,
+				projectManagerService
+			),
+		});
+		return branchName ? { branchName } : undefined;
+	}
+
+	if (choice.ref.checkedOutPath) {
+		notificationService.error(localize(
+			'createWorktreeRefAlreadyCheckedOut',
+			'Branch "{0}" is already checked out at "{1}".',
+			choice.ref.name,
+			choice.ref.checkedOutPath
+		));
+		return undefined;
+	}
+
+	return { startPoint: choice.ref.name };
+}
+
+async function validateCreateWorktreeBranchName(
+	projectId: string,
+	value: string,
+	refs: readonly WorktreeRefRecord[],
+	projectManagerService: IProjectManagerService
+): Promise<string | undefined> {
+	const branchName = value.trim();
+	if (!branchName) {
+		return localize(
+			'createWorktreeBranchValidate',
+			'Branch name is required.'
+		);
+	}
+	if (branchName !== value) {
+		return localize(
+			'createWorktreeBranchWhitespaceValidate',
+			'Branch name cannot start or end with whitespace.'
+		);
+	}
+	if (refs.some(ref => ref.type === 'head' && ref.name === branchName)) {
+		return localize(
+			'createWorktreeBranchExistsValidate',
+			'Branch "{0}" already exists.',
+			branchName
+		);
+	}
+	if (!(await projectManagerService.isValidBranchName(projectId, branchName))) {
+		return localize(
+			'createWorktreeBranchInvalidValidate',
+			'Branch name is not valid.'
+		);
+	}
+
+	return undefined;
+}
+
+function toCreateWorktreeRefPicks(
+	refs: readonly WorktreeRefRecord[],
+	type: WorktreeRefRecord['type']
+): QuickPickInput<CreateWorktreeQuickPick>[] {
+	const matchingRefs = refs.filter(ref => ref.type === type);
+	if (!matchingRefs.length) {
+		return [];
+	}
+
+	const label = type === 'head'
+		? localize('createWorktreeLocalBranches', 'Local Branches')
+		: type === 'remote'
+			? localize('createWorktreeRemoteBranches', 'Remote Branches')
+			: localize('createWorktreeTags', 'Tags');
+	return [
+		{ type: 'separator', label },
+		...matchingRefs.map(ref => ({
+			kind: 'ref' as const,
+			ref,
+			label: ref.type === 'tag'
+				? `$(tag) ${ref.name}`
+				: `$(git-branch) ${ref.name}`,
+			description: getWorktreeRefDescription(ref),
+			detail: ref.checkedOutPath ?? ref.subject,
+		})),
+	];
+}
+
+function getWorktreeRefDescription(
+	ref: WorktreeRefRecord
+): string | undefined {
+	if (ref.checkedOutPath) {
+		return localize('createWorktreeCheckedOut', 'checked out');
+	}
+	if (ref.upstream) {
+		return ref.upstream;
+	}
+	return ref.commit;
 }
 
 class ProjectSwitcherAccessibilityProvider
@@ -328,9 +468,15 @@ interface ProjectSwitcherTemplate {
 	readonly text: HTMLElement;
 	readonly label: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
-	readonly action: HTMLButtonElement;
-	currentAction?: () => void;
+	readonly actions: HTMLElement;
+	readonly leadingAction: ProjectSwitcherActionTemplate;
+	readonly trailingAction: ProjectSwitcherActionTemplate;
 	readonly disposables: readonly (() => void)[];
+}
+
+interface ProjectSwitcherActionTemplate {
+	readonly button: HTMLButtonElement;
+	currentAction?: () => void;
 }
 
 class ProjectSwitcherRenderer
@@ -357,23 +503,40 @@ class ProjectSwitcherRenderer
 			text,
 			dom.$('span.hucode-project-switcher-description')
 		) as HTMLSpanElement;
-		const action = dom.append(
+		const actions = dom.append(
 			item,
-			dom.$('button.hucode-project-switcher-action-button')
-		) as HTMLButtonElement;
-		action.type = 'button';
+			dom.$('.hucode-project-switcher-actions')
+		);
+		const disposables: (() => void)[] = [];
+		const createAction = (): ProjectSwitcherActionTemplate => {
+			const button = dom.append(
+				actions,
+				dom.$('button.hucode-project-switcher-action-button')
+			) as HTMLButtonElement;
+			button.type = 'button';
+			const action: ProjectSwitcherActionTemplate = { button };
 
-		const stopPropagation = (event: Event) => {
-			event.preventDefault();
-			event.stopPropagation();
+			const stopPropagation = (event: Event) => {
+				event.preventDefault();
+				event.stopPropagation();
+			};
+			const onClick = (event: MouseEvent) => {
+				stopPropagation(event);
+				action.currentAction?.();
+			};
+			button.addEventListener('mousedown', stopPropagation);
+			button.addEventListener('dblclick', stopPropagation);
+			button.addEventListener('click', onClick);
+			disposables.push(
+				() => button.removeEventListener('mousedown', stopPropagation),
+				() => button.removeEventListener('dblclick', stopPropagation),
+				() => button.removeEventListener('click', onClick)
+			);
+
+			return action;
 		};
-		const onClick = (event: MouseEvent) => {
-			stopPropagation(event);
-			template.currentAction?.();
-		};
-		action.addEventListener('mousedown', stopPropagation);
-		action.addEventListener('dblclick', stopPropagation);
-		action.addEventListener('click', onClick);
+		const leadingAction = createAction();
+		const trailingAction = createAction();
 
 		const template: ProjectSwitcherTemplate = {
 			container: item,
@@ -381,12 +544,10 @@ class ProjectSwitcherRenderer
 			text,
 			label,
 			description,
-			action,
-			disposables: [
-				() => action.removeEventListener('mousedown', stopPropagation),
-				() => action.removeEventListener('dblclick', stopPropagation),
-				() => action.removeEventListener('click', onClick),
-			],
+			actions,
+			leadingAction,
+			trailingAction,
+			disposables,
 		};
 
 		return template;
@@ -405,15 +566,14 @@ class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
-		templateData.action.className = 'hucode-project-switcher-action-button';
 		templateData.label.textContent = item.label;
 		templateData.description.textContent = item.description ?? '';
 		templateData.description.style.display = item.description ? '' : 'none';
 		templateData.container.title = item.tooltip ?? '';
-		templateData.action.style.display = 'none';
-		templateData.action.title = '';
-		templateData.action.setAttribute('aria-label', '');
-		templateData.currentAction = undefined;
+		templateData.actions.className = 'hucode-project-switcher-actions';
+		templateData.actions.style.display = 'none';
+		this.resetAction(templateData.leadingAction);
+		this.resetAction(templateData.trailingAction);
 
 		if (isSeparatorItem(item)) {
 			templateData.container.classList.add(
@@ -429,21 +589,39 @@ class ProjectSwitcherRenderer
 				? localize('unpinProjectButton', 'Unpin Project')
 				: localize('pinProjectButton', 'Pin Project');
 			const icon = item.pinned ? Codicon.pinned : Codicon.pin;
+			const createLabel = localize(
+				'createWorktreeButton',
+				'Create Worktree'
+			);
 			templateData.container.classList.add(
 				'hucode-project-switcher-project'
 			);
-			templateData.action.style.display = '';
-			templateData.action.title = label;
-			templateData.action.setAttribute('aria-label', label);
-			templateData.action.classList.add(
-				...ThemeIcon.asClassNameArray(icon)
+			this.setAction(
+				templateData,
+				templateData.leadingAction,
+				label,
+				icon,
+				() => {
+					void this.commandService.executeCommand(
+						item.pinned
+							? UNPIN_PROJECT_COMMAND_ID
+							: PIN_PROJECT_COMMAND_ID,
+						toHandleArg(item)
+					);
+				}
 			);
-			templateData.currentAction = () => {
-				void this.commandService.executeCommand(
-					item.pinned ? UNPIN_PROJECT_COMMAND_ID : PIN_PROJECT_COMMAND_ID,
-					toHandleArg(item)
-				);
-			};
+			this.setAction(
+				templateData,
+				templateData.trailingAction,
+				createLabel,
+				Codicon.add,
+				() => {
+					void this.commandService.executeCommand(
+						CREATE_WORKTREE_COMMAND_ID,
+						toHandleArg(item)
+					);
+				}
+			);
 		}
 
 		if (isWorktreeItem(item)) {
@@ -451,6 +629,25 @@ class ProjectSwitcherRenderer
 				row?.classList.add('hucode-project-switcher-active-row');
 				row?.setAttribute('aria-current', 'true');
 			}
+
+			const pinLabel = item.pinned
+				? localize('unpinWorktreeButton', 'Unpin Worktree')
+				: localize('pinWorktreeButton', 'Pin Worktree');
+			const pinIcon = item.pinned ? Codicon.pinned : Codicon.pin;
+			this.setAction(
+				templateData,
+				templateData.leadingAction,
+				pinLabel,
+				pinIcon,
+				() => {
+					void this.commandService.executeCommand(
+						item.pinned
+							? UNPIN_WORKTREE_COMMAND_ID
+							: PIN_WORKTREE_COMMAND_ID,
+						toHandleArg(item)
+					);
+				}
+			);
 
 			if (item.hostedWorkbenchInstanceId) {
 				templateData.container.classList.add(
@@ -461,18 +658,18 @@ class ProjectSwitcherRenderer
 
 				if (item.hostedWorkbenchState !== 'loading') {
 					const label = localize('unloadWorkbenchButton', 'Unload');
-					templateData.action.style.display = '';
-					templateData.action.title = label;
-					templateData.action.setAttribute('aria-label', label);
-					templateData.action.classList.add(
-						...ThemeIcon.asClassNameArray(Codicon.chromeMinimize)
+					this.setAction(
+						templateData,
+						templateData.trailingAction,
+						label,
+						Codicon.chromeMinimize,
+						() => {
+							void this.commandService.executeCommand(
+								UNLOAD_WORKTREE_COMMAND_ID,
+								toHandleArg(item)
+							);
+						}
 					);
-					templateData.currentAction = () => {
-						void this.commandService.executeCommand(
-							UNLOAD_WORKTREE_COMMAND_ID,
-							toHandleArg(item)
-						);
-					};
 				}
 			} else {
 				templateData.container.classList.add(
@@ -483,18 +680,18 @@ class ProjectSwitcherRenderer
 						'removeWorktreeButton',
 						'Remove Worktree'
 					);
-					templateData.action.style.display = '';
-					templateData.action.title = label;
-					templateData.action.setAttribute('aria-label', label);
-					templateData.action.classList.add(
-						...ThemeIcon.asClassNameArray(Codicon.close)
+					this.setAction(
+						templateData,
+						templateData.trailingAction,
+						label,
+						Codicon.close,
+						() => {
+							void this.commandService.executeCommand(
+								REMOVE_WORKTREE_COMMAND_ID,
+								toHandleArg(item)
+							);
+						}
 					);
-					templateData.currentAction = () => {
-						void this.commandService.executeCommand(
-							REMOVE_WORKTREE_COMMAND_ID,
-							toHandleArg(item)
-						);
-					};
 				}
 			}
 		} else {
@@ -507,6 +704,29 @@ class ProjectSwitcherRenderer
 				...ThemeIcon.asClassNameArray(item.themeIcon)
 			);
 		}
+	}
+
+	private resetAction(action: ProjectSwitcherActionTemplate): void {
+		action.button.className = 'hucode-project-switcher-action-button';
+		action.button.style.display = 'none';
+		action.button.title = '';
+		action.button.setAttribute('aria-label', '');
+		action.currentAction = undefined;
+	}
+
+	private setAction(
+		templateData: ProjectSwitcherTemplate,
+		action: ProjectSwitcherActionTemplate,
+		label: string,
+		icon: ThemeIcon,
+		run: () => void
+	): void {
+		templateData.actions.style.display = '';
+		action.button.style.display = '';
+		action.button.title = label;
+		action.button.setAttribute('aria-label', label);
+		action.button.classList.add(...ThemeIcon.asClassNameArray(icon));
+		action.currentAction = run;
 	}
 
 	disposeTemplate(templateData: ProjectSwitcherTemplate): void {
@@ -2098,31 +2318,16 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			const branchName = await quickInputService.input({
-				prompt: localize('createWorktreeBranch', 'Branch name'),
-				validateInput: async value => value.trim()
-					? undefined
-					: localize(
-						'createWorktreeBranchValidate',
-						'Branch name is required.'
-					),
-			});
-			if (!branchName) {
+			const options = await pickCreateWorktreeOptions(
+				projectId,
+				projectManagerService,
+				quickInputService,
+				notificationService
+			);
+			if (!options) {
 				return;
 			}
 
-			const startPoint = await quickInputService.input({
-				prompt: localize('createWorktreeStartPoint', 'Start point'),
-				value: 'HEAD',
-			});
-			if (startPoint === undefined) {
-				return;
-			}
-
-			const options: CreateWorktreeOptions = {
-				branchName,
-				startPoint,
-			};
 			await projectManagerService.createWorktree(projectId, options);
 		} catch (error) {
 			notificationService.error(String(error));

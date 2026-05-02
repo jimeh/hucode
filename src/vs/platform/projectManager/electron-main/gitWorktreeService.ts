@@ -9,7 +9,10 @@ import { basename, dirname, join } from '../../../base/common/path.js';
 import { isEqual } from '../../../base/common/extpath.js';
 import { isLinux } from '../../../base/common/platform.js';
 import { ILogService } from '../../log/common/log.js';
-import { WorktreeRecord } from '../common/projectManager.js';
+import {
+	WorktreeRecord,
+	WorktreeRefRecord,
+} from '../common/projectManager.js';
 
 type ExecGitResult = {
 	readonly stdout: string;
@@ -78,14 +81,35 @@ export class GitWorktreeService {
 		);
 	}
 
+	async listRefs(
+		projectRoot: string,
+		worktrees: readonly WorktreeRecord[]
+	): Promise<readonly WorktreeRefRecord[]> {
+		const result = await this.runGit(
+			[
+				'for-each-ref',
+				'--format=%(refname)%00%(objectname:short)%00' +
+				'%(upstream:short)%00%(committerdate:relative)%00%(subject)',
+				'refs/heads',
+				'refs/remotes',
+				'refs/tags',
+			],
+			projectRoot
+		);
+
+		return GitWorktreeService.parseRefList(result.stdout, worktrees);
+	}
+
 	async createWorktree(
 		projectRoot: string,
-		options: { branchName: string; startPoint?: string; path?: string },
+		options: { branchName?: string; startPoint?: string; path?: string },
 		existingPaths: readonly string[],
 	): Promise<string> {
-		const branchName = options.branchName.trim();
+		const branchName = options.branchName?.trim();
 		const startPoint = options.startPoint?.trim() || 'HEAD';
-		const branchSlug = GitWorktreeService.sanitizeBranchName(branchName);
+		const branchSlug = GitWorktreeService.sanitizeBranchName(
+			branchName || startPoint
+		);
 		const defaultBasePath = join(
 			dirname(projectRoot),
 			`${basename(projectRoot)}.worktrees`,
@@ -98,12 +122,31 @@ export class GitWorktreeService {
 		);
 
 		await this.ensureDir(dirname(worktreePath));
-		await this.runGit(
-			['worktree', 'add', '-b', branchName, worktreePath, startPoint],
-			projectRoot
-		);
+		const args = branchName
+			? ['worktree', 'add', '-b', branchName, worktreePath, startPoint]
+			: ['worktree', 'add', worktreePath, startPoint];
+		await this.runGit(args, projectRoot);
 
 		return worktreePath;
+	}
+
+	async isValidBranchName(
+		projectRoot: string,
+		branchName: string
+	): Promise<boolean> {
+		try {
+			await this.runGit(
+				['check-ref-format', '--branch', branchName],
+				projectRoot
+			);
+			return true;
+		} catch (error) {
+			if (error instanceof GitCommandError) {
+				return false;
+			}
+
+			throw error;
+		}
 	}
 
 	async removeWorktree(
@@ -210,6 +253,60 @@ export class GitWorktreeService {
 		});
 	}
 
+	static parseRefList(
+		stdout: string,
+		worktrees: readonly WorktreeRecord[]
+	): readonly WorktreeRefRecord[] {
+		const checkedOutPaths = new Map<string, string>();
+		for (const worktree of worktrees) {
+			if (worktree.branch) {
+				checkedOutPaths.set(worktree.branch, worktree.path);
+			}
+		}
+
+		const refs: WorktreeRefRecord[] = [];
+		for (const line of stdout.split('\n')) {
+			if (!line.trim()) {
+				continue;
+			}
+
+			const [refName, commit, upstream, _date, subject] = line.split('\0');
+			let type: WorktreeRefRecord['type'];
+			let name: string;
+			if (refName.startsWith('refs/heads/')) {
+				type = 'head';
+				name = refName.slice('refs/heads/'.length);
+			} else if (refName.startsWith('refs/remotes/')) {
+				type = 'remote';
+				name = refName.slice('refs/remotes/'.length);
+				if (name.endsWith('/HEAD')) {
+					continue;
+				}
+			} else if (refName.startsWith('refs/tags/')) {
+				type = 'tag';
+				name = refName.slice('refs/tags/'.length);
+			} else {
+				continue;
+			}
+
+			refs.push({
+				name,
+				type,
+				commit: commit || undefined,
+				upstream: upstream || undefined,
+				subject: subject || undefined,
+				checkedOutPath: type === 'head'
+					? checkedOutPaths.get(name)
+					: undefined,
+			});
+		}
+
+		return refs.sort((a, b) => {
+			const typeOrder = refTypeOrder(a.type) - refTypeOrder(b.type);
+			return typeOrder || a.name.localeCompare(b.name);
+		});
+	}
+
 	static sanitizeBranchName(branchName: string): string {
 		const sanitized = branchName
 			.replace(/[\\/]/g, '-')
@@ -256,5 +353,16 @@ export class GitWorktreeService {
 
 	private static pathsEqual(pathA: string, pathB: string): boolean {
 		return isEqual(pathA, pathB, !isLinux);
+	}
+}
+
+function refTypeOrder(type: WorktreeRefRecord['type']): number {
+	switch (type) {
+		case 'head':
+			return 0;
+		case 'remote':
+			return 1;
+		case 'tag':
+			return 2;
 	}
 }

@@ -47,6 +47,18 @@ export interface ProjectRecord {
 }
 
 /**
+ * Git reference that can be used as the start point for a new worktree.
+ */
+export interface WorktreeRefRecord {
+	readonly name: string;
+	readonly type: 'head' | 'remote' | 'tag';
+	readonly commit?: string;
+	readonly upstream?: string;
+	readonly subject?: string;
+	readonly checkedOutPath?: string;
+}
+
+/**
  * Persisted custom display label for a git worktree path.
  */
 export interface StoredWorktreeLabel {
@@ -81,7 +93,7 @@ export interface StoredProjectManagerState {
  * Options for creating a new git worktree for a tracked project.
  */
 export interface CreateWorktreeOptions {
-	readonly branchName: string;
+	readonly branchName?: string;
 	readonly startPoint?: string;
 	readonly path?: string;
 }
@@ -119,6 +131,8 @@ export interface IProjectManagerService {
 	removeProject(id: string): Promise<void>;
 	moveProject(id: string, beforeProjectId?: string): Promise<void>;
 	refresh(id?: string): Promise<readonly ProjectRecord[]>;
+	getWorktreeRefs(projectId: string): Promise<readonly WorktreeRefRecord[]>;
+	isValidBranchName(projectId: string, branchName: string): Promise<boolean>;
 	createWorktree(
 		projectId: string,
 		options: CreateWorktreeOptions

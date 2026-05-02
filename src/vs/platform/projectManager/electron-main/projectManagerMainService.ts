@@ -20,6 +20,7 @@ import {
 	StoredProjectManagerState,
 	StoredProjectRecord,
 	WorktreeRecord,
+	WorktreeRefRecord,
 } from '../common/projectManager.js';
 import { IProjectManagerMainService } from './projectManager.js';
 import { GitWorktreeService } from './gitWorktreeService.js';
@@ -28,6 +29,8 @@ type ProjectManagerGitService = Pick<
 	GitWorktreeService,
 	'resolveProjectRoot' |
 	'listWorktrees' |
+	'listRefs' |
+	'isValidBranchName' |
 	'createWorktree' |
 	'removeWorktree'
 >;
@@ -297,6 +300,29 @@ export class ProjectManagerMainService extends Disposable
 		this.saveState();
 		this.emitChange();
 		return this.toProjectRecords();
+	}
+
+	async getWorktreeRefs(
+		projectId: string
+	): Promise<readonly WorktreeRefRecord[]> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.gitWorktreeService.listWorktrees(project.rootPath);
+
+		return this.gitWorktreeService.listRefs(project.rootPath, worktrees);
+	}
+
+	async isValidBranchName(
+		projectId: string,
+		branchName: string
+	): Promise<boolean> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		return this.gitWorktreeService.isValidBranchName(
+			project.rootPath,
+			branchName
+		);
 	}
 
 	async createWorktree(
