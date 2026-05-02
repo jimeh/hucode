@@ -26,6 +26,7 @@ export const PROJECT_MANAGER_STORAGE_VERSION = 1;
 export interface WorktreeRecord {
 	readonly path: string;
 	readonly label: string;
+	readonly customLabel?: string;
 	readonly branch?: string;
 	readonly isMain: boolean;
 	readonly isDetached: boolean;
@@ -46,6 +47,14 @@ export interface ProjectRecord {
 }
 
 /**
+ * Persisted custom display label for a git worktree path.
+ */
+export interface StoredWorktreeLabel {
+	readonly path: string;
+	readonly label: string;
+}
+
+/**
  * Persisted subset of project metadata stored in application state.
  */
 export interface StoredProjectRecord {
@@ -57,6 +66,7 @@ export interface StoredProjectRecord {
 	lastActiveWorktreePath?: string;
 	worktreeOrder?: readonly string[];
 	pinnedWorktreePaths?: readonly string[];
+	worktreeLabels?: readonly StoredWorktreeLabel[];
 }
 
 /**
@@ -90,6 +100,16 @@ export interface IProjectManagerService {
 	getProjects(): Promise<readonly ProjectRecord[]>;
 	addProject(uri: URI): Promise<ProjectRecord>;
 	renameProject(id: string, label: string): Promise<void>;
+	resetProjectLabel(id: string): Promise<void>;
+	renameWorktree(
+		projectId: string,
+		worktreePath: string,
+		label: string
+	): Promise<void>;
+	resetWorktreeLabel(
+		projectId: string,
+		worktreePath: string
+	): Promise<void>;
 	setPinned(id: string, pinned: boolean): Promise<void>;
 	setWorktreePinned(
 		projectId: string,

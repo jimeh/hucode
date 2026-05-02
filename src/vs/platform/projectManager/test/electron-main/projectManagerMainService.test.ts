@@ -316,6 +316,25 @@ suite('ProjectManagerMainService', () => {
 		]);
 	});
 
+	test('resets custom project labels to root basenames', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [createMainWorktree('/repo')]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		await service.renameProject(project.id, 'Client Repo');
+		await service.resetProjectLabel(project.id);
+
+		const projects = await service.getProjects();
+		assert.strictEqual(projects[0].label, 'repo');
+
+		const savedState = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+		assert.strictEqual(savedState?.projects[0].label, 'repo');
+	});
+
 	test('loads persisted state lazily after service construction', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
@@ -470,6 +489,133 @@ suite('ProjectManagerMainService', () => {
 					{ path: '/repo.worktrees/alpha', pinned: undefined },
 					{ path: '/repo.worktrees/bravo', pinned: true },
 				]
+		);
+	});
+
+	test('persists custom worktree labels across refreshes', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'feature/alpha'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		await service.renameWorktree(
+			project.id,
+			'/repo.worktrees/alpha',
+			'Client Alpha'
+		);
+
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(worktree => ({
+				path: worktree.path,
+				label: worktree.label,
+				customLabel: worktree.customLabel,
+				branch: worktree.branch,
+			})),
+			[
+				{
+					path: '/repo',
+					label: 'main',
+					customLabel: undefined,
+					branch: 'main',
+				},
+				{
+					path: '/repo.worktrees/alpha',
+					label: 'feature/alpha',
+					customLabel: 'Client Alpha',
+					branch: 'feature/alpha',
+				},
+			]
+		);
+
+		const reloadedService = createService(stateService, gitWorktreeService);
+		assert.deepStrictEqual(
+			(await reloadedService.refresh())[0].worktrees.map(worktree => ({
+				path: worktree.path,
+				customLabel: worktree.customLabel,
+				branch: worktree.branch,
+			})),
+			[
+				{
+					path: '/repo',
+					customLabel: undefined,
+					branch: 'main',
+				},
+				{
+					path: '/repo.worktrees/alpha',
+					customLabel: 'Client Alpha',
+					branch: 'feature/alpha',
+				},
+			]
+		);
+	});
+
+	test('resets custom worktree labels to default display names', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'feature/alpha'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		await service.renameWorktree(
+			project.id,
+			'/repo.worktrees/alpha',
+			'Client Alpha'
+		);
+		await service.resetWorktreeLabel(project.id, '/repo.worktrees/alpha');
+
+		const worktree = (await service.getProjects())[0].worktrees[1];
+		assert.strictEqual(worktree.path, '/repo.worktrees/alpha');
+		assert.strictEqual(worktree.label, 'feature/alpha');
+		assert.strictEqual(worktree.customLabel, undefined);
+		assert.strictEqual(worktree.branch, 'feature/alpha');
+
+		const savedState = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+		assert.strictEqual(savedState?.projects[0].worktreeLabels, undefined);
+	});
+
+	test('prunes custom worktree labels for removed worktrees', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		await service.renameWorktree(
+			project.id,
+			'/repo.worktrees/alpha',
+			'Alpha Custom'
+		);
+		await service.renameWorktree(
+			project.id,
+			'/repo.worktrees/bravo',
+			'Bravo Custom'
+		);
+
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+		await service.refresh(project.id);
+
+		const savedState = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+		assert.deepStrictEqual(
+			savedState?.projects[0].worktreeLabels,
+			[{ path: '/repo.worktrees/bravo', label: 'Bravo Custom' }]
 		);
 	});
 

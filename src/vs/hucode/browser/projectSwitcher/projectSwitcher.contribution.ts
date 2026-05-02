@@ -89,6 +89,11 @@ const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
 const OPEN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.openProject';
 const OPEN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.openWorktree';
 const RENAME_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.renameProject';
+const RESET_PROJECT_LABEL_COMMAND_ID =
+	'hucode.projectSwitcher.resetProjectLabel';
+const RENAME_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.renameWorktree';
+const RESET_WORKTREE_LABEL_COMMAND_ID =
+	'hucode.projectSwitcher.resetWorktreeLabel';
 const PIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.pinProject';
 const UNPIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.unpinProject';
 const PIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.pinWorktree';
@@ -213,6 +218,7 @@ interface ProjectSwitcherProjectItem extends ProjectSwitcherBaseItem {
 	readonly pinned: boolean;
 	readonly section: ProjectSwitcherSection;
 	readonly rootPath: string;
+	readonly hasCustomLabel: boolean;
 }
 
 interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
@@ -225,6 +231,7 @@ interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
 	readonly hostedWorkbenchInstanceId?: string;
 	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
+	readonly hasCustomLabel: boolean;
 }
 
 interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
@@ -1044,6 +1051,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	): IObjectTreeElement<ProjectSwitcherItem> {
 		const rootUri = URI.revive(project.rootUri);
 		const rootPath = rootUri.fsPath;
+		const rootBasename = basename(rootPath);
 		const handle = encodeProjectHandle(project.id, section);
 		const item: ProjectSwitcherProjectItem = {
 			id: handle,
@@ -1053,8 +1061,9 @@ export class ProjectSwitcherWidget extends Disposable {
 			pinned: project.pinned,
 			section,
 			rootPath,
+			hasCustomLabel: project.label !== rootBasename,
 			label: project.label,
-			description: basename(rootPath),
+			description: project.label === rootBasename ? undefined : rootBasename,
 			tooltip: rootPath,
 			contextValue: project.pinned
 				? PINNED_PROJECT_CONTEXT_VALUE
@@ -1084,6 +1093,14 @@ export class ProjectSwitcherWidget extends Disposable {
 			worktree.path
 		);
 		const isActive = this.isActiveWorktree(worktree.path);
+		const worktreeLabel = worktree.customLabel ??
+			(worktree.isMain
+				? localize('localWorktree', 'local')
+				: basename(worktree.path));
+		const worktreeDescription = worktree.branch ??
+			(worktree.isDetached
+				? localize('detachedWorktree', 'Detached')
+				: undefined);
 		const item: ProjectSwitcherWorktreeItem = {
 			id: getWorktreeItemId(
 				project.id,
@@ -1100,10 +1117,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			hostedWorkbenchInstanceId: hostedWorkbenchInstance?.instanceId,
 			hostedWorkbenchState: hostedWorkbenchInstance?.state,
 			isActive,
-			label: worktree.isMain
-				? localize('mainWorktree', 'Main')
-				: basename(worktree.path),
-			description: worktree.label,
+			hasCustomLabel: !!worktree.customLabel,
+			label: worktreeLabel,
+			description: worktreeLabel === worktreeDescription
+				? undefined
+				: worktreeDescription,
 			tooltip: worktree.path,
 			contextValue: worktree.isMain
 				? MAIN_WORKTREE_CONTEXT_VALUE
@@ -1294,6 +1312,19 @@ export class ProjectSwitcherWidget extends Disposable {
 						projectHandle
 					),
 				}),
+				...(item.hasCustomLabel
+					? [toAction({
+						id: RESET_PROJECT_LABEL_COMMAND_ID,
+						label: localize(
+							'resetProjectLabel',
+							'Reset Project Name'
+						),
+						run: () => this.commandService.executeCommand(
+							RESET_PROJECT_LABEL_COMMAND_ID,
+							projectHandle
+						),
+					})]
+					: []),
 				toAction({
 					id: item.pinned ? UNPIN_PROJECT_COMMAND_ID : PIN_PROJECT_COMMAND_ID,
 					label: item.pinned
@@ -1338,6 +1369,27 @@ export class ProjectSwitcherWidget extends Disposable {
 			const hostedWorkbenchInstanceId =
 				this.getHostedWorkbenchInstance(item.worktreePath)?.instanceId;
 			const actions: IAction[] = [
+				toAction({
+					id: RENAME_WORKTREE_COMMAND_ID,
+					label: localize('renameWorktree', 'Rename Worktree'),
+					run: () => this.commandService.executeCommand(
+						RENAME_WORKTREE_COMMAND_ID,
+						worktreeHandle
+					),
+				}),
+				...(item.hasCustomLabel
+					? [toAction({
+						id: RESET_WORKTREE_LABEL_COMMAND_ID,
+						label: localize(
+							'resetWorktreeLabel',
+							'Reset Worktree Name'
+						),
+						run: () => this.commandService.executeCommand(
+							RESET_WORKTREE_LABEL_COMMAND_ID,
+							worktreeHandle
+						),
+					})]
+					: []),
 				toAction({
 					id: item.pinned
 						? UNPIN_WORKTREE_COMMAND_ID
@@ -1771,6 +1823,128 @@ registerAction2(class extends Action2 {
 			}
 
 			await projectManagerService.renameProject(projectId, label);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: RESET_PROJECT_LABEL_COMMAND_ID,
+			title: localize2('resetProjectLabel', 'Reset Project Name'),
+		});
+	}
+
+	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const notificationService = accessor.get(INotificationService);
+
+		try {
+			const projectId = parseProjectHandle(handle.$treeItemHandle);
+			if (!projectId) {
+				return;
+			}
+
+			await projectManagerService.resetProjectLabel(projectId);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: RENAME_WORKTREE_COMMAND_ID,
+			title: localize2('renameWorktree', 'Rename Worktree'),
+		});
+	}
+
+	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const quickInputService = accessor.get(IQuickInputService);
+		const notificationService = accessor.get(INotificationService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
+
+		try {
+			const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+			if (!parsed) {
+				return;
+			}
+
+			const projects = await projectManagerService.getProjects();
+			const project = projects.find(entry => entry.id === parsed.projectId);
+			const worktree = project?.worktrees.find(entry =>
+				pathsEqual(entry.path, parsed.worktreePath)
+			);
+			if (!project || !worktree) {
+				return;
+			}
+
+			if (environmentService.isOmniWindow) {
+				await shellService.focusShell(dom.getWindowId(mainWindow));
+			}
+
+			const defaultLabel = worktree.isMain
+				? localize('localWorktree', 'local')
+				: basename(worktree.path);
+			const labelPromise = quickInputService.input({
+				prompt: localize('renameWorktreePrompt', 'Worktree label'),
+				value: worktree.customLabel ?? defaultLabel,
+				validateInput: async value => value.trim()
+					? undefined
+					: localize(
+						'renameWorktreeValidate',
+						'Worktree label is required.'
+					),
+			});
+			if (environmentService.isOmniWindow) {
+				mainWindow.requestAnimationFrame(() => {
+					quickInputService.focus();
+				});
+			}
+
+			const label = await labelPromise;
+			if (!label) {
+				return;
+			}
+
+			await projectManagerService.renameWorktree(
+				parsed.projectId,
+				parsed.worktreePath,
+				label
+			);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: RESET_WORKTREE_LABEL_COMMAND_ID,
+			title: localize2('resetWorktreeLabel', 'Reset Worktree Name'),
+		});
+	}
+
+	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const notificationService = accessor.get(INotificationService);
+
+		try {
+			const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+			if (!parsed) {
+				return;
+			}
+
+			await projectManagerService.resetWorktreeLabel(
+				parsed.projectId,
+				parsed.worktreePath
+			);
 		} catch (error) {
 			notificationService.error(String(error));
 		}

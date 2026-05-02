@@ -105,6 +105,96 @@ export class ProjectManagerMainService extends Disposable
 		this.emitChange();
 	}
 
+	async resetProjectLabel(id: string): Promise<void> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(id);
+		const defaultLabel = basename(project.rootPath);
+		if (project.label === defaultLabel) {
+			return;
+		}
+
+		project.label = defaultLabel;
+		this.saveState();
+		this.emitChange();
+	}
+
+	async renameWorktree(
+		projectId: string,
+		worktreePath: string,
+		label: string
+	): Promise<void> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.refreshProject(project);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+
+		const trimmedLabel = label.trim();
+		if (!trimmedLabel) {
+			return;
+		}
+
+		const worktreeLabels = this.filterWorktreeLabel(
+			project.worktreeLabels ?? [],
+			worktree.path
+		);
+		project.worktreeLabels = [
+			...worktreeLabels,
+			{ path: worktree.path, label: trimmedLabel },
+		];
+		this.projectWorktrees.set(
+			project.id,
+			this.applyWorktreePins(
+				project,
+				this.applyWorktreeLabels(project, worktrees)
+			)
+		);
+		this.saveState();
+		this.emitChange();
+	}
+
+	async resetWorktreeLabel(
+		projectId: string,
+		worktreePath: string
+	): Promise<void> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.refreshProject(project);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+
+		const worktreeLabels = this.filterWorktreeLabel(
+			project.worktreeLabels ?? [],
+			worktree.path
+		);
+		if (worktreeLabels.length === (project.worktreeLabels ?? []).length) {
+			return;
+		}
+
+		project.worktreeLabels = worktreeLabels.length
+			? worktreeLabels
+			: undefined;
+		this.projectWorktrees.set(
+			project.id,
+			this.applyWorktreePins(
+				project,
+				this.applyWorktreeLabels(project, worktrees)
+			)
+		);
+		this.saveState();
+		this.emitChange();
+	}
+
 	async setPinned(id: string, pinned: boolean): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(id);
@@ -330,14 +420,19 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord
 	): Promise<readonly WorktreeRecord[]> {
 		try {
-			const orderedWorktrees = this.applyWorktreeOrder(
+			const labeledWorktrees = this.applyWorktreeLabels(
 				project,
 				await this.gitWorktreeService.listWorktrees(
 					project.rootPath
 				)
 			);
+			const orderedWorktrees = this.applyWorktreeOrder(
+				project,
+				labeledWorktrees
+			);
 			this.pruneWorktreeOrder(project, orderedWorktrees);
 			this.prunePinnedWorktreePaths(project, orderedWorktrees);
+			this.pruneWorktreeLabels(project, orderedWorktrees);
 			const worktrees = this.applyWorktreePins(project, orderedWorktrees);
 			this.projectWorktrees.set(project.id, worktrees);
 
@@ -449,6 +544,51 @@ export class ProjectManagerMainService extends Disposable
 		return paths.filter(path => !this.pathsEqual(path, worktreePath));
 	}
 
+	private filterWorktreeLabel(
+		labels: readonly { readonly path: string; readonly label: string }[],
+		worktreePath: string
+	): { readonly path: string; readonly label: string }[] {
+		return labels.filter(entry =>
+			!this.pathsEqual(entry.path, worktreePath)
+		);
+	}
+
+	private applyWorktreeLabels(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): readonly WorktreeRecord[] {
+		const labelsByPath = new Map(
+			(project.worktreeLabels ?? []).map(entry => [
+				this.getPathComparisonKey(entry.path),
+				entry.label,
+			])
+		);
+		return worktrees.map(worktree => {
+			const customLabel = labelsByPath.get(
+				this.getPathComparisonKey(worktree.path)
+			);
+			const baseWorktree = this.toBaseWorktreeRecord(worktree);
+			return customLabel
+				? { ...baseWorktree, customLabel }
+				: baseWorktree;
+		});
+	}
+
+	private toBaseWorktreeRecord(worktree: WorktreeRecord): WorktreeRecord {
+		return {
+			path: worktree.path,
+			label: worktree.label,
+			...(worktree.branch !== undefined
+				? { branch: worktree.branch }
+				: {}),
+			isMain: worktree.isMain,
+			isDetached: worktree.isDetached,
+			...(worktree.pinned !== undefined
+				? { pinned: worktree.pinned }
+				: {}),
+		};
+	}
+
 	private applyWorktreeOrder(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
@@ -501,6 +641,9 @@ export class ProjectManagerMainService extends Disposable
 			const unpinnedWorktree: WorktreeRecord = {
 				path: worktree.path,
 				label: worktree.label,
+				...(worktree.customLabel !== undefined
+					? { customLabel: worktree.customLabel }
+					: {}),
 				...(worktree.branch !== undefined
 					? { branch: worktree.branch }
 					: {}),
@@ -552,6 +695,25 @@ export class ProjectManagerMainService extends Disposable
 		);
 		project.pinnedWorktreePaths = pinnedWorktreePaths.length
 			? pinnedWorktreePaths
+			: undefined;
+	}
+
+	private pruneWorktreeLabels(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): void {
+		if (!project.worktreeLabels?.length) {
+			return;
+		}
+
+		const existingPaths = new Set(
+			worktrees.map(entry => this.getPathComparisonKey(entry.path))
+		);
+		const worktreeLabels = project.worktreeLabels.filter(entry =>
+			existingPaths.has(this.getPathComparisonKey(entry.path))
+		);
+		project.worktreeLabels = worktreeLabels.length
+			? worktreeLabels
 			: undefined;
 	}
 
