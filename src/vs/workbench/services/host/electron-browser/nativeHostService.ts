@@ -44,18 +44,42 @@ interface IHucodeShellService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
 	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
+	captureWorkspaceScreenshot(windowId: number, quality?: number): Promise<VSBuffer | undefined>;
 }
 
 const IHucodeShellService =
 	createDecorator<IHucodeShellService>('hucodeShellService');
 
-class WorkbenchNativeHostService extends NativeHostService {
+// @ts-expect-error: interface is implemented via proxy
+class WorkbenchNativeHostService implements INativeHostService {
+
+	declare readonly _serviceBrand: undefined;
 
 	constructor(
 		@INativeWorkbenchEnvironmentService environmentService: INativeWorkbenchEnvironmentService,
 		@IMainProcessService mainProcessService: IMainProcessService
 	) {
-		super(environmentService.window.id, mainProcessService);
+		const service = new NativeHostService(
+			environmentService.window.id,
+			mainProcessService
+		);
+
+		if (!environmentService.isHostedOmniWorkspace) {
+			return service as unknown as WorkbenchNativeHostService;
+		}
+
+		return new Proxy(service, {
+			get(target, property, receiver) {
+				if (
+					property === 'setRepresentedFilename' ||
+					property === 'setDocumentEdited'
+				) {
+					return async () => { };
+				}
+
+				return Reflect.get(target, property, receiver);
+			}
+		}) as unknown as WorkbenchNativeHostService;
 	}
 }
 
@@ -365,6 +389,12 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	//#region Screenshots
 
 	getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> {
+		if (this.environmentService.isHostedOmniWorkspace) {
+			return this.hucodeShellService.captureWorkspaceScreenshot(
+				this.nativeHostService.windowId
+			);
+		}
+
 		return this.nativeHostService.getScreenshot(rect);
 	}
 

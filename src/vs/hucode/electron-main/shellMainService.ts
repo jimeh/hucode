@@ -905,6 +905,16 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.getActiveInstance()?.view?.webContents.reload();
 	}
 
+	toggleWorkspaceDevTools(): boolean {
+		const webContents = this.getActiveInstance()?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		webContents.toggleDevTools();
+		return true;
+	}
+
 	async captureWorkspaceScreenshot(
 		quality: number = 80
 	): Promise<VSBuffer | undefined> {
@@ -1164,6 +1174,10 @@ export class HucodeShellMainService extends Disposable
 
 	async reloadWorkspace(windowId: number): Promise<void> {
 		this.getOrCreateController(windowId).reloadWorkspace();
+	}
+
+	async toggleWorkspaceDevTools(windowId: number): Promise<boolean> {
+		return this.getOrCreateController(windowId).toggleWorkspaceDevTools();
 	}
 
 	async runActionInWorkspace(
