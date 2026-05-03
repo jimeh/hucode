@@ -99,6 +99,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Hosted Omni workspaces should only transition from `loading` to `loaded` or
   `active` after the child workbench reports `LifecyclePhase.Restored`. An
   Electron `loadURL()` completion only means the renderer document loaded.
+- Hosted Omni workspace restore must share one in-flight restore promise.
+  `getWindowState()` is called by multiple shell parts during startup, and a
+  partial restore snapshot makes Projects miss loaded worktrees and unload
+  actions.
 - Integrated browser `WebContentsView`s inside hosted Omni workbenches should
   stay top-level `contentView` siblings, not children of the hosted workbench
   `WebContentsView`. Use the hosted view only to calculate offsets and sync

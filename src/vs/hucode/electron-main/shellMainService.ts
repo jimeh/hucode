@@ -74,6 +74,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private activeInstanceId: string | undefined;
 	private restored = false;
+	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
 	private overlayOccluded = false;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
@@ -331,9 +332,21 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		this.restored = true;
+		this.restorePromise ??= this.restoreResidentWorkspaces().finally(() => {
+			this.restorePromise = undefined;
+		});
+
+		await this.restorePromise;
+	}
+
+	private async restoreResidentWorkspaces(): Promise<void> {
+		if (this.restored) {
+			return;
+		}
+
 		const restoreEntries = this.window.config?.omniResidentWorkspaces;
 		if (!restoreEntries?.length) {
+			this.restored = true;
 			this.emitState();
 			return;
 		}
@@ -381,6 +394,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			}
 		}
 
+		this.restored = true;
 		this.emitState();
 	}
 
