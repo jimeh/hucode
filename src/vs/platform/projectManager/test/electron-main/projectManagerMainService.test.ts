@@ -216,12 +216,16 @@ suite('GitWorktreeService', () => {
 					'1111111',
 					'',
 					'',
+					'',
+					'',
 					'origin main',
 				].join('\0'),
 				[
 					'refs/remotes/origin/feature/two',
 					'2222222',
 					'',
+					'1 day ago',
+					'Jim Myhrberg',
 					'',
 					'remote feature',
 				].join('\0'),
@@ -229,6 +233,8 @@ suite('GitWorktreeService', () => {
 					'refs/tags/v1.0.0',
 					'3333333',
 					'',
+					'2 months ago',
+					'Jim Myhrberg',
 					'',
 					'release',
 				].join('\0'),
@@ -236,7 +242,9 @@ suite('GitWorktreeService', () => {
 					'refs/heads/main',
 					'4444444',
 					'origin/main',
-					'',
+					'1 day ago',
+					'Jim Myhrberg',
+					'[ahead 1, behind 2]',
 					'main branch',
 				].join('\0'),
 			].join('\n'),
@@ -249,6 +257,9 @@ suite('GitWorktreeService', () => {
 				type: 'head',
 				commit: '4444444',
 				upstream: 'origin/main',
+				tracking: 'ahead 1, behind 2',
+				relativeDate: '1 day ago',
+				authorName: 'Jim Myhrberg',
 				subject: 'main branch',
 				checkedOutPath: '/repo',
 			},
@@ -257,6 +268,9 @@ suite('GitWorktreeService', () => {
 				type: 'remote',
 				commit: '2222222',
 				upstream: undefined,
+				tracking: undefined,
+				relativeDate: '1 day ago',
+				authorName: 'Jim Myhrberg',
 				subject: 'remote feature',
 				checkedOutPath: undefined,
 			},
@@ -265,6 +279,9 @@ suite('GitWorktreeService', () => {
 				type: 'tag',
 				commit: '3333333',
 				upstream: undefined,
+				tracking: undefined,
+				relativeDate: '2 months ago',
+				authorName: 'Jim Myhrberg',
 				subject: 'release',
 				checkedOutPath: undefined,
 			},
@@ -293,6 +310,14 @@ suite('GitWorktreeService', () => {
 			{ startPoint: 'feature/two' },
 			['/repo']
 		);
+		await service.createWorktree(
+			'/repo',
+			{
+				branchName: 'feature/three',
+				startPoint: 'origin/main',
+			},
+			['/repo']
+		);
 
 		assert.deepStrictEqual(calls, [
 			{
@@ -312,6 +337,17 @@ suite('GitWorktreeService', () => {
 					'add',
 					'/repo.worktrees/feature-two',
 					'feature/two',
+				],
+				cwd: '/repo',
+			},
+			{
+				args: [
+					'worktree',
+					'add',
+					'-b',
+					'feature/three',
+					'/repo.worktrees/feature-three',
+					'origin/main',
 				],
 				cwd: '/repo',
 			},
@@ -392,12 +428,14 @@ suite('ProjectManagerMainService', () => {
 
 	function createService(
 		stateService: TestStateService,
-		gitWorktreeService: TestGitWorktreeService
+		gitWorktreeService: TestGitWorktreeService,
+		now?: () => number
 	): ProjectManagerMainService {
 		return disposables.add(new ProjectManagerMainService(
 			stateService,
 			new NullLogService(),
-			gitWorktreeService
+			gitWorktreeService,
+			now
 		));
 	}
 
@@ -492,6 +530,67 @@ suite('ProjectManagerMainService', () => {
 				lastActiveWorktreePath: '/alpha',
 			},
 		]);
+	});
+
+	test('tracks worktree visits for MRU switchers', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		let now = 100;
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			() => now
+		);
+		const project = await service.addProject(URI.file('/repo'));
+
+		await service.setLastActiveWorktree(
+			project.id,
+			'/repo.worktrees/alpha'
+		);
+		now = 200;
+		await service.setLastActiveWorktree(
+			project.id,
+			'/repo.worktrees/bravo'
+		);
+
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(worktree => ({
+				path: worktree.path,
+				lastVisitedAt: worktree.lastVisitedAt,
+			})),
+			[
+				{ path: '/repo', lastVisitedAt: undefined },
+				{ path: '/repo.worktrees/alpha', lastVisitedAt: 100 },
+				{ path: '/repo.worktrees/bravo', lastVisitedAt: 200 },
+			]
+		);
+
+		const savedState = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+		assert.deepStrictEqual(savedState?.projects[0].worktreeVisits, [
+			{ path: '/repo.worktrees/alpha', lastVisitedAt: 100 },
+			{ path: '/repo.worktrees/bravo', lastVisitedAt: 200 },
+		]);
+
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+		await service.refresh(project.id);
+
+		assert.deepStrictEqual(
+			stateService.getItem<StoredProjectManagerState>(
+				PROJECT_MANAGER_STORAGE_KEY
+			)?.projects[0].worktreeVisits,
+			[{ path: '/repo.worktrees/bravo', lastVisitedAt: 200 }]
+		);
 	});
 
 	test('resets custom project labels to root basenames', async () => {

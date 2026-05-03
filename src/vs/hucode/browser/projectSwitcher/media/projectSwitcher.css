@@ -147,6 +147,9 @@
 .hucode-project-switcher-view .monaco-list-row.focused
 	.hucode-project-switcher-action-button,
 .hucode-project-switcher-view .monaco-list-row.selected
+	.hucode-project-switcher-action-button,
+.hucode-project-switcher-view
+	.monaco-list-row.hucode-project-switcher-active-row
 	.hucode-project-switcher-action-button {
 	opacity: 1;
 	pointer-events: auto;

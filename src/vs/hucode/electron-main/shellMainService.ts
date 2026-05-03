@@ -338,8 +338,12 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		const mostRecentWorktreePath = [...restoreEntries]
+			.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0]
+			?.worktreePath;
 		const activeWorktreePath = this.window.config?.omniActiveWorktreePath ??
-			restoreEntries.find(entry => entry.state === 'active')?.worktreePath;
+			restoreEntries.find(entry => entry.state === 'active')?.worktreePath ??
+			mostRecentWorktreePath;
 		const sortedEntries = [...restoreEntries].sort((a, b) => {
 			if (a.worktreePath === activeWorktreePath) {
 				return -1;
@@ -935,18 +939,20 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	runActionInWorkspace(
+	async runActionInWorkspace(
 		request: INativeRunActionInWindowRequest
-	): boolean {
+	): Promise<boolean> {
+		await this.ensureRestored();
 		return this.sendToActiveWorkspace(
 			'vscode:runAction',
 			this.withOmniForwardingMarker(request)
 		);
 	}
 
-	runKeybindingInWorkspace(
+	async runKeybindingInWorkspace(
 		request: INativeRunKeybindingInWindowRequest
-	): boolean {
+	): Promise<boolean> {
+		await this.ensureRestored();
 		return this.sendToActiveWorkspace(
 			'vscode:runKeybinding',
 			this.withOmniForwardingMarker(request)

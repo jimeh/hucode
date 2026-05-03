@@ -51,6 +51,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Omni resident workbenches are keyed by worktree path. Hidden workbenches stay
   loaded and switch back to `active` instead of being recreated on each
   selection change.
+- Omni resident-workspace restore must always choose one active workspace, even
+  for older restore entries without an explicit `active` state. Shell-to-workspace
+  action forwarding should wait for restore before looking up the active hosted
+  workbench.
 - Omni windows cannot be implemented as a normal workbench contribution overlay.
   They need their own renderer entrypoint and shell bootstrap, otherwise the
   standard workbench still renders underneath any custom DOM.
@@ -112,6 +116,13 @@ For detailed project overview, architecture, coding guidelines, and validation s
   has focus, the shell renderer resolves shortcuts locally and calls
   `ICommandService.executeCommand`, so shortcut forwarding needs an Omni-local
   command service route as well as the native `vscode:runKeybinding` handler.
+- Keep Omni command forwarding command-id based. Native menu accelerators can
+  arrive as user-settings labels, but label allowlists do not track user
+  keybinding customizations; forward those labels to the active workspace first.
+- Omni shell commands that should prefer the active hosted workbench but still
+  work with no loaded workspace should self-forward through
+  `IHucodeShellService.runActionInWorkspace()` and fall back locally when it
+  returns `false`.
 - Keep the Omni command-service route scoped to Projects focus. Shell QuickInput
   widgets are renderer-local; forwarding their `quickInput.accept` or clipboard
   commands breaks project rename and other shell prompts.
