@@ -593,6 +593,39 @@ suite('ProjectManagerMainService', () => {
 		);
 	});
 
+	test('stores canonical worktree paths for MRU visits', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+
+		const service = createService(stateService, gitWorktreeService, () => 300);
+		const project = await service.addProject(URI.file('/repo'));
+
+		await service.setLastActiveWorktree(
+			project.id,
+			isLinux ? '/repo.worktrees/alpha' : '/REPO.WORKTREES/ALPHA'
+		);
+
+		const savedState = stateService.getItem<StoredProjectManagerState>(
+			PROJECT_MANAGER_STORAGE_KEY
+		);
+		assert.strictEqual(
+			savedState?.projects[0].lastActiveWorktreePath,
+			'/repo.worktrees/alpha'
+		);
+		assert.deepStrictEqual(savedState?.projects[0].worktreeVisits, [
+			{ path: '/repo.worktrees/alpha', lastVisitedAt: 300 },
+		]);
+
+		await assert.rejects(
+			service.setLastActiveWorktree(project.id, '/repo.worktrees/missing'),
+			/Unknown worktree/
+		);
+	});
+
 	test('resets custom project labels to root basenames', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();

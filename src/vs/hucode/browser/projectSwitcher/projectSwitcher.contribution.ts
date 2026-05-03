@@ -905,6 +905,8 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.loadViewState();
 		this._register(toDisposable(() => {
 			this.saveState();
+			this.canGoBackContext.set(false);
+			this.canGoForwardContext.set(false);
 			if (currentProjectSwitcherWidget === this) {
 				currentProjectSwitcherWidget = undefined;
 			}

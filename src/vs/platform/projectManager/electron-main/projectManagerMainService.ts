@@ -438,8 +438,17 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		project.lastActiveWorktreePath = worktreePath;
-		this.setWorktreeVisited(project, worktreePath, this.now());
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.refreshProject(project);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+
+		project.lastActiveWorktreePath = worktree.path;
+		this.setWorktreeVisited(project, worktree.path, this.now());
 		this.saveState();
 		this.emitChange();
 	}

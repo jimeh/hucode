@@ -115,6 +115,7 @@ export interface IHucodeShellService {
 	 */
 	captureWorkspaceScreenshot(
 		windowId: number,
+		rect?: IRectangle,
 		quality?: number
 	): Promise<VSBuffer | undefined>;
 	/**

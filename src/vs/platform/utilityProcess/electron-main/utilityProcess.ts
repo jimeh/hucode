@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { type BrowserWindow, Details, MessageChannelMain, app, utilityProcess, type WebContents, UtilityProcess as ElectronUtilityProcess } from 'electron';
+import { type BrowserWindow, type Details, MessageChannelMain, app, utilityProcess, type WebContents, UtilityProcess as ElectronUtilityProcess } from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { ILogService } from '../../log/common/log.js';
@@ -516,7 +516,7 @@ export class WindowUtilityProcess extends UtilityProcess {
 		if (!resolvedTarget) {
 			this.log('Refusing to start utility process because requesting window cannot be found or is destroyed...', Severity.Error);
 
-			return true;
+			return false;
 		}
 
 		// Start utility process

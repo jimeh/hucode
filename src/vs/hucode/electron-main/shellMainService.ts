@@ -341,7 +341,17 @@ class ResidentHostedWorkspacesController extends Disposable {
 		const mostRecentWorktreePath = [...restoreEntries]
 			.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0]
 			?.worktreePath;
-		const activeWorktreePath = this.window.config?.omniActiveWorktreePath ??
+		const configuredActiveWorktreePath =
+			this.window.config?.omniActiveWorktreePath;
+		const hasConfiguredActiveWorktreePath =
+			!!configuredActiveWorktreePath &&
+			restoreEntries.some(entry =>
+				entry.worktreePath === configuredActiveWorktreePath
+			);
+		const activeWorktreePath = (
+			hasConfiguredActiveWorktreePath
+				? configuredActiveWorktreePath
+				: undefined) ??
 			restoreEntries.find(entry => entry.state === 'active')?.worktreePath ??
 			mostRecentWorktreePath;
 		const sortedEntries = [...restoreEntries].sort((a, b) => {
@@ -916,6 +926,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	async captureWorkspaceScreenshot(
+		rect?: IRectangle,
 		quality: number = 80
 	): Promise<VSBuffer | undefined> {
 		const webContents = this.getActiveInstance()?.view?.webContents;
@@ -924,7 +935,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		try {
-			const image = await webContents.capturePage(undefined, {
+			const image = await webContents.capturePage(rect, {
 				stayHidden: true
 			});
 			return VSBuffer.wrap(image.toJPEG(quality));
@@ -1205,10 +1216,11 @@ export class HucodeShellMainService extends Disposable
 
 	async captureWorkspaceScreenshot(
 		windowId: number,
+		rect?: IRectangle,
 		quality?: number
 	): Promise<VSBuffer | undefined> {
 		return this.getOrCreateController(windowId)
-			.captureWorkspaceScreenshot(quality);
+			.captureWorkspaceScreenshot(rect, quality);
 	}
 
 	async setWorkspaceOverlayOcclusion(

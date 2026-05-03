@@ -22,13 +22,23 @@ suite('HucodeLazyEventService', () => {
 			onWillAddFirstListener: () => sourceListeners++
 		});
 
+		class TestService {
+			readonly onDidChange = emitter.event;
+			readonly value = 'ready';
+
+			getValue(): string {
+				return this.value;
+			}
+		}
+
 		try {
 			const service = hucodeCreateLazyEventService(
-				{ onDidChange: emitter.event },
+				new TestService(),
 				['onDidChange']
 			);
 			const channel = ProxyChannel.fromService(service, disposables);
 			assert.strictEqual(sourceListeners, 0);
+			assert.strictEqual(await channel.call(undefined, 'getValue'), 'ready');
 
 			const event = channel.listen<string>(undefined, 'onDidChange');
 			assert.strictEqual(sourceListeners, 1);

@@ -44,7 +44,7 @@ interface IHucodeShellService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
 	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
-	captureWorkspaceScreenshot(windowId: number, quality?: number): Promise<VSBuffer | undefined>;
+	captureWorkspaceScreenshot(windowId: number, rect?: IRectangle, quality?: number): Promise<VSBuffer | undefined>;
 }
 
 const IHucodeShellService =
@@ -391,7 +391,8 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> {
 		if (this.environmentService.isHostedOmniWorkspace) {
 			return this.hucodeShellService.captureWorkspaceScreenshot(
-				this.nativeHostService.windowId
+				this.nativeHostService.windowId,
+				rect
 			);
 		}
 
