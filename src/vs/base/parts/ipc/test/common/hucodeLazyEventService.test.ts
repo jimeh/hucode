@@ -45,11 +45,14 @@ suite('HucodeLazyEventService', () => {
 
 			const events: string[] = [];
 			const listener = event(e => events.push(e));
-			emitter.fire('changed');
-			await timeout(0);
+			try {
+				emitter.fire('changed');
+				await timeout(0);
 
-			assert.deepStrictEqual(events, ['changed']);
-			listener.dispose();
+				assert.deepStrictEqual(events, ['changed']);
+			} finally {
+				listener.dispose();
+			}
 		} finally {
 			emitter.dispose();
 			disposables.dispose();
