@@ -89,7 +89,8 @@ export class GitWorktreeService {
 			[
 				'for-each-ref',
 				'--format=%(refname)%00%(objectname:short)%00' +
-				'%(upstream:short)%00%(committerdate:relative)%00%(subject)',
+				'%(upstream:short)%00%(committerdate:relative)%00' +
+				'%(authorname)%00%(upstream:track)%00%(subject)',
 				'refs/heads',
 				'refs/remotes',
 				'refs/tags',
@@ -270,7 +271,15 @@ export class GitWorktreeService {
 				continue;
 			}
 
-			const [refName, commit, upstream, _date, subject] = line.split('\0');
+			const [
+				refName,
+				commit,
+				upstream,
+				relativeDate,
+				authorName,
+				tracking,
+				subject,
+			] = line.split('\0');
 			let type: WorktreeRefRecord['type'];
 			let name: string;
 			if (refName.startsWith('refs/heads/')) {
@@ -294,6 +303,9 @@ export class GitWorktreeService {
 				type,
 				commit: commit || undefined,
 				upstream: upstream || undefined,
+				tracking: normalizeTrackingStatus(tracking),
+				relativeDate: relativeDate || undefined,
+				authorName: authorName || undefined,
 				subject: subject || undefined,
 				checkedOutPath: type === 'head'
 					? checkedOutPaths.get(name)
@@ -354,6 +366,13 @@ export class GitWorktreeService {
 	private static pathsEqual(pathA: string, pathB: string): boolean {
 		return isEqual(pathA, pathB, !isLinux);
 	}
+}
+
+function normalizeTrackingStatus(
+	tracking: string | undefined
+): string | undefined {
+	const value = tracking?.trim().replace(/^\[|\]$/g, '');
+	return value || undefined;
 }
 
 function refTypeOrder(type: WorktreeRefRecord['type']): number {

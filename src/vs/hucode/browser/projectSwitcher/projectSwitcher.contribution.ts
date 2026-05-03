@@ -28,17 +28,15 @@ import {
 	ITreeRenderer,
 } from '../../../base/browser/ui/tree/tree.js';
 import { Codicon } from '../../../base/common/codicons.js';
-import { isEqual } from '../../../base/common/extpath.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
-import { isLinux } from '../../../base/common/platform.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { hasKey } from '../../../base/common/types.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
-import { IContextKey } from
+import { IContextKey, IContextKeyService, RawContextKey } from
 	'../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from
 	'../../../platform/contextview/browser/contextView.js';
@@ -46,17 +44,14 @@ import { IFileDialogService, IDialogService } from
 	'../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService, ServicesAccessor } from
 	'../../../platform/instantiation/common/instantiation.js';
+import { ILabelService } from
+	'../../../platform/label/common/label.js';
 import { WorkbenchObjectTree } from
 	'../../../platform/list/browser/listService.js';
 import { INotificationService } from
 	'../../../platform/notification/common/notification.js';
 import { IStorageService, StorageScope, StorageTarget } from
 	'../../../platform/storage/common/storage.js';
-import {
-	IQuickInputService,
-	IQuickPickItem,
-	QuickPickInput,
-} from '../../../platform/quickinput/common/quickInput.js';
 import { asCssVariable } from
 	'../../../platform/theme/common/colorUtils.js';
 import { sessionsSidebarBackground } from
@@ -74,11 +69,9 @@ import { IWorkspaceContextService, WorkbenchState } from
 import { ICommandService } from
 	'../../../platform/commands/common/commands.js';
 import {
-	CreateWorktreeOptions,
 	IProjectManagerService,
 	ProjectRecord,
 	WorktreeRecord,
-	WorktreeRefRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
@@ -86,16 +79,27 @@ import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import {
+	CREATE_WORKTREE_COMMAND_ID,
+	getWorktreeDisplayLabel,
+	pathsEqual,
+	RENAME_PROJECT_COMMAND_ID,
+	RENAME_WORKTREE_COMMAND_ID,
+} from './projectSwitcherCommon.js';
+import {
+	openProjectSwitcherTarget,
+	type IProjectSwitcherSelectionTarget,
+} from './switchProjectWorktree.contribution.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
 const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
+const GO_BACK_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goBack';
+const GO_FORWARD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goForward';
 const OPEN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.openProject';
 const OPEN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.openWorktree';
-const RENAME_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.renameProject';
 const RESET_PROJECT_LABEL_COMMAND_ID =
 	'hucode.projectSwitcher.resetProjectLabel';
-const RENAME_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.renameWorktree';
 const RESET_WORKTREE_LABEL_COMMAND_ID =
 	'hucode.projectSwitcher.resetWorktreeLabel';
 const PIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.pinProject';
@@ -103,7 +107,6 @@ const UNPIN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.unpinProject';
 const PIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.pinWorktree';
 const UNPIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unpinWorktree';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
-const CREATE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.createWorktree';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
 const REFRESH_PROJECTS_COMMAND_ID = 'hucode.projectSwitcher.refresh';
@@ -123,6 +126,24 @@ const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
 const PROJECT_SWITCHER_VIEW_STATE_VERSION = 1;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
+const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
+
+const ProjectSwitcherCanGoBackContext = new RawContextKey<boolean>(
+	'hucode.projectSwitcher.canGoBack',
+	false,
+	localize(
+		'projectSwitcherCanGoBack',
+		'Whether the Hucode project switcher can navigate back'
+	)
+);
+const ProjectSwitcherCanGoForwardContext = new RawContextKey<boolean>(
+	'hucode.projectSwitcher.canGoForward',
+	false,
+	localize(
+		'projectSwitcherCanGoForward',
+		'Whether the Hucode project switcher can navigate forward'
+	)
+);
 
 type ProjectSwitcherSection = 'pinned' | 'unpinned';
 
@@ -201,10 +222,6 @@ function parseWorktreeHandle(
 	};
 }
 
-function pathsEqual(pathA: string, pathB: string): boolean {
-	return isEqual(pathA, pathB, !isLinux);
-}
-
 interface ProjectSwitcherBaseItem {
 	readonly id: string;
 	readonly handle: string;
@@ -242,20 +259,10 @@ interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
 	readonly kind: 'separator';
 }
 
-export interface IProjectSwitcherSelectionTarget {
-	readonly projectId: string;
-	readonly worktreePath: string;
-}
-
 type ProjectSwitcherItem =
 	| ProjectSwitcherProjectItem
 	| ProjectSwitcherWorktreeItem
 	| ProjectSwitcherSeparatorItem;
-
-type CreateWorktreeQuickPick = IQuickPickItem & (
-	| { readonly kind: 'createBranch' }
-	| { readonly kind: 'ref'; readonly ref: WorktreeRefRecord }
-);
 
 function isProjectItem(
 	item: ProjectSwitcherItem | undefined
@@ -297,135 +304,14 @@ function toHandleArg(item: ProjectSwitcherItem): TreeViewItemHandleArg {
 	};
 }
 
-async function pickCreateWorktreeOptions(
-	projectId: string,
-	projectManagerService: IProjectManagerService,
-	quickInputService: IQuickInputService,
-	notificationService: INotificationService
-): Promise<CreateWorktreeOptions | undefined> {
-	const refs = await projectManagerService.getWorktreeRefs(projectId);
-	const createBranchPick: CreateWorktreeQuickPick = {
-		kind: 'createBranch',
-		label: `$(git-branch-create) ${localize('createWorktreeNewBranch', 'Create New Branch...')
-			}`,
-	};
-	const picks: QuickPickInput<CreateWorktreeQuickPick>[] = [
-		createBranchPick,
-		{ type: 'separator' },
-		...toCreateWorktreeRefPicks(refs, 'head'),
-		...toCreateWorktreeRefPicks(refs, 'remote'),
-		...toCreateWorktreeRefPicks(refs, 'tag'),
-	];
-	const choice = await quickInputService.pick(picks, {
-		placeHolder: localize(
-			'createWorktreePickRef',
-			'Select a branch or tag to create the new worktree from'
-		),
-	});
-	if (!choice) {
-		return undefined;
-	}
-
-	if (choice.kind === 'createBranch') {
-		const branchName = await quickInputService.input({
-			prompt: localize('createWorktreeBranch', 'Branch name'),
-			validateInput: value => validateCreateWorktreeBranchName(
-				projectId,
-				value,
-				refs,
-				projectManagerService
-			),
-		});
-		return branchName ? { branchName } : undefined;
-	}
-
-	if (choice.ref.checkedOutPath) {
-		notificationService.error(localize(
-			'createWorktreeRefAlreadyCheckedOut',
-			'Branch "{0}" is already checked out at "{1}".',
-			choice.ref.name,
-			choice.ref.checkedOutPath
-		));
-		return undefined;
-	}
-
-	return { startPoint: choice.ref.name };
-}
-
-async function validateCreateWorktreeBranchName(
-	projectId: string,
-	value: string,
-	refs: readonly WorktreeRefRecord[],
-	projectManagerService: IProjectManagerService
-): Promise<string | undefined> {
-	const branchName = value.trim();
-	if (!branchName) {
-		return localize(
-			'createWorktreeBranchValidate',
-			'Branch name is required.'
-		);
-	}
-	if (branchName !== value) {
-		return localize(
-			'createWorktreeBranchWhitespaceValidate',
-			'Branch name cannot start or end with whitespace.'
-		);
-	}
-	if (refs.some(ref => ref.type === 'head' && ref.name === branchName)) {
-		return localize(
-			'createWorktreeBranchExistsValidate',
-			'Branch "{0}" already exists.',
-			branchName
-		);
-	}
-	if (!(await projectManagerService.isValidBranchName(projectId, branchName))) {
-		return localize(
-			'createWorktreeBranchInvalidValidate',
-			'Branch name is not valid.'
-		);
-	}
-
-	return undefined;
-}
-
-function toCreateWorktreeRefPicks(
-	refs: readonly WorktreeRefRecord[],
-	type: WorktreeRefRecord['type']
-): QuickPickInput<CreateWorktreeQuickPick>[] {
-	const matchingRefs = refs.filter(ref => ref.type === type);
-	if (!matchingRefs.length) {
-		return [];
-	}
-
-	const label = type === 'head'
-		? localize('createWorktreeLocalBranches', 'Local Branches')
-		: type === 'remote'
-			? localize('createWorktreeRemoteBranches', 'Remote Branches')
-			: localize('createWorktreeTags', 'Tags');
-	return [
-		{ type: 'separator', label },
-		...matchingRefs.map(ref => ({
-			kind: 'ref' as const,
-			ref,
-			label: ref.type === 'tag'
-				? `$(tag) ${ref.name}`
-				: `$(git-branch) ${ref.name}`,
-			description: getWorktreeRefDescription(ref),
-			detail: ref.checkedOutPath ?? ref.subject,
-		})),
-	];
-}
-
-function getWorktreeRefDescription(
-	ref: WorktreeRefRecord
-): string | undefined {
-	if (ref.checkedOutPath) {
-		return localize('createWorktreeCheckedOut', 'checked out');
-	}
-	if (ref.upstream) {
-		return ref.upstream;
-	}
-	return ref.commit;
+function selectionTargetsEqual(
+	a: IProjectSwitcherSelectionTarget | undefined,
+	b: IProjectSwitcherSelectionTarget | undefined
+): boolean {
+	return a?.projectId === b?.projectId &&
+		typeof a?.worktreePath === 'string' &&
+		typeof b?.worktreePath === 'string' &&
+		pathsEqual(a.worktreePath, b.worktreePath);
 }
 
 class ProjectSwitcherAccessibilityProvider
@@ -974,6 +860,12 @@ export class ProjectSwitcherWidget extends Disposable {
 	private height = 0;
 	private width = 0;
 	private collapsedProjectIds = new Set<string>();
+	private worktreeNavigationHistory: IProjectSwitcherSelectionTarget[] = [];
+	private worktreeNavigationIndex = -1;
+	private isNavigatingWorktreeHistory = false;
+	private hasSeededNavigationHistory = false;
+	private readonly canGoBackContext: IContextKey<boolean>;
+	private readonly canGoForwardContext: IContextKey<boolean>;
 	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
 		instances: [],
 	};
@@ -983,6 +875,8 @@ export class ProjectSwitcherWidget extends Disposable {
 		private readonly instantiationService: IInstantiationService,
 		@IContextMenuService
 		private readonly contextMenuService: IContextMenuService,
+		@IContextKeyService
+		private readonly contextKeyService: IContextKeyService,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@IWorkspaceContextService
@@ -997,12 +891,22 @@ export class ProjectSwitcherWidget extends Disposable {
 		private readonly environmentService: IWorkbenchEnvironmentService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
+		@IHostService
+		private readonly hostService: IHostService,
+		@ILabelService
+		private readonly labelService: ILabelService,
 	) {
 		super();
 		currentProjectSwitcherWidget = this;
+		this.canGoBackContext =
+			ProjectSwitcherCanGoBackContext.bindTo(this.contextKeyService);
+		this.canGoForwardContext =
+			ProjectSwitcherCanGoForwardContext.bindTo(this.contextKeyService);
 		this.loadViewState();
 		this._register(toDisposable(() => {
 			this.saveState();
+			this.canGoBackContext.set(false);
+			this.canGoForwardContext.set(false);
 			if (currentProjectSwitcherWidget === this) {
 				currentProjectSwitcherWidget = undefined;
 			}
@@ -1030,6 +934,10 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private get windowId(): number {
 		return dom.getWindowId(mainWindow);
+	}
+
+	private getPathLabel(path: string): string {
+		return this.labelService.getUriLabel(URI.file(path));
 	}
 
 	render(container: HTMLElement): void {
@@ -1153,6 +1061,39 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.tree?.collapseAll();
 	}
 
+	async goBack(): Promise<void> {
+		await this.navigateWorktreeHistory(-1);
+	}
+
+	async goForward(): Promise<void> {
+		await this.navigateWorktreeHistory(1);
+	}
+
+	private async navigateWorktreeHistory(delta: -1 | 1): Promise<void> {
+		const nextIndex = this.worktreeNavigationIndex + delta;
+		const target = this.worktreeNavigationHistory[nextIndex];
+		if (!target) {
+			return;
+		}
+
+		this.isNavigatingWorktreeHistory = true;
+		try {
+			await openProjectSwitcherTarget(
+				target,
+				this.projectManagerService,
+				this.environmentService,
+				this.shellService,
+				this.hostService
+			);
+			this.worktreeNavigationIndex = nextIndex;
+		} catch (error) {
+			this.notificationService.error(String(error));
+		} finally {
+			this.isNavigatingWorktreeHistory = false;
+			this.updateNavigationContexts();
+		}
+	}
+
 	private async loadCachedProjects(): Promise<void> {
 		try {
 			await this.handleProjectsChanged(
@@ -1170,12 +1111,14 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
 		await this.updateCurrentWorktreeSelection(projects);
+		this.recordActiveWorktree(projects);
 	}
 
 	private async handleWorkspaceContextChange(): Promise<void> {
 		this.renderProjects(this.projects);
 		await this.syncCurrentWorkspace(this.projects);
 		await this.updateCurrentWorktreeSelection(this.projects);
+		this.recordActiveWorktree(this.projects);
 	}
 
 	private renderProjects(projects: readonly ProjectRecord[]): void {
@@ -1284,7 +1227,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			hasCustomLabel: project.label !== rootBasename,
 			label: project.label,
 			description: project.label === rootBasename ? undefined : rootBasename,
-			tooltip: rootPath,
+			tooltip: this.getPathLabel(rootPath),
 			contextValue: project.pinned
 				? PINNED_PROJECT_CONTEXT_VALUE
 				: PROJECT_CONTEXT_VALUE,
@@ -1313,10 +1256,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			worktree.path
 		);
 		const isActive = this.isActiveWorktree(worktree.path);
-		const worktreeLabel = worktree.customLabel ??
-			(worktree.isMain
-				? localize('localWorktree', 'local')
-				: basename(worktree.path));
+		const worktreeLabel = getWorktreeDisplayLabel(worktree);
 		const worktreeDescription = worktree.branch ??
 			(worktree.isDetached
 				? localize('detachedWorktree', 'Detached')
@@ -1342,7 +1282,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			description: worktreeLabel === worktreeDescription
 				? undefined
 				: worktreeDescription,
-			tooltip: worktree.path,
+			tooltip: this.getPathLabel(worktree.path),
 			contextValue: worktree.isMain
 				? MAIN_WORKTREE_CONTEXT_VALUE
 				: WORKTREE_CONTEXT_VALUE,
@@ -1432,6 +1372,13 @@ export class ProjectSwitcherWidget extends Disposable {
 
 		this.renderProjects(this.projects);
 		this.updateItemContext();
+		void this.updateCurrentWorktreeSelection(this.projects).catch(error => {
+			this.notificationService.error(String(error));
+		});
+		void this.syncOmniActiveWorktree(this.projects).catch(error => {
+			this.notificationService.error(String(error));
+		});
+		this.recordActiveWorktree(this.projects);
 	}
 
 	private getHostedWorkbenchInstance(
@@ -1676,11 +1623,45 @@ export class ProjectSwitcherWidget extends Disposable {
 			const worktree = project.worktrees.find(entry =>
 				pathsEqual(entry.path, folderUri.fsPath)
 			);
-			if (worktree && project.lastActiveWorktreePath !== worktree.path) {
+			if (
+				worktree &&
+				(project.lastActiveWorktreePath === undefined ||
+					!pathsEqual(project.lastActiveWorktreePath, worktree.path))
+			) {
 				await this.projectManagerService.setLastActiveWorktree(
 					project.id,
 					worktree.path
 				);
+			}
+		}
+	}
+
+	private async syncOmniActiveWorktree(
+		projects: readonly ProjectRecord[]
+	): Promise<void> {
+		if (!this.environmentService.isOmniWindow) {
+			return;
+		}
+
+		const activeWorktreePath = this.getActiveWorktreePath();
+		if (!activeWorktreePath) {
+			return;
+		}
+
+		for (const project of projects) {
+			const worktree = project.worktrees.find(entry =>
+				pathsEqual(entry.path, activeWorktreePath)
+			);
+			if (
+				worktree &&
+				(project.lastActiveWorktreePath === undefined ||
+					!pathsEqual(project.lastActiveWorktreePath, worktree.path))
+			) {
+				await this.projectManagerService.setLastActiveWorktree(
+					project.id,
+					worktree.path
+				);
+				return;
 			}
 		}
 	}
@@ -1739,6 +1720,99 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 
 		return undefined;
+	}
+
+	private recordActiveWorktree(projects: readonly ProjectRecord[]): void {
+		if (this.isNavigatingWorktreeHistory) {
+			return;
+		}
+
+		const activeTarget = this.getActiveSelectionTarget(projects);
+		if (!activeTarget) {
+			this.updateNavigationContexts();
+			return;
+		}
+
+		if (!this.hasSeededNavigationHistory) {
+			this.seedNavigationHistory(projects, activeTarget);
+			return;
+		}
+
+		const currentTarget =
+			this.worktreeNavigationHistory[this.worktreeNavigationIndex];
+		if (selectionTargetsEqual(currentTarget, activeTarget)) {
+			this.updateNavigationContexts();
+			return;
+		}
+
+		this.worktreeNavigationHistory = [
+			...this.worktreeNavigationHistory.slice(
+				0,
+				this.worktreeNavigationIndex + 1
+			),
+			activeTarget,
+		].slice(-PROJECT_SWITCHER_HISTORY_LIMIT);
+		this.worktreeNavigationIndex =
+			this.worktreeNavigationHistory.length - 1;
+		this.updateNavigationContexts();
+	}
+
+	private seedNavigationHistory(
+		projects: readonly ProjectRecord[],
+		activeTarget: IProjectSwitcherSelectionTarget
+	): void {
+		this.hasSeededNavigationHistory = true;
+		const visitedTargets = projects
+			.flatMap(project => project.worktrees
+				.filter(worktree => worktree.lastVisitedAt !== undefined)
+				.map(worktree => ({
+					projectId: project.id,
+					worktreePath: worktree.path,
+					lastVisitedAt: worktree.lastVisitedAt ?? 0,
+				}))
+			)
+			.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt)
+			.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }))
+			.filter(target => !selectionTargetsEqual(target, activeTarget));
+
+		this.worktreeNavigationHistory = [
+			...visitedTargets,
+			activeTarget,
+		].slice(-PROJECT_SWITCHER_HISTORY_LIMIT);
+		this.worktreeNavigationIndex =
+			this.worktreeNavigationHistory.length - 1;
+		this.updateNavigationContexts();
+	}
+
+	private getActiveSelectionTarget(
+		projects: readonly ProjectRecord[]
+	): IProjectSwitcherSelectionTarget | undefined {
+		const activeWorktreePath = this.getActiveWorktreePath();
+		if (!activeWorktreePath) {
+			return undefined;
+		}
+
+		for (const project of projects) {
+			if (project.worktrees.some(worktree =>
+				pathsEqual(worktree.path, activeWorktreePath)
+			)) {
+				return {
+					projectId: project.id,
+					worktreePath: activeWorktreePath,
+				};
+			}
+		}
+
+		return undefined;
+	}
+
+	private updateNavigationContexts(): void {
+		this.canGoBackContext.set(this.worktreeNavigationIndex > 0);
+		this.canGoForwardContext.set(
+			this.worktreeNavigationIndex >= 0 &&
+			this.worktreeNavigationIndex <
+			this.worktreeNavigationHistory.length - 1
+		);
 	}
 
 	saveState(): void {
@@ -1855,6 +1929,48 @@ export function getSelectedProjectSwitcherTarget():
 	| undefined {
 	return currentProjectSwitcherWidget?.getSelectionTarget();
 }
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: GO_BACK_WORKTREE_COMMAND_ID,
+			title: localize2('goBackWorktree', 'Go Back'),
+			icon: Codicon.arrowLeft,
+			precondition: ProjectSwitcherCanGoBackContext,
+			menu: {
+				id: Menus.SidebarTitleNavigation,
+				group: 'navigation',
+				order: 1,
+			},
+			f1: true,
+		});
+	}
+
+	async run(): Promise<void> {
+		await currentProjectSwitcherWidget?.goBack();
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: GO_FORWARD_WORKTREE_COMMAND_ID,
+			title: localize2('goForwardWorktree', 'Go Forward'),
+			icon: Codicon.arrowRight,
+			precondition: ProjectSwitcherCanGoForwardContext,
+			menu: {
+				id: Menus.SidebarTitleNavigation,
+				group: 'navigation',
+				order: 2,
+			},
+			f1: true,
+		});
+	}
+
+	async run(): Promise<void> {
+		await currentProjectSwitcherWidget?.goForward();
+	}
+});
 
 registerAction2(class extends Action2 {
 	constructor() {
@@ -1993,65 +2109,6 @@ registerAction2(class extends Action2 {
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
-			id: RENAME_PROJECT_COMMAND_ID,
-			title: localize2('renameProject', 'Rename Project'),
-		});
-	}
-
-	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
-		const projectManagerService = accessor.get(IProjectManagerService);
-		const quickInputService = accessor.get(IQuickInputService);
-		const notificationService = accessor.get(INotificationService);
-		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
-
-		try {
-			const projectId = parseProjectHandle(handle.$treeItemHandle);
-			if (!projectId) {
-				return;
-			}
-
-			const projects = await projectManagerService.getProjects();
-			const project = projects.find(entry => entry.id === projectId);
-			if (!project) {
-				return;
-			}
-
-			if (environmentService.isOmniWindow) {
-				await shellService.focusShell(dom.getWindowId(mainWindow));
-			}
-
-			const labelPromise = quickInputService.input({
-				prompt: localize('renameProjectPrompt', 'Project label'),
-				value: project.label,
-				validateInput: async value => value.trim()
-					? undefined
-					: localize(
-						'renameProjectValidate',
-						'Project label is required.'
-					),
-			});
-			if (environmentService.isOmniWindow) {
-				mainWindow.requestAnimationFrame(() => {
-					quickInputService.focus();
-				});
-			}
-
-			const label = await labelPromise;
-			if (!label) {
-				return;
-			}
-
-			await projectManagerService.renameProject(projectId, label);
-		} catch (error) {
-			notificationService.error(String(error));
-		}
-	}
-});
-
-registerAction2(class extends Action2 {
-	constructor() {
-		super({
 			id: RESET_PROJECT_LABEL_COMMAND_ID,
 			title: localize2('resetProjectLabel', 'Reset Project Name'),
 		});
@@ -2068,75 +2125,6 @@ registerAction2(class extends Action2 {
 			}
 
 			await projectManagerService.resetProjectLabel(projectId);
-		} catch (error) {
-			notificationService.error(String(error));
-		}
-	}
-});
-
-registerAction2(class extends Action2 {
-	constructor() {
-		super({
-			id: RENAME_WORKTREE_COMMAND_ID,
-			title: localize2('renameWorktree', 'Rename Worktree'),
-		});
-	}
-
-	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
-		const projectManagerService = accessor.get(IProjectManagerService);
-		const quickInputService = accessor.get(IQuickInputService);
-		const notificationService = accessor.get(INotificationService);
-		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
-
-		try {
-			const parsed = parseWorktreeHandle(handle.$treeItemHandle);
-			if (!parsed) {
-				return;
-			}
-
-			const projects = await projectManagerService.getProjects();
-			const project = projects.find(entry => entry.id === parsed.projectId);
-			const worktree = project?.worktrees.find(entry =>
-				pathsEqual(entry.path, parsed.worktreePath)
-			);
-			if (!project || !worktree) {
-				return;
-			}
-
-			if (environmentService.isOmniWindow) {
-				await shellService.focusShell(dom.getWindowId(mainWindow));
-			}
-
-			const defaultLabel = worktree.isMain
-				? localize('localWorktree', 'local')
-				: basename(worktree.path);
-			const labelPromise = quickInputService.input({
-				prompt: localize('renameWorktreePrompt', 'Worktree label'),
-				value: worktree.customLabel ?? defaultLabel,
-				validateInput: async value => value.trim()
-					? undefined
-					: localize(
-						'renameWorktreeValidate',
-						'Worktree label is required.'
-					),
-			});
-			if (environmentService.isOmniWindow) {
-				mainWindow.requestAnimationFrame(() => {
-					quickInputService.focus();
-				});
-			}
-
-			const label = await labelPromise;
-			if (!label) {
-				return;
-			}
-
-			await projectManagerService.renameWorktree(
-				parsed.projectId,
-				parsed.worktreePath,
-				label
-			);
 		} catch (error) {
 			notificationService.error(String(error));
 		}
@@ -2293,42 +2281,6 @@ registerAction2(class extends Action2 {
 			}
 
 			await projectManagerService.removeProject(projectId);
-		} catch (error) {
-			notificationService.error(String(error));
-		}
-	}
-});
-
-registerAction2(class extends Action2 {
-	constructor() {
-		super({
-			id: CREATE_WORKTREE_COMMAND_ID,
-			title: localize2('createWorktree', 'Create Worktree'),
-		});
-	}
-
-	async run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<void> {
-		const projectManagerService = accessor.get(IProjectManagerService);
-		const quickInputService = accessor.get(IQuickInputService);
-		const notificationService = accessor.get(INotificationService);
-
-		try {
-			const projectId = parseProjectHandle(handle.$treeItemHandle);
-			if (!projectId) {
-				return;
-			}
-
-			const options = await pickCreateWorktreeOptions(
-				projectId,
-				projectManagerService,
-				quickInputService,
-				notificationService
-			);
-			if (!options) {
-				return;
-			}
-
-			await projectManagerService.createWorktree(projectId, options);
 		} catch (error) {
 			notificationService.error(String(error));
 		}

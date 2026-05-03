@@ -11,9 +11,7 @@ import {
 	HUCODE_OMNI_PROJECTS_SELECTOR,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
-	isHucodeOmniShellKeybinding,
 	isHucodeOmniShellLayoutAction,
-	isHucodeOmniShellLayoutKeybinding,
 	withHucodeOmniShellCommandForwardingDisabled,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
@@ -74,13 +72,7 @@ export class HucodeOmniCommandForwarding {
 			return false;
 		}
 
-		if (isHucodeOmniShellKeybinding(request.userSettingsLabel)) {
-			return false;
-		}
-
-		const forwarded = await this.tryForwardKeybindingToWorkspace(request);
-		return forwarded ||
-			isHucodeOmniShellLayoutKeybinding(request.userSettingsLabel);
+		return this.tryForwardKeybindingToWorkspace(request);
 	}
 
 	async runWithForwardingDisabledIfNeeded<T>(

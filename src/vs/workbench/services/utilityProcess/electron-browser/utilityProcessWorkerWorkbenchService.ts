@@ -14,6 +14,7 @@ import { acquirePort } from '../../../../base/parts/ipc/electron-browser/ipc.mp.
 import { IOnDidTerminateUtilityrocessWorkerProcess, ipcUtilityProcessWorkerChannelName, IUtilityProcessWorkerProcess, IUtilityProcessWorkerService } from '../../../../platform/utilityProcess/common/utilityProcessWorkerService.js';
 import { Barrier, timeout } from '../../../../base/common/async.js';
 import { IRendererReplyTarget } from '../../../../platform/window/common/window.js';
+import { hucodeGetRendererReplyTargetLabel } from '../../../../platform/window/common/hucodeRendererReplyTarget.js';
 
 export const IUtilityProcessWorkerWorkbenchService = createDecorator<IUtilityProcessWorkerWorkbenchService>('utilityProcessWorkerWorkbenchService');
 
@@ -135,7 +136,8 @@ export class UtilityProcessWorkerWorkbenchService extends Disposable implements 
 		const client = disposables.add(
 			new MessagePortClient(
 				port,
-				`${this.getReplyTargetLogLabel()},module:${process.moduleId}`
+				`${hucodeGetRendererReplyTargetLabel(this.replyTarget)},` +
+				`module:${process.moduleId}`
 			)
 		);
 		this.logService.trace('Renderer->UtilityProcess#createWorkerChannel: connection established');
@@ -155,13 +157,5 @@ export class UtilityProcessWorkerWorkbenchService extends Disposable implements 
 		if (!this.restoredBarrier.isOpen()) {
 			this.restoredBarrier.open();
 		}
-	}
-
-	private getReplyTargetLogLabel(): string {
-		if (this.replyTarget.kind === 'window') {
-			return `window:${this.replyTarget.windowId}`;
-		}
-
-		return `webContents:${this.replyTarget.webContentsId}`;
 	}
 }

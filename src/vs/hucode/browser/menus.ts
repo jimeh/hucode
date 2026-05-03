@@ -19,6 +19,7 @@ export const Menus = {
 	TitleBarRightLayout: new MenuId('HucodeOmniTitleBarRightLayout'),
 	PanelTitle: new MenuId('HucodeOmniPanelTitle'),
 	SidebarTitle: new MenuId('HucodeOmniSidebarTitle'),
+	SidebarTitleNavigation: new MenuId('HucodeOmniSidebarTitleNavigation'),
 	SidebarSessionsHeader: new MenuId('HucodeOmniSidebarHeader'),
 	AuxiliaryBarTitle: new MenuId('HucodeOmniAuxiliaryBarTitle'),
 	AuxiliaryBarTitleLeft: new MenuId('HucodeOmniAuxiliaryBarTitleLeft'),

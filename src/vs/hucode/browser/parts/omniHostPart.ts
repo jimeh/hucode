@@ -307,6 +307,7 @@ export class OmniHostPart extends Part {
 		try {
 			screenshot = await this.shellService.captureWorkspaceScreenshot(
 				this.windowId,
+				undefined,
 				80
 			);
 		} catch {

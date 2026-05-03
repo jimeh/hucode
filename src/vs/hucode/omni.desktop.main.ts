@@ -148,6 +148,8 @@ import '../workbench/contrib/mergeEditor/electron-browser/mergeEditor.contributi
 import '../workbench/contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 import '../workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 import '../workbench/contrib/chat/electron-browser/chat.contribution.js';
+import './browser/projectSwitcher/createProjectWorktree.contribution.js';
+import './browser/projectSwitcher/renameProjectWorktree.contribution.js';
 import './browser/projectSwitcher/projectSwitcher.contribution.js';
 import '../workbench/contrib/encryption/electron-browser/encryption.contribution.js';
 import '../workbench/contrib/emergencyAlert/electron-browser/emergencyAlert.contribution.js';

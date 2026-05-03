@@ -31,6 +31,7 @@ export interface WorktreeRecord {
 	readonly isMain: boolean;
 	readonly isDetached: boolean;
 	readonly pinned?: boolean;
+	readonly lastVisitedAt?: number;
 }
 
 /**
@@ -54,6 +55,9 @@ export interface WorktreeRefRecord {
 	readonly type: 'head' | 'remote' | 'tag';
 	readonly commit?: string;
 	readonly upstream?: string;
+	readonly tracking?: string;
+	readonly relativeDate?: string;
+	readonly authorName?: string;
 	readonly subject?: string;
 	readonly checkedOutPath?: string;
 }
@@ -64,6 +68,14 @@ export interface WorktreeRefRecord {
 export interface StoredWorktreeLabel {
 	readonly path: string;
 	readonly label: string;
+}
+
+/**
+ * Persisted most-recently-used timestamp for a git worktree path.
+ */
+export interface StoredWorktreeVisit {
+	readonly path: string;
+	readonly lastVisitedAt: number;
 }
 
 /**
@@ -79,6 +91,7 @@ export interface StoredProjectRecord {
 	worktreeOrder?: readonly string[];
 	pinnedWorktreePaths?: readonly string[];
 	worktreeLabels?: readonly StoredWorktreeLabel[];
+	worktreeVisits?: readonly StoredWorktreeVisit[];
 }
 
 /**

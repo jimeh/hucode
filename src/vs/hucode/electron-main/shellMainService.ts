@@ -338,8 +338,22 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		const activeWorktreePath = this.window.config?.omniActiveWorktreePath ??
-			restoreEntries.find(entry => entry.state === 'active')?.worktreePath;
+		const mostRecentWorktreePath = [...restoreEntries]
+			.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0]
+			?.worktreePath;
+		const configuredActiveWorktreePath =
+			this.window.config?.omniActiveWorktreePath;
+		const hasConfiguredActiveWorktreePath =
+			!!configuredActiveWorktreePath &&
+			restoreEntries.some(entry =>
+				entry.worktreePath === configuredActiveWorktreePath
+			);
+		const activeWorktreePath = (
+			hasConfiguredActiveWorktreePath
+				? configuredActiveWorktreePath
+				: undefined) ??
+			restoreEntries.find(entry => entry.state === 'active')?.worktreePath ??
+			mostRecentWorktreePath;
 		const sortedEntries = [...restoreEntries].sort((a, b) => {
 			if (a.worktreePath === activeWorktreePath) {
 				return -1;
@@ -901,7 +915,18 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.getActiveInstance()?.view?.webContents.reload();
 	}
 
+	toggleWorkspaceDevTools(): boolean {
+		const webContents = this.getActiveInstance()?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		webContents.toggleDevTools();
+		return true;
+	}
+
 	async captureWorkspaceScreenshot(
+		rect?: IRectangle,
 		quality: number = 80
 	): Promise<VSBuffer | undefined> {
 		const webContents = this.getActiveInstance()?.view?.webContents;
@@ -910,7 +935,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		try {
-			const image = await webContents.capturePage(undefined, {
+			const image = await webContents.capturePage(rect, {
 				stayHidden: true
 			});
 			return VSBuffer.wrap(image.toJPEG(quality));
@@ -935,18 +960,20 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	runActionInWorkspace(
+	async runActionInWorkspace(
 		request: INativeRunActionInWindowRequest
-	): boolean {
+	): Promise<boolean> {
+		await this.ensureRestored();
 		return this.sendToActiveWorkspace(
 			'vscode:runAction',
 			this.withOmniForwardingMarker(request)
 		);
 	}
 
-	runKeybindingInWorkspace(
+	async runKeybindingInWorkspace(
 		request: INativeRunKeybindingInWindowRequest
-	): boolean {
+	): Promise<boolean> {
+		await this.ensureRestored();
 		return this.sendToActiveWorkspace(
 			'vscode:runKeybinding',
 			this.withOmniForwardingMarker(request)
@@ -1160,6 +1187,10 @@ export class HucodeShellMainService extends Disposable
 		this.getOrCreateController(windowId).reloadWorkspace();
 	}
 
+	async toggleWorkspaceDevTools(windowId: number): Promise<boolean> {
+		return this.getOrCreateController(windowId).toggleWorkspaceDevTools();
+	}
+
 	async runActionInWorkspace(
 		windowId: number,
 		request: INativeRunActionInWindowRequest
@@ -1185,10 +1216,11 @@ export class HucodeShellMainService extends Disposable
 
 	async captureWorkspaceScreenshot(
 		windowId: number,
+		rect?: IRectangle,
 		quality?: number
 	): Promise<VSBuffer | undefined> {
 		return this.getOrCreateController(windowId)
-			.captureWorkspaceScreenshot(quality);
+			.captureWorkspaceScreenshot(rect, quality);
 	}
 
 	async setWorkspaceOverlayOcclusion(

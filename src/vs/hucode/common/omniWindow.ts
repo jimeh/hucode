@@ -108,12 +108,14 @@ export interface IHucodeShellService {
 	 */
 	triggerPasteInWorkspace(windowId: number): Promise<boolean>;
 	reloadWorkspace(windowId: number): Promise<void>;
+	toggleWorkspaceDevTools(windowId: number): Promise<boolean>;
 	layoutWorkspace(windowId: number, bounds: IRectangle): Promise<void>;
 	/**
 	 * Captures the active hosted workspace view for DOM fallback rendering.
 	 */
 	captureWorkspaceScreenshot(
 		windowId: number,
+		rect?: IRectangle,
 		quality?: number
 	): Promise<VSBuffer | undefined>;
 	/**

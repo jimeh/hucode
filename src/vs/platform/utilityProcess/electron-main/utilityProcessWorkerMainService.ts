@@ -14,7 +14,7 @@ import { hash } from '../../../base/common/hash.js';
 import { Event, Emitter } from '../../../base/common/event.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
-import { IRendererReplyTarget } from '../../window/common/window.js';
+import { hucodeGetRendererReplyTargetKey, hucodeGetRendererReplyTargetLabel } from '../../window/common/hucodeRendererReplyTarget.js';
 
 export const IUtilityProcessWorkerMainService = createDecorator<IUtilityProcessWorkerMainService>('utilityProcessWorker');
 
@@ -40,7 +40,7 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 
 	async createWorker(configuration: IUtilityProcessWorkerCreateConfiguration): Promise<IOnDidTerminateUtilityrocessWorkerProcess> {
 		const workerLogId =
-			`${this.getReplyTargetLabel(configuration.reply.target)}, ` +
+			`${hucodeGetRendererReplyTargetLabel(configuration.reply.target)}, ` +
 			`moduleId: ${configuration.process.moduleId}`;
 		this.logService.trace(`[UtilityProcessWorker]: createWorker(${workerLogId})`);
 
@@ -78,7 +78,7 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 	private hash(configuration: IUtilityProcessWorkerConfiguration): number {
 		return hash({
 			moduleId: configuration.process.moduleId,
-			replyTarget: configuration.reply.target
+			replyTarget: hucodeGetRendererReplyTargetKey(configuration.reply.target)
 		});
 	}
 
@@ -91,7 +91,7 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 
 		this.logService.trace(
 			`[UtilityProcessWorker]: disposeWorker(` +
-			`${this.getReplyTargetLabel(configuration.reply.target)}, ` +
+			`${hucodeGetRendererReplyTargetLabel(configuration.reply.target)}, ` +
 			`moduleId: ${configuration.process.moduleId})`
 		);
 
@@ -100,13 +100,6 @@ export class UtilityProcessWorkerMainService extends Disposable implements IUtil
 		this.workers.delete(workerId);
 	}
 
-	private getReplyTargetLabel(target: IRendererReplyTarget): string {
-		if (target.kind === 'window') {
-			return `window: ${target.windowId}`;
-		}
-
-		return `webContents: ${target.webContentsId}`;
-	}
 }
 
 class UtilityProcessWorker extends Disposable {

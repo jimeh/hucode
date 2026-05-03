@@ -88,6 +88,21 @@ export class ProjectsPart extends Part {
 		);
 		label.textContent = localize('hucodeOmniProjectsTitle', 'Projects');
 
+		const navigationActions = append(
+			titleArea,
+			$('div.hucode-omni-projects-title-navigation-actions')
+		);
+		this._register(this.instantiationService.createInstance(
+			MenuWorkbenchToolBar,
+			navigationActions,
+			Menus.SidebarTitleNavigation,
+			{
+				hiddenItemStrategy: HiddenItemStrategy.NoHide,
+				toolbarOptions: { primaryGroup: () => true },
+				telemetrySource: 'omniProjectsTitleNavigation',
+			}
+		));
+
 		const actions = append(
 			titleArea,
 			$('div.hucode-omni-projects-title-actions')

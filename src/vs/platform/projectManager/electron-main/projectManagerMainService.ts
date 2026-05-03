@@ -57,6 +57,7 @@ export class ProjectManagerMainService extends Disposable
 		@ILogService private readonly logService: ILogService,
 		gitWorktreeService: ProjectManagerGitService =
 			new GitWorktreeService(logService),
+		private readonly now: () => number = () => Date.now(),
 	) {
 		super();
 
@@ -437,7 +438,17 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		project.lastActiveWorktreePath = worktreePath;
+		const worktrees = this.projectWorktrees.get(projectId) ??
+			await this.refreshProject(project);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+
+		project.lastActiveWorktreePath = worktree.path;
+		this.setWorktreeVisited(project, worktree.path, this.now());
 		this.saveState();
 		this.emitChange();
 	}
@@ -459,7 +470,12 @@ export class ProjectManagerMainService extends Disposable
 			this.pruneWorktreeOrder(project, orderedWorktrees);
 			this.prunePinnedWorktreePaths(project, orderedWorktrees);
 			this.pruneWorktreeLabels(project, orderedWorktrees);
-			const worktrees = this.applyWorktreePins(project, orderedWorktrees);
+			this.pruneWorktreeVisits(project, orderedWorktrees);
+			const visitedWorktrees = this.applyWorktreeVisits(
+				project,
+				orderedWorktrees
+			);
+			const worktrees = this.applyWorktreePins(project, visitedWorktrees);
 			this.projectWorktrees.set(project.id, worktrees);
 
 			if (project.lastActiveWorktreePath &&
@@ -612,6 +628,9 @@ export class ProjectManagerMainService extends Disposable
 			...(worktree.pinned !== undefined
 				? { pinned: worktree.pinned }
 				: {}),
+			...(worktree.lastVisitedAt !== undefined
+				? { lastVisitedAt: worktree.lastVisitedAt }
+				: {}),
 		};
 	}
 
@@ -675,6 +694,9 @@ export class ProjectManagerMainService extends Disposable
 					: {}),
 				isMain: worktree.isMain,
 				isDetached: worktree.isDetached,
+				...(worktree.lastVisitedAt !== undefined
+					? { lastVisitedAt: worktree.lastVisitedAt }
+					: {}),
 			};
 			if (!pinnedPaths.has(this.getPathComparisonKey(worktree.path))) {
 				return unpinnedWorktree;
@@ -682,6 +704,54 @@ export class ProjectManagerMainService extends Disposable
 
 			return { ...unpinnedWorktree, pinned: true };
 		});
+	}
+
+	private applyWorktreeVisits(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): readonly WorktreeRecord[] {
+		const visitsByPath = new Map(
+			(project.worktreeVisits ?? []).map(entry => [
+				this.getPathComparisonKey(entry.path),
+				entry.lastVisitedAt,
+			])
+		);
+		return worktrees.map(worktree => {
+			const lastVisitedAt = visitsByPath.get(
+				this.getPathComparisonKey(worktree.path)
+			);
+			return lastVisitedAt !== undefined
+				? { ...worktree, lastVisitedAt }
+				: worktree;
+		});
+	}
+
+	private setWorktreeVisited(
+		project: StoredProjectRecord,
+		worktreePath: string,
+		lastVisitedAt: number
+	): void {
+		const visits = (project.worktreeVisits ?? []).filter(entry =>
+			!this.pathsEqual(entry.path, worktreePath)
+		);
+		project.worktreeVisits = [
+			...visits,
+			{ path: worktreePath, lastVisitedAt },
+		];
+
+		const worktrees = this.projectWorktrees.get(project.id);
+		if (!worktrees) {
+			return;
+		}
+
+		this.projectWorktrees.set(
+			project.id,
+			worktrees.map(worktree =>
+				this.pathsEqual(worktree.path, worktreePath)
+					? { ...worktree, lastVisitedAt }
+					: worktree
+			)
+		);
 	}
 
 	private pruneWorktreeOrder(
@@ -740,6 +810,25 @@ export class ProjectManagerMainService extends Disposable
 		);
 		project.worktreeLabels = worktreeLabels.length
 			? worktreeLabels
+			: undefined;
+	}
+
+	private pruneWorktreeVisits(
+		project: StoredProjectRecord,
+		worktrees: readonly WorktreeRecord[]
+	): void {
+		if (!project.worktreeVisits?.length) {
+			return;
+		}
+
+		const existingPaths = new Set(
+			worktrees.map(entry => this.getPathComparisonKey(entry.path))
+		);
+		const worktreeVisits = project.worktreeVisits.filter(entry =>
+			existingPaths.has(this.getPathComparisonKey(entry.path))
+		);
+		project.worktreeVisits = worktreeVisits.length
+			? worktreeVisits
 			: undefined;
 	}
 

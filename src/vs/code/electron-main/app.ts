@@ -22,6 +22,7 @@ import { assertType } from '../../base/common/types.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { registerContextMenuListener } from '../../base/parts/contextmenu/electron-main/contextmenu.js';
+import { hucodeCreateLazyEventService } from '../../base/parts/ipc/common/hucodeLazyEventService.js';
 import { getDelayedChannel, ProxyChannel, StaticRouter } from '../../base/parts/ipc/common/ipc.js';
 import { Server as ElectronIPCServer } from '../../base/parts/ipc/electron-main/ipc.electron.js';
 import { Client as MessagePortClient } from '../../base/parts/ipc/electron-main/ipc.mp.js';
@@ -1364,7 +1365,15 @@ export class CodeApplication extends Disposable {
 
 		// Native host (main & shared process)
 		this.nativeHostMainService = accessor.get(INativeHostMainService);
-		const nativeHostChannel = ProxyChannel.fromService(this.nativeHostMainService, disposables);
+		const nativeHostChannel = ProxyChannel.fromService(
+			hucodeCreateLazyEventService(this.nativeHostMainService, [
+				'onDidBlurMainWindow',
+				'onDidFocusMainWindow',
+				'onDidBlurMainOrAuxiliaryWindow',
+				'onDidFocusMainOrAuxiliaryWindow',
+			]),
+			disposables
+		);
 		mainProcessElectronServer.registerChannel('nativeHost', nativeHostChannel);
 		sharedProcessClient.then(client => client.registerChannel('nativeHost', nativeHostChannel));
 

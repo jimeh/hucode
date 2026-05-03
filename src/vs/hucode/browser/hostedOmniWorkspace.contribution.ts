@@ -29,6 +29,9 @@ import { IsDevelopmentContext } from
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
+import './projectSwitcher/createProjectWorktree.contribution.js';
+import './projectSwitcher/renameProjectWorktree.contribution.js';
+import './projectSwitcher/switchProjectWorktree.contribution.js';
 
 class HostedOmniWorkspaceReadyContribution implements IWorkbenchContribution {
 

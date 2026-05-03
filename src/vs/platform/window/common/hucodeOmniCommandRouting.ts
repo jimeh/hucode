@@ -13,11 +13,12 @@ const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
 ];
 
 const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
-	'workbench.action.omniWindow.focusProjectsFromExplorerShortcut',
-	'workbench.action.omniWindow.focusProjectsFromSourceControlShortcut',
 	'workbench.action.omniWindow.focusProjectPane',
 	'workbench.action.omniWindow.openSelectedInOmniWindow',
 	'workbench.action.omniWindow.openSelectedInNewWindow',
+	'workbench.action.omniWindow.focusWorkspace',
+	'workbench.action.omniWindow.reloadWorkspace',
+	'workbench.action.omniWindow.closeWorkspace',
 ]);
 
 const HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS = new Set([
@@ -31,25 +32,6 @@ const HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS = new Set([
 	'workbench.action.closeSidebar',
 	'workbench.action.focusSideBar',
 	'workbench.action.toggleSidebarPosition',
-]);
-
-const HUCODE_OMNI_SHELL_KEYBINDINGS = new Set([
-	'shift+cmd+e',
-	'cmd+shift+e',
-	'ctrl+shift+e',
-	'ctrl+shift+g',
-	'shift+cmd+g',
-	'cmd+shift+g',
-]);
-
-const HUCODE_OMNI_SHELL_LAYOUT_KEYBINDINGS = new Set([
-	'cmd+b',
-	'ctrl+b',
-	'cmd+j',
-	'ctrl+j',
-	'alt+cmd+b',
-	'cmd+alt+b',
-	'ctrl+alt+b',
 ]);
 
 export const HUCODE_OMNI_PROJECTS_SELECTOR =
@@ -84,28 +66,6 @@ export function isHucodeOmniShellLayoutAction(commandId: string): boolean {
 }
 
 /**
- * Returns whether a keybinding is reserved for the Omni Projects shell.
- */
-export function isHucodeOmniShellKeybinding(
-	userSettingsLabel: string
-): boolean {
-	return HUCODE_OMNI_SHELL_KEYBINDINGS.has(
-		normalizeHucodeOmniKeybindingLabel(userSettingsLabel)
-	);
-}
-
-/**
- * Returns whether a keybinding would expose unsupported shell layout UI.
- */
-export function isHucodeOmniShellLayoutKeybinding(
-	userSettingsLabel: string
-): boolean {
-	return HUCODE_OMNI_SHELL_LAYOUT_KEYBINDINGS.has(
-		normalizeHucodeOmniKeybindingLabel(userSettingsLabel)
-	);
-}
-
-/**
  * Returns whether this native request already came from the Omni shell.
  */
 export function isHucodeForwardedFromOmniShell(
@@ -135,8 +95,4 @@ export async function withHucodeOmniShellCommandForwardingDisabled<T>(
  */
 export function isHucodeOmniShellCommandForwardingDisabled(): boolean {
 	return hucodeOmniShellCommandForwardingDisabled > 0;
-}
-
-function normalizeHucodeOmniKeybindingLabel(userSettingsLabel: string): string {
-	return userSettingsLabel.toLowerCase().replace(/\s+/g, '');
 }
