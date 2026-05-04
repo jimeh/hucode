@@ -144,6 +144,41 @@ import {
 } from '../common/omniWindow.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
+import {
+	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+} from '../../workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js';
+
+const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
+	'GitHub.copilot-chat',
+	'vscode.debug-auto-launch',
+	'vscode.debug-server-ready',
+	'vscode.git',
+	'vscode.github',
+	'vscode.github-authentication',
+	'vscode.grunt',
+	'vscode.gulp',
+	'vscode.jake',
+	'vscode.merge-conflict',
+	'vscode.microsoft-authentication',
+	'vscode.npm',
+	'vscode.terminal-suggest',
+	'vscode.tunnel-forwarding',
+] as const;
+
+class HucodeOmniWorkbenchEnvironmentService
+	extends NativeWorkbenchEnvironmentService {
+
+	get hucodeExtensionEnablementPolicy() {
+		return HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY;
+	}
+
+	override get skipBuiltinExtensions(): readonly string[] {
+		return [
+			...super.skipBuiltinExtensions,
+			...HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS,
+		];
+	}
+}
 
 export class OmniMain extends Disposable {
 
@@ -295,7 +330,7 @@ export class OmniMain extends Disposable {
 		};
 		serviceCollection.set(IProductService, productService);
 
-		const environmentService = new NativeWorkbenchEnvironmentService(
+		const environmentService = new HucodeOmniWorkbenchEnvironmentService(
 			this.configuration,
 			productService
 		);
