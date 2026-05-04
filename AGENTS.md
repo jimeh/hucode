@@ -119,6 +119,9 @@ For detailed project overview, architecture, coding guidelines, and validation s
   Projects-tree actions in the shell, and forward other `vscode:runAction` and
   `vscode:runKeybinding` payloads from `NativeWindow` to the active hosted
   workspace instead of routing them from the main-process menubar.
+- Native menu accelerator IPC can arrive at the Omni shell while the focused
+  hosted `WebContentsView` also receives the physical keydown. Do not inject a
+  synthetic `vscode:runKeybinding` into an already-focused hosted workspace.
 - Keep Omni command-forwarding policy in Hucode-named helpers near the layer
   that consumes them. Generic workbench files can import same-layer
   `hucode*` helpers or lower-layer platform helpers, but should not import from

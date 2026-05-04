@@ -991,6 +991,10 @@ class ResidentHostedWorkspacesController extends Disposable {
 		request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
 		await this.ensureRestored();
+		if (this.getFocusedSurface() === 'workspace') {
+			return this.hasActiveWorkspace();
+		}
+
 		return this.sendToActiveWorkspace(
 			'vscode:runKeybinding',
 			this.withOmniForwardingMarker(request)
