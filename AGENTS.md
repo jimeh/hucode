@@ -108,6 +108,9 @@ For detailed project overview, architecture, coding guidelines, and validation s
   `WebContentsView`. Use the hosted view only to calculate offsets and sync
   visibility/z-order from the Omni shell; nested parenting can leave browser
   contents visible but not hit-testable.
+- Hosted Omni workbench unload must explicitly destroy integrated browser
+  views owned by that hosted `webContentsId`; those views are top-level
+  siblings, so removing the workbench view will not remove them.
 - Omni shell native menu/action IPC arrives in the shell renderer. Keep
   Projects-tree actions in the shell, and forward other `vscode:runAction` and
   `vscode:runKeybinding` payloads from `NativeWindow` to the active hosted

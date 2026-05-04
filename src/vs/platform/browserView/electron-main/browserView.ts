@@ -626,6 +626,14 @@ export class BrowserView extends Disposable {
 		this.bringToFront();
 	}
 
+	/**
+	 * Returns whether this view belongs to the given hosted Omni workbench.
+	 */
+	belongsToHostedWebContents(hostedWebContentsId: number): boolean {
+		return this.owner.hostedWebContentsId === hostedWebContentsId
+			|| this._hostedWebContentsId === hostedWebContentsId;
+	}
+
 	private _applyVisibility(): void {
 		const visible = this._requestedVisible && this._hostVisible;
 		if (this._view.getVisible() === visible) {

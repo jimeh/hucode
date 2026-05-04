@@ -35,6 +35,11 @@ export interface IBrowserViewMainService extends IBrowserViewService {
 	setHostedWebContentsVisible(hostedWebContentsId: number, visible: boolean): void;
 
 	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void;
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void;
 }
 
 export class BrowserViewMainService extends Disposable implements IBrowserViewMainService {
@@ -215,6 +220,23 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
 		for (const view of this.browserViews.values()) {
 			view.bringToFrontForHostedWebContents(hostedWebContentsId);
+		}
+	}
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void {
+		this.hostedWebContentsVisibility.delete(hostedWebContentsId);
+
+		const viewIds = Array.from(this.browserViews)
+			.filter(([, view]) =>
+				view.belongsToHostedWebContents(hostedWebContentsId)
+			)
+			.map(([id]) => id);
+
+		for (const id of viewIds) {
+			this.browserViews.deleteAndDispose(id);
 		}
 	}
 

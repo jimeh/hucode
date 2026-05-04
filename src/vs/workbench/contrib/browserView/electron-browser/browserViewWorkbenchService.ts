@@ -19,6 +19,7 @@ import { IWorkspaceTrustManagementService } from '../../../../platform/workspace
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 
 /** Command IDs whose accelerators are shown in browser view context menus. */
 const browserViewContextMenuCommands = [
@@ -46,7 +47,8 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
 	) {
 		super();
 		const channel = mainProcessService.getChannel(ipcBrowserViewChannelName);
@@ -122,7 +124,12 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	}
 
 	private _getDefaultOwner(): IBrowserViewOwner {
-		return { mainWindowId: this._mainWindowId };
+		return {
+			mainWindowId: this._mainWindowId,
+			hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
+				? this.environmentService.hostedWebContentsId
+				: undefined
+		};
 	}
 
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {

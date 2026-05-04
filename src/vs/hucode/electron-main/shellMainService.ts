@@ -735,6 +735,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		if (instance.view) {
+			this.browserViewMainService.destroyBrowserViewsForHostedWebContents(
+				instance.view.webContents.id
+			);
 			this.untrustView(instance);
 			instance.view.setVisible(false);
 			this.window.win?.contentView.removeChildView(instance.view);
