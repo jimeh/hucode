@@ -25,6 +25,7 @@ import './electron-browser/omniCommandService.js';
 
 import './electron-browser/omni.main.js';
 import '../workbench/electron-browser/desktop.contribution.js';
+import '../workbench/electron-browser/hucodeConfiguration.contribution.js';
 
 //#endregion
 

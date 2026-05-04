@@ -20,6 +20,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
   `actool`'s generated compatibility ICNS.
 - Hucode's app release version lives in the overlay as `hucodeVersion`.
   Keep upstream `version` for VS Code compatibility and extension checks.
+- Hucode macOS desktop workbenches default `window.menuStyle` to `native`
+  through `src/vs/workbench/electron-browser/hucodeConfiguration.contribution.ts`.
+  Hosted Omni workbenches boot the standard desktop bundle, so keep this
+  contribution imported from `workbench.desktop.main.ts` as well as Omni.
 - Workbench `TreeView` selection/reveal paths operate on the live `ITreeItem`
   instances in the tree model, not synthetic `{ handle }` placeholders. Cache
   and reuse the provider-produced items when restoring selection.

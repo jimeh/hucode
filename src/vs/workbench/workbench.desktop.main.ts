@@ -21,6 +21,7 @@ import './workbench.common.main.js';
 
 import './electron-browser/desktop.main.js';
 import './electron-browser/desktop.contribution.js';
+import './electron-browser/hucodeConfiguration.contribution.js';
 
 //#endregion
 
