@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { timeout } from '../../../../base/common/async.js';
+import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
 import { isLinux } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -23,7 +25,10 @@ import {
 	GitCommandError,
 	GitWorktreeService
 } from '../../electron-main/gitWorktreeService.js';
-import { ProjectManagerMainService } from
+import {
+	ProjectManagerMainService,
+	type ProjectManagerMainServiceOptions,
+} from
 	'../../electron-main/projectManagerMainService.js';
 
 class TestStateService implements IStateService {
@@ -72,10 +77,13 @@ class TestStateService implements IStateService {
 }
 
 class TestGitWorktreeService {
+	readonly commonDirs = new Map<string, string>();
+	readonly adminDirs = new Map<string, readonly string[]>();
 	readonly resolvedRoots = new Map<string, string>();
 	readonly worktrees = new Map<string, readonly WorktreeRecord[]>();
 	readonly refs = new Map<string, readonly WorktreeRefRecord[]>();
 	readonly validBranchNames = new Set<string>();
+	readonly listWorktreesCalls: string[] = [];
 	readonly createdCalls: {
 		projectRoot: string;
 		options: CreateWorktreeOptions;
@@ -87,7 +95,26 @@ class TestGitWorktreeService {
 		return this.resolvedRoots.get(cwd) ?? cwd;
 	}
 
+	async getGitCommonDir(projectRoot: string): Promise<string> {
+		return this.commonDirs.get(projectRoot) ?? `${projectRoot}/.git`;
+	}
+
+	async listWorktreeAdminDirs(
+		commonGitDir: string
+	): Promise<readonly string[]> {
+		const configured = this.adminDirs.get(commonGitDir);
+		if (configured) {
+			return configured;
+		}
+
+		const projectRoot = commonGitDir.replace(/\/\.git$/, '');
+		return (this.worktrees.get(projectRoot) ?? [])
+			.filter(worktree => !worktree.isMain)
+			.map(worktree => basename(worktree.path));
+	}
+
 	async listWorktrees(projectRoot: string): Promise<readonly WorktreeRecord[]> {
+		this.listWorktreesCalls.push(projectRoot);
 		return this.worktrees.get(projectRoot) ?? [];
 	}
 
@@ -138,6 +165,36 @@ class TestGitWorktreeService {
 				worktree.path !== worktreePath
 			)
 		);
+	}
+}
+
+class TestProjectMetadataWatcher {
+	readonly watchedPaths: string[] = [];
+	readonly disposedPaths: string[] = [];
+	private readonly listeners = new Map<string, (() => void)[]>();
+
+	watch(path: string, onDidChange: () => void) {
+		this.watchedPaths.push(path);
+		const listeners = this.listeners.get(path) ?? [];
+		listeners.push(onDidChange);
+		this.listeners.set(path, listeners);
+
+		return toDisposable(() => {
+			this.disposedPaths.push(path);
+			const nextListeners = (this.listeners.get(path) ?? [])
+				.filter(listener => listener !== onDidChange);
+			if (nextListeners.length) {
+				this.listeners.set(path, nextListeners);
+			} else {
+				this.listeners.delete(path);
+			}
+		});
+	}
+
+	fire(path: string): void {
+		for (const listener of this.listeners.get(path) ?? []) {
+			listener();
+		}
 	}
 }
 
@@ -429,13 +486,20 @@ suite('ProjectManagerMainService', () => {
 	function createService(
 		stateService: TestStateService,
 		gitWorktreeService: TestGitWorktreeService,
-		now?: () => number
+		now?: () => number,
+		options: Omit<
+			ProjectManagerMainServiceOptions,
+			'gitWorktreeService' | 'now'
+		> = {}
 	): ProjectManagerMainService {
 		return disposables.add(new ProjectManagerMainService(
 			stateService,
 			new NullLogService(),
-			gitWorktreeService,
-			now
+			{
+				gitWorktreeService,
+				now,
+				...options,
+			}
 		));
 	}
 
@@ -679,6 +743,131 @@ suite('ProjectManagerMainService', () => {
 			lastActiveWorktreePath: '/repo',
 			worktrees: [createMainWorktree('/repo')],
 		}]);
+	});
+
+	test('auto-refreshes when watched git metadata changes', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				autoRefreshDebounceMs: 0,
+				autoRefreshQuietMs: 0,
+			}
+		);
+		await service.addProject(URI.file('/repo'));
+
+		assert.deepStrictEqual(metadataWatcher.watchedPaths, [
+			'/repo/.git/HEAD',
+			'/repo/.git/worktrees',
+			'/repo/.git/worktrees/alpha/HEAD',
+			'/repo/.git/worktrees/alpha/gitdir',
+		]);
+
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'feature/alpha'),
+		]);
+		metadataWatcher.fire('/repo/.git/worktrees/alpha/HEAD');
+		await timeout(0);
+		await timeout(0);
+
+		assert.deepStrictEqual({
+			worktrees: (await service.getProjects())[0].worktrees,
+			listWorktreesCalls: gitWorktreeService.listWorktreesCalls,
+		}, {
+			worktrees: [
+				createMainWorktree('/repo'),
+				createLinkedWorktree('/repo.worktrees/alpha', 'feature/alpha'),
+			],
+			listWorktreesCalls: ['/repo', '/repo'],
+		});
+	});
+
+	test('coalesces auto-refresh events and rebuilds project watchers', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				autoRefreshDebounceMs: 0,
+				autoRefreshQuietMs: 0,
+			}
+		);
+		const project = await service.addProject(URI.file('/repo'));
+
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+		]);
+		metadataWatcher.fire('/repo/.git/worktrees');
+		metadataWatcher.fire('/repo/.git/worktrees');
+		await timeout(0);
+		await timeout(0);
+
+		assert.deepStrictEqual({
+			listWorktreesCalls: gitWorktreeService.listWorktreesCalls,
+			watchedPaths: metadataWatcher.watchedPaths,
+			disposedPaths: metadataWatcher.disposedPaths,
+			worktrees: (await service.getProjects())[0].worktrees,
+		}, {
+			listWorktreesCalls: ['/repo', '/repo'],
+			watchedPaths: [
+				'/repo/.git/HEAD',
+				'/repo/.git/worktrees',
+				'/repo/.git/worktrees/alpha/HEAD',
+				'/repo/.git/worktrees/alpha/gitdir',
+				'/repo/.git/HEAD',
+				'/repo/.git/worktrees',
+				'/repo/.git/worktrees/alpha/HEAD',
+				'/repo/.git/worktrees/alpha/gitdir',
+				'/repo/.git/worktrees/bravo/HEAD',
+				'/repo/.git/worktrees/bravo/gitdir',
+			],
+			disposedPaths: [
+				'/repo/.git/HEAD',
+				'/repo/.git/worktrees',
+				'/repo/.git/worktrees/alpha/HEAD',
+				'/repo/.git/worktrees/alpha/gitdir',
+			],
+			worktrees: [
+				createMainWorktree('/repo'),
+				createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+				createLinkedWorktree('/repo.worktrees/bravo', 'bravo'),
+			],
+		});
+
+		await service.removeProject(project.id);
+		assert.deepStrictEqual(
+			metadataWatcher.disposedPaths.slice(-6),
+			[
+				'/repo/.git/HEAD',
+				'/repo/.git/worktrees',
+				'/repo/.git/worktrees/alpha/HEAD',
+				'/repo/.git/worktrees/alpha/gitdir',
+				'/repo/.git/worktrees/bravo/HEAD',
+				'/repo/.git/worktrees/bravo/gitdir',
+			]
+		);
 	});
 
 	test('applies persisted worktree order using platform path comparison rules', async () => {
