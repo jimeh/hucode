@@ -119,6 +119,7 @@ const WORKTREE_CONTEXT_VALUE = 'hucode-worktree';
 const MAIN_WORKTREE_CONTEXT_VALUE = 'hucode-worktree-main';
 const PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE =
 	'hucode-project-group-separator';
+const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 const PINNED_SEPARATOR_HANDLE = 'separator:pinned';
 const UNPINNED_SEPARATOR_HANDLE = 'separator:unpinned';
 
@@ -859,6 +860,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private emptyContainer: HTMLElement | undefined;
 	private height = 0;
 	private width = 0;
+	private lastProjectsRefreshAt = 0;
 	private collapsedProjectIds = new Set<string>();
 	private worktreeNavigationHistory: IProjectSwitcherSelectionTarget[] = [];
 	private worktreeNavigationIndex = -1;
@@ -922,6 +924,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			void this.handleWorkspaceContextChange();
 		}));
 		if (this.environmentService.isOmniWindow) {
+			this._register(this.hostService.onDidChangeFocus(focused => {
+				if (focused) {
+					void this.refreshProjectsIfStale();
+				}
+			}));
 			this._register(this.shellService.onDidChangeWindowState(change => {
 				if (change.windowId !== this.windowId) {
 					return;
@@ -1107,11 +1114,25 @@ export class ProjectSwitcherWidget extends Disposable {
 	private async handleProjectsChanged(
 		projects: readonly ProjectRecord[]
 	): Promise<void> {
+		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
 		await this.updateCurrentWorktreeSelection(projects);
 		this.recordActiveWorktree(projects);
+	}
+
+	private async refreshProjectsIfStale(): Promise<void> {
+		if (Date.now() - this.lastProjectsRefreshAt <
+			PROJECT_SWITCHER_STALE_REFRESH_INTERVAL) {
+			return;
+		}
+
+		try {
+			await this.projectManagerService.refresh();
+		} catch (error) {
+			this.notificationService.error(String(error));
+		}
 	}
 
 	private async handleWorkspaceContextChange(): Promise<void> {

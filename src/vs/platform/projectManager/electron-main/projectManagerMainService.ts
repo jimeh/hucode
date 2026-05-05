@@ -3,15 +3,22 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { timeout, ThrottledDelayer } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
-import { basename } from '../../../base/common/path.js';
+import {
+	Disposable,
+	DisposableMap,
+	DisposableStore,
+	IDisposable,
+} from '../../../base/common/lifecycle.js';
+import { basename, join } from '../../../base/common/path.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { URI } from '../../../base/common/uri.js';
 import { isLinux } from '../../../base/common/platform.js';
 import { isEqual } from '../../../base/common/extpath.js';
 import { IStateService } from '../../state/node/state.js';
 import { ILogService } from '../../log/common/log.js';
+import { IFileService } from '../../files/common/files.js';
 import {
 	CreateWorktreeOptions,
 	PROJECT_MANAGER_STORAGE_KEY,
@@ -25,15 +32,60 @@ import {
 import { IProjectManagerMainService } from './projectManager.js';
 import { GitWorktreeService } from './gitWorktreeService.js';
 
-type ProjectManagerGitService = Pick<
+const PROJECT_AUTO_REFRESH_DEBOUNCE_MS = 1000;
+const PROJECT_AUTO_REFRESH_QUIET_MS = 5000;
+
+/**
+ * Watches targeted project metadata paths for worktree-affecting changes.
+ */
+export interface IProjectMetadataWatcher {
+	watch(path: string, onDidChange: () => void): IDisposable;
+}
+
+/**
+ * Git operations used by the main-process project manager.
+ */
+export type ProjectManagerGitService = Pick<
 	GitWorktreeService,
 	'resolveProjectRoot' |
+	'getGitCommonDir' |
+	'listWorktreeAdminDirs' |
 	'listWorktrees' |
 	'listRefs' |
 	'isValidBranchName' |
 	'createWorktree' |
 	'removeWorktree'
 >;
+
+/**
+ * Optional dependencies for production wiring and focused unit tests.
+ */
+export interface ProjectManagerMainServiceOptions {
+	readonly fileService?: IFileService;
+	readonly gitWorktreeService?: ProjectManagerGitService;
+	readonly metadataWatcher?: IProjectMetadataWatcher;
+	readonly now?: () => number;
+	readonly autoRefreshDebounceMs?: number;
+	readonly autoRefreshQuietMs?: number;
+	readonly refreshDelay?: (milliseconds: number) => Promise<void>;
+}
+
+class FileServiceProjectMetadataWatcher implements IProjectMetadataWatcher {
+
+	constructor(private readonly fileService: IFileService) {
+	}
+
+	watch(path: string, onDidChange: () => void): IDisposable {
+		const store = new DisposableStore();
+		const watcher = store.add(this.fileService.createWatcher(URI.file(path), {
+			recursive: false,
+			excludes: [],
+		}));
+		store.add(watcher.onDidChange(() => onDidChange()));
+
+		return store;
+	}
+}
 
 /**
  * Main-process Hucode project registry and worktree orchestration service.
@@ -44,24 +96,42 @@ export class ProjectManagerMainService extends Disposable
 	declare readonly _serviceBrand: undefined;
 
 	private readonly gitWorktreeService: ProjectManagerGitService;
+	private readonly metadataWatcher: IProjectMetadataWatcher | undefined;
+	private readonly autoRefreshDebounceMs: number;
+	private readonly autoRefreshQuietMs: number;
+	private readonly refreshDelay: (milliseconds: number) => Promise<void>;
+	private readonly now: () => number;
 	private readonly _onDidChangeProjects =
 		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
 
 	private storedProjects: StoredProjectRecord[] = [];
 	private projectWorktrees = new Map<string, readonly WorktreeRecord[]>();
+	private readonly projectWatchers =
+		this._register(new DisposableMap<string>());
+	private readonly autoRefreshDelayers =
+		this._register(new DisposableMap<string, ThrottledDelayer<void>>());
 	private stateLoaded = false;
 
 	constructor(
 		@IStateService private readonly stateService: IStateService,
 		@ILogService private readonly logService: ILogService,
-		gitWorktreeService: ProjectManagerGitService =
-			new GitWorktreeService(logService),
-		private readonly now: () => number = () => Date.now(),
+		options: ProjectManagerMainServiceOptions = {},
 	) {
 		super();
 
-		this.gitWorktreeService = gitWorktreeService;
+		this.gitWorktreeService = options.gitWorktreeService ??
+			new GitWorktreeService(logService);
+		this.metadataWatcher = options.metadataWatcher ??
+			(options.fileService
+				? new FileServiceProjectMetadataWatcher(options.fileService)
+				: undefined);
+		this.autoRefreshDebounceMs = options.autoRefreshDebounceMs ??
+			PROJECT_AUTO_REFRESH_DEBOUNCE_MS;
+		this.autoRefreshQuietMs = options.autoRefreshQuietMs ??
+			PROJECT_AUTO_REFRESH_QUIET_MS;
+		this.refreshDelay = options.refreshDelay ?? timeout;
+		this.now = options.now ?? (() => Date.now());
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
@@ -264,6 +334,8 @@ export class ProjectManagerMainService extends Disposable
 		this.requireProject(id);
 		this.storedProjects = this.storedProjects.filter(project => project.id !== id);
 		this.projectWorktrees.delete(id);
+		this.projectWatchers.deleteAndDispose(id);
+		this.autoRefreshDelayers.deleteAndDispose(id);
 		this.saveState();
 		this.emitChange();
 	}
@@ -486,6 +558,8 @@ export class ProjectManagerMainService extends Disposable
 				project.lastActiveWorktreePath = undefined;
 			}
 
+			await this.updateProjectWatchers(project);
+
 			return worktrees;
 		} catch (error) {
 			this.logService.warn(
@@ -493,7 +567,107 @@ export class ProjectManagerMainService extends Disposable
 				`${project.rootPath}: ${error}`
 			);
 			this.projectWorktrees.set(project.id, []);
+			this.projectWatchers.deleteAndDispose(project.id);
 			return [];
+		}
+	}
+
+	private async updateProjectWatchers(
+		project: StoredProjectRecord
+	): Promise<void> {
+		if (!this.metadataWatcher) {
+			return;
+		}
+
+		const watchers = new DisposableStore();
+		try {
+			const commonGitDir = await this.gitWorktreeService.getGitCommonDir(
+				project.rootPath
+			);
+			this.watchProjectMetadataPath(
+				watchers,
+				project.id,
+				join(commonGitDir, 'HEAD')
+			);
+			this.watchProjectMetadataPath(
+				watchers,
+				project.id,
+				join(commonGitDir, 'worktrees')
+			);
+
+			for (const adminDirName of
+				await this.gitWorktreeService.listWorktreeAdminDirs(commonGitDir)) {
+				const adminDir = join(commonGitDir, 'worktrees', adminDirName);
+				this.watchProjectMetadataPath(
+					watchers,
+					project.id,
+					join(adminDir, 'HEAD')
+				);
+				this.watchProjectMetadataPath(
+					watchers,
+					project.id,
+					join(adminDir, 'gitdir')
+				);
+			}
+
+			this.projectWatchers.set(project.id, watchers);
+		} catch (error) {
+			watchers.dispose();
+			this.logService.warn(
+				`[ProjectManagerMainService] Failed to watch ` +
+				`${project.rootPath}: ${error}`
+			);
+		}
+	}
+
+	private watchProjectMetadataPath(
+		watchers: DisposableStore,
+		projectId: string,
+		path: string
+	): void {
+		const metadataWatcher = this.metadataWatcher;
+		if (!metadataWatcher) {
+			return;
+		}
+
+		try {
+			watchers.add(metadataWatcher.watch(path, () => {
+				this.scheduleProjectRefresh(projectId);
+			}));
+		} catch (error) {
+			this.logService.warn(
+				`[ProjectManagerMainService] Failed to watch ${path}: ${error}`
+			);
+		}
+	}
+
+	private scheduleProjectRefresh(projectId: string): void {
+		let delayer = this.autoRefreshDelayers.get(projectId);
+		if (!delayer) {
+			delayer = new ThrottledDelayer<void>(this.autoRefreshDebounceMs);
+			this.autoRefreshDelayers.set(projectId, delayer);
+		}
+
+		delayer.trigger(() => this.runScheduledProjectRefresh(projectId))
+			.then(undefined, error => this.logService.warn(
+				`[ProjectManagerMainService] Failed to auto-refresh ` +
+				`${projectId}: ${error}`
+			));
+	}
+
+	private async runScheduledProjectRefresh(projectId: string): Promise<void> {
+		const project = this.storedProjects.find(entry => entry.id === projectId);
+		if (!project) {
+			this.autoRefreshDelayers.deleteAndDispose(projectId);
+			return;
+		}
+
+		await this.refreshProject(project);
+		this.saveState();
+		this.emitChange();
+
+		if (this.autoRefreshQuietMs > 0) {
+			await this.refreshDelay(this.autoRefreshQuietMs);
 		}
 	}
 

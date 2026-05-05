@@ -208,7 +208,9 @@ class CodeMain {
 		// Hucode Project Manager
 		services.set(
 			IProjectManagerMainService,
-			new ProjectManagerMainService(stateService, logService)
+			new ProjectManagerMainService(stateService, logService, {
+				fileService,
+			})
 		);
 
 		// Use FileUserDataProvider for user data to

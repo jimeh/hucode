@@ -69,6 +69,42 @@ export class GitWorktreeService {
 		return topLevel;
 	}
 
+	/**
+	 * Returns Git's absolute common metadata directory for a project root.
+	 */
+	async getGitCommonDir(projectRoot: string): Promise<string> {
+		return (await this.runGit(
+			['rev-parse', '--path-format=absolute', '--git-common-dir'],
+			projectRoot
+		)).stdout.trim();
+	}
+
+	/**
+	 * Lists linked worktree metadata directories under a common Git directory.
+	 */
+	async listWorktreeAdminDirs(
+		commonGitDir: string
+	): Promise<readonly string[]> {
+		try {
+			const worktreesPath = join(commonGitDir, 'worktrees');
+			const dirents = await fs.readdir(worktreesPath, {
+				withFileTypes: true,
+			});
+
+			return dirents
+				.filter(dirent => dirent.isDirectory())
+				.map(dirent => dirent.name)
+				.sort((a, b) => a.localeCompare(b));
+		} catch (error) {
+			if (error instanceof Error &&
+				(error as NodeJS.ErrnoException).code === 'ENOENT') {
+				return [];
+			}
+
+			throw error;
+		}
+	}
+
 	async listWorktrees(projectRoot: string): Promise<readonly WorktreeRecord[]> {
 		const result = await this.runGit(
 			['worktree', 'list', '--porcelain'],
