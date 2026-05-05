@@ -158,3 +158,23 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - `npm run hucode:compile` must build the client, built-in extension outputs,
   and extension media. Using only `transpile-client` cleans `out/` but leaves
   files like `extensions/git-base/out/extension.js` and `codicon.ttf` missing.
+- The Omni Projects shell does not need VS Code's extension-host Git
+  integration for project/worktree lists. Those flows use the main-process
+  `GitWorktreeService`, so shell startup can suppress non-theme user extensions
+  and selected Git/GitHub, debug, task, terminal, and tunnel built-ins without
+  breaking Projects.
+- `enableExtensions` does not override `disableExtensions: true`. If Omni
+  needs selected user extensions available, use the explicit Hucode extension
+  enablement policy instead of blanket disabling all installed extensions.
+- Omni shell user-extension filtering is controlled by
+  `hucodeExtensionEnablementPolicy`, not `isOmniWindow` alone. Shell and hosted
+  workbench extension-host logs can share `windowN/` paths, so verify resident
+  hosted workspace state before assuming a `windowN/exthost` entry is from an
+  embedded workspace.
+- The Omni shell's local extension host can receive extensions from the cached
+  scanner before later enablement checks are visible in logs. Keep the
+  theme-only user-extension policy enforced at scan time as well as enablement
+  time.
+- Keep Omni shell extension-filtering policy in
+  `src/vs/workbench/services/extensions/common/hucodeExtensionEnablementPolicy.ts`
+  so upstream extension scanner and enablement service edits stay thin.
