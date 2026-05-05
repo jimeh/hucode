@@ -88,6 +88,13 @@ export interface IHucodeShellService {
 	focusWorkspace(windowId: number): Promise<void>;
 	focusShell(windowId: number): Promise<void>;
 	/**
+	 * Sends an action invocation to the Omni shell renderer.
+	 */
+	runActionInShell(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean>;
+	/**
 	 * Sends a native menu/action invocation from the shell to the active
 	 * hosted workspace.
 	 */

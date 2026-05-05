@@ -32,6 +32,7 @@ import { KeybindingWeight } from
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
+import './omniProjectsSidebarActions.js';
 
 class HostedOmniWorkspaceReadyContribution implements IWorkbenchContribution {
 

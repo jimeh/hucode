@@ -928,6 +928,27 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.window.win?.webContents.focus();
 	}
 
+	runActionInShell(request: INativeRunActionInWindowRequest): boolean {
+		const webContents = this.window.win?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		try {
+			webContents.send(
+				'vscode:runAction',
+				this.withOmniForwardingMarker(request)
+			);
+			return true;
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to forward shell action ' +
+				`${request.id}: ${error}`
+			);
+			return false;
+		}
+	}
+
 	reloadWorkspace(): void {
 		this.getActiveInstance()?.view?.webContents.reload();
 	}
@@ -1202,6 +1223,13 @@ export class HucodeShellMainService extends Disposable
 
 	async focusShell(windowId: number): Promise<void> {
 		this.getOrCreateController(windowId).focusShell();
+	}
+
+	async runActionInShell(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId).runActionInShell(request);
 	}
 
 	async reloadWorkspace(windowId: number): Promise<void> {

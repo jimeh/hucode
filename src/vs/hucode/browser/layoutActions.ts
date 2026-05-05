@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { alert } from '../../base/browser/ui/aria/aria.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { localize, localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
@@ -45,11 +44,12 @@ class ToggleSidebarVisibilityAction extends Action2 {
 		});
 	}
 
-	run(_accessor: ServicesAccessor): void {
-		alert(localize(
-			'sidebarCollapseDisabled',
-			'Projects sidebar collapsing is currently disabled.'
-		));
+	run(accessor: ServicesAccessor): void {
+		const layoutService = accessor.get(IWorkbenchLayoutService);
+		layoutService.setPartHidden(
+			layoutService.isVisible(Parts.SIDEBAR_PART),
+			Parts.SIDEBAR_PART
+		);
 	}
 }
 

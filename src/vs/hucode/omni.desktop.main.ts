@@ -103,6 +103,7 @@ import '../workbench/services/power/electron-browser/powerService.js';
 import '../platform/projectManager/electron-browser/projectManagerService.js';
 import './electron-browser/omniWindowService.js';
 import './browser/omniWindowUI.js';
+import './browser/omniProjectsSidebarActions.js';
 
 import { registerSingleton } from
 	'../platform/instantiation/common/extensions.js';

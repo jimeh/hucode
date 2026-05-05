@@ -19,6 +19,7 @@ const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
 	'workbench.action.omniWindow.focusWorkspace',
 	'workbench.action.omniWindow.reloadWorkspace',
 	'workbench.action.omniWindow.closeWorkspace',
+	'workbench.action.omniWindow.toggleProjectsSidebar',
 ]);
 
 const HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS = new Set([

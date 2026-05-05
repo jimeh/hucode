@@ -35,6 +35,10 @@
 	margin-left: 0;
 }
 
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.chatbar {
+	margin-left: 0;
+}
+
 .hucode-omni-workbench .part.auxiliarybar {
 	margin: 0 10px 0px 0;
 	background: var(--part-background);
@@ -56,6 +60,10 @@
 }
 
 .hucode-omni-workbench:not(.nosidebar) .part.panel {
+	margin-left: 0;
+}
+
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.panel {
 	margin-left: 0;
 }
 

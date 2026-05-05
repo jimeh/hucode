@@ -1081,11 +1081,24 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	private setSideBarHidden(hidden: boolean): void {
-		if (hidden) {
+		if (this.partVisibility.sidebar === !hidden) {
 			return;
 		}
 
-		// Omni currently does not support hiding/collapsing the Projects sidebar.
+		this.partVisibility.sidebar = !hidden;
+		this.mainContainer.classList.toggle(
+			LayoutClasses.SIDEBAR_HIDDEN,
+			hidden
+		);
+
+		this.workbenchGrid.setViewVisible(
+			this.sideBarPartView,
+			!hidden,
+		);
+
+		if (hidden && this.hasFocus(Parts.SIDEBAR_PART)) {
+			this.focusPart(Parts.CHATBAR_PART);
+		}
 	}
 
 	private setAuxiliaryBarHidden(hidden: boolean): void {
