@@ -398,6 +398,27 @@
 }
 
 /* Center-Adjacent Toolbar (e.g., update indicator) */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container {
+	display: none;
+	position: relative;
+	align-items: center;
+	gap: 8px;
+	height: 100%;
+	padding: 0 8px;
+	z-index: 2500;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container:has(> .left-action-toolbar:not(.has-no-actions)) {
+	display: flex;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar .action-item,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar .action-label {
+	-webkit-app-region: no-drag;
+}
+
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .center-adjacent-toolbar-container {
 	z-index: 2500;
 	-webkit-app-region: no-drag;

@@ -7,7 +7,7 @@ import './media/titlebarpart.css';
 import { localize, localize2 } from '../../../../nls.js';
 import { MultiWindowParts, Part } from '../../part.js';
 import { ITitleService } from '../../../services/title/browser/titleService.js';
-import { getWCOTitlebarAreaRect, getZoomFactor, isWCOEnabled } from '../../../../base/browser/browser.js';
+import { getWCOTitlebarAreaRect, getZoomFactor, isFullscreen, isWCOEnabled, onDidChangeFullscreen } from '../../../../base/browser/browser.js';
 import { MenuBarVisibility, getTitleBarStyle, getMenuBarVisibility, hasCustomTitlebar, hasNativeTitlebar, DEFAULT_CUSTOM_TITLEBAR_HEIGHT, getWindowControlsStyle, WindowControlsStyle, TitlebarStyle, MenuSettings, hasNativeMenu } from '../../../../platform/window/common/window.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { StandardMouseEvent } from '../../../../base/browser/mouseEvent.js';
@@ -270,6 +270,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 	private readonly actionToolBarDisposable = this._register(new DisposableStore());
 	private readonly editorActionsChangeDisposable = this._register(new DisposableStore());
 	private actionToolBarElement!: HTMLElement;
+	private readonly leftToolBarDisposable = this._register(new DisposableStore());
 	private readonly centerAdjacentToolBarDisposable = this._register(new DisposableStore());
 
 	private globalToolbarMenu: IMenu | undefined;
@@ -298,7 +299,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 
 	constructor(
 		id: string,
-		targetWindow: CodeWindow,
+		private readonly targetWindow: CodeWindow,
 		private readonly editorGroupsContainer: IEditorGroupsContainer,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IConfigurationService protected readonly configurationService: IConfigurationService,
@@ -321,17 +322,17 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			[IEditorService, scopedEditorService]
 		)));
 
-		this.isAuxiliary = targetWindow.vscodeWindowId !== mainWindow.vscodeWindowId;
+		this.isAuxiliary = this.targetWindow.vscodeWindowId !== mainWindow.vscodeWindowId;
 
 		this.isCompactContextKey = IsCompactTitleBarContext.bindTo(this.contextKeyService);
 
 		this.titleBarStyle = getTitleBarStyle(this.configurationService);
 
-		this.windowTitle = this._register(this.instantiationService.createInstance(WindowTitle, targetWindow));
+		this.windowTitle = this._register(this.instantiationService.createInstance(WindowTitle, this.targetWindow));
 
 		this.hoverDelegate = this._register(createInstantHoverDelegate());
 
-		this.registerListeners(getWindowId(targetWindow));
+		this.registerListeners(getWindowId(this.targetWindow));
 	}
 
 	private registerListeners(targetWindowId: number): void {
@@ -489,6 +490,19 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 
 		// Center-Adjacent Toolbar (e.g., update indicator)
 		if (hasCustomTitlebar(this.configurationService, this.titleBarStyle)) {
+			const leftToolBarHost = append(this.leftContent, $('div.left-action-toolbar-container'));
+			this.createTrafficLightSpacer(leftToolBarHost);
+			const leftToolBarElement = append(leftToolBarHost, $('div.left-action-toolbar'));
+			this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, MenuId.TitleBarLeft, {
+				contextMenu: MenuId.TitleBarContext,
+				hiddenItemStrategy: HiddenItemStrategy.NoHide,
+				toolbarOptions: {
+					primaryGroup: () => true,
+				},
+				actionViewItemProvider: (action, options) => this.actionViewItemProvider(action, options),
+				hoverDelegate: this.hoverDelegate
+			}));
+
 			const centerAdjacentToolBarElement = append(this.rightContent, $('div.center-adjacent-toolbar-container'));
 			this.centerAdjacentToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, centerAdjacentToolBarElement, MenuId.TitleBarAdjacentCenter, {
 				contextMenu: MenuId.TitleBarContext,
@@ -579,6 +593,34 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		return this.element;
 	}
 
+	private createTrafficLightSpacer(parent: HTMLElement): void {
+		if (
+			!isMacintosh ||
+			!isNative ||
+			hasNativeTitlebar(
+				this.configurationService,
+				getTitleBarStyle(this.configurationService)
+			)
+		) {
+			return;
+		}
+
+		const spacer = prepend(parent, $('div.window-controls-container'));
+		spacer.style.width = '70px';
+		spacer.style.height = '100%';
+		spacer.style.flexShrink = '0';
+		spacer.style.order = '-1';
+		const updateSpacerVisibility = () => {
+			spacer.style.display = isFullscreen(this.targetWindow) ? 'none' : '';
+		};
+		updateSpacerVisibility();
+		this._register(onDidChangeFullscreen(windowId => {
+			if (windowId === getWindowId(this.targetWindow)) {
+				updateSpacerVisibility();
+			}
+		}));
+	}
+
 	private createTitle(): void {
 		this.titleDisposables.clear();
 
@@ -610,7 +652,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 	private actionViewItemProvider(action: IAction, options: IBaseActionViewItemOptions): IActionViewItem | undefined {
 
 		// --- Custom view items registered via IActionViewItemService
-		for (const menuId of [MenuId.TitleBar, MenuId.LayoutControlMenu]) {
+		for (const menuId of [MenuId.TitleBar, MenuId.TitleBarLeft, MenuId.LayoutControlMenu]) {
 			const customViewItem = this.actionViewItemService.lookUp(menuId, action.id);
 			if (customViewItem) {
 				const result = customViewItem(action, options, this.instantiationService, getWindowId(this.element ? getWindow(this.element) : mainWindow));

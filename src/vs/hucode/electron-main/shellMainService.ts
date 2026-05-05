@@ -77,6 +77,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
 	private overlayOccluded = false;
+	private projectsSidebarVisible = true;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
 
@@ -144,6 +145,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		return {
 			activeInstanceId: this.activeInstanceId,
+			projectsSidebarVisible: this.projectsSidebarVisible,
 			instances,
 		};
 	}
@@ -928,6 +930,15 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.window.win?.webContents.focus();
 	}
 
+	setProjectsSidebarVisible(visible: boolean): void {
+		if (this.projectsSidebarVisible === visible) {
+			return;
+		}
+
+		this.projectsSidebarVisible = visible;
+		this.emitState();
+	}
+
 	runActionInShell(request: INativeRunActionInWindowRequest): boolean {
 		const webContents = this.window.win?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
@@ -1223,6 +1234,14 @@ export class HucodeShellMainService extends Disposable
 
 	async focusShell(windowId: number): Promise<void> {
 		this.getOrCreateController(windowId).focusShell();
+	}
+
+	async setProjectsSidebarVisible(
+		windowId: number,
+		visible: boolean
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setProjectsSidebarVisible(visible);
 	}
 
 	async runActionInShell(

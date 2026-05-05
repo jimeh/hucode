@@ -9,7 +9,6 @@ import {
 	onDidChangeFullscreen,
 } from '../../../base/browser/browser.js';
 import { mainWindow } from '../../../base/browser/window.js';
-import { localize } from '../../../nls.js';
 import {
 	HiddenItemStrategy,
 	MenuWorkbenchToolBar,
@@ -81,12 +80,6 @@ export class ProjectsPart extends Part {
 
 		prepend(titleArea, $('.titlebar-drag-region'));
 		this.createTrafficLightSpacer(titleArea);
-
-		const label = append(
-			titleArea,
-			$('div.hucode-omni-projects-title-label')
-		);
-		label.textContent = localize('hucodeOmniProjectsTitle', 'Projects');
 
 		const navigationActions = append(
 			titleArea,

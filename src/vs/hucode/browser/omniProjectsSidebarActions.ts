@@ -5,12 +5,13 @@
 
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
+import { Codicon } from '../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
-import { Action2, registerAction2 } from
+import { Action2, MenuId, registerAction2 } from
 	'../../platform/actions/common/actions.js';
-import { ContextKeyExpr } from
+import { ContextKeyExpr, RawContextKey } from
 	'../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
@@ -27,9 +28,15 @@ import {
 	Parts,
 } from '../../workbench/services/layout/browser/layoutService.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
+import { Menus } from './menus.js';
 
 export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
 	'workbench.action.omniWindow.toggleProjectsSidebar';
+
+export const ProjectsSidebarHiddenContext = new RawContextKey<boolean>(
+	'hucode.projectsSidebarHidden',
+	false
+);
 
 const OmniShellOrHostedWorkspaceContext = ContextKeyExpr.or(
 	IsOmniWindowContext,
@@ -45,8 +52,26 @@ registerAction2(class extends Action2 {
 				'Omni-Window: Toggle Projects Sidebar'
 			),
 			category: Categories.View,
+			icon: Codicon.layoutSidebarLeft,
 			f1: true,
 			precondition: OmniShellOrHostedWorkspaceContext,
+			menu: [
+				{
+					id: Menus.SidebarTitleNavigation,
+					group: 'navigation',
+					when: IsOmniWindowContext,
+					order: 0,
+				},
+				{
+					id: MenuId.TitleBarLeft,
+					group: 'navigation',
+					when: ContextKeyExpr.and(
+						IsHostedOmniWorkspaceContext,
+						ProjectsSidebarHiddenContext
+					),
+					order: 0,
+				},
+			],
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib + 50,
 				when: OmniShellOrHostedWorkspaceContext,

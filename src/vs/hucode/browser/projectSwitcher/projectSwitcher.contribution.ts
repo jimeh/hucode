@@ -869,6 +869,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private readonly canGoBackContext: IContextKey<boolean>;
 	private readonly canGoForwardContext: IContextKey<boolean>;
 	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
+		projectsSidebarVisible: true,
 		instances: [],
 	};
 

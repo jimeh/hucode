@@ -89,18 +89,6 @@
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.hucode-omni-projects-title-label {
-	position: relative;
-	z-index: 1;
-	flex: 0 1 auto;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-weight: 600;
-}
-
-.monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-projects-title-navigation-actions {
 	position: relative;
 	z-index: 1;
