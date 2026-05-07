@@ -495,6 +495,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			const leftToolBarElement = append(leftToolBarHost, $('div.left-action-toolbar'));
 			this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, MenuId.TitleBarLeft, {
 				contextMenu: MenuId.TitleBarContext,
+				eventDebounceDelay: 0,
 				hiddenItemStrategy: HiddenItemStrategy.NoHide,
 				toolbarOptions: {
 					primaryGroup: () => true,

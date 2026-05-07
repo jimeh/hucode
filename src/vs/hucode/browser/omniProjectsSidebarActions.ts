@@ -11,7 +11,7 @@ import { localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
 import { Action2, MenuId, registerAction2 } from
 	'../../platform/actions/common/actions.js';
-import { ContextKeyExpr, RawContextKey } from
+import { ContextKeyExpr, IContextKeyService, RawContextKey } from
 	'../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
@@ -87,10 +87,34 @@ registerAction2(class extends Action2 {
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 
 		if (environmentService.isHostedOmniWorkspace) {
-			await accessor.get(IHucodeShellService).runActionInShell(
+			const contextKeyService = accessor.get(IContextKeyService);
+			const wasHidden =
+				ProjectsSidebarHiddenContext.getValue(contextKeyService) === true;
+			const projectsSidebarHidden =
+				ProjectsSidebarHiddenContext.bindTo(contextKeyService);
+			if (wasHidden) {
+				projectsSidebarHidden.set(false);
+			}
+
+			const didForward = await accessor.get(IHucodeShellService).runActionInShell(
 				getWindowId(mainWindow),
 				{ id: TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID, from: 'keybinding' }
 			);
+			if (!didForward) {
+				projectsSidebarHidden.set(wasHidden);
+				return;
+			}
+
+			if (!wasHidden) {
+				mainWindow.requestAnimationFrame(() => {
+					if (
+						ProjectsSidebarHiddenContext.getValue(contextKeyService)
+						=== wasHidden
+					) {
+						projectsSidebarHidden.set(true);
+					}
+				});
+			}
 			return;
 		}
 
