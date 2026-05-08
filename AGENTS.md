@@ -182,3 +182,8 @@ For detailed project overview, architecture, coding guidelines, and validation s
 - Keep Omni shell extension-filtering policy in
   `src/vs/workbench/services/extensions/common/hucodeExtensionEnablementPolicy.ts`
   so upstream extension scanner and enablement service edits stay thin.
+- Keep high-volume `ILocalPtyService` stream events lazy when exposing the
+  main-process `localPty` channel through `ProxyChannel.fromService`. Desktop
+  workbenches consume terminal data through `PtyHostWindow`, and eager buffering
+  of `onProcessData`, `onProcessReady`, or `onDidChangeProperty` can trigger
+  dev-mode `Event.buffer` leak warnings with no renderer listener attached.

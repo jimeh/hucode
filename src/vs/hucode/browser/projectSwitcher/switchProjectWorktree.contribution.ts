@@ -7,6 +7,7 @@ import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Codicon } from '../../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
@@ -263,10 +264,11 @@ function pickSwitchWorktree(
 	quickInputService: IQuickInputService,
 	picks: readonly SwitchWorktreeQuickPick[]
 ): Promise<SwitchWorktreeQuickPick | undefined> {
+	const disposables = new DisposableStore();
 	const quickPick =
-		quickInputService.createQuickPick<SwitchWorktreeQuickPick>({
+		disposables.add(quickInputService.createQuickPick<SwitchWorktreeQuickPick>({
 			useSeparators: true,
-		});
+		}));
 	quickPick.placeholder = localize(
 		'switchWorktreePlaceholder',
 		'Select a project worktree'
@@ -293,15 +295,15 @@ function pickSwitchWorktree(
 				return;
 			}
 			didResolve = true;
-			quickPick.dispose();
+			disposables.dispose();
 			resolve(pick);
 		};
-		quickPick.onDidAccept(() => {
+		disposables.add(quickPick.onDidAccept(() => {
 			acceptedPick = quickPick.selectedItems[0] ?? quickPick.activeItems[0];
 			quickPick.hide();
-		});
-		quickPick.onDidHide(() => finish(acceptedPick));
-		quickPick.onDidChangeValue(value => setItems(value));
+		}));
+		disposables.add(quickPick.onDidHide(() => finish(acceptedPick)));
+		disposables.add(quickPick.onDidChangeValue(value => setItems(value)));
 
 		quickPick.show();
 		quickPick.focusOnInput();
