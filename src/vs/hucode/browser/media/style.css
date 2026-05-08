@@ -31,7 +31,9 @@
 	box-sizing: border-box;
 }
 
-.hucode-omni-workbench:not(.nosidebar) .part.chatbar {
+/* Flush card parts against the sidebar, or the window edge when Omni hides it. */
+.hucode-omni-workbench:not(.nosidebar) .part.chatbar,
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.chatbar {
 	margin-left: 0;
 }
 
@@ -55,7 +57,8 @@
 	box-sizing: border-box;
 }
 
-.hucode-omni-workbench:not(.nosidebar) .part.panel {
+.hucode-omni-workbench:not(.nosidebar) .part.panel,
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.panel {
 	margin-left: 0;
 }
 

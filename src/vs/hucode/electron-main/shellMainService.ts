@@ -55,6 +55,7 @@ interface IHostedWorkbenchInstance {
 	configObjectUrl?: IIPCObjectUrl<INativeWindowConfiguration>;
 	trustedProcessIds: Set<number>;
 	trustedWebContentsId?: number;
+	attached: boolean;
 	state: HucodeHostedWorkbenchLifecycleState;
 	visible: boolean;
 	focused: boolean;
@@ -77,6 +78,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
 	private overlayOccluded = false;
+	private projectsSidebarVisible = true;
+	private projectSwitcherCanGoBack = false;
+	private projectSwitcherCanGoForward = false;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
 
@@ -144,6 +148,9 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		return {
 			activeInstanceId: this.activeInstanceId,
+			projectsSidebarVisible: this.projectsSidebarVisible,
+			projectSwitcherCanGoBack: this.projectSwitcherCanGoBack,
+			projectSwitcherCanGoForward: this.projectSwitcherCanGoForward,
 			instances,
 		};
 	}
@@ -265,8 +272,15 @@ class ResidentHostedWorkspacesController extends Disposable {
 		if (!visible && instance.view?.webContents.isFocused()) {
 			this.window.win?.webContents.focus();
 		}
-		instance.view?.setVisible(visible);
 		if (instance.view) {
+			if (visible) {
+				this.attachInstanceView(instance);
+				instance.view.setVisible(true);
+			} else {
+				instance.view.setVisible(false);
+				this.detachInstanceView(instance);
+			}
+
 			this.browserViewMainService.setHostedWebContentsVisible(
 				instance.view.webContents.id,
 				visible
@@ -277,16 +291,78 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
+	private attachInstanceView(instance: IHostedWorkbenchInstance): void {
 		if (!instance.view || !this.window.win) {
 			return;
 		}
 
 		// Re-adding an attached Electron View moves it above its siblings.
 		this.window.win.contentView.addChildView(instance.view);
+		instance.attached = true;
+	}
+
+	private detachInstanceView(instance: IHostedWorkbenchInstance): void {
+		if (!instance.view || !this.window.win || !instance.attached) {
+			return;
+		}
+
+		this.window.win.contentView.removeChildView(instance.view);
+		instance.attached = false;
+	}
+
+	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
+		if (!instance.view) {
+			return;
+		}
+
+		this.attachInstanceView(instance);
 		this.browserViewMainService.bringHostedBrowserViewsToFront(
 			instance.view.webContents.id
 		);
+	}
+
+	private setInstanceBounds(
+		instance: IHostedWorkbenchInstance,
+		bounds: IRectangle
+	): void {
+		if (!instance.view || !this.window.win) {
+			return;
+		}
+
+		const zoomFactor = this.window.win.webContents.getZoomFactor();
+		instance.view.setBounds({
+			x: Math.round(bounds.x * zoomFactor),
+			y: Math.round(bounds.y * zoomFactor),
+			width: Math.round(bounds.width * zoomFactor),
+			height: Math.round(bounds.height * zoomFactor),
+		});
+	}
+
+	private expandActiveInstanceToWindowLeft(): void {
+		const activeInstance = this.getActiveInstance();
+		if (
+			!activeInstance
+			|| !this.isViewActuallyVisible(activeInstance)
+			|| !this.window.win
+		) {
+			return;
+		}
+
+		const contentBounds = this.window.win.getContentBounds();
+		const width = this.bounds.width > 0
+			? Math.max(this.bounds.x + this.bounds.width, contentBounds.width)
+			: contentBounds.width;
+		const height = this.bounds.height > 0
+			? Math.max(this.bounds.height, contentBounds.height)
+			: contentBounds.height;
+
+		this.setInstanceBounds(activeInstance, {
+			x: 0,
+			y: 0,
+			width,
+			height,
+		});
+		this.bringInstanceToFront(activeInstance);
 	}
 
 	private bringActiveInstanceToFront(): void {
@@ -427,6 +503,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			projectId,
 			worktreePath,
 			trustedProcessIds: new Set<number>(),
+			attached: false,
 			state: 'loading',
 			visible: false,
 			focused: false,
@@ -556,7 +633,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			}
 		});
 
-		this.window.win?.contentView.addChildView(view);
+		this.attachInstanceView(instance);
 		this.layout(this.bounds);
 		this.setViewVisible(instance, makeActive);
 		this.trustView(instance);
@@ -644,16 +721,8 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		const zoomFactor = this.window.win.webContents.getZoomFactor();
-		const viewBounds = {
-			x: Math.round(bounds.x * zoomFactor),
-			y: Math.round(bounds.y * zoomFactor),
-			width: Math.round(bounds.width * zoomFactor),
-			height: Math.round(bounds.height * zoomFactor),
-		};
-
 		for (const instance of this.instancesById.values()) {
-			instance.view?.setBounds(viewBounds);
+			this.setInstanceBounds(instance, bounds);
 		}
 		this.bringActiveInstanceToFront();
 	}
@@ -740,7 +809,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			);
 			this.untrustView(instance);
 			instance.view.setVisible(false);
-			this.window.win?.contentView.removeChildView(instance.view);
+			this.detachInstanceView(instance);
 			instance.view.webContents.close({ waitForBeforeUnload: false });
 			instance.view = undefined;
 		}
@@ -926,6 +995,55 @@ class ResidentHostedWorkspacesController extends Disposable {
 	focusShell(): void {
 		this.lastFocusedSurface = 'shell';
 		this.window.win?.webContents.focus();
+	}
+
+	setProjectsSidebarVisible(visible: boolean): void {
+		if (this.projectsSidebarVisible === visible) {
+			return;
+		}
+
+		this.projectsSidebarVisible = visible;
+		if (!visible) {
+			this.expandActiveInstanceToWindowLeft();
+		}
+		this.emitState();
+	}
+
+	setProjectSwitcherNavigationState(
+		canGoBack: boolean,
+		canGoForward: boolean
+	): void {
+		if (
+			this.projectSwitcherCanGoBack === canGoBack &&
+			this.projectSwitcherCanGoForward === canGoForward
+		) {
+			return;
+		}
+
+		this.projectSwitcherCanGoBack = canGoBack;
+		this.projectSwitcherCanGoForward = canGoForward;
+		this.emitState();
+	}
+
+	runActionInShell(request: INativeRunActionInWindowRequest): boolean {
+		const webContents = this.window.win?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		try {
+			webContents.send(
+				'vscode:runAction',
+				this.withOmniForwardingMarker(request)
+			);
+			return true;
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to forward shell action ' +
+				`${request.id}: ${error}`
+			);
+			return false;
+		}
 	}
 
 	reloadWorkspace(): void {
@@ -1202,6 +1320,30 @@ export class HucodeShellMainService extends Disposable
 
 	async focusShell(windowId: number): Promise<void> {
 		this.getOrCreateController(windowId).focusShell();
+	}
+
+	async setProjectsSidebarVisible(
+		windowId: number,
+		visible: boolean
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setProjectsSidebarVisible(visible);
+	}
+
+	async setProjectSwitcherNavigationState(
+		windowId: number,
+		canGoBack: boolean,
+		canGoForward: boolean
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setProjectSwitcherNavigationState(canGoBack, canGoForward);
+	}
+
+	async runActionInShell(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId).runActionInShell(request);
 	}
 
 	async reloadWorkspace(windowId: number): Promise<void> {

@@ -108,9 +108,19 @@
 .hucode-project-switcher-actions {
 	display: flex;
 	align-items: center;
-	flex: 0 0 auto;
-	gap: 2px;
+	flex: 0 0 0;
+	gap: 0;
+	overflow: hidden;
 	margin-left: auto;
+	margin-right: 0;
+}
+
+.hucode-project-switcher-view .monaco-list-row:hover
+	.hucode-project-switcher-actions,
+.hucode-project-switcher-actions:focus-within {
+	flex-basis: auto;
+	gap: 2px;
+	overflow: visible;
 	margin-right: 6px;
 }
 
@@ -144,12 +154,7 @@
 
 .hucode-project-switcher-view .monaco-list-row:hover
 	.hucode-project-switcher-action-button,
-.hucode-project-switcher-view .monaco-list-row.focused
-	.hucode-project-switcher-action-button,
-.hucode-project-switcher-view .monaco-list-row.selected
-	.hucode-project-switcher-action-button,
-.hucode-project-switcher-view
-	.monaco-list-row.hucode-project-switcher-active-row
+.hucode-project-switcher-actions:focus-within
 	.hucode-project-switcher-action-button {
 	opacity: 1;
 	pointer-events: auto;

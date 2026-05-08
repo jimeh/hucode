@@ -128,10 +128,23 @@ class OmniWindowShellContribution extends Disposable
 				).then(() => undefined),
 		}));
 
+		this.updateProjectsSidebarVisibility();
+		this._register(this.layoutService.onDidChangePartVisibility(change => {
+			if (change.partId === Parts.SIDEBAR_PART) {
+				this.updateProjectsSidebarVisibility();
+			}
+		}));
 	}
 
 	private get windowId(): number {
 		return getWindowId(mainWindow);
+	}
+
+	private updateProjectsSidebarVisibility(): void {
+		void this.shellService.setProjectsSidebarVisible(
+			this.windowId,
+			this.layoutService.isVisible(Parts.SIDEBAR_PART)
+		);
 	}
 }
 

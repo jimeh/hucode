@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { alert } from '../../base/browser/ui/aria/aria.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { localize, localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
@@ -20,38 +19,6 @@ const panelCloseIcon = registerIcon(
 	Codicon.close,
 	localize('agentPanelCloseIcon', 'Icon to close the panel.')
 );
-const sidebarToggleClosedIcon = registerIcon(
-	'hucode-omni-sidebar-toggle-closed',
-	Codicon.layoutSidebarLeftOff,
-	localize(
-		'agentSidebarToggleClosedIcon',
-		'Icon for the Omni sidebar when closed.'
-	)
-);
-class ToggleSidebarVisibilityAction extends Action2 {
-
-	static readonly ID = 'workbench.action.omniToggleSidebarVisibility';
-
-	constructor() {
-		super({
-			id: ToggleSidebarVisibilityAction.ID,
-			title: localize2('toggleSidebar', 'Toggle Primary Side Bar Visibility'),
-			icon: sidebarToggleClosedIcon,
-			metadata: {
-				description: localize('openAndCloseSidebar', 'Open/Show and Close/Hide Sidebar'),
-			},
-			category: Categories.View,
-			f1: false,
-		});
-	}
-
-	run(_accessor: ServicesAccessor): void {
-		alert(localize(
-			'sidebarCollapseDisabled',
-			'Projects sidebar collapsing is currently disabled.'
-		));
-	}
-}
 
 class TogglePanelVisibilityAction extends Action2 {
 
@@ -81,7 +48,6 @@ class TogglePanelVisibilityAction extends Action2 {
 	}
 }
 
-registerAction2(ToggleSidebarVisibilityAction);
 registerAction2(TogglePanelVisibilityAction);
 
 // Floating window controls: always-on-top

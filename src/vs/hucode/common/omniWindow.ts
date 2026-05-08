@@ -46,6 +46,9 @@ export interface IHucodeHostedWorkbenchInstance {
  */
 export interface IHucodeHostedWorkspaceState {
 	readonly activeInstanceId?: string;
+	readonly projectsSidebarVisible: boolean;
+	readonly projectSwitcherCanGoBack: boolean;
+	readonly projectSwitcherCanGoForward: boolean;
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 }
 
@@ -87,6 +90,30 @@ export interface IHucodeShellService {
 	): Promise<void>;
 	focusWorkspace(windowId: number): Promise<void>;
 	focusShell(windowId: number): Promise<void>;
+	/**
+	 * Updates the current Omni Projects sidebar visibility for hosted
+	 * workbenches.
+	 */
+	setProjectsSidebarVisible(
+		windowId: number,
+		visible: boolean
+	): Promise<void>;
+	/**
+	 * Updates shell-owned Projects navigation affordance state for hosted
+	 * workbench titlebars.
+	 */
+	setProjectSwitcherNavigationState(
+		windowId: number,
+		canGoBack: boolean,
+		canGoForward: boolean
+	): Promise<void>;
+	/**
+	 * Sends an action invocation to the Omni shell renderer.
+	 */
+	runActionInShell(
+		windowId: number,
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean>;
 	/**
 	 * Sends a native menu/action invocation from the shell to the active
 	 * hosted workspace.

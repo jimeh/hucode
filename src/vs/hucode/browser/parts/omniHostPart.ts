@@ -46,6 +46,9 @@ export class OmniHostPart extends Part {
 	private screenshot: HTMLElement | undefined;
 	private screenshotImage: HTMLImageElement | undefined;
 	private state: IHucodeHostedWorkspaceState = {
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
 	private bodyHeight = 0;
