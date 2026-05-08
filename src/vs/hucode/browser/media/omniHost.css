@@ -88,6 +88,14 @@
 	-webkit-app-region: drag;
 }
 
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.nosidebar
+	.part.sidebar,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.nosidebar
+	.part.sidebar * {
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+}
+
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-projects-title-navigation-actions {
 	position: relative;

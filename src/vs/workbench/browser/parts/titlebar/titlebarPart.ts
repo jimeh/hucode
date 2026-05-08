@@ -493,7 +493,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			const leftToolBarHost = append(this.leftContent, $('div.left-action-toolbar-container'));
 			this.createTrafficLightSpacer(leftToolBarHost);
 			const leftToolBarElement = append(leftToolBarHost, $('div.left-action-toolbar'));
-			this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, MenuId.TitleBarLeft, {
+			const leftToolBar = this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, MenuId.TitleBarLeft, {
 				contextMenu: MenuId.TitleBarContext,
 				eventDebounceDelay: 0,
 				hiddenItemStrategy: HiddenItemStrategy.NoHide,
@@ -503,6 +503,16 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 				actionViewItemProvider: (action, options) => this.actionViewItemProvider(action, options),
 				hoverDelegate: this.hoverDelegate
 			}));
+			const updateLeftToolBarVisibility = () => {
+				leftToolBarHost.classList.toggle(
+					'has-actions',
+					!leftToolBarElement.classList.contains('has-no-actions')
+				);
+			};
+			updateLeftToolBarVisibility();
+			this.leftToolBarDisposable.add(
+				leftToolBar.onDidChangeMenuItems(updateLeftToolBarVisibility)
+			);
 
 			const centerAdjacentToolBarElement = append(this.rightContent, $('div.center-adjacent-toolbar-container'));
 			this.centerAdjacentToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, centerAdjacentToolBarElement, MenuId.TitleBarAdjacentCenter, {

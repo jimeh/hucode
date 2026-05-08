@@ -97,6 +97,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
   pointer-transparent over the hosted surface and re-add the active hosted view
   when showing, laying out, or focusing it so Electron keeps it topmost.
   Otherwise hosted titlebar controls can turn into shell window-drag hit areas.
+- Hidden resident hosted workbenches should be removed from the window
+  `contentView`, not just `setVisible(false)`. Invisible Electron view siblings
+  can still disturb native hit testing when several workbenches restore at
+  startup.
 - Omni sidebar startup should open `workbench.hucode.projectSwitcher`
   directly. Restoring the generic default sidebar container can briefly render
   Explorer/"No Folder Opened" before Projects replaces it.
@@ -159,6 +163,10 @@ For detailed project overview, architecture, coding guidelines, and validation s
   compiled output. Run `npm run hucode:watch` for incremental rebuilds while
   developing, or `npm run hucode:compile` before launch for a full one-shot
   rebuild.
+- When launching `npm run hucode:run` from an integrated Hucode extension-host
+  terminal, clear inherited Electron/VS Code process env such as
+  `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
+  can run as Node and fail before the Electron main process starts.
 - `npm run hucode:compile` must build the client, built-in extension outputs,
   and extension media. Using only `transpile-client` cleans `out/` but leaves
   files like `extensions/git-base/out/extension.js` and `codicon.ttf` missing.

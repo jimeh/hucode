@@ -409,13 +409,15 @@
 	-webkit-app-region: no-drag;
 }
 
-.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container:has(> .left-action-toolbar:not(.has-no-actions)) {
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container.has-actions {
 	display: flex;
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar *,
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar .action-item,
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-action-toolbar-container > .left-action-toolbar .action-label {
+	pointer-events: auto;
 	-webkit-app-region: no-drag;
 }
 
