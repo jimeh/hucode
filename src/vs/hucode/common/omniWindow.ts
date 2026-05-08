@@ -47,6 +47,8 @@ export interface IHucodeHostedWorkbenchInstance {
 export interface IHucodeHostedWorkspaceState {
 	readonly activeInstanceId?: string;
 	readonly projectsSidebarVisible: boolean;
+	readonly projectSwitcherCanGoBack: boolean;
+	readonly projectSwitcherCanGoForward: boolean;
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 }
 
@@ -95,6 +97,15 @@ export interface IHucodeShellService {
 	setProjectsSidebarVisible(
 		windowId: number,
 		visible: boolean
+	): Promise<void>;
+	/**
+	 * Updates shell-owned Projects navigation affordance state for hosted
+	 * workbench titlebars.
+	 */
+	setProjectSwitcherNavigationState(
+		windowId: number,
+		canGoBack: boolean,
+		canGoForward: boolean
 	): Promise<void>;
 	/**
 	 * Sends an action invocation to the Omni shell renderer.

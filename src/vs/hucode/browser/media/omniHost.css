@@ -99,6 +99,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-projects-title-navigation-actions {
 	position: relative;
+	top: -1px;
 	z-index: 1;
 	flex: 0 0 auto;
 	-webkit-app-region: no-drag;
@@ -107,10 +108,22 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-projects-title-actions {
 	position: relative;
+	top: -1px;
 	z-index: 1;
 	flex: 0 0 auto;
 	margin-left: auto;
 	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-navigation-actions
+	.monaco-toolbar
+	.actions-container,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-actions
+	.monaco-toolbar
+	.actions-container {
+	gap: 4px;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window

@@ -12,8 +12,10 @@ import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize, localize2 } from '../../../nls.js';
-import { Action2, registerAction2 } from
+import { Action2, MenuId, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
+import { ContextKeyExpr } from
+	'../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
 	'../../../platform/instantiation/common/instantiation.js';
 import { KeybindingWeight } from
@@ -36,6 +38,10 @@ import { IHostService } from
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
 import {
+	IsHostedOmniWorkspaceContext,
+	IsOmniWindowContext,
+} from '../../../workbench/common/contextkeys.js';
+import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -48,6 +54,8 @@ import {
 } from '../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { IHucodeShellService } from '../../common/omniWindow.js';
 import { Menus } from '../menus.js';
+import { ProjectsSidebarHiddenContext } from
+	'../omniProjectsSidebarActions.js';
 import {
 	getWorktreeDisplayLabel,
 	pathsEqual,
@@ -462,11 +470,23 @@ registerAction2(class extends Action2 {
 				'Switch to Project Worktree...'
 			),
 			icon: Codicon.search,
-			menu: {
-				id: Menus.SidebarTitleNavigation,
-				group: 'navigation',
-				order: 3,
-			},
+			menu: [
+				{
+					id: Menus.SidebarTitle,
+					group: 'navigation',
+					when: IsOmniWindowContext,
+					order: 5,
+				},
+				{
+					id: MenuId.TitleBarLeft,
+					group: 'navigation',
+					when: ContextKeyExpr.and(
+						IsHostedOmniWorkspaceContext,
+						ProjectsSidebarHiddenContext
+					),
+					order: 3,
+				},
+			],
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
 				primary: 0,

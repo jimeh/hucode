@@ -36,7 +36,7 @@ import { URI } from '../../../base/common/uri.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
-import { IContextKey, IContextKeyService, RawContextKey } from
+import { IContextKey, IContextKeyService } from
 	'../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from
 	'../../../platform/contextview/browser/contextView.js';
@@ -81,8 +81,12 @@ import {
 } from '../../common/omniWindow.js';
 import {
 	CREATE_WORKTREE_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
 	getWorktreeDisplayLabel,
 	pathsEqual,
+	ProjectSwitcherCanGoBackContext,
+	ProjectSwitcherCanGoForwardContext,
 	RENAME_PROJECT_COMMAND_ID,
 	RENAME_WORKTREE_COMMAND_ID,
 } from './projectSwitcherCommon.js';
@@ -94,8 +98,6 @@ import {
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
 const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
-const GO_BACK_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goBack';
-const GO_FORWARD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goForward';
 const OPEN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.openProject';
 const OPEN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.openWorktree';
 const RESET_PROJECT_LABEL_COMMAND_ID =
@@ -128,23 +130,6 @@ const PROJECT_SWITCHER_VIEW_STATE_VERSION = 1;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
-
-const ProjectSwitcherCanGoBackContext = new RawContextKey<boolean>(
-	'hucode.projectSwitcher.canGoBack',
-	false,
-	localize(
-		'projectSwitcherCanGoBack',
-		'Whether the Hucode project switcher can navigate back'
-	)
-);
-const ProjectSwitcherCanGoForwardContext = new RawContextKey<boolean>(
-	'hucode.projectSwitcher.canGoForward',
-	false,
-	localize(
-		'projectSwitcherCanGoForward',
-		'Whether the Hucode project switcher can navigate forward'
-	)
-);
 
 type ProjectSwitcherSection = 'pinned' | 'unpinned';
 
@@ -870,6 +855,8 @@ export class ProjectSwitcherWidget extends Disposable {
 	private readonly canGoForwardContext: IContextKey<boolean>;
 	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
 		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
 
@@ -910,6 +897,13 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.saveState();
 			this.canGoBackContext.set(false);
 			this.canGoForwardContext.set(false);
+			if (this.environmentService.isOmniWindow) {
+				void this.shellService.setProjectSwitcherNavigationState(
+					this.windowId,
+					false,
+					false
+				);
+			}
 			if (currentProjectSwitcherWidget === this) {
 				currentProjectSwitcherWidget = undefined;
 			}
@@ -1829,12 +1823,21 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private updateNavigationContexts(): void {
-		this.canGoBackContext.set(this.worktreeNavigationIndex > 0);
-		this.canGoForwardContext.set(
+		const canGoBack = this.worktreeNavigationIndex > 0;
+		const canGoForward =
 			this.worktreeNavigationIndex >= 0 &&
 			this.worktreeNavigationIndex <
-			this.worktreeNavigationHistory.length - 1
-		);
+			this.worktreeNavigationHistory.length - 1;
+
+		this.canGoBackContext.set(canGoBack);
+		this.canGoForwardContext.set(canGoForward);
+		if (this.environmentService.isOmniWindow) {
+			void this.shellService.setProjectSwitcherNavigationState(
+				this.windowId,
+				canGoBack,
+				canGoForward
+			);
+		}
 	}
 
 	saveState(): void {
