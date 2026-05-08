@@ -146,6 +146,7 @@ import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+	type HucodeExtensionEnablementPolicy,
 } from '../../workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js';
 
 const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
@@ -168,7 +169,7 @@ const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
 class HucodeOmniWorkbenchEnvironmentService
 	extends NativeWorkbenchEnvironmentService {
 
-	get hucodeExtensionEnablementPolicy() {
+	get hucodeExtensionEnablementPolicy(): HucodeExtensionEnablementPolicy {
 		return HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY;
 	}
 

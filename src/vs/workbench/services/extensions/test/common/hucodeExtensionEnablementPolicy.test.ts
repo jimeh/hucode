@@ -185,7 +185,8 @@ suite('HucodeExtensionEnablementPolicy', () => {
 				name,
 				publisher,
 				engines: { vscode: '^1.0.0' },
-				...manifest
+				...manifest,
+				version: manifest.version ?? '1.0.0'
 			},
 			location: URI.file(id),
 			targetPlatform: TargetPlatform.UNDEFINED,
