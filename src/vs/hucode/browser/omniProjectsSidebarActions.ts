@@ -35,9 +35,17 @@ import { Menus } from './menus.js';
 export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
 	'workbench.action.omniWindow.toggleProjectsSidebar';
 
+export const PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING =
+	'hucode.omni.titleBar.projectControls.enabled';
+
 export const ProjectsSidebarHiddenContext = new RawContextKey<boolean>(
 	'hucode.projectsSidebarHidden',
 	false
+);
+
+export const ProjectsTitleBarControlsEnabledContext = ContextKeyExpr.equals(
+	`config.${PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING}`,
+	true
 );
 
 const OmniShellOrHostedWorkspaceContext = ContextKeyExpr.or(
@@ -69,7 +77,8 @@ registerAction2(class extends Action2 {
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,
-						ProjectsSidebarHiddenContext
+						ProjectsSidebarHiddenContext,
+						ProjectsTitleBarControlsEnabledContext
 					),
 					order: 0,
 				},

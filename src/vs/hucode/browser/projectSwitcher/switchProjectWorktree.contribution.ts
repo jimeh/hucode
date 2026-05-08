@@ -56,7 +56,10 @@ import {
 } from '../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { IHucodeShellService } from '../../common/omniWindow.js';
 import { Menus } from '../menus.js';
-import { ProjectsSidebarHiddenContext } from
+import {
+	ProjectsSidebarHiddenContext,
+	ProjectsTitleBarControlsEnabledContext,
+} from
 	'../omniProjectsSidebarActions.js';
 import {
 	getWorktreeDisplayLabel,
@@ -484,7 +487,8 @@ registerAction2(class extends Action2 {
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,
-						ProjectsSidebarHiddenContext
+						ProjectsSidebarHiddenContext,
+						ProjectsTitleBarControlsEnabledContext
 					),
 					order: 3,
 				},

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { localize2 } from '../../nls.js';
+import { localize, localize2 } from '../../nls.js';
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
@@ -18,16 +18,28 @@ import { Categories } from
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
 import {
+	ConfigurationScope,
+	Extensions as ConfigurationExtensions,
+	IConfigurationRegistry,
+} from
+	'../../platform/configuration/common/configurationRegistry.js';
+import {
 	ContextKeyExpr,
 	type ContextKeyExpression,
 	IContextKeyService,
 } from
 	'../../platform/contextkey/common/contextkey.js';
+import { Registry } from '../../platform/registry/common/platform.js';
 import { IWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/common/environmentService.js';
-import { IsHostedOmniWorkspaceContext } from
+import {
+	IsCompactTitleBarContext,
+	IsHostedOmniWorkspaceContext,
+} from
 	'../../workbench/common/contextkeys.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
+import { ToggleTitleBarConfigAction } from
+	'../../workbench/browser/parts/titlebar/titlebarActions.js';
 import {
 	IWorkbenchContribution,
 	registerWorkbenchContribution2,
@@ -38,7 +50,11 @@ import { IsDevelopmentContext } from
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
-import { ProjectsSidebarHiddenContext } from './omniProjectsSidebarActions.js';
+import {
+	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
+	ProjectsSidebarHiddenContext,
+	ProjectsTitleBarControlsEnabledContext,
+} from './omniProjectsSidebarActions.js';
 import {
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
@@ -48,6 +64,47 @@ import {
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
+
+Registry.as<IConfigurationRegistry>(
+	ConfigurationExtensions.Configuration
+).registerConfiguration({
+	id: 'hucode',
+	order: 8,
+	title: localize('hucodeConfigurationTitle', "Hucode"),
+	type: 'object',
+	properties: {
+		[PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING]: {
+			type: 'boolean',
+			default: true,
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.projectsTitleBarControls',
+				"Controls whether Hucode project controls are shown in the custom title bar when the Projects sidebar is hidden."
+			),
+		},
+	},
+});
+
+class ToggleProjectTitleBarControls extends ToggleTitleBarConfigAction {
+
+	constructor() {
+		super(
+			PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
+			localize('toggle.hucodeProjectControls', "Project Controls"),
+			localize(
+				'toggle.hucodeProjectControlsDescription',
+				"Toggle visibility of Hucode project controls in the title bar"
+			),
+			3.5,
+			ContextKeyExpr.and(
+				IsHostedOmniWorkspaceContext,
+				IsCompactTitleBarContext.toNegated()
+			)
+		);
+	}
+}
+
+registerAction2(ToggleProjectTitleBarControls);
 
 class HostedOmniWorkspaceReadyContribution extends Disposable
 	implements IWorkbenchContribution {
@@ -123,6 +180,7 @@ function registerHostedProjectNavigationAction(
 				precondition: ContextKeyExpr.and(
 					IsHostedOmniWorkspaceContext,
 					ProjectsSidebarHiddenContext,
+					ProjectsTitleBarControlsEnabledContext,
 					enabledContext
 				),
 				menu: {
@@ -130,7 +188,8 @@ function registerHostedProjectNavigationAction(
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,
-						ProjectsSidebarHiddenContext
+						ProjectsSidebarHiddenContext,
+						ProjectsTitleBarControlsEnabledContext
 					),
 					order,
 				},
