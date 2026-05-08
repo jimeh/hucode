@@ -26,6 +26,7 @@ import { IStorageService, StorageScope } from '../../../../platform/storage/comm
 import { Parts, IWorkbenchLayoutService, ActivityBarPosition, LayoutSettings, EditorActionsLocation, EditorTabsMode } from '../../../services/layout/browser/layoutService.js';
 import { createActionViewItem, fillInActionBarActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { Action2, IMenu, IMenuService, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { HucodeMenuId } from '../../../../platform/actions/common/hucodeMenuIds.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { WindowTitle } from './windowTitle.js';
@@ -490,10 +491,10 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 
 		// Center-Adjacent Toolbar (e.g., update indicator)
 		if (hasCustomTitlebar(this.configurationService, this.titleBarStyle)) {
-			const leftToolBarHost = append(this.leftContent, $('div.left-action-toolbar-container'));
+			const leftToolBarHost = append(this.leftContent, $('div.hucode-titlebar-left-action-toolbar-container'));
 			this.createTrafficLightSpacer(leftToolBarHost);
-			const leftToolBarElement = append(leftToolBarHost, $('div.left-action-toolbar'));
-			const leftToolBar = this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, MenuId.TitleBarLeft, {
+			const leftToolBarElement = append(leftToolBarHost, $('div.hucode-titlebar-left-action-toolbar'));
+			const leftToolBar = this.leftToolBarDisposable.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, leftToolBarElement, HucodeMenuId.TitleBarLeft, {
 				contextMenu: MenuId.TitleBarContext,
 				eventDebounceDelay: 0,
 				hiddenItemStrategy: HiddenItemStrategy.NoHide,
@@ -663,7 +664,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 	private actionViewItemProvider(action: IAction, options: IBaseActionViewItemOptions): IActionViewItem | undefined {
 
 		// --- Custom view items registered via IActionViewItemService
-		for (const menuId of [MenuId.TitleBar, MenuId.TitleBarLeft, MenuId.LayoutControlMenu]) {
+		for (const menuId of [MenuId.TitleBar, HucodeMenuId.TitleBarLeft, MenuId.LayoutControlMenu]) {
 			const customViewItem = this.actionViewItemService.lookUp(menuId, action.id);
 			if (customViewItem) {
 				const result = customViewItem(action, options, this.instantiationService, getWindowId(this.element ? getWindow(this.element) : mainWindow));

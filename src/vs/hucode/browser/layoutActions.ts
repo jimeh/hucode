@@ -19,39 +19,6 @@ const panelCloseIcon = registerIcon(
 	Codicon.close,
 	localize('agentPanelCloseIcon', 'Icon to close the panel.')
 );
-const sidebarToggleClosedIcon = registerIcon(
-	'hucode-omni-sidebar-toggle-closed',
-	Codicon.layoutSidebarLeftOff,
-	localize(
-		'agentSidebarToggleClosedIcon',
-		'Icon for the Omni sidebar when closed.'
-	)
-);
-class ToggleSidebarVisibilityAction extends Action2 {
-
-	static readonly ID = 'workbench.action.omniToggleSidebarVisibility';
-
-	constructor() {
-		super({
-			id: ToggleSidebarVisibilityAction.ID,
-			title: localize2('toggleSidebar', 'Toggle Primary Side Bar Visibility'),
-			icon: sidebarToggleClosedIcon,
-			metadata: {
-				description: localize('openAndCloseSidebar', 'Open/Show and Close/Hide Sidebar'),
-			},
-			category: Categories.View,
-			f1: false,
-		});
-	}
-
-	run(accessor: ServicesAccessor): void {
-		const layoutService = accessor.get(IWorkbenchLayoutService);
-		layoutService.setPartHidden(
-			layoutService.isVisible(Parts.SIDEBAR_PART),
-			Parts.SIDEBAR_PART
-		);
-	}
-}
 
 class TogglePanelVisibilityAction extends Action2 {
 
@@ -81,7 +48,6 @@ class TogglePanelVisibilityAction extends Action2 {
 	}
 }
 
-registerAction2(ToggleSidebarVisibilityAction);
 registerAction2(TogglePanelVisibilityAction);
 
 // Floating window controls: always-on-top

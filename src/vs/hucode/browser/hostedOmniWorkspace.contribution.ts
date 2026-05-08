@@ -9,8 +9,10 @@ import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../base/common/themables.js';
-import { Action2, MenuId, registerAction2 } from
+import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
+import { HucodeMenuId } from
+	'../../platform/actions/common/hucodeMenuIds.js';
 import { Categories } from
 	'../../platform/action/common/actionCommonCategories.js';
 import { ServicesAccessor } from
@@ -124,7 +126,7 @@ function registerHostedProjectNavigationAction(
 					enabledContext
 				),
 				menu: {
-					id: MenuId.TitleBarLeft,
+					id: HucodeMenuId.TitleBarLeft,
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,

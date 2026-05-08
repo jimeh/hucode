@@ -9,8 +9,10 @@ import { Codicon } from '../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
-import { Action2, MenuId, registerAction2 } from
+import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
+import { HucodeMenuId } from
+	'../../platform/actions/common/hucodeMenuIds.js';
 import { ContextKeyExpr, IContextKeyService, RawContextKey } from
 	'../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
@@ -63,7 +65,7 @@ registerAction2(class extends Action2 {
 					order: 0,
 				},
 				{
-					id: MenuId.TitleBarLeft,
+					id: HucodeMenuId.TitleBarLeft,
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,

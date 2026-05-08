@@ -12,8 +12,10 @@ import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize, localize2 } from '../../../nls.js';
-import { Action2, MenuId, registerAction2 } from
+import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
+import { HucodeMenuId } from
+	'../../../platform/actions/common/hucodeMenuIds.js';
 import { ContextKeyExpr } from
 	'../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
@@ -478,7 +480,7 @@ registerAction2(class extends Action2 {
 					order: 5,
 				},
 				{
-					id: MenuId.TitleBarLeft,
+					id: HucodeMenuId.TitleBarLeft,
 					group: 'navigation',
 					when: ContextKeyExpr.and(
 						IsHostedOmniWorkspaceContext,
