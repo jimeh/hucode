@@ -40,6 +40,20 @@ VS Code code that Hucode customizes.
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
 
+## CI Workflow
+
+- Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
+  default. Do not reintroduce upstream VS Code self-hosted `1ES.Pool` runners or
+  larger macOS runners such as `macos-14-xlarge` unless the cost and need are
+  explicitly accepted.
+- Keep disabled upstream VS Code workflows in `.github/workflows.disabled/`
+  with their contents unchanged where practical. Only Hucode-owned workflows
+  should live in `.github/workflows/` by default.
+- Keep PR CI Hucode-focused: product mixin validation, compile/hygiene/lint/type
+  gates, Node unit tests, and targeted Hucode Electron tests. Treat full
+  upstream VS Code electron/browser/remote/integration/smoke matrices as a
+  separate deliberate decision, not the default fork baseline.
+
 ## Omni Shell Boundaries
 
 - Hucode macOS desktop workbenches default `window.menuStyle` to `native`

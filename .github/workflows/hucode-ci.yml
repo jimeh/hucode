@@ -1,0 +1,167 @@
+name: Hucode CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - 'series-*'
+      - 'release/*'
+  push:
+    branches:
+      - main
+      - 'series-*'
+      - 'release/*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+  VSCODE_QUALITY: stable
+
+jobs:
+  compile-hygiene:
+    name: Compile & Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libkrb5-dev \
+            libnotify-bin \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config
+
+      - name: Install dependencies
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Hucode mixin
+        run: npm run hucode:prepare
+
+      - name: Validate Hucode mixin
+        run: npm run hucode:validate
+
+      - name: Type check /build/ scripts
+        run: npm run typecheck
+        working-directory: build
+
+      - name: Prepare built-in extensions cache key
+        run: node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts > .build/builtindepshash
+
+      - name: Restore built-in extensions cache
+        id: cache-builtin-extensions
+        uses: actions/cache/restore@v5
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-${{ hashFiles('.build/builtindepshash') }}"
+
+      - name: Download built-in extensions
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile & Hygiene
+        run: |
+          npm exec -- npm-run-all2 -lp \
+            core-ci \
+            hygiene \
+            eslint \
+            valid-layers-check \
+            define-class-fields-check \
+            vscode-dts-compile-check \
+            tsec-compile-check \
+            test-build-scripts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check cyclic dependencies
+        run: node build/lib/checkCyclicDependencies.ts out-build
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libgbm1 \
+            libgtk-3-0 \
+            libkrb5-dev \
+            libxkbfile-dev \
+            pkg-config \
+            xvfb
+
+      - name: Install dependencies
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile Hucode
+        run: npm run hucode:compile
+
+      - name: Run Node unit tests
+        run: npm run test-node
+
+      - name: Run Hucode Electron unit tests
+        run: |
+          xvfb-run ./scripts/test.sh \
+            --run \
+            src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts
