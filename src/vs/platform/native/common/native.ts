@@ -138,6 +138,7 @@ export interface ICommonNativeHostService {
 	 * @param args CLI arguments to pass to the sibling application.
 	 */
 	launchSiblingApp(args?: string[]): Promise<void>;
+	openOmniWindow(): Promise<void>;
 
 	isFullScreen(options?: INativeHostOptions): Promise<boolean>;
 	toggleFullScreen(options?: INativeHostOptions): Promise<void>;
