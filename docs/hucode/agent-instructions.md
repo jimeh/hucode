@@ -107,6 +107,16 @@ VS Code code that Hucode customizes.
 - The Omni Projects sidebar should keep a real minimum width. Letting it shrink
   too far effectively hides it and strands the macOS traffic-light area.
 
+## Learnings
+
+- In a clean worktree, run `npm run hucode:prepare` before
+  `npm run hucode:validate`. Validation reads generated files under
+  `.build/distro/mixin/stable/`, so prepare must run first.
+- Omni Projects title controls mirror the workbench titlebar's optional
+  `titleBar.border`. When present, such as in Dark 2026, that border reduces
+  the effective titlebar content height by 1px and changes toolbar icon
+  centering.
+
 ## Projects And Worktrees
 
 - The project manager is a single Electron main-process service exposed to

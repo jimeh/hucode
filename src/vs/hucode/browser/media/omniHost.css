@@ -70,13 +70,16 @@
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.sidebar > .hucode-omni-projects-title {
+	box-sizing: border-box;
 	display: flex;
 	position: relative;
 	align-items: center;
 	gap: 8px;
 	height: 35px;
+	line-height: 22px;
 	min-width: 0;
 	padding: 0 8px;
+	border-bottom: 1px solid var(--vscode-titleBar-border);
 	-webkit-app-region: drag;
 }
 
@@ -97,22 +100,21 @@
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.hucode-omni-projects-title-navigation-actions {
+	.hucode-omni-projects-title-navigation-actions,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-actions {
+	display: flex;
 	position: relative;
-	top: -1px;
+	align-items: center;
 	z-index: 1;
 	flex: 0 0 auto;
+	height: 100%;
 	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-projects-title-actions {
-	position: relative;
-	top: -1px;
-	z-index: 1;
-	flex: 0 0 auto;
 	margin-left: auto;
-	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
