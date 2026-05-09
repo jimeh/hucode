@@ -56,7 +56,9 @@ VS Code code that Hucode customizes.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the
-  failing check.
+  failing check. Run hygiene before `core-ci`; the compile step can generate
+  `extensions/*/tsconfig.tsbuildinfo`, which hygiene flags as missing copyright
+  headers if it runs afterward.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or

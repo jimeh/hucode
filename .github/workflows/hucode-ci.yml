@@ -95,13 +95,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run hygiene
+        run: npm run hygiene
+
       - name: Compile core
         run: npm run core-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run hygiene
-        run: npm run hygiene
 
       - name: Run ESLint
         run: npm run eslint
