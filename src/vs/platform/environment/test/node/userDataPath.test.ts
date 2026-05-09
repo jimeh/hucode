@@ -59,5 +59,21 @@ suite('User data path', () => {
 		}
 	});
 
+	test('getUserDataPath - VSCODE_DEV uses product-specific suffix', () => {
+		const origDev = process.env['VSCODE_DEV'];
+		try {
+			process.env['VSCODE_DEV'] = '1';
+
+			const path = getUserDataPath(parseArgs(process.argv, OPTIONS), 'Hucode');
+			assert.ok(path.endsWith('Hucode-dev'));
+		} finally {
+			if (typeof origDev === 'string') {
+				process.env['VSCODE_DEV'] = origDev;
+			} else {
+				delete process.env['VSCODE_DEV'];
+			}
+		}
+	});
+
 	ensureNoDisposablesAreLeakedInTestSuite();
 });
