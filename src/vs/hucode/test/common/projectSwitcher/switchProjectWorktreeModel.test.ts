@@ -14,6 +14,7 @@ import {
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
 	getLoadedProjectWorktreeTargets,
+	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
 	SwitchWorktreeQuickPick,
 	withSwitchWorktreeSeparators,
@@ -139,6 +140,21 @@ suite('SwitchProjectWorktreeModel', () => {
 		assert.strictEqual(
 			getDefaultSwitchWorktreeActivePick([current]),
 			current
+		);
+	});
+
+	test('filters quick switch picks to loaded worktrees', () => {
+		const current = createPick({
+			projectId: 'current',
+			isCurrent: true,
+			isLoaded: true,
+		});
+		const loaded = createPick({ projectId: 'loaded', isLoaded: true });
+		const notLoaded = createPick({ projectId: 'not-loaded' });
+
+		assert.deepStrictEqual(
+			getLoadedSwitchWorktreePicks([current, loaded, notLoaded]),
+			[current, loaded]
 		);
 	});
 

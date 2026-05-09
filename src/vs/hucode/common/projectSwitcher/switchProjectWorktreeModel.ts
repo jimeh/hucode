@@ -98,6 +98,12 @@ export function getDefaultSwitchWorktreeActivePick(
 	return picks.find(pick => !pick.isCurrent) ?? picks[0];
 }
 
+export function getLoadedSwitchWorktreePicks(
+	picks: readonly SwitchWorktreeQuickPick[]
+): SwitchWorktreeQuickPick[] {
+	return picks.filter(pick => pick.isLoaded);
+}
+
 export function getVisualProjectWorktreeTargets(
 	projects: readonly ProjectRecord[]
 ): IProjectSwitcherSelectionTarget[] {

@@ -43,6 +43,14 @@ export const SWITCH_NEXT_LOADED_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.switchNextLoadedWorktree';
 export const SWITCH_LAST_ACTIVE_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.switchLastActiveWorktree';
+export const QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID =
+	'hucode.projectSwitcher.quickSwitchLoadedWorktree';
+export const QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_NEXT_COMMAND_ID =
+	'hucode.projectSwitcher.quickSwitchLoadedWorktreeNavigateNext';
+export const QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_PREVIOUS_COMMAND_ID =
+	'hucode.projectSwitcher.quickSwitchLoadedWorktreeNavigatePrevious';
+export const QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY =
+	'inQuickSwitchLoadedProjectWorktree';
 export const CREATE_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.createWorktree';
 export const RENAME_PROJECT_COMMAND_ID =
