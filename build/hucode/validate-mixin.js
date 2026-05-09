@@ -45,9 +45,12 @@ export async function validateMixin(quality = 'stable') {
 	);
 	const generated = await readJson(generatedPath);
 	const rootProduct = await readJson(path.join(repoRoot, 'product.json'));
+	const sourceProduct = await readJson(
+		path.join(repoRoot, 'build', 'hucode', 'mixin', quality, 'product.json')
+	);
 
 	assert.strictEqual(generated.nameShort, 'Hucode');
-	assert.strictEqual(generated.hucodeVersion, '0.0.5');
+	assert.strictEqual(generated.hucodeVersion, sourceProduct.hucodeVersion);
 	assert.strictEqual(generated.applicationName, 'hucode');
 	assert.strictEqual(generated.dataFolderName, '.hucode');
 	assert.strictEqual(generated.urlProtocol, 'hucode');
