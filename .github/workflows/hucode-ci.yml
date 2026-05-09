@@ -95,18 +95,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compile & Hygiene
-        run: |
-          npm exec -- npm-run-all2 -lp \
-            core-ci \
-            hygiene \
-            eslint \
-            valid-layers-check \
-            define-class-fields-check \
-            vscode-dts-compile-check \
-            test-build-scripts
+      - name: Compile core
+        run: npm run core-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run hygiene
+        run: npm run hygiene
+
+      - name: Run ESLint
+        run: npm run eslint
+
+      - name: Check layers
+        run: npm run valid-layers-check
+
+      - name: Check class fields
+        run: npm run define-class-fields-check
+
+      - name: Check VS Code API typings
+        run: npm run vscode-dts-compile-check
+
+      - name: Test build scripts
+        run: npm run test-build-scripts
 
       - name: Check cyclic dependencies
         run: node build/lib/checkCyclicDependencies.ts out-build

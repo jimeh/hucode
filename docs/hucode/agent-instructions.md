@@ -53,6 +53,10 @@ VS Code code that Hucode customizes.
   gates, Node unit tests, and targeted Hucode Electron tests. Treat full
   upstream VS Code electron/browser/remote/integration/smoke matrices as a
   separate deliberate decision, not the default fork baseline.
+- Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
+  `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
+  can leave GitHub Actions showing only a generic cancellation line and hide the
+  failing check.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
