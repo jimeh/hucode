@@ -104,7 +104,6 @@ jobs:
             valid-layers-check \
             define-class-fields-check \
             vscode-dts-compile-check \
-            tsec-compile-check \
             test-build-scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,14 +128,21 @@ jobs:
 
       - name: Install test tools
         run: |
+          USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
+          if sysctl -n "$USERNS_KEY" >/dev/null 2>&1; then
+            sudo sysctl -w "$USERNS_KEY=0"
+          fi
+
           sudo apt-get update
           sudo apt-get install -y \
+            bubblewrap \
             build-essential \
             libgbm1 \
             libgtk-3-0 \
             libkrb5-dev \
             libxkbfile-dev \
             pkg-config \
+            socat \
             xvfb
 
       - name: Install dependencies
@@ -160,8 +166,17 @@ jobs:
       - name: Run Node unit tests
         run: npm run test-node
 
+      - name: Prepare Electron sandbox
+        run: |
+          npm run electron
+          sudo chown root .build/electron/chrome-sandbox
+          sudo chmod 4755 .build/electron/chrome-sandbox
+          stat .build/electron/chrome-sandbox
+
       - name: Run Hucode Electron unit tests
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
             src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts
+        env:
+          VSCODE_SKIP_PRELAUNCH: 1

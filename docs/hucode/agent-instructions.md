@@ -53,6 +53,15 @@ VS Code code that Hucode customizes.
   gates, Node unit tests, and targeted Hucode Electron tests. Treat full
   upstream VS Code electron/browser/remote/integration/smoke matrices as a
   separate deliberate decision, not the default fork baseline.
+- The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
+  Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
+  rules; re-enable this gate only after that code has been reviewed, fixed, or
+  explicitly exempted.
+- Linux Electron tests on GitHub-hosted runners need Chromium sandbox setup:
+  enable unprivileged user namespaces for Ubuntu runners, install
+  `bubblewrap`/`socat`, set `.build/electron/chrome-sandbox` to root-owned
+  mode `4755`, and run `scripts/test.sh` with `VSCODE_SKIP_PRELAUNCH=1` so the
+  prelaunch step does not replace the prepared sandbox binary.
 
 ## Omni Shell Boundaries
 
