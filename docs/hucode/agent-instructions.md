@@ -28,6 +28,9 @@ VS Code code that Hucode customizes.
 
 - `npm run hucode:prepare` generates the Hucode mixin overlay.
 - `npm run hucode:validate` verifies the Hucode mixin and generated output.
+- In a clean worktree, run `npm run hucode:prepare` before
+  `npm run hucode:validate`; validation reads the generated files under
+  `.build/distro/mixin/stable/`.
 - `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
   compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
@@ -104,6 +107,9 @@ VS Code code that Hucode customizes.
   should be anchored in the sidebar title toolbar, not a body-level overlay or
   the right-hand titlebar part. The top-left traffic-light strip behaves
   differently enough that floating controls there are brittle.
+- Omni Projects title controls mirror the workbench titlebar's optional
+  `titleBar.border`; that border reduces the titlebar content height by 1px in
+  themes such as Dark 2026 and changes toolbar icon centering.
 - The Omni Projects sidebar should keep a real minimum width. Letting it shrink
   too far effectively hides it and strands the macOS traffic-light area.
 
