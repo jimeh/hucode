@@ -20,7 +20,9 @@ import { ContextKeyExpr } from
 	'../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
 	'../../../platform/instantiation/common/instantiation.js';
-import { KeybindingWeight } from
+import { IKeybindingService } from
+	'../../../platform/keybinding/common/keybinding.js';
+import { KeybindingsRegistry, KeybindingWeight } from
 	'../../../platform/keybinding/common/keybindingsRegistry.js';
 import { ILabelService } from
 	'../../../platform/label/common/label.js';
@@ -31,10 +33,12 @@ import {
 	ProjectRecord,
 	WorktreeRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
-import { IQuickInputService } from
+import { IQuickInputService, IQuickNavigateConfiguration } from
 	'../../../platform/quickinput/common/quickInput.js';
 import { IWorkspaceContextService, WorkbenchState } from
 	'../../../platform/workspace/common/workspace.js';
+import { getQuickNavigateHandler, inQuickPickContext } from
+	'../../../workbench/browser/quickaccess.js';
 import { IHostService } from
 	'../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
@@ -48,6 +52,7 @@ import {
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
 	getLoadedProjectWorktreeTargets,
+	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
 	IProjectSwitcherSelectionTarget,
 	SwitchWorktreeQuickPick,
@@ -64,6 +69,10 @@ import {
 import {
 	getWorktreeDisplayLabel,
 	pathsEqual,
+	QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
+	QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY,
+	QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_NEXT_COMMAND_ID,
+	QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_PREVIOUS_COMMAND_ID,
 	SWITCH_LAST_ACTIVE_WORKTREE_COMMAND_ID,
 	SWITCH_NEXT_LOADED_WORKTREE_COMMAND_ID,
 	SWITCH_NEXT_WORKTREE_COMMAND_ID,
@@ -275,7 +284,12 @@ export async function openProjectSwitcherTarget(
 
 function pickSwitchWorktree(
 	quickInputService: IQuickInputService,
-	picks: readonly SwitchWorktreeQuickPick[]
+	picks: readonly SwitchWorktreeQuickPick[],
+	options: {
+		readonly contextKey?: string;
+		readonly hideInput?: boolean;
+		readonly quickNavigate?: IQuickNavigateConfiguration;
+	} = {}
 ): Promise<SwitchWorktreeQuickPick | undefined> {
 	const disposables = new DisposableStore();
 	const quickPick =
@@ -290,6 +304,9 @@ function pickSwitchWorktree(
 	quickPick.matchOnDescription = false;
 	quickPick.matchOnDetail = false;
 	quickPick.sortByLabel = false;
+	quickPick.contextKey = options.contextKey;
+	quickPick.hideInput = options.hideInput ?? false;
+	quickPick.quickNavigate = options.quickNavigate;
 	const setItems = (query: string): void => {
 		const filteredPicks = filterSwitchWorktreePicks(picks, query);
 		quickPick.items = withSwitchWorktreeSeparators(filteredPicks);
@@ -319,9 +336,11 @@ function pickSwitchWorktree(
 		disposables.add(quickPick.onDidChangeValue(value => setItems(value)));
 
 		quickPick.show();
-		quickPick.focusOnInput();
-		mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
-		mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+		if (!options.hideInput) {
+			quickPick.focusOnInput();
+			mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
+			mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+		}
 	});
 }
 
@@ -466,6 +485,88 @@ async function switchLastActiveProjectWorktree(
 	}
 }
 
+async function quickSwitchLoadedProjectWorktree(
+	accessor: ServicesAccessor
+): Promise<void> {
+	const projectManagerService = accessor.get(IProjectManagerService);
+	const quickInputService = accessor.get(IQuickInputService);
+	const keybindingService = accessor.get(IKeybindingService);
+	const labelService = accessor.get(ILabelService);
+	const notificationService = accessor.get(INotificationService);
+	const environmentService = accessor.get(IWorkbenchEnvironmentService);
+	const workspaceContextService = accessor.get(IWorkspaceContextService);
+	const shellService = accessor.get(IHucodeShellService);
+	const hostService = accessor.get(IHostService);
+
+	try {
+		if (environmentService.isOmniWindow) {
+			const windowId = dom.getWindowId(mainWindow);
+			const forwarded = await tryForwardShellSwitchCommand(
+				QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
+				environmentService,
+				shellService
+			);
+			if (forwarded) {
+				return;
+			}
+
+			await shellService.focusShell(windowId);
+		}
+
+		const projects = await projectManagerService.getProjects();
+		const activeWorktreePath = await getActiveWorkbenchWorktreePath(
+			environmentService,
+			workspaceContextService,
+			shellService
+		);
+		const loadedWorktreePaths = await getLoadedWorkbenchWorktreePaths(
+			environmentService,
+			workspaceContextService,
+			shellService
+		);
+		const picks = getLoadedSwitchWorktreePicks(getSwitchWorktreePicks(
+			projects,
+			activeWorktreePath,
+			loadedWorktreePaths,
+			labelService
+		));
+		if (!picks.some(pick => !pick.isCurrent)) {
+			return;
+		}
+
+		const pick = await pickSwitchWorktree(
+			quickInputService,
+			picks,
+			{
+				contextKey: QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY,
+				hideInput: true,
+				quickNavigate: {
+					keybindings: keybindingService.lookupKeybindings(
+						QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID
+					),
+				},
+			}
+		);
+		if (
+			!pick ||
+			(activeWorktreePath !== undefined &&
+				pathsEqual(pick.worktreePath, activeWorktreePath))
+		) {
+			return;
+		}
+
+		await openProjectSwitcherTarget(
+			pick,
+			projectManagerService,
+			environmentService,
+			shellService,
+			hostService
+		);
+	} catch (error) {
+		notificationService.error(String(error));
+	}
+}
+
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
@@ -578,6 +679,33 @@ registerAction2(class extends Action2 {
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
+			id: QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
+			title: localize2(
+				'quickSwitchLoadedProjectWorktree',
+				'Quick Switch Loaded Project Worktree'
+			),
+			icon: Codicon.history,
+			keybinding: {
+				weight: KeybindingWeight.WorkbenchContrib,
+				primary: 0,
+				mac: {
+					primary: KeyMod.CtrlCmd |
+						KeyMod.WinCtrl |
+						KeyCode.Tab,
+				},
+			},
+			f1: true,
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		await quickSwitchLoadedProjectWorktree(accessor);
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
 			id: SWITCH_LAST_ACTIVE_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchLastActiveProjectWorktree',
@@ -601,6 +729,42 @@ registerAction2(class extends Action2 {
 	async run(accessor: ServicesAccessor): Promise<void> {
 		await switchLastActiveProjectWorktree(accessor);
 	}
+});
+
+const quickSwitchLoadedWorktreeContext = ContextKeyExpr.and(
+	inQuickPickContext,
+	ContextKeyExpr.has(QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY)
+);
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_NEXT_COMMAND_ID,
+	weight: KeybindingWeight.WorkbenchContrib + 50,
+	handler: getQuickNavigateHandler(
+		QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_NEXT_COMMAND_ID,
+		true
+	),
+	when: quickSwitchLoadedWorktreeContext,
+	primary: 0,
+	mac: {
+		primary: KeyMod.CtrlCmd | KeyMod.WinCtrl | KeyCode.Tab,
+	},
+});
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_PREVIOUS_COMMAND_ID,
+	weight: KeybindingWeight.WorkbenchContrib + 50,
+	handler: getQuickNavigateHandler(
+		QUICK_SWITCH_LOADED_WORKTREE_NAVIGATE_PREVIOUS_COMMAND_ID,
+		false
+	),
+	when: quickSwitchLoadedWorktreeContext,
+	primary: 0,
+	mac: {
+		primary: KeyMod.CtrlCmd |
+			KeyMod.WinCtrl |
+			KeyMod.Shift |
+			KeyCode.Tab,
+	},
 });
 
 registerAction2(class extends Action2 {
