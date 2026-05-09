@@ -67,6 +67,7 @@ export interface IElementData {
 
 export interface IBrowserViewBounds {
 	windowId: number;
+	hostedWebContentsId?: number;
 	x: number;
 	y: number;
 	width: number;
@@ -88,6 +89,8 @@ export interface IBrowserViewCaptureScreenshotOptions {
 export interface IBrowserViewOwner {
 	/** The main code window ID that owns this view's lifecycle. */
 	readonly mainWindowId: number;
+	/** Hosted Omni workbench webContents ID that owns this view, if any. */
+	readonly hostedWebContentsId?: number;
 }
 
 /**

@@ -24,6 +24,7 @@ import { ChatContextKeys } from '../../chat/common/actions/chatContextKeys.js';
 import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
 import { ChatConfiguration } from '../../chat/common/constants.js';
 import { AgentHostEnabledSettingId } from '../../../../platform/agentHost/common/agentService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 
 /**
  * When enabled, integrated browser tools are exposed as client-provided tools
@@ -84,6 +85,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
 	) {
 		super();
 		const channel = mainProcessService.getChannel(ipcBrowserViewChannelName);
@@ -172,7 +174,12 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	}
 
 	private _getDefaultOwner(): IBrowserViewOwner {
-		return { mainWindowId: this._mainWindowId };
+		return {
+			mainWindowId: this._mainWindowId,
+			hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
+				? this.environmentService.hostedWebContentsId
+				: undefined
+		};
 	}
 
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {
