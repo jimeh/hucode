@@ -13,7 +13,15 @@ import { IFileService } from '../../platform/files/common/files.js';
 import { EditorResourceAccessor, IUntitledTextResourceEditorInput, SideBySideEditor, pathsToEditors, IResourceDiffEditorInput, IUntypedEditorInput, IEditorPane, isResourceEditorInput, IResourceMergeEditorInput } from '../common/editor.js';
 import { IEditorService } from '../services/editor/common/editorService.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
-import { WindowMinimumSize, IOpenFileRequest, IAddRemoveFoldersRequest, INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest, INativeOpenFileRequest, hasNativeTitlebar } from '../../platform/window/common/window.js';
+import {
+	WindowMinimumSize,
+	IOpenFileRequest,
+	IAddRemoveFoldersRequest,
+	INativeRunActionInWindowRequest,
+	INativeRunKeybindingInWindowRequest,
+	INativeOpenFileRequest,
+	hasNativeTitlebar,
+} from '../../platform/window/common/window.js';
 import { ITitleService } from '../services/title/browser/titleService.js';
 import { IWorkbenchThemeService } from '../services/themes/common/workbenchThemeService.js';
 import { ApplyZoomTarget, applyZoom } from '../../platform/window/electron-browser/window.js';
@@ -80,6 +88,8 @@ import { DynamicWorkbenchSecurityConfiguration } from '../common/configuration.j
 import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
+import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
+import { HUCODE_OMNI_CLIPBOARD_ACTIONS, HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
 
 export class NativeWindow extends BaseWindow {
 
@@ -90,6 +100,7 @@ export class NativeWindow extends BaseWindow {
 	private pendingFoldersToRemove: URI[] = [];
 
 	private isDocumentedEdited = false;
+	private readonly hucodeOmniCommandForwarding: HucodeOmniCommandForwarding;
 
 	constructor(
 		@IEditorService private readonly editorService: IEditorService,
@@ -130,9 +141,15 @@ export class NativeWindow extends BaseWindow {
 		@IUtilityProcessWorkerWorkbenchService private readonly utilityProcessWorkerWorkbenchService: IUtilityProcessWorkerWorkbenchService,
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
+		@IMainProcessService mainProcessService: IMainProcessService,
 	) {
 		super(mainWindow, undefined, hostService, nativeEnvironmentService, contextMenuService, layoutService);
 
+		this.hucodeOmniCommandForwarding = new HucodeOmniCommandForwarding(
+			nativeEnvironmentService,
+			mainProcessService,
+			logService,
+		);
 		this.configuredWindowZoomLevel = this.resolveConfiguredWindowZoomLevel();
 
 		this.registerListeners();
@@ -154,9 +171,27 @@ export class NativeWindow extends BaseWindow {
 			}));
 		}
 
+		for (const [eventType, actionId] of HUCODE_OMNI_CLIPBOARD_ACTIONS) {
+			this._register(addDisposableListener(mainWindow.document, eventType, e => {
+				if (!this.hucodeOmniCommandForwarding.shouldForwardShellInvocation()) {
+					return;
+				}
+
+				EventHelper.stop(e, true);
+				void this.hucodeOmniCommandForwarding.forwardActionToWorkspace({
+					id: actionId,
+					from: 'menu'
+				});
+			}));
+		}
+
 		// Support `runAction` event
 		ipcRenderer.on('vscode:runAction', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunActionInWindowRequest;
+			if (await this.hucodeOmniCommandForwarding.forwardActionToWorkspace(request)) {
+				return;
+			}
+
 			const args: unknown[] = request.args || [];
 
 			// If we run an action from the touchbar, we fill in the currently active resource
@@ -169,12 +204,16 @@ export class NativeWindow extends BaseWindow {
 						args.push(resource);
 					}
 				}
-			} else {
+			} else if (request.from !== 'keybinding') {
 				args.push({ from: request.from });
 			}
 
 			try {
-				await this.commandService.executeCommand(request.id, ...args);
+				const executeCommand = () =>
+					this.commandService.executeCommand(request.id, ...args);
+
+				await this.hucodeOmniCommandForwarding
+					.runWithForwardingDisabledIfNeeded(request, executeCommand);
 
 				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from });
 			} catch (error) {
@@ -183,11 +222,22 @@ export class NativeWindow extends BaseWindow {
 		});
 
 		// Support runKeybinding event
-		ipcRenderer.on('vscode:runKeybinding', (event: unknown, ...argsRaw: unknown[]) => {
+		ipcRenderer.on('vscode:runKeybinding', async (event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
+			if (await this.hucodeOmniCommandForwarding.forwardKeybindingToWorkspace(request)) {
+				return;
+			}
+
 			const activeElement = getActiveElement();
 			if (activeElement) {
-				this.keybindingService.dispatchByUserSettingsLabel(request.userSettingsLabel, activeElement);
+				const dispatch = () =>
+					this.keybindingService.dispatchByUserSettingsLabel(
+						request.userSettingsLabel,
+						activeElement
+					);
+
+				await this.hucodeOmniCommandForwarding
+					.runWithForwardingDisabledIfNeeded(request, dispatch);
 			}
 		});
 
