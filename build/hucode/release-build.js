@@ -31,12 +31,16 @@ function printHelp() {
 Builds a minified Hucode desktop package with the stable product mixin.
 
 Options:
---archive            Also create dist/hucode-<platform>-<arch>.zip.
+--archive            Also create hucode-<platform>-<arch>.zip.
+--artifacts <list>   Comma-separated artifacts to create.
+Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
+--move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
---skip-build         Move/archive an existing ../VSCode-* package.
+--sign               Enable package signing. Not implemented yet.
+--skip-build         Package an existing ../VSCode-* app output.
 -h, --help           Show this help.
 `);
 }
@@ -52,11 +56,13 @@ function normalizeArch(arch) {
 
 function parseArgs(args) {
 	const options = {
-		archive: false,
+		artifacts: [],
 		arch: normalizeArch(process.arch),
+		moveToDist: false,
 		platform: process.platform,
 		quality: 'stable',
 		out: 'dist',
+		sign: false,
 		skipBuild: false,
 		help: false
 	};
@@ -65,10 +71,21 @@ function parseArgs(args) {
 		const arg = args[i];
 		switch (arg) {
 			case '--archive':
-				options.archive = true;
+				options.artifacts.push('archive');
+				break;
+			case '--artifacts':
+				options.artifacts.push(
+					...readValue(args, ++i, arg)
+						.split(',')
+						.map(value => value.trim())
+						.filter(Boolean)
+				);
 				break;
 			case '--arch':
 				options.arch = normalizeArch(readValue(args, ++i, arg));
+				break;
+			case '--move-to-dist':
+				options.moveToDist = true;
 				break;
 			case '--platform':
 				options.platform = readValue(args, ++i, arg);
@@ -78,6 +95,9 @@ function parseArgs(args) {
 				break;
 			case '--out':
 				options.out = readValue(args, ++i, arg);
+				break;
+			case '--sign':
+				options.sign = true;
 				break;
 			case '--skip-build':
 				options.skipBuild = true;
@@ -101,8 +121,27 @@ function parseArgs(args) {
 		);
 	}
 
+	options.artifacts = Array.from(new Set(options.artifacts));
+	for (const artifact of options.artifacts) {
+		if (!supportedArtifacts.get(options.platform).has(artifact)) {
+			throw new Error(
+				`Unsupported ${options.platform} artifact '${artifact}'.`
+			);
+		}
+	}
+
+	if (options.sign) {
+		throw new Error('Package signing is not implemented for Hucode builds yet.');
+	}
+
 	return options;
 }
+
+const supportedArtifacts = new Map([
+	['darwin', new Set(['archive', 'dmg'])],
+	['linux', new Set(['archive', 'deb', 'rpm'])],
+	['win32', new Set(['archive', 'user-setup', 'system-setup'])]
+]);
 
 function readValue(args, index, option) {
 	const value = args[index];
@@ -113,10 +152,11 @@ function readValue(args, index, option) {
 	return value;
 }
 
-async function run(command, args, cwd) {
+async function run(command, args, cwd, env = {}) {
 	await new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd,
+			env: { ...process.env, ...env },
 			stdio: 'inherit',
 			shell: process.platform === 'win32'
 		});
@@ -130,6 +170,20 @@ async function run(command, args, cwd) {
 
 			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
 		});
+	});
+}
+
+async function runWithMixin(args, options, env = {}) {
+	await run(process.execPath, [
+		path.join('build', 'hucode', 'run-with-mixin.js'),
+		'--quality',
+		options.quality,
+		'--',
+		...args
+	], repoRoot, {
+		VSCODE_ARCH: options.arch,
+		VSCODE_QUALITY: options.quality,
+		...env
 	});
 }
 
@@ -166,6 +220,26 @@ async function movePackage(source, destination) {
 	}
 }
 
+async function moveFile(source, destination) {
+	if (!(await exists(source))) {
+		throw new Error(`Build output not found: ${source}`);
+	}
+
+	await fs.rm(destination, { force: true });
+	await fs.mkdir(path.dirname(destination), { recursive: true });
+
+	try {
+		await fs.rename(source, destination);
+	} catch (error) {
+		if (error?.code !== 'EXDEV') {
+			throw error;
+		}
+
+		await fs.copyFile(source, destination);
+		await fs.rm(source, { force: true });
+	}
+}
+
 async function createArchive(source, archivePath) {
 	await fs.rm(archivePath, { force: true });
 	await fs.mkdir(path.dirname(archivePath), { recursive: true });
@@ -186,6 +260,173 @@ async function createArchive(source, archivePath) {
 	await run('zip', ['-Xry', archivePath, '.'], source);
 }
 
+async function findFirst(root, predicate) {
+	const entries = await fs.readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		const entryPath = path.join(root, entry.name);
+		if (entry.isDirectory()) {
+			const nested = await findFirst(entryPath, predicate);
+			if (nested) {
+				return nested;
+			}
+			continue;
+		}
+
+		if (predicate(entryPath)) {
+			return entryPath;
+		}
+	}
+
+	return undefined;
+}
+
+async function packageArchive(buildOutput, distRoot, distName) {
+	const archivePath = path.join(distRoot, `${distName}.zip`);
+	await createArchive(buildOutput, archivePath);
+	console.log(`Hucode archive: ${archivePath}`);
+}
+
+async function packageDmg(options, buildRoot, distRoot, distName) {
+	const dmgOut = path.join(distRoot, '.tmp', distName, 'dmg');
+	await fs.mkdir(dmgOut, { recursive: true });
+
+	await runWithMixin([
+		process.execPath,
+		path.join('build', 'darwin', 'create-dmg.ts'),
+		buildRoot,
+		dmgOut
+	], options);
+
+	const source = path.join(dmgOut, `VSCode-darwin-${options.arch}.dmg`);
+	const destination = path.join(distRoot, `${distName}.dmg`);
+	await moveFile(source, destination);
+	console.log(`Hucode DMG: ${destination}`);
+}
+
+async function packageDeb(options, distRoot) {
+	const buildRoot = path.join(repoRoot, '.build', 'linux', 'deb');
+	await fs.rm(buildRoot, { recursive: true, force: true });
+
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-linux-${options.arch}-prepare-deb`
+	], options);
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-linux-${options.arch}-build-deb`
+	], options);
+
+	const source = await findFirst(
+		buildRoot,
+		filePath => filePath.endsWith('.deb')
+	);
+	if (!source) {
+		throw new Error('DEB package was not created.');
+	}
+
+	const destination = path.join(distRoot, path.basename(source));
+	await moveFile(source, destination);
+	console.log(`Hucode DEB: ${destination}`);
+}
+
+async function packageRpm(options, distRoot) {
+	const buildRoot = path.join(repoRoot, '.build', 'linux', 'rpm');
+	await fs.rm(buildRoot, { recursive: true, force: true });
+
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-linux-${options.arch}-prepare-rpm`
+	], options);
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-linux-${options.arch}-build-rpm`
+	], options);
+
+	const source = await findFirst(
+		buildRoot,
+		filePath => filePath.endsWith('.rpm')
+	);
+	if (!source) {
+		throw new Error('RPM package was not created.');
+	}
+
+	const destination = path.join(distRoot, path.basename(source));
+	await moveFile(source, destination);
+	console.log(`Hucode RPM: ${destination}`);
+}
+
+async function packageWindowsSetup(options, distRoot, distName, target) {
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-win32-${options.arch}-inno-updater`
+	], options);
+	await runWithMixin([
+		'npm',
+		'run',
+		'gulp',
+		`vscode-win32-${options.arch}-${target}-setup`
+	], options);
+
+	const source = path.join(
+		repoRoot,
+		'.build',
+		`win32-${options.arch}`,
+		`${target}-setup`,
+		'VSCodeSetup.exe'
+	);
+	const destination = path.join(
+		distRoot,
+		`${distName}-${target}-setup.exe`
+	);
+	await moveFile(source, destination);
+	console.log(`Hucode ${target} setup: ${destination}`);
+}
+
+async function packageArtifact(artifact, options, paths) {
+	switch (artifact) {
+		case 'archive':
+			await packageArchive(paths.buildOutput, paths.distRoot, paths.distName);
+			return;
+		case 'dmg':
+			await packageDmg(options, paths.buildRoot, paths.distRoot, paths.distName);
+			return;
+		case 'deb':
+			await packageDeb(options, paths.distRoot);
+			return;
+		case 'rpm':
+			await packageRpm(options, paths.distRoot);
+			return;
+		case 'user-setup':
+			await packageWindowsSetup(
+				options,
+				paths.distRoot,
+				paths.distName,
+				'user'
+			);
+			return;
+		case 'system-setup':
+			await packageWindowsSetup(
+				options,
+				paths.distRoot,
+				paths.distName,
+				'system'
+			);
+			return;
+		default:
+			throw new Error(`Unsupported artifact '${artifact}'.`);
+	}
+}
+
 async function main() {
 	const options = parseArgs(process.argv.slice(2));
 	if (options.help) {
@@ -196,34 +437,35 @@ async function main() {
 	const buildName = `VSCode-${options.platform}-${options.arch}`;
 	const distName = `hucode-${options.platform}-${options.arch}`;
 	const taskName = `vscode-${options.platform}-${options.arch}-min`;
-	const buildOutput = path.join(path.dirname(repoRoot), buildName);
+	const buildRoot = path.dirname(repoRoot);
+	const buildOutput = path.join(buildRoot, buildName);
 	const distRoot = path.resolve(repoRoot, options.out);
 	const distOutput = path.join(distRoot, distName);
-	const archivePath = path.join(distRoot, `${distName}.zip`);
 
+	await prepareMixin(options.quality);
 	if (!options.skipBuild) {
-		await prepareMixin(options.quality);
-		await run(process.execPath, [
-			path.join('build', 'hucode', 'run-with-mixin.js'),
-			'--quality',
-			options.quality,
-			'--',
+		await runWithMixin([
 			'npm',
 			'run',
 			'gulp',
 			taskName
-		], repoRoot);
+		], options);
 	}
 
-	await movePackage(buildOutput, distOutput);
-
-	if (options.archive) {
-		await createArchive(distOutput, archivePath);
+	for (const artifact of options.artifacts) {
+		await packageArtifact(artifact, options, {
+			buildOutput,
+			buildRoot,
+			distName,
+			distRoot
+		});
 	}
 
-	console.log(`Hucode build output: ${distOutput}`);
-	if (options.archive) {
-		console.log(`Hucode release archive: ${archivePath}`);
+	if (options.moveToDist) {
+		await movePackage(buildOutput, distOutput);
+		console.log(`Hucode build output: ${distOutput}`);
+	} else {
+		console.log(`Hucode build output: ${buildOutput}`);
 	}
 }
 

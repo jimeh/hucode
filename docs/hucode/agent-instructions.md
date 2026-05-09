@@ -57,6 +57,11 @@ VS Code code that Hucode customizes.
   `.github/workflows/hucode-node-modules-cache.yml` on trusted branch pushes or
   manual dispatch. PR CI should restore those archives but not save them; keep
   cache writes out of untrusted pull-request execution.
+- Hucode release packaging keeps upstream app output directories such as
+  `../VSCode-linux-x64` in place by default so follow-on gulp packaging tasks
+  can build archives, DMGs, DEB, RPM, and setup artifacts. Use
+  `--move-to-dist` only for local build commands that should relocate the app
+  directory into the configured output directory, `dist/` by default.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the
