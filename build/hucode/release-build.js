@@ -35,7 +35,7 @@ Options:
 --artifacts <list>   Comma-separated artifacts to create.
 Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
---move-to-dist       Move the app output to dist/hucode-<platform>-<arch>.
+--move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
