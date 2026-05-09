@@ -83,6 +83,10 @@ interface IOpenBrowserWindowOptions {
 	readonly emptyWindowBackupInfo?: IEmptyWindowBackupInfo;
 	readonly forceProfile?: string;
 	readonly forceTempProfile?: boolean;
+	readonly isOmniWindow?: boolean;
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?:
+	INativeWindowConfiguration['omniResidentWorkspaces'];
 }
 
 interface IPathResolveOptions {
@@ -159,6 +163,11 @@ interface IPathToOpen<T = IEditorOptions> extends IPath<T> {
 	 * Optional label for the recent history
 	 */
 	label?: string;
+
+	readonly isOmniWindow?: boolean;
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?:
+	INativeWindowConfiguration['omniResidentWorkspaces'];
 }
 
 const EMPTY_WINDOW: IPathToOpen = Object.create(null);
@@ -177,6 +186,10 @@ function isWorkspacePathToOpen(path: IPathToOpen | undefined): path is IWorkspac
 
 function isSingleFolderWorkspacePathToOpen(path: IPathToOpen | undefined): path is ISingleFolderWorkspacePathToOpen {
 	return isSingleFolderWorkspaceIdentifier(path?.workspace);
+}
+
+function isOmniPathToOpen(path: IPathToOpen | undefined): boolean {
+	return !!path?.isOmniWindow;
 }
 
 //#endregion
@@ -299,6 +312,18 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		return this.open(await this.ensureAgentsWindow(openConfig));
 	}
 
+	async openOmniWindow(openConfig: IOpenConfiguration): Promise<ICodeWindow[]> {
+		this.logService.trace('windowsManager#openOmniWindow');
+
+		return this.open({
+			...openConfig,
+			forceNewWindow: true,
+			forceOmniWindow: true,
+			forceEmpty: false,
+			noRecentEntry: true
+		});
+	}
+
 	private async ensureAgentsWindow(openConfig: IOpenConfiguration): Promise<IOpenConfiguration> {
 		const agentSessionsWorkspaceUri = this.environmentMainService.agentSessionsWorkspace;
 		if (!agentSessionsWorkspaceUri) {
@@ -348,6 +373,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const untitledWorkspacesToRestore: IWorkspacePathToOpen[] = [];
 
 		const emptyWindowsWithBackupsToRestore: IEmptyWindowBackupInfo[] = [];
+		const omniWindowsToRestore: IPathToOpen[] = [];
 
 		let filesToOpen: IFilesToOpen | undefined;
 		let maybeOpenEmptyWindow = false;
@@ -375,6 +401,8 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 					filesToOpen = { filesToOpenOrCreate: [], filesToDiff: [], filesToMerge: [], remoteAuthority: path.remoteAuthority };
 				}
 				filesToOpen.filesToOpenOrCreate.push(path);
+			} else if (isOmniPathToOpen(path)) {
+				omniWindowsToRestore.push(path);
 			} else if (path.backupPath) {
 				emptyWindowsWithBackupsToRestore.push({ backupFolder: basename(path.backupPath), remoteAuthority: path.remoteAuthority });
 			} else {
@@ -414,7 +442,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		}
 
 		// Open based on config
-		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
+		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
 
 		this.logService.trace(`windowsManager#open used window count ${usedWindows.length} (workspacesToOpen: ${workspacesToOpen.length}, foldersToOpen: ${foldersToOpen.length}, emptyToRestore: ${emptyWindowsWithBackupsToRestore.length}, maybeOpenEmptyWindow: ${maybeOpenEmptyWindow})`);
 
@@ -553,6 +581,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		workspacesToOpen: IWorkspacePathToOpen[],
 		foldersToOpen: ISingleFolderWorkspacePathToOpen[],
 		emptyToRestore: IEmptyWindowBackupInfo[],
+		omniWindowsToRestore: IPathToOpen[],
 		maybeOpenEmptyWindow: boolean,
 		filesToOpen: IFilesToOpen | undefined,
 		foldersToAdd: ISingleFolderWorkspacePathToOpen[],
@@ -586,7 +615,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		// Handle files to open/diff/merge or to create when we dont open a folder and we do not restore any
 		// folder/untitled from hot-exit by trying to open them in the window that fits best
-		const potentialNewWindowsCount = foldersToOpen.length + workspacesToOpen.length + emptyToRestore.length;
+		const potentialNewWindowsCount =
+			foldersToOpen.length +
+			workspacesToOpen.length +
+			emptyToRestore.length +
+			omniWindowsToRestore.length;
 		if (filesToOpen && potentialNewWindowsCount === 0) {
 
 			// Find suitable window or folder path to open files in
@@ -723,6 +756,19 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			}
 		}
 
+		const allOmniWindowsToRestore = distinct(omniWindowsToRestore, omniWindow =>
+			JSON.stringify({
+				active: omniWindow.omniActiveWorktreePath,
+				resident: omniWindow.omniResidentWorkspaces ?? [],
+			})
+		);
+		if (allOmniWindowsToRestore.length > 0) {
+			for (const omniWindowToRestore of allOmniWindowsToRestore) {
+				addUsedWindow(await this.doOpenOmni(openConfig, true, omniWindowToRestore));
+				openFolderInNewWindow = true;
+			}
+		}
+
 		// Finally, open an empty window if
 		// - we still have files to open
 		// - user forces an empty window (e.g. via command line)
@@ -801,6 +847,27 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		});
 	}
 
+	private doOpenOmni(
+		openConfig: IOpenConfiguration,
+		forceNewWindow: boolean,
+		omniWindow: IPathToOpen
+	): Promise<ICodeWindow> {
+		this.logService.trace('windowsManager#doOpenOmni', omniWindow);
+
+		return this.openInBrowserWindow({
+			userEnv: openConfig.userEnv,
+			cli: openConfig.cli,
+			initialStartup: openConfig.initialStartup,
+			forceNewWindow,
+			forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
+			forceProfile: openConfig.forceProfile,
+			forceTempProfile: openConfig.forceTempProfile,
+			isOmniWindow: true,
+			omniActiveWorktreePath: omniWindow.omniActiveWorktreePath,
+			omniResidentWorkspaces: omniWindow.omniResidentWorkspaces,
+		});
+	}
+
 	private doOpenFolderOrWorkspace(openConfig: IOpenConfiguration, folderOrWorkspace: IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen, forceNewWindow: boolean, filesToOpen: IFilesToOpen | undefined, windowToUse?: ICodeWindow): Promise<ICodeWindow> {
 		this.logService.trace('windowsManager#doOpenFolderOrWorkspace', { folderOrWorkspace, filesToOpen });
 
@@ -832,6 +899,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		if (openConfig.urisToOpen && openConfig.urisToOpen.length > 0) {
 			pathsToOpen = await this.doExtractPathsFromAPI(openConfig);
 			isCommandLineOrAPICall = true;
+		}
+
+		// Check for force empty
+		else if (openConfig.forceOmniWindow) {
+			pathsToOpen = [{ isOmniWindow: true }];
 		}
 
 		// Check for force empty
@@ -891,7 +963,12 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// focus treatment.
 		if (openConfig.initialStartup && !isRestoringPaths && this.configurationService.getValue<IWindowSettings | undefined>('window')?.restoreWindows === 'preserve') {
 			const lastSessionPaths = await this.doGetPathsFromLastSession();
-			pathsToOpen.unshift(...lastSessionPaths.filter(path => isWorkspacePathToOpen(path) || isSingleFolderWorkspacePathToOpen(path) || path.backupPath));
+			pathsToOpen.unshift(...lastSessionPaths.filter(path =>
+				isWorkspacePathToOpen(path) ||
+				isSingleFolderWorkspacePathToOpen(path) ||
+				path.backupPath ||
+				isOmniPathToOpen(path)
+			));
 		}
 
 		return pathsToOpen;
@@ -1034,6 +1111,15 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				const agentSessionsWorkspaceUri = this.environmentMainService.agentSessionsWorkspace;
 
 				const pathsToOpen = await Promise.all(lastSessionWindows.map(async lastSessionWindow => {
+					if (lastSessionWindow.windowKind === 'omni') {
+						return {
+							isOmniWindow: true,
+							omniActiveWorktreePath:
+								lastSessionWindow.omniActiveWorktreePath,
+							omniResidentWorkspaces:
+								lastSessionWindow.omniResidentWorkspaces,
+						} satisfies IPathToOpen;
+					}
 
 					// Workspaces
 					if (lastSessionWindow.workspace) {
@@ -1608,6 +1694,10 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			cssModules: this.cssDevelopmentService.isEnabled ? await this.cssDevelopmentService.getCssModules() : undefined,
 
 			isSessionsWindow: isWorkspaceIdentifier(options.workspace) && isEqual(options.workspace.configPath, this.environmentMainService.agentSessionsWorkspace),
+			isOmniWindow: options.isOmniWindow,
+			omniActiveWorktreePath: options.omniActiveWorktreePath,
+			omniResidentWorkspaces: options.omniResidentWorkspaces,
+			'skip-sessions-welcome': options.isOmniWindow || undefined,
 		};
 
 		// New window
