@@ -41,6 +41,25 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      - name: Prepare node_modules cache key
+        run: |
+          mkdir -p .build
+          NODE_ARCH=$(node -p process.arch)
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-linux x64 "$NODE_ARCH" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-linux-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -54,6 +73,7 @@ jobs:
             pkg-config
 
       - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
           set -e
 
@@ -136,6 +156,25 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      - name: Prepare node_modules cache key
+        run: |
+          mkdir -p .build
+          NODE_ARCH=$(node -p process.arch)
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-linux x64 "$NODE_ARCH" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-linux-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
       - name: Install test tools
         run: |
           USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
@@ -156,6 +195,7 @@ jobs:
             xvfb
 
       - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
           set -e
 
