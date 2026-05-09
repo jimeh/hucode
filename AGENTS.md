@@ -29,3 +29,8 @@ as the required Hucode instruction set for work in this fork.
 - For VS Code release upgrades, use the project-local
   `hucode-upgrade-vscode` skill and follow
   [Repo Strategy](docs/hucode/repo-strategy.md).
+
+## Repository hygiene notes
+
+- TOML files cannot carry VS Code's standard block copyright header. Keep
+  `*.toml` excluded from copyright hygiene rather than adding invalid TOML.
