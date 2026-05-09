@@ -1,0 +1,278 @@
+name: Hucode release build
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - darwin-x64
+          - darwin-arm64
+          - linux-x64
+          - linux-arm64
+          - linux-armhf
+          - win32-x64
+          - win32-arm64
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target || 'tag' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+  VSCODE_QUALITY: stable
+
+jobs:
+  prepare-matrix:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Select targets
+        id: matrix
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          node <<'NODE'
+          const targets = [
+            {
+              platform: 'darwin',
+              arch: 'x64',
+              npm_arch: 'x64',
+              runner: 'macos-15-intel',
+              artifacts: 'archive,dmg'
+            },
+            {
+              platform: 'darwin',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              runner: 'macos-15',
+              artifacts: 'archive,dmg'
+            },
+            {
+              platform: 'linux',
+              arch: 'x64',
+              npm_arch: 'x64',
+              runner: 'ubuntu-latest',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              platform: 'linux',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              runner: 'ubuntu-24.04-arm',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              platform: 'linux',
+              arch: 'armhf',
+              npm_arch: 'arm',
+              runner: 'ubuntu-latest',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              platform: 'win32',
+              arch: 'x64',
+              npm_arch: 'x64',
+              runner: 'windows-latest',
+              artifacts: 'archive,user-setup,system-setup'
+            },
+            {
+              platform: 'win32',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              runner: 'windows-11-arm',
+              artifacts: 'archive,user-setup,system-setup'
+            }
+          ];
+          const target = process.env.TARGET;
+          const include = target === 'all'
+            ? targets
+            : targets.filter(item => `${item.platform}-${item.arch}` === target);
+          const output = `matrix=${JSON.stringify({ include })}\n`;
+          require('fs').appendFileSync(process.env.GITHUB_OUTPUT, output);
+          NODE
+
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: prepare-matrix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          {
+            echo "describe=$describe"
+            echo "safe_version=$safe_version"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release tag version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          hucode_version="$(node -p "require('./build/hucode/mixin/stable/product.json').hucodeVersion")"
+          if [ "$tag_version" != "$hucode_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match hucodeVersion $hucode_version" >&2
+            exit 1
+          fi
+
+      - name: Install Linux build tools
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            file \
+            libkrb5-dev \
+            libnotify-bin \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            rpm \
+            zip
+
+      - name: Install macOS build tools
+        if: matrix.platform == 'darwin'
+        run: python3 -m pip install --user setuptools
+
+      - name: Install dependencies
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_arch: ${{ matrix.npm_arch }}
+
+      - name: Download Linux sysroot
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sysroot_arch="${{ matrix.arch }}"
+          if [ "$sysroot_arch" = "x64" ]; then
+            sysroot_arch="amd64"
+          fi
+          export VSCODE_SYSROOT_DIR="$PWD/.build/sysroots/glibc-2.28-gcc-8.5.0"
+          SYSROOT_ARCH="$sysroot_arch" \
+            VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-8.5.0" \
+            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+
+      - name: Prepare Hucode mixin
+        run: npm run hucode:prepare
+
+      - name: Validate Hucode mixin
+        run: npm run hucode:validate
+
+      - name: Prepare built-in extensions cache key
+        run: |
+          mkdir -p .build
+          node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts > .build/builtindepshash
+
+      - name: Restore built-in extensions cache
+        id: cache-builtin-extensions
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-${{ hashFiles('.build/builtindepshash') }}"
+
+      - name: Download built-in extensions
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build release artifacts
+        run: |
+          node build/hucode/release-build.js \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --artifacts "${{ matrix.artifacts }}" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-artifacts
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes "Unsigned Hucode release build artifacts."
+          fi
+
+          mapfile -t files < <(find release-artifacts -type f)
+          gh release upload "$TAG_NAME" "${files[@]}" --clobber
