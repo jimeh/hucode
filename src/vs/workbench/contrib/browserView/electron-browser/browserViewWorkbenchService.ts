@@ -115,7 +115,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 
 		// Listen for new browser views
 		this._register(this._browserViewService.onDidCreateBrowserView(e => {
-			if (e.info.owner.mainWindowId !== this._mainWindowId) {
+			if (!this._ownsBrowserView(e.info.owner)) {
 				return; // Not for this window
 			}
 
@@ -150,10 +150,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 				);
 				return this._createModel(id, this._getDefaultOwner(), state);
 			});
-			input.onWillDispose(() => {
+			const inputDisposeListener = this._register(input.onWillDispose(() => {
+				inputDisposeListener.dispose();
 				this._known.delete(id);
 				this._onDidChangeBrowserViews.fire();
-			});
+			}));
 			if (model) {
 				input.model = model;
 			}
@@ -182,6 +183,19 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		};
 	}
 
+	private _ownsBrowserView(owner: IBrowserViewOwner): boolean {
+		if (owner.mainWindowId !== this._mainWindowId) {
+			return false;
+		}
+
+		if (this.environmentService.isHostedOmniWorkspace) {
+			return typeof this.environmentService.hostedWebContentsId === 'number'
+				&& owner.hostedWebContentsId === this.environmentService.hostedWebContentsId;
+		}
+
+		return owner.hostedWebContentsId === undefined;
+	}
+
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {
 		const dataStorageSetting = this.configurationService.getValue<BrowserViewStorageScope>(
 			'workbench.browser.dataStorage'
@@ -203,6 +217,9 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	private async _initializeExistingViews(): Promise<void> {
 		const views = await this._browserViewService.getBrowserViews(this._mainWindowId);
 		for (const info of views) {
+			if (!this._ownsBrowserView(info.owner)) {
+				continue;
+			}
 			this._createModel(info.id, info.owner, info.state);
 		}
 	}
