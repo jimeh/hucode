@@ -1,28 +1,39 @@
 # Hucode Docs
 
-This directory captures the current product plan for Hucode as a fork of
-`microsoft/vscode`.
+This directory captures Hucode-specific product, architecture, repository, and
+agent guidance for this VS Code fork.
 
 Start here:
 
-- [Architecture](./architecture.md): product shape, runtime boundaries, and the
-  main subsystems.
+- [Agent Instructions](./agent-instructions.md): Hucode-specific rules, gotchas,
+  and boundaries agents should load before Hucode work.
+- [Architecture](./architecture.md): current runtime shape, module ownership,
+  and core invariants.
 - [Repo Strategy](./repo-strategy.md): how to structure the fork, track VS Code
   releases, and package Hucode.
-- [Roadmap](./roadmap.md): phased implementation plan and validation strategy.
+- [Roadmap](./roadmap.md): completed, active, and later work.
+- [Upgrade Skill](../../.agents/skills/hucode-upgrade-vscode/SKILL.md):
+  operational workflow for upgrading the underlying VS Code release.
 
 Current assumptions:
 
 - Hucode is a real fork of `microsoft/vscode`, not a wrapper that downloads VS
   Code at build time.
+- Hucode product identity lives in the tracked mixin overlay under
+  `build/hucode/mixin/stable/`; root product files stay upstream OSS.
 - The project manager lives outside any individual workspace renderer.
-- Workspaces are hosted in Electron `WebContentsView` instances.
+- Omni workspaces are hosted in Electron `WebContentsView` instances.
 - Hucode is rebranded and uses OpenVSX for extension discovery and install.
 
 Current local workflow:
 
 - `npm run hucode:prepare`: generate the tracked stable overlay into
   `.build/distro/mixin/stable/`.
+- `npm run hucode:validate`: verify the Hucode mixin and generated output.
+- `npm run hucode:compile`: build client, built-in extensions, and extension
+  media with Hucode product config staged for the subprocess.
 - `npm run hucode:watch`: run the normal watch flow with Hucode product config
-  staged in place for the subprocess.
+  staged for the subprocess.
 - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
+- `npm run hucode:generate-icons`: regenerate Hucode macOS icon assets from
+  `build/hucode/icons/darwin/`.

@@ -57,6 +57,10 @@ git diff upstream-<version>..series-<version>
 git log --oneline upstream-<version>..series-<version>
 ```
 
+Publish each `upstream-<version>` and `series-<version>` branch to `origin`
+once it is created. The remote should always contain both the clean VS Code
+baseline and the matching Hucode series branch for each release line.
+
 Use the `series-<version>` branch as the working branch for development and
 upgrade conflict resolution. When starting the next upgrade, first create or
 refresh `series-<version>-replay` from the matching `upstream-<version>` branch
@@ -88,13 +92,15 @@ To upgrade from `1.117.0` to `1.118.1`:
 2. Create or refresh the compact replay branch for the current series:
 
    ```sh
-   git switch --create series-1.117.0-replay upstream-1.117.0
+   git switch --create series-1.117.0-replay series-1.117.0
+   git reset --soft upstream-1.117.0
    ```
 
-   Rebuild the final `series-1.117.0` Hucode tree as a curated sequence of
-   topic commits. Squash commits that only represent intermediate debugging,
-   API adaptation, file moves, generated-asset churn, or conflict-resolution
-   fallout.
+   This keeps the final `series-1.117.0` tree in the index while comparing it
+   against the clean upstream baseline. Rebuild that staged diff as a curated
+   sequence of topic commits. Squash commits that only represent intermediate
+   debugging, API adaptation, file moves, generated-asset churn, or
+   conflict-resolution fallout.
 
 3. Verify the compact branch before using it as the upgrade source:
 
@@ -114,15 +120,28 @@ To upgrade from `1.117.0` to `1.118.1`:
 
    ```sh
    git switch --create upstream-1.118.1 1.118.1
+   git push -u origin upstream-1.118.1
    ```
 
 6. Create the Hucode series branch at the same baseline commit:
 
    ```sh
    git switch --create series-1.118.1 upstream-1.118.1
+   git push -u origin series-1.118.1
    ```
 
-7. Replay the compacted Hucode patch series onto the new baseline:
+7. Refresh dependencies on the new baseline before replaying Hucode patches:
+
+   ```sh
+   npm install
+   ```
+
+   VS Code upgrades can change lint, TypeScript, or hook dependencies. Run
+   `npm install` before conflict resolution so commit hooks and local
+   validation use the new release's dependency set. Avoid bypassing hooks just
+   because `node_modules` is stale.
+
+8. Replay the compacted Hucode patch series onto the new baseline:
 
    ```sh
    git cherry-pick upstream-1.117.0..series-1.117.0-replay
@@ -131,17 +150,31 @@ To upgrade from `1.117.0` to `1.118.1`:
    Resolve conflicts commit-by-commit. Prefer adapting each patch to the new
    upstream API over adding compatibility shims for old VS Code code paths.
 
-8. Verify the resulting branch:
+9. Verify the resulting branch:
 
    ```sh
    git log --oneline upstream-1.118.1..series-1.118.1
    git diff --stat upstream-1.118.1..series-1.118.1
+   npm run precommit
    npm run hucode:compile
    ```
 
-9. Update Hucode release metadata only after the replay is coherent. Keep the
+10. Update Hucode release metadata only after the replay is coherent. Keep the
    root VS Code `version` aligned with upstream; Hucode's own release version
    belongs in the stable overlay as `hucodeVersion`.
+
+   After changing `hucodeVersion`, run:
+
+   ```sh
+   npm run hucode:prepare
+   npm run hucode:validate
+   ```
+
+   The validator should compare the generated mixin output against the source
+   overlay value, not a hardcoded historical Hucode version. Root `product.json`
+   should remain upstream OSS; if validation fails because it is mixed to
+   Hucode, restore or ignore that local generated runtime state before treating
+   validation as meaningful.
 
 If an upgrade replay has to be abandoned, reset only the new
 `series-<version>` branch. Do not rewrite an older completed
