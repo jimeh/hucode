@@ -40,6 +40,39 @@ VS Code code that Hucode customizes.
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
 
+## CI Workflow
+
+- Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
+  default. Do not reintroduce upstream VS Code self-hosted `1ES.Pool` runners or
+  larger macOS runners such as `macos-14-xlarge` unless the cost and need are
+  explicitly accepted.
+- Keep disabled upstream VS Code workflows in `.github/workflows.disabled/`
+  with their contents unchanged where practical. Only Hucode-owned workflows
+  should live in `.github/workflows/` by default.
+- Keep PR CI Hucode-focused: product mixin validation, compile/hygiene/lint/type
+  gates, Node unit tests, and targeted Hucode Electron tests. Treat full
+  upstream VS Code electron/browser/remote/integration/smoke matrices as a
+  separate deliberate decision, not the default fork baseline.
+- Hucode warms Linux x64 `node_modules` archives through
+  `.github/workflows/hucode-node-modules-cache.yml` on trusted branch pushes or
+  manual dispatch. PR CI should restore those archives but not save them; keep
+  cache writes out of untrusted pull-request execution.
+- Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
+  `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
+  can leave GitHub Actions showing only a generic cancellation line and hide the
+  failing check. Run hygiene before `core-ci`; the compile step can generate
+  `extensions/*/tsconfig.tsbuildinfo`, which hygiene flags as missing copyright
+  headers if it runs afterward.
+- The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
+  Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
+  rules; re-enable this gate only after that code has been reviewed, fixed, or
+  explicitly exempted.
+- Linux Electron tests on GitHub-hosted runners need Chromium sandbox setup:
+  enable unprivileged user namespaces for Ubuntu runners, install
+  `bubblewrap`/`socat`, set `.build/electron/chrome-sandbox` to root-owned
+  mode `4755`, and run `scripts/test.sh` with `VSCODE_SKIP_PRELAUNCH=1` so the
+  prelaunch step does not replace the prepared sandbox binary.
+
 ## Omni Shell Boundaries
 
 - Hucode macOS desktop workbenches default `window.menuStyle` to `native`
