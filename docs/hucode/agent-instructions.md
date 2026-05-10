@@ -94,6 +94,9 @@ VS Code code that Hucode customizes.
 - Hucode's release wrapper cleans `.build/extensions` directly before packaging
   with an external Copilot VSIX. Upstream defines `clean-extensions-build` as an
   internal task object but does not register it as a public gulp task.
+- The wrapper also runs `build/hucode/esbuild-bundle.js` directly instead of
+  invoking `esbuild-bundle-<platform>-<arch>-min`; those esbuild bundle tasks
+  are internal task objects, not public gulp tasks.
 - The public `@vscode/openssl-prebuilt` package extracts libraries under
   `out/<arch>/`, so Linux release CI must export OpenSSL paths from that nested
   directory. Do not add Ubuntu's `armhf` foreign architecture for the armhf

@@ -466,7 +466,6 @@ async function validatePackagedCopilot(options, buildOutput) {
 
 async function runBuildWithCopilotVsix(options, buildOutput) {
 	const env = getBuildEnv(options);
-	const bundleTask = `esbuild-bundle-${options.platform}-${options.arch}-min`;
 	const packageTask = `vscode-${options.platform}-${options.arch}-min-ci`;
 
 	await fs.rm(path.join(repoRoot, '.build', 'extensions'), {
@@ -477,7 +476,10 @@ async function runBuildWithCopilotVsix(options, buildOutput) {
 	await runGulpTask('compile-non-native-extensions-build', options, env);
 	await runGulpTask('compile-extension-media-build', options, env);
 	await writeBuildDate();
-	await runGulpTask(bundleTask, options, env);
+	await runWithMixin([
+		process.execPath,
+		path.join('build', 'hucode', 'esbuild-bundle.js')
+	], options, env);
 	await extractCopilotVsix(options.copilotVsix);
 	await runGulpTask(packageTask, options, env);
 	await validatePackagedCopilot(options, buildOutput);
