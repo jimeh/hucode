@@ -325,19 +325,35 @@ function getCliTarget(options) {
 	return target;
 }
 
-function getAppProductJsonPath(options, buildOutput, product) {
-	if (options.platform === 'darwin') {
-		return path.join(
-			buildOutput,
-			`${product.nameLong}.app`,
-			'Contents',
-			'Resources',
-			'app',
-			'product.json'
-		);
+async function findAppProductJson(options, buildOutput) {
+	const appProductPath = path.join(
+		buildOutput,
+		'resources',
+		'app',
+		'product.json'
+	);
+	if (await exists(appProductPath)) {
+		return appProductPath;
 	}
 
-	return path.join(buildOutput, 'resources', 'app', 'product.json');
+	return findFirst(buildOutput, filePath => {
+		if (path.basename(filePath) !== 'product.json') {
+			return false;
+		}
+
+		const parts = path.relative(buildOutput, filePath).split(path.sep);
+		if (options.platform === 'darwin') {
+			return parts.length >= 5
+				&& parts.at(-5).endsWith('.app')
+				&& parts.at(-4) === 'Contents'
+				&& parts.at(-3) === 'Resources'
+				&& parts.at(-2) === 'app';
+		}
+
+		return parts.length >= 3
+			&& parts.at(-3) === 'resources'
+			&& parts.at(-2) === 'app';
+	});
 }
 
 function getAppCliDestination(options, buildOutput, product) {
@@ -360,7 +376,7 @@ function getAppCliDestination(options, buildOutput, product) {
 	);
 }
 
-function getLinuxCliEnv(options) {
+async function getLinuxCliEnv(options) {
 	if (options.platform !== 'linux') {
 		return {};
 	}
@@ -369,19 +385,22 @@ function getLinuxCliEnv(options) {
 		['x64', {
 			cargo: 'X86_64_UNKNOWN_LINUX_GNU',
 			cc: 'CC_x86_64_unknown_linux_gnu',
-			debianArch: 'x86_64-linux-gnu',
+			pkgConfig: 'x86_64_unknown_linux_gnu',
+			sysrootLibArch: 'x86_64-linux-gnu',
 			triple: 'x86_64-linux-gnu'
 		}],
 		['arm64', {
 			cargo: 'AARCH64_UNKNOWN_LINUX_GNU',
 			cc: 'CC_aarch64_unknown_linux_gnu',
-			debianArch: 'aarch64-linux-gnu',
+			pkgConfig: 'aarch64_unknown_linux_gnu',
+			sysrootLibArch: 'aarch64-linux-gnu',
 			triple: 'aarch64-linux-gnu'
 		}],
 		['armhf', {
 			cargo: 'ARMV7_UNKNOWN_LINUX_GNUEABIHF',
 			cc: 'CC_armv7_unknown_linux_gnueabihf',
-			debianArch: 'arm-linux-gnueabihf',
+			pkgConfig: 'armv7_unknown_linux_gnueabihf',
+			sysrootLibArch: 'arm-rpi-linux-gnueabihf',
 			triple: 'arm-rpi-linux-gnueabihf'
 		}]
 	]);
@@ -404,25 +423,31 @@ function getLinuxCliEnv(options) {
 		'bin',
 		`${target.triple}-gcc`
 	);
-	const rustFlags = [
-		`-C link-arg=--sysroot=${sysroot}`,
-		`-C link-arg=-L${sysroot}/usr/lib/${target.debianArch}`,
-		`-C link-arg=-L/usr/lib/${target.debianArch}`
-	].join(' ');
-	const env = {
-		[`CARGO_TARGET_${target.cargo}_LINKER`]: gcc,
-		[`CARGO_TARGET_${target.cargo}_RUSTFLAGS`]: rustFlags,
-		[target.cc]: `${gcc} --sysroot=${sysroot}`
-	};
 
-	if (options.arch === 'armhf') {
-		env.PKG_CONFIG_ALLOW_CROSS = '1';
-		env.PKG_CONFIG_LIBDIR_armv7_unknown_linux_gnueabihf =
-			'/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig';
-		env.PKG_CONFIG_SYSROOT_DIR_armv7_unknown_linux_gnueabihf = '/';
+	if (!(await exists(gcc))) {
+		if (process.env.CI || options.arch === 'armhf') {
+			throw new Error(
+				`Linux CLI sysroot toolchain not found: ${gcc}. ` +
+				'Run the sysroot download step or set VSCODE_SYSROOT_DIR.'
+			);
+		}
+
+		return {};
 	}
 
-	return env;
+	const rustFlags = [
+		`-C link-arg=--sysroot=${sysroot}`,
+		`-C link-arg=-L${sysroot}/usr/lib/${target.sysrootLibArch}`
+	].join(' ');
+	return {
+		[`CARGO_TARGET_${target.cargo}_LINKER`]: gcc,
+		[`CARGO_TARGET_${target.cargo}_RUSTFLAGS`]: rustFlags,
+		[target.cc]: `${gcc} --sysroot=${sysroot}`,
+		[`PKG_CONFIG_LIBDIR_${target.pkgConfig}`]:
+			`${sysroot}/usr/lib/${target.sysrootLibArch}/pkgconfig:` +
+			`${sysroot}/usr/share/pkgconfig`,
+		[`PKG_CONFIG_SYSROOT_DIR_${target.pkgConfig}`]: sysroot
+	};
 }
 
 async function readJson(filePath) {
@@ -430,20 +455,12 @@ async function readJson(filePath) {
 }
 
 async function mixInCli(options, buildOutput) {
-	const mixinProductPath = path.join(
-		repoRoot,
-		'.build',
-		'distro',
-		'mixin',
-		options.quality,
-		'product.json'
-	);
-	const product = await readJson(mixinProductPath);
-	const appProductPath = getAppProductJsonPath(options, buildOutput, product);
-	if (!(await exists(appProductPath))) {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
 		throw new Error(`App product.json not found: ${appProductPath}`);
 	}
 
+	const product = await readJson(appProductPath);
 	const target = getCliTarget(options);
 	const commit = process.env.GITHUB_SHA
 		?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
@@ -457,8 +474,8 @@ async function mixInCli(options, buildOutput) {
 	], path.join(repoRoot, 'cli'), {
 		CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
 		VSCODE_CLI_COMMIT: commit,
-		VSCODE_CLI_PRODUCT_JSON: mixinProductPath,
-		...getLinuxCliEnv(options)
+		VSCODE_CLI_PRODUCT_JSON: appProductPath,
+		...await getLinuxCliEnv(options)
 	});
 
 	const cliBinary = path.join(
