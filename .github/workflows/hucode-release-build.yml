@@ -114,9 +114,96 @@ jobs:
           require('fs').appendFileSync(process.env.GITHUB_OUTPUT, output);
           NODE
 
+  copilot-vsix:
+    name: Build Copilot VSIX
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extensions/copilot/package-lock.json
+
+      - name: Setup emsdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /opt/dev
+          sudo chown "$USER" /opt/dev
+          extensions/copilot/build/setup-emsdk.sh
+          {
+            echo "/opt/dev/emsdk/upstream/emscripten"
+            echo "/opt/dev/emsdk"
+          } >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-workspaces
+          npm ci --prefix extensions/copilot
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Copilot extension
+        run: npm run build
+        working-directory: extensions/copilot
+
+      - name: Minify Copilot JSON files
+        shell: bash
+        working-directory: extensions/copilot
+        run: |
+          set -euo pipefail
+          find . -name "*.json" -type f -print0 | while IFS= read -r -d '' file; do
+            if [[ "$file" == *"/node_modules/"* ]]; then
+              continue
+            fi
+
+            echo "Minifying $file"
+            FILE="$file" node <<'NODE'
+            const fs = require('fs');
+            const { parse } = require('jsonc-parser');
+            const file = process.env.FILE;
+            const contents = fs.readFileSync(file, 'utf8');
+            const errors = [];
+            const parsed = parse(contents, errors);
+            if (errors.length) {
+              throw new Error(`Failed to parse ${file}: ${JSON.stringify(errors)}`);
+            }
+            const minified = JSON.stringify(parsed, null, 0);
+            fs.writeFileSync(`${file}.min`, minified);
+            NODE
+            test -s "$file.min"
+            mv "$file.min" "$file"
+          done
+
+      - name: Package Copilot VSIX
+        run: npx vsce package -o copilot-chat.vsix --allow-package-secrets sendgrid
+        working-directory: extensions/copilot
+
+      - name: Upload Copilot VSIX
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-copilot-vsix
+          path: extensions/copilot/copilot-chat.vsix
+          if-no-files-found: error
+          retention-days: 14
+
   build:
     name: ${{ matrix.platform }}-${{ matrix.arch }}
-    needs: prepare-matrix
+    needs:
+      - prepare-matrix
+      - copilot-vsix
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
@@ -288,12 +375,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download Copilot VSIX
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-copilot-vsix
+          path: .build/hucode/copilot
+
       - name: Build release artifacts
         run: |
           node build/hucode/release-build.js \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
             --artifacts "${{ matrix.artifacts }}" \
+            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
             --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
         shell: bash
         env:

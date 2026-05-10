@@ -70,8 +70,14 @@ VS Code code that Hucode customizes.
   [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
   Code strips core source maps in CI, prunes production `node_modules` through
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
-  local release path currently packages Copilot from source and can ship a much
-  larger `extensions/copilot/node_modules` tree.
+  release workflow builds a Copilot VSIX once, uploads it as
+  `hucode-copilot-vsix`, downloads it in each platform job, and passes
+  `--copilot-vsix` to `build/hucode/release-build.js`. Local release builds
+  without `--copilot-vsix` still package Copilot from source and can ship a much
+  larger `extensions/copilot/node_modules` tree. The release wrapper rejects a
+  VSIX that already contains platform-specific Copilot executable packages or
+  ripgrep binaries; the target-specific ripgrep shim is injected by the
+  `vscode-*-min-ci` package task and validated afterward.
 - Hucode release packaging must mix the Rust CLI into desktop outputs before
   archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
   dependency generation expects `bin/<tunnelApplicationName>` to exist in

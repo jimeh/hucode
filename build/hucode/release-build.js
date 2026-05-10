@@ -4,9 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { pipeline } from 'stream/promises';
+import yauzl from 'yauzl';
 import { prepareMixin } from './prepare-mixin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +39,7 @@ Options:
 Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
+--copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
@@ -63,6 +67,7 @@ function parseArgs(args) {
 		platform: process.platform,
 		quality: 'stable',
 		out: 'dist',
+		copilotVsix: undefined,
 		sign: false,
 		stripSourceMaps: true,
 		skipBuild: false,
@@ -88,6 +93,12 @@ function parseArgs(args) {
 				break;
 			case '--move-to-dist':
 				options.moveToDist = true;
+				break;
+			case '--copilot-vsix':
+				options.copilotVsix = path.resolve(
+					repoRoot,
+					readValue(args, ++i, arg)
+				);
 				break;
 			case '--platform':
 				options.platform = readValue(args, ++i, arg);
@@ -139,6 +150,10 @@ function parseArgs(args) {
 		throw new Error('Package signing is not implemented for Hucode builds yet.');
 	}
 
+	if (options.skipBuild && options.copilotVsix) {
+		throw new Error('--copilot-vsix cannot be used with --skip-build.');
+	}
+
 	return options;
 }
 
@@ -157,6 +172,13 @@ const cliTargets = new Map([
 	['win32-x64', 'x86_64-pc-windows-msvc'],
 	['win32-arm64', 'aarch64-pc-windows-msvc']
 ]);
+
+function getNodePlatformArch(options) {
+	const nodePlatform = options.platform === 'alpine' ? 'linux' : options.platform;
+	const nodeArch = options.arch === 'armhf' ? 'arm' : options.arch;
+
+	return `${nodePlatform}-${nodeArch}`;
+}
 
 function readValue(args, index, option) {
 	const value = args[index];
@@ -226,6 +248,10 @@ async function runWithMixin(args, options, env = {}) {
 	});
 }
 
+async function runGulpTask(taskName, options, env = {}) {
+	await runWithMixin(['npm', 'run', 'gulp', taskName], options, env);
+}
+
 function getBuildEnv(options) {
 	if (!options.stripSourceMaps) {
 		return {};
@@ -243,6 +269,209 @@ async function exists(filePath) {
 	} catch {
 		return false;
 	}
+}
+
+async function writeBuildDate() {
+	let date;
+	try {
+		date = await capture(
+			'git',
+			['log', '-1', '--format=%cI', 'HEAD'],
+			repoRoot
+		);
+	} catch {
+		date = new Date().toISOString();
+	}
+
+	const outBuild = path.join(repoRoot, 'out-build');
+	await fs.mkdir(outBuild, { recursive: true });
+	await fs.writeFile(path.join(outBuild, 'date'), date, 'utf8');
+}
+
+function openZip(zipPath) {
+	return new Promise((resolve, reject) => {
+		yauzl.open(zipPath, {
+			autoClose: true,
+			lazyEntries: true
+		}, (error, zipfile) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(zipfile);
+		});
+	});
+}
+
+function openZipEntry(zipfile, entry) {
+	return new Promise((resolve, reject) => {
+		zipfile.openReadStream(entry, (error, stream) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(stream);
+		});
+	});
+}
+
+function getExtensionRelativePath(entryName) {
+	if (!entryName.startsWith('extension/')) {
+		return undefined;
+	}
+
+	const relativePath = entryName.slice('extension/'.length);
+	if (!relativePath || relativePath.endsWith('/')) {
+		return undefined;
+	}
+
+	const normalized = path.normalize(relativePath);
+	if (
+		normalized === '..'
+		|| normalized.startsWith(`..${path.sep}`)
+		|| path.isAbsolute(normalized)
+	) {
+		throw new Error(`Unsafe VSIX entry path: ${entryName}`);
+	}
+
+	return normalized;
+}
+
+async function extractCopilotVsix(vsixPath) {
+	if (!(await exists(vsixPath))) {
+		throw new Error(`Copilot VSIX not found: ${vsixPath}`);
+	}
+
+	const outputDir = path.join(repoRoot, '.build', 'extensions', 'copilot');
+	await fs.rm(outputDir, { recursive: true, force: true });
+	await fs.mkdir(outputDir, { recursive: true });
+
+	const zipfile = await openZip(vsixPath);
+	await new Promise((resolve, reject) => {
+		zipfile.on('entry', async entry => {
+			try {
+				const relativePath = getExtensionRelativePath(entry.fileName);
+				if (!relativePath) {
+					zipfile.readEntry();
+					return;
+				}
+
+				const destination = path.join(outputDir, relativePath);
+				await fs.mkdir(path.dirname(destination), { recursive: true });
+				const stream = await openZipEntry(zipfile, entry);
+				await pipeline(stream, createWriteStream(destination));
+				zipfile.readEntry();
+			} catch (error) {
+				reject(error);
+			}
+		});
+		zipfile.on('close', resolve);
+		zipfile.on('error', reject);
+		zipfile.readEntry();
+	});
+
+	const manifestPath = path.join(outputDir, 'package.json');
+	if (!(await exists(manifestPath))) {
+		throw new Error(`Copilot VSIX did not contain extension/package.json.`);
+	}
+
+	await validateExtractedCopilotVsix(outputDir);
+
+	console.log(`Copilot VSIX: ${vsixPath}`);
+	console.log(`Copilot extension: ${outputDir}`);
+}
+
+async function validateExtractedCopilotVsix(outputDir) {
+	const copilotModules = path.join(outputDir, 'node_modules', '@github');
+	if (await exists(copilotModules)) {
+		const entries = await fs.readdir(copilotModules, { withFileTypes: true });
+		const platformPackages = entries
+			.filter(entry => entry.isDirectory())
+			.map(entry => entry.name)
+			.filter(name => /^copilot-(darwin|linux|win32)-/.test(name));
+		if (platformPackages.length) {
+			throw new Error(
+				'Copilot VSIX includes platform-specific executable packages: ' +
+				platformPackages.join(', ')
+			);
+		}
+	}
+
+	const ripgrepRoot = path.join(
+		outputDir,
+		'node_modules',
+		'@github',
+		'copilot',
+		'sdk',
+		'ripgrep',
+		'bin'
+	);
+	if (await exists(ripgrepRoot)) {
+		throw new Error(
+			'Copilot VSIX includes ripgrep binaries; release packaging must ' +
+			'inject the target-specific ripgrep shim instead.'
+		);
+	}
+}
+
+async function findBuiltInCopilotExtension(buildOutput) {
+	const manifest = await findFirst(buildOutput, filePath => {
+		if (path.basename(filePath) !== 'package.json') {
+			return false;
+		}
+
+		const parts = path.relative(buildOutput, filePath).split(path.sep);
+		return parts.at(-3) === 'extensions'
+			&& parts.at(-2) === 'copilot'
+			&& parts.at(-1) === 'package.json';
+	});
+
+	return manifest ? path.dirname(manifest) : undefined;
+}
+
+async function validatePackagedCopilot(options, buildOutput) {
+	const extensionDir = await findBuiltInCopilotExtension(buildOutput);
+	if (!extensionDir) {
+		throw new Error(`Built-in Copilot extension not found in ${buildOutput}`);
+	}
+
+	const platformArch = getNodePlatformArch(options);
+	const ripgrepShim = path.join(
+		extensionDir,
+		'node_modules',
+		'@github',
+		'copilot',
+		'sdk',
+		'ripgrep',
+		'bin',
+		platformArch
+	);
+	if (!(await exists(ripgrepShim))) {
+		throw new Error(`Copilot ripgrep shim not found: ${ripgrepShim}`);
+	}
+
+	const shimEntries = await fs.readdir(ripgrepShim);
+	if (!shimEntries.length) {
+		throw new Error(`Copilot ripgrep shim is empty: ${ripgrepShim}`);
+	}
+}
+
+async function runBuildWithCopilotVsix(options, buildOutput) {
+	const env = getBuildEnv(options);
+	const bundleTask = `esbuild-bundle-${options.platform}-${options.arch}-min`;
+	const packageTask = `vscode-${options.platform}-${options.arch}-min-ci`;
+
+	await runGulpTask('copy-codicons', options, env);
+	await runGulpTask('clean-extensions-build', options, env);
+	await runGulpTask('compile-non-native-extensions-build', options, env);
+	await runGulpTask('compile-extension-media-build', options, env);
+	await writeBuildDate();
+	await runGulpTask(bundleTask, options, env);
+	await extractCopilotVsix(options.copilotVsix);
+	await runGulpTask(packageTask, options, env);
+	await validatePackagedCopilot(options, buildOutput);
 }
 
 async function movePackage(source, destination) {
@@ -680,12 +909,11 @@ async function main() {
 
 	await prepareMixin(options.quality);
 	if (!options.skipBuild) {
-		await runWithMixin([
-			'npm',
-			'run',
-			'gulp',
-			taskName
-		], options, getBuildEnv(options));
+		if (options.copilotVsix) {
+			await runBuildWithCopilotVsix(options, buildOutput);
+		} else {
+			await runGulpTask(taskName, options, getBuildEnv(options));
+		}
 	}
 
 	await mixInCli(options, buildOutput);

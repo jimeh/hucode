@@ -46,3 +46,6 @@ Current local workflow:
   `-- --include-source-maps` to keep them for debugging.
 - `npm run hucode:build:release`: build a minified desktop app, create a zip
   archive, and move the app output into `dist/`.
+- `node build/hucode/release-build.js --copilot-vsix <path>`: inject a
+  prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
+  desktop app, matching the release workflow's smaller Copilot package shape.
