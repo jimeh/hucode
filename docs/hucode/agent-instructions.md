@@ -91,6 +91,9 @@ VS Code code that Hucode customizes.
   dependency generation in warn-only mode because the added CLI can change the
   generated package dependencies; the generated dependency list is still used in
   the package metadata.
+- Hucode's release wrapper cleans `.build/extensions` directly before packaging
+  with an external Copilot VSIX. Upstream defines `clean-extensions-build` as an
+  internal task object but does not register it as a public gulp task.
 - The public `@vscode/openssl-prebuilt` package extracts libraries under
   `out/<arch>/`, so Linux release CI must export OpenSSL paths from that nested
   directory. Do not add Ubuntu's `armhf` foreign architecture for the armhf

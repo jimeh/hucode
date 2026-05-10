@@ -469,8 +469,11 @@ async function runBuildWithCopilotVsix(options, buildOutput) {
 	const bundleTask = `esbuild-bundle-${options.platform}-${options.arch}-min`;
 	const packageTask = `vscode-${options.platform}-${options.arch}-min-ci`;
 
+	await fs.rm(path.join(repoRoot, '.build', 'extensions'), {
+		recursive: true,
+		force: true
+	});
 	await runGulpTask('copy-codicons', options, env);
-	await runGulpTask('clean-extensions-build', options, env);
 	await runGulpTask('compile-non-native-extensions-build', options, env);
 	await runGulpTask('compile-extension-media-build', options, env);
 	await writeBuildDate();
