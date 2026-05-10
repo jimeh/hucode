@@ -62,12 +62,56 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- Hucode local release packaging strips source maps by default by running the
+  upstream gulp build with `GITHUB_WORKSPACE` set for that subprocess. Pass
+  `--include-source-maps` to `build/hucode/release-build.js` only when a local
+  package needs debuggable bundled source maps.
 - For release app size work, read
   [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
   Code strips core source maps in CI, prunes production `node_modules` through
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
-  local release path currently packages Copilot from source and can ship a much
-  larger `extensions/copilot/node_modules` tree.
+  release workflow builds a Copilot VSIX once, uploads it as
+  `hucode-copilot-vsix`, downloads it in each platform job, and passes
+  `--copilot-vsix` to `build/hucode/release-build.js`. Local release builds
+  without `--copilot-vsix` still package Copilot from source and can ship a much
+  larger `extensions/copilot/node_modules` tree. The release wrapper rejects a
+  VSIX that already contains platform-specific Copilot executable packages or
+  ripgrep binaries; the target-specific ripgrep shim is injected by the
+  `vscode-*-min-ci` package task and validated afterward.
+- Hucode release CI runs `build/hucode/release-size-report.js` after packaging
+  each target. The report writes JSON and Markdown into the release artifact
+  directory, appends the Markdown to the GitHub step summary, and currently
+  warns when `extensions/copilot/node_modules` exceeds `100 MiB`. Treat this as
+  a guardrail baseline until post-VSIX release artifacts establish tighter
+  thresholds.
+- Hucode release packaging must mix the Rust CLI into desktop outputs before
+  archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
+  dependency generation expects `bin/<tunnelApplicationName>` to exist in
+  `../VSCode-linux-*`. Hucode's Linux DEB/RPM prepare tasks run upstream
+  dependency generation in warn-only mode because the added CLI can change the
+  generated package dependencies; the generated dependency list is still used in
+  the package metadata. The release wrapper patches generated DEB/RPM metadata
+  after upstream prepare tasks so package versions come from Hucode's
+  `hucodeVersion`, not upstream VS Code's `package.json` version.
+- Hucode's macOS DMG volume title comes from the overlay field
+  `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
+  changing upstream VS Code's stable/insider/exploration title defaults.
+- Hucode's release wrapper cleans `.build/extensions` directly before packaging
+  with an external Copilot VSIX. Upstream defines `clean-extensions-build` as an
+  internal task object but does not register it as a public gulp task.
+- The wrapper also runs `build/hucode/esbuild-bundle.js` directly instead of
+  invoking `esbuild-bundle-<platform>-<arch>-min`; those esbuild bundle tasks
+  are internal task objects, not public gulp tasks.
+- The public `@vscode/openssl-prebuilt` package extracts libraries under
+  `out/<arch>/`, so Linux and Windows release CI must export OpenSSL paths from
+  that nested directory before building the Rust CLI. Windows uses the
+  `*-windows-static` prebuilt directories and sets `OPENSSL_STATIC=1`. Do not
+  add Ubuntu's `armhf` foreign architecture for the armhf release job; the
+  cross-compiler packages install without it, and Noble's default security apt
+  source does not serve armhf indexes.
+- VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
+  for x64 and armhf release builds on x64 runners, but native arm64 GitHub
+  runners cannot execute the arm64 sysroot compiler binary.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the

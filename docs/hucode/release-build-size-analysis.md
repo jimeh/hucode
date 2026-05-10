@@ -378,9 +378,11 @@ builds.
 
 ### Preferred: Mirror Upstream Copilot VSIX Injection
 
-Add a Hucode release workflow stage/job that builds Copilot as a VSIX and
-extracts it into `.build/extensions/copilot` before the desktop app package
-task.
+The Hucode release workflow now has a `copilot-vsix` job that builds Copilot as
+a VSIX and uploads it as `hucode-copilot-vsix`. Platform build jobs download
+that artifact and pass it to `build/hucode/release-build.js --copilot-vsix`,
+which extracts the VSIX into `.build/extensions/copilot` before the desktop app
+package task.
 
 This is closest to upstream and most likely to reproduce official size:
 
@@ -398,8 +400,14 @@ The upstream model to copy is:
 - `build/azure-pipelines/common/downloadCopilotVsix.ts`
 - `build/azure-pipelines/darwin/steps/product-build-darwin-compile.yml`
 
-Hucode may not need Azure Pipeline artifact transfer exactly, but the important
-shape is: build VSIX once, then inject that VSIX output.
+Hucode mirrors that artifact shape through GitHub Actions rather than Azure
+Pipelines: build VSIX once, then inject that VSIX output.
+The official private `microsoft/vscode-capi` mixin is not publicly accessible,
+so Hucode's GitHub workflow uses the public Copilot build and packaging steps.
+The Hucode release wrapper also rejects VSIX contents that already carry
+platform-specific Copilot executable packages or ripgrep binaries. The final
+desktop package task injects the target-specific ripgrep shim and the wrapper
+validates that shim in the packaged app.
 
 ### Alternative: Make Local Copilot Packaging VSIX-Shaped
 
@@ -420,14 +428,11 @@ files that are copied or shimmed during `extensions/copilot/script/postinstall.t
 ### Also Fix Local Source Map Behavior
 
 For local `npm run hucode:build:production` and
-`npm run hucode:build:release`, consider forcing release packaging to strip
-local source maps even outside CI.
-
-Options:
-
-- set a Hucode-specific env var in `release-build.js`
-- teach `build/gulpfile.vscode.ts` to strip maps for Hucode release packaging
-- run the `-ci` package task after preparing all `.build/extensions` inputs
+`npm run hucode:build:release`, Hucode now forces release packaging to strip
+local source maps even outside CI. `build/hucode/release-build.js` sets
+`GITHUB_WORKSPACE` for the upstream gulp build subprocess, which reuses the
+existing upstream CI packaging path without modifying `build/gulpfile.vscode.ts`.
+Pass `--include-source-maps` to keep source maps in a local package.
 
 The Actions app is already much smaller because GitHub Actions sets
 `GITHUB_WORKSPACE`, making `isCI` true.
@@ -435,6 +440,22 @@ The Actions app is already much smaller because GitHub Actions sets
 ## Verification Commands
 
 Useful read-only checks:
+
+Release CI now writes size reports as build artifacts with:
+
+```bash
+node build/hucode/release-size-report.js \
+  --platform darwin \
+  --arch arm64 \
+  --app ../VSCode-darwin-arm64 \
+  --out .build/hucode/release/<version>/size-report-darwin-arm64.json \
+  --markdown-out .build/hucode/release/<version>/size-report-darwin-arm64.md \
+  --copilot-node-modules-warn-mb 100
+```
+
+The warning threshold is intentionally loose until a release workflow run with
+VSIX-injected Copilot establishes a stable baseline. Tighten it or add
+`--copilot-node-modules-fail-mb` after the first successful reports.
 
 ```bash
 du -sh \

@@ -41,6 +41,13 @@ Current local workflow:
 - `npm run hucode:generate-icons`: regenerate Hucode macOS icon assets from
   `build/hucode/icons/darwin/`.
 - `npm run hucode:build:production`: build a minified desktop app and move it
-  into the default `dist/hucode-<platform>-<arch>` output directory.
+  into the default `dist/hucode-<platform>-<arch>` output directory. Local
+  release builds strip packaged source maps by default; pass
+  `-- --include-source-maps` to keep them for debugging.
 - `npm run hucode:build:release`: build a minified desktop app, create a zip
   archive, and move the app output into `dist/`.
+- `node build/hucode/release-build.js --copilot-vsix <path>`: inject a
+  prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
+  desktop app, matching the release workflow's smaller Copilot package shape.
+- `node build/hucode/release-size-report.js --app <path>`: report packaged app
+  size, key subdirectory sizes, source-map totals, and release size guardrails.

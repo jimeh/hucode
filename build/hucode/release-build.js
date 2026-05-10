@@ -4,9 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { pipeline } from 'stream/promises';
+import yauzl from 'yauzl';
 import { prepareMixin } from './prepare-mixin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,10 +39,12 @@ Options:
 Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
+--copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
 --sign               Enable package signing. Not implemented yet.
+--include-source-maps  Keep local source maps in the packaged app.
 --skip-build         Package an existing ../VSCode-* app output.
 -h, --help           Show this help.
 `);
@@ -62,7 +67,9 @@ function parseArgs(args) {
 		platform: process.platform,
 		quality: 'stable',
 		out: 'dist',
+		copilotVsix: undefined,
 		sign: false,
+		stripSourceMaps: true,
 		skipBuild: false,
 		help: false
 	};
@@ -87,6 +94,12 @@ function parseArgs(args) {
 			case '--move-to-dist':
 				options.moveToDist = true;
 				break;
+			case '--copilot-vsix':
+				options.copilotVsix = path.resolve(
+					repoRoot,
+					readValue(args, ++i, arg)
+				);
+				break;
 			case '--platform':
 				options.platform = readValue(args, ++i, arg);
 				break;
@@ -98,6 +111,9 @@ function parseArgs(args) {
 				break;
 			case '--sign':
 				options.sign = true;
+				break;
+			case '--include-source-maps':
+				options.stripSourceMaps = false;
 				break;
 			case '--skip-build':
 				options.skipBuild = true;
@@ -134,6 +150,10 @@ function parseArgs(args) {
 		throw new Error('Package signing is not implemented for Hucode builds yet.');
 	}
 
+	if (options.skipBuild && options.copilotVsix) {
+		throw new Error('--copilot-vsix cannot be used with --skip-build.');
+	}
+
 	return options;
 }
 
@@ -142,6 +162,23 @@ const supportedArtifacts = new Map([
 	['linux', new Set(['archive', 'deb', 'rpm'])],
 	['win32', new Set(['archive', 'user-setup', 'system-setup'])]
 ]);
+
+const cliTargets = new Map([
+	['darwin-x64', 'x86_64-apple-darwin'],
+	['darwin-arm64', 'aarch64-apple-darwin'],
+	['linux-x64', 'x86_64-unknown-linux-gnu'],
+	['linux-arm64', 'aarch64-unknown-linux-gnu'],
+	['linux-armhf', 'armv7-unknown-linux-gnueabihf'],
+	['win32-x64', 'x86_64-pc-windows-msvc'],
+	['win32-arm64', 'aarch64-pc-windows-msvc']
+]);
+
+function getNodePlatformArch(options) {
+	const nodePlatform = options.platform === 'alpine' ? 'linux' : options.platform;
+	const nodeArch = options.arch === 'armhf' ? 'arm' : options.arch;
+
+	return `${nodePlatform}-${nodeArch}`;
+}
 
 function readValue(args, index, option) {
 	const value = args[index];
@@ -173,6 +210,30 @@ async function run(command, args, cwd, env = {}) {
 	});
 }
 
+async function capture(command, args, cwd) {
+	const chunks = [];
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd,
+			stdio: ['ignore', 'pipe', 'inherit'],
+			shell: process.platform === 'win32'
+		});
+
+		child.stdout.on('data', chunk => chunks.push(chunk));
+		child.on('error', reject);
+		child.on('exit', code => {
+			if (code === 0) {
+				resolve(undefined);
+				return;
+			}
+
+			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+		});
+	});
+
+	return Buffer.concat(chunks).toString('utf8').trim();
+}
+
 async function runWithMixin(args, options, env = {}) {
 	await run(process.execPath, [
 		path.join('build', 'hucode', 'run-with-mixin.js'),
@@ -187,6 +248,26 @@ async function runWithMixin(args, options, env = {}) {
 	});
 }
 
+async function runGulpTask(taskName, options, env = {}) {
+	await runWithMixin(['npm', 'run', 'gulp', taskName], options, env);
+}
+
+function getBuildEnv(options) {
+	if (!options.stripSourceMaps) {
+		return {};
+	}
+
+	return {
+		GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE ?? repoRoot
+	};
+}
+
+function getLinuxPackageDepsEnv() {
+	return {
+		HUCODE_LINUX_PACKAGE_DEPS_WARN_ONLY: '1'
+	};
+}
+
 async function exists(filePath) {
 	try {
 		await fs.access(filePath);
@@ -194,6 +275,214 @@ async function exists(filePath) {
 	} catch {
 		return false;
 	}
+}
+
+async function writeBuildDate() {
+	let date;
+	try {
+		date = await capture(
+			'git',
+			['log', '-1', '--format=%cI', 'HEAD'],
+			repoRoot
+		);
+	} catch {
+		date = new Date().toISOString();
+	}
+
+	const outBuild = path.join(repoRoot, 'out-build');
+	await fs.mkdir(outBuild, { recursive: true });
+	await fs.writeFile(path.join(outBuild, 'date'), date, 'utf8');
+}
+
+function openZip(zipPath) {
+	return new Promise((resolve, reject) => {
+		yauzl.open(zipPath, {
+			autoClose: true,
+			lazyEntries: true
+		}, (error, zipfile) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(zipfile);
+		});
+	});
+}
+
+function openZipEntry(zipfile, entry) {
+	return new Promise((resolve, reject) => {
+		zipfile.openReadStream(entry, (error, stream) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(stream);
+		});
+	});
+}
+
+function getExtensionRelativePath(entryName) {
+	if (!entryName.startsWith('extension/')) {
+		return undefined;
+	}
+
+	const relativePath = entryName.slice('extension/'.length);
+	if (!relativePath || relativePath.endsWith('/')) {
+		return undefined;
+	}
+
+	const normalized = path.normalize(relativePath);
+	if (
+		normalized === '..'
+		|| normalized.startsWith(`..${path.sep}`)
+		|| path.isAbsolute(normalized)
+	) {
+		throw new Error(`Unsafe VSIX entry path: ${entryName}`);
+	}
+
+	return normalized;
+}
+
+async function extractCopilotVsix(vsixPath) {
+	if (!(await exists(vsixPath))) {
+		throw new Error(`Copilot VSIX not found: ${vsixPath}`);
+	}
+
+	const outputDir = path.join(repoRoot, '.build', 'extensions', 'copilot');
+	await fs.rm(outputDir, { recursive: true, force: true });
+	await fs.mkdir(outputDir, { recursive: true });
+
+	const zipfile = await openZip(vsixPath);
+	await new Promise((resolve, reject) => {
+		zipfile.on('entry', async entry => {
+			try {
+				const relativePath = getExtensionRelativePath(entry.fileName);
+				if (!relativePath) {
+					zipfile.readEntry();
+					return;
+				}
+
+				const destination = path.join(outputDir, relativePath);
+				await fs.mkdir(path.dirname(destination), { recursive: true });
+				const stream = await openZipEntry(zipfile, entry);
+				await pipeline(stream, createWriteStream(destination));
+				zipfile.readEntry();
+			} catch (error) {
+				reject(error);
+			}
+		});
+		zipfile.on('close', resolve);
+		zipfile.on('error', reject);
+		zipfile.readEntry();
+	});
+
+	const manifestPath = path.join(outputDir, 'package.json');
+	if (!(await exists(manifestPath))) {
+		throw new Error(`Copilot VSIX did not contain extension/package.json.`);
+	}
+
+	await validateExtractedCopilotVsix(outputDir);
+
+	console.log(`Copilot VSIX: ${vsixPath}`);
+	console.log(`Copilot extension: ${outputDir}`);
+}
+
+async function validateExtractedCopilotVsix(outputDir) {
+	const copilotModules = path.join(outputDir, 'node_modules', '@github');
+	if (await exists(copilotModules)) {
+		const entries = await fs.readdir(copilotModules, { withFileTypes: true });
+		const platformPackages = entries
+			.filter(entry => entry.isDirectory())
+			.map(entry => entry.name)
+			.filter(name => /^copilot-(darwin|linux|win32)-/.test(name));
+		if (platformPackages.length) {
+			throw new Error(
+				'Copilot VSIX includes platform-specific executable packages: ' +
+				platformPackages.join(', ')
+			);
+		}
+	}
+
+	const ripgrepRoot = path.join(
+		outputDir,
+		'node_modules',
+		'@github',
+		'copilot',
+		'sdk',
+		'ripgrep',
+		'bin'
+	);
+	if (await exists(ripgrepRoot)) {
+		throw new Error(
+			'Copilot VSIX includes ripgrep binaries; release packaging must ' +
+			'inject the target-specific ripgrep shim instead.'
+		);
+	}
+}
+
+async function findBuiltInCopilotExtension(buildOutput) {
+	const manifest = await findFirst(buildOutput, filePath => {
+		if (path.basename(filePath) !== 'package.json') {
+			return false;
+		}
+
+		const parts = path.relative(buildOutput, filePath).split(path.sep);
+		return parts.at(-3) === 'extensions'
+			&& parts.at(-2) === 'copilot'
+			&& parts.at(-1) === 'package.json';
+	});
+
+	return manifest ? path.dirname(manifest) : undefined;
+}
+
+async function validatePackagedCopilot(options, buildOutput) {
+	const extensionDir = await findBuiltInCopilotExtension(buildOutput);
+	if (!extensionDir) {
+		throw new Error(`Built-in Copilot extension not found in ${buildOutput}`);
+	}
+
+	const platformArch = getNodePlatformArch(options);
+	const ripgrepShim = path.join(
+		extensionDir,
+		'node_modules',
+		'@github',
+		'copilot',
+		'sdk',
+		'ripgrep',
+		'bin',
+		platformArch
+	);
+	if (!(await exists(ripgrepShim))) {
+		throw new Error(`Copilot ripgrep shim not found: ${ripgrepShim}`);
+	}
+
+	const shimEntries = await fs.readdir(ripgrepShim);
+	if (!shimEntries.length) {
+		throw new Error(`Copilot ripgrep shim is empty: ${ripgrepShim}`);
+	}
+}
+
+async function runBuildWithCopilotVsix(options, buildOutput) {
+	const env = getBuildEnv(options);
+	const packageTask = `vscode-${options.platform}-${options.arch}-min-ci`;
+
+	await fs.rm(path.join(repoRoot, '.build', 'extensions'), {
+		recursive: true,
+		force: true
+	});
+	await runGulpTask('copy-codicons', options, env);
+	await runGulpTask('compile-non-native-extensions-build', options, env);
+	await runGulpTask('compile-extension-media-build', options, env);
+	await writeBuildDate();
+	await runWithMixin([
+		process.execPath,
+		path.join('build', 'hucode', 'esbuild-bundle.js')
+	], options, env);
+	await extractCopilotVsix(options.copilotVsix);
+	await runGulpTask(packageTask, options, env);
+	await validatePackagedCopilot(options, buildOutput);
 }
 
 async function movePackage(source, destination) {
@@ -280,6 +569,284 @@ async function findFirst(root, predicate) {
 	return undefined;
 }
 
+function getCliTarget(options) {
+	const target = cliTargets.get(`${options.platform}-${options.arch}`);
+	if (!target) {
+		throw new Error(
+			`Unsupported CLI target '${options.platform}-${options.arch}'.`
+		);
+	}
+
+	return target;
+}
+
+async function findAppProductJson(options, buildOutput) {
+	const appProductPath = path.join(
+		buildOutput,
+		'resources',
+		'app',
+		'product.json'
+	);
+	if (await exists(appProductPath)) {
+		return appProductPath;
+	}
+
+	return findFirst(buildOutput, filePath => {
+		if (path.basename(filePath) !== 'product.json') {
+			return false;
+		}
+
+		const parts = path.relative(buildOutput, filePath).split(path.sep);
+		if (options.platform === 'darwin') {
+			return parts.length >= 5
+				&& parts.at(-5).endsWith('.app')
+				&& parts.at(-4) === 'Contents'
+				&& parts.at(-3) === 'Resources'
+				&& parts.at(-2) === 'app';
+		}
+
+		return parts.length >= 3
+			&& parts.at(-3) === 'resources'
+			&& parts.at(-2) === 'app';
+	});
+}
+
+function getAppCliDestination(options, buildOutput, product) {
+	if (options.platform === 'darwin') {
+		return path.join(
+			buildOutput,
+			`${product.nameLong}.app`,
+			'Contents',
+			'Resources',
+			'app',
+			'bin',
+			product.tunnelApplicationName
+		);
+	}
+
+	return path.join(
+		buildOutput,
+		'bin',
+		`${product.tunnelApplicationName}${options.platform === 'win32' ? '.exe' : ''}`
+	);
+}
+
+async function getLinuxCliEnv(options) {
+	if (options.platform !== 'linux') {
+		return {};
+	}
+
+	const targets = new Map([
+		['x64', {
+			cargo: 'X86_64_UNKNOWN_LINUX_GNU',
+			cc: 'CC_x86_64_unknown_linux_gnu',
+			pkgConfig: 'x86_64_unknown_linux_gnu',
+			sysrootLibArch: 'x86_64-linux-gnu',
+			triple: 'x86_64-linux-gnu'
+		}],
+		['arm64', {
+			cargo: 'AARCH64_UNKNOWN_LINUX_GNU',
+			cc: 'CC_aarch64_unknown_linux_gnu',
+			pkgConfig: 'aarch64_unknown_linux_gnu',
+			sysrootLibArch: 'aarch64-linux-gnu',
+			triple: 'aarch64-linux-gnu'
+		}],
+		['armhf', {
+			cargo: 'ARMV7_UNKNOWN_LINUX_GNUEABIHF',
+			cc: 'CC_armv7_unknown_linux_gnueabihf',
+			pkgConfig: 'armv7_unknown_linux_gnueabihf',
+			sysrootLibArch: 'arm-rpi-linux-gnueabihf',
+			triple: 'arm-rpi-linux-gnueabihf'
+		}]
+	]);
+	const target = targets.get(options.arch);
+	if (!target) {
+		throw new Error(`Unsupported Linux CLI arch '${options.arch}'.`);
+	}
+
+	const sysrootRoot = process.env.VSCODE_SYSROOT_DIR
+		?? path.join(repoRoot, '.build', 'sysroots');
+	const sysroot = path.join(
+		sysrootRoot,
+		target.triple,
+		target.triple,
+		'sysroot'
+	);
+	const gcc = path.join(
+		sysrootRoot,
+		target.triple,
+		'bin',
+		`${target.triple}-gcc`
+	);
+
+	if (options.arch === 'arm64' && process.arch === 'arm64') {
+		return {};
+	}
+
+	if (!(await exists(gcc))) {
+		if (process.env.CI || options.arch === 'armhf') {
+			throw new Error(
+				`Linux CLI sysroot toolchain not found: ${gcc}. ` +
+				'Run the sysroot download step or set VSCODE_SYSROOT_DIR.'
+			);
+		}
+
+		return {};
+	}
+
+	const rustFlags = [
+		`-C link-arg=--sysroot=${sysroot}`,
+		`-C link-arg=-L${sysroot}/usr/lib/${target.sysrootLibArch}`
+	].join(' ');
+	return {
+		[`CARGO_TARGET_${target.cargo}_LINKER`]: gcc,
+		[`CARGO_TARGET_${target.cargo}_RUSTFLAGS`]: rustFlags,
+		[target.cc]: `${gcc} --sysroot=${sysroot}`,
+		[`PKG_CONFIG_LIBDIR_${target.pkgConfig}`]:
+			`${sysroot}/usr/lib/${target.sysrootLibArch}/pkgconfig:` +
+			`${sysroot}/usr/share/pkgconfig`,
+		[`PKG_CONFIG_SYSROOT_DIR_${target.pkgConfig}`]: sysroot
+	};
+}
+
+async function readJson(filePath) {
+	return JSON.parse(await fs.readFile(filePath, 'utf8'));
+}
+
+async function readMixinProduct(options) {
+	return readJson(
+		path.join(
+			repoRoot,
+			'.build',
+			'distro',
+			'mixin',
+			options.quality,
+			'product.json'
+		)
+	);
+}
+
+async function getHucodePackageVersion(options, packageType) {
+	const product = await readMixinProduct(options);
+	const version = product.hucodeVersion;
+	if (!version) {
+		throw new Error('Hucode product mixin does not define hucodeVersion.');
+	}
+
+	if (packageType === 'rpm' && !/^[A-Za-z0-9._+~]+$/.test(version)) {
+		throw new Error(
+			`hucodeVersion '${version}' is not a valid RPM Version.`
+		);
+	}
+
+	if (packageType === 'deb' && !/^[0-9][A-Za-z0-9.+:~.-]*$/.test(version)) {
+		throw new Error(
+			`hucodeVersion '${version}' is not a valid Debian Version.`
+		);
+	}
+
+	return version;
+}
+
+function applyDebianPackageVersion(controlContent, hucodeVersion) {
+	const match = /^Version:\s*(\S+)\s*$/m.exec(controlContent);
+	if (!match) {
+		throw new Error('DEB control file does not contain a Version field.');
+	}
+
+	const existingVersion = match[1];
+	const revisionIndex = existingVersion.lastIndexOf('-');
+	const version = revisionIndex === -1
+		? hucodeVersion
+		: `${hucodeVersion}${existingVersion.slice(revisionIndex)}`;
+
+	return controlContent.replace(
+		/^Version:\s*\S+\s*$/m,
+		`Version: ${version}`
+	);
+}
+
+function applyRpmPackageVersion(specContent, hucodeVersion) {
+	if (!/^Version:\s*\S+\s*$/m.test(specContent)) {
+		throw new Error('RPM spec file does not contain a Version field.');
+	}
+
+	return specContent.replace(
+		/^Version:\s*\S+\s*$/m,
+		`Version:  ${hucodeVersion}`
+	);
+}
+
+async function patchLinuxPackageVersion(options, buildRoot, packageType) {
+	const version = await getHucodePackageVersion(options, packageType);
+	const filePath = await findFirst(buildRoot, candidate => {
+		if (packageType === 'deb') {
+			return path.basename(candidate) === 'control'
+				&& path.basename(path.dirname(candidate)) === 'DEBIAN';
+		}
+
+		return path.extname(candidate) === '.spec'
+			&& path.basename(path.dirname(candidate)) === 'SPECS';
+	});
+
+	if (!filePath) {
+		throw new Error(
+			`Linux ${packageType.toUpperCase()} metadata was not created.`
+		);
+	}
+
+	const content = await fs.readFile(filePath, 'utf8');
+	const patched = packageType === 'deb'
+		? applyDebianPackageVersion(content, version)
+		: applyRpmPackageVersion(content, version);
+
+	await fs.writeFile(filePath, patched, 'utf8');
+	console.log(`Hucode ${packageType.toUpperCase()} version: ${version}`);
+}
+
+async function mixInCli(options, buildOutput) {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
+	}
+
+	const product = await readJson(appProductPath);
+	const target = getCliTarget(options);
+	const commit = process.env.GITHUB_SHA
+		?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
+	await run('cargo', [
+		'build',
+		'--release',
+		'--target',
+		target,
+		'--bin',
+		'code'
+	], path.join(repoRoot, 'cli'), {
+		CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
+		VSCODE_CLI_COMMIT: commit,
+		VSCODE_CLI_PRODUCT_JSON: appProductPath,
+		...await getLinuxCliEnv(options)
+	});
+
+	const cliBinary = path.join(
+		repoRoot,
+		'cli',
+		'target',
+		target,
+		'release',
+		`code${options.platform === 'win32' ? '.exe' : ''}`
+	);
+	const destination = getAppCliDestination(options, buildOutput, product);
+	await fs.mkdir(path.dirname(destination), { recursive: true });
+	await fs.copyFile(cliBinary, destination);
+
+	if (options.platform !== 'win32') {
+		await fs.chmod(destination, 0o755);
+	}
+
+	console.log(`Hucode CLI: ${destination}`);
+}
+
 async function packageArchive(buildOutput, distRoot, distName) {
 	const archivePath = path.join(distRoot, `${distName}.zip`);
 	await createArchive(buildOutput, archivePath);
@@ -312,7 +879,8 @@ async function packageDeb(options, distRoot) {
 		'run',
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-deb`
-	], options);
+	], options, getLinuxPackageDepsEnv());
+	await patchLinuxPackageVersion(options, buildRoot, 'deb');
 	await runWithMixin([
 		'npm',
 		'run',
@@ -342,7 +910,8 @@ async function packageRpm(options, distRoot) {
 		'run',
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-rpm`
-	], options);
+	], options, getLinuxPackageDepsEnv());
+	await patchLinuxPackageVersion(options, buildRoot, 'rpm');
 	await runWithMixin([
 		'npm',
 		'run',
@@ -444,13 +1013,14 @@ async function main() {
 
 	await prepareMixin(options.quality);
 	if (!options.skipBuild) {
-		await runWithMixin([
-			'npm',
-			'run',
-			'gulp',
-			taskName
-		], options);
+		if (options.copilotVsix) {
+			await runBuildWithCopilotVsix(options, buildOutput);
+		} else {
+			await runGulpTask(taskName, options, getBuildEnv(options));
+		}
 	}
+
+	await mixInCli(options, buildOutput);
 
 	for (const artifact of options.artifacts) {
 		await packageArtifact(artifact, options, {
