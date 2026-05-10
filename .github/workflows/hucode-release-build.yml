@@ -164,18 +164,37 @@ jobs:
         working-directory: extensions/copilot
         run: |
           set -euo pipefail
-          json_files="$(mktemp)"
-          trap 'rm -f "$json_files"' EXIT
-          find . -name "*.json" -type f \
-            -not -path "*/node_modules/*" \
-            -print0 > "$json_files"
-          JSON_FILES="$json_files" node <<'NODE'
+          node <<'NODE'
           const fs = require('fs');
+          const path = require('path');
           const { parse } = require('jsonc-parser');
-          const files = fs.readFileSync(process.env.JSON_FILES)
-            .toString('utf8')
-            .split('\0')
-            .filter(Boolean);
+          const files = new Set();
+
+          function add(file) {
+            if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+              files.add(file);
+            }
+          }
+
+          function addMatchingFiles(dir, pattern) {
+            if (!fs.existsSync(dir)) {
+              return;
+            }
+
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const file = path.join(dir, entry.name);
+              if (entry.isFile() && pattern.test(entry.name)) {
+                files.add(file);
+              }
+            }
+          }
+
+          add('package.json');
+          add('package.nls.json');
+          add('telemetry.json');
+          addMatchingFiles('.', /^package\.nls\..+\.json$/);
+          addMatchingFiles('l10n', /^bundle\.l10n\..+\.json$/);
+          addMatchingFiles('dist', /\.json$/);
 
           for (const file of files) {
             console.log(`Minifying ${file}`);
