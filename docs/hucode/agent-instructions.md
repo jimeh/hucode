@@ -90,7 +90,12 @@ VS Code code that Hucode customizes.
   `../VSCode-linux-*`. Hucode's Linux DEB/RPM prepare tasks run upstream
   dependency generation in warn-only mode because the added CLI can change the
   generated package dependencies; the generated dependency list is still used in
-  the package metadata.
+  the package metadata. The release wrapper patches generated DEB/RPM metadata
+  after upstream prepare tasks so package versions come from Hucode's
+  `hucodeVersion`, not upstream VS Code's `package.json` version.
+- Hucode's macOS DMG volume title comes from the overlay field
+  `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
+  changing upstream VS Code's stable/insider/exploration title defaults.
 - Hucode's release wrapper cleans `.build/extensions` directly before packaging
   with an external Copilot VSIX. Upstream defines `clean-extensions-build` as an
   internal task object but does not register it as a public gulp task.

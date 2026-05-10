@@ -713,6 +713,97 @@ async function readJson(filePath) {
 	return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
+async function readMixinProduct(options) {
+	return readJson(
+		path.join(
+			repoRoot,
+			'.build',
+			'distro',
+			'mixin',
+			options.quality,
+			'product.json'
+		)
+	);
+}
+
+async function getHucodePackageVersion(options, packageType) {
+	const product = await readMixinProduct(options);
+	const version = product.hucodeVersion;
+	if (!version) {
+		throw new Error('Hucode product mixin does not define hucodeVersion.');
+	}
+
+	if (packageType === 'rpm' && !/^[A-Za-z0-9._+~]+$/.test(version)) {
+		throw new Error(
+			`hucodeVersion '${version}' is not a valid RPM Version.`
+		);
+	}
+
+	if (packageType === 'deb' && !/^[0-9][A-Za-z0-9.+:~.-]*$/.test(version)) {
+		throw new Error(
+			`hucodeVersion '${version}' is not a valid Debian Version.`
+		);
+	}
+
+	return version;
+}
+
+function applyDebianPackageVersion(controlContent, hucodeVersion) {
+	const match = /^Version:\s*(\S+)\s*$/m.exec(controlContent);
+	if (!match) {
+		throw new Error('DEB control file does not contain a Version field.');
+	}
+
+	const existingVersion = match[1];
+	const revisionIndex = existingVersion.lastIndexOf('-');
+	const version = revisionIndex === -1
+		? hucodeVersion
+		: `${hucodeVersion}${existingVersion.slice(revisionIndex)}`;
+
+	return controlContent.replace(
+		/^Version:\s*\S+\s*$/m,
+		`Version: ${version}`
+	);
+}
+
+function applyRpmPackageVersion(specContent, hucodeVersion) {
+	if (!/^Version:\s*\S+\s*$/m.test(specContent)) {
+		throw new Error('RPM spec file does not contain a Version field.');
+	}
+
+	return specContent.replace(
+		/^Version:\s*\S+\s*$/m,
+		`Version:  ${hucodeVersion}`
+	);
+}
+
+async function patchLinuxPackageVersion(options, buildRoot, packageType) {
+	const version = await getHucodePackageVersion(options, packageType);
+	const filePath = await findFirst(buildRoot, candidate => {
+		if (packageType === 'deb') {
+			return path.basename(candidate) === 'control'
+				&& path.basename(path.dirname(candidate)) === 'DEBIAN';
+		}
+
+		return path.extname(candidate) === '.spec'
+			&& path.basename(path.dirname(candidate)) === 'SPECS';
+	});
+
+	if (!filePath) {
+		throw new Error(
+			`Linux ${packageType.toUpperCase()} metadata was not created.`
+		);
+	}
+
+	const content = await fs.readFile(filePath, 'utf8');
+	const patched = packageType === 'deb'
+		? applyDebianPackageVersion(content, version)
+		: applyRpmPackageVersion(content, version);
+
+	await fs.writeFile(filePath, patched, 'utf8');
+	console.log(`Hucode ${packageType.toUpperCase()} version: ${version}`);
+}
+
 async function mixInCli(options, buildOutput) {
 	const appProductPath = await findAppProductJson(options, buildOutput);
 	if (!appProductPath) {
@@ -789,6 +880,7 @@ async function packageDeb(options, distRoot) {
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-deb`
 	], options, getLinuxPackageDepsEnv());
+	await patchLinuxPackageVersion(options, buildRoot, 'deb');
 	await runWithMixin([
 		'npm',
 		'run',
@@ -819,6 +911,7 @@ async function packageRpm(options, distRoot) {
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-rpm`
 	], options, getLinuxPackageDepsEnv());
+	await patchLinuxPackageVersion(options, buildRoot, 'rpm');
 	await runWithMixin([
 		'npm',
 		'run',
