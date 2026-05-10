@@ -93,6 +93,7 @@ jobs:
               platform: 'win32',
               arch: 'x64',
               npm_arch: 'x64',
+              openssl_arch: 'x64-windows-static',
               rust_target: 'x86_64-pc-windows-msvc',
               runner: 'windows-latest',
               artifacts: 'archive,user-setup,system-setup'
@@ -101,6 +102,7 @@ jobs:
               platform: 'win32',
               arch: 'arm64',
               npm_arch: 'arm64',
+              openssl_arch: 'arm64-windows-static',
               rust_target: 'aarch64-pc-windows-msvc',
               runner: 'windows-11-arm',
               artifacts: 'archive,user-setup,system-setup'
@@ -300,8 +302,8 @@ jobs:
               libc6-dev-armhf-cross
           fi
 
-      - name: Download Linux OpenSSL prebuilt
-        if: matrix.platform == 'linux'
+      - name: Download OpenSSL prebuilt
+        if: matrix.platform == 'linux' || matrix.platform == 'win32'
         shell: bash
         run: |
           set -euo pipefail
@@ -316,9 +318,20 @@ jobs:
             echo "OpenSSL prebuilt not found: $openssl_arch_root" >&2
             exit 1
           fi
+
+          openssl_lib_dir="$openssl_arch_root/lib"
+          openssl_include_dir="$openssl_arch_root/include"
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            openssl_lib_dir="$(cygpath -w "$openssl_lib_dir")"
+            openssl_include_dir="$(cygpath -w "$openssl_include_dir")"
+          fi
+
           {
-            echo "OPENSSL_LIB_DIR=$openssl_arch_root/lib"
-            echo "OPENSSL_INCLUDE_DIR=$openssl_arch_root/include"
+            echo "OPENSSL_LIB_DIR=$openssl_lib_dir"
+            echo "OPENSSL_INCLUDE_DIR=$openssl_include_dir"
+            if [ "${{ matrix.platform }}" = "win32" ]; then
+              echo "OPENSSL_STATIC=1"
+            fi
           } >> "$GITHUB_ENV"
 
       - name: Install macOS build tools

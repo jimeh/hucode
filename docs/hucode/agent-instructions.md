@@ -98,10 +98,12 @@ VS Code code that Hucode customizes.
   invoking `esbuild-bundle-<platform>-<arch>-min`; those esbuild bundle tasks
   are internal task objects, not public gulp tasks.
 - The public `@vscode/openssl-prebuilt` package extracts libraries under
-  `out/<arch>/`, so Linux release CI must export OpenSSL paths from that nested
-  directory. Do not add Ubuntu's `armhf` foreign architecture for the armhf
-  release job; the cross-compiler packages install without it, and Noble's
-  default security apt source does not serve armhf indexes.
+  `out/<arch>/`, so Linux and Windows release CI must export OpenSSL paths from
+  that nested directory before building the Rust CLI. Windows uses the
+  `*-windows-static` prebuilt directories and sets `OPENSSL_STATIC=1`. Do not
+  add Ubuntu's `armhf` foreign architecture for the armhf release job; the
+  cross-compiler packages install without it, and Noble's default security apt
+  source does not serve armhf indexes.
 - VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
   runners cannot execute the arm64 sysroot compiler binary.
