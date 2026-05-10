@@ -206,10 +206,11 @@ it is not enough for the first push of a new Hucode repo.
 Before the first publish to `origin`, expect to:
 
 - fetch enough history for the chosen release line
-- fetch reachable Git LFS objects for that history
+- account for any reachable legacy Git LFS pointers in that history
 
-Without that, GitHub may reject the first push because required objects are
-missing.
+Hucode's current tree does not require Git LFS, but older commits may still
+contain upstream Copilot simulation cache LFS pointers. GitHub may reject a
+push of that history if referenced LFS objects are missing.
 
 ## Keeping The Diff Healthy
 
