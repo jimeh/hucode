@@ -167,10 +167,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ matrix.arch }}" = "armhf" ]; then
-            sudo dpkg --add-architecture armhf
-          fi
-
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -204,9 +200,14 @@ jobs:
           tar -xzf "$openssl_root/$tarball" \
             --strip-components=1 \
             --directory="$openssl_root"
+          openssl_arch_root="$openssl_root/out/${{ matrix.openssl_arch }}"
+          if [ ! -d "$openssl_arch_root/lib" ]; then
+            echo "OpenSSL prebuilt not found: $openssl_arch_root" >&2
+            exit 1
+          fi
           {
-            echo "OPENSSL_LIB_DIR=$openssl_root/${{ matrix.openssl_arch }}/lib"
-            echo "OPENSSL_INCLUDE_DIR=$openssl_root/${{ matrix.openssl_arch }}/include"
+            echo "OPENSSL_LIB_DIR=$openssl_arch_root/lib"
+            echo "OPENSSL_INCLUDE_DIR=$openssl_arch_root/include"
           } >> "$GITHUB_ENV"
 
       - name: Install macOS build tools

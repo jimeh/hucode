@@ -424,6 +424,10 @@ async function getLinuxCliEnv(options) {
 		`${target.triple}-gcc`
 	);
 
+	if (options.arch === 'arm64' && process.arch === 'arm64') {
+		return {};
+	}
+
 	if (!(await exists(gcc))) {
 		if (process.env.CI || options.arch === 'armhf') {
 			throw new Error(

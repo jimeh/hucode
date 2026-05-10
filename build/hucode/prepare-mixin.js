@@ -7,7 +7,7 @@ import assert from 'assert';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -121,7 +121,9 @@ async function runUpstreamMixin(quality, tmpRoot) {
 	const script = [
 		`process.chdir(${JSON.stringify(tmpRoot)});`,
 		`await import(${JSON.stringify(
-			path.join(repoRoot, 'build/azure-pipelines/distro/mixin-quality.ts')
+			pathToFileURL(
+				path.join(repoRoot, 'build/azure-pipelines/distro/mixin-quality.ts')
+			).href
 		)});`
 	].join('\n');
 

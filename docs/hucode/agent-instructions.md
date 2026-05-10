@@ -72,6 +72,14 @@ VS Code code that Hucode customizes.
   archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
   dependency generation expects `bin/<tunnelApplicationName>` to exist in
   `../VSCode-linux-*`.
+- The public `@vscode/openssl-prebuilt` package extracts libraries under
+  `out/<arch>/`, so Linux release CI must export OpenSSL paths from that nested
+  directory. Do not add Ubuntu's `armhf` foreign architecture for the armhf
+  release job; the cross-compiler packages install without it, and Noble's
+  default security apt source does not serve armhf indexes.
+- VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
+  for x64 and armhf release builds on x64 runners, but native arm64 GitHub
+  runners cannot execute the arm64 sysroot compiler binary.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the
