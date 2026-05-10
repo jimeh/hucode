@@ -262,6 +262,12 @@ function getBuildEnv(options) {
 	};
 }
 
+function getLinuxPackageDepsEnv() {
+	return {
+		HUCODE_LINUX_PACKAGE_DEPS_WARN_ONLY: '1'
+	};
+}
+
 async function exists(filePath) {
 	try {
 		await fs.access(filePath);
@@ -777,7 +783,7 @@ async function packageDeb(options, distRoot) {
 		'run',
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-deb`
-	], options);
+	], options, getLinuxPackageDepsEnv());
 	await runWithMixin([
 		'npm',
 		'run',
@@ -807,7 +813,7 @@ async function packageRpm(options, distRoot) {
 		'run',
 		'gulp',
 		`vscode-linux-${options.arch}-prepare-rpm`
-	], options);
+	], options, getLinuxPackageDepsEnv());
 	await runWithMixin([
 		'npm',
 		'run',

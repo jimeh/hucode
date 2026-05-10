@@ -357,6 +357,7 @@ jobs:
         run: npm run hucode:validate
 
       - name: Prepare built-in extensions cache key
+        shell: bash
         run: |
           mkdir -p .build
           node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts > .build/builtindepshash

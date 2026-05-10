@@ -87,7 +87,10 @@ VS Code code that Hucode customizes.
 - Hucode release packaging must mix the Rust CLI into desktop outputs before
   archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
   dependency generation expects `bin/<tunnelApplicationName>` to exist in
-  `../VSCode-linux-*`.
+  `../VSCode-linux-*`. Hucode's Linux DEB/RPM prepare tasks run upstream
+  dependency generation in warn-only mode because the added CLI can change the
+  generated package dependencies; the generated dependency list is still used in
+  the package metadata.
 - The public `@vscode/openssl-prebuilt` package extracts libraries under
   `out/<arch>/`, so Linux release CI must export OpenSSL paths from that nested
   directory. Do not add Ubuntu's `armhf` foreign architecture for the armhf
