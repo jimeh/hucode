@@ -420,14 +420,11 @@ files that are copied or shimmed during `extensions/copilot/script/postinstall.t
 ### Also Fix Local Source Map Behavior
 
 For local `npm run hucode:build:production` and
-`npm run hucode:build:release`, consider forcing release packaging to strip
-local source maps even outside CI.
-
-Options:
-
-- set a Hucode-specific env var in `release-build.js`
-- teach `build/gulpfile.vscode.ts` to strip maps for Hucode release packaging
-- run the `-ci` package task after preparing all `.build/extensions` inputs
+`npm run hucode:build:release`, Hucode now forces release packaging to strip
+local source maps even outside CI. `build/hucode/release-build.js` sets
+`GITHUB_WORKSPACE` for the upstream gulp build subprocess, which reuses the
+existing upstream CI packaging path without modifying `build/gulpfile.vscode.ts`.
+Pass `--include-source-maps` to keep source maps in a local package.
 
 The Actions app is already much smaller because GitHub Actions sets
 `GITHUB_WORKSPACE`, making `isCI` true.

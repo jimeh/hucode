@@ -62,6 +62,10 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- Hucode local release packaging strips source maps by default by running the
+  upstream gulp build with `GITHUB_WORKSPACE` set for that subprocess. Pass
+  `--include-source-maps` to `build/hucode/release-build.js` only when a local
+  package needs debuggable bundled source maps.
 - For release app size work, read
   [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
   Code strips core source maps in CI, prunes production `node_modules` through

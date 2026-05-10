@@ -40,6 +40,7 @@ Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
 --sign               Enable package signing. Not implemented yet.
+--include-source-maps  Keep local source maps in the packaged app.
 --skip-build         Package an existing ../VSCode-* app output.
 -h, --help           Show this help.
 `);
@@ -63,6 +64,7 @@ function parseArgs(args) {
 		quality: 'stable',
 		out: 'dist',
 		sign: false,
+		stripSourceMaps: true,
 		skipBuild: false,
 		help: false
 	};
@@ -98,6 +100,9 @@ function parseArgs(args) {
 				break;
 			case '--sign':
 				options.sign = true;
+				break;
+			case '--include-source-maps':
+				options.stripSourceMaps = false;
 				break;
 			case '--skip-build':
 				options.skipBuild = true;
@@ -219,6 +224,16 @@ async function runWithMixin(args, options, env = {}) {
 		VSCODE_QUALITY: options.quality,
 		...env
 	});
+}
+
+function getBuildEnv(options) {
+	if (!options.stripSourceMaps) {
+		return {};
+	}
+
+	return {
+		GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE ?? repoRoot
+	};
 }
 
 async function exists(filePath) {
@@ -670,7 +685,7 @@ async function main() {
 			'run',
 			'gulp',
 			taskName
-		], options);
+		], options, getBuildEnv(options));
 	}
 
 	await mixInCli(options, buildOutput);

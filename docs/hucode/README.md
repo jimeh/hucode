@@ -41,6 +41,8 @@ Current local workflow:
 - `npm run hucode:generate-icons`: regenerate Hucode macOS icon assets from
   `build/hucode/icons/darwin/`.
 - `npm run hucode:build:production`: build a minified desktop app and move it
-  into the default `dist/hucode-<platform>-<arch>` output directory.
+  into the default `dist/hucode-<platform>-<arch>` output directory. Local
+  release builds strip packaged source maps by default; pass
+  `-- --include-source-maps` to keep them for debugging.
 - `npm run hucode:build:release`: build a minified desktop app, create a zip
   archive, and move the app output into `dist/`.
