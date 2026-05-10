@@ -164,28 +164,33 @@ jobs:
         working-directory: extensions/copilot
         run: |
           set -euo pipefail
-          find . -name "*.json" -type f -print0 | while IFS= read -r -d '' file; do
-            if [[ "$file" == *"/node_modules/"* ]]; then
-              continue
-            fi
+          json_files="$(mktemp)"
+          trap 'rm -f "$json_files"' EXIT
+          find . -name "*.json" -type f \
+            -not -path "*/node_modules/*" \
+            -print0 > "$json_files"
+          JSON_FILES="$json_files" node <<'NODE'
+          const fs = require('fs');
+          const { parse } = require('jsonc-parser');
+          const files = fs.readFileSync(process.env.JSON_FILES)
+            .toString('utf8')
+            .split('\0')
+            .filter(Boolean);
 
-            echo "Minifying $file"
-            FILE="$file" node <<'NODE'
-            const fs = require('fs');
-            const { parse } = require('jsonc-parser');
-            const file = process.env.FILE;
+          for (const file of files) {
+            console.log(`Minifying ${file}`);
             const contents = fs.readFileSync(file, 'utf8');
             const errors = [];
             const parsed = parse(contents, errors);
             if (errors.length) {
-              throw new Error(`Failed to parse ${file}: ${JSON.stringify(errors)}`);
+              throw new Error(
+                `Failed to parse ${file}: ${JSON.stringify(errors)}`
+              );
             }
-            const minified = JSON.stringify(parsed, null, 0);
-            fs.writeFileSync(`${file}.min`, minified);
-            NODE
-            test -s "$file.min"
-            mv "$file.min" "$file"
-          done
+
+            fs.writeFileSync(file, JSON.stringify(parsed, null, 0));
+          }
+          NODE
 
       - name: Package Copilot VSIX
         run: npx vsce package -o copilot-chat.vsix --allow-package-secrets sendgrid
@@ -414,10 +419,8 @@ jobs:
           retention-days: 14
 
   publish-release:
-    name: Publish GitHub release (disabled)
-    # TODO: Enable once release workflow has been tested and verified.
-    # if: github.event_name == 'push'
-    if: false
+    name: Publish GitHub release (disabled by default)
+    if: github.event_name == 'push' && vars.HUCODE_ENABLE_RELEASE_PUBLISH == 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
