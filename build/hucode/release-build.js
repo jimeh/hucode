@@ -457,7 +457,7 @@ async function readJson(filePath) {
 async function mixInCli(options, buildOutput) {
 	const appProductPath = await findAppProductJson(options, buildOutput);
 	if (!appProductPath) {
-		throw new Error(`App product.json not found: ${appProductPath}`);
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
 	}
 
 	const product = await readJson(appProductPath);
