@@ -171,7 +171,7 @@ jobs:
 
       - name: Install macOS build tools
         if: matrix.platform == 'darwin'
-        run: python3 -m pip install --user setuptools
+        run: python3 -m pip install --user --break-system-packages setuptools
 
       - name: Install dependencies
         run: |

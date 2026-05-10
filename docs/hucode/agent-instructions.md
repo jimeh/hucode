@@ -77,6 +77,10 @@ VS Code code that Hucode customizes.
   `bubblewrap`/`socat`, set `.build/electron/chrome-sandbox` to root-owned
   mode `4755`, and run `scripts/test.sh` with `VSCODE_SKIP_PRELAUNCH=1` so the
   prelaunch step does not replace the prepared sandbox binary.
+- GitHub-hosted macOS runners use Homebrew Python as an externally managed
+  environment. Direct `python3 -m pip install --user ...` calls can fail with
+  PEP 668; use `--break-system-packages` with `--user` for runner-local build
+  tool installs, or use a dedicated Python environment.
 
 ## Omni Shell Boundaries
 
