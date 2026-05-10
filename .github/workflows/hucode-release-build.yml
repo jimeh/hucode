@@ -370,7 +370,7 @@ jobs:
           npm_config_arch: ${{ matrix.npm_arch }}
 
       - name: Download Linux sysroot
-        if: matrix.platform == 'linux'
+        if: matrix.platform == 'linux' && matrix.arch != 'arm64'
         shell: bash
         run: |
           set -euo pipefail
