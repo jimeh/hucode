@@ -393,6 +393,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Report release size
+        run: |
+          node build/hucode/release-size-report.js \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --app "../VSCode-${{ matrix.platform }}-${{ matrix.arch }}" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}/size-report-${{ matrix.platform }}-${{ matrix.arch }}.json" \
+            --markdown-out ".build/hucode/release/${{ steps.version.outputs.safe_version }}/size-report-${{ matrix.platform }}-${{ matrix.arch }}.md" \
+            --copilot-node-modules-warn-mb 100
+        shell: bash
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

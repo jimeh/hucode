@@ -441,6 +441,22 @@ The Actions app is already much smaller because GitHub Actions sets
 
 Useful read-only checks:
 
+Release CI now writes size reports as build artifacts with:
+
+```bash
+node build/hucode/release-size-report.js \
+  --platform darwin \
+  --arch arm64 \
+  --app ../VSCode-darwin-arm64 \
+  --out .build/hucode/release/<version>/size-report-darwin-arm64.json \
+  --markdown-out .build/hucode/release/<version>/size-report-darwin-arm64.md \
+  --copilot-node-modules-warn-mb 100
+```
+
+The warning threshold is intentionally loose until a release workflow run with
+VSIX-injected Copilot establishes a stable baseline. Tighten it or add
+`--copilot-node-modules-fail-mb` after the first successful reports.
+
 ```bash
 du -sh \
   dist/hucode-darwin-arm64/Hucode.app \

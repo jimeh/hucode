@@ -78,6 +78,12 @@ VS Code code that Hucode customizes.
   VSIX that already contains platform-specific Copilot executable packages or
   ripgrep binaries; the target-specific ripgrep shim is injected by the
   `vscode-*-min-ci` package task and validated afterward.
+- Hucode release CI runs `build/hucode/release-size-report.js` after packaging
+  each target. The report writes JSON and Markdown into the release artifact
+  directory, appends the Markdown to the GitHub step summary, and currently
+  warns when `extensions/copilot/node_modules` exceeds `100 MiB`. Treat this as
+  a guardrail baseline until post-VSIX release artifacts establish tighter
+  thresholds.
 - Hucode release packaging must mix the Rust CLI into desktop outputs before
   archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
   dependency generation expects `bin/<tunnelApplicationName>` to exist in

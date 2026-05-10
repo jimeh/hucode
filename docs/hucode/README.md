@@ -49,3 +49,5 @@ Current local workflow:
 - `node build/hucode/release-build.js --copilot-vsix <path>`: inject a
   prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
   desktop app, matching the release workflow's smaller Copilot package shape.
+- `node build/hucode/release-size-report.js --app <path>`: report packaged app
+  size, key subdirectory sizes, source-map totals, and release size guardrails.
