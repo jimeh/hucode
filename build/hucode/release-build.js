@@ -143,6 +143,16 @@ const supportedArtifacts = new Map([
 	['win32', new Set(['archive', 'user-setup', 'system-setup'])]
 ]);
 
+const cliTargets = new Map([
+	['darwin-x64', 'x86_64-apple-darwin'],
+	['darwin-arm64', 'aarch64-apple-darwin'],
+	['linux-x64', 'x86_64-unknown-linux-gnu'],
+	['linux-arm64', 'aarch64-unknown-linux-gnu'],
+	['linux-armhf', 'armv7-unknown-linux-gnueabihf'],
+	['win32-x64', 'x86_64-pc-windows-msvc'],
+	['win32-arm64', 'aarch64-pc-windows-msvc']
+]);
+
 function readValue(args, index, option) {
 	const value = args[index];
 	if (!value || value.startsWith('--')) {
@@ -171,6 +181,30 @@ async function run(command, args, cwd, env = {}) {
 			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
 		});
 	});
+}
+
+async function capture(command, args, cwd) {
+	const chunks = [];
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd,
+			stdio: ['ignore', 'pipe', 'inherit'],
+			shell: process.platform === 'win32'
+		});
+
+		child.stdout.on('data', chunk => chunks.push(chunk));
+		child.on('error', reject);
+		child.on('exit', code => {
+			if (code === 0) {
+				resolve(undefined);
+				return;
+			}
+
+			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+		});
+	});
+
+	return Buffer.concat(chunks).toString('utf8').trim();
 }
 
 async function runWithMixin(args, options, env = {}) {
@@ -278,6 +312,172 @@ async function findFirst(root, predicate) {
 	}
 
 	return undefined;
+}
+
+function getCliTarget(options) {
+	const target = cliTargets.get(`${options.platform}-${options.arch}`);
+	if (!target) {
+		throw new Error(
+			`Unsupported CLI target '${options.platform}-${options.arch}'.`
+		);
+	}
+
+	return target;
+}
+
+function getAppProductJsonPath(options, buildOutput, product) {
+	if (options.platform === 'darwin') {
+		return path.join(
+			buildOutput,
+			`${product.nameLong}.app`,
+			'Contents',
+			'Resources',
+			'app',
+			'product.json'
+		);
+	}
+
+	return path.join(buildOutput, 'resources', 'app', 'product.json');
+}
+
+function getAppCliDestination(options, buildOutput, product) {
+	if (options.platform === 'darwin') {
+		return path.join(
+			buildOutput,
+			`${product.nameLong}.app`,
+			'Contents',
+			'Resources',
+			'app',
+			'bin',
+			product.tunnelApplicationName
+		);
+	}
+
+	return path.join(
+		buildOutput,
+		'bin',
+		`${product.tunnelApplicationName}${options.platform === 'win32' ? '.exe' : ''}`
+	);
+}
+
+function getLinuxCliEnv(options) {
+	if (options.platform !== 'linux') {
+		return {};
+	}
+
+	const targets = new Map([
+		['x64', {
+			cargo: 'X86_64_UNKNOWN_LINUX_GNU',
+			cc: 'CC_x86_64_unknown_linux_gnu',
+			debianArch: 'x86_64-linux-gnu',
+			triple: 'x86_64-linux-gnu'
+		}],
+		['arm64', {
+			cargo: 'AARCH64_UNKNOWN_LINUX_GNU',
+			cc: 'CC_aarch64_unknown_linux_gnu',
+			debianArch: 'aarch64-linux-gnu',
+			triple: 'aarch64-linux-gnu'
+		}],
+		['armhf', {
+			cargo: 'ARMV7_UNKNOWN_LINUX_GNUEABIHF',
+			cc: 'CC_armv7_unknown_linux_gnueabihf',
+			debianArch: 'arm-linux-gnueabihf',
+			triple: 'arm-rpi-linux-gnueabihf'
+		}]
+	]);
+	const target = targets.get(options.arch);
+	if (!target) {
+		throw new Error(`Unsupported Linux CLI arch '${options.arch}'.`);
+	}
+
+	const sysrootRoot = process.env.VSCODE_SYSROOT_DIR
+		?? path.join(repoRoot, '.build', 'sysroots');
+	const sysroot = path.join(
+		sysrootRoot,
+		target.triple,
+		target.triple,
+		'sysroot'
+	);
+	const gcc = path.join(
+		sysrootRoot,
+		target.triple,
+		'bin',
+		`${target.triple}-gcc`
+	);
+	const rustFlags = [
+		`-C link-arg=--sysroot=${sysroot}`,
+		`-C link-arg=-L${sysroot}/usr/lib/${target.debianArch}`,
+		`-C link-arg=-L/usr/lib/${target.debianArch}`
+	].join(' ');
+	const env = {
+		[`CARGO_TARGET_${target.cargo}_LINKER`]: gcc,
+		[`CARGO_TARGET_${target.cargo}_RUSTFLAGS`]: rustFlags,
+		[target.cc]: `${gcc} --sysroot=${sysroot}`
+	};
+
+	if (options.arch === 'armhf') {
+		env.PKG_CONFIG_ALLOW_CROSS = '1';
+		env.PKG_CONFIG_LIBDIR_armv7_unknown_linux_gnueabihf =
+			'/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig';
+		env.PKG_CONFIG_SYSROOT_DIR_armv7_unknown_linux_gnueabihf = '/';
+	}
+
+	return env;
+}
+
+async function readJson(filePath) {
+	return JSON.parse(await fs.readFile(filePath, 'utf8'));
+}
+
+async function mixInCli(options, buildOutput) {
+	const mixinProductPath = path.join(
+		repoRoot,
+		'.build',
+		'distro',
+		'mixin',
+		options.quality,
+		'product.json'
+	);
+	const product = await readJson(mixinProductPath);
+	const appProductPath = getAppProductJsonPath(options, buildOutput, product);
+	if (!(await exists(appProductPath))) {
+		throw new Error(`App product.json not found: ${appProductPath}`);
+	}
+
+	const target = getCliTarget(options);
+	const commit = process.env.GITHUB_SHA
+		?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
+	await run('cargo', [
+		'build',
+		'--release',
+		'--target',
+		target,
+		'--bin',
+		'code'
+	], path.join(repoRoot, 'cli'), {
+		CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
+		VSCODE_CLI_COMMIT: commit,
+		VSCODE_CLI_PRODUCT_JSON: mixinProductPath,
+		...getLinuxCliEnv(options)
+	});
+
+	const cliBinary = path.join(
+		repoRoot,
+		'cli',
+		'target',
+		target,
+		'release',
+		`code${options.platform === 'win32' ? '.exe' : ''}`
+	);
+	const destination = getAppCliDestination(options, buildOutput, product);
+	await fs.mkdir(path.dirname(destination), { recursive: true });
+	await fs.copyFile(cliBinary, destination);
+
+	if (options.platform !== 'win32') {
+		await fs.chmod(destination, 0o755);
+	}
+
+	console.log(`Hucode CLI: ${destination}`);
 }
 
 async function packageArchive(buildOutput, distRoot, distName) {
@@ -451,6 +651,8 @@ async function main() {
 			taskName
 		], options);
 	}
+
+	await mixInCli(options, buildOutput);
 
 	for (const artifact of options.artifacts) {
 		await packageArtifact(artifact, options, {

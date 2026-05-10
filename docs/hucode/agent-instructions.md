@@ -68,6 +68,10 @@ VS Code code that Hucode customizes.
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
   local release path currently packages Copilot from source and can ship a much
   larger `extensions/copilot/node_modules` tree.
+- Hucode release packaging must mix the Rust CLI into desktop outputs before
+  archives, DMGs, DEB, RPM, or Windows setup artifacts are produced. Linux
+  dependency generation expects `bin/<tunnelApplicationName>` to exist in
+  `../VSCode-linux-*`.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the
