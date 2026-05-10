@@ -11,6 +11,9 @@ Start here:
   and core invariants.
 - [Repo Strategy](./repo-strategy.md): how to structure the fork, track VS Code
   releases, and package Hucode.
+- [Release Build Size Analysis](./release-build-size-analysis.md): investigation
+  notes on Hucode macOS app size, source maps, node_modules pruning, and
+  upstream Copilot VSIX packaging.
 - [Roadmap](./roadmap.md): completed, active, and later work.
 - [Upgrade Skill](../../.agents/skills/hucode-upgrade-vscode/SKILL.md):
   operational workflow for upgrading the underlying VS Code release.

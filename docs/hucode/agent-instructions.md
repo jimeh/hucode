@@ -62,6 +62,12 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- For release app size work, read
+  [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
+  Code strips core source maps in CI, prunes production `node_modules` through
+  `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
+  local release path currently packages Copilot from source and can ship a much
+  larger `extensions/copilot/node_modules` tree.
 - Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
   `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
   can leave GitHub Actions showing only a generic cancellation line and hide the
