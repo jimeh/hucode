@@ -197,6 +197,10 @@ VS Code code that Hucode customizes.
   workbenches, suppress redundant UI by deregistering the view/container in the
   hosted renderer instead of persisting hidden state, or regular workbench
   windows can lose the view too.
+- Projects quick-switch MRU has two clocks: hosted workspace `lastActiveAt` is
+  the live ordering source for loaded worktrees, while project-manager
+  `lastVisitedAt` is the persisted fallback. Sidebar open paths must call
+  `setLastActiveWorktree` immediately instead of relying on later sidebar sync.
 
 ## Hosted Workspace Lifecycle
 

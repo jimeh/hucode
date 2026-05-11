@@ -15,6 +15,8 @@ import {
 	registerWorkbenchContribution2,
 	WorkbenchPhase,
 } from '../../workbench/common/contributions.js';
+import { IProjectManagerService } from
+	'../../platform/projectManager/common/projectManager.js';
 import { IHostService } from '../../workbench/services/host/browser/host.js';
 import { IWorkbenchLayoutService, Parts } from
 	'../../workbench/services/layout/browser/layoutService.js';
@@ -32,6 +34,7 @@ import { IHucodeOmniWindowUIService } from './omniWindowUI.js';
 async function openSelectedInOmniWindow(
 	windowId: number,
 	shellService: IHucodeShellService,
+	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
 	const selection = getSelectedProjectSwitcherTarget();
@@ -43,6 +46,11 @@ async function openSelectedInOmniWindow(
 		return undefined;
 	}
 
+	await projectManagerService.setLastActiveWorktree(
+		selection.projectId,
+		selection.worktreePath
+	);
+
 	return shellService.openWorkspace(
 		windowId,
 		selection.worktreePath,
@@ -52,6 +60,7 @@ async function openSelectedInOmniWindow(
 
 async function openSelectedInStandaloneWindow(
 	hostService: IHostService,
+	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): Promise<void> {
 	const selection = getSelectedProjectSwitcherTarget();
@@ -62,6 +71,11 @@ async function openSelectedInStandaloneWindow(
 		));
 		return;
 	}
+
+	await projectManagerService.setLastActiveWorktree(
+		selection.projectId,
+		selection.worktreePath
+	);
 
 	await hostService.openWindow(
 		[{ folderUri: URI.file(selection.worktreePath) }],
@@ -83,6 +97,8 @@ class OmniWindowShellContribution extends Disposable
 		private readonly layoutService: IWorkbenchLayoutService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
+		@IProjectManagerService
+		private readonly projectManagerService: IProjectManagerService,
 		@IHostService
 		private readonly hostService: IHostService,
 		@INotificationService
@@ -102,6 +118,7 @@ class OmniWindowShellContribution extends Disposable
 				const nextState = await openSelectedInOmniWindow(
 					this.windowId,
 					this.shellService,
+					this.projectManagerService,
 					this.notificationService
 				);
 				if (nextState) {
@@ -112,6 +129,7 @@ class OmniWindowShellContribution extends Disposable
 			},
 			openSelectedInStandalone: () => openSelectedInStandaloneWindow(
 				this.hostService,
+				this.projectManagerService,
 				this.notificationService
 			),
 			focusWorkspace: () =>

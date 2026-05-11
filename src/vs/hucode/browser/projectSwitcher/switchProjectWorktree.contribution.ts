@@ -84,8 +84,9 @@ import {
 export type { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 
-function pathInList(path: string, paths: readonly string[]): boolean {
-	return paths.some(candidate => pathsEqual(path, candidate));
+interface ILoadedWorkbenchWorktree {
+	readonly path: string;
+	readonly lastActiveAt?: number;
 }
 
 function getProjectPickLabel(project: ProjectRecord): string {
@@ -146,7 +147,7 @@ function getSwitchWorktreeSearchFields(
 function getSwitchWorktreePicks(
 	projects: readonly ProjectRecord[],
 	activeWorktreePath: string | undefined,
-	loadedWorktreePaths: readonly string[],
+	loadedWorktrees: readonly ILoadedWorkbenchWorktree[],
 	labelService: ILabelService
 ): SwitchWorktreeQuickPick[] {
 	const picks: SwitchWorktreeQuickPick[] = [];
@@ -161,13 +162,16 @@ function getSwitchWorktreePicks(
 				worktree,
 				worktreeLabel
 			);
+			const loadedWorktree = loadedWorktrees.find(entry =>
+				pathsEqual(entry.path, worktree.path)
+			);
 			picks.push({
 				projectId: project.id,
 				worktreePath: worktree.path,
 				isCurrent,
-				isLoaded: isCurrent ||
-					pathInList(worktree.path, loadedWorktreePaths),
-				lastVisitedAt: worktree.lastVisitedAt,
+				isLoaded: isCurrent || !!loadedWorktree,
+				lastVisitedAt: loadedWorktree?.lastActiveAt ??
+					worktree.lastVisitedAt,
 				projectOrder: project.order,
 				worktreeOrder,
 				label: projectLabel,
@@ -227,6 +231,18 @@ async function getLoadedWorkbenchWorktreePaths(
 	workspaceContextService: IWorkspaceContextService,
 	shellService: IHucodeShellService
 ): Promise<readonly string[]> {
+	return (await getLoadedWorkbenchWorktrees(
+		environmentService,
+		workspaceContextService,
+		shellService
+	)).map(worktree => worktree.path);
+}
+
+async function getLoadedWorkbenchWorktrees(
+	environmentService: IWorkbenchEnvironmentService,
+	workspaceContextService: IWorkspaceContextService,
+	shellService: IHucodeShellService
+): Promise<readonly ILoadedWorkbenchWorktree[]> {
 	if (
 		environmentService.isOmniWindow ||
 		environmentService.isHostedOmniWorkspace
@@ -239,7 +255,10 @@ async function getLoadedWorkbenchWorktreePaths(
 				instance.state !== 'crashed' &&
 				instance.state !== 'unloaded'
 			)
-			.map(instance => instance.worktreePath);
+			.map(instance => ({
+				path: instance.worktreePath,
+				lastActiveAt: instance.lastActiveAt,
+			}));
 	}
 
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
@@ -247,7 +266,7 @@ async function getLoadedWorkbenchWorktreePaths(
 	}
 
 	const folderUri = workspaceContextService.getWorkspace().folders[0]?.uri;
-	return folderUri?.scheme === 'file' ? [folderUri.fsPath] : [];
+	return folderUri?.scheme === 'file' ? [{ path: folderUri.fsPath }] : [];
 }
 
 export async function openProjectSwitcherTarget(
@@ -453,7 +472,7 @@ async function switchLastActiveProjectWorktree(
 			workspaceContextService,
 			shellService
 		);
-		const loadedWorktreePaths = await getLoadedWorkbenchWorktreePaths(
+		const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 			environmentService,
 			workspaceContextService,
 			shellService
@@ -461,7 +480,7 @@ async function switchLastActiveProjectWorktree(
 		const picks = getSwitchWorktreePicks(
 			projects,
 			activeWorktreePath,
-			loadedWorktreePaths,
+			loadedWorktrees,
 			labelService
 		);
 		const pick = getDefaultSwitchWorktreeActivePick(picks);
@@ -519,7 +538,7 @@ async function quickSwitchLoadedProjectWorktree(
 			workspaceContextService,
 			shellService
 		);
-		const loadedWorktreePaths = await getLoadedWorkbenchWorktreePaths(
+		const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 			environmentService,
 			workspaceContextService,
 			shellService
@@ -527,7 +546,7 @@ async function quickSwitchLoadedProjectWorktree(
 		const picks = getLoadedSwitchWorktreePicks(getSwitchWorktreePicks(
 			projects,
 			activeWorktreePath,
-			loadedWorktreePaths,
+			loadedWorktrees,
 			labelService
 		));
 		if (!picks.some(pick => !pick.isCurrent)) {
@@ -636,7 +655,7 @@ registerAction2(class extends Action2 {
 				workspaceContextService,
 				shellService
 			);
-			const loadedWorktreePaths = await getLoadedWorkbenchWorktreePaths(
+			const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 				environmentService,
 				workspaceContextService,
 				shellService
@@ -644,7 +663,7 @@ registerAction2(class extends Action2 {
 			const picks = getSwitchWorktreePicks(
 				projects,
 				activeWorktreePath,
-				loadedWorktreePaths,
+				loadedWorktrees,
 				labelService
 			);
 			if (!picks.length) {
