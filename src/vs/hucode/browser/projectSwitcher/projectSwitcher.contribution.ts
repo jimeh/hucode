@@ -2138,6 +2138,10 @@ registerAction2(class extends Action2 {
 				pathsEqual(worktree.path, resolvedWorktreePath)
 			);
 			if (!project || !worktree) {
+				await hostService.openWindow(
+					[{ folderUri: URI.file(resolvedWorktreePath) }],
+					{ forceNewWindow: true }
+				);
 				return;
 			}
 

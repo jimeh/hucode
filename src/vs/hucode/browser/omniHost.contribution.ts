@@ -26,6 +26,9 @@ import {
 	getSelectedProjectSwitcherTarget,
 } from './projectSwitcher/projectSwitcher.contribution.js';
 import {
+	setLastActiveWorktreeBestEffort,
+} from './projectSwitcher/switchProjectWorktree.contribution.js';
+import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../common/omniWindow.js';
@@ -46,7 +49,8 @@ async function openSelectedInOmniWindow(
 		return undefined;
 	}
 
-	await projectManagerService.setLastActiveWorktree(
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService,
 		selection.projectId,
 		selection.worktreePath
 	);
@@ -72,7 +76,8 @@ async function openSelectedInStandaloneWindow(
 		return;
 	}
 
-	await projectManagerService.setLastActiveWorktree(
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService,
 		selection.projectId,
 		selection.worktreePath
 	);

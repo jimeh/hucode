@@ -11,6 +11,7 @@ import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
@@ -276,7 +277,8 @@ export async function openProjectSwitcherTarget(
 	shellService: IHucodeShellService,
 	hostService: IHostService
 ): Promise<void> {
-	await projectManagerService.setLastActiveWorktree(
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService,
 		target.projectId,
 		target.worktreePath
 	);
@@ -299,6 +301,21 @@ export async function openProjectSwitcherTarget(
 		[{ folderUri: URI.file(target.worktreePath) }],
 		{ forceReuseWindow: true }
 	);
+}
+
+export async function setLastActiveWorktreeBestEffort(
+	projectManagerService: IProjectManagerService,
+	projectId: string,
+	worktreePath: string
+): Promise<void> {
+	try {
+		await projectManagerService.setLastActiveWorktree(
+			projectId,
+			worktreePath
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 }
 
 function pickSwitchWorktree(

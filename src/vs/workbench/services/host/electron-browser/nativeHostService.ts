@@ -23,6 +23,8 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
+import { IProjectManagerService } from '../../../../platform/projectManager/common/projectManager.js';
+import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
 
 interface IHucodeHostedWorkbenchInstance {
 	readonly instanceId: string;
@@ -44,6 +46,8 @@ interface IHucodeShellService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
 	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
+	openWorkspace(windowId: number, worktreePath: string, projectId?: string): Promise<IHucodeHostedWorkspaceState>;
+	focusWorkspace(windowId: number): Promise<void>;
 	captureWorkspaceScreenshot(windowId: number, rect?: IRectangle, quality?: number): Promise<VSBuffer | undefined>;
 }
 
@@ -95,7 +99,8 @@ class WorkbenchHostService extends Disposable implements IHostService {
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ILabelService private readonly labelService: ILabelService,
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
-		@IHucodeShellService private readonly hucodeShellService: IHucodeShellService
+		@IHucodeShellService private readonly hucodeShellService: IHucodeShellService,
+		@IProjectManagerService private readonly projectManagerService: IProjectManagerService
 	) {
 		super();
 
@@ -287,7 +292,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 		return this.doOpenEmptyWindow(arg1);
 	}
 
-	private doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
+	private async doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
 		const remoteAuthority = this.environmentService.remoteAuthority;
 		if (remoteAuthority) {
 			toOpen.forEach(openable => openable.label = openable.label || this.getRecentLabel(openable));
@@ -297,6 +302,17 @@ class WorkbenchHostService extends Disposable implements IHostService {
 				// It will be used when the input is neither file nor vscode-remote.
 				options = options ? { ...options, remoteAuthority } : { remoteAuthority };
 			}
+		}
+
+		if (await tryOpenHucodeOmniWindow(
+			toOpen,
+			options,
+			this.nativeHostService,
+			this.environmentService,
+			this.hucodeShellService,
+			this.projectManagerService
+		)) {
+			return;
 		}
 
 		return this.nativeHostService.openWindow(toOpen, options);
