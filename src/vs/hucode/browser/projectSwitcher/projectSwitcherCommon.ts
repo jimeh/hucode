@@ -17,6 +17,10 @@ export const SWITCH_WORKTREE_COMMAND_ID =
 export const GO_BACK_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goBack';
 export const GO_FORWARD_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.goForward';
+export const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
+export const REFRESH_PROJECTS_COMMAND_ID = 'hucode.projectSwitcher.refresh';
+export const COLLAPSE_ALL_PROJECTS_COMMAND_ID =
+	'hucode.projectSwitcher.collapseAll';
 export const ProjectSwitcherCanGoBackContext = new RawContextKey<boolean>(
 	'hucode.projectSwitcher.canGoBack',
 	false,

@@ -83,12 +83,15 @@ import {
 	CREATE_WORKTREE_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	getWorktreeDisplayLabel,
 	pathsEqual,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
 	RENAME_PROJECT_COMMAND_ID,
 	RENAME_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcherCommon.js';
 import {
 	openProjectSwitcherTarget,
@@ -97,7 +100,6 @@ import {
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
-const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
 const OPEN_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.openProject';
 const OPEN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.openWorktree';
 const RESET_PROJECT_LABEL_COMMAND_ID =
@@ -111,9 +113,6 @@ const UNPIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unpinWorktree';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
-const REFRESH_PROJECTS_COMMAND_ID = 'hucode.projectSwitcher.refresh';
-const COLLAPSE_ALL_PROJECTS_COMMAND_ID =
-	'hucode.projectSwitcher.collapseAll';
 
 const PROJECT_CONTEXT_VALUE = 'hucode-project';
 const PINNED_PROJECT_CONTEXT_VALUE = 'hucode-project-pinned';
@@ -1959,7 +1958,7 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: GO_BACK_WORKTREE_COMMAND_ID,
-			title: localize2('goBackWorktree', 'Go Back'),
+			title: localize2('goBackWorktree', 'Go Back Project Worktree'),
 			icon: Codicon.arrowLeft,
 			precondition: ProjectSwitcherCanGoBackContext,
 			menu: {
@@ -1980,7 +1979,7 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: GO_FORWARD_WORKTREE_COMMAND_ID,
-			title: localize2('goForwardWorktree', 'Go Forward'),
+			title: localize2('goForwardWorktree', 'Go Forward Project Worktree'),
 			icon: Codicon.arrowRight,
 			precondition: ProjectSwitcherCanGoForwardContext,
 			menu: {

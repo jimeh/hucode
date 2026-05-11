@@ -56,10 +56,13 @@ import {
 	ProjectsTitleBarControlsEnabledContext,
 } from './omniProjectsSidebarActions.js';
 import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
+	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcher/projectSwitcherCommon.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
@@ -164,6 +167,49 @@ registerWorkbenchContribution2(
 	WorkbenchPhase.AfterRestored
 );
 
+function registerHostedProjectSidebarCommand(
+	id: string,
+	title: ReturnType<typeof localize2>
+): void {
+	registerAction2(class extends Action2 {
+		constructor() {
+			super({
+				id,
+				title,
+				f1: true,
+				precondition: IsHostedOmniWorkspaceContext,
+			});
+		}
+
+		override async run(accessor: ServicesAccessor): Promise<void> {
+			const environmentService = accessor.get(IWorkbenchEnvironmentService);
+			if (!environmentService.isHostedOmniWorkspace) {
+				return;
+			}
+
+			await accessor.get(IHucodeShellService).runActionInShell(
+				getWindowId(mainWindow),
+				{ id, from: 'menu' }
+			);
+		}
+	});
+}
+
+registerHostedProjectSidebarCommand(
+	ADD_PROJECT_COMMAND_ID,
+	localize2('addProject', 'Add Project')
+);
+
+registerHostedProjectSidebarCommand(
+	REFRESH_PROJECTS_COMMAND_ID,
+	localize2('refreshProjects', 'Refresh Projects')
+);
+
+registerHostedProjectSidebarCommand(
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	localize2('collapseAllProjects', 'Collapse All')
+);
+
 function registerHostedProjectNavigationAction(
 	id: string,
 	title: ReturnType<typeof localize2>,
@@ -207,7 +253,7 @@ function registerHostedProjectNavigationAction(
 
 registerHostedProjectNavigationAction(
 	GO_BACK_WORKTREE_COMMAND_ID,
-	localize2('hostedOmniGoBackWorktree', 'Go Back'),
+	localize2('hostedOmniGoBackWorktree', 'Go Back Project Worktree'),
 	Codicon.arrowLeft,
 	ProjectSwitcherCanGoBackContext,
 	1
@@ -215,7 +261,7 @@ registerHostedProjectNavigationAction(
 
 registerHostedProjectNavigationAction(
 	GO_FORWARD_WORKTREE_COMMAND_ID,
-	localize2('hostedOmniGoForwardWorktree', 'Go Forward'),
+	localize2('hostedOmniGoForwardWorktree', 'Go Forward Project Worktree'),
 	Codicon.arrowRight,
 	ProjectSwitcherCanGoForwardContext,
 	2
