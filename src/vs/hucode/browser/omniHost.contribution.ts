@@ -29,6 +29,9 @@ import {
 	setLastActiveWorktreeBestEffort,
 } from './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
+	focusWorkspaceBestEffort,
+} from '../common/omniWindowFocus.js';
+import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../common/omniWindow.js';
@@ -127,7 +130,8 @@ class OmniWindowShellContribution extends Disposable
 					this.notificationService
 				);
 				if (nextState) {
-					await this.shellService.focusWorkspace(
+					await focusWorkspaceBestEffort(
+						this.shellService,
 						this.windowId
 					);
 				}

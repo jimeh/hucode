@@ -76,7 +76,10 @@ export async function tryOpenHucodeOmniWindow(
 				target.worktreePath,
 				target.projectId
 			);
-			await shellService.focusWorkspace(nativeHostService.windowId);
+			await focusWorkspaceBestEffort(
+				shellService,
+				nativeHostService.windowId
+			);
 			return true;
 		}
 	}
@@ -125,6 +128,17 @@ async function setLastActiveWorktreeBestEffort(
 			projectId,
 			worktreePath
 		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
+}
+
+async function focusWorkspaceBestEffort(
+	shellService: IHucodeOmniOpenShellService,
+	windowId: number
+): Promise<void> {
+	try {
+		await shellService.focusWorkspace(windowId);
 	} catch (error) {
 		onUnexpectedError(error);
 	}

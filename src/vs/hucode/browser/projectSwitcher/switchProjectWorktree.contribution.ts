@@ -49,6 +49,9 @@ import {
 	IsOmniWindowContext,
 } from '../../../workbench/common/contextkeys.js';
 import {
+	focusWorkspaceBestEffort,
+} from '../../common/omniWindowFocus.js';
+import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -293,7 +296,7 @@ export async function openProjectSwitcherTarget(
 			target.worktreePath,
 			target.projectId
 		);
-		await shellService.focusWorkspace(windowId);
+		await focusWorkspaceBestEffort(shellService, windowId);
 		return;
 	}
 
