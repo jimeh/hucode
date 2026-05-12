@@ -24,6 +24,7 @@ import { ChatContextKeys } from '../../chat/common/actions/chatContextKeys.js';
 import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
 import { ChatConfiguration } from '../../chat/common/constants.js';
 import { AgentHostEnabledSettingId } from '../../../../platform/agentHost/common/agentService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 
 /**
  * When enabled, integrated browser tools are exposed as client-provided tools
@@ -84,6 +85,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
 	) {
 		super();
 		const channel = mainProcessService.getChannel(ipcBrowserViewChannelName);
@@ -113,7 +115,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 
 		// Listen for new browser views
 		this._register(this._browserViewService.onDidCreateBrowserView(e => {
-			if (e.info.owner.mainWindowId !== this._mainWindowId) {
+			if (!this._ownsBrowserView(e.info.owner)) {
 				return; // Not for this window
 			}
 
@@ -148,10 +150,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 				);
 				return this._createModel(id, this._getDefaultOwner(), state);
 			});
-			input.onWillDispose(() => {
+			const inputDisposeListener = this._register(input.onWillDispose(() => {
+				inputDisposeListener.dispose();
 				this._known.delete(id);
 				this._onDidChangeBrowserViews.fire();
-			});
+			}));
 			if (model) {
 				input.model = model;
 			}
@@ -172,7 +175,25 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	}
 
 	private _getDefaultOwner(): IBrowserViewOwner {
-		return { mainWindowId: this._mainWindowId };
+		return {
+			mainWindowId: this._mainWindowId,
+			hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
+				? this.environmentService.hostedWebContentsId
+				: undefined
+		};
+	}
+
+	private _ownsBrowserView(owner: IBrowserViewOwner): boolean {
+		if (owner.mainWindowId !== this._mainWindowId) {
+			return false;
+		}
+
+		if (this.environmentService.isHostedOmniWorkspace) {
+			return typeof this.environmentService.hostedWebContentsId === 'number'
+				&& owner.hostedWebContentsId === this.environmentService.hostedWebContentsId;
+		}
+
+		return owner.hostedWebContentsId === undefined;
 	}
 
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {
@@ -196,6 +217,9 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	private async _initializeExistingViews(): Promise<void> {
 		const views = await this._browserViewService.getBrowserViews(this._mainWindowId);
 		for (const info of views) {
+			if (!this._ownsBrowserView(info.owner)) {
+				continue;
+			}
 			this._createModel(info.id, info.owner, info.state);
 		}
 	}
