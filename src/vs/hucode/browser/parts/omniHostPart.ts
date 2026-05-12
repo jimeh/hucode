@@ -20,6 +20,8 @@ import { IThemeService } from
 	'../../../platform/theme/common/themeService.js';
 import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
+import { focusWorkspaceBestEffort } from
+	'../../common/omniWindowFocus.js';
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
@@ -143,7 +145,7 @@ export class OmniHostPart extends Part {
 
 	focus(): void {
 		this.getContainer()?.focus();
-		void this.shellService.focusWorkspace(this.windowId);
+		void focusWorkspaceBestEffort(this.shellService, this.windowId);
 	}
 
 	override toJSON(): object {

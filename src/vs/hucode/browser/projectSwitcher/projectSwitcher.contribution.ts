@@ -2062,6 +2062,8 @@ registerAction2(class extends Action2 {
 		projectId: string | TreeViewItemHandleArg
 	): Promise<void> {
 		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 		const hostService = accessor.get(IHostService);
 		const notificationService = accessor.get(INotificationService);
 
@@ -2087,9 +2089,12 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await hostService.openWindow(
-				[{ folderUri: URI.file(worktree.path) }],
-				{ forceReuseWindow: true }
+			await openProjectSwitcherTarget(
+				{ projectId: project.id, worktreePath: worktree.path },
+				projectManagerService,
+				environmentService,
+				shellService,
+				hostService
 			);
 		} catch (error) {
 			notificationService.error(String(error));
@@ -2109,6 +2114,9 @@ registerAction2(class extends Action2 {
 		accessor: ServicesAccessor,
 		worktreePath: string | TreeViewItemHandleArg
 	): Promise<void> {
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 		const hostService = accessor.get(IHostService);
 		const notificationService = accessor.get(INotificationService);
 
@@ -2120,9 +2128,29 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await hostService.openWindow(
-				[{ folderUri: URI.file(resolvedWorktreePath) }],
-				{ forceReuseWindow: true }
+			const projects = await projectManagerService.getProjects();
+			const project = projects.find(project =>
+				project.worktrees.some(worktree =>
+					pathsEqual(worktree.path, resolvedWorktreePath)
+				)
+			);
+			const worktree = project?.worktrees.find(worktree =>
+				pathsEqual(worktree.path, resolvedWorktreePath)
+			);
+			if (!project || !worktree) {
+				await hostService.openWindow(
+					[{ folderUri: URI.file(resolvedWorktreePath) }],
+					{ forceNewWindow: true }
+				);
+				return;
+			}
+
+			await openProjectSwitcherTarget(
+				{ projectId: project.id, worktreePath: worktree.path },
+				projectManagerService,
+				environmentService,
+				shellService,
+				hostService
 			);
 		} catch (error) {
 			notificationService.error(String(error));

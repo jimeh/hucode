@@ -134,6 +134,12 @@ VS Code code that Hucode customizes.
 
 ## Omni Shell Boundaries
 
+- Keep upstream VS Code files as thin integration points for Hucode behavior.
+  If a Hucode change needs substantial logic, put that logic in a Hucode-owned
+  file under `src/vs/hucode/` where layering allows it. If VS Code layer rules
+  block importing `src/vs/hucode/`, use a nearby companion file with an explicit
+  `hucode*` name and keep the upstream file change to minimal wiring such as an
+  import, service injection, and a delegation call.
 - Hucode macOS desktop workbenches default `window.menuStyle` to `native`
   through `src/vs/workbench/electron-browser/hucodeConfiguration.contribution.ts`.
   Hosted Omni workbenches boot the standard desktop bundle, so keep this
@@ -197,6 +203,14 @@ VS Code code that Hucode customizes.
   workbenches, suppress redundant UI by deregistering the view/container in the
   hosted renderer instead of persisting hidden state, or regular workbench
   windows can lose the view too.
+- Projects quick-switch MRU has two clocks: hosted workspace `lastActiveAt` is
+  the live ordering source for loaded worktrees, while project-manager
+  `lastVisitedAt` is the persisted fallback. Sidebar open paths must call
+  `setLastActiveWorktree` immediately instead of relying on later sidebar sync.
+- Generic folder/workspace opens from an Omni shell or hosted Omni workbench
+  must not reuse the Omni window for unknown paths. Known project worktrees
+  should route through the shell; unknown folders/workspaces should open in a
+  new normal workbench window.
 
 ## Hosted Workspace Lifecycle
 
