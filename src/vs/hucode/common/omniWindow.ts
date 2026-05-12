@@ -6,6 +6,7 @@
 import { Event } from '../../base/common/event.js';
 import { createDecorator } from '../../platform/instantiation/common/instantiation.js';
 import {
+	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 	IRectangle,
@@ -77,6 +78,23 @@ export interface IHucodeShellService {
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/**
+	 * Opens files inside a hosted workspace, creating or activating the
+	 * workspace first when necessary.
+	 */
+	openFilesInWorkspace(
+		windowId: number,
+		worktreePath: string,
+		request: INativeOpenFileRequest,
+		projectId?: string
+	): Promise<boolean>;
+	/**
+	 * Opens files inside the currently active hosted workspace.
+	 */
+	openFilesInActiveWorkspace(
+		windowId: number,
+		request: INativeOpenFileRequest
+	): Promise<boolean>;
 	closeWorkspace(
 		windowId: number,
 		instanceId?: string
