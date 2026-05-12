@@ -17,7 +17,9 @@ Use this branch model:
 - `upstream-<version>`: clean branch at the upstream VS Code release tag.
 - `series-<version>`: Hucode patch series on top of that upstream branch.
 - `series-<version>-replay`: compact replay branch for the completed previous
-  series, tree-equivalent to `series-<version>` but with curated topic commits.
+  series, created during the upgrade as a temporary compaction artifact. It
+  should be tree-equivalent to `series-<version>` but with curated topic
+  commits.
 
 Push both `upstream-<version>` and `series-<version>` to `origin` so the remote
 has the clean baseline and Hucode series branch available.
@@ -33,15 +35,16 @@ has the clean baseline and Hucode series branch available.
 
 2. Confirm `series-<old-version>` is pushed and in sync with `origin`.
 
-3. Decide whether the current `series-<old-version>-replay` can be reused or
-   must be refreshed. Refresh it when feature history is noisy or when recent
-   fixes are only on the raw series branch.
+3. Expect to create `series-<old-version>-replay` as part of the upgrade. The
+   replay branch is not maintained continuously and does not need to exist
+   before the upgrade starts. If it already exists from an abandoned or previous
+   attempt, inspect it before deciding whether to delete, refresh, or reuse it.
 
 4. Keep local generated mixin state out of commits. If root `product.json` or
    `resources/darwin/*` are dirty from Hucode launch/build workflows, identify
    them explicitly and avoid staging them unless the user asks.
 
-## Create Or Refresh The Replay Branch
+## Create The Replay Branch
 
 Only do this from a clean worktree. The preferred compaction setup is:
 
@@ -80,6 +83,10 @@ npm run hucode:compile
 If equivalence fails, either fix the replay branch or document intentional
 differences before using it as the upgrade source.
 
+The replay branch is only needed as the source for this upgrade's
+cherry-pick. Do not push it by default; the new `series-<new-version>` branch
+is the branch that carries the upgraded Hucode patch series forward.
+
 ## Create The New Baseline
 
 Fetch only the selected tag:
@@ -105,7 +112,10 @@ npm install
 ```
 
 Do this before conflict resolution. Avoid bypassing hooks just because
-`node_modules` is stale; rerun `npm install` first.
+`node_modules` is stale; rerun `npm install` first. If `npm install` fails
+while `node-gyp` is fetching Electron or Node headers with transient network
+errors such as `ECONNRESET`, retry before treating the failure as an upgrade
+blocker.
 
 ## Replay Onto The New Series
 
@@ -130,10 +140,25 @@ upstream APIs over preserving old compatibility paths. When resolving:
 Useful conflict checks:
 
 ```sh
-rg -n "<<<<<<<|=======|>>>>>>>" <conflicted-files>
+rg -n '^(<{7}|>{7})( |$)' <conflicted-files>
 git diff --check
 git status --short
 ```
+
+For a final changed-file scan after replay, avoid searching for `=======`
+globally: VS Code has many legitimate separators and fixtures. A real Git
+conflict hunk always has line-start start and end markers (`<<<<<<<` and
+`>>>>>>>`), so scanning for those markers over changed files catches unresolved
+conflicts without the separator noise:
+
+```sh
+while IFS= read -r -d '' file; do
+	rg -n '^(<{7}|>{7})( |$)' -- "$file" || true
+done < <(git diff --name-only --diff-filter=ACMRT -z upstream-<new-version>..series-<new-version>)
+```
+
+No output is expected from that scan. Deleted files are excluded because they
+cannot contain unresolved markers in the final worktree.
 
 ## Validate The Upgraded Series
 
@@ -190,7 +215,8 @@ Report:
 
 - New upstream and series branch names.
 - Whether both branches were pushed to `origin`.
-- Replay source branch and commit count.
+- Replay source branch and commit count. The replay branch normally remains
+  local unless the user explicitly asks to publish it.
 - Conflict areas and important decisions.
 - Validation commands and outcomes.
 - Any remaining dirty generated mixin state that was deliberately left alone.
