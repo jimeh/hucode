@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { errorHandler } from '../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
 import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
 import { IProjectManagerMainService } from '../../../platform/projectManager/electron-main/projectManager.js';
@@ -37,6 +38,21 @@ suite('HucodeOmniFileOpen', () => {
 		order: 0,
 		worktrees
 	});
+
+	const withExpectedUnexpectedError = async <T>(
+		callback: () => Promise<T>
+	): Promise<T> => {
+		const originalHandler = errorHandler.getUnexpectedErrorHandler();
+		const errors: unknown[] = [];
+		errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+		try {
+			const result = await callback();
+			assert.strictEqual(errors.length, 1);
+			return result;
+		} finally {
+			errorHandler.setUnexpectedErrorHandler(originalHandler);
+		}
+	};
 
 	test('matches files to the most specific known worktree', () => {
 		const projects = [
@@ -145,6 +161,187 @@ suite('HucodeOmniFileOpen', () => {
 		);
 		assert.strictEqual(activeWorkspaceRequestUri, fileUri);
 		assert.strictEqual(setLastActiveWorktreeCalled, false);
+	});
+
+	test('falls back when project lookup fails', async () => {
+		const omni = {
+			id: 1,
+			isOmniWindow: true,
+			lastFocusTime: 10
+		} as ICodeWindow;
+
+		const accessor = {
+			get(serviceId: unknown): unknown {
+				if (serviceId === IProjectManagerMainService) {
+					return {
+						async getProjects() {
+							throw new Error('lookup failed');
+						}
+					};
+				}
+
+				if (serviceId === IHucodeShellMainService) {
+					return {};
+				}
+
+				throw new Error('Unexpected service lookup');
+			}
+		} as ServicesAccessor;
+
+		assert.strictEqual(
+			await withExpectedUnexpectedError(() =>
+				tryOpenFilesInHucodeOmniWindow(accessor, [omni], {
+					filesToOpenOrCreate: [{ fileUri: URI.file('/repo/file.txt') }],
+					filesToDiff: [],
+					filesToMerge: []
+				}, undefined)
+			),
+			undefined
+		);
+	});
+
+	test('falls back when active workspace file open fails', async () => {
+		const omni = {
+			id: 1,
+			isOmniWindow: true,
+			lastFocusTime: 10
+		} as ICodeWindow;
+
+		const accessor = {
+			get(serviceId: unknown): unknown {
+				if (serviceId === IProjectManagerMainService) {
+					return {
+						async getProjects() {
+							return [];
+						}
+					};
+				}
+
+				if (serviceId === IHucodeShellMainService) {
+					return {
+						async openFilesInActiveWorkspace() {
+							throw new Error('open failed');
+						}
+					};
+				}
+
+				throw new Error('Unexpected service lookup');
+			}
+		} as ServicesAccessor;
+
+		assert.strictEqual(
+			await withExpectedUnexpectedError(() =>
+				tryOpenFilesInHucodeOmniWindow(accessor, [omni], {
+					filesToOpenOrCreate: [{ fileUri: URI.file('/outside/file.txt') }],
+					filesToDiff: [],
+					filesToMerge: []
+				}, undefined)
+			),
+			undefined
+		);
+	});
+
+	test('falls back when hosted workspace file open fails', async () => {
+		const omni = {
+			id: 1,
+			isOmniWindow: true,
+			lastFocusTime: 10
+		} as ICodeWindow;
+
+		const accessor = {
+			get(serviceId: unknown): unknown {
+				if (serviceId === IProjectManagerMainService) {
+					return {
+						async getProjects() {
+							return [
+								project('project', [worktree('/repo')])
+							];
+						},
+						async setLastActiveWorktree() { }
+					};
+				}
+
+				if (serviceId === IHucodeShellMainService) {
+					return {
+						async openFilesInWorkspace() {
+							throw new Error('open failed');
+						}
+					};
+				}
+
+				throw new Error('Unexpected service lookup');
+			}
+		} as ServicesAccessor;
+
+		assert.strictEqual(
+			await withExpectedUnexpectedError(() =>
+				tryOpenFilesInHucodeOmniWindow(accessor, [omni], {
+					filesToOpenOrCreate: [
+						{ fileUri: URI.file('/repo/src/file.txt') }
+					],
+					filesToDiff: [],
+					filesToMerge: []
+				}, undefined)
+			),
+			undefined
+		);
+	});
+
+	test('continues when last active worktree persistence fails', async () => {
+		const omni = {
+			id: 1,
+			isOmniWindow: true,
+			lastFocusTime: 10
+		} as ICodeWindow;
+		let workspaceOpenUri: URI | undefined;
+
+		const accessor = {
+			get(serviceId: unknown): unknown {
+				if (serviceId === IProjectManagerMainService) {
+					return {
+						async getProjects() {
+							return [
+								project('project', [worktree('/repo')])
+							];
+						},
+						async setLastActiveWorktree() {
+							throw new Error('persistence failed');
+						}
+					};
+				}
+
+				if (serviceId === IHucodeShellMainService) {
+					return {
+						async openFilesInWorkspace(
+							windowId: number,
+							worktreePath: string,
+							request: { filesToOpenOrCreate: { fileUri?: URI }[] }
+						) {
+							assert.strictEqual(windowId, omni.id);
+							assert.strictEqual(worktreePath, '/repo');
+							workspaceOpenUri =
+								request.filesToOpenOrCreate[0].fileUri;
+							return true;
+						}
+					};
+				}
+
+				throw new Error('Unexpected service lookup');
+			}
+		} as ServicesAccessor;
+
+		const fileUri = URI.file('/repo/src/file.txt');
+		assert.strictEqual(
+			await withExpectedUnexpectedError(() =>
+				tryOpenFilesInHucodeOmniWindow(accessor, [omni], {
+					filesToOpenOrCreate: [{ fileUri }],
+					filesToDiff: [],
+					filesToMerge: []
+				}, undefined)
+			),
+			omni
+		);
+		assert.strictEqual(workspaceOpenUri, fileUri);
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();

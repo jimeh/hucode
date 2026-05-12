@@ -54,44 +54,49 @@ export async function tryOpenFilesInHucodeOmniWindow(
 		return undefined;
 	}
 
-	const projectManagerService = accessor.get(IProjectManagerMainService);
-	const shellService = accessor.get(IHucodeShellMainService);
-	const target = findHucodeProjectWorktreeForFiles(
-		await projectManagerService.getProjects(),
-		fileUris
-	);
-	const request: INativeOpenFileRequest = {
-		filesToOpenOrCreate: filesToOpen.filesToOpenOrCreate,
-		filesToWait: filesToOpen.filesToWait,
-		termProgram,
-	};
+	try {
+		const projectManagerService = accessor.get(IProjectManagerMainService);
+		const shellService = accessor.get(IHucodeShellMainService);
+		const target = findHucodeProjectWorktreeForFiles(
+			await projectManagerService.getProjects(),
+			fileUris
+		);
+		const request: INativeOpenFileRequest = {
+			filesToOpenOrCreate: filesToOpen.filesToOpenOrCreate,
+			filesToWait: filesToOpen.filesToWait,
+			termProgram,
+		};
 
-	if (!target) {
-		const opened = await shellService.openFilesInActiveWorkspace(
+		if (!target) {
+			const opened = await shellService.openFilesInActiveWorkspace(
+				omniWindow.id,
+				request
+			);
+
+			return opened ? omniWindow : undefined;
+		}
+
+		try {
+			await projectManagerService.setLastActiveWorktree(
+				target.projectId,
+				target.worktreePath
+			);
+		} catch (error) {
+			onUnexpectedError(error);
+		}
+
+		const opened = await shellService.openFilesInWorkspace(
 			omniWindow.id,
-			request
+			target.worktreePath,
+			request,
+			target.projectId
 		);
 
 		return opened ? omniWindow : undefined;
-	}
-
-	try {
-		await projectManagerService.setLastActiveWorktree(
-			target.projectId,
-			target.worktreePath
-		);
 	} catch (error) {
 		onUnexpectedError(error);
+		return undefined;
 	}
-
-	const opened = await shellService.openFilesInWorkspace(
-		omniWindow.id,
-		target.worktreePath,
-		request,
-		target.projectId
-	);
-
-	return opened ? omniWindow : undefined;
 }
 
 /**

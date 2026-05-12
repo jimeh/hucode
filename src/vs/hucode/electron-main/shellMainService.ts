@@ -550,7 +550,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return false;
 		}
 
-		return this.sendToActiveWorkspace('vscode:openFiles', request);
+		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
 	}
 
 	async openFilesInActiveWorkspace(
@@ -1202,7 +1202,11 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	triggerPasteInWorkspace(): boolean {
 		const activeInstance = this.getActiveInstance();
-		const webContents = activeInstance?.view?.webContents;
+		if (!activeInstance) {
+			return false;
+		}
+
+		const webContents = activeInstance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return false;
 		}
@@ -1224,14 +1228,30 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	private sendToActiveWorkspace(channel: string, request: unknown): boolean {
 		const activeInstance = this.getActiveInstance();
-		const webContents = activeInstance?.view?.webContents;
+		if (!activeInstance) {
+			return false;
+		}
+
+		return this.sendToWorkspace(activeInstance, channel, request);
+	}
+
+	private sendToWorkspace(
+		instance: IHostedWorkbenchInstance,
+		channel: string,
+		request: unknown
+	): boolean {
+		if (this.activeInstanceId !== instance.instanceId) {
+			this.activateInstance(instance);
+		}
+
+		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return false;
 		}
 
 		try {
 			this.lastFocusedSurface = 'workspace';
-			this.bringInstanceToFront(activeInstance);
+			this.bringInstanceToFront(instance);
 			webContents.focus();
 			webContents.send(channel, request);
 			return true;
