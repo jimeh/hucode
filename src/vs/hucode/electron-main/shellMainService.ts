@@ -571,7 +571,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 			return false;
 		}
 
-		return this.sendToActiveWorkspace('vscode:openFiles', request);
+		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
 	}
 
 	private async createOrRestoreInstance(
