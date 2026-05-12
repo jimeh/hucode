@@ -40,6 +40,7 @@ import { IStateService } from '../../state/node/state.js';
 import { IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfiguration, IOpenEmptyWindowOptions, IPath, IPathsToWaitFor, isFileToOpen, isFolderToOpen, isWorkspaceToOpen, IWindowOpenable, IWindowSettings } from '../../window/common/window.js';
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
+import { isHucodeOmniWindow, tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
@@ -621,61 +622,82 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			emptyToRestore.length +
 			omniWindowsToRestore.length;
 		if (filesToOpen && potentialNewWindowsCount === 0) {
+			const hucodeFilesToOpen = filesToOpen;
 
 			// Find suitable window or folder path to open files in
 			const fileToCheck: IPath<IEditorOptions> | undefined = filesToOpen.filesToOpenOrCreate[0] || filesToOpen.filesToDiff[0] || filesToOpen.filesToMerge[3] /* [3] is the resulting merge file */;
 
-			// only look at the windows with correct authority
-			const windows = this.getWindows().filter(window => filesToOpen && isEqualAuthority(window.remoteAuthority, filesToOpen.remoteAuthority));
+			const hucodeOmniWindow = openConfig.forceNewWindow
+				? undefined
+				: await this.instantiationService.invokeFunction(accessor =>
+					tryOpenFilesInHucodeOmniWindow(
+						accessor,
+						this.getWindows(),
+						hucodeFilesToOpen,
+						openConfig.userEnv?.['TERM_PROGRAM']
+					)
+				);
 
-			// figure out a good window to open the files in if any
-			// with a fallback to the last active window.
-			//
-			// in case `openFilesInNewWindow` is enforced, we skip
-			// this step.
-			let windowToUseForFiles: ICodeWindow | undefined = undefined;
-			if (fileToCheck?.fileUri && !openFilesInNewWindow) {
-				if (openConfig.context === OpenContext.DESKTOP || openConfig.context === OpenContext.CLI || openConfig.context === OpenContext.DOCK || openConfig.context === OpenContext.LINK) {
-					windowToUseForFiles = await findWindowOnFile(windows, fileToCheck.fileUri, async workspace => workspace.configPath.scheme === Schemas.file ? this.workspacesManagementMainService.resolveLocalWorkspace(workspace.configPath) : undefined);
+			if (hucodeOmniWindow) {
+				addUsedWindow(hucodeOmniWindow, true);
+			} else {
+
+				// only look at the windows with correct authority
+				const windows = this.getWindows().filter(window =>
+					filesToOpen &&
+					!isHucodeOmniWindow(window) &&
+					isEqualAuthority(window.remoteAuthority, filesToOpen.remoteAuthority)
+				);
+
+				// figure out a good window to open the files in if any
+				// with a fallback to the last active window.
+				//
+				// in case `openFilesInNewWindow` is enforced, we skip
+				// this step.
+				let windowToUseForFiles: ICodeWindow | undefined = undefined;
+				if (fileToCheck?.fileUri && !openFilesInNewWindow) {
+					if (openConfig.context === OpenContext.DESKTOP || openConfig.context === OpenContext.CLI || openConfig.context === OpenContext.DOCK || openConfig.context === OpenContext.LINK) {
+						windowToUseForFiles = await findWindowOnFile(windows, fileToCheck.fileUri, async workspace => workspace.configPath.scheme === Schemas.file ? this.workspacesManagementMainService.resolveLocalWorkspace(workspace.configPath) : undefined);
+					}
+
+					if (!windowToUseForFiles) {
+						windowToUseForFiles = this.doGetLastActiveWindow(windows);
+					}
 				}
 
-				if (!windowToUseForFiles) {
-					windowToUseForFiles = this.doGetLastActiveWindow(windows);
+				// We found a window to open the files in
+				if (windowToUseForFiles) {
+
+					// Window is workspace
+					if (isWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
+						workspacesToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
+					}
+
+					// Window is single folder
+					else if (isSingleFolderWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
+						foldersToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
+					}
+
+					// Window is empty
+					else {
+						addUsedWindow(this.doOpenFilesInExistingWindow(openConfig, windowToUseForFiles, filesToOpen), true);
+					}
 				}
-			}
 
-			// We found a window to open the files in
-			if (windowToUseForFiles) {
-
-				// Window is workspace
-				if (isWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
-					workspacesToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
-				}
-
-				// Window is single folder
-				else if (isSingleFolderWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
-					foldersToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
-				}
-
-				// Window is empty
+				// Finally, if no window or folder is found, just open the files in an empty window
 				else {
-					addUsedWindow(this.doOpenFilesInExistingWindow(openConfig, windowToUseForFiles, filesToOpen), true);
+					addUsedWindow(await this.openInBrowserWindow({
+						userEnv: openConfig.userEnv,
+						cli: openConfig.cli,
+						initialStartup: openConfig.initialStartup,
+						filesToOpen,
+						forceNewWindow: true,
+						remoteAuthority: filesToOpen.remoteAuthority,
+						forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
+						forceProfile: openConfig.forceProfile,
+						forceTempProfile: openConfig.forceTempProfile
+					}), true);
 				}
-			}
-
-			// Finally, if no window or folder is found, just open the files in an empty window
-			else {
-				addUsedWindow(await this.openInBrowserWindow({
-					userEnv: openConfig.userEnv,
-					cli: openConfig.cli,
-					initialStartup: openConfig.initialStartup,
-					filesToOpen,
-					forceNewWindow: true,
-					remoteAuthority: filesToOpen.remoteAuthority,
-					forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
-					forceProfile: openConfig.forceProfile,
-					forceTempProfile: openConfig.forceTempProfile
-				}), true);
 			}
 		}
 

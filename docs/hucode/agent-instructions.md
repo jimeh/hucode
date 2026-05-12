@@ -211,6 +211,11 @@ VS Code code that Hucode customizes.
   must not reuse the Omni window for unknown paths. Known project worktrees
   should route through the shell; unknown folders/workspaces should open in a
   new normal workbench window.
+- External `hucode <file>` CLI launches bypass renderer `IHostService`
+  routing and enter the main-process `WindowsMainService` path directly.
+  Keep CLI file routing in main-process code; otherwise upstream fallback can
+  target the Omni shell as an empty last-active window, where `vscode:openFiles`
+  is not handled by a normal editor workbench.
 
 ## Hosted Workspace Lifecycle
 

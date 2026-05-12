@@ -27,6 +27,7 @@ import {
 } from '../../platform/window/electron-main/window.js';
 import {
 	INativeWindowConfiguration,
+	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 	IOmniWorkspaceRestoreEntry,
@@ -68,6 +69,11 @@ type OmniFocusedSurface = 'shell' | 'workspace';
 class ResidentHostedWorkspacesController extends Disposable {
 	private static readonly BEFORE_UNLOAD_TIMEOUT_MS = 5000;
 	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
+	private static readonly READY_TIMEOUT_MS = 30000;
+
+	private readonly _onDidChangeState =
+		this._register(new Emitter<IHucodeHostedWorkspaceState>());
+	readonly onDidChangeState = this._onDidChangeState.event;
 
 	private readonly instancesById = new Map<string, IHostedWorkbenchInstance>();
 	private readonly instanceIdsByPath = new Map<string, string>();
@@ -173,7 +179,38 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	private emitState(): void {
 		this.updateWindowRestoreState();
-		this.onStateChange(this.getState());
+		const state = this.getState();
+		this._onDidChangeState.fire(state);
+		this.onStateChange(state);
+	}
+
+	private waitForInstanceReady(
+		instance: IHostedWorkbenchInstance
+	): Promise<boolean> {
+		if (instance.state !== 'loading') {
+			return Promise.resolve(
+				instance.state !== 'crashed' && instance.state !== 'unloaded'
+			);
+		}
+
+		return new Promise<boolean>(resolve => {
+			const listener = this.onDidChangeState(() => {
+				if (instance.state === 'loading') {
+					return;
+				}
+
+				listener.dispose();
+				clearTimeout(handle);
+				resolve(
+					instance.state !== 'crashed' && instance.state !== 'unloaded'
+				);
+			});
+
+			const handle = setTimeout(() => {
+				listener.dispose();
+				resolve(false);
+			}, ResidentHostedWorkspacesController.READY_TIMEOUT_MS);
+		});
 	}
 
 	private updateWindowRestoreState(): void {
@@ -491,6 +528,50 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		await this.createOrRestoreInstance(worktreePath, projectId, true);
+	}
+
+	async openFilesInWorkspace(
+		worktreePath: string,
+		request: INativeOpenFileRequest,
+		projectId?: string
+	): Promise<boolean> {
+		await this.openWorkspace(worktreePath, projectId);
+
+		const instance = this.getActiveInstance();
+		if (!instance || instance.worktreePath !== worktreePath) {
+			return false;
+		}
+
+		if (!await this.waitForInstanceReady(instance)) {
+			this.logService.warn(
+				'[HucodeShellMainService] Timed out waiting for hosted ' +
+				`workspace before opening files for ${worktreePath}.`
+			);
+			return false;
+		}
+
+		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
+	}
+
+	async openFilesInActiveWorkspace(
+		request: INativeOpenFileRequest
+	): Promise<boolean> {
+		await this.ensureRestored();
+
+		const instance = this.getActiveInstance();
+		if (!instance) {
+			return false;
+		}
+
+		if (!await this.waitForInstanceReady(instance)) {
+			this.logService.warn(
+				'[HucodeShellMainService] Timed out waiting for active ' +
+				'hosted workspace before opening files.'
+			);
+			return false;
+		}
+
+		return this.sendToWorkspace(instance, 'vscode:openFiles', request);
 	}
 
 	private async createOrRestoreInstance(
@@ -1121,7 +1202,11 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	triggerPasteInWorkspace(): boolean {
 		const activeInstance = this.getActiveInstance();
-		const webContents = activeInstance?.view?.webContents;
+		if (!activeInstance) {
+			return false;
+		}
+
+		const webContents = activeInstance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return false;
 		}
@@ -1143,14 +1228,30 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 	private sendToActiveWorkspace(channel: string, request: unknown): boolean {
 		const activeInstance = this.getActiveInstance();
-		const webContents = activeInstance?.view?.webContents;
+		if (!activeInstance) {
+			return false;
+		}
+
+		return this.sendToWorkspace(activeInstance, channel, request);
+	}
+
+	private sendToWorkspace(
+		instance: IHostedWorkbenchInstance,
+		channel: string,
+		request: unknown
+	): boolean {
+		if (this.activeInstanceId !== instance.instanceId) {
+			this.activateInstance(instance);
+		}
+
+		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return false;
 		}
 
 		try {
 			this.lastFocusedSurface = 'workspace';
-			this.bringInstanceToFront(activeInstance);
+			this.bringInstanceToFront(instance);
 			webContents.focus();
 			webContents.send(channel, request);
 			return true;
@@ -1296,6 +1397,34 @@ export class HucodeShellMainService extends Disposable
 		const controller = this.getOrCreateController(windowId);
 		await controller.openWorkspace(worktreePath, projectId);
 		return controller.getState();
+	}
+
+	/**
+	 * Opens files in a hosted workspace owned by an Omni shell window.
+	 */
+	async openFilesInWorkspace(
+		windowId: number,
+		worktreePath: string,
+		request: INativeOpenFileRequest,
+		projectId?: string
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId).openFilesInWorkspace(
+			worktreePath,
+			request,
+			projectId
+		);
+	}
+
+	/**
+	 * Opens files in the active hosted workspace owned by an Omni shell window.
+	 */
+	async openFilesInActiveWorkspace(
+		windowId: number,
+		request: INativeOpenFileRequest
+	): Promise<boolean> {
+		return this.getOrCreateController(windowId).openFilesInActiveWorkspace(
+			request
+		);
 	}
 
 	async closeWorkspace(
