@@ -391,13 +391,14 @@ class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
-		if (!instance.view) {
+		const webContents = this.getLiveWebContents(instance);
+		if (!instance.view || !webContents) {
 			return;
 		}
 
 		this.attachInstanceView(instance);
 		this.browserViewMainService.bringHostedBrowserViewsToFront(
-			instance.view.webContents.id
+			webContents.id
 		);
 	}
 
@@ -1014,13 +1015,18 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		if (instance.view) {
-			this.browserViewMainService.destroyBrowserViewsForHostedWebContents(
-				instance.view.webContents.id
-			);
+			const view = instance.view;
+			const webContents = this.getLiveWebContents(instance);
+			if (webContents) {
+				this.browserViewMainService
+					.destroyBrowserViewsForHostedWebContents(webContents.id);
+			}
 			this.untrustView(instance);
-			instance.view.setVisible(false);
+			view.setVisible(false);
 			this.detachInstanceView(instance);
-			instance.view.webContents.close({ waitForBeforeUnload: false });
+			if (webContents) {
+				webContents.close({ waitForBeforeUnload: false });
+			}
 			instance.view = undefined;
 		}
 
