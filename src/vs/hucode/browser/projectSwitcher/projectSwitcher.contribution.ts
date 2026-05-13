@@ -249,6 +249,12 @@ type ProjectSwitcherItem =
 	| ProjectSwitcherWorktreeItem
 	| ProjectSwitcherSeparatorItem;
 
+function isHostedWorkbenchInProgress(
+	state: HucodeHostedWorkbenchLifecycleState | undefined
+): boolean {
+	return state === 'restore-pending' || state === 'loading';
+}
+
 function isProjectItem(
 	item: ProjectSwitcherItem | undefined
 ): item is ProjectSwitcherProjectItem {
@@ -522,26 +528,24 @@ class ProjectSwitcherRenderer
 
 			if (item.hostedWorkbenchInstanceId) {
 				templateData.container.classList.add(
-					item.hostedWorkbenchState === 'loading'
+					isHostedWorkbenchInProgress(item.hostedWorkbenchState)
 						? 'hucode-project-switcher-worktree-loading'
 						: 'hucode-project-switcher-worktree-loaded'
 				);
 
-				if (item.hostedWorkbenchState !== 'loading') {
-					const label = localize('unloadWorkbenchButton', 'Unload');
-					this.setAction(
-						templateData,
-						templateData.trailingAction,
-						label,
-						Codicon.chromeMinimize,
-						() => {
-							void this.commandService.executeCommand(
-								UNLOAD_WORKTREE_COMMAND_ID,
-								toHandleArg(item)
-							);
-						}
-					);
-				}
+				const label = localize('unloadWorkbenchButton', 'Unload');
+				this.setAction(
+					templateData,
+					templateData.trailingAction,
+					label,
+					Codicon.chromeMinimize,
+					() => {
+						void this.commandService.executeCommand(
+							UNLOAD_WORKTREE_COMMAND_ID,
+							toHandleArg(item)
+						);
+					}
+				);
 			} else {
 				templateData.container.classList.add(
 					'hucode-project-switcher-worktree-unloaded'
@@ -1301,7 +1305,9 @@ export class ProjectSwitcherWidget extends Disposable {
 			contextValue: worktree.isMain
 				? MAIN_WORKTREE_CONTEXT_VALUE
 				: WORKTREE_CONTEXT_VALUE,
-			themeIcon: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
+			themeIcon: isHostedWorkbenchInProgress(hostedWorkbenchInstance?.state)
+				? ThemeIcon.modify(Codicon.loading, 'spin')
+				: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
 		};
 		itemsById.set(item.handle, item);
 		return { element: item };

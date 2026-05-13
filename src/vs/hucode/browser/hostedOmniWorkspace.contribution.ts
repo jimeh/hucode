@@ -7,6 +7,7 @@ import { localize, localize2 } from '../../nls.js';
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
+import { onUnexpectedError } from '../../base/common/errors.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../base/common/themables.js';
 import { Action2, registerAction2 } from
@@ -113,6 +114,18 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 	implements IWorkbenchContribution {
 
 	static readonly ID = 'hucode.hostedOmniWorkspaceReady';
+	private static readonly READY_NOTIFICATION_RETRY_DELAYS = [
+		0,
+		250,
+		1000,
+		2500,
+		5000,
+		10000,
+	];
+
+	private readonly readyNotificationHandles =
+		new Set<Timeout>();
+	private isDisposed = false;
 
 	constructor(
 		@IWorkbenchEnvironmentService
@@ -130,7 +143,8 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 		}
 
 		const windowId = getWindowId(mainWindow);
-		void shellService.notifyHostedWorkspaceReady(
+		this.notifyHostedWorkspaceReadyWithRetry(
+			shellService,
 			windowId,
 			environmentService.hostedInstanceId
 		);
@@ -158,6 +172,115 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 				updateShellStateContexts(change.state);
 			}
 		}));
+	}
+
+	override dispose(): void {
+		this.isDisposed = true;
+		for (const handle of this.readyNotificationHandles) {
+			clearTimeout(handle);
+		}
+		this.readyNotificationHandles.clear();
+		super.dispose();
+	}
+
+	private notifyHostedWorkspaceReadyWithRetry(
+		shellService: IHucodeShellService,
+		windowId: number,
+		instanceId: string
+	): void {
+		this.scheduleHostedWorkspaceReadyNotification(
+			shellService,
+			windowId,
+			instanceId,
+			0
+		);
+	}
+
+	private scheduleHostedWorkspaceReadyNotification(
+		shellService: IHucodeShellService,
+		windowId: number,
+		instanceId: string,
+		attemptIndex: number
+	): void {
+		if (
+			this.isDisposed
+			|| attemptIndex >= HostedOmniWorkspaceReadyContribution
+				.READY_NOTIFICATION_RETRY_DELAYS.length
+		) {
+			return;
+		}
+
+		const delay = HostedOmniWorkspaceReadyContribution
+			.READY_NOTIFICATION_RETRY_DELAYS[attemptIndex];
+		const handle = setTimeout(() => {
+			this.readyNotificationHandles.delete(handle);
+			void this.notifyHostedWorkspaceReadyAndVerify(
+				shellService,
+				windowId,
+				instanceId,
+				attemptIndex
+			);
+		}, delay);
+		this.readyNotificationHandles.add(handle);
+	}
+
+	private async notifyHostedWorkspaceReadyAndVerify(
+		shellService: IHucodeShellService,
+		windowId: number,
+		instanceId: string,
+		attemptIndex: number
+	): Promise<void> {
+		let shouldRetry = false;
+		try {
+			await shellService.notifyHostedWorkspaceReady(
+				windowId,
+				instanceId
+			);
+			shouldRetry = await this.isHostedWorkspaceStillPendingReady(
+				shellService,
+				windowId,
+				instanceId
+			);
+		} catch (error) {
+			shouldRetry = true;
+			if (this.isLastReadyNotificationAttempt(attemptIndex)) {
+				onUnexpectedError(error);
+			}
+		}
+
+		if (
+			!shouldRetry
+			|| this.isLastReadyNotificationAttempt(attemptIndex)
+		) {
+			return;
+		}
+
+		this.scheduleHostedWorkspaceReadyNotification(
+			shellService,
+			windowId,
+			instanceId,
+			attemptIndex + 1
+		);
+	}
+
+	private async isHostedWorkspaceStillPendingReady(
+		shellService: IHucodeShellService,
+		windowId: number,
+		instanceId: string
+	): Promise<boolean> {
+		const state = await shellService.getWindowState(windowId);
+		return state.instances.some(instance =>
+			instance.instanceId === instanceId &&
+			(
+				instance.state === 'restore-pending' ||
+				instance.state === 'loading'
+			)
+		);
+	}
+
+	private isLastReadyNotificationAttempt(attemptIndex: number): boolean {
+		return attemptIndex >= HostedOmniWorkspaceReadyContribution
+			.READY_NOTIFICATION_RETRY_DELAYS.length - 1;
 	}
 }
 

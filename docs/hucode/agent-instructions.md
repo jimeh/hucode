@@ -258,6 +258,13 @@ VS Code code that Hucode customizes.
   `contentView`, not just `setVisible(false)`. Invisible Electron view siblings
   can still disturb native hit testing when several workbenches restore at
   startup.
+- Detached hidden resident workbenches can still finish loading and report
+  readiness, but multi-workbench startup may leave them in `loading` briefly.
+  Treat `loading` as resident/switchable UI state, not as unloaded.
+- Resident restore entries are surfaced as `restore-pending` before their
+  `WebContentsView` exists. Projects UI should render that state like
+  `loading`, while main promotes it to `loading` when the serialized restore
+  loop starts attaching the workbench.
 - Hosted Omni workspaces should only transition from `loading` to `loaded` or
   `active` after the child workbench reports `LifecyclePhase.Restored`. An
   Electron `loadURL()` completion only means the renderer document loaded.
