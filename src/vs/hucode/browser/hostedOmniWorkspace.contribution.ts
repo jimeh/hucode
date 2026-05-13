@@ -8,7 +8,11 @@ import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { onUnexpectedError } from '../../base/common/errors.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import {
+	Disposable,
+	DisposableStore,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../base/common/themables.js';
 import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
@@ -123,8 +127,8 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 		10000,
 	];
 
-	private readonly readyNotificationHandles =
-		new Set<Timeout>();
+	private readonly readyNotificationDisposables =
+		this._register(new DisposableStore());
 	private isDisposed = false;
 
 	constructor(
@@ -176,10 +180,6 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 
 	override dispose(): void {
 		this.isDisposed = true;
-		for (const handle of this.readyNotificationHandles) {
-			clearTimeout(handle);
-		}
-		this.readyNotificationHandles.clear();
 		super.dispose();
 	}
 
@@ -213,7 +213,6 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 		const delay = HostedOmniWorkspaceReadyContribution
 			.READY_NOTIFICATION_RETRY_DELAYS[attemptIndex];
 		const handle = setTimeout(() => {
-			this.readyNotificationHandles.delete(handle);
 			void this.notifyHostedWorkspaceReadyAndVerify(
 				shellService,
 				windowId,
@@ -221,7 +220,9 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 				attemptIndex
 			);
 		}, delay);
-		this.readyNotificationHandles.add(handle);
+		this.readyNotificationDisposables.add(
+			toDisposable(() => clearTimeout(handle))
+		);
 	}
 
 	private async notifyHostedWorkspaceReadyAndVerify(

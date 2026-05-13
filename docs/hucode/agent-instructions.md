@@ -282,6 +282,11 @@ VS Code code that Hucode customizes.
   main-process storage IPC writes to flush. If `updateItems` replies before the
   `IStorageMain.set()` / `delete()` promises settle, app quit can destroy child
   workbenches while `@vscode/sqlite3` statements are still finalizing.
+- Once main-process shutdown starts, late-created profile/workspace storage must
+  stay in-memory for normal `QUIT` as well as abnormal `KILL`. Hosted renderer
+  unload can still issue storage IPC after the shutdown joiner snapshot; opening
+  a new sqlite DB in that window can leave native `exec()` callbacks racing app
+  teardown.
 
 ## Integrated Browser Views
 
