@@ -168,13 +168,14 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private toExternalInstance(
 		instance: IHostedWorkbenchInstance
 	): IHucodeHostedWorkbenchInstance {
+		const webContents = this.getLiveWebContents(instance);
 		return {
 			instanceId: instance.instanceId,
 			projectId: instance.projectId,
 			worktreePath: instance.worktreePath,
 			state: instance.state,
-			webContentsId: instance.view?.webContents.id,
-			processId: instance.view?.webContents.getProcessId(),
+			webContentsId: webContents?.id,
+			processId: webContents?.getProcessId(),
 			visible: instance.visible,
 			focused: instance.focused,
 			lastActiveAt: instance.lastActiveAt,
@@ -323,6 +324,17 @@ class ResidentHostedWorkspacesController extends Disposable {
 			);
 	}
 
+	private getLiveWebContents(
+		instance: IHostedWorkbenchInstance
+	): Electron.WebContents | undefined {
+		const webContents = instance.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return undefined;
+		}
+
+		return webContents;
+	}
+
 	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
 		const visible = this.isViewActuallyVisible(instance);
 		this.traceRestore(
@@ -330,20 +342,27 @@ class ResidentHostedWorkspacesController extends Disposable {
 			`attached=${instance.attached}`,
 			instance
 		);
-		if (!visible && instance.view?.webContents.isFocused()) {
+		const view = instance.view;
+		const webContents = this.getLiveWebContents(instance);
+		if (view && !webContents) {
+			instance.attached = false;
+			return;
+		}
+
+		if (!visible && webContents?.isFocused()) {
 			this.window.win?.webContents.focus();
 		}
-		if (instance.view) {
+		if (view && webContents) {
 			if (visible) {
 				this.attachInstanceView(instance);
-				instance.view.setVisible(true);
+				view.setVisible(true);
 			} else {
-				instance.view.setVisible(false);
+				view.setVisible(false);
 				this.detachInstanceView(instance);
 			}
 
 			this.browserViewMainService.setHostedWebContentsVisible(
-				instance.view.webContents.id,
+				webContents.id,
 				visible
 			);
 		}
@@ -733,11 +752,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		instance.view = view;
 		instance.configObjectUrl = configObjectUrl;
+		const webContents = view.webContents;
+		const webContentsId = webContents.id;
 
 		configObjectUrl.update(
 			this.createHostedConfiguration(
 				instance,
-				view.webContents.id
+				webContentsId
 			)
 		);
 
@@ -791,14 +812,18 @@ class ResidentHostedWorkspacesController extends Disposable {
 				visible: false,
 			});
 		});
-		view.webContents.once('destroyed', () => {
+		webContents.once('destroyed', () => {
 			this.untrustView(instance);
+			this.browserViewMainService.destroyBrowserViewsForHostedWebContents(
+				webContentsId
+			);
 			if (!instance.disposed &&
 				this.instancesById.has(instance.instanceId)) {
 				if (instance.instanceId === this.activeInstanceId) {
 					this.setWorkspaceOverlayOcclusion(false);
 				}
-				this.setViewVisible(instance, false);
+				instance.view = undefined;
+				instance.attached = false;
 				this.updateInstanceState(instance, {
 					state: 'crashed',
 					focused: false,

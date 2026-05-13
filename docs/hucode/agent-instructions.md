@@ -275,6 +275,13 @@ VS Code code that Hucode customizes.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.
+- Hosted workspace `webContents.destroyed` fires after Electron has already
+  invalidated the object. Capture ids before registering the handler and avoid
+  calling visibility, focus, bounds, or process APIs from that path.
+- Hosted workspace unload relies on renderer storage close waiting for
+  main-process storage IPC writes to flush. If `updateItems` replies before the
+  `IStorageMain.set()` / `delete()` promises settle, app quit can destroy child
+  workbenches while `@vscode/sqlite3` statements are still finalizing.
 
 ## Integrated Browser Views
 
