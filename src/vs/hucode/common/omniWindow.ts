@@ -20,6 +20,7 @@ export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
  * Lifecycle state of a hosted Omni workbench instance.
  */
 export type HucodeHostedWorkbenchLifecycleState =
+	| 'restore-pending'
 	| 'loading'
 	| 'active'
 	| 'loaded'

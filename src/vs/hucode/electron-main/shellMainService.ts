@@ -89,6 +89,8 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private projectSwitcherCanGoForward = false;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
+	private readonly traceRestoreToStdout: boolean;
+	private readonly traceRestoreStartedAt = Date.now();
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -108,6 +110,8 @@ class ResidentHostedWorkspacesController extends Disposable {
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
 	) {
 		super();
+		this.traceRestoreToStdout =
+			process.env['HUCODE_OMNI_RESTORE_TRACE'] === '1';
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
@@ -164,13 +168,14 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private toExternalInstance(
 		instance: IHostedWorkbenchInstance
 	): IHucodeHostedWorkbenchInstance {
+		const webContents = this.getLiveWebContents(instance);
 		return {
 			instanceId: instance.instanceId,
 			projectId: instance.projectId,
 			worktreePath: instance.worktreePath,
 			state: instance.state,
-			webContentsId: instance.view?.webContents.id,
-			processId: instance.view?.webContents.getProcessId(),
+			webContentsId: webContents?.id,
+			processId: webContents?.getProcessId(),
 			visible: instance.visible,
 			focused: instance.focused,
 			lastActiveAt: instance.lastActiveAt,
@@ -187,7 +192,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 	private waitForInstanceReady(
 		instance: IHostedWorkbenchInstance
 	): Promise<boolean> {
-		if (instance.state !== 'loading') {
+		if (!this.isInstancePendingReady(instance)) {
 			return Promise.resolve(
 				instance.state !== 'crashed' && instance.state !== 'unloaded'
 			);
@@ -195,7 +200,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		return new Promise<boolean>(resolve => {
 			const listener = this.onDidChangeState(() => {
-				if (instance.state === 'loading') {
+				if (this.isInstancePendingReady(instance)) {
 					return;
 				}
 
@@ -211,6 +216,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 				resolve(false);
 			}, ResidentHostedWorkspacesController.READY_TIMEOUT_MS);
 		});
+	}
+
+	private isInstancePendingReady(
+		instance: IHostedWorkbenchInstance
+	): boolean {
+		return instance.state === 'restore-pending' ||
+			instance.state === 'loading';
 	}
 
 	private updateWindowRestoreState(): void {
@@ -282,6 +294,14 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		const state: HucodeHostedWorkbenchLifecycleState =
 			instance.instanceId === this.activeInstanceId ? 'active' : 'loaded';
+		if (instance.state === state) {
+			return;
+		}
+
+		this.traceRestore(
+			`ready previousState=${instance.state} nextState=${state}`,
+			instance
+		);
 		this.updateInstanceState(instance, { state });
 		if (state === 'active') {
 			this.applyViewVisibility(instance);
@@ -304,22 +324,45 @@ class ResidentHostedWorkspacesController extends Disposable {
 			);
 	}
 
+	private getLiveWebContents(
+		instance: IHostedWorkbenchInstance
+	): Electron.WebContents | undefined {
+		const webContents = instance.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return undefined;
+		}
+
+		return webContents;
+	}
+
 	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
 		const visible = this.isViewActuallyVisible(instance);
-		if (!visible && instance.view?.webContents.isFocused()) {
+		this.traceRestore(
+			`visibility requested=${instance.visible} actual=${visible} ` +
+			`attached=${instance.attached}`,
+			instance
+		);
+		const view = instance.view;
+		const webContents = this.getLiveWebContents(instance);
+		if (view && !webContents) {
+			instance.attached = false;
+			return;
+		}
+
+		if (!visible && webContents?.isFocused()) {
 			this.window.win?.webContents.focus();
 		}
-		if (instance.view) {
+		if (view && webContents) {
 			if (visible) {
 				this.attachInstanceView(instance);
-				instance.view.setVisible(true);
+				view.setVisible(true);
 			} else {
-				instance.view.setVisible(false);
+				view.setVisible(false);
 				this.detachInstanceView(instance);
 			}
 
 			this.browserViewMainService.setHostedWebContentsVisible(
-				instance.view.webContents.id,
+				webContents.id,
 				visible
 			);
 		}
@@ -348,13 +391,14 @@ class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
-		if (!instance.view) {
+		const webContents = this.getLiveWebContents(instance);
+		if (!instance.view || !webContents) {
 			return;
 		}
 
 		this.attachInstanceView(instance);
 		this.browserViewMainService.bringHostedBrowserViewsToFront(
-			instance.view.webContents.id
+			webContents.id
 		);
 	}
 
@@ -459,6 +503,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		const restoreEntries = this.window.config?.omniResidentWorkspaces;
 		if (!restoreEntries?.length) {
+			this.traceRestore('restore:start entries=0');
 			this.restored = true;
 			this.emitState();
 			return;
@@ -491,9 +536,19 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 			return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
 		});
+		this.traceRestore(
+			`restore:start entries=${sortedEntries.length} ` +
+			`active=${activeWorktreePath ?? '<none>'}`
+		);
+		this.createRestorePendingInstances(sortedEntries, activeWorktreePath);
 
-		for (const entry of sortedEntries) {
+		for (const [index, entry] of sortedEntries.entries()) {
 			try {
+				this.traceRestore(
+					`restore:entry index=${index + 1}/${sortedEntries.length} ` +
+					`makeActive=${entry.worktreePath === activeWorktreePath} ` +
+					`path=${entry.worktreePath}`
+				);
 				await this.createOrRestoreInstance(
 					entry.worktreePath,
 					entry.projectId,
@@ -508,6 +563,41 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		this.restored = true;
+		this.traceRestore('restore:complete');
+		this.emitState();
+	}
+
+	private createRestorePendingInstances(
+		entries: readonly IOmniWorkspaceRestoreEntry[],
+		activeWorktreePath: string | undefined
+	): void {
+		for (const entry of entries) {
+			if (this.instanceIdsByPath.has(entry.worktreePath)) {
+				continue;
+			}
+
+			const instance: IHostedWorkbenchInstance = {
+				instanceId: generateUuid(),
+				projectId: entry.projectId,
+				worktreePath: entry.worktreePath,
+				trustedProcessIds: new Set<number>(),
+				attached: false,
+				state: 'restore-pending',
+				visible: false,
+				focused: false,
+				lastActiveAt: entry.worktreePath === activeWorktreePath
+					? Date.now()
+					: entry.lastActiveAt,
+				disposed: false,
+			};
+			this.instancesById.set(instance.instanceId, instance);
+			this.instanceIdsByPath.set(entry.worktreePath, instance.instanceId);
+			if (entry.worktreePath === activeWorktreePath) {
+				this.activeInstanceId = instance.instanceId;
+			}
+			this.traceRestore('restore:pending', instance);
+		}
+
 		this.emitState();
 	}
 
@@ -579,25 +669,47 @@ class ResidentHostedWorkspacesController extends Disposable {
 		projectId: string | undefined,
 		makeActive: boolean
 	): Promise<IHostedWorkbenchInstance> {
-		const instance: IHostedWorkbenchInstance = {
-			instanceId: generateUuid(),
-			projectId,
-			worktreePath,
-			trustedProcessIds: new Set<number>(),
-			attached: false,
-			state: 'loading',
-			visible: false,
-			focused: false,
-			lastActiveAt: makeActive ? Date.now() : undefined,
-			disposed: false,
-		};
+		const pendingId = this.instanceIdsByPath.get(worktreePath);
+		const pendingInstance = pendingId
+			? this.instancesById.get(pendingId)
+			: undefined;
+		const instance: IHostedWorkbenchInstance =
+			pendingInstance?.state === 'restore-pending'
+				? pendingInstance
+				: {
+					instanceId: generateUuid(),
+					projectId,
+					worktreePath,
+					trustedProcessIds: new Set<number>(),
+					attached: false,
+					state: 'loading',
+					visible: false,
+					focused: false,
+					lastActiveAt: makeActive ? Date.now() : undefined,
+					disposed: false,
+				};
+
+		instance.projectId = projectId ?? instance.projectId;
+		instance.state = 'loading';
+		if (makeActive) {
+			instance.lastActiveAt = Date.now();
+			this.activeInstanceId = instance.instanceId;
+		}
 
 		this.instancesById.set(instance.instanceId, instance);
 		this.instanceIdsByPath.set(worktreePath, instance.instanceId);
+		this.traceRestore(
+			`instance:create makeActive=${makeActive} state=${instance.state}`,
+			instance
+		);
 		this.emitState();
 
 		try {
 			await this.attachInstance(instance, makeActive);
+			this.traceRestore(
+				`instance:attached makeActive=${makeActive} state=${instance.state}`,
+				instance
+			);
 			if (makeActive) {
 				this.activateInstance(instance);
 			} else {
@@ -615,6 +727,7 @@ class ResidentHostedWorkspacesController extends Disposable {
 		instance: IHostedWorkbenchInstance,
 		makeActive: boolean
 	): Promise<void> {
+		this.traceRestore(`attach:start makeActive=${makeActive}`, instance);
 		const configObjectUrl = this._register(
 			this.protocolMainService
 				.createIPCObjectUrl<INativeWindowConfiguration>()
@@ -640,11 +753,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 
 		instance.view = view;
 		instance.configObjectUrl = configObjectUrl;
+		const webContents = view.webContents;
+		const webContentsId = webContents.id;
 
 		configObjectUrl.update(
 			this.createHostedConfiguration(
 				instance,
-				view.webContents.id
+				webContentsId
 			)
 		);
 
@@ -698,14 +813,18 @@ class ResidentHostedWorkspacesController extends Disposable {
 				visible: false,
 			});
 		});
-		view.webContents.once('destroyed', () => {
+		webContents.once('destroyed', () => {
 			this.untrustView(instance);
+			this.browserViewMainService.destroyBrowserViewsForHostedWebContents(
+				webContentsId
+			);
 			if (!instance.disposed &&
 				this.instancesById.has(instance.instanceId)) {
 				if (instance.instanceId === this.activeInstanceId) {
 					this.setWorkspaceOverlayOcclusion(false);
 				}
-				this.setViewVisible(instance, false);
+				instance.view = undefined;
+				instance.attached = false;
 				this.updateInstanceState(instance, {
 					state: 'crashed',
 					focused: false,
@@ -726,7 +845,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 			.asBrowserUri(windowResourcePath)
 			.toString(true);
 
+		const loadStartedAt = Date.now();
+		this.traceRestore('loadURL:start', instance);
 		await view.webContents.loadURL(windowUrl);
+		this.traceRestore(
+			`loadURL:complete duration=${Date.now() - loadStartedAt}ms`,
+			instance
+		);
 	}
 
 	private createHostedConfiguration(
@@ -768,6 +893,10 @@ class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private activateInstance(instance: IHostedWorkbenchInstance): void {
+		this.traceRestore(
+			`activate:start previousActive=${this.activeInstanceId ?? '<none>'}`,
+			instance
+		);
 		const previousActive = this.getActiveInstance();
 		if (previousActive &&
 			previousActive.instanceId !== instance.instanceId) {
@@ -775,8 +904,8 @@ class ResidentHostedWorkspacesController extends Disposable {
 			this.updateInstanceState(previousActive, {
 				state: previousActive.state === 'crashed'
 					? 'crashed'
-					: previousActive.state === 'loading'
-						? 'loading'
+					: this.isInstancePendingReady(previousActive)
+						? previousActive.state
 						: 'loaded',
 				focused: false,
 			});
@@ -788,12 +917,13 @@ class ResidentHostedWorkspacesController extends Disposable {
 		this.updateInstanceState(instance, {
 			state: instance.state === 'crashed'
 				? 'crashed'
-				: instance.state === 'loading'
-					? 'loading'
+				: this.isInstancePendingReady(instance)
+					? instance.state
 					: 'active',
 			visible: true,
 			lastActiveAt: instance.lastActiveAt,
 		});
+		this.traceRestore(`activate:complete state=${instance.state}`, instance);
 	}
 
 	layout(bounds: IRectangle): void {
@@ -885,13 +1015,18 @@ class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		if (instance.view) {
-			this.browserViewMainService.destroyBrowserViewsForHostedWebContents(
-				instance.view.webContents.id
-			);
+			const view = instance.view;
+			const webContents = this.getLiveWebContents(instance);
+			if (webContents) {
+				this.browserViewMainService
+					.destroyBrowserViewsForHostedWebContents(webContents.id);
+			}
 			this.untrustView(instance);
-			instance.view.setVisible(false);
+			view.setVisible(false);
 			this.detachInstanceView(instance);
-			instance.view.webContents.close({ waitForBeforeUnload: false });
+			if (webContents) {
+				webContents.close({ waitForBeforeUnload: false });
+			}
 			instance.view = undefined;
 		}
 
@@ -1322,6 +1457,29 @@ class ResidentHostedWorkspacesController extends Disposable {
 			!input.alt &&
 			!input.shift &&
 			input.key.toLowerCase() === 'v';
+	}
+
+	private traceRestore(
+		message: string,
+		instance?: IHostedWorkbenchInstance
+	): void {
+		if (!this.traceRestoreToStdout) {
+			return;
+		}
+
+		const elapsed = Date.now() - this.traceRestoreStartedAt;
+		const instanceDetails = instance
+			? ` instance=${instance.instanceId}` +
+			` state=${instance.state}` +
+			` active=${instance.instanceId === this.activeInstanceId}` +
+			` visible=${instance.visible}` +
+			` attached=${instance.attached}` +
+			` path=${instance.worktreePath}`
+			: '';
+		console.log(
+			`[HucodeOmniRestore +${elapsed}ms win=${this.window.id}] ` +
+			`${message}${instanceDetails}`
+		);
 	}
 
 	override dispose(): void {

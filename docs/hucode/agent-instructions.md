@@ -258,6 +258,13 @@ VS Code code that Hucode customizes.
   `contentView`, not just `setVisible(false)`. Invisible Electron view siblings
   can still disturb native hit testing when several workbenches restore at
   startup.
+- Detached hidden resident workbenches can still finish loading and report
+  readiness, but multi-workbench startup may leave them in `loading` briefly.
+  Treat `loading` as resident/switchable UI state, not as unloaded.
+- Resident restore entries are surfaced as `restore-pending` before their
+  `WebContentsView` exists. Projects UI should render that state like
+  `loading`, while main promotes it to `loading` when the serialized restore
+  loop starts attaching the workbench.
 - Hosted Omni workspaces should only transition from `loading` to `loaded` or
   `active` after the child workbench reports `LifecyclePhase.Restored`. An
   Electron `loadURL()` completion only means the renderer document loaded.
@@ -268,6 +275,18 @@ VS Code code that Hucode customizes.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.
+- Hosted workspace `webContents.destroyed` fires after Electron has already
+  invalidated the object. Capture ids before registering the handler and avoid
+  calling visibility, focus, bounds, or process APIs from that path.
+- Hosted workspace unload relies on renderer storage close waiting for
+  main-process storage IPC writes to flush. If `updateItems` replies before the
+  `IStorageMain.set()` / `delete()` promises settle, app quit can destroy child
+  workbenches while `@vscode/sqlite3` statements are still finalizing.
+- Once main-process shutdown starts, late-created profile/workspace storage must
+  stay in-memory for normal `QUIT` as well as abnormal `KILL`. Hosted renderer
+  unload can still issue storage IPC after the shutdown joiner snapshot; opening
+  a new sqlite DB in that window can leave native `exec()` callbacks racing app
+  teardown.
 
 ## Integrated Browser Views
 
