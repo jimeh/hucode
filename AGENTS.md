@@ -32,5 +32,10 @@ as the required Hucode instruction set for work in this fork.
 
 ## Repository hygiene notes
 
+- After editing files, run the same hygiene path as the pre-commit hook before
+  considering the work complete. If changes are already staged for a commit,
+  run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
+  for the edited files. Do not bypass or ignore hygiene failures; fix them or
+  report the blocker.
 - TOML files cannot carry VS Code's standard block copyright header. Keep
   `*.toml` excluded from copyright hygiene rather than adding invalid TOML.
