@@ -648,6 +648,39 @@ function getAppCliDestination(options, buildOutput, product) {
 	);
 }
 
+/**
+ * Validates that a packaged app output includes the Hucode CLI artifact.
+ *
+ * @param {{ platform: string; arch: string }} options
+ * @param {string} buildOutput
+ * @returns {Promise<string>}
+ */
+export async function validateAppCliArtifact(options, buildOutput) {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
+	}
+
+	const product = await readJson(appProductPath);
+	const cliPath = getAppCliDestination(options, buildOutput, product);
+	let stats;
+	try {
+		stats = await fs.stat(cliPath);
+	} catch {
+		throw new Error(`Hucode CLI artifact not found: ${cliPath}`);
+	}
+
+	if (!stats.isFile()) {
+		throw new Error(`Hucode CLI artifact is not a file: ${cliPath}`);
+	}
+
+	if (options.platform !== 'win32' && (stats.mode & 0o111) === 0) {
+		throw new Error(`Hucode CLI artifact is not executable: ${cliPath}`);
+	}
+
+	return cliPath;
+}
+
 async function getLinuxCliEnv(options) {
 	if (options.platform !== 'linux') {
 		return {};
@@ -765,8 +798,8 @@ async function getHucodePackageVersion(options, packageType) {
 	return version;
 }
 
-function applyDebianPackageVersion(controlContent, hucodeVersion) {
-	const match = /^Version:\s*(\S+)\s*$/m.exec(controlContent);
+export function applyDebianPackageVersion(controlContent, hucodeVersion) {
+	const match = /^Version:[^\S\r\n]*(\S+)[^\S\r\n]*$/m.exec(controlContent);
 	if (!match) {
 		throw new Error('DEB control file does not contain a Version field.');
 	}
@@ -778,18 +811,18 @@ function applyDebianPackageVersion(controlContent, hucodeVersion) {
 		: `${hucodeVersion}${existingVersion.slice(revisionIndex)}`;
 
 	return controlContent.replace(
-		/^Version:\s*\S+\s*$/m,
+		/^Version:[^\S\r\n]*\S+[^\S\r\n]*$/m,
 		`Version: ${version}`
 	);
 }
 
-function applyRpmPackageVersion(specContent, hucodeVersion) {
-	if (!/^Version:\s*\S+\s*$/m.test(specContent)) {
+export function applyRpmPackageVersion(specContent, hucodeVersion) {
+	if (!/^Version:[^\S\r\n]*\S+[^\S\r\n]*$/m.test(specContent)) {
 		throw new Error('RPM spec file does not contain a Version field.');
 	}
 
 	return specContent.replace(
-		/^Version:\s*\S+\s*$/m,
+		/^Version:[^\S\r\n]*\S+[^\S\r\n]*$/m,
 		`Version:  ${hucodeVersion}`
 	);
 }
@@ -861,6 +894,7 @@ async function mixInCli(options, buildOutput) {
 		await fs.chmod(destination, 0o755);
 	}
 
+	await validateAppCliArtifact(options, buildOutput);
 	console.log(`Hucode CLI: ${destination}`);
 }
 

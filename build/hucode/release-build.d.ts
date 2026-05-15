@@ -15,6 +15,30 @@ export interface HucodeReleaseTargetOptions {
 }
 
 /**
+ * Patches generated DEB control metadata to use the Hucode version.
+ */
+export function applyDebianPackageVersion(
+	controlContent: string,
+	hucodeVersion: string
+): string;
+
+/**
+ * Patches generated RPM spec metadata to use the Hucode version.
+ */
+export function applyRpmPackageVersion(
+	specContent: string,
+	hucodeVersion: string
+): string;
+
+/**
+ * Validates that a packaged app output includes the Hucode CLI artifact.
+ */
+export function validateAppCliArtifact(
+	options: HucodeReleaseTargetOptions,
+	buildOutput: string
+): Promise<string>;
+
+/**
  * Validates that an extracted Copilot VSIX has no bundled target binaries.
  */
 export function validateExtractedCopilotVsix(outputDir: string): Promise<void>;

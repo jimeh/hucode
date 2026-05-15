@@ -9,7 +9,10 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+	applyDebianPackageVersion,
+	applyRpmPackageVersion,
 	findBuiltInCopilotExtension,
+	validateAppCliArtifact,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
 } from '../../hucode/release-build.js';
@@ -102,6 +105,94 @@ suite('Hucode release build', () => {
 		);
 	});
 
+	test('patches Linux package versions from Hucode release metadata', () => {
+		assert.strictEqual(
+			applyDebianPackageVersion(
+				'Package: hucode\nVersion: 1.119.1-1757688183\n',
+				'0.48.0'
+			),
+			'Package: hucode\nVersion: 0.48.0-1757688183\n'
+		);
+		assert.strictEqual(
+			applyRpmPackageVersion(
+				'Name: hucode\nVersion:  1.119.1\nRelease: 1757688183\n',
+				'0.48.0'
+			),
+			'Name: hucode\nVersion:  0.48.0\nRelease: 1757688183\n'
+		);
+		assert.throws(
+			() => applyDebianPackageVersion('Package: hucode\n', '0.48.0'),
+			/DEB control file does not contain a Version field/
+		);
+	});
+
+	test('validates Linux CLI artifact in packaged app output', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-linux-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+		const cliPath = path.join(buildOutput, 'bin', 'hucode-tunnel');
+		await fs.mkdir(path.dirname(cliPath), { recursive: true });
+		await fs.writeFile(cliPath, '');
+		await fs.chmod(cliPath, 0o755);
+
+		assert.strictEqual(
+			await validateAppCliArtifact(
+				{ platform: 'linux', arch: 'x64' },
+				buildOutput
+			),
+			cliPath
+		);
+	});
+
+	test('validates macOS CLI artifact in app resources', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-darwin-arm64');
+		const appRoot = path.join(buildOutput, 'Hucode.app');
+		await createAppProduct(
+			path.join(
+				appRoot,
+				'Contents',
+				'Resources',
+				'app',
+				'product.json'
+			)
+		);
+		const cliPath = path.join(
+			appRoot,
+			'Contents',
+			'Resources',
+			'app',
+			'bin',
+			'hucode-tunnel'
+		);
+		await fs.mkdir(path.dirname(cliPath), { recursive: true });
+		await fs.writeFile(cliPath, '');
+		await fs.chmod(cliPath, 0o755);
+
+		assert.strictEqual(
+			await validateAppCliArtifact(
+				{ platform: 'darwin', arch: 'arm64' },
+				buildOutput
+			),
+			cliPath
+		);
+	});
+
+	test('rejects missing Hucode CLI artifact', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-win32-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+
+		await assert.rejects(
+			validateAppCliArtifact(
+				{ platform: 'win32', arch: 'x64' },
+				buildOutput
+			),
+			/Hucode CLI artifact not found/
+		);
+	});
+
 	async function createCopilotExtension(): Promise<string> {
 		const outputDir = path.join(tmpDir, 'copilot');
 		await fs.mkdir(outputDir, { recursive: true });
@@ -140,5 +231,16 @@ suite('Hucode release build', () => {
 		await fs.writeFile(path.join(shimDir, 'rg'), '');
 
 		return extensionDir;
+	}
+
+	async function createAppProduct(productPath: string): Promise<void> {
+		await fs.mkdir(path.dirname(productPath), { recursive: true });
+		await fs.writeFile(
+			productPath,
+			JSON.stringify({
+				nameLong: 'Hucode',
+				tunnelApplicationName: 'hucode-tunnel'
+			})
+		);
 	}
 });
