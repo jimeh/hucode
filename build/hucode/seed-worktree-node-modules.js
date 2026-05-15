@@ -23,13 +23,24 @@ function parseArgs(args) {
 		target: process.env.CODEX_WORKTREE_PATH || repoRoot,
 	};
 
+	function readPathValue(option, index) {
+		const value = args[index + 1];
+		if (!value || value.startsWith('--')) {
+			throw new Error(`${option} requires a path value.`);
+		}
+
+		return value;
+	}
+
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
 			case '--source':
-				options.source = args[++i];
+				options.source = readPathValue(args[i], i);
+				i++;
 				break;
 			case '--target':
-				options.target = args[++i];
+				options.target = readPathValue(args[i], i);
+				i++;
 				break;
 			default:
 				throw new Error(`Unknown argument: ${args[i]}`);
