@@ -287,6 +287,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ids?: string[];
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
+		readonly readyTimeoutMs?: number;
 		readonly windowId?: number;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
@@ -345,7 +346,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			{
 				beforeUnloadTimeoutMs: 100,
 				willUnloadTimeoutMs: 100,
-				readyTimeoutMs: 100,
+				readyTimeoutMs: options.readyTimeoutMs ?? 100,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
 				viewFactory,
@@ -544,6 +545,88 @@ suite('ResidentHostedWorkspacesController', () => {
 				state: 'active',
 			},
 		]);
+	});
+
+	test('openFilesInWorkspace waits for new workspace readiness', async () => {
+		const alpha = createWorktree('alpha');
+		const fileUri = URI.file(join(alpha, 'src/file.txt'));
+		const request = {
+			filesToOpenOrCreate: [{ fileUri }],
+			termProgram: 'hucode',
+		};
+		const { controller, viewFactory } = createController();
+
+		const openPromise = controller.openFilesInWorkspace(
+			alpha,
+			request,
+			'project-alpha'
+		);
+		setTimeout(() =>
+			controller.notifyHostedWorkspaceReady('instance-1'), 0);
+
+		assert.strictEqual(await openPromise, true);
+		assert.strictEqual(viewFactory.views.length, 1);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, [
+			{
+				channel: 'vscode:openFiles',
+				request,
+			}
+		]);
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			projectId: instance.projectId,
+			worktreePath: instance.worktreePath,
+			state: instance.state,
+			visible: instance.visible,
+		})), [
+			{
+				projectId: 'project-alpha',
+				worktreePath: alpha,
+				state: 'active',
+				visible: true,
+			}
+		]);
+	});
+
+	test('openFilesInActiveWorkspace waits for readiness', async () => {
+		const alpha = createWorktree('alpha');
+		const fileUri = URI.file(join(alpha, 'src/file.txt'));
+		const request = {
+			filesToOpenOrCreate: [{ fileUri }],
+		};
+		const { controller, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const openPromise = controller.openFilesInActiveWorkspace(request);
+		await Promise.resolve();
+
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, []);
+		controller.notifyHostedWorkspaceReady('instance-1');
+
+		assert.strictEqual(await openPromise, true);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, [
+			{
+				channel: 'vscode:openFiles',
+				request,
+			}
+		]);
+	});
+
+	test('openFilesInActiveWorkspace fails when readiness times out', async () => {
+		const alpha = createWorktree('alpha');
+		const fileUri = URI.file(join(alpha, 'src/file.txt'));
+		const { controller, viewFactory } = createController({
+			readyTimeoutMs: 1,
+		});
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+
+		assert.strictEqual(
+			await controller.openFilesInActiveWorkspace({
+				filesToOpenOrCreate: [{ fileUri }],
+			}),
+			false
+		);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, []);
 	});
 
 	test('unload reply channels are unique across controllers', async () => {

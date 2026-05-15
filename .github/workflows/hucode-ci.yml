@@ -226,6 +226,8 @@ jobs:
             --run \
             src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
             --run \
+            src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
+            --run \
             src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts
         env:
           VSCODE_SKIP_PRELAUNCH: 1
