@@ -855,10 +855,13 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	test('runKeybindingInWorkspace forwards when shell has focus', async () => {
 		const alpha = createWorktree('alpha');
-		const { controller, viewFactory } = createController();
+		const { controller, viewFactory, window } = createController();
 
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
+		const shellWebContents = window.win!.webContents as unknown as
+			TestWebContents;
+		shellWebContents.focus();
 
 		const sent = await controller.runKeybindingInWorkspace({
 			userSettingsLabel: 'ctrl+s',
