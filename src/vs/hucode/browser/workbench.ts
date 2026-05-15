@@ -16,7 +16,7 @@ import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/com
 import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString } from '../../workbench/services/layout/browser/layoutService.js';
 import { ILayoutOffsetInfo } from '../../platform/layout/browser/layoutService.js';
 import { Part } from '../../workbench/browser/part.js';
-import { Direction, ISerializableView, ISerializedGrid, ISerializedLeafNode, ISerializedNode, IViewSize, Orientation, SerializableGrid } from '../../base/browser/ui/grid/grid.js';
+import { Direction, ISerializableView, ISerializedGrid, IViewSize, SerializableGrid } from '../../base/browser/ui/grid/grid.js';
 import { IEditorGroupsService } from '../../workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../workbench/services/editor/common/editorService.js';
 import { IPaneCompositePartService } from '../../workbench/services/panecomposite/browser/panecomposite.js';
@@ -63,6 +63,7 @@ import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.
 import { TitleService } from './parts/titlebarPart.js';
 import { OmniHostPart } from './parts/omniHostPart.js';
 import { ProjectsPart } from './parts/projectsPart.js';
+import { createOmniGridDescriptor } from './omniLayoutModel.js';
 
 //#region Workbench Options
 
@@ -792,85 +793,15 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	 *   - Panel (below workspace host and auxiliary bar only)
 	 */
 	private createGridDescriptor(): ISerializedGrid {
-		const { width, height } = this._mainContainerDimension;
-
-		// Default sizes
-		const sideBarSize = 300;
-		const auxiliaryBarSize = 380;
-		const panelSize = 300;
-		const titleBarHeight = this.titleBarPartView?.minimumHeight ?? 30;
-
-		// Calculate right section width and chat bar width
-		const rightSectionWidth = Math.max(0, width - sideBarSize);
-		const chatBarWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
-
-		const contentHeight = height - titleBarHeight;
-		const topRightHeight = contentHeight - panelSize;
-
-		const titleBarNode: ISerializedLeafNode = {
-			type: 'leaf',
-			data: { type: Parts.TITLEBAR_PART },
-			size: titleBarHeight,
-			visible: true
-		};
-
-		const sideBarNode: ISerializedLeafNode = {
-			type: 'leaf',
-			data: { type: Parts.SIDEBAR_PART },
-			size: sideBarSize,
-			visible: this.partVisibility.sidebar
-		};
-
-		const auxiliaryBarNode: ISerializedLeafNode = {
-			type: 'leaf',
-			data: { type: Parts.AUXILIARYBAR_PART },
-			size: auxiliaryBarSize,
-			visible: this.partVisibility.auxiliaryBar
-		};
-
-		const chatBarNode: ISerializedLeafNode = {
-			type: 'leaf',
-			data: { type: Parts.CHATBAR_PART },
-			size: chatBarWidth,
-			visible: this.partVisibility.chatBar
-		};
-
-		const panelNode: ISerializedLeafNode = {
-			type: 'leaf',
-			data: { type: Parts.PANEL_PART },
-			size: panelSize,
-			visible: this.partVisibility.panel
-		};
-
-		// Top right section: Chat Bar | Auxiliary Bar (horizontal)
-		const topRightSection: ISerializedNode = {
-			type: 'branch',
-			data: [chatBarNode, auxiliaryBarNode],
-			size: topRightHeight
-		};
-
-		// Right section: Titlebar | Top Right | Panel (vertical)
-		const rightSection: ISerializedNode = {
-			type: 'branch',
-			data: [titleBarNode, topRightSection, panelNode],
-			size: rightSectionWidth
-		};
-
-		const result: ISerializedGrid = {
-			root: {
-				type: 'branch',
-				size: height,
-				data: [
-					sideBarNode,
-					rightSection
-				]
-			},
-			orientation: Orientation.HORIZONTAL,
-			width,
-			height
-		};
-
-		return result;
+		return createOmniGridDescriptor({
+			width: this._mainContainerDimension.width,
+			height: this._mainContainerDimension.height,
+			titleBarHeight: this.titleBarPartView?.minimumHeight ?? 30,
+			sideBarVisible: this.partVisibility.sidebar,
+			auxiliaryBarVisible: this.partVisibility.auxiliaryBar,
+			chatBarVisible: this.partVisibility.chatBar,
+			panelVisible: this.partVisibility.panel,
+		});
 	}
 
 	//#endregion

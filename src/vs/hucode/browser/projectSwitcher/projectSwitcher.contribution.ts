@@ -20,7 +20,6 @@ import {
 import { IListAccessibilityProvider } from
 	'../../../base/browser/ui/list/listWidget.js';
 import {
-	IObjectTreeElement,
 	ITreeContextMenuEvent,
 	ITreeDragAndDrop,
 	ITreeDragOverReaction,
@@ -71,10 +70,8 @@ import { ICommandService } from
 import {
 	IProjectManagerService,
 	ProjectRecord,
-	WorktreeRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
-	HucodeHostedWorkbenchLifecycleState,
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
@@ -85,7 +82,6 @@ import {
 	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ADD_PROJECT_COMMAND_ID,
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	getWorktreeDisplayLabel,
 	pathsEqual,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
@@ -97,6 +93,22 @@ import {
 	openProjectSwitcherTarget,
 	type IProjectSwitcherSelectionTarget,
 } from './switchProjectWorktree.contribution.js';
+import {
+	buildProjectSwitcherTreeModel,
+	encodeProjectHandle,
+	encodeWorktreeHandle,
+	isHostedWorkbenchInProgress,
+	isProjectItem,
+	isSeparatorItem,
+	isWorktreeItem,
+	PINNED_SECTION,
+	ProjectSwitcherItem,
+	ProjectSwitcherProjectItem,
+	ProjectSwitcherTreeElement,
+	ProjectSwitcherWorktreeItem,
+	selectionTargetsEqual,
+	UNPINNED_SECTION,
+} from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -114,15 +126,7 @@ const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
 
-const PROJECT_CONTEXT_VALUE = 'hucode-project';
-const PINNED_PROJECT_CONTEXT_VALUE = 'hucode-project-pinned';
-const WORKTREE_CONTEXT_VALUE = 'hucode-worktree';
-const MAIN_WORKTREE_CONTEXT_VALUE = 'hucode-worktree-main';
-const PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE =
-	'hucode-project-group-separator';
 const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
-const PINNED_SEPARATOR_HANDLE = 'separator:pinned';
-const UNPINNED_SEPARATOR_HANDLE = 'separator:unpinned';
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
 const PROJECT_SWITCHER_VIEW_STATE_VERSION = 1;
@@ -130,38 +134,11 @@ const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
 
-type ProjectSwitcherSection = 'pinned' | 'unpinned';
-
-const PINNED_SECTION: ProjectSwitcherSection = 'pinned';
-const UNPINNED_SECTION: ProjectSwitcherSection = 'unpinned';
+let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
 
 interface ProjectSwitcherViewState {
 	version?: number;
 	collapsedProjectIds?: string[];
-}
-
-let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
-
-function encodeProjectHandle(
-	projectId: string,
-	section: ProjectSwitcherSection
-): string {
-	return `project:${section}:${projectId}`;
-}
-
-function encodeWorktreeHandle(projectId: string, worktreePath: string): string {
-	return `worktree:${projectId}:${encodeURIComponent(worktreePath)}`;
-}
-
-function getWorktreeItemId(
-	projectId: string,
-	worktreePath: string,
-	hostedWorkbenchInstanceId?: string
-): string {
-	const handle = encodeWorktreeHandle(projectId, worktreePath);
-	return hostedWorkbenchInstanceId
-		? `${handle}:loaded:${hostedWorkbenchInstanceId}`
-		: `${handle}:idle`;
 }
 
 function getTreeItemHandle(
@@ -207,72 +184,6 @@ function parseWorktreeHandle(
 	};
 }
 
-interface ProjectSwitcherBaseItem {
-	readonly id: string;
-	readonly handle: string;
-	readonly kind: 'project' | 'worktree' | 'separator';
-	readonly label: string;
-	readonly description?: string;
-	readonly tooltip?: string;
-	readonly contextValue: string;
-	readonly themeIcon?: ThemeIcon;
-}
-
-interface ProjectSwitcherProjectItem extends ProjectSwitcherBaseItem {
-	readonly kind: 'project';
-	readonly projectId: string;
-	readonly pinned: boolean;
-	readonly section: ProjectSwitcherSection;
-	readonly rootPath: string;
-	readonly hasCustomLabel: boolean;
-}
-
-interface ProjectSwitcherWorktreeItem extends ProjectSwitcherBaseItem {
-	readonly kind: 'worktree';
-	readonly projectId: string;
-	readonly worktreePath: string;
-	readonly isMain: boolean;
-	readonly pinned: boolean;
-	readonly section: ProjectSwitcherSection;
-	readonly hostedWorkbenchInstanceId?: string;
-	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
-	readonly isActive: boolean;
-	readonly hasCustomLabel: boolean;
-}
-
-interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
-	readonly kind: 'separator';
-}
-
-type ProjectSwitcherItem =
-	| ProjectSwitcherProjectItem
-	| ProjectSwitcherWorktreeItem
-	| ProjectSwitcherSeparatorItem;
-
-function isHostedWorkbenchInProgress(
-	state: HucodeHostedWorkbenchLifecycleState | undefined
-): boolean {
-	return state === 'restore-pending' || state === 'loading';
-}
-
-function isProjectItem(
-	item: ProjectSwitcherItem | undefined
-): item is ProjectSwitcherProjectItem {
-	return item?.kind === 'project';
-}
-
-function isWorktreeItem(
-	item: ProjectSwitcherItem | undefined
-): item is ProjectSwitcherWorktreeItem {
-	return item?.kind === 'worktree';
-}
-
-function isSeparatorItem(
-	item: ProjectSwitcherItem | undefined
-): item is ProjectSwitcherSeparatorItem {
-	return item?.kind === 'separator';
-}
-
 function isBeforeDropPosition(
 	targetSector: ListViewTargetSector | undefined
 ): boolean {
@@ -293,16 +204,6 @@ function toHandleArg(item: ProjectSwitcherItem): TreeViewItemHandleArg {
 		$treeViewId: PROJECT_SWITCHER_VIEW_ID,
 		$treeItemHandle: item.handle,
 	};
-}
-
-function selectionTargetsEqual(
-	a: IProjectSwitcherSelectionTarget | undefined,
-	b: IProjectSwitcherSelectionTarget | undefined
-): boolean {
-	return a?.projectId === b?.projectId &&
-		typeof a?.worktreePath === 'string' &&
-		typeof b?.worktreePath === 'string' &&
-		pathsEqual(a.worktreePath, b.worktreePath);
 }
 
 class ProjectSwitcherAccessibilityProvider
@@ -1161,156 +1062,17 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private buildRoots(projects: readonly ProjectRecord[]): {
-		roots: readonly IObjectTreeElement<ProjectSwitcherItem>[];
+		roots: readonly ProjectSwitcherTreeElement[];
 		itemsById: Map<string, ProjectSwitcherItem>;
 	} {
-		const itemsById = new Map<string, ProjectSwitcherItem>();
-		const roots: IObjectTreeElement<ProjectSwitcherItem>[] = [];
-		const pinnedProjectElements: IObjectTreeElement<ProjectSwitcherItem>[] = [];
-		const unpinnedProjectElements: IObjectTreeElement<ProjectSwitcherItem>[] = [];
-
-		for (const project of projects) {
-			const pinnedWorktrees = project.pinned
-				? project.worktrees
-				: project.worktrees.filter(worktree => worktree.pinned);
-			const unpinnedWorktrees = project.pinned
-				? []
-				: project.worktrees.filter(worktree => !worktree.pinned);
-
-			if (pinnedWorktrees.length) {
-				pinnedProjectElements.push(this.toProjectElement(
-					project,
-					pinnedWorktrees,
-					PINNED_SECTION,
-					itemsById
-				));
-			}
-			if (unpinnedWorktrees.length) {
-				unpinnedProjectElements.push(this.toProjectElement(
-					project,
-					unpinnedWorktrees,
-					UNPINNED_SECTION,
-					itemsById
-				));
-			}
-		}
-
-		if (pinnedProjectElements.length) {
-			const separator: ProjectSwitcherSeparatorItem = {
-				id: PINNED_SEPARATOR_HANDLE,
-				handle: PINNED_SEPARATOR_HANDLE,
-				kind: 'separator',
-				label: localize('pinnedProjects', 'Pinned'),
-				contextValue: PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE,
-			};
-			itemsById.set(separator.handle, separator);
-			roots.push({ element: separator });
-			roots.push(...pinnedProjectElements);
-		}
-
-		if (pinnedProjectElements.length && unpinnedProjectElements.length) {
-			const separator: ProjectSwitcherSeparatorItem = {
-				id: UNPINNED_SEPARATOR_HANDLE,
-				handle: UNPINNED_SEPARATOR_HANDLE,
-				kind: 'separator',
-				label: localize('unpinnedProjects', 'Unpinned'),
-				contextValue: PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE,
-			};
-			itemsById.set(separator.handle, separator);
-			roots.push({ element: separator });
-		}
-
-		roots.push(...unpinnedProjectElements);
-
-		return { roots, itemsById };
-	}
-
-	private toProjectElement(
-		project: ProjectRecord,
-		worktrees: readonly WorktreeRecord[],
-		section: ProjectSwitcherSection,
-		itemsById: Map<string, ProjectSwitcherItem>
-	): IObjectTreeElement<ProjectSwitcherItem> {
-		const rootUri = URI.revive(project.rootUri);
-		const rootPath = rootUri.fsPath;
-		const rootBasename = basename(rootPath);
-		const handle = encodeProjectHandle(project.id, section);
-		const item: ProjectSwitcherProjectItem = {
-			id: handle,
-			handle,
-			kind: 'project',
-			projectId: project.id,
-			pinned: project.pinned,
-			section,
-			rootPath,
-			hasCustomLabel: project.label !== rootBasename,
-			label: project.label,
-			description: project.label === rootBasename ? undefined : rootBasename,
-			tooltip: this.getPathLabel(rootPath),
-			contextValue: project.pinned
-				? PINNED_PROJECT_CONTEXT_VALUE
-				: PROJECT_CONTEXT_VALUE,
-			themeIcon: Codicon.folder,
-		};
-		itemsById.set(item.handle, item);
-
-		return {
-			element: item,
-			collapsible: true,
-			collapsed: this.collapsedProjectIds.has(item.id) ||
-				this.collapsedProjectIds.has(project.id),
-			children: worktrees.map(worktree =>
-				this.toWorktreeElement(project, worktree, section, itemsById)
-			),
-		};
-	}
-
-	private toWorktreeElement(
-		project: ProjectRecord,
-		worktree: WorktreeRecord,
-		section: ProjectSwitcherSection,
-		itemsById: Map<string, ProjectSwitcherItem>
-	): IObjectTreeElement<ProjectSwitcherItem> {
-		const hostedWorkbenchInstance = this.getHostedWorkbenchInstance(
-			worktree.path
-		);
-		const isActive = this.isActiveWorktree(worktree.path);
-		const worktreeLabel = getWorktreeDisplayLabel(worktree);
-		const worktreeDescription = worktree.branch ??
-			(worktree.isDetached
-				? localize('detachedWorktree', 'Detached')
-				: undefined);
-		const item: ProjectSwitcherWorktreeItem = {
-			id: getWorktreeItemId(
-				project.id,
-				worktree.path,
-				hostedWorkbenchInstance?.instanceId
-			),
-			handle: encodeWorktreeHandle(project.id, worktree.path),
-			kind: 'worktree',
-			projectId: project.id,
-			worktreePath: worktree.path,
-			isMain: worktree.isMain,
-			pinned: !!worktree.pinned,
-			section,
-			hostedWorkbenchInstanceId: hostedWorkbenchInstance?.instanceId,
-			hostedWorkbenchState: hostedWorkbenchInstance?.state,
-			isActive,
-			hasCustomLabel: !!worktree.customLabel,
-			label: worktreeLabel,
-			description: worktreeLabel === worktreeDescription
-				? undefined
-				: worktreeDescription,
-			tooltip: this.getPathLabel(worktree.path),
-			contextValue: worktree.isMain
-				? MAIN_WORKTREE_CONTEXT_VALUE
-				: WORKTREE_CONTEXT_VALUE,
-			themeIcon: isHostedWorkbenchInProgress(hostedWorkbenchInstance?.state)
-				? ThemeIcon.modify(Codicon.loading, 'spin')
-				: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
-		};
-		itemsById.set(item.handle, item);
-		return { element: item };
+		return buildProjectSwitcherTreeModel({
+			projects,
+			collapsedProjectIds: this.collapsedProjectIds,
+			getPathLabel: path => this.getPathLabel(path),
+			isOmniWindow: this.environmentService.isOmniWindow,
+			activeWorktreePath: this.getActiveWorktreePath(),
+			hostedWorkspaceState: this.omniHostedWorkspaceState,
+		});
 	}
 
 	private getProjectSelectionTarget(
@@ -1412,12 +1174,6 @@ export class ProjectSwitcherWidget extends Disposable {
 		return this.omniHostedWorkspaceState.instances.find(instance =>
 			pathsEqual(instance.worktreePath, worktreePath)
 		);
-	}
-
-	private isActiveWorktree(worktreePath: string): boolean {
-		const activeWorktreePath = this.getActiveWorktreePath();
-		return typeof activeWorktreePath === 'string' &&
-			pathsEqual(activeWorktreePath, worktreePath);
 	}
 
 	private getActiveWorktreePath(): string | undefined {
