@@ -50,14 +50,23 @@ export async function validateMixin(quality = 'stable') {
 	);
 
 	assert.strictEqual(generated.nameShort, 'Hucode');
+	assert.strictEqual(generated.nameLong, 'Hucode');
 	assert.strictEqual(generated.hucodeVersion, sourceProduct.hucodeVersion);
 	assert.strictEqual(generated.applicationName, 'hucode');
 	assert.strictEqual(generated.dataFolderName, '.hucode');
+	assert.strictEqual(generated.serverApplicationName, 'hucode-server');
+	assert.strictEqual(generated.serverDataFolderName, '.hucode-server');
+	assert.strictEqual(generated.tunnelApplicationName, 'hucode-tunnel');
 	assert.strictEqual(generated.urlProtocol, 'hucode');
+	assert.strictEqual(generated.win32MutexName, 'hucode');
+	assert.strictEqual(generated.win32TunnelServiceMutex, 'hucode-tunnelservice');
+	assert.strictEqual(generated.win32TunnelMutex, 'hucode-tunnel');
 	assert.strictEqual(generated.darwinBundleIdentifier, 'dev.hucode.app');
+	assert.strictEqual(generated.darwinDmgTitle, 'Hucode');
 	assert.strictEqual(generated.darwinAssetsCar, 'resources/darwin/Assets.car');
 	assert.strictEqual(generated.win32AppUserModelId, 'dev.hucode.app');
 	assert.strictEqual(generated.embedderIdentifier, 'dev.hucode.app');
+	assert.strictEqual(generated.linuxIconName, 'hucode');
 	assert.strictEqual(
 		generated.extensionsGallery.serviceUrl,
 		'https://open-vsx.org/vscode/gallery'
@@ -70,6 +79,11 @@ export async function validateMixin(quality = 'stable') {
 	);
 	assert.ok(generated.trustedExtensionAuthAccess);
 	assert.strictEqual(rootProduct.nameShort, 'Code - OSS');
+	assert.strictEqual(rootProduct.applicationName, 'code-oss');
+	assert.strictEqual(rootProduct.dataFolderName, '.vscode-oss');
+	assert.strictEqual(rootProduct.serverApplicationName, 'code-server-oss');
+	assert.strictEqual(rootProduct.tunnelApplicationName, 'code-tunnel-oss');
+	assert.strictEqual(rootProduct.urlProtocol, 'code-oss');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
