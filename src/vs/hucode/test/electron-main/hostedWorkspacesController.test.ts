@@ -521,6 +521,31 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(protocolMainService.objectUrls[0].disposeCalls, 1);
 	});
 
+	test('opening crashed workspace creates a new resident view', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-2');
+
+		assert.strictEqual(viewFactory.views.length, 2);
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			instanceId: instance.instanceId,
+			worktreePath: instance.worktreePath,
+			state: instance.state,
+		})), [
+			{
+				instanceId: 'instance-2',
+				worktreePath: alpha,
+				state: 'active',
+			},
+		]);
+	});
+
 	test('unload reply channels are unique across controllers', async () => {
 		const alpha = createWorktree('alpha');
 		const bravo = createWorktree('bravo');
@@ -650,6 +675,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('render process gone marks workspace crashed and clears trust', async () => {
 		const alpha = createWorktree('alpha');
 		const {
+			browserViewMainService,
 			controller,
 			trustedProcessIds,
 			trustedWebContentsIds,
@@ -663,6 +689,10 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
+		assert.deepStrictEqual(
+			browserViewMainService.destroyedHostedWebContentsIds,
+			[1]
+		);
 		assert.deepStrictEqual(trustedWebContentsIds, [1]);
 		assert.deepStrictEqual(trustedProcessIds, [1001]);
 		assert.deepStrictEqual(untrustedWebContentsIds, [1]);

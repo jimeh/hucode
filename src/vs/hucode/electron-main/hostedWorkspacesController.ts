@@ -685,9 +685,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (existingId) {
 			const existing = this.instancesById.get(existingId);
 			if (existing) {
-				existing.projectId = projectId ?? existing.projectId;
-				this.activateInstance(existing);
-				return;
+				if (
+					!existing.disposed &&
+					existing.state !== 'crashed' &&
+					existing.state !== 'unloaded'
+				) {
+					existing.projectId = projectId ?? existing.projectId;
+					this.activateInstance(existing);
+					return;
+				}
+
+				await this.destroyInstance(existing, true, false);
 			}
 		}
 
@@ -872,6 +880,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.setWorkspaceOverlayOcclusion(false);
 			}
 			this.untrustView(instance);
+			this.browserViewMainService
+				.destroyBrowserViewsForHostedWebContents(webContentsId);
 			this.setViewVisible(instance, false);
 			this.updateInstanceState(instance, {
 				state: 'crashed',
