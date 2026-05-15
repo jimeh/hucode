@@ -3,6 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/**
+ * Release target options for Hucode packaging.
+ *
+ * @property platform Release platform identifier.
+ * @property arch Release architecture identifier.
+ */
 export interface HucodeReleaseTargetOptions {
 	readonly platform: string;
 	readonly arch: string;
