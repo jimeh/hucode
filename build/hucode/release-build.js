@@ -389,7 +389,12 @@ async function extractCopilotVsix(vsixPath) {
 	console.log(`Copilot extension: ${outputDir}`);
 }
 
-async function validateExtractedCopilotVsix(outputDir) {
+/**
+ * Validates that an extracted Copilot VSIX has no bundled target binaries.
+ *
+ * @param {string} outputDir
+ */
+export async function validateExtractedCopilotVsix(outputDir) {
 	const copilotModules = path.join(outputDir, 'node_modules', '@github');
 	if (await exists(copilotModules)) {
 		const entries = await fs.readdir(copilotModules, { withFileTypes: true });
@@ -422,7 +427,13 @@ async function validateExtractedCopilotVsix(outputDir) {
 	}
 }
 
-async function findBuiltInCopilotExtension(buildOutput) {
+/**
+ * Finds the built-in Copilot extension inside a packaged app output.
+ *
+ * @param {string} buildOutput
+ * @returns {Promise<string | undefined>}
+ */
+export async function findBuiltInCopilotExtension(buildOutput) {
 	const manifest = await findFirst(buildOutput, filePath => {
 		if (path.basename(filePath) !== 'package.json') {
 			return false;
@@ -437,7 +448,13 @@ async function findBuiltInCopilotExtension(buildOutput) {
 	return manifest ? path.dirname(manifest) : undefined;
 }
 
-async function validatePackagedCopilot(options, buildOutput) {
+/**
+ * Validates the packaged Copilot extension for a release target.
+ *
+ * @param {{ platform: string; arch: string }} options
+ * @param {string} buildOutput
+ */
+export async function validatePackagedCopilot(options, buildOutput) {
 	const extensionDir = await findBuiltInCopilotExtension(buildOutput);
 	if (!extensionDir) {
 		throw new Error(`Built-in Copilot extension not found in ${buildOutput}`);
@@ -1039,9 +1056,11 @@ async function main() {
 	}
 }
 
-try {
-	await main();
-} catch (error) {
-	console.error(error instanceof Error ? error.message : error);
-	process.exit(1);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+	try {
+		await main();
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : error);
+		process.exit(1);
+	}
 }
