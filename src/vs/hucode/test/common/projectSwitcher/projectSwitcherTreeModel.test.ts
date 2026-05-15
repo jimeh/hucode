@@ -1,0 +1,290 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { URI } from '../../../../base/common/uri.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from
+	'../../../../base/test/common/utils.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
+import {
+	ProjectRecord,
+	WorktreeRecord,
+} from '../../../../platform/projectManager/common/projectManager.js';
+import { IHucodeHostedWorkspaceState } from
+	'../../../common/omniWindow.js';
+import {
+	buildProjectSwitcherTreeModel,
+	encodeWorktreeHandle,
+	isWorktreeItem,
+	MAIN_WORKTREE_CONTEXT_VALUE,
+	ProjectSwitcherTreeElement,
+	WORKTREE_CONTEXT_VALUE,
+} from '../../../common/projectSwitcher/projectSwitcherTreeModel.js';
+
+suite('ProjectSwitcherTreeModel', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('returns no roots for the empty project state', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.deepStrictEqual(model.roots, []);
+		assert.strictEqual(model.itemsById.size, 0);
+	});
+
+	test('orders pinned projects and pinned worktrees in visible sections', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'alpha',
+					worktrees: [
+						createWorktree('/repos/alpha', { isMain: true }),
+						createWorktree('/repos/alpha.worktrees/pinned', {
+							branch: 'feature/pinned',
+							pinned: true,
+						}),
+						createWorktree('/repos/alpha.worktrees/other', {
+							branch: 'feature/other',
+						}),
+					],
+				}),
+				createProject({
+					id: 'bravo',
+					pinned: true,
+					worktrees: [
+						createWorktree('/repos/bravo', { isMain: true }),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.deepStrictEqual(
+			flatten(model.roots).map(item => item.element.label),
+			[
+				'Pinned',
+				'alpha',
+				'pinned',
+				'bravo',
+				'local',
+				'Unpinned',
+				'alpha',
+				'local',
+				'other',
+			]
+		);
+	});
+
+	test('marks active, loaded, loading, and unloaded worktree UI state', () => {
+		const active = '/repos/hucode.worktrees/active';
+		const loading = '/repos/hucode.worktrees/loading';
+		const unloaded = '/repos/hucode.worktrees/unloaded';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'hucode',
+					worktrees: [
+						createWorktree(active, { branch: 'active' }),
+						createWorktree(loading, { branch: 'loading' }),
+						createWorktree(unloaded, { branch: 'unloaded' }),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			activeWorktreePath: active,
+			hostedWorkspaceState: createHostedState({
+				activeInstanceId: 'active-instance',
+				instances: [
+					{
+						instanceId: 'active-instance',
+						worktreePath: active,
+						state: 'active',
+						visible: true,
+						focused: true,
+					},
+					{
+						instanceId: 'loading-instance',
+						worktreePath: loading,
+						state: 'loading',
+						visible: false,
+						focused: false,
+					},
+				],
+			}),
+		});
+
+		const activeItem = getWorktree(model.roots, active);
+		const loadingItem = getWorktree(model.roots, loading);
+		const unloadedItem = getWorktree(model.roots, unloaded);
+
+		assert.strictEqual(activeItem.isActive, true);
+		assert.strictEqual(activeItem.hostedWorkbenchState, 'active');
+		assert.strictEqual(loadingItem.hostedWorkbenchState, 'loading');
+		assert.deepStrictEqual(
+			ThemeIcon.asClassNameArray(loadingItem.themeIcon!),
+			['codicon', 'codicon-loading', 'codicon-modifier-spin']
+		);
+		assert.strictEqual(unloadedItem.contextValue, WORKTREE_CONTEXT_VALUE);
+		assert.strictEqual(unloadedItem.label, 'unloaded');
+		assert.strictEqual(unloadedItem.hostedWorkbenchInstanceId, undefined);
+	});
+
+	test('preserves custom labels used by rename flows', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'hucode',
+					label: 'Hucode Fork',
+					worktrees: [
+						createWorktree('/repos/hucode', {
+							isMain: true,
+							customLabel: 'stable',
+						}),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: false,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		const project = model.roots[0].element;
+		const worktree = getWorktree(model.roots, '/repos/hucode');
+
+		assert.strictEqual(project.label, 'Hucode Fork');
+		assert.strictEqual(project.description, 'hucode');
+		assert.strictEqual(worktree.label, 'stable');
+		assert.strictEqual(worktree.hasCustomLabel, true);
+		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
+	});
+
+	test('ignores stale hosted instances without matching project worktrees', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'hucode',
+					worktrees: [
+						createWorktree('/repos/hucode', { isMain: true }),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState({
+				instances: [
+					{
+						instanceId: 'stale-instance',
+						worktreePath: '/repos/hucode.worktrees/stale',
+						state: 'loaded',
+						visible: false,
+						focused: false,
+					},
+				],
+			}),
+		});
+
+		assert.strictEqual(
+			model.itemsById.has(
+				encodeWorktreeHandle('hucode', '/repos/hucode.worktrees/stale')
+			),
+			false
+		);
+		assert.strictEqual(
+			getWorktree(model.roots, '/repos/hucode').contextValue,
+			MAIN_WORKTREE_CONTEXT_VALUE
+		);
+	});
+});
+
+function flatten(
+	roots: readonly ProjectSwitcherTreeElement[]
+): ProjectSwitcherTreeElement[] {
+	const result: ProjectSwitcherTreeElement[] = [];
+	for (const root of roots) {
+		result.push(root);
+		result.push(...flatten(root.children ?? []));
+	}
+
+	return result;
+}
+
+function getWorktree(
+	roots: readonly ProjectSwitcherTreeElement[],
+	worktreePath: string
+) {
+	const item = flatten(roots).map(element => element.element).find(item =>
+		isWorktreeItem(item) && item.worktreePath === worktreePath
+	);
+	assert.ok(isWorktreeItem(item));
+	return item;
+}
+
+function createProject(options: {
+	readonly id: string;
+	readonly label?: string;
+	readonly pinned?: boolean;
+	readonly worktrees: readonly WorktreeRecord[];
+}): ProjectRecord {
+	return {
+		id: options.id,
+		label: options.label ?? options.id,
+		rootUri: URI.file(`/repos/${options.id}`),
+		pinned: options.pinned ?? false,
+		order: 0,
+		worktrees: options.worktrees,
+	};
+}
+
+function createWorktree(
+	path: string,
+	options: {
+		readonly branch?: string;
+		readonly customLabel?: string;
+		readonly isMain?: boolean;
+		readonly pinned?: boolean;
+	} = {}
+): WorktreeRecord {
+	return {
+		path,
+		label: options.customLabel ?? (options.isMain ? 'local' : ''),
+		customLabel: options.customLabel,
+		branch: options.branch,
+		isMain: options.isMain ?? false,
+		isDetached: false,
+		pinned: options.pinned,
+	};
+}
+
+function createHostedState(options: Partial<{
+	readonly activeInstanceId: string;
+	readonly instances: readonly {
+		readonly instanceId: string;
+		readonly worktreePath: string;
+		readonly state: 'restore-pending' | 'loading' | 'active' | 'loaded' |
+		'dormant' | 'unloaded' | 'crashed';
+		readonly visible: boolean;
+		readonly focused: boolean;
+	}[];
+}> = {}): IHucodeHostedWorkspaceState {
+	return {
+		activeInstanceId: options.activeInstanceId,
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
+		instances: options.instances ?? [],
+	};
+}
