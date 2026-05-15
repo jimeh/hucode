@@ -5,8 +5,13 @@ name = "hucode"
 [setup]
 script = '''
 cd "$CODEX_WORKTREE_PATH"
+
+if command -v mise >/dev/null 2>&1 && [ -f mise.toml ]; then
+	mise trust mise.toml
+fi
+
+mise x -- npm run hucode:seed-worktree-node-modules
 mise x -- npm install
-mise x -- npm ci
 '''
 
 [[actions]]
