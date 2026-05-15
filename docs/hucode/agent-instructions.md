@@ -56,10 +56,7 @@ VS Code code that Hucode customizes.
 - Hucode warms Linux x64 `node_modules` archives through
   `.github/workflows/hucode-node-modules-cache.yml` on trusted branch pushes or
   manual dispatch. PR CI should restore those archives but not save them; keep
-  cache writes out of untrusted pull-request execution. Shared setup actions
-  must keep using GitHub's `hashFiles('.build/packagelockhash')` cache key
-  expression; replacing it with a shell hash changes the key and misses warmed
-  caches.
+  cache writes out of untrusted pull-request execution.
 - Hucode release packaging keeps upstream app output directories such as
   `../VSCode-linux-x64` in place by default so follow-on gulp packaging tasks
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
@@ -115,12 +112,6 @@ VS Code code that Hucode customizes.
 - VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
   runners cannot execute the arm64 sysroot compiler binary.
-- Keep heavyweight CI gates as separate workflow jobs or steps. Running
-  `core-ci`, `hygiene`, eslint, and TypeScript checks in one parallel
-  `npm-run-all2` step can leave GitHub Actions showing only a generic
-  cancellation line and hide the failing check. In Hucode CI, hygiene runs in a
-  separate clean job while `core-ci` runs in its own job; keep the cyclic
-  dependency check with `core-ci` because it consumes `out-build`.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
@@ -180,6 +171,15 @@ VS Code code that Hucode customizes.
 - In a clean worktree, run `npm run hucode:prepare` before
   `npm run hucode:validate`. Validation reads generated files under
   `.build/distro/mixin/stable/`, so prepare must run first.
+- Avoid replacing GitHub's `hashFiles('.build/packagelockhash')` cache key with
+  a shell hash. The values differ, so shared setup actions must use the same
+  `hashFiles()` expression as the node_modules cache warmer or PR CI will miss
+  warmed caches.
+- Keep heavyweight CI gates as separate workflow jobs or steps. Running
+  `core-ci`, `hygiene`, eslint, and TypeScript checks in one parallel
+  `npm-run-all2` step can leave GitHub Actions showing only a generic
+  cancellation line and hide the failing check. In Hucode CI, keep the cyclic
+  dependency check with `core-ci` because it consumes `out-build`.
 - Omni Projects title controls mirror the workbench titlebar's optional
   `titleBar.border`. When present, such as in Dark 2026, that border reduces
   the effective titlebar content height by 1px and changes toolbar icon
