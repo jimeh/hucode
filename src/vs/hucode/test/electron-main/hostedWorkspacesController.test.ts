@@ -50,6 +50,10 @@ class TestWebContents extends EventEmitter {
 		return this.processId;
 	}
 
+	setProcessId(processId: number): void {
+		this.processId = processId;
+	}
+
 	isDestroyed(): boolean {
 		return this.destroyed;
 	}
@@ -441,6 +445,66 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.ok(stateChanges.length >= 4);
 	});
 
+	test('restore skips missing active workspace and promotes MRU', async () => {
+		const alpha = createWorktree('alpha');
+		const stale = join(tempRoot, 'stale');
+		const { browserViewMainService, controller, viewFactory, window } =
+			createController({
+				activeWorktreePath: stale,
+				restoreEntries: [
+					{
+						projectId: 'project-alpha',
+						worktreePath: alpha,
+						state: 'loaded',
+						lastActiveAt: 100,
+					},
+					{
+						projectId: 'project-stale',
+						worktreePath: stale,
+						state: 'active',
+						lastActiveAt: 200,
+					},
+				],
+			});
+
+		await controller.ensureRestored();
+		controller.notifyHostedWorkspaceReady('instance-2');
+
+		assert.strictEqual(viewFactory.views.length, 2);
+		assert.deepStrictEqual(
+			browserViewMainService.destroyedHostedWebContentsIds,
+			[1]
+		);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.closeCalls, [
+			{ waitForBeforeUnload: false },
+		]);
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			webContentsId: instance.webContentsId,
+			worktreePath: instance.worktreePath,
+			state: instance.state,
+			visible: instance.visible,
+		})), [
+			{
+				webContentsId: 2,
+				worktreePath: alpha,
+				state: 'active',
+				visible: true,
+			},
+		]);
+		assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-3), [
+			{ id: 2, visible: false },
+			{ id: 2, visible: true },
+			{ id: 2, visible: true },
+		]);
+		assert.strictEqual(window.config?.omniActiveWorktreePath, alpha);
+		assert.deepStrictEqual(window.config?.omniResidentWorkspaces, [{
+			projectId: 'project-alpha',
+			worktreePath: alpha,
+			lastActiveAt: 1000,
+			state: 'active',
+		}]);
+	});
+
 	test('opening an existing workspace reuses the resident view', async () => {
 		const alpha = createWorktree('alpha');
 		const bravo = createWorktree('bravo');
@@ -719,6 +783,70 @@ suite('ResidentHostedWorkspacesController', () => {
 		]);
 	});
 
+	test('switching workspaces hides inactive BrowserViews and raises active',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { browserViewMainService, controller, window } =
+				createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			now = 3000;
+			await controller.openWorkspace(alpha, 'project-alpha');
+
+			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
+				{ id: 2, visible: false },
+				{ id: 1, visible: true },
+			]);
+			assert.strictEqual(browserViewMainService.frontCalls.at(-1), 1);
+			assert.deepStrictEqual(
+				(window.win as unknown as TestBrowserWindow).contentView.removed
+					.map(view => view.webContents.id),
+				[2]
+			);
+		});
+
+	test('closing inactive workspace cleans up its BrowserViews and trust',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const {
+				browserViewMainService,
+				controller,
+				untrustedProcessIds,
+				untrustedWebContentsIds,
+				viewFactory,
+			} = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.closeWorkspace('instance-1');
+
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1]
+			);
+			assert.deepStrictEqual(untrustedWebContentsIds, [1]);
+			assert.deepStrictEqual(untrustedProcessIds, [1001]);
+			assert.deepStrictEqual(viewFactory.views[0].visibleCalls.slice(-1), [
+				false,
+			]);
+			assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+				worktreePath: instance.worktreePath,
+				state: instance.state,
+				visible: instance.visible,
+			})), [
+				{ worktreePath: bravo, state: 'active', visible: true },
+			]);
+		});
+
 	test('shutdown ignores unload veto after will-unload handoff', async () => {
 		const alpha = createWorktree('alpha');
 		const { controller, ipcMain, viewFactory } = createController();
@@ -794,6 +922,92 @@ suite('ResidentHostedWorkspacesController', () => {
 			},
 		]);
 	});
+
+	test('trust tracks hosted renderer process changes until close', async () => {
+		const alpha = createWorktree('alpha');
+		const {
+			controller,
+			trustedProcessIds,
+			trustedWebContentsIds,
+			untrustedProcessIds,
+			untrustedWebContentsIds,
+			viewFactory,
+		} = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		viewFactory.views[0].rawWebContents.setProcessId(2001);
+		viewFactory.views[0].rawWebContents.emit('did-start-navigation');
+		viewFactory.views[0].rawWebContents.emit('did-start-loading');
+
+		await controller.closeWorkspace();
+
+		assert.deepStrictEqual(trustedWebContentsIds, [1]);
+		assert.deepStrictEqual(trustedProcessIds, [1001, 2001]);
+		assert.deepStrictEqual(untrustedWebContentsIds, [1]);
+		assert.deepStrictEqual(untrustedProcessIds, [1001, 2001]);
+	});
+
+	test('window restore state tracks active workspace and MRU ordering',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { controller, window } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			now = 3000;
+			await controller.openWorkspace(alpha, 'project-alpha');
+
+			assert.strictEqual(window.config?.omniActiveWorktreePath, alpha);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, [
+				{
+					projectId: 'project-alpha',
+					worktreePath: alpha,
+					lastActiveAt: 3000,
+					state: 'active',
+				},
+				{
+					projectId: 'project-bravo',
+					worktreePath: bravo,
+					lastActiveAt: 2000,
+					state: 'loaded',
+				},
+			]);
+		});
+
+	test('window restore entries omit crashed and unloaded workspaces',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const charlie = createWorktree('charlie');
+			const { controller, viewFactory, window } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			now = 3000;
+			await controller.openWorkspace(charlie, 'project-charlie');
+			controller.notifyHostedWorkspaceReady('instance-3');
+
+			viewFactory.views[1].rawWebContents.emit('render-process-gone');
+			await controller.closeWorkspace('instance-3');
+
+			assert.strictEqual(window.config?.omniActiveWorktreePath, alpha);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, [
+				{
+					projectId: 'project-alpha',
+					worktreePath: alpha,
+					lastActiveAt: 3000,
+					state: 'active',
+				},
+			]);
+		});
 
 	test('runActionInShell forwards marked action to shell webContents', () => {
 		const { controller, window } = createController();
