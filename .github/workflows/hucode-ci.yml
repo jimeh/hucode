@@ -145,44 +145,6 @@ jobs:
       - name: Check VS Code API typings
         run: npm run vscode-dts-compile-check
 
-  compile-hygiene:
-    name: Compile & Hygiene
-    runs-on: ubuntu-latest
-    needs:
-      - mixin-build-scripts
-      - hygiene
-      - core-compile
-      - eslint
-      - architecture-checks
-    if: ${{ always() }}
-    timeout-minutes: 5
-    steps:
-      - name: Check split job results
-        run: |
-          failed=0
-          for check in \
-            "Hucode Mixin & Build Scripts:$MIXIN_BUILD_SCRIPTS_RESULT" \
-            "Hygiene:$HYGIENE_RESULT" \
-            "Core Compile:$CORE_COMPILE_RESULT" \
-            "ESLint:$ESLINT_RESULT" \
-            "Architecture Checks:$ARCHITECTURE_CHECKS_RESULT"
-          do
-            name=${check%:*}
-            result=${check#*:}
-            echo "$name: $result"
-            if [ "$result" != "success" ]; then
-              failed=1
-            fi
-          done
-
-          exit "$failed"
-        env:
-          MIXIN_BUILD_SCRIPTS_RESULT: ${{ needs.mixin-build-scripts.result }}
-          HYGIENE_RESULT: ${{ needs.hygiene.result }}
-          CORE_COMPILE_RESULT: ${{ needs.core-compile.result }}
-          ESLINT_RESULT: ${{ needs.eslint.result }}
-          ARCHITECTURE_CHECKS_RESULT: ${{ needs.architecture-checks.result }}
-
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
