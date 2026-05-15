@@ -34,16 +34,49 @@ suite('OmniLayoutModel', () => {
 		const host = getLeaf(root, Parts.CHATBAR_PART);
 		const panel = getLeaf(root, Parts.PANEL_PART);
 
-		assert.strictEqual(descriptor.width, 1280);
-		assert.strictEqual(descriptor.height, 800);
-		assert.strictEqual(sideBar.visible, true);
-		assert.strictEqual(sideBar.size, 300);
-		assert.strictEqual(titleBar.visible, true);
-		assert.strictEqual(titleBar.size, 34);
-		assert.strictEqual(host.visible, true);
-		assert.strictEqual(host.size, 600);
-		assert.strictEqual(panel.visible, false);
-		assert.strictEqual(panel.size, 300);
+		assert.deepStrictEqual({
+			descriptor: {
+				width: descriptor.width,
+				height: descriptor.height,
+			},
+			sideBar: {
+				visible: sideBar.visible,
+				size: sideBar.size,
+			},
+			titleBar: {
+				visible: titleBar.visible,
+				size: titleBar.size,
+			},
+			host: {
+				visible: host.visible,
+				size: host.size,
+			},
+			panel: {
+				visible: panel.visible,
+				size: panel.size,
+			},
+		}, {
+			descriptor: {
+				width: 1280,
+				height: 800,
+			},
+			sideBar: {
+				visible: true,
+				size: 300,
+			},
+			titleBar: {
+				visible: true,
+				size: 34,
+			},
+			host: {
+				visible: true,
+				size: 600,
+			},
+			panel: {
+				visible: false,
+				size: 300,
+			},
+		});
 	});
 
 	test('sidebar toggle keeps host surface visible with bounded width', () => {
@@ -69,7 +102,7 @@ suite('OmniLayoutModel', () => {
 	test('small windows do not create negative host surface bounds', () => {
 		const descriptor = createOmniGridDescriptor({
 			width: 420,
-			height: 360,
+			height: 260,
 			titleBarHeight: 30,
 			sideBarVisible: true,
 			auxiliaryBarVisible: true,
@@ -77,9 +110,17 @@ suite('OmniLayoutModel', () => {
 			panelVisible: true,
 		});
 
-		const host = getLeaf(descriptor.root as ISerializedNode, Parts.CHATBAR_PART);
+		const root = descriptor.root as ISerializedNode;
+		const host = getLeaf(root, Parts.CHATBAR_PART);
+		const topRight = getBranchContainingLeaf(root, Parts.CHATBAR_PART);
 
-		assert.strictEqual(host.size, 0);
+		assert.deepStrictEqual({
+			hostSize: host.size,
+			topRightSize: topRight.size,
+		}, {
+			hostSize: 0,
+			topRightSize: 0,
+		});
 	});
 });
 
@@ -100,4 +141,23 @@ function getLeaf(root: ISerializedNode, part: Parts) {
 	}
 
 	throw new Error(`Missing layout part ${part}`);
+}
+
+function getBranchContainingLeaf(root: ISerializedNode, part: Parts) {
+	const queue: ISerializedNode[] = [root];
+	while (queue.length) {
+		const node = queue.shift()!;
+		const children = node.data as Array<ISerializedLeafNode | ISerializedNode>;
+		for (const child of children) {
+			const data = child.data as { readonly type?: Parts };
+			if (child.type === 'leaf' && data.type === part) {
+				return node;
+			}
+			if (child.type === 'branch') {
+				queue.push(child);
+			}
+		}
+	}
+
+	throw new Error(`Missing containing branch for layout part ${part}`);
 }

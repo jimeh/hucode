@@ -33,7 +33,7 @@ export function createOmniGridDescriptor(
 	const rightSectionWidth = Math.max(0, width - sideBarSize);
 	const chatBarWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
 	const contentHeight = height - titleBarHeight;
-	const topRightHeight = contentHeight - panelSize;
+	const topRightHeight = Math.max(0, contentHeight - panelSize);
 
 	const titleBarNode: ISerializedLeafNode = {
 		type: 'leaf',

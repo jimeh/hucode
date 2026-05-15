@@ -129,16 +129,40 @@ suite('ProjectSwitcherTreeModel', () => {
 		const loadingItem = getWorktree(model.roots, loading);
 		const unloadedItem = getWorktree(model.roots, unloaded);
 
-		assert.strictEqual(activeItem.isActive, true);
-		assert.strictEqual(activeItem.hostedWorkbenchState, 'active');
-		assert.strictEqual(loadingItem.hostedWorkbenchState, 'loading');
-		assert.deepStrictEqual(
-			ThemeIcon.asClassNameArray(loadingItem.themeIcon!),
-			['codicon', 'codicon-loading', 'codicon-modifier-spin']
-		);
-		assert.strictEqual(unloadedItem.contextValue, WORKTREE_CONTEXT_VALUE);
-		assert.strictEqual(unloadedItem.label, 'unloaded');
-		assert.strictEqual(unloadedItem.hostedWorkbenchInstanceId, undefined);
+		assert.deepStrictEqual({
+			active: {
+				isActive: activeItem.isActive,
+				hostedWorkbenchState: activeItem.hostedWorkbenchState,
+			},
+			loading: {
+				hostedWorkbenchState: loadingItem.hostedWorkbenchState,
+				iconClasses: ThemeIcon.asClassNameArray(loadingItem.themeIcon!),
+			},
+			unloaded: {
+				contextValue: unloadedItem.contextValue,
+				label: unloadedItem.label,
+				hostedWorkbenchInstanceId:
+					unloadedItem.hostedWorkbenchInstanceId,
+			},
+		}, {
+			active: {
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			},
+			loading: {
+				hostedWorkbenchState: 'loading',
+				iconClasses: [
+					'codicon',
+					'codicon-loading',
+					'codicon-modifier-spin',
+				],
+			},
+			unloaded: {
+				contextValue: WORKTREE_CONTEXT_VALUE,
+				label: 'unloaded',
+				hostedWorkbenchInstanceId: undefined,
+			},
+		});
 	});
 
 	test('preserves custom labels used by rename flows', () => {
