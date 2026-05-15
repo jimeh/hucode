@@ -29,6 +29,12 @@ async function readJson(filePath) {
 	return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
+async function assertFileExists(filePath) {
+	const stats = await fs.stat(filePath);
+	assert.ok(stats.isFile(), `${filePath} is not a file.`);
+	assert.ok(stats.size > 0, `${filePath} is empty.`);
+}
+
 /**
  * Validates the generated product mixin output.
  *
@@ -48,6 +54,7 @@ export async function validateMixin(quality = 'stable') {
 	const sourceProduct = await readJson(
 		path.join(repoRoot, 'build', 'hucode', 'mixin', quality, 'product.json')
 	);
+	const generatedRoot = path.dirname(generatedPath);
 
 	assert.strictEqual(generated.nameShort, 'Hucode');
 	assert.strictEqual(generated.nameLong, 'Hucode');
@@ -84,6 +91,12 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(rootProduct.serverApplicationName, 'code-server-oss');
 	assert.strictEqual(rootProduct.tunnelApplicationName, 'code-tunnel-oss');
 	assert.strictEqual(rootProduct.urlProtocol, 'code-oss');
+	await assertFileExists(
+		path.join(generatedRoot, 'resources', 'darwin', 'code.icns')
+	);
+	await assertFileExists(
+		path.join(generatedRoot, 'resources', 'darwin', 'Assets.car')
+	);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -37,5 +37,10 @@ as the required Hucode instruction set for work in this fork.
   run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
   for the edited files. Do not bypass or ignore hygiene failures; fix them or
   report the blocker.
+- `npm run test-build-scripts -- --test-name-pattern <pattern>` does not work:
+  the build package test script places the test glob before forwarded args, so
+  Node treats the pattern as another test file. For filtered build-script tests,
+  run `cd build && node --test --test-name-pattern <pattern> \
+  '{lib,next}/**/*.test.ts'`.
 - TOML files cannot carry VS Code's standard block copyright header. Keep
   `*.toml` excluded from copyright hygiene rather than adding invalid TOML.
