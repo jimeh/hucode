@@ -794,4 +794,145 @@ suite('ResidentHostedWorkspacesController', () => {
 			},
 		]);
 	});
+
+	test('runActionInShell forwards marked action to shell webContents', () => {
+		const { controller, window } = createController();
+		const shellWebContents = window.win!.webContents as unknown as
+			TestWebContents;
+
+		const sent = controller.runActionInShell({
+			id: 'workbench.action.toggleSidebarVisibility',
+			from: 'menu',
+			args: ['test'],
+		});
+
+		assert.strictEqual(sent, true);
+		assert.deepStrictEqual(shellWebContents.sent, [{
+			channel: 'vscode:runAction',
+			request: {
+				id: 'workbench.action.toggleSidebarVisibility',
+				from: 'menu',
+				args: ['test'],
+				hucodeForwardedFromOmniShell: true,
+			},
+		}]);
+	});
+
+	test('runActionInWorkspace restores and forwards to active workspace', async () => {
+		const alpha = createWorktree('alpha');
+		const { browserViewMainService, controller, viewFactory } =
+			createController({
+				activeWorktreePath: alpha,
+				restoreEntries: [{
+					projectId: 'project-alpha',
+					worktreePath: alpha,
+					lastActiveAt: 100,
+					state: 'active',
+				}],
+			});
+
+		const sent = await controller.runActionInWorkspace({
+			id: 'workbench.action.files.save',
+			from: 'keybinding',
+			args: [{ source: 'test' }],
+		});
+
+		const workspaceWebContents = viewFactory.views[0].rawWebContents;
+		const frontCalls = browserViewMainService.frontCalls;
+		assert.strictEqual(sent, true);
+		assert.strictEqual(workspaceWebContents.isFocused(), true);
+		assert.strictEqual(frontCalls[frontCalls.length - 1], 1);
+		assert.deepStrictEqual(workspaceWebContents.sent, [{
+			channel: 'vscode:runAction',
+			request: {
+				id: 'workbench.action.files.save',
+				from: 'keybinding',
+				args: [{ source: 'test' }],
+				hucodeForwardedFromOmniShell: true,
+			},
+		}]);
+	});
+
+	test('runKeybindingInWorkspace forwards when shell has focus', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+
+		const sent = await controller.runKeybindingInWorkspace({
+			userSettingsLabel: 'ctrl+s',
+		});
+
+		const workspaceWebContents = viewFactory.views[0].rawWebContents;
+		assert.strictEqual(sent, true);
+		assert.strictEqual(workspaceWebContents.isFocused(), true);
+		assert.deepStrictEqual(workspaceWebContents.sent, [{
+			channel: 'vscode:runKeybinding',
+			request: {
+				userSettingsLabel: 'ctrl+s',
+				hucodeForwardedFromOmniShell: true,
+			},
+		}]);
+	});
+
+	test('runKeybindingInWorkspace skips forwarding when workspace has focus',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.focus();
+
+			const sent = await controller.runKeybindingInWorkspace({
+				userSettingsLabel: 'ctrl+s',
+			});
+
+			assert.strictEqual(sent, true);
+			assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, []);
+		});
+
+	test('triggerPasteInWorkspace focuses and pastes into active workspace',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+
+			const pasted = controller.triggerPasteInWorkspace();
+
+			const workspaceWebContents = viewFactory.views[0].rawWebContents;
+			assert.strictEqual(pasted, true);
+			assert.strictEqual(workspaceWebContents.isFocused(), true);
+			assert.strictEqual(workspaceWebContents.pasteCalls.length, 1);
+		});
+
+	test('workspace paste key event is rerouted through native paste', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller, viewFactory } = createController();
+		let prevented = false;
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		viewFactory.views[0].rawWebContents.emit('before-input-event', {
+			preventDefault() {
+				prevented = true;
+			},
+		}, {
+			type: 'keyDown',
+			meta: true,
+			control: false,
+			alt: false,
+			shift: false,
+			key: 'v',
+		});
+
+		assert.strictEqual(prevented, true);
+		assert.strictEqual(
+			viewFactory.views[0].rawWebContents.pasteCalls.length,
+			1
+		);
+	});
 });
