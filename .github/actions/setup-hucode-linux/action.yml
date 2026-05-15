@@ -26,7 +26,6 @@ runs:
         node-version-file: .nvmrc
 
     - name: Prepare node_modules cache key
-      id: node-modules-cache-key
       shell: bash
       run: |
         mkdir -p .build
@@ -34,15 +33,13 @@ runs:
         node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
           hucode-linux x64 "$NODE_ARCH" \
           > .build/packagelockhash
-        HASH=$(sha256sum .build/packagelockhash | cut -d' ' -f1)
-        echo "key=node_modules-hucode-linux-$HASH" >> "$GITHUB_OUTPUT"
 
     - name: Restore node_modules cache
       id: cache-node-modules
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: .build/node_modules_cache
-        key: ${{ steps.node-modules-cache-key.outputs.key }}
+        key: "node_modules-hucode-linux-${{ hashFiles('.build/packagelockhash') }}"
 
     - name: Extract node_modules cache
       if: steps.cache-node-modules.outputs.cache-hit == 'true'

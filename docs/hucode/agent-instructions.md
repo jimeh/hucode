@@ -56,7 +56,10 @@ VS Code code that Hucode customizes.
 - Hucode warms Linux x64 `node_modules` archives through
   `.github/workflows/hucode-node-modules-cache.yml` on trusted branch pushes or
   manual dispatch. PR CI should restore those archives but not save them; keep
-  cache writes out of untrusted pull-request execution.
+  cache writes out of untrusted pull-request execution. Shared setup actions
+  must keep using GitHub's `hashFiles('.build/packagelockhash')` cache key
+  expression; replacing it with a shell hash changes the key and misses warmed
+  caches.
 - Hucode release packaging keeps upstream app output directories such as
   `../VSCode-linux-x64` in place by default so follow-on gulp packaging tasks
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
