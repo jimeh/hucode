@@ -35,6 +35,7 @@ class TestWebContents extends EventEmitter {
 	readonly pasteCalls: number[] = [];
 	readonly reloadCalls: number[] = [];
 	readonly devToolsCalls: number[] = [];
+	loadUrlError: Error | undefined = undefined;
 
 	constructor(
 		id: number,
@@ -73,6 +74,9 @@ class TestWebContents extends EventEmitter {
 
 	async loadURL(url: string): Promise<void> {
 		this.loadedUrls.push(url);
+		if (this.loadUrlError) {
+			throw this.loadUrlError;
+		}
 	}
 
 	send(channel: string, request: unknown): void {
@@ -170,12 +174,16 @@ class TestHostedWorkbenchViewFactory implements IHostedWorkbenchViewFactory {
 	readonly views: TestHostedWorkbenchView[] = [];
 	private nextWebContentsId = 1;
 
-	constructor(private readonly ipcMain: TestHostedWorkspaceIpcMain) { }
+	constructor(
+		private readonly ipcMain: TestHostedWorkspaceIpcMain,
+		private readonly loadUrlErrors: Error[] = []
+	) { }
 
 	createView(): IHostedWorkbenchView {
 		const view = new TestHostedWorkbenchView(
 			new TestWebContents(this.nextWebContentsId++, this.ipcMain)
 		);
+		view.rawWebContents.loadUrlError = this.loadUrlErrors.shift();
 		this.views.push(view);
 		return view as unknown as IHostedWorkbenchView;
 	}
@@ -185,12 +193,14 @@ class TestIPCObjectUrl<T> implements IIPCObjectUrl<T> {
 	readonly resource = URI.parse('vscode-file://test/window-config');
 	value: T | undefined;
 	disposed = false;
+	disposeCalls = 0;
 
 	update(obj: T): void {
 		this.value = obj;
 	}
 
 	dispose(): void {
+		this.disposeCalls++;
 		this.disposed = true;
 	}
 }
@@ -275,10 +285,16 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
 		readonly activeWorktreePath?: string;
 		readonly ids?: string[];
+		readonly ipcMain?: TestHostedWorkspaceIpcMain;
+		readonly loadUrlErrors?: Error[];
+		readonly windowId?: number;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
-		const ipcMain = new TestHostedWorkspaceIpcMain();
-		const viewFactory = new TestHostedWorkbenchViewFactory(ipcMain);
+		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
+		const viewFactory = new TestHostedWorkbenchViewFactory(
+			ipcMain,
+			[...(options.loadUrlErrors ?? [])]
+		);
 		const browserViewMainService = new TestBrowserViewMainService();
 		const trustedProcessIds: number[] = [];
 		const untrustedProcessIds: number[] = [];
@@ -294,10 +310,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			'instance-4',
 		])];
 		const window = {
-			id: 1,
+			id: options.windowId ?? 1,
 			win: new TestBrowserWindow() as unknown as Electron.BrowserWindow,
 			config: {
-				windowId: 1,
+				windowId: options.windowId ?? 1,
 				partsSplash: {},
 				perfMarks: [],
 				workspace: undefined,
@@ -327,9 +343,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			id => untrustedWebContentsIds.push(id),
 			state => stateChanges.push(state),
 			{
-				beforeUnloadTimeoutMs: 10,
-				willUnloadTimeoutMs: 10,
-				readyTimeoutMs: 10,
+				beforeUnloadTimeoutMs: 100,
+				willUnloadTimeoutMs: 100,
+				readyTimeoutMs: 100,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
 				viewFactory,
@@ -457,6 +473,101 @@ suite('ResidentHostedWorkspacesController', () => {
 				lastActiveAt: 2000,
 			},
 		]);
+	});
+
+	test('failed workspace attach rolls back lookup state', async () => {
+		const alpha = createWorktree('alpha');
+		const loadError = new Error('load failed');
+		const { controller, protocolMainService, viewFactory } = createController({
+			ids: ['failed-instance', 'recovered-instance'],
+			loadUrlErrors: [loadError],
+		});
+
+		await assert.rejects(
+			() => controller.openWorkspace(alpha, 'project-alpha'),
+			/load failed/
+		);
+
+		assert.deepStrictEqual(controller.getState().instances, []);
+		assert.strictEqual(protocolMainService.objectUrls[0].disposed, true);
+		assert.strictEqual(viewFactory.views[0].rawWebContents.closeCalls.length, 1);
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('recovered-instance');
+
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			instanceId: instance.instanceId,
+			worktreePath: instance.worktreePath,
+			state: instance.state,
+		})), [
+			{
+				instanceId: 'recovered-instance',
+				worktreePath: alpha,
+				state: 'active',
+			},
+		]);
+	});
+
+	test('closing workspace owns its config object URL once', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller, protocolMainService } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.closeWorkspace();
+
+		assert.strictEqual(protocolMainService.objectUrls[0].disposeCalls, 1);
+		controller.dispose();
+		assert.strictEqual(protocolMainService.objectUrls[0].disposeCalls, 1);
+	});
+
+	test('unload reply channels are unique across controllers', async () => {
+		const alpha = createWorktree('alpha');
+		const bravo = createWorktree('bravo');
+		const ipcMain = new TestHostedWorkspaceIpcMain();
+		const first = createController({ ipcMain, windowId: 1 });
+		const second = createController({ ipcMain, windowId: 2 });
+
+		await first.controller.openWorkspace(alpha, 'project-alpha');
+		await second.controller.openWorkspace(bravo, 'project-bravo');
+		first.controller.notifyHostedWorkspaceReady('instance-1');
+		second.controller.notifyHostedWorkspaceReady('instance-1');
+
+		await Promise.all([
+			first.controller.closeWorkspace(),
+			second.controller.closeWorkspace(),
+		]);
+
+		const firstBeforeUnload = first.viewFactory.views[0].rawWebContents
+			.sent[0].request as { okChannel: string; cancelChannel: string };
+		const secondBeforeUnload = second.viewFactory.views[0].rawWebContents
+			.sent[0].request as { okChannel: string; cancelChannel: string };
+		const firstWillUnload = first.viewFactory.views[0].rawWebContents
+			.sent[1].request as { replyChannel: string };
+		const secondWillUnload = second.viewFactory.views[0].rawWebContents
+			.sent[1].request as { replyChannel: string };
+
+		assert.strictEqual(firstBeforeUnload.okChannel, 'vscode:ok:1:instance-1:0');
+		assert.strictEqual(
+			firstBeforeUnload.cancelChannel,
+			'vscode:cancel:1:instance-1:0'
+		);
+		assert.strictEqual(
+			secondBeforeUnload.okChannel,
+			'vscode:ok:2:instance-1:0'
+		);
+		assert.strictEqual(
+			secondBeforeUnload.cancelChannel,
+			'vscode:cancel:2:instance-1:0'
+		);
+		assert.strictEqual(
+			firstWillUnload.replyChannel,
+			'vscode:reply:1:instance-1:1'
+		);
+		assert.strictEqual(
+			secondWillUnload.replyChannel,
+			'vscode:reply:2:instance-1:1'
+		);
 	});
 
 	test('closing active workspace unloads it and activates next MRU', async () => {

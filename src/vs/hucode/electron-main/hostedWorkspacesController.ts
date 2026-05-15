@@ -747,6 +747,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		const pendingInstance = pendingId
 			? this.instancesById.get(pendingId)
 			: undefined;
+		const previousActiveInstanceId = this.activeInstanceId;
 		const instance: IHostedWorkbenchInstance =
 			pendingInstance?.state === 'restore-pending'
 				? pendingInstance
@@ -792,7 +793,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
-			await this.destroyInstance(instance, false, false);
+			await this.destroyInstance(instance, true, false);
+			if (instance.instanceId === this.activeInstanceId) {
+				this.activeInstanceId =
+					previousActiveInstanceId !== instance.instanceId
+						? previousActiveInstanceId
+						: undefined;
+				this.emitState();
+			}
 			throw error;
 		}
 	}
@@ -802,10 +810,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		makeActive: boolean
 	): Promise<void> {
 		this.traceRestore(`attach:start makeActive=${makeActive}`, instance);
-		const configObjectUrl = this._register(
-			this.protocolMainService
-				.createIPCObjectUrl<INativeWindowConfiguration>()
-		);
+		const configObjectUrl = this.protocolMainService
+			.createIPCObjectUrl<INativeWindowConfiguration>();
 		const view = this.viewFactory.createView(
 			configObjectUrl,
 			this.environmentMainService.useCodeCache
@@ -1147,7 +1153,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		reason: UnloadReason
 	): Promise<boolean> {
 		return new Promise<boolean>(resolve => {
-			const oneTimeEventToken = this.oneTimeListenerTokenGenerator++;
+			const oneTimeEventToken = this.createOneTimeEventToken(instance);
 			const okChannel = `vscode:ok${oneTimeEventToken}`;
 			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
 
@@ -1207,7 +1213,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		reason: UnloadReason
 	): Promise<void> {
 		return new Promise<void>(resolve => {
-			const oneTimeEventToken = this.oneTimeListenerTokenGenerator++;
+			const oneTimeEventToken = this.createOneTimeEventToken(instance);
 			const replyChannel = `vscode:reply${oneTimeEventToken}`;
 
 			let settled = false;
@@ -1254,6 +1260,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				complete();
 			}
 		});
+	}
+
+	private createOneTimeEventToken(instance: IHostedWorkbenchInstance): string {
+		return `:${this.window.id}:${instance.instanceId}:` +
+			`${this.oneTimeListenerTokenGenerator++}`;
 	}
 
 	focusWorkspace(): void {
