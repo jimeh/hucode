@@ -180,6 +180,18 @@ VS Code code that Hucode customizes.
   `npm-run-all2` step can leave GitHub Actions showing only a generic
   cancellation line and hide the failing check. In Hucode CI, keep the cyclic
   dependency check with `core-ci` because it consumes `out-build`.
+- Local dependency bootstrap should use `npm install`. `npm run hucode:run`
+  reaches `build/lib/preLaunch.ts`, which runs `npm ci` only when the root
+  `node_modules` directory is absent. Seeding root `node_modules` before launch
+  avoids that fallback.
+- For parallel local git worktrees, dependency state is per worktree because
+  VS Code's install hash lives under root `node_modules`. Use
+  `npm run hucode:seed-worktree-node-modules` to copy every `node_modules` tree
+  listed by `build/npm/dirs.ts` from a matching, already-installed worktree.
+  Set `HUCODE_NODE_MODULES_SOURCE` to force the source worktree. Then run
+  `node build/npm/fast-install.ts` or `npm install` to verify the install hash.
+- New worktree paths can require `mise trust <worktree>/mise.toml` before
+  `node`/`npm` shims work, because mise trusts config files by path.
 - Omni Projects title controls mirror the workbench titlebar's optional
   `titleBar.border`. When present, such as in Dark 2026, that border reduces
   the effective titlebar content height by 1px and changes toolbar icon
