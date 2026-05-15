@@ -112,12 +112,12 @@ VS Code code that Hucode customizes.
 - VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
   runners cannot execute the arm64 sysroot compiler binary.
-- Keep heavyweight CI gates as separate workflow steps. Running `core-ci`,
-  `hygiene`, eslint, and TypeScript checks in one parallel `npm-run-all2` step
-  can leave GitHub Actions showing only a generic cancellation line and hide the
-  failing check. Run hygiene before `core-ci`; the compile step can generate
-  `extensions/*/tsconfig.tsbuildinfo`, which hygiene flags as missing copyright
-  headers if it runs afterward.
+- Keep heavyweight CI gates as separate workflow jobs or steps. Running
+  `core-ci`, `hygiene`, eslint, and TypeScript checks in one parallel
+  `npm-run-all2` step can leave GitHub Actions showing only a generic
+  cancellation line and hide the failing check. In Hucode CI, hygiene runs in a
+  separate clean job while `core-ci` runs in its own job; keep the cyclic
+  dependency check with `core-ci` because it consumes `out-build`.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
