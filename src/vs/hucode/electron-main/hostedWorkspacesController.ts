@@ -637,8 +637,29 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		this.restored = true;
+		this.activateMostRecentRestoredInstance();
 		this.traceRestore('restore:complete');
 		this.emitState();
+	}
+
+	private activateMostRecentRestoredInstance(): void {
+		if (this.getActiveInstance()) {
+			return;
+		}
+
+		const nextActive = Array.from(this.instancesById.values())
+			.filter(instance =>
+				!instance.disposed &&
+				instance.state !== 'crashed' &&
+				instance.state !== 'unloaded'
+			)
+			.sort((a, b) =>
+				(b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)
+			)[0];
+
+		if (nextActive) {
+			this.activateInstance(nextActive);
+		}
 	}
 
 	private createRestorePendingInstances(
@@ -1027,7 +1048,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		let nextActive: IHostedWorkbenchInstance | undefined;
 		if (wasActive) {
 			nextActive = Array.from(this.instancesById.values())
-				.filter(candidate => candidate.instanceId !== target.instanceId)
+				.filter(candidate =>
+					candidate.instanceId !== target.instanceId &&
+					!candidate.disposed &&
+					candidate.state !== 'crashed' &&
+					candidate.state !== 'unloaded'
+				)
 				.sort((a, b) =>
 					(b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)
 				)[0];
