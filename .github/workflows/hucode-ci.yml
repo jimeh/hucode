@@ -229,12 +229,28 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
+            src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
+            --run \
+            src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
+            --run \
             src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
             --run \
             src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
             --run \
+            src/vs/platform/windows/test/electron-main/windowsStateHandler.test.ts \
+            --run \
             src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
             --run \
-            src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts
+            src/vs/hucode/test/electron-main/omniOpenPlan.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniStartup.test.ts \
+            --run \
+            src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
+            --run \
+            src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts \
+            --run \
+            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
         env:
           VSCODE_SKIP_PRELAUNCH: 1

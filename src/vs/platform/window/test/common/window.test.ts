@@ -10,6 +10,13 @@ import {
 	hucodeIsRendererReplyTargetEqual,
 	hucodeResolveRendererReplyTargetWithLookup,
 } from '../../common/hucodeRendererReplyTarget.js';
+import {
+	isHucodeForwardedFromOmniShell,
+	isHucodeOmniShellAction,
+	isHucodeOmniShellCommandForwardingDisabled,
+	isHucodeOmniShellLayoutAction,
+	withHucodeOmniShellCommandForwardingDisabled,
+} from '../../common/hucodeOmniCommandRouting.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 
 suite('RendererReplyTarget', () => {
@@ -139,5 +146,98 @@ suite('RendererReplyTarget', () => {
 		});
 
 		assert.strictEqual(resolved, undefined);
+	});
+});
+
+suite('HucodeOmniCommandRouting', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('identifies shell-owned actions', () => {
+		assert.strictEqual(
+			isHucodeOmniShellAction(
+				'workbench.action.omniWindow.focusProjectPane'
+			),
+			true
+		);
+		assert.strictEqual(
+			isHucodeOmniShellAction('hucode.projectSwitcher.refresh'),
+			true
+		);
+		assert.strictEqual(
+			isHucodeOmniShellAction('workbench.action.files.save'),
+			false
+		);
+	});
+
+	test('identifies shell layout actions', () => {
+		assert.strictEqual(
+			isHucodeOmniShellLayoutAction('workbench.action.togglePanel'),
+			true
+		);
+		assert.strictEqual(
+			isHucodeOmniShellLayoutAction('workbench.action.files.save'),
+			false
+		);
+	});
+
+	test('detects requests already forwarded from the shell', () => {
+		assert.strictEqual(
+			isHucodeForwardedFromOmniShell({
+				id: 'workbench.action.files.save',
+				from: 'keybinding',
+				hucodeForwardedFromOmniShell: true
+			}),
+			true
+		);
+		assert.strictEqual(
+			isHucodeForwardedFromOmniShell({
+				id: 'workbench.action.files.save',
+				from: 'keybinding'
+			}),
+			false
+		);
+	});
+
+	test('scopes forwarding suppression to the callback', async () => {
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
+
+		await withHucodeOmniShellCommandForwardingDisabled(async () => {
+			assert.strictEqual(
+				isHucodeOmniShellCommandForwardingDisabled(),
+				true
+			);
+			await withHucodeOmniShellCommandForwardingDisabled(() => {
+				assert.strictEqual(
+					isHucodeOmniShellCommandForwardingDisabled(),
+					true
+				);
+			});
+			assert.strictEqual(
+				isHucodeOmniShellCommandForwardingDisabled(),
+				true
+			);
+		});
+
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
+	});
+
+	test('restores forwarding suppression after callback errors', async () => {
+		await assert.rejects(
+			withHucodeOmniShellCommandForwardingDisabled(() => {
+				throw new Error('expected');
+			}),
+			/expected/
+		);
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
 	});
 });

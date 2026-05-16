@@ -11,10 +11,8 @@ import { ILabelService, Verbosity } from '../../../../platform/label/common/labe
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { IWindowOpenable, IOpenWindowOptions, isFolderToOpen, isWorkspaceToOpen, IOpenEmptyWindowOptions, IPoint, IRectangle, IOpenedAuxiliaryWindow, IOpenedMainWindow } from '../../../../platform/window/common/window.js';
 import { Disposable, DisposableSet, IDisposable } from '../../../../base/common/lifecycle.js';
-import { NativeHostService } from '../../../../platform/native/common/nativeHostService.js';
 import { INativeWorkbenchEnvironmentService } from '../../environment/electron-browser/environmentService.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
-import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { disposableWindowInterval, getActiveDocument, getWindowId, getWindowsCount, hasWindow, onDidRegisterWindow } from '../../../../base/browser/dom.js';
 import { memoize } from '../../../../base/common/decorators.js';
 import { isAuxiliaryWindow } from '../../../../base/browser/window.js';
@@ -22,37 +20,9 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { IProjectManagerService } from '../../../../platform/projectManager/common/projectManager.js';
 import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
-
-interface IHucodeHostedWorkbenchInstance {
-	readonly instanceId: string;
-	readonly state: string;
-	readonly visible: boolean;
-}
-
-interface IHucodeHostedWorkspaceState {
-	readonly activeInstanceId?: string;
-	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
-}
-
-interface IHucodeShellWindowStateChange {
-	readonly windowId: number;
-	readonly state: IHucodeHostedWorkspaceState;
-}
-
-interface IHucodeShellService {
-	readonly _serviceBrand: undefined;
-	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
-	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
-	openWorkspace(windowId: number, worktreePath: string, projectId?: string): Promise<IHucodeHostedWorkspaceState>;
-	focusWorkspace(windowId: number): Promise<void>;
-	captureWorkspaceScreenshot(windowId: number, rect?: IRectangle, quality?: number): Promise<VSBuffer | undefined>;
-}
-
-const IHucodeShellService =
-	createDecorator<IHucodeShellService>('hucodeShellService');
+import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeShellService } from './hucodeHostedOmniHost.js';
 
 // @ts-expect-error: interface is implemented via proxy
 class WorkbenchNativeHostService implements INativeHostService {
@@ -63,27 +33,10 @@ class WorkbenchNativeHostService implements INativeHostService {
 		@INativeWorkbenchEnvironmentService environmentService: INativeWorkbenchEnvironmentService,
 		@IMainProcessService mainProcessService: IMainProcessService
 	) {
-		const service = new NativeHostService(
-			environmentService.window.id,
+		return createHucodeWorkbenchNativeHostService(
+			environmentService,
 			mainProcessService
-		);
-
-		if (!environmentService.isHostedOmniWorkspace) {
-			return service as unknown as WorkbenchNativeHostService;
-		}
-
-		return new Proxy(service, {
-			get(target, property, receiver) {
-				if (
-					property === 'setRepresentedFilename' ||
-					property === 'setDocumentEdited'
-				) {
-					return async () => { };
-				}
-
-				return Reflect.get(target, property, receiver);
-			}
-		}) as unknown as WorkbenchNativeHostService;
+		) as unknown as WorkbenchNativeHostService;
 	}
 }
 
@@ -91,9 +44,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly _onDidChangeHostedOmniFocus = this._register(new Emitter<void>());
-	private hostedOmniOwnerWindowFocused = getActiveDocument().hasFocus();
-	private hostedOmniInstanceActiveAndVisible = false;
+	private readonly hucodeHostedOmniFocusTracker: HucodeHostedOmniFocusTracker;
 
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
@@ -104,14 +55,20 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	) {
 		super();
 
-		this.registerHostedOmniFocusTracking();
+		this.hucodeHostedOmniFocusTracker = this._register(
+			new HucodeHostedOmniFocusTracker(
+				nativeHostService,
+				environmentService,
+				hucodeShellService
+			)
+		);
 
 		this.onDidChangeFocus = Event.latch(
 			Event.any(
 				Event.map(Event.filter(this.nativeHostService.onDidFocusMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
 				Event.map(Event.filter(this.nativeHostService.onDidBlurMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
 				Event.map(this.onDidChangeActiveWindow, () => this.hasFocus, this._store),
-				Event.map(this._onDidChangeHostedOmniFocus.event, () => this.hasFocus, this._store)
+				Event.map(this.hucodeHostedOmniFocusTracker.onDidChangeFocus, () => this.hasFocus, this._store)
 			), undefined, this._store
 		);
 
@@ -135,120 +92,24 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	readonly onDidChangeFocus: Event<boolean>;
 
 	get hasFocus(): boolean {
-		if (!this.environmentService.isHostedOmniWorkspace) {
-			return getActiveDocument().hasFocus();
-		}
-
-		return this.hostedOmniInstanceActiveAndVisible &&
-			(
-				getActiveDocument().hasFocus() ||
-				this.hostedOmniOwnerWindowFocused
-			);
+		return this.hucodeHostedOmniFocusTracker.hasFocus ??
+			getActiveDocument().hasFocus();
 	}
 
 	async hadLastFocus(): Promise<boolean> {
+		const hucodeHadLastFocus =
+			await this.hucodeHostedOmniFocusTracker.hadLastFocus();
+		if (hucodeHadLastFocus !== undefined) {
+			return hucodeHadLastFocus;
+		}
+
 		const activeWindowId = await this.nativeHostService.getActiveWindowId();
 
 		if (typeof activeWindowId === 'undefined') {
 			return false;
 		}
 
-		if (!this.environmentService.isHostedOmniWorkspace) {
-			return activeWindowId === this.nativeHostService.windowId;
-		}
-
-		const windowHadLastFocus = activeWindowId === this.nativeHostService.windowId;
-		this.updateHostedOmniOwnerWindowFocus(windowHadLastFocus);
-		if (!windowHadLastFocus) {
-			return false;
-		}
-
-		await this.updateHostedOmniWorkspaceState();
-		return this.hasFocus;
-	}
-
-	private registerHostedOmniFocusTracking(): void {
-		if (
-			!this.environmentService.isHostedOmniWorkspace ||
-			!this.environmentService.hostedInstanceId
-		) {
-			return;
-		}
-
-		this._register(Event.filter(
-			this.nativeHostService.onDidFocusMainOrAuxiliaryWindow,
-			id => id === this.nativeHostService.windowId,
-			this._store
-		)(() => this.updateHostedOmniOwnerWindowFocus(true)));
-
-		this._register(Event.filter(
-			this.nativeHostService.onDidBlurMainOrAuxiliaryWindow,
-			id => id === this.nativeHostService.windowId,
-			this._store
-		)(() => this.updateHostedOmniOwnerWindowFocus(false)));
-
-		this._register(Event.filter(
-			this.hucodeShellService.onDidChangeWindowState,
-			e => e.windowId === this.nativeHostService.windowId,
-			this._store
-		)(e => this.updateHostedOmniInstanceState(e.state)));
-
-		void this.nativeHostService.getActiveWindowId().then(activeWindowId => {
-			this.updateHostedOmniOwnerWindowFocus(
-				activeWindowId === this.nativeHostService.windowId
-			);
-		}).catch(onUnexpectedError);
-
-		void this.updateHostedOmniWorkspaceState().catch(onUnexpectedError);
-	}
-
-	private async updateHostedOmniWorkspaceState(): Promise<void> {
-		if (
-			!this.environmentService.isHostedOmniWorkspace ||
-			!this.environmentService.hostedInstanceId
-		) {
-			return;
-		}
-
-		const state = await this.hucodeShellService.getWindowState(
-			this.nativeHostService.windowId
-		);
-		this.updateHostedOmniInstanceState(state);
-	}
-
-	private updateHostedOmniOwnerWindowFocus(focused: boolean): void {
-		if (this.hostedOmniOwnerWindowFocused === focused) {
-			return;
-		}
-
-		const hadFocus = this.hasFocus;
-		this.hostedOmniOwnerWindowFocused = focused;
-		this.fireHostedOmniFocusChangeIfNeeded(hadFocus);
-	}
-
-	private updateHostedOmniInstanceState(state: IHucodeHostedWorkspaceState): void {
-		const instanceId = this.environmentService.hostedInstanceId;
-		const instance = state.instances.find(candidate =>
-			candidate.instanceId === instanceId
-		);
-		const activeAndVisible =
-			state.activeInstanceId === instanceId &&
-			instance?.state === 'active' &&
-			instance.visible;
-
-		if (this.hostedOmniInstanceActiveAndVisible === activeAndVisible) {
-			return;
-		}
-
-		const hadFocus = this.hasFocus;
-		this.hostedOmniInstanceActiveAndVisible = activeAndVisible;
-		this.fireHostedOmniFocusChangeIfNeeded(hadFocus);
-	}
-
-	private fireHostedOmniFocusChangeIfNeeded(hadFocus: boolean): void {
-		if (this.hasFocus !== hadFocus) {
-			this._onDidChangeHostedOmniFocus.fire();
-		}
+		return activeWindowId === this.nativeHostService.windowId;
 	}
 
 	//#endregion
@@ -405,11 +266,14 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	//#region Screenshots
 
 	getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> {
-		if (this.environmentService.isHostedOmniWorkspace) {
-			return this.hucodeShellService.captureWorkspaceScreenshot(
-				this.nativeHostService.windowId,
-				rect
-			);
+		const hucodeScreenshot = getHucodeHostedOmniScreenshot(
+			this.environmentService,
+			this.hucodeShellService,
+			this.nativeHostService.windowId,
+			rect
+		);
+		if (hucodeScreenshot) {
+			return hucodeScreenshot;
 		}
 
 		return this.nativeHostService.getScreenshot(rect);
