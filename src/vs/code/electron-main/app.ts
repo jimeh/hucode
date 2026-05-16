@@ -1349,6 +1349,7 @@ export class CodeApplication extends Disposable {
 		const ptyHostChannel = ProxyChannel.fromService(
 			hucodeCreateLazyEventService(accessor.get(ILocalPtyService), [
 				'onProcessData',
+				'onProcessExit',
 				'onProcessReady',
 				'onDidChangeProperty',
 			]),
