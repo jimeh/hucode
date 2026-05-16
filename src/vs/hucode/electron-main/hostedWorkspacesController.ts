@@ -409,11 +409,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return webContents;
 	}
 
-	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
+	private applyViewVisibility(
+		instance: IHostedWorkbenchInstance,
+		options: {
+			readonly forceRepaint?: boolean;
+			readonly transientOverlayOcclusion?: boolean;
+		} = {}
+	): void {
 		const visible = this.isViewActuallyVisible(instance);
 		this.traceRestore(
 			`visibility requested=${instance.visible} actual=${visible} ` +
-			`attached=${instance.attached}`,
+			`attached=${instance.attached} ` +
+			`transientOverlayOcclusion=${!!options.transientOverlayOcclusion}`,
 			instance
 		);
 		const view = instance.view;
@@ -432,7 +439,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				view.setVisible(true);
 			} else {
 				view.setVisible(false);
-				this.detachInstanceView(instance);
+				if (!options.transientOverlayOcclusion) {
+					this.detachInstanceView(instance);
+				}
 			}
 
 			this.browserViewMainService.setHostedWebContentsVisible(
@@ -442,6 +451,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		if (visible) {
 			this.bringInstanceToFront(instance);
+			if (options.forceRepaint) {
+				webContents?.invalidate();
+			}
 		}
 	}
 
@@ -1406,14 +1418,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	setWorkspaceOverlayOcclusion(occluded: boolean): void {
-		if (this.overlayOccluded === occluded) {
+		const wasOccluded = this.overlayOccluded;
+		if (wasOccluded === occluded) {
 			return;
 		}
 
 		this.overlayOccluded = occluded;
 		const activeInstance = this.getActiveInstance();
 		if (activeInstance) {
-			this.applyViewVisibility(activeInstance);
+			this.applyViewVisibility(activeInstance, {
+				forceRepaint: wasOccluded && !occluded,
+				transientOverlayOcclusion: occluded,
+			});
 		}
 	}
 

@@ -273,6 +273,11 @@ VS Code code that Hucode customizes.
   `contentView`, not just `setVisible(false)`. Invisible Electron view siblings
   can still disturb native hit testing when several workbenches restore at
   startup.
+- Omni shell screenshot-overlay fallback is different from resident workspace
+  hiding. When shell overlays such as hovers or QuickInput need to render above
+  the active hosted workbench, keep that active `WebContentsView` attached and
+  only toggle `setVisible(false)`. Detach remains for inactive resident
+  workbenches.
 - Detached hidden resident workbenches can still finish loading and report
   readiness, but multi-workbench startup may leave them in `loading` briefly.
   Treat `loading` as resident/switchable UI state, not as unloaded.
