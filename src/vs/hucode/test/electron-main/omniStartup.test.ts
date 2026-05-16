@@ -20,20 +20,15 @@ suite('HucodeOmniStartup', () => {
 	});
 
 	test('does not replace explicit or restorable empty windows', () => {
-		assert.strictEqual(
+		const results = [
 			getHucodeDefaultStartupWindowPath({ initialStartup: false }),
-			undefined
-		);
-		assert.strictEqual(
 			getHucodeDefaultStartupWindowPath({}),
-			undefined
-		);
-		assert.strictEqual(
 			getHucodeDefaultStartupWindowPath({
 				initialStartup: true,
 				hasRestorableWindows: true
-			}),
-			undefined
-		);
+			})
+		];
+
+		assert.deepStrictEqual(results, [undefined, undefined, undefined]);
 	});
 });
