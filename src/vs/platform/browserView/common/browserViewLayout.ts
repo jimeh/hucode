@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IBrowserViewBounds } from './browserView.js';
+import type { IBrowserViewBounds } from './browserView.js';
 
 export interface IBrowserViewHostOffset {
 	readonly x: number;

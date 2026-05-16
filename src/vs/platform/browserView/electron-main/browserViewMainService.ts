@@ -20,6 +20,7 @@ import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { localize } from '../../../nls.js';
 import { INativeHostMainService } from '../../native/electron-main/nativeHostMainService.js';
 import { htmlAttributeEncodeValue } from '../../../base/common/strings.js';
+import { BrowserViewHostedWebContents } from './browserViewHostedWebContents.js';
 
 export const IBrowserViewMainService = createDecorator<IBrowserViewMainService>('browserViewMainService');
 
@@ -53,7 +54,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	private readonly browserViews = this._register(new DisposableMap<string, BrowserView>());
-	private readonly hostedWebContentsVisibility = new Map<number, boolean>();
+	private readonly hostedWebContents = new BrowserViewHostedWebContents();
 	private _keybindings: { [commandId: string]: string } = Object.create(null);
 
 	private readonly _onDidCreateBrowserView = this._register(new Emitter<IBrowserViewCreatedEvent>());
@@ -203,10 +204,10 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	async layout(id: string, bounds: IBrowserViewBounds): Promise<void> {
-		const hostVisible = typeof bounds.hostedWebContentsId === 'number'
-			? this.hostedWebContentsVisibility.get(bounds.hostedWebContentsId) ?? true
-			: true;
-		return this._getBrowserView(id).layout(bounds, hostVisible);
+		return this._getBrowserView(id).layout(
+			bounds,
+			this.hostedWebContents.isVisible(bounds.hostedWebContentsId)
+		);
 	}
 
 	async setVisible(id: string, visible: boolean): Promise<void> {
@@ -217,30 +218,29 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 		hostedWebContentsId: number,
 		visible: boolean
 	): void {
-		this.hostedWebContentsVisibility.set(hostedWebContentsId, visible);
-		for (const view of this.browserViews.values()) {
-			view.setHostedWebContentsVisible(hostedWebContentsId, visible);
-		}
+		this.hostedWebContents.setVisible(
+			hostedWebContentsId,
+			visible,
+			this.browserViews.values()
+		);
 	}
 
 	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
-		for (const view of this.browserViews.values()) {
-			view.bringToFrontForHostedWebContents(hostedWebContentsId);
-		}
+		this.hostedWebContents.bringToFront(
+			hostedWebContentsId,
+			this.browserViews.values()
+		);
 	}
 
 	/**
 	 * Destroys all browser views owned by the given hosted Omni workbench.
 	 */
 	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void {
-		this.hostedWebContentsVisibility.delete(hostedWebContentsId);
-
-		const viewIds = Array.from(this.browserViews)
-			.filter(([, view]) =>
-				view.belongsToHostedWebContents(hostedWebContentsId)
-			)
-			.map(([id]) => id);
-
+		this.hostedWebContents.delete(hostedWebContentsId);
+		const viewIds = this.hostedWebContents.getOwnedViewIds(
+			hostedWebContentsId,
+			this.browserViews
+		);
 		for (const id of viewIds) {
 			this.browserViews.deleteAndDispose(id);
 		}
