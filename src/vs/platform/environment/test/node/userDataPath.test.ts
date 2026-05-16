@@ -133,5 +133,20 @@ suite('User data path', () => {
 		});
 	});
 
+	test('getUserDataPath - Hucode dev display identity uses Hucode-dev folder', () => {
+		withEnv({
+			VSCODE_APPDATA: 'appdata-dir',
+			VSCODE_DEV: '1',
+			VSCODE_PORTABLE: undefined
+		}, () => {
+			const path = getUserDataPath(
+				parseArgs(process.argv, OPTIONS),
+				'Hucode Dev'
+			);
+
+			assert.strictEqual(path, resolve(join('appdata-dir', 'Hucode-dev')));
+		});
+	});
+
 	ensureNoDisposablesAreLeakedInTestSuite();
 });
