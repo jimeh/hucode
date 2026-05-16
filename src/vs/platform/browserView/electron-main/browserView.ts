@@ -19,7 +19,7 @@ import { IAuxiliaryWindow } from '../../auxiliaryWindow/electron-main/auxiliaryW
 import { SCAN_CODE_STR_TO_EVENT_KEY_CODE } from '../../../base/common/keyCodes.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { logBrowserOpen } from '../common/browserViewTelemetry.js';
-import { BrowserViewNativeHost } from './browserViewNativeHost.js';
+import { BrowserViewNativeHost } from '../../../hucode/platform/browserView/electron-main/browserViewNativeHost.js';
 
 enum NewPageLocation {
 	Foreground = 'foreground',

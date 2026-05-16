@@ -8,7 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ProjectRecord, WorktreeRecord } from
-	'../../../../platform/projectManager/common/projectManager.js';
+	'../../../platform/projectManager/common/projectManager.js';
 import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,

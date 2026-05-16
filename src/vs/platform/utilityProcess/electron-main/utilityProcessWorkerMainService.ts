@@ -14,7 +14,7 @@ import { hash } from '../../../base/common/hash.js';
 import { Event, Emitter } from '../../../base/common/event.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
-import { hucodeGetRendererReplyTargetKey, hucodeGetRendererReplyTargetLabel } from '../../window/common/hucodeRendererReplyTarget.js';
+import { hucodeGetRendererReplyTargetKey, hucodeGetRendererReplyTargetLabel } from '../../../hucode/platform/window/common/rendererReplyTarget.js';
 
 export const IUtilityProcessWorkerMainService = createDecorator<IUtilityProcessWorkerMainService>('utilityProcessWorker');
 

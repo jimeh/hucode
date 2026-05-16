@@ -7,7 +7,7 @@ import { getActiveElement } from '../../base/browser/dom.js';
 import {
 	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
 	HUCODE_OMNI_PROJECTS_SELECTOR,
-} from '../../platform/window/common/hucodeOmniCommandRouting.js';
+} from '../platform/window/common/omniCommandRouting.js';
 
 /**
  * Returns whether keyboard focus is currently inside the Omni Projects UI.

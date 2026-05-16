@@ -156,12 +156,14 @@ VS Code code that Hucode customizes.
 
 - Keep upstream VS Code files as thin integration points for Hucode behavior.
   If a Hucode change needs substantial logic, put that logic in a Hucode-owned
-  file under `src/vs/hucode/` where layering allows it. If VS Code layer rules
-  block importing `src/vs/hucode/`, use a nearby companion file with an explicit
-  `hucode*` name and keep the upstream file change to minimal wiring such as an
-  import, service injection, and a delegation call.
+  file under `src/vs/hucode/`. Prefer adding a narrow hygiene-rule carve-out
+  for the exact upstream subsystem that needs that Hucode helper over placing a
+  Hucode-specific companion file next to upstream VS Code sources. Keep the
+  upstream file change to minimal wiring such as an import, service injection,
+  and a delegation call.
 - Hucode macOS desktop workbenches default `window.menuStyle` to `native`
-  through `src/vs/workbench/electron-browser/hucodeConfiguration.contribution.ts`.
+  through
+  `src/vs/hucode/workbench/electron-browser/configuration.contribution.ts`.
   Hosted Omni workbenches boot the standard desktop bundle, so keep this
   contribution imported from `workbench.desktop.main.ts` as well as Omni.
 - Omni windows cannot be implemented as a normal workbench contribution overlay.
@@ -355,9 +357,11 @@ VS Code code that Hucode customizes.
   hosted `WebContentsView` also receives the physical keydown. Do not inject a
   synthetic `vscode:runKeybinding` into an already-focused hosted workspace.
 - Keep Omni command-forwarding policy in Hucode-named helpers near the layer
-  that consumes them. Generic workbench files can import same-layer `hucode*`
-  helpers or lower-layer platform helpers, but should not import from
-  `src/vs/hucode/*`.
+  that consumes them. Prefer placing those helpers under `src/vs/hucode/` and
+  adding an exact-file hygiene-rule carve-out for the upstream file that needs
+  the hook. Generic workbench files should only import `src/vs/hucode/*` through
+  a narrow, justified carve-out, and the upstream edit should remain minimal:
+  an import, any required service injection, and a delegation call.
 - Omni shell DOM keybindings do not use the native menu IPC path. When Projects
   has focus, the shell renderer resolves shortcuts locally and calls
   `ICommandService.executeCommand`, so shortcut forwarding needs an Omni-local
@@ -401,7 +405,7 @@ VS Code code that Hucode customizes.
   theme-only user-extension policy enforced at scan time as well as enablement
   time.
 - Keep Omni shell extension-filtering policy in
-  `src/vs/workbench/services/extensions/common/hucodeExtensionEnablementPolicy.ts`
+  `src/vs/hucode/workbench/services/extensions/common/extensionEnablementPolicy.ts`
   so upstream extension scanner and enablement service edits stay thin.
 
 ## Other Hucode Gotchas

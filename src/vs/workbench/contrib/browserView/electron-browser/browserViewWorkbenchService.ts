@@ -25,7 +25,7 @@ import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
 import { ChatConfiguration } from '../../chat/common/constants.js';
 import { AgentHostEnabledSettingId } from '../../../../platform/agentHost/common/agentService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
-import { getBrowserViewOwner, ownsBrowserView } from '../common/browserViewOwnership.js';
+import { getBrowserViewOwner, ownsBrowserView } from '../../../../hucode/workbench/contrib/browserView/common/browserViewOwnership.js';
 
 /**
  * When enabled, integrated browser tools are exposed as client-provided tools

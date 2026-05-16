@@ -8,8 +8,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { errorHandler } from '../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
 import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
-import { IProjectManagerMainService } from '../../../platform/projectManager/electron-main/projectManager.js';
-import { ProjectRecord, WorktreeRecord } from '../../../platform/projectManager/common/projectManager.js';
+import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import { ProjectRecord, WorktreeRecord } from '../../platform/projectManager/common/projectManager.js';
 import { ICodeWindow } from '../../../platform/window/electron-main/window.js';
 import {
 	findHucodeProjectWorktreeForFiles,

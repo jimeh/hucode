@@ -19,9 +19,9 @@ import { deepClone } from '../../../base/common/objects.js';
 import { isWindows } from '../../../base/common/platform.js';
 import { isUNCAccessRestrictionsDisabled, getUNCHostAllowlist } from '../../../base/node/unc.js';
 import { IRendererReplyTarget } from '../../window/common/window.js';
-import { hucodeGetRendererReplyTargetLabel } from '../../window/common/hucodeRendererReplyTarget.js';
-import { hucodeResolveRendererReplyTarget } from '../../window/electron-main/hucodeRendererReplyTarget.js';
-import { UtilityProcessCrashRegistry } from './utilityProcessCrashRegistry.js';
+import { hucodeGetRendererReplyTargetLabel } from '../../../hucode/platform/window/common/rendererReplyTarget.js';
+import { hucodeResolveRendererReplyTarget } from '../../../hucode/platform/window/electron-main/rendererReplyTarget.js';
+import { UtilityProcessCrashRegistry } from '../../../hucode/platform/utilityProcess/electron-main/utilityProcessCrashRegistry.js';
 
 const utilityProcessCrashRegistry = new UtilityProcessCrashRegistry(listener =>
 	app.on('child-process-gone', listener));

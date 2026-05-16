@@ -16,7 +16,7 @@ import {
 	CreateWorktreeOptions,
 	IProjectManagerService,
 	WorktreeRefRecord,
-} from '../../../platform/projectManager/common/projectManager.js';
+} from '../../platform/projectManager/common/projectManager.js';
 import {
 	IQuickInputService,
 	IQuickPickItem,

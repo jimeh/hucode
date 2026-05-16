@@ -25,7 +25,7 @@ import './electron-browser/omniCommandService.js';
 
 import './electron-browser/omni.main.js';
 import '../workbench/electron-browser/desktop.contribution.js';
-import '../workbench/electron-browser/hucodeConfiguration.contribution.js';
+import './workbench/electron-browser/configuration.contribution.js';
 
 //#endregion
 
@@ -100,7 +100,7 @@ import '../platform/agentHost/electron-browser/sshRemoteAgentHostService.js';
 import '../workbench/services/browserView/electron-browser/playwrightWorkbenchService.js';
 import '../workbench/services/process/electron-browser/processService.js';
 import '../workbench/services/power/electron-browser/powerService.js';
-import '../platform/projectManager/electron-browser/projectManagerService.js';
+import './platform/projectManager/electron-browser/projectManagerService.js';
 import './electron-browser/omniWindowService.js';
 import './browser/omniWindowUI.js';
 import './browser/omniProjectsSidebarActions.js';

@@ -36,7 +36,7 @@ import { isWeb } from '../../../../base/common/platform.js';
 import { ChatEntitlementService, IChatEntitlementService } from '../../chat/common/chatEntitlementService.js';
 import {
 	hucodeIsExtensionDisabledByPolicy,
-} from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
+} from '../../../../hucode/workbench/services/extensions/common/extensionEnablementPolicy.js';
 
 const SOURCE = 'IWorkbenchExtensionEnablementService';
 

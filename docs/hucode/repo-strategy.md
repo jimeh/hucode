@@ -223,7 +223,7 @@ To keep upstream merges manageable:
 
 Suggested Hucode-heavy areas:
 
-- `src/vs/platform/projectManager`
+- `src/vs/hucode/platform/projectManager`
 - `src/vs/workbench/contrib/projectSwitcher`
 - `src/vs/hucode`
 - `product.json`

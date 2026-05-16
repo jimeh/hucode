@@ -15,7 +15,7 @@ import {
 	IQuickPickSeparator,
 } from '../../../platform/quickinput/common/quickInput.js';
 import { ProjectRecord, WorktreeRecord } from
-	'../../../platform/projectManager/common/projectManager.js';
+	'../../platform/projectManager/common/projectManager.js';
 
 export interface IProjectSwitcherSelectionTarget {
 	readonly projectId: string;

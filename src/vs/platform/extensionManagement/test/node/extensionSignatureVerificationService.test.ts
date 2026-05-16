@@ -9,7 +9,7 @@ import { NullLogService } from '../../../log/common/log.js';
 import { IProductService } from '../../../product/common/productService.js';
 import { NullTelemetryService } from '../../../telemetry/common/telemetryUtils.js';
 import { ExtensionSignatureVerificationCode } from '../../common/extensionManagement.js';
-import { HucodeOpenVsxExtensionSignatureVerifier, IHucodeExtensionSignatureVerificationResult } from '../../node/hucodeOpenVsxExtensionSignatureVerifier.js';
+import { HucodeOpenVsxExtensionSignatureVerifier, IHucodeExtensionSignatureVerificationResult } from '../../../../hucode/platform/extensionManagement/node/hucodeOpenVsxExtensionSignatureVerifier.js';
 import { ExtensionSignatureVerificationResult, ExtensionSignatureVerificationService } from '../../node/extensionSignatureVerificationService.js';
 
 type VsceVerify = (vsixFilePath: string, signatureArchiveFilePath: string, verbose: boolean) => Promise<ExtensionSignatureVerificationResult>;

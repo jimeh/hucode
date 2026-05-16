@@ -20,9 +20,9 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { IProjectManagerService } from '../../../../platform/projectManager/common/projectManager.js';
-import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
-import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeShellService } from './hucodeHostedOmniHost.js';
+import { IProjectManagerService } from '../../../../hucode/platform/projectManager/common/projectManager.js';
+import { tryOpenHucodeOmniWindow } from '../../../../hucode/workbench/services/host/electron-browser/omniOpen.js';
+import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeShellService } from '../../../../hucode/workbench/services/host/electron-browser/hostedOmniHost.js';
 
 // @ts-expect-error: interface is implemented via proxy
 class WorkbenchNativeHostService implements INativeHostService {

@@ -11,7 +11,7 @@ import { ILogService, LogLevel } from '../../log/common/log.js';
 import { IProductService } from '../../product/common/productService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { ExtensionSignatureVerificationCode } from '../common/extensionManagement.js';
-import { HucodeOpenVsxExtensionSignatureVerifier, useHucodeOpenVsxSignatureVerifier } from './hucodeOpenVsxExtensionSignatureVerifier.js';
+import { HucodeOpenVsxExtensionSignatureVerifier, useHucodeOpenVsxSignatureVerifier } from '../../../hucode/platform/extensionManagement/node/hucodeOpenVsxExtensionSignatureVerifier.js';
 
 export const IExtensionSignatureVerificationService = createDecorator<IExtensionSignatureVerificationService>('IExtensionSignatureVerificationService');
 

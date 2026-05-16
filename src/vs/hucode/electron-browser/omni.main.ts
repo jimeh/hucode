@@ -147,7 +147,7 @@ import { ShutdownReason } from
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
 	type HucodeExtensionEnablementPolicy,
-} from '../../workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js';
+} from '../workbench/services/extensions/common/extensionEnablementPolicy.js';
 
 const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
 	'GitHub.copilot-chat',

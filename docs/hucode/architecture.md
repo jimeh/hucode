@@ -58,9 +58,9 @@ renderers.
 
 Key services:
 
-- `src/vs/platform/projectManager/electron-main/projectManagerMainService.ts`
+- `src/vs/hucode/platform/projectManager/electron-main/projectManagerMainService.ts`
   owns project records and worktree orchestration.
-- `src/vs/platform/projectManager/electron-main/gitWorktreeService.ts` wraps
+- `src/vs/hucode/platform/projectManager/electron-main/gitWorktreeService.ts` wraps
   git worktree operations.
 - `src/vs/hucode/electron-main/shellMainService.ts` owns hosted workspace
   creation, restore, focus, shutdown, and command forwarding.
@@ -139,14 +139,15 @@ platform helpers, but should not import from `src/vs/hucode/*`.
 
 Native replies and utility-process startup can target either the owning window
 or a hosted workspace `webContents`. Hucode-specific renderer reply-target
-helpers live under `src/vs/platform/window/` so shared window and IPC code does
-not need to depend on `src/vs/hucode/*`.
+helpers live under `src/vs/hucode/platform/window/`; narrow hygiene-rule
+carve-outs let shared window and IPC code import those helpers without placing
+Hucode companion files next to upstream sources.
 
 ### Extension Filtering
 
 The Omni shell does not need the full user extension set for project/worktree
 management. Hucode filters user extensions for the shell through
-`src/vs/workbench/services/extensions/common/hucodeExtensionEnablementPolicy.ts`.
+`src/vs/hucode/workbench/services/extensions/common/extensionEnablementPolicy.ts`.
 
 Keep this policy centralized so upstream extension scanner and enablement
 service changes stay thin during VS Code upgrades.
@@ -166,8 +167,8 @@ Hucode work most often intersects with:
 
 - `src/vs/code/electron-main`
 - `src/vs/platform/browserView`
-- `src/vs/platform/projectManager`
 - `src/vs/platform/window`
+- `src/vs/hucode/platform/projectManager`
 - `src/vs/workbench/electron-browser`
 - `src/vs/workbench/contrib/browserView`
 - `src/vs/workbench/services/browserView`
@@ -186,8 +187,8 @@ Use the narrowest validation that covers the change:
 - product overlay changes: `npm run hucode:validate`
 - Hucode TypeScript changes: `npm run hucode:compile`
 - incremental UI work: `npm run hucode:watch` plus `npm run hucode:run`
-- project/worktree model changes: run the related `src/vs/hucode/test` or
-  `src/vs/platform/projectManager/test` suites when practical
+- project/worktree model changes: run the related `src/vs/hucode/test`
+  project manager and project switcher suites when practical
 
 ## Design Principles
 

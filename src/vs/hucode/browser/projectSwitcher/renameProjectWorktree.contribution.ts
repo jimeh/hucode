@@ -14,7 +14,7 @@ import { ServicesAccessor } from
 import { INotificationService } from
 	'../../../platform/notification/common/notification.js';
 import { IProjectManagerService } from
-	'../../../platform/projectManager/common/projectManager.js';
+	'../../platform/projectManager/common/projectManager.js';
 import { IQuickInputService } from
 	'../../../platform/quickinput/common/quickInput.js';
 import { TreeViewItemHandleArg } from

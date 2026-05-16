@@ -1639,6 +1639,68 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/platform/browserView/electron-main/{browserView.ts,browserViewMainService.ts}',
+					'layer': 'electron-main',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/browserView/~',
+						'tas-client',
+						'@microsoft/1ds-core-js',
+						'@microsoft/1ds-post-js',
+						'@xterm/headless',
+						'@vscode/tree-sitter-wasm'
+					]
+				},
+				{
+					'target': 'src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.ts',
+					'layer': 'node',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/extensionManagement/~',
+						'tas-client',
+						'@microsoft/1ds-core-js',
+						'@microsoft/1ds-post-js',
+						'@xterm/headless',
+						'@vscode/tree-sitter-wasm'
+					]
+				},
+				{
+					'target': 'src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts',
+					'layer': 'node',
+					'test': true,
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/extensionManagement/~',
+						'tas-client',
+						'@microsoft/1ds-core-js',
+						'@microsoft/1ds-post-js',
+						'@xterm/headless',
+						'@vscode/tree-sitter-wasm'
+					]
+				},
+				{
+					'target': 'src/vs/platform/utilityProcess/electron-main/{utilityProcess.ts,utilityProcessWorkerMainService.ts}',
+					'layer': 'electron-main',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/utilityProcess/~',
+						'vs/hucode/platform/window/~',
+						'tas-client',
+						'@microsoft/1ds-core-js',
+						'@microsoft/1ds-post-js',
+						'@xterm/headless',
+						'@vscode/tree-sitter-wasm'
+					]
+				},
+				{
 					'target': 'src/vs/platform/*/~',
 					'restrictions': [
 						'vs/base/~',
@@ -1717,6 +1779,48 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/workbench/browser/parts/titlebar/titlebarPart.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/common/menuIds.js'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/electron-browser/window.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/electron-browser/omniCommandForwarding.js'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/electron-browser/actions/developerActions.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/electron-browser/hostedDevTools.js'
+					]
+				},
+				{
 					'target': 'src/vs/workbench/~',
 					'restrictions': [
 						'vs/base/~',
@@ -1750,6 +1854,92 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/workbench/services/environment/common/environmentService.ts',
+					'layer': 'common',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/services/extensions/~'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/services/extensions/~'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts',
+					'layer': 'browser',
+					'test': true,
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/services/extensions/~'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/services/extensions/electron-browser/cachedExtensionScanner.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/services/extensions/~'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/services/host/electron-browser/nativeHostService.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/projectManager/~',
+						'vs/hucode/workbench/services/host/~'
+					]
+				},
+				{
+					'target': 'src/vs/workbench/services/utilityProcess/electron-browser/utilityProcessWorkerWorkbenchService.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/window/~'
+					]
+				},
+				{
 					'target': 'src/vs/workbench/services/*/~',
 					'restrictions': [
 						'vs/base/~',
@@ -1771,6 +1961,21 @@ export default tseslint.config(
 							'when': 'hasBrowser',
 							'pattern': '@xterm/xterm'
 						} // node module allowed even in /browser/
+					]
+				},
+				{
+					'target': 'src/vs/workbench/contrib/browserView/electron-browser/{browserEditor.ts,browserViewWorkbenchService.ts}',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/hucode/workbench/contrib/browserView/~'
 					]
 				},
 				{
@@ -1835,6 +2040,21 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/code/electron-main/{app.ts,main.ts}',
+					'layer': 'electron-main',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/code/~',
+						'vs/hucode/platform/projectManager/{common,electron-main}/**',
+						'vs/hucode/common/lazyEventService.js',
+						'vs/hucode/electron-main/**'
+					]
+				},
+				{
 					'target': 'src/vs/code/~',
 					'restrictions': [
 						'vs/base/~',
@@ -1862,6 +2082,227 @@ export default tseslint.config(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/platform/browserView/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/browserView/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/platform/browserView/~',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/browserView/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/platform/extensionManagement/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/extensionManagement/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/platform/extensionManagement/~',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/extensionManagement/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/platform/*/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/*/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/common/*.ts',
+					'layer': 'common',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/hucode/common/~',
+						'vs/hucode/common/lazyEventService.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/platform/*/~',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/hucode/platform/*/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/workbench/common/menuIds.ts',
+					'layer': 'common',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/workbench/common/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/workbench/electron-browser/{configuration.contribution.ts,hostedDevTools.ts,omniCommandForwarding.ts}',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/window/~',
+						'vs/hucode/workbench/electron-browser/~',
+						'vs/hucode/workbench/electron-browser/omniCommandForwarding.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/workbench/electron-browser/omniCommandForwarding.test.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/window/~',
+						'vs/hucode/workbench/electron-browser/~',
+						'vs/hucode/workbench/electron-browser/omniCommandForwarding.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/workbench/services/*/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/projectManager/~',
+						'vs/hucode/workbench/services/*/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/workbench/services/*/~',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/hucode/platform/projectManager/~',
+						'vs/hucode/workbench/services/*/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/workbench/contrib/browserView/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/hucode/platform/browserView/~',
+						'vs/hucode/workbench/contrib/browserView/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/test/workbench/contrib/browserView/~',
+					'restrictions': [
+						'assert',
+						'vs/base/test/~',
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/hucode/workbench/contrib/browserView/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/browser/*.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/platform/*/~',
+						'vs/hucode/workbench/common/menuIds.js',
+						'vs/hucode/workbench/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/browser/projectSwitcher/*.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/platform/*/~',
+						'vs/hucode/workbench/common/menuIds.js',
+						'vs/hucode/workbench/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
 					'target': 'src/vs/hucode/~',
 					'restrictions': [
 						'vs/base/~',
@@ -1874,6 +2315,9 @@ export default tseslint.config(
 						'vs/workbench/contrib/*/~',
 						'vs/sessions/~',
 						'vs/sessions/services/*/~',
+						'vs/hucode/platform/*/~',
+						'vs/hucode/workbench/common/~',
+						'vs/hucode/workbench/services/*/~',
 						'vs/hucode/~'
 					]
 				},
@@ -1991,7 +2435,9 @@ export default tseslint.config(
 						'vs/workbench/contrib/*/~',
 						'vs/workbench/workbench.common.main.js',
 						'vs/hucode/electron-browser/omniWindowService.js',
-						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
+						'vs/hucode/browser/hostedOmniWorkspace.contribution.js',
+						'vs/hucode/platform/projectManager/electron-browser/projectManagerService.js',
+						'vs/hucode/workbench/electron-browser/configuration.contribution.js'
 					]
 				},
 				{
@@ -2009,6 +2455,8 @@ export default tseslint.config(
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
 						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/platform/projectManager/electron-browser/projectManagerService.js',
+						'vs/hucode/workbench/electron-browser/configuration.contribution.js',
 						'vs/hucode/~'
 					]
 				},

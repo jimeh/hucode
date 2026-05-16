@@ -21,7 +21,7 @@ import { IWorkbenchEnvironmentService } from '../../environment/common/environme
 import {
 	hucodeShouldKeepOnlyUserThemeExtensions,
 	hucodeShouldKeepScannedUserExtension,
-} from '../common/hucodeExtensionEnablementPolicy.js';
+} from '../../../../hucode/workbench/services/extensions/common/extensionEnablementPolicy.js';
 
 export class CachedExtensionScanner {
 

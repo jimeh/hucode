@@ -12,7 +12,7 @@ import { Categories } from '../../platform/action/common/actionCommonCategories.
 import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
 import { HucodeMenuId } from
-	'../../platform/actions/common/hucodeMenuIds.js';
+	'../workbench/common/menuIds.js';
 import { ContextKeyExpr, IContextKeyService, RawContextKey } from
 	'../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from

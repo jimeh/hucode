@@ -19,7 +19,7 @@ import { getActiveWindow } from '../../../base/browser/dom.js';
 import { IProgressService, ProgressLocation } from '../../../platform/progress/common/progress.js';
 import { IDialogService } from '../../../platform/dialogs/common/dialogs.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../services/statusbar/browser/statusbar.js';
-import { hucodeToggleHostedWorkspaceDevTools } from '../hucodeHostedDevTools.js';
+import { hucodeToggleHostedWorkspaceDevTools } from '../../../hucode/workbench/electron-browser/hostedDevTools.js';
 
 export class ToggleDevToolsAction extends Action2 {
 

@@ -13,7 +13,7 @@ import { localize } from '../../../nls.js';
 import {
 	ProjectRecord,
 	WorktreeRecord,
-} from '../../../platform/projectManager/common/projectManager.js';
+} from '../../platform/projectManager/common/projectManager.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
 	IHucodeHostedWorkbenchInstance,

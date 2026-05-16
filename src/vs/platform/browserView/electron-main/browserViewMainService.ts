@@ -20,7 +20,7 @@ import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { localize } from '../../../nls.js';
 import { INativeHostMainService } from '../../native/electron-main/nativeHostMainService.js';
 import { htmlAttributeEncodeValue } from '../../../base/common/strings.js';
-import { BrowserViewHostedWebContents } from './browserViewHostedWebContents.js';
+import { BrowserViewHostedWebContents } from '../../../hucode/platform/browserView/electron-main/browserViewHostedWebContents.js';
 
 export const IBrowserViewMainService = createDecorator<IBrowserViewMainService>('browserViewMainService');
 

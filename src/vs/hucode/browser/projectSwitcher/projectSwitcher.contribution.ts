@@ -70,7 +70,7 @@ import { ICommandService } from
 import {
 	IProjectManagerService,
 	ProjectRecord,
-} from '../../../platform/projectManager/common/projectManager.js';
+} from '../../platform/projectManager/common/projectManager.js';
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,

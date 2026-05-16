@@ -10,7 +10,7 @@ import { localize } from '../../../nls.js';
 import { RawContextKey } from
 	'../../../platform/contextkey/common/contextkey.js';
 import { WorktreeRecord } from
-	'../../../platform/projectManager/common/projectManager.js';
+	'../../platform/projectManager/common/projectManager.js';
 
 export const SWITCH_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.switchWorktree';

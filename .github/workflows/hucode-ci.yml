@@ -229,13 +229,13 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
-            src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
+            src/vs/hucode/test/platform/browserView/electron-main/browserViewHostedWebContents.test.ts \
             --run \
-            src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
+            src/vs/hucode/test/platform/browserView/electron-main/browserViewNativeHost.test.ts \
             --run \
-            src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
+            src/vs/hucode/test/platform/projectManager/electron-main/projectManagerMainService.test.ts \
             --run \
-            src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
+            src/vs/hucode/test/platform/utilityProcess/electron-main/utilityProcess.test.ts \
             --run \
             src/vs/platform/windows/test/electron-main/windowsStateHandler.test.ts \
             --run \
@@ -247,10 +247,10 @@ jobs:
             --run \
             src/vs/hucode/test/electron-main/omniStartup.test.ts \
             --run \
-            src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
+            src/vs/hucode/test/workbench/electron-browser/omniCommandForwarding.test.ts \
             --run \
-            src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts \
+            src/vs/hucode/test/workbench/services/host/electron-browser/hostedOmniHost.test.ts \
             --run \
-            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
+            src/vs/hucode/test/workbench/services/host/electron-browser/omniOpen.test.ts
         env:
           VSCODE_SKIP_PRELAUNCH: 1

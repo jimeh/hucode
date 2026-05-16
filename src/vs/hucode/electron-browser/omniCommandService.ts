@@ -11,7 +11,7 @@ import {
 	isHucodeOmniShellAction,
 	isHucodeOmniShellCommandForwardingDisabled,
 	isHucodeOmniShellLayoutAction,
-} from '../../platform/window/common/hucodeOmniCommandRouting.js';
+} from '../platform/window/common/omniCommandRouting.js';
 import { INativeRunActionInWindowRequest } from '../../platform/window/common/window.js';
 import {
 	isHucodeOmniLocalInputFocus,

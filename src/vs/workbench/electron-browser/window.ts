@@ -87,7 +87,7 @@ import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
-import { HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
+import { HucodeOmniCommandForwarding } from '../../hucode/workbench/electron-browser/omniCommandForwarding.js';
 
 export class NativeWindow extends BaseWindow {
 

@@ -14,7 +14,7 @@ import { acquirePort } from '../../../../base/parts/ipc/electron-browser/ipc.mp.
 import { IOnDidTerminateUtilityrocessWorkerProcess, ipcUtilityProcessWorkerChannelName, IUtilityProcessWorkerProcess, IUtilityProcessWorkerService } from '../../../../platform/utilityProcess/common/utilityProcessWorkerService.js';
 import { Barrier, timeout } from '../../../../base/common/async.js';
 import { IRendererReplyTarget } from '../../../../platform/window/common/window.js';
-import { hucodeGetRendererReplyTargetLabel } from '../../../../platform/window/common/hucodeRendererReplyTarget.js';
+import { hucodeGetRendererReplyTargetLabel } from '../../../../hucode/platform/window/common/rendererReplyTarget.js';
 
 export const IUtilityProcessWorkerWorkbenchService = createDecorator<IUtilityProcessWorkerWorkbenchService>('utilityProcessWorkerWorkbenchService');
 

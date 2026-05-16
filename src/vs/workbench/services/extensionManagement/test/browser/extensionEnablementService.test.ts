@@ -46,7 +46,7 @@ import { ChatEntitlementContext, IChatEntitlementService } from '../../../chat/c
 import { Lazy } from '../../../../../base/common/lazy.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
-} from '../../../extensions/common/hucodeExtensionEnablementPolicy.js';
+} from '../../../../../hucode/workbench/services/extensions/common/extensionEnablementPolicy.js';
 
 function createStorageService(instantiationService: TestInstantiationService, disposableStore: DisposableStore): IStorageService {
 	let service = instantiationService.get(IStorageService);

@@ -74,8 +74,8 @@ import { FileUserDataProvider } from '../../platform/userData/common/fileUserDat
 import { addUNCHostToAllowlist, getUNCHost } from '../../base/node/unc.js';
 import { ThemeMainService } from '../../platform/theme/electron-main/themeMainServiceImpl.js';
 import { LINUX_SYSTEM_POLICY_FILE_PATH } from '../../base/common/policy.js';
-import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
-import { ProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManagerMainService.js';
+import { IProjectManagerMainService } from '../../hucode/platform/projectManager/electron-main/projectManager.js';
+import { ProjectManagerMainService } from '../../hucode/platform/projectManager/electron-main/projectManagerMainService.js';
 
 /**
  * The main VS Code entry point.

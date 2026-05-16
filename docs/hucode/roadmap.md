@@ -44,7 +44,7 @@ Done:
 
 Validation:
 
-- project manager tests under `src/vs/platform/projectManager/test`
+- project manager tests under `src/vs/hucode/test/platform/projectManager`
 - project switcher model tests under `src/vs/hucode/test`
 - manual add, remove, rename, refresh, switch, and unload testing
 

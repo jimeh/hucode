@@ -9,7 +9,7 @@ import { IEnvironmentService } from '../../../../platform/environment/common/env
 import { URI } from '../../../../base/common/uri.js';
 import type {
 	HucodeExtensionEnablementPolicy,
-} from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
+} from '../../../../hucode/workbench/services/extensions/common/extensionEnablementPolicy.js';
 
 export const IWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IWorkbenchEnvironmentService>(IEnvironmentService);
 

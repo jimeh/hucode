@@ -11,7 +11,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import {
 	ProjectRecord,
 	WorktreeRecord,
-} from '../../../../platform/projectManager/common/projectManager.js';
+} from '../../../platform/projectManager/common/projectManager.js';
 import { IHucodeHostedWorkspaceState } from
 	'../../../common/omniWindow.js';
 import {

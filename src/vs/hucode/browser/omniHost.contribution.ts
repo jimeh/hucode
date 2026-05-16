@@ -16,7 +16,7 @@ import {
 	WorkbenchPhase,
 } from '../../workbench/common/contributions.js';
 import { IProjectManagerService } from
-	'../../platform/projectManager/common/projectManager.js';
+	'../platform/projectManager/common/projectManager.js';
 import { IHostService } from '../../workbench/services/host/browser/host.js';
 import { IWorkbenchLayoutService, Parts } from
 	'../../workbench/services/layout/browser/layoutService.js';
