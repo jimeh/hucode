@@ -7,7 +7,7 @@ import './media/window.css';
 import { localize } from '../../nls.js';
 import { URI } from '../../base/common/uri.js';
 import { equals } from '../../base/common/objects.js';
-import { EventType, EventHelper, addDisposableListener, ModifierKeyEmitter, getActiveElement, hasWindow, getWindowById, getWindows, $ } from '../../base/browser/dom.js';
+import { EventType, EventHelper, addDisposableListener, ModifierKeyEmitter, hasWindow, getWindowById, getWindows, $ } from '../../base/browser/dom.js';
 import { Action, Separator, WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../base/common/actions.js';
 import { IFileService } from '../../platform/files/common/files.js';
 import { EditorResourceAccessor, IUntitledTextResourceEditorInput, SideBySideEditor, pathsToEditors, IResourceDiffEditorInput, IUntypedEditorInput, IEditorPane, isResourceEditorInput, IResourceMergeEditorInput } from '../common/editor.js';
@@ -17,8 +17,6 @@ import {
 	WindowMinimumSize,
 	IOpenFileRequest,
 	IAddRemoveFoldersRequest,
-	INativeRunActionInWindowRequest,
-	INativeRunKeybindingInWindowRequest,
 	INativeOpenFileRequest,
 	hasNativeTitlebar,
 } from '../../platform/window/common/window.js';
@@ -89,7 +87,7 @@ import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
-import { HUCODE_OMNI_CLIPBOARD_ACTIONS, HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
+import { HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
 
 export class NativeWindow extends BaseWindow {
 
@@ -171,75 +169,29 @@ export class NativeWindow extends BaseWindow {
 			}));
 		}
 
-		for (const [eventType, actionId] of HUCODE_OMNI_CLIPBOARD_ACTIONS) {
-			this._register(addDisposableListener(mainWindow.document, eventType, e => {
-				if (!this.hucodeOmniCommandForwarding.shouldForwardShellInvocation()) {
-					return;
-				}
-
-				EventHelper.stop(e, true);
-				void this.hucodeOmniCommandForwarding.forwardActionToWorkspace({
-					id: actionId,
-					from: 'menu'
-				});
-			}));
-		}
-
-		// Support `runAction` event
-		ipcRenderer.on('vscode:runAction', async (event: unknown, ...argsRaw: unknown[]) => {
-			const request = argsRaw[0] as INativeRunActionInWindowRequest;
-			if (await this.hucodeOmniCommandForwarding.forwardActionToWorkspace(request)) {
-				return;
-			}
-
-			const args: unknown[] = request.args || [];
-
-			// If we run an action from the touchbar, we fill in the currently active resource
-			// as payload because the touch bar items are context aware depending on the editor
-			if (request.from === 'touchbar') {
+		this._register(this.hucodeOmniCommandForwarding.registerWindowListeners({
+			document: mainWindow.document,
+			getActiveEditorResource: () => {
 				const activeEditor = this.editorService.activeEditor;
-				if (activeEditor) {
-					const resource = EditorResourceAccessor.getOriginalUri(activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
-					if (resource) {
-						args.push(resource);
-					}
-				}
-			} else if (request.from !== 'keybinding') {
-				args.push({ from: request.from });
-			}
-
-			try {
-				const executeCommand = () =>
-					this.commandService.executeCommand(request.id, ...args);
-
-				await this.hucodeOmniCommandForwarding
-					.runWithForwardingDisabledIfNeeded(request, executeCommand);
-
-				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from });
-			} catch (error) {
-				this.notificationService.error(error);
-			}
-		});
-
-		// Support runKeybinding event
-		ipcRenderer.on('vscode:runKeybinding', async (event: unknown, ...argsRaw: unknown[]) => {
-			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
-			if (await this.hucodeOmniCommandForwarding.forwardKeybindingToWorkspace(request)) {
-				return;
-			}
-
-			const activeElement = getActiveElement();
-			if (activeElement) {
-				const dispatch = () =>
-					this.keybindingService.dispatchByUserSettingsLabel(
-						request.userSettingsLabel,
-						activeElement
-					);
-
-				await this.hucodeOmniCommandForwarding
-					.runWithForwardingDisabledIfNeeded(request, dispatch);
-			}
-		});
+				return activeEditor
+					? EditorResourceAccessor.getOriginalUri(
+						activeEditor,
+						{ supportSideBySide: SideBySideEditor.PRIMARY }
+					)
+					: undefined;
+			},
+			executeCommand: (commandId, ...args) =>
+				this.commandService.executeCommand(commandId, ...args),
+			dispatchKeybinding: (userSettingsLabel, target) =>
+				this.keybindingService.dispatchByUserSettingsLabel(
+					userSettingsLabel,
+					target
+				),
+			onActionExecuted: request =>
+				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from }),
+			onActionError: error =>
+				this.notificationService.error(toErrorMessage(error))
+		}));
 
 		// Shared Process crash reported from main
 		ipcRenderer.on('vscode:reportSharedProcessCrash', (event: unknown, ...argsRaw: unknown[]) => {

@@ -247,6 +247,8 @@ jobs:
             --run \
             src/vs/hucode/test/electron-main/omniStartup.test.ts \
             --run \
+            src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
+            --run \
             src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts \
             --run \
             src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
