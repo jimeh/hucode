@@ -40,6 +40,13 @@ VS Code code that Hucode customizes.
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
 
+## Code Documentation
+
+- Add concise JSDoc for new Hucode-owned exported functions, interfaces, enums,
+  and classes, especially when extracting helpers out of upstream-heavy files.
+  Keep comments focused on behavior and contracts so automated docstring review
+  checks do not flag avoidable omissions.
+
 ## CI Workflow
 
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by

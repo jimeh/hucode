@@ -15,19 +15,24 @@ suite('browserViewOwnership', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('creates owners for hosted and normal workbenches', () => {
-		assert.deepStrictEqual(getBrowserViewOwner(1, {
-			isHostedOmniWorkspace: true,
-			hostedWebContentsId: 42,
-		}), {
-			mainWindowId: 1,
-			hostedWebContentsId: 42,
-		});
-		assert.deepStrictEqual(getBrowserViewOwner(1, {
-			isHostedOmniWorkspace: false,
-			hostedWebContentsId: 42,
-		}), {
-			mainWindowId: 1,
-			hostedWebContentsId: undefined,
+		assert.deepStrictEqual({
+			hosted: getBrowserViewOwner(1, {
+				isHostedOmniWorkspace: true,
+				hostedWebContentsId: 42,
+			}),
+			normal: getBrowserViewOwner(1, {
+				isHostedOmniWorkspace: false,
+				hostedWebContentsId: 42,
+			}),
+		}, {
+			hosted: {
+				mainWindowId: 1,
+				hostedWebContentsId: 42,
+			},
+			normal: {
+				mainWindowId: 1,
+				hostedWebContentsId: undefined,
+			},
 		});
 	});
 
@@ -37,18 +42,24 @@ suite('browserViewOwnership', () => {
 			hostedWebContentsId: 42,
 		};
 
-		assert.strictEqual(ownsBrowserView({
-			mainWindowId: 1,
-			hostedWebContentsId: 42,
-		}, 1, environment), true);
-		assert.strictEqual(ownsBrowserView({
-			mainWindowId: 1,
-			hostedWebContentsId: 7,
-		}, 1, environment), false);
-		assert.strictEqual(ownsBrowserView({
-			mainWindowId: 2,
-			hostedWebContentsId: 42,
-		}, 1, environment), false);
+		assert.deepStrictEqual({
+			activeHostedWorkbench: ownsBrowserView({
+				mainWindowId: 1,
+				hostedWebContentsId: 42,
+			}, 1, environment),
+			otherHostedWorkbench: ownsBrowserView({
+				mainWindowId: 1,
+				hostedWebContentsId: 7,
+			}, 1, environment),
+			otherMainWindow: ownsBrowserView({
+				mainWindowId: 2,
+				hostedWebContentsId: 42,
+			}, 1, environment),
+		}, {
+			activeHostedWorkbench: true,
+			otherHostedWorkbench: false,
+			otherMainWindow: false,
+		});
 	});
 
 	test('normal workbenches ignore hosted browser views', () => {
@@ -57,16 +68,20 @@ suite('browserViewOwnership', () => {
 			hostedWebContentsId: 42,
 		};
 
-		assert.strictEqual(ownsBrowserView({
-			mainWindowId: 1,
-		}, 1, environment), true);
-		assert.strictEqual(ownsBrowserView({
-			mainWindowId: 1,
-			hostedWebContentsId: 42,
-		}, 1, environment), false);
-		assert.strictEqual(
-			getHostedBrowserViewWebContentsId(environment),
-			undefined
-		);
+		assert.deepStrictEqual({
+			normalOwner: ownsBrowserView({
+				mainWindowId: 1,
+			}, 1, environment),
+			hostedOwner: ownsBrowserView({
+				mainWindowId: 1,
+				hostedWebContentsId: 42,
+			}, 1, environment),
+			hostedWebContentsId:
+				getHostedBrowserViewWebContentsId(environment),
+		}, {
+			normalOwner: true,
+			hostedOwner: false,
+			hostedWebContentsId: undefined,
+		});
 	});
 });
