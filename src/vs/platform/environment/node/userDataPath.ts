@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { homedir } from 'os';
-import { INodeProcess } from '../../../base/common/platform.js';
 import { NativeParsedArgs } from '../common/argv.js';
 // This file used to be a pure JS file and was always
 // importing `path` from node.js even though we ship
@@ -46,11 +45,7 @@ function doGetUserDataPath(cliArgs: NativeParsedArgs, productName: string): stri
 
 	// 0. Running out of sources has a fixed productName
 	if (process.env['VSCODE_DEV']) {
-		if ((process as INodeProcess).isEmbeddedApp) {
-			productName = 'agents-oss-dev';
-		} else {
-			productName = `${productName}-dev`;
-		}
+		productName = `${productName.replace(/ Dev$/, '')}-dev`;
 	}
 
 	// 1. Support portable mode

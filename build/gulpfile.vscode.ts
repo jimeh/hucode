@@ -444,11 +444,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			result = result.pipe(patchDarwinInfoPlistVersion(
 				(product as { hucodeVersion?: string }).hucodeVersion,
 				[
-					`${product.nameLong}.app/Contents/Info.plist`,
-					...(embedded ? [
-						`${product.nameLong}.app/Contents/Applications/` +
-						`${embedded.nameLong}.app/Contents/Info.plist`
-					] : [])
+					`${product.nameLong}.app/Contents/Info.plist`
 				]
 			));
 		}
