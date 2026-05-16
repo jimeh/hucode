@@ -409,18 +409,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return webContents;
 	}
 
-	private applyViewVisibility(
-		instance: IHostedWorkbenchInstance,
-		options: {
-			readonly forceRepaint?: boolean;
-			readonly transientOverlayOcclusion?: boolean;
-		} = {}
-	): void {
+	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
 		const visible = this.isViewActuallyVisible(instance);
+		const wasActuallyVisible = instance.attached && visible;
 		this.traceRestore(
 			`visibility requested=${instance.visible} actual=${visible} ` +
-			`attached=${instance.attached} ` +
-			`transientOverlayOcclusion=${!!options.transientOverlayOcclusion}`,
+			`wasActual=${wasActuallyVisible} attached=${instance.attached}`,
 			instance
 		);
 		const view = instance.view;
@@ -439,9 +433,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				view.setVisible(true);
 			} else {
 				view.setVisible(false);
-				if (!options.transientOverlayOcclusion) {
-					this.detachInstanceView(instance);
-				}
+				this.detachInstanceView(instance);
 			}
 
 			this.browserViewMainService.setHostedWebContentsVisible(
@@ -451,7 +443,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		if (visible) {
 			this.bringInstanceToFront(instance);
-			if (options.forceRepaint) {
+			if (
+				!wasActuallyVisible &&
+				instance.instanceId === this.activeInstanceId
+			) {
 				webContents?.invalidate();
 			}
 		}
@@ -1426,10 +1421,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.overlayOccluded = occluded;
 		const activeInstance = this.getActiveInstance();
 		if (activeInstance) {
-			this.applyViewVisibility(activeInstance, {
-				forceRepaint: wasOccluded && !occluded,
-				transientOverlayOcclusion: occluded,
-			});
+			this.applyViewVisibility(activeInstance);
 		}
 	}
 

@@ -792,7 +792,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const alpha = createWorktree('alpha');
 			const bravo = createWorktree('bravo');
-			const { browserViewMainService, controller, window } =
+			const { browserViewMainService, controller, viewFactory, window } =
 				createController();
 
 			await controller.openWorkspace(alpha, 'project-alpha');
@@ -813,9 +813,24 @@ suite('ResidentHostedWorkspacesController', () => {
 					.map(view => view.webContents.id),
 				[2]
 			);
+
+			now = 4000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+
+			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
+				{ id: 1, visible: false },
+				{ id: 2, visible: true },
+			]);
+			assert.deepStrictEqual(
+				(window.win as unknown as TestBrowserWindow).contentView.removed
+					.map(view => view.webContents.id),
+				[2, 1]
+			);
+			assert.strictEqual(viewFactory.views[1].rawWebContents
+				.invalidateCalls.length, 1);
 		});
 
-	test('overlay occlusion hides active workspace without detaching',
+	test('overlay occlusion restores active workspace with repaint',
 		async () => {
 			const alpha = createWorktree('alpha');
 			const {
@@ -837,7 +852,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.deepStrictEqual(view.visibleCalls.slice(-1), [false]);
 			assert.strictEqual(
 				browserWindow.contentView.removed.length,
-				removedBefore
+				removedBefore + 1
 			);
 			assert.deepStrictEqual(
 				browserViewMainService.visibleCalls.at(-1),
