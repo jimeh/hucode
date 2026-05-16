@@ -30,6 +30,15 @@ export interface IBrowserViewMainService extends IBrowserViewService {
 
 	/** Create a new target and return it. */
 	createTarget(url: string, owner: IBrowserViewOwner, browserContextId?: string): Promise<BrowserView>;
+
+	setHostedWebContentsVisible(hostedWebContentsId: number, visible: boolean): void;
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void;
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void;
 }
 
 export class BrowserViewMainService extends Disposable implements IBrowserViewMainService {
@@ -44,6 +53,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	private readonly browserViews = this._register(new DisposableMap<string, BrowserView>());
+	private readonly hostedWebContentsVisibility = new Map<number, boolean>();
 	private _keybindings: { [commandId: string]: string } = Object.create(null);
 
 	private readonly _onDidCreateBrowserView = this._register(new Emitter<IBrowserViewCreatedEvent>());
@@ -193,11 +203,47 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	async layout(id: string, bounds: IBrowserViewBounds): Promise<void> {
-		return this._getBrowserView(id).layout(bounds);
+		const hostVisible = typeof bounds.hostedWebContentsId === 'number'
+			? this.hostedWebContentsVisibility.get(bounds.hostedWebContentsId) ?? true
+			: true;
+		return this._getBrowserView(id).layout(bounds, hostVisible);
 	}
 
 	async setVisible(id: string, visible: boolean): Promise<void> {
 		return this._getBrowserView(id).setVisible(visible);
+	}
+
+	setHostedWebContentsVisible(
+		hostedWebContentsId: number,
+		visible: boolean
+	): void {
+		this.hostedWebContentsVisibility.set(hostedWebContentsId, visible);
+		for (const view of this.browserViews.values()) {
+			view.setHostedWebContentsVisible(hostedWebContentsId, visible);
+		}
+	}
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
+		for (const view of this.browserViews.values()) {
+			view.bringToFrontForHostedWebContents(hostedWebContentsId);
+		}
+	}
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void {
+		this.hostedWebContentsVisibility.delete(hostedWebContentsId);
+
+		const viewIds = Array.from(this.browserViews)
+			.filter(([, view]) =>
+				view.belongsToHostedWebContents(hostedWebContentsId)
+			)
+			.map(([id]) => id);
+
+		for (const id of viewIds) {
+			this.browserViews.deleteAndDispose(id);
+		}
 	}
 
 	async loadURL(id: string, url: string): Promise<void> {
@@ -474,7 +520,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			click: () => webContents.inspectElement(params.x, params.y)
 		}));
 
-		const viewBounds = view.getWebContentsView().getBounds();
+		const viewBounds = view.getWindowRelativeBounds();
 		menu.popup({
 			window: win,
 			x: viewBounds.x + params.x,

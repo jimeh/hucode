@@ -27,7 +27,7 @@ import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { isMacintosh, isLinux } from '../../../../base/common/platform.js';
 import { StandardKeyboardEvent } from '../../../../base/browser/keyboardEvent.js';
-import { BrowserOverlayManager, BrowserOverlayType, IBrowserOverlayInfo } from './overlayManager.js';
+import { BrowserOverlayManager, BrowserOverlayType, IBrowserOverlayInfo } from '../browser/overlayManager.js';
 import { getZoomFactor, onDidChangeZoomLevel } from '../../../../base/browser/browser.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
@@ -40,6 +40,7 @@ import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { SiteInfoWidget } from './siteInfoWidget.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
+import { INativeWorkbenchEnvironmentService } from '../../../services/environment/electron-browser/environmentService.js';
 
 export const CONTEXT_BROWSER_CAN_GO_BACK = new RawContextKey<boolean>('browserCanGoBack', false, localize('browser.canGoBack', "Whether the browser can go back"));
 export const CONTEXT_BROWSER_CAN_GO_FORWARD = new RawContextKey<boolean>('browserCanGoForward', false, localize('browser.canGoForward', "Whether the browser can go forward"));
@@ -377,6 +378,7 @@ export class BrowserEditor extends EditorPane {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@ILayoutService private readonly layoutService: ILayoutService,
+		@INativeWorkbenchEnvironmentService private readonly environmentService: INativeWorkbenchEnvironmentService,
 	) {
 		super(BrowserEditorInput.EDITOR_ID, group, telemetryService, themeService, storageService);
 	}
@@ -1020,6 +1022,9 @@ export class BrowserEditor extends EditorPane {
 
 			void this._model.layout({
 				windowId: this.group.windowId,
+				hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
+					? this.environmentService.hostedWebContentsId
+					: undefined,
 				x: containerRect.left,
 				y: containerRect.top,
 				width: containerRect.width,
