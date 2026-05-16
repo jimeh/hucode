@@ -411,9 +411,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
 		const visible = this.isViewActuallyVisible(instance);
+		const wasActuallyVisible = instance.attached && visible;
 		this.traceRestore(
 			`visibility requested=${instance.visible} actual=${visible} ` +
-			`attached=${instance.attached}`,
+			`wasActual=${wasActuallyVisible} attached=${instance.attached}`,
 			instance
 		);
 		const view = instance.view;
@@ -442,6 +443,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		if (visible) {
 			this.bringInstanceToFront(instance);
+			if (
+				!wasActuallyVisible &&
+				instance.instanceId === this.activeInstanceId
+			) {
+				webContents?.invalidate();
+			}
 		}
 	}
 
@@ -1406,7 +1413,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	setWorkspaceOverlayOcclusion(occluded: boolean): void {
-		if (this.overlayOccluded === occluded) {
+		const wasOccluded = this.overlayOccluded;
+		if (wasOccluded === occluded) {
 			return;
 		}
 

@@ -35,6 +35,7 @@ class TestWebContents extends EventEmitter {
 	readonly pasteCalls: number[] = [];
 	readonly reloadCalls: number[] = [];
 	readonly devToolsCalls: number[] = [];
+	readonly invalidateCalls: number[] = [];
 	loadUrlError: Error | undefined = undefined;
 
 	constructor(
@@ -107,6 +108,10 @@ class TestWebContents extends EventEmitter {
 
 	toggleDevTools(): void {
 		this.devToolsCalls.push(Date.now());
+	}
+
+	invalidate(): void {
+		this.invalidateCalls.push(Date.now());
 	}
 
 	paste(): void {
@@ -787,7 +792,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const alpha = createWorktree('alpha');
 			const bravo = createWorktree('bravo');
-			const { browserViewMainService, controller, window } =
+			const { browserViewMainService, controller, viewFactory, window } =
 				createController();
 
 			await controller.openWorkspace(alpha, 'project-alpha');
@@ -808,6 +813,62 @@ suite('ResidentHostedWorkspacesController', () => {
 					.map(view => view.webContents.id),
 				[2]
 			);
+
+			now = 4000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+
+			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
+				{ id: 1, visible: false },
+				{ id: 2, visible: true },
+			]);
+			assert.deepStrictEqual(
+				(window.win as unknown as TestBrowserWindow).contentView.removed
+					.map(view => view.webContents.id),
+				[2, 1]
+			);
+			assert.strictEqual(viewFactory.views[1].rawWebContents
+				.invalidateCalls.length, 1);
+		});
+
+	test('overlay occlusion restores active workspace with repaint',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+				window,
+			} = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+			const view = viewFactory.views[0];
+			const removedBefore = browserWindow.contentView.removed.length;
+
+			controller.setWorkspaceOverlayOcclusion(true);
+
+			assert.deepStrictEqual(view.visibleCalls.slice(-1), [false]);
+			assert.strictEqual(
+				browserWindow.contentView.removed.length,
+				removedBefore + 1
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.at(-1),
+				{ id: 1, visible: false }
+			);
+			assert.strictEqual(view.rawWebContents.invalidateCalls.length, 0);
+
+			controller.setWorkspaceOverlayOcclusion(false);
+
+			assert.deepStrictEqual(view.visibleCalls.slice(-1), [true]);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.at(-1),
+				{ id: 1, visible: true }
+			);
+			assert.strictEqual(browserViewMainService.frontCalls.at(-1), 1);
+			assert.strictEqual(view.rawWebContents.invalidateCalls.length, 1);
 		});
 
 	test('closing inactive workspace cleans up its BrowserViews and trust',
