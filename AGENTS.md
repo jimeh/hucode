@@ -37,6 +37,10 @@ as the required Hucode instruction set for work in this fork.
   run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
   for the edited files. Do not bypass or ignore hygiene failures; fix them or
   report the blocker.
+- `windowsMainService.getPathsToOpen()` selects the default fallback window
+  before initial-startup untitled workspaces and empty-window backups are
+  appended in `open()`. When changing default startup-window behavior, account
+  for those later restores or the app can open an extra fallback window.
 - `npm run test-build-scripts -- --test-name-pattern <pattern>` does not work:
   the build package test script places the test glob before forwarded args, so
   Node treats the pattern as another test file. For filtered build-script tests,
