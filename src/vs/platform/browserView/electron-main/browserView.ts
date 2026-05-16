@@ -19,6 +19,7 @@ import { IAuxiliaryWindow } from '../../auxiliaryWindow/electron-main/auxiliaryW
 import { SCAN_CODE_STR_TO_EVENT_KEY_CODE } from '../../../base/common/keyCodes.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { logBrowserOpen } from '../common/browserViewTelemetry.js';
+import { toBrowserViewWindowBounds } from '../common/browserViewLayout.js';
 
 enum NewPageLocation {
 	Foreground = 'foreground',
@@ -47,6 +48,7 @@ export class BrowserView extends Disposable {
 	private _currentWindow: ICodeWindow | IAuxiliaryWindow | undefined;
 	private _parentView: Electron.View | undefined;
 	private _hostedWebContentsId: number | undefined;
+	private _lastLayoutBounds: IBrowserViewBounds | undefined;
 	private _hostVisible = true;
 	private _requestedVisible = true;
 	private _isDisposed = false;
@@ -490,6 +492,14 @@ export class BrowserView extends Disposable {
 	 * Update the layout bounds of this view
 	 */
 	layout(bounds: IBrowserViewBounds, hostVisible: boolean = true): void {
+		this._lastLayoutBounds = bounds;
+		this._layout(bounds, hostVisible);
+	}
+
+	private _layout(
+		bounds: IBrowserViewBounds,
+		hostVisible: boolean = true
+	): void {
 		const newWindow = this._windowById(bounds.windowId);
 		if (!newWindow?.win) {
 			return;
@@ -514,14 +524,22 @@ export class BrowserView extends Disposable {
 			: undefined;
 
 		this._view.setBorderRadius(Math.round(bounds.cornerRadius * bounds.zoomFactor));
-		this._view.setBounds({
-			x: Math.round(bounds.x * bounds.zoomFactor) + (hostOffset?.x ?? 0),
-			y: Math.round(bounds.y * bounds.zoomFactor) + (hostOffset?.y ?? 0),
-			width: Math.round(bounds.width * bounds.zoomFactor),
-			height: Math.round(bounds.height * bounds.zoomFactor)
-		});
+		this._view.setBounds(toBrowserViewWindowBounds(bounds, hostOffset));
 		this._applyVisibility();
 		this.bringToFront();
+	}
+
+	private _relayoutForHostedWebContents(
+		hostedWebContentsId: number
+	): boolean {
+		if (
+			this._lastLayoutBounds?.hostedWebContentsId !== hostedWebContentsId
+		) {
+			return false;
+		}
+
+		this._layout(this._lastLayoutBounds, this._hostVisible);
+		return true;
 	}
 
 	private _resolveHostView(
@@ -629,7 +647,11 @@ export class BrowserView extends Disposable {
 		}
 
 		this._hostVisible = visible;
-		this._applyVisibility();
+		const didRelayout = visible
+			&& this._relayoutForHostedWebContents(hostedWebContentsId);
+		if (!didRelayout) {
+			this._applyVisibility();
+		}
 		if (visible) {
 			this.bringToFront();
 		}
@@ -640,6 +662,7 @@ export class BrowserView extends Disposable {
 			return;
 		}
 
+		this._relayoutForHostedWebContents(hostedWebContentsId);
 		this.bringToFront();
 	}
 

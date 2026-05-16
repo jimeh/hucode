@@ -314,6 +314,10 @@ VS Code code that Hucode customizes.
   `WebContentsView`. Use the hosted view only to calculate offsets and sync
   visibility/z-order from the Omni shell; nested parenting can leave browser
   contents visible but not hit-testable.
+- Browser editor layout can arrive while a resident hosted workbench is hidden
+  and detached from the window `contentView`. Re-resolve the hosted
+  `WebContentsView` bounds when showing or raising its browser views so stale
+  window-relative fallback coordinates do not overlay the Omni sidebar.
 
 ## Command, Menu, And Clipboard Routing
 
