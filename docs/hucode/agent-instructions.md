@@ -47,6 +47,25 @@ VS Code code that Hucode customizes.
   Keep comments focused on behavior and contracts so automated docstring review
   checks do not flag avoidable omissions.
 
+## Upstream Patch Boundaries And Tests
+
+- Keep upstream VS Code files as thin integration points for Hucode behavior.
+  When extracting Hucode behavior out of an upstream-owned file, move the
+  decision-making and error/result mapping into Hucode-owned helpers, services,
+  or clearly named `hucode*` companions, leaving the upstream file with imports,
+  service injection, feature checks, and delegation calls only where practical.
+- Prefer `src/vs/hucode/` for Hucode-owned logic when layer rules allow it. If
+  VS Code import restrictions block a `src/vs/hucode/` dependency, place a
+  clearly named `hucode*` companion beside the upstream integration point and
+  keep the upstream patch small.
+- Preserve or improve focused test coverage when moving behavior. Put tests
+  near the code they exercise: `src/vs/hucode/test/...` for Hucode-owned modules
+  under `src/vs/hucode/`, and the matching subsystem's `test/...` tree for
+  layer-compatible `hucode*` companion files.
+- When splitting an upstream patch, keep high-level integration tests in the
+  upstream subsystem focused on verifier/adapter selection and routing, and move
+  detailed Hucode behavior tests with the extracted Hucode helper.
+
 ## CI Workflow
 
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
