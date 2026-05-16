@@ -44,6 +44,9 @@ import { AllowedExtensionsService } from '../../../../../platform/extensionManag
 import { IStringDictionary } from '../../../../../base/common/collections.js';
 import { ChatEntitlementContext, IChatEntitlementService } from '../../../chat/common/chatEntitlementService.js';
 import { Lazy } from '../../../../../base/common/lazy.js';
+import {
+	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+} from '../../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 function createStorageService(instantiationService: TestInstantiationService, disposableStore: DisposableStore): IStorageService {
 	let service = instantiationService.get(IStorageService);
@@ -575,6 +578,20 @@ suite('ExtensionEnablementService Test', () => {
 		installed.push(extension);
 
 		instantiationService.stub(IWorkbenchEnvironmentService, { disableExtensions: ['pub.a'] });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.ok(!testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.DisabledByEnvironment);
+	});
+
+	test('test hucode omni policy disables user extension without themes', async () => {
+		const extension = aLocalExtension('pub.a');
+		installed.push(extension);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, {
+			hucodeExtensionEnablementPolicy:
+				HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY
+		});
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
 
 		assert.ok(!testObject.isEnabled(extension));
