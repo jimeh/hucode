@@ -140,6 +140,7 @@ suite('HucodeOmniOpen', () => {
 		);
 		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+		assert.deepStrictEqual(projectManager.setLastActiveWorktreeCalls, []);
 	});
 
 	test('opens known folders inside the Omni hosted workspace', async () => {
@@ -269,5 +270,6 @@ suite('HucodeOmniOpen', () => {
 		);
 		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+		assert.deepStrictEqual(projectManager.setLastActiveWorktreeCalls, []);
 	});
 });

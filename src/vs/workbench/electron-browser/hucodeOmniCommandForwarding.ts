@@ -5,7 +5,7 @@
 
 import { addDisposableListener, EventHelper, getActiveElement } from '../../base/browser/dom.js';
 import { URI } from '../../base/common/uri.js';
-import { IDisposable, DisposableStore } from '../../base/common/lifecycle.js';
+import { DisposableStore, IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { ipcRenderer } from '../../base/parts/sandbox/electron-browser/globals.js';
@@ -69,21 +69,26 @@ export class HucodeOmniCommandForwarding {
 		const disposables = new DisposableStore();
 		disposables.add(this.registerClipboardListeners(handlers.document));
 
-		ipcRenderer.on(
-			'vscode:runAction',
-			(event: unknown, ...argsRaw: unknown[]) => {
-				const request = argsRaw[0] as INativeRunActionInWindowRequest;
-				void this.handleRunActionInWindow(request, handlers);
-			}
-		);
+		const runActionHandler = (_event: unknown, ...argsRaw: unknown[]) => {
+			const request = argsRaw[0] as INativeRunActionInWindowRequest;
+			void this.handleRunActionInWindow(request, handlers);
+		};
+		ipcRenderer.on('vscode:runAction', runActionHandler);
+		disposables.add(toDisposable(() =>
+			ipcRenderer.removeListener('vscode:runAction', runActionHandler)
+		));
 
-		ipcRenderer.on(
-			'vscode:runKeybinding',
-			(event: unknown, ...argsRaw: unknown[]) => {
-				const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
-				void this.handleRunKeybindingInWindow(request, handlers);
-			}
-		);
+		const runKeybindingHandler = (_event: unknown, ...argsRaw: unknown[]) => {
+			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
+			void this.handleRunKeybindingInWindow(request, handlers);
+		};
+		ipcRenderer.on('vscode:runKeybinding', runKeybindingHandler);
+		disposables.add(toDisposable(() =>
+			ipcRenderer.removeListener(
+				'vscode:runKeybinding',
+				runKeybindingHandler
+			)
+		));
 
 		return disposables;
 	}

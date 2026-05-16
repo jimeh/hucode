@@ -7,6 +7,7 @@ import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Event } from '../../../base/common/event.js';
 import { URI } from '../../../base/common/uri.js';
+import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
@@ -200,7 +201,60 @@ suite('HucodeOmniCommandForwarding', () => {
 			]
 		}]);
 	});
+
+	test('disposes registered window IPC listeners', () => {
+		const fixture = createFixture({ isOmniWindow: false });
+		const originalOn = ipcRenderer.on;
+		const originalRemoveListener = ipcRenderer.removeListener;
+		const registrations: {
+			channel: string;
+			listener: IpcRendererListener;
+		}[] = [];
+		const removals: {
+			channel: string;
+			listener: IpcRendererListener;
+		}[] = [];
+		const ipcRendererSpy = ipcRenderer as unknown as {
+			on(channel: string, listener: IpcRendererListener): typeof ipcRenderer;
+			removeListener(
+				channel: string,
+				listener: IpcRendererListener
+			): typeof ipcRenderer;
+		};
+		let registeredListener: { dispose(): void } | undefined;
+
+		try {
+			ipcRendererSpy.on = (channel, listener) => {
+				registrations.push({ channel, listener });
+				return originalOn.call(ipcRenderer, channel, listener);
+			};
+			ipcRendererSpy.removeListener = (channel, listener) => {
+				removals.push({ channel, listener });
+				return originalRemoveListener.call(ipcRenderer, channel, listener);
+			};
+
+			registeredListener = fixture.forwarding.registerWindowListeners(
+				fixture.handlers
+			);
+
+			assert.deepStrictEqual(
+				registrations.map(registration => registration.channel),
+				['vscode:runAction', 'vscode:runKeybinding']
+			);
+
+			registeredListener.dispose();
+			registeredListener = undefined;
+
+			assert.deepStrictEqual(removals, registrations);
+		} finally {
+			registeredListener?.dispose();
+			ipcRendererSpy.on = originalOn;
+			ipcRendererSpy.removeListener = originalRemoveListener;
+		}
+	});
 });
+
+type IpcRendererListener = Parameters<typeof ipcRenderer.on>[1];
 
 function createFixture(options: {
 	readonly isOmniWindow: boolean;
