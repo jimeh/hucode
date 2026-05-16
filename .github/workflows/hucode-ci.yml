@@ -241,6 +241,8 @@ jobs:
             --run \
             src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
             --run \
+            src/vs/hucode/test/electron-main/omniOpenPlan.test.ts \
+            --run \
             src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts \
             --run \
             src/vs/hucode/test/electron-main/omniStartup.test.ts \

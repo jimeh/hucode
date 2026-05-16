@@ -40,8 +40,18 @@ import { IStateService } from '../../state/node/state.js';
 import { IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfiguration, IOpenEmptyWindowOptions, IPath, IPathsToWaitFor, isFileToOpen, isFolderToOpen, isWorkspaceToOpen, IWindowOpenable, IWindowSettings } from '../../window/common/window.js';
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
-import { isHucodeOmniWindow, tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
-import { getHucodeDefaultStartupWindowPath } from '../../../hucode/electron-main/omniStartup.js';
+import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
+import {
+	createHucodeOmniWindowPath,
+	distinctHucodeOmniWindowPaths,
+	filterHucodePreserveRestorePaths,
+	getHucodeDefaultStartupWindowPath,
+	getHucodeOmniBrowserWindowOptions,
+	getHucodeOmniFileOpenPlan,
+	getHucodeOmniPathFromWindowState,
+	IHucodeOmniWindowPath,
+	isHucodeOmniPathToOpen
+} from '../../../hucode/electron-main/omniOpenPlan.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
@@ -188,10 +198,6 @@ function isWorkspacePathToOpen(path: IPathToOpen | undefined): path is IWorkspac
 
 function isSingleFolderWorkspacePathToOpen(path: IPathToOpen | undefined): path is ISingleFolderWorkspacePathToOpen {
 	return isSingleFolderWorkspaceIdentifier(path?.workspace);
-}
-
-function isOmniPathToOpen(path: IPathToOpen | undefined): boolean {
-	return !!path?.isOmniWindow;
 }
 
 //#endregion
@@ -376,7 +382,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const untitledWorkspacesToRestore: IWorkspacePathToOpen[] = [];
 
 		const emptyWindowsWithBackupsToRestore: IEmptyWindowBackupInfo[] = [];
-		const omniWindowsToRestore: IPathToOpen[] = [];
+		const omniWindowsToRestore: IHucodeOmniWindowPath[] = [];
 
 		let filesToOpen: IFilesToOpen | undefined;
 		let maybeOpenEmptyWindow = false;
@@ -404,7 +410,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 					filesToOpen = { filesToOpenOrCreate: [], filesToDiff: [], filesToMerge: [], remoteAuthority: path.remoteAuthority };
 				}
 				filesToOpen.filesToOpenOrCreate.push(path);
-			} else if (isOmniPathToOpen(path)) {
+			} else if (isHucodeOmniPathToOpen(path)) {
 				omniWindowsToRestore.push(path);
 			} else if (path.backupPath) {
 				emptyWindowsWithBackupsToRestore.push({ backupFolder: basename(path.backupPath), remoteAuthority: path.remoteAuthority });
@@ -570,7 +576,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		workspacesToOpen: IWorkspacePathToOpen[],
 		foldersToOpen: ISingleFolderWorkspacePathToOpen[],
 		emptyToRestore: IEmptyWindowBackupInfo[],
-		omniWindowsToRestore: IPathToOpen[],
+		omniWindowsToRestore: IHucodeOmniWindowPath[],
 		maybeOpenEmptyWindow: boolean,
 		filesToOpen: IFilesToOpen | undefined,
 		foldersToAdd: ISingleFolderWorkspacePathToOpen[],
@@ -615,25 +621,27 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			// Find suitable window or folder path to open files in
 			const fileToCheck: IPath<IEditorOptions> | undefined = filesToOpen.filesToOpenOrCreate[0] || filesToOpen.filesToDiff[0] || filesToOpen.filesToMerge[3] /* [3] is the resulting merge file */;
 
-			const hucodeOmniWindow = openConfig.forceNewWindow
-				? undefined
-				: await this.instantiationService.invokeFunction(accessor =>
-					tryOpenFilesInHucodeOmniWindow(
-						accessor,
-						this.getWindows(),
-						hucodeFilesToOpen,
-						openConfig.userEnv?.['TERM_PROGRAM']
+			const hucodeOmniFileOpenPlan = await getHucodeOmniFileOpenPlan({
+				forceNewWindow: openConfig.forceNewWindow,
+				windows: this.getWindows(),
+				openInOmniWindow: () =>
+					this.instantiationService.invokeFunction(accessor =>
+						tryOpenFilesInHucodeOmniWindow(
+							accessor,
+							this.getWindows(),
+							hucodeFilesToOpen,
+							openConfig.userEnv?.['TERM_PROGRAM']
+						)
 					)
-				);
+			});
 
-			if (hucodeOmniWindow) {
-				addUsedWindow(hucodeOmniWindow, true);
+			if (hucodeOmniFileOpenPlan.omniWindow) {
+				addUsedWindow(hucodeOmniFileOpenPlan.omniWindow, true);
 			} else {
 
 				// only look at the windows with correct authority
-				const windows = this.getWindows().filter(window =>
+				const windows = hucodeOmniFileOpenPlan.fallbackWindows.filter(window =>
 					filesToOpen &&
-					!isHucodeOmniWindow(window) &&
 					isEqualAuthority(window.remoteAuthority, filesToOpen.remoteAuthority)
 				);
 
@@ -766,12 +774,8 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			}
 		}
 
-		const allOmniWindowsToRestore = distinct(omniWindowsToRestore, omniWindow =>
-			JSON.stringify({
-				active: omniWindow.omniActiveWorktreePath,
-				resident: omniWindow.omniResidentWorkspaces ?? [],
-			})
-		);
+		const allOmniWindowsToRestore =
+			distinctHucodeOmniWindowPaths(omniWindowsToRestore);
 		if (allOmniWindowsToRestore.length > 0) {
 			for (const omniWindowToRestore of allOmniWindowsToRestore) {
 				addUsedWindow(await this.doOpenOmni(openConfig, true, omniWindowToRestore));
@@ -868,22 +872,17 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	private doOpenOmni(
 		openConfig: IOpenConfiguration,
 		forceNewWindow: boolean,
-		omniWindow: IPathToOpen
+		omniWindow: IHucodeOmniWindowPath
 	): Promise<ICodeWindow> {
 		this.logService.trace('windowsManager#doOpenOmni', omniWindow);
 
-		return this.openInBrowserWindow({
-			userEnv: openConfig.userEnv,
-			cli: openConfig.cli,
-			initialStartup: openConfig.initialStartup,
-			forceNewWindow,
-			forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
-			forceProfile: openConfig.forceProfile,
-			forceTempProfile: openConfig.forceTempProfile,
-			isOmniWindow: true,
-			omniActiveWorktreePath: omniWindow.omniActiveWorktreePath,
-			omniResidentWorkspaces: omniWindow.omniResidentWorkspaces,
-		});
+		return this.openInBrowserWindow(
+			getHucodeOmniBrowserWindowOptions(
+				openConfig,
+				omniWindow,
+				forceNewWindow
+			)
+		);
 	}
 
 	private doOpenFolderOrWorkspace(openConfig: IOpenConfiguration, folderOrWorkspace: IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen, forceNewWindow: boolean, filesToOpen: IFilesToOpen | undefined, windowToUse?: ICodeWindow): Promise<ICodeWindow> {
@@ -923,7 +922,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		// Check for force empty
 		else if (openConfig.forceOmniWindow) {
-			pathsToOpen = [{ isOmniWindow: true }];
+			pathsToOpen = [createHucodeOmniWindowPath()];
 		}
 
 		// Check for force empty
@@ -993,11 +992,10 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// focus treatment.
 		if (openConfig.initialStartup && !isRestoringPaths && this.configurationService.getValue<IWindowSettings | undefined>('window')?.restoreWindows === 'preserve') {
 			const lastSessionPaths = await this.doGetPathsFromLastSession();
-			pathsToOpen.unshift(...lastSessionPaths.filter(path =>
-				isWorkspacePathToOpen(path) ||
-				isSingleFolderWorkspacePathToOpen(path) ||
-				path.backupPath ||
-				isOmniPathToOpen(path)
+			pathsToOpen.unshift(...filterHucodePreserveRestorePaths(
+				lastSessionPaths,
+				isWorkspacePathToOpen,
+				isSingleFolderWorkspacePathToOpen
 			));
 		}
 
@@ -1139,14 +1137,10 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				}
 
 				const pathsToOpen = await Promise.all(lastSessionWindows.map(async lastSessionWindow => {
-					if (lastSessionWindow.windowKind === 'omni') {
-						return {
-							isOmniWindow: true,
-							omniActiveWorktreePath:
-								lastSessionWindow.omniActiveWorktreePath,
-							omniResidentWorkspaces:
-								lastSessionWindow.omniResidentWorkspaces,
-						} satisfies IPathToOpen;
+					const hucodeOmniPath =
+						getHucodeOmniPathFromWindowState(lastSessionWindow);
+					if (hucodeOmniPath) {
+						return hucodeOmniPath;
 					}
 
 					// Workspaces
