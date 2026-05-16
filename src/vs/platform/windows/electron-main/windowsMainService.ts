@@ -41,6 +41,7 @@ import { IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfigur
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
 import { isHucodeOmniWindow, tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
+import { getHucodeDefaultStartupWindowPath } from '../../../hucode/electron-main/omniStartup.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
@@ -944,7 +945,17 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		else {
 			pathsToOpen = await this.doGetPathsFromLastSession();
 			if (pathsToOpen.length === 0) {
-				pathsToOpen.push(EMPTY_WINDOW); // add an empty window if we did not have windows to restore
+				const hasRestorableWindows =
+					this.workspacesManagementMainService
+						.getUntitledWorkspaces().length > 0 ||
+					this.backupMainService.getEmptyWindowBackups().length > 0;
+				pathsToOpen.push(
+					getHucodeDefaultStartupWindowPath({
+						initialStartup: openConfig.initialStartup,
+						hasRestorableWindows
+					})
+					?? EMPTY_WINDOW
+				);
 			}
 
 			isRestoringPaths = true;
