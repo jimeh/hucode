@@ -46,16 +46,36 @@ has the clean baseline and Hucode series branch available.
 
 ## Create The Replay Branch
 
-Only do this from a clean worktree. The preferred compaction setup is:
+Only do this from a clean worktree. The replay branch should normally be a
+fresh compaction of the final `series-<old-version>` tree, not a preservation of
+the old development history. Prefer compacting unless every existing commit
+already reads like a curated replay commit from a previous upgrade and there
+are no later fixes, feature commits, version bumps, debugging commits, or other
+small follow-up changes mixed in.
+
+The preferred compaction setup is:
 
 ```sh
 git switch --create series-<old-version>-replay series-<old-version>
 git reset --soft upstream-<old-version>
+git reset
 ```
 
-This leaves the final Hucode tree from `series-<old-version>` staged against
-the clean upstream baseline. Split that diff into durable topic commits. Use
-path-based staging and inspect every commit. Good replay boundaries include:
+The soft reset moves the complete final Hucode tree from
+`series-<old-version>` to the index against the clean upstream baseline. The
+plain `git reset` immediately unstages that full diff so the replay can be
+built intentionally instead of accidentally committing one giant staged change.
+
+Split that diff into durable topic commits based on the final state only. Use
+path-based staging as the starting point, but split individual files with patch
+or hunk staging when one file contains changes for more than one replay
+boundary. Inspect every commit and pay attention to which area owns each change
+so unrelated changes do not get tied together. Shared integration files should
+not become catch-all commits; stage their hunks into the commit whose behavior
+they belong to. A commit should usually represent one coherent reason to carry a
+patch across the next VS Code baseline.
+
+Good replay boundaries include:
 
 - Hucode repo docs and strategy.
 - Product overlay, release scripts, generated source assets.
@@ -67,9 +87,17 @@ path-based staging and inspect every commit. Good replay boundaries include:
 - Command forwarding and extension filtering.
 - Small release/about/version fixes.
 
+Files that wire multiple systems together often need hunk-level staging. Treat
+shared files such as `platform.ts`, `native.ts`, `windowActions.ts`,
+`desktop.contribution.ts`, and service registration files as integration points,
+not as automatic single-topic commits.
+
 Prefer squashing intermediate debugging, file-move churn, generated-asset churn,
-and conflict-resolution fallout. Hucode feature development history remains on
-the previous `series-<old-version>` branch.
+historical Hucode version bumps, refactors caused by later tests, and
+conflict-resolution fallout. Hucode feature development history remains on the
+previous `series-<old-version>` branch. The replay branch exists to make the
+next cherry-pick easy to reason about and as conflict-free as possible, so favor
+clear final-state topic commits over chronological fidelity.
 
 Verify replay equivalence before upgrading:
 
@@ -132,10 +160,19 @@ upstream APIs over preserving old compatibility paths. When resolving:
 - Keep Hucode-local code under established Hucode locations when possible.
 - Preserve upstream lifecycle and safety fixes unless there is a clear Hucode
   reason to override them.
+- Preserve upstream signature and API changes, then adapt Hucode behavior to
+  them unless the Hucode behavior explicitly requires a different contract.
+- When upstream renames or replaces a workflow, disable the current upstream
+  workflow file instead of resurrecting an old deleted workflow name.
 - If a replay conflict reveals stale Hucode assumptions, fix the replayed patch
   in the new series and consider later backporting or documenting the lesson.
 - Do not use `--no-verify` for normal conflict commits. If a hook fails, fix
   the dependency/tooling issue first, usually with `npm install`.
+
+If compile or tests reveal small replay-adaptation fixes after cherry-picking,
+commit them as `fixup! <topic>` against the relevant replay commit. Before final
+validation, run an autosquash rebase so the upgraded series does not retain
+generic "fix conflict" or "fix compile" commits.
 
 Useful conflict checks:
 
@@ -220,3 +257,6 @@ Report:
 - Conflict areas and important decisions.
 - Validation commands and outcomes.
 - Any remaining dirty generated mixin state that was deliberately left alone.
+  `hucode:prepare`, `hucode:compile`, and launch workflows can dirty root
+  `product.json` and `resources/darwin/*`; distinguish that generated runtime
+  state from source edits and do not push it as part of the upgraded series.
