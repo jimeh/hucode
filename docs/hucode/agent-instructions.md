@@ -40,6 +40,13 @@ VS Code code that Hucode customizes.
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
 
+## Code Documentation
+
+- Add concise JSDoc for new Hucode-owned exported functions, interfaces, enums,
+  and classes, especially when extracting helpers out of upstream-heavy files.
+  Keep comments focused on behavior and contracts so automated docstring review
+  checks do not flag avoidable omissions.
+
 ## CI Workflow
 
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
@@ -314,6 +321,10 @@ VS Code code that Hucode customizes.
   `WebContentsView`. Use the hosted view only to calculate offsets and sync
   visibility/z-order from the Omni shell; nested parenting can leave browser
   contents visible but not hit-testable.
+- Browser editor layout can arrive while a resident hosted workbench is hidden
+  and detached from the window `contentView`. Re-resolve the hosted
+  `WebContentsView` bounds when showing or raising its browser views so stale
+  window-relative fallback coordinates do not overlay the Omni sidebar.
 
 ## Command, Menu, And Clipboard Routing
 

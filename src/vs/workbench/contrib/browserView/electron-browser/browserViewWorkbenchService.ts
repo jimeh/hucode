@@ -25,6 +25,7 @@ import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
 import { ChatConfiguration } from '../../chat/common/constants.js';
 import { AgentHostEnabledSettingId } from '../../../../platform/agentHost/common/agentService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { getBrowserViewOwner, ownsBrowserView } from '../common/browserViewOwnership.js';
 
 /**
  * When enabled, integrated browser tools are exposed as client-provided tools
@@ -115,7 +116,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 
 		// Listen for new browser views
 		this._register(this._browserViewService.onDidCreateBrowserView(e => {
-			if (!this._ownsBrowserView(e.info.owner)) {
+			if (!ownsBrowserView(
+				e.info.owner,
+				this._mainWindowId,
+				this.environmentService
+			)) {
 				return; // Not for this window
 			}
 
@@ -175,25 +180,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	}
 
 	private _getDefaultOwner(): IBrowserViewOwner {
-		return {
-			mainWindowId: this._mainWindowId,
-			hostedWebContentsId: this.environmentService.isHostedOmniWorkspace
-				? this.environmentService.hostedWebContentsId
-				: undefined
-		};
-	}
-
-	private _ownsBrowserView(owner: IBrowserViewOwner): boolean {
-		if (owner.mainWindowId !== this._mainWindowId) {
-			return false;
-		}
-
-		if (this.environmentService.isHostedOmniWorkspace) {
-			return typeof this.environmentService.hostedWebContentsId === 'number'
-				&& owner.hostedWebContentsId === this.environmentService.hostedWebContentsId;
-		}
-
-		return owner.hostedWebContentsId === undefined;
+		return getBrowserViewOwner(this._mainWindowId, this.environmentService);
 	}
 
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {
@@ -217,7 +204,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	private async _initializeExistingViews(): Promise<void> {
 		const views = await this._browserViewService.getBrowserViews(this._mainWindowId);
 		for (const info of views) {
-			if (!this._ownsBrowserView(info.owner)) {
+			if (!ownsBrowserView(
+				info.owner,
+				this._mainWindowId,
+				this.environmentService
+			)) {
 				continue;
 			}
 			this._createModel(info.id, info.owner, info.state);
