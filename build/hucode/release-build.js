@@ -761,7 +761,8 @@ async function prepareDarwinSigning() {
 		Buffer.from(
 			requireEnv('MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64'),
 			'base64'
-		)
+		),
+		{ mode: 0o600 }
 	);
 	await fs.writeFile(
 		notaryKeyPath,

@@ -148,10 +148,14 @@ if (import.meta.main) {
 		const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 		if (tempDir) {
 			const keychain = path.join(tempDir, 'buildagent.keychain');
-			const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
-			const match = /(\d+) valid identities found/.exec(identities);
-			const count = match?.[1] ?? 'unknown';
-			console.error(`Available codesigning identities: ${count}`);
+			try {
+				const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
+				const match = /(\d+) valid identities found/.exec(identities);
+				const count = match?.[1] ?? 'unknown';
+				console.error(`Available codesigning identities: ${count}`);
+			} catch (probeError) {
+				console.error('Failed to inspect codesigning identities:', probeError);
+			}
 		}
 		process.exit(1);
 	});
