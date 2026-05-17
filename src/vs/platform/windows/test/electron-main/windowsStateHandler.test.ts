@@ -51,17 +51,6 @@ suite('Windows State Storing', () => {
 		assert.strictEqual(expected.backupPath, actual.backupPath, message);
 		assertEqualURI(expected.folderUri, actual.folderUri, message);
 		assert.strictEqual(expected.remoteAuthority, actual.remoteAuthority, message);
-		assert.strictEqual(expected.windowKind, actual.windowKind, message);
-		assert.strictEqual(
-			expected.omniActiveWorktreePath,
-			actual.omniActiveWorktreePath,
-			message
-		);
-		assert.deepStrictEqual(
-			expected.omniResidentWorkspaces,
-			actual.omniResidentWorkspaces,
-			message
-		);
 		assertEqualWorkspace(expected.workspace, actual.workspace, message);
 		assert.deepStrictEqual(expected.uiState, actual.uiState, message);
 	}
@@ -126,22 +115,6 @@ suite('Windows State Storing', () => {
 			openedWindows: []
 		};
 		assertRestoring(windowState, 'lastPluginDevelopmentHostWindow');
-
-		windowState = {
-			openedWindows: [{
-				backupPath: testBackupPath1,
-				uiState: getUIState(),
-				windowKind: 'omni',
-				omniActiveWorktreePath: testFolderURI.fsPath,
-				omniResidentWorkspaces: [{
-					projectId: 'project-1',
-					worktreePath: testFolderURI.fsPath,
-					state: 'active',
-					lastActiveAt: 123,
-				}]
-			}]
-		};
-		assertRestoring(windowState, 'omni window');
 	});
 
 	test('open 1_32', () => {

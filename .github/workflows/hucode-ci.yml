@@ -218,6 +218,32 @@ jobs:
       - name: Run Node unit tests
         run: npm run test-node
 
+      - name: Run Hucode Node and common unit tests
+        run: |
+          npm run test-node -- \
+            --run \
+            src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts \
+            --run \
+            src/vs/hucode/test/common/projectSwitcher/projectSwitcherTreeModel.test.ts \
+            --run \
+            src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts \
+            --run \
+            src/vs/platform/browserView/test/common/browserViewLayout.test.ts \
+            --run \
+            src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
+            --run \
+            src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
+            --run \
+            src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts \
+            --run \
+            src/vs/platform/window/test/common/hucodeOmniCommandRouting.test.ts \
+            --run \
+            src/vs/platform/window/test/common/hucodeRendererReplyTarget.test.ts \
+            --run \
+            src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts \
+            --run \
+            src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts
+
       - name: Prepare Electron sandbox
         run: |
           npm run electron
@@ -229,6 +255,8 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
+            src/vs/hucode/test/browser/omniLayoutModel.test.ts \
+            --run \
             src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
             --run \
             src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
@@ -237,7 +265,9 @@ jobs:
             --run \
             src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
             --run \
-            src/vs/platform/windows/test/electron-main/windowsStateHandler.test.ts \
+            src/vs/platform/windows/test/electron-main/hucodeWindowsStateHandler.test.ts \
+            --run \
+            src/vs/platform/windows/test/electron-main/windowsFinder.test.ts \
             --run \
             src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
             --run \
@@ -246,6 +276,8 @@ jobs:
             src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts \
             --run \
             src/vs/hucode/test/electron-main/omniStartup.test.ts \
+            --run \
+            src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts \
             --run \
             src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
             --run \
