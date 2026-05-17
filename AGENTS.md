@@ -32,6 +32,11 @@ as the required Hucode instruction set for work in this fork.
 
 ## Repository hygiene notes
 
+- For code changes, inspect nearby existing tests before considering the work
+  complete. Add or extend focused tests for new behavior and regressions when
+  an applicable test suite exists. If automated coverage is not practical, say
+  why and describe the manual verification performed. Hygiene/precommit checks
+  are not a substitute for behavior coverage.
 - After editing files, run the same hygiene path as the pre-commit hook before
   considering the work complete. If changes are already staged for a commit,
   run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`

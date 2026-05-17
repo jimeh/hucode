@@ -257,10 +257,25 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private emitState(): void {
+		this.ensureProjectsSidebarVisibleWithoutLoadedWorkbench();
 		this.updateWindowRestoreState();
 		const state = this.getState();
 		this._onDidChangeState.fire(state);
 		this.onStateChange(state);
+	}
+
+	private hasLoadedWorkbench(): boolean {
+		return Array.from(this.instancesById.values()).some(instance =>
+			!instance.disposed &&
+			instance.state !== 'crashed' &&
+			instance.state !== 'unloaded'
+		);
+	}
+
+	private ensureProjectsSidebarVisibleWithoutLoadedWorkbench(): void {
+		if (!this.hasLoadedWorkbench()) {
+			this.projectsSidebarVisible = true;
+		}
 	}
 
 	private waitForInstanceReady(
@@ -1327,6 +1342,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	setProjectsSidebarVisible(visible: boolean): void {
+		if (!visible && !this.hasLoadedWorkbench()) {
+			visible = true;
+		}
+
 		if (this.projectsSidebarVisible === visible) {
 			return;
 		}

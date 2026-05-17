@@ -71,6 +71,8 @@ import {
 	IProjectManagerService,
 	ProjectRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
+import { OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID } from
+	'../../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
@@ -1112,7 +1114,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			}
 
 			await this.commandService.executeCommand(
-				'workbench.action.omniWindow.openSelectedInOmniWindow'
+				OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID
 			);
 			return;
 		}

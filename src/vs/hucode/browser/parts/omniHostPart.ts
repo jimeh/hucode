@@ -20,6 +20,8 @@ import { IThemeService } from
 	'../../../platform/theme/common/themeService.js';
 import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
+import { IContextKey, IContextKeyService } from
+	'../../../platform/contextkey/common/contextkey.js';
 import { focusWorkspaceBestEffort } from
 	'../../common/omniWindowFocus.js';
 import {
@@ -27,6 +29,7 @@ import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
 
 /**
  * Dedicated Omni shell host surface.
@@ -62,6 +65,7 @@ export class OmniHostPart extends Part {
 	private overlayOccluded = false;
 	private overlayOcclusionToken = 0;
 	private activeInstanceId: string | undefined;
+	private readonly hasLoadedWorkbenchContext: IContextKey<boolean>;
 	private readonly overlayManager =
 		this._register(new BrowserOverlayManager(mainWindow));
 
@@ -69,6 +73,7 @@ export class OmniHostPart extends Part {
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
+		@IContextKeyService contextKeyService: IContextKeyService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
 	) {
@@ -81,6 +86,8 @@ export class OmniHostPart extends Part {
 		);
 
 		this.windowId = mainWindow.vscodeWindowId;
+		this.hasLoadedWorkbenchContext =
+			HasLoadedWorkbenchContext.bindTo(contextKeyService);
 
 		this._register(this.shellService.onDidChangeWindowState(change => {
 			if (change.windowId !== this.windowId) {
@@ -126,7 +133,7 @@ export class OmniHostPart extends Part {
 			$('.hucode-omni-host-empty', undefined,
 				localize(
 					'omniEmptyState',
-					'Select a worktree in Projects to load it into this window.'
+					'Select a worktree in the Projects sidebar to load it into this window'
 				))
 		);
 
@@ -163,9 +170,20 @@ export class OmniHostPart extends Part {
 			return;
 		}
 
+		const hasLoadedWorkbench = this.hasLoadedWorkbench();
+		this.hasLoadedWorkbenchContext.set(hasLoadedWorkbench);
+
+		if (
+			!hasLoadedWorkbench
+			&& !this.layoutService.isVisible(Parts.SIDEBAR_PART)
+		) {
+			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
+		}
+
 		const activeInstance = this.state.activeInstanceId
 			? this.state.instances.find(instance =>
 				instance.instanceId === this.state.activeInstanceId
+				&& this.isLoadedWorkbench(instance)
 			)
 			: undefined;
 		const activeInstanceId = activeInstance?.instanceId;
@@ -177,12 +195,14 @@ export class OmniHostPart extends Part {
 		}
 
 		if (activeInstance) {
+			this.setHostEmpty(!hasLoadedWorkbench);
 			this.emptyState.classList.add('hidden');
 			this.surface.classList.remove('hidden');
 			this.updateScreenshotRefresh();
 			return;
 		}
 
+		this.setHostEmpty(!hasLoadedWorkbench);
 		this.emptyState.classList.remove('hidden');
 		this.surface.classList.add('hidden');
 		this.stopScreenshotRefresh();
@@ -248,6 +268,23 @@ export class OmniHostPart extends Part {
 		this.screenshot.style.top = '0';
 		this.screenshot.style.width = `${width}px`;
 		this.screenshot.style.height = `${height}px`;
+	}
+
+	private setHostEmpty(empty: boolean): void {
+		this.layoutService.getContainer(mainWindow)
+			?.classList.toggle('hucode-omni-host-empty', empty);
+	}
+
+	private hasLoadedWorkbench(): boolean {
+		return this.state.instances.some(instance =>
+			this.isLoadedWorkbench(instance)
+		);
+	}
+
+	private isLoadedWorkbench(
+		instance: IHucodeHostedWorkbenchInstance
+	): boolean {
+		return instance.state !== 'crashed' && instance.state !== 'unloaded';
 	}
 
 	private getActiveInstance(): IHucodeHostedWorkbenchInstance | undefined {

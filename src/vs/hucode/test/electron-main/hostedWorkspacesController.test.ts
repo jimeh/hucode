@@ -393,6 +393,14 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(stateChanges.length, 1);
 	});
 
+	test('projects sidebar cannot be hidden without loaded workspaces', () => {
+		const { controller } = createController();
+
+		controller.setProjectsSidebarVisible(false);
+
+		assert.strictEqual(controller.getState().projectsSidebarVisible, true);
+	});
+
 	test('restore chooses configured active workspace and waits for ready', async () => {
 		const alpha = createWorktree('alpha');
 		const bravo = createWorktree('bravo');
@@ -908,6 +916,22 @@ suite('ResidentHostedWorkspacesController', () => {
 			]);
 		});
 
+	test('closing last workspace restores hidden projects sidebar', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		controller.setProjectsSidebarVisible(false);
+
+		assert.strictEqual(controller.getState().projectsSidebarVisible, false);
+
+		await controller.closeWorkspace();
+
+		assert.strictEqual(controller.getState().projectsSidebarVisible, true);
+		assert.strictEqual(controller.getState().instances.length, 0);
+	});
+
 	test('shutdown ignores unload veto after will-unload handoff', async () => {
 		const alpha = createWorktree('alpha');
 		const { controller, ipcMain, viewFactory } = createController();
@@ -958,9 +982,13 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
+		controller.setProjectsSidebarVisible(false);
+
+		assert.strictEqual(controller.getState().projectsSidebarVisible, false);
 
 		viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
+		assert.strictEqual(controller.getState().projectsSidebarVisible, true);
 		assert.deepStrictEqual(
 			browserViewMainService.destroyedHostedWebContentsIds,
 			[1]

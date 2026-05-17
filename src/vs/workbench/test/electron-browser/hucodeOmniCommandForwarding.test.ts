@@ -14,6 +14,10 @@ import { IMainProcessService } from '../../../platform/ipc/common/mainProcessSer
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
+	FOCUS_WORKSPACE_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from '../../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
 	HucodeOmniCommandForwarding,
 	IHucodeOmniCommandForwardingWindowHandlers,
 } from '../../electron-browser/hucodeOmniCommandForwarding.js';
@@ -113,7 +117,7 @@ suite('HucodeOmniCommandForwarding', () => {
 	test('keeps Omni shell actions local', async () => {
 		const fixture = createFixture({ isOmniWindow: true });
 		const request: INativeRunActionInWindowRequest = {
-			id: 'workbench.action.omniWindow.focusWorkspace',
+			id: FOCUS_WORKSPACE_COMMAND_ID,
 			from: 'menu'
 		};
 
@@ -124,7 +128,26 @@ suite('HucodeOmniCommandForwarding', () => {
 
 		assert.deepStrictEqual(fixture.channel.calls, []);
 		assert.deepStrictEqual(fixture.commandCalls, [{
-			commandId: 'workbench.action.omniWindow.focusWorkspace',
+			commandId: FOCUS_WORKSPACE_COMMAND_ID,
+			args: [{ from: 'menu' }]
+		}]);
+	});
+
+	test('keeps Omni unload current worktree action local', async () => {
+		const fixture = createFixture({ isOmniWindow: true });
+		const request: INativeRunActionInWindowRequest = {
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			from: 'menu'
+		};
+
+		await fixture.forwarding.handleRunActionInWindow(
+			request,
+			fixture.handlers
+		);
+
+		assert.deepStrictEqual(fixture.channel.calls, []);
+		assert.deepStrictEqual(fixture.commandCalls, [{
+			commandId: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 			args: [{ from: 'menu' }]
 		}]);
 	});

@@ -62,6 +62,17 @@ VS Code code that Hucode customizes.
   near the code they exercise: `src/vs/hucode/test/...` for Hucode-owned modules
   under `src/vs/hucode/`, and the matching subsystem's `test/...` tree for
   layer-compatible `hucode*` companion files.
+- For Hucode behavior changes, assume tests are required unless they are not
+  practical or would be lower value than manual verification. Before finalizing
+  or committing, inspect nearby test suites and either add focused automated
+  coverage for new state, command, routing, persistence, or lifecycle behavior,
+  or explicitly state why no reasonable automated coverage was added.
+- For Omni shell and resident-workbench changes, prefer stable coverage
+  boundaries over brittle DOM assertions: main-process controller state tests,
+  command routing/forwarding tests, then browser component/DOM tests only when
+  the behavior cannot be covered at a lower layer. Cover empty-window,
+  no-workbench, last-workbench close/unload/crash, command-palette, keybinding,
+  and context-key transitions when touched.
 - When splitting an upstream patch, keep high-level integration tests in the
   upstream subsystem focused on verifier/adapter selection and routing, and move
   detailed Hucode behavior tests with the extracted Hucode helper.

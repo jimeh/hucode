@@ -42,7 +42,10 @@ import {
 	IsHostedOmniWorkspaceContext,
 } from
 	'../../workbench/common/contextkeys.js';
-import { IHucodeShellService } from '../common/omniWindow.js';
+import {
+	IHucodeShellService,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from '../common/omniWindow.js';
 import { ToggleTitleBarConfigAction } from
 	'../../workbench/browser/parts/titlebar/titlebarActions.js';
 import {
@@ -56,6 +59,7 @@ import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
 import {
+	HasLoadedWorkbenchContext,
 	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
 	ProjectsSidebarHiddenContext,
 	ProjectsTitleBarControlsEnabledContext,
@@ -155,6 +159,8 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 
 		const projectsSidebarHidden =
 			ProjectsSidebarHiddenContext.bindTo(contextKeyService);
+		const hasLoadedWorkbench =
+			HasLoadedWorkbenchContext.bindTo(contextKeyService);
 		const projectSwitcherCanGoBack =
 			ProjectSwitcherCanGoBackContext.bindTo(contextKeyService);
 		const projectSwitcherCanGoForward =
@@ -163,6 +169,9 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			state: Awaited<ReturnType<IHucodeShellService['getWindowState']>>
 		) => {
 			projectsSidebarHidden.set(!state.projectsSidebarVisible);
+			hasLoadedWorkbench.set(state.instances.some(instance =>
+				instance.state !== 'crashed' && instance.state !== 'unloaded'
+			));
 			projectSwitcherCanGoBack.set(state.projectSwitcherCanGoBack);
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);
 		};
@@ -333,6 +342,38 @@ registerHostedProjectSidebarCommand(
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	localize2('collapseAllProjects', 'Collapse All')
 );
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			title: localize2(
+				'hostedOmniUnloadCurrentWorktree',
+				'Omni-Window: Unload Current Worktree'
+			),
+			f1: true,
+			precondition: ContextKeyExpr.and(
+				IsHostedOmniWorkspaceContext,
+				HasLoadedWorkbenchContext
+			),
+		});
+	}
+
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (
+			!environmentService.isHostedOmniWorkspace ||
+			!environmentService.hostedInstanceId
+		) {
+			return;
+		}
+
+		await accessor.get(IHucodeShellService).closeWorkspace(
+			getWindowId(mainWindow),
+			environmentService.hostedInstanceId
+		);
+	}
+});
 
 function registerHostedProjectNavigationAction(
 	id: string,

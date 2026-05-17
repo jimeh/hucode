@@ -30,16 +30,22 @@ import {
 	Parts,
 } from '../../workbench/services/layout/browser/layoutService.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
+import { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID } from
+	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { Menus } from './menus.js';
 
-export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
-	'workbench.action.omniWindow.toggleProjectsSidebar';
+export { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID };
 
 export const PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING =
 	'hucode.omni.titleBar.projectControls.enabled';
 
 export const ProjectsSidebarHiddenContext = new RawContextKey<boolean>(
 	'hucode.projectsSidebarHidden',
+	false
+);
+
+export const HasLoadedWorkbenchContext = new RawContextKey<boolean>(
+	'hucode.hasLoadedWorkbench',
 	false
 );
 
@@ -64,7 +70,10 @@ registerAction2(class extends Action2 {
 			category: Categories.View,
 			icon: Codicon.layoutSidebarLeft,
 			f1: true,
-			precondition: OmniShellOrHostedWorkspaceContext,
+			precondition: ContextKeyExpr.and(
+				OmniShellOrHostedWorkspaceContext,
+				HasLoadedWorkbenchContext
+			),
 			menu: [
 				{
 					id: Menus.SidebarTitleNavigation,
@@ -85,7 +94,10 @@ registerAction2(class extends Action2 {
 			],
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib + 50,
-				when: OmniShellOrHostedWorkspaceContext,
+				when: ContextKeyExpr.and(
+					OmniShellOrHostedWorkspaceContext,
+					HasLoadedWorkbenchContext
+				),
 				primary: 0,
 				mac: {
 					primary: KeyMod.WinCtrl | KeyMod.Shift | KeyCode.KeyP,
@@ -96,9 +108,15 @@ registerAction2(class extends Action2 {
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const contextKeyService = accessor.get(IContextKeyService);
+
+		if (
+			HasLoadedWorkbenchContext.getValue(contextKeyService) !== true
+		) {
+			return;
+		}
 
 		if (environmentService.isHostedOmniWorkspace) {
-			const contextKeyService = accessor.get(IContextKeyService);
 			const wasHidden =
 				ProjectsSidebarHiddenContext.getValue(contextKeyService) === true;
 			const projectsSidebarHidden =
