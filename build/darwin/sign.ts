@@ -31,6 +31,12 @@ function getEntitlementsForFile(filePath: string): string {
 	return path.join(baseDir, 'azure-pipelines', 'darwin', 'app-entitlements.plist');
 }
 
+function shouldIgnoreSigningFile(filePath: string): boolean {
+	// WebAssembly payloads can look binary to osx-sign, but they are not Mach-O
+	// code and cannot be signed by codesign.
+	return path.extname(filePath) === '.wasm';
+}
+
 async function retrySignOnKeychainError<T>(fn: () => Promise<T>, maxRetries: number = 3): Promise<T> {
 	let lastError: Error | undefined;
 
@@ -85,6 +91,7 @@ async function main(buildDir?: string): Promise<void> {
 			entitlements: getEntitlementsForFile(filePath),
 			hardenedRuntime: true,
 		}),
+		ignore: shouldIgnoreSigningFile,
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
 		keychain: path.join(tempDir, 'buildagent.keychain'),
@@ -143,8 +150,6 @@ if (import.meta.main) {
 			const keychain = path.join(tempDir, 'buildagent.keychain');
 			const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
 			console.error(`Available identities:\n${identities}`);
-			const dump = await spawn('security', ['dump-keychain', keychain]);
-			console.error(`Keychain dump:\n${dump}`);
 		}
 		process.exit(1);
 	});

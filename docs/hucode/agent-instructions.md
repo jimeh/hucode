@@ -128,6 +128,9 @@ VS Code code that Hucode customizes.
   shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
   notarized through a temporary ZIP, stapled, then used to create the release
   ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+- `@electron/osx-sign` treats binary-looking `.wasm` files as signing
+  candidates. Keep WebAssembly payloads ignored during macOS signing; they are
+  not Mach-O code and cannot be signed by `codesign`.
 - Hucode release CI signs macOS tag builds by default and also signs manual
   `workflow_dispatch` builds unless the dispatch input disables signing. The
   required GitHub secrets are `APPLE_NOTARIZATION_KEY_P8_BASE64`,
