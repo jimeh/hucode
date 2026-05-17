@@ -982,9 +982,13 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
+		controller.setProjectsSidebarVisible(false);
+
+		assert.strictEqual(controller.getState().projectsSidebarVisible, false);
 
 		viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
+		assert.strictEqual(controller.getState().projectsSidebarVisible, true);
 		assert.deepStrictEqual(
 			browserViewMainService.destroyedHostedWebContentsIds,
 			[1]
