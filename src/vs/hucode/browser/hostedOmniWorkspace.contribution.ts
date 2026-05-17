@@ -56,6 +56,7 @@ import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
 import {
+	HasLoadedWorkbenchContext,
 	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
 	ProjectsSidebarHiddenContext,
 	ProjectsTitleBarControlsEnabledContext,
@@ -155,6 +156,8 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 
 		const projectsSidebarHidden =
 			ProjectsSidebarHiddenContext.bindTo(contextKeyService);
+		const hasLoadedWorkbench =
+			HasLoadedWorkbenchContext.bindTo(contextKeyService);
 		const projectSwitcherCanGoBack =
 			ProjectSwitcherCanGoBackContext.bindTo(contextKeyService);
 		const projectSwitcherCanGoForward =
@@ -163,6 +166,9 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			state: Awaited<ReturnType<IHucodeShellService['getWindowState']>>
 		) => {
 			projectsSidebarHidden.set(!state.projectsSidebarVisible);
+			hasLoadedWorkbench.set(state.instances.some(instance =>
+				instance.state !== 'crashed' && instance.state !== 'unloaded'
+			));
 			projectSwitcherCanGoBack.set(state.projectSwitcherCanGoBack);
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);
 		};
