@@ -220,6 +220,27 @@ async function run(command, args, cwd, env = {}) {
 	});
 }
 
+async function runQuiet(command, args, cwd, env = {}) {
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd,
+			env: { ...process.env, ...env },
+			stdio: 'ignore',
+			shell: process.platform === 'win32'
+		});
+
+		child.on('error', reject);
+		child.on('exit', code => {
+			if (code === 0) {
+				resolve(undefined);
+				return;
+			}
+
+			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+		});
+	});
+}
+
 async function capture(command, args, cwd) {
 	const chunks = [];
 	await new Promise((resolve, reject) => {
@@ -784,6 +805,18 @@ async function prepareDarwinSigning() {
 		keychain
 	], repoRoot);
 	await run('security', [
+		'default-keychain',
+		'-s',
+		keychain
+	], repoRoot);
+	await run('security', [
+		'list-keychains',
+		'-d',
+		'user',
+		'-s',
+		keychain
+	], repoRoot);
+	await runQuiet('security', [
 		'import',
 		p12Path,
 		'-k',
@@ -793,7 +826,7 @@ async function prepareDarwinSigning() {
 		'-T',
 		'/usr/bin/codesign'
 	], repoRoot);
-	await run('security', [
+	await runQuiet('security', [
 		'set-key-partition-list',
 		'-S',
 		'apple-tool:,apple:,codesign:',

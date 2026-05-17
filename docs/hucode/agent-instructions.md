@@ -128,6 +128,11 @@ VS Code code that Hucode customizes.
   shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
   notarized through a temporary ZIP, stapled, then used to create the release
   ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+- macOS signing CI must make the temporary signing keychain the default user
+  keychain and the active user keychain search list before running
+  `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
+  `codesign` failures even when `security find-identity` sees the imported
+  Developer ID identity.
 - `@electron/osx-sign` treats binary-looking `.wasm` files as signing
   candidates. Keep WebAssembly payloads ignored during macOS signing; they are
   not Mach-O code and cannot be signed by `codesign`.
