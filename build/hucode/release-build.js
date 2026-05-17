@@ -747,15 +747,15 @@ async function prepareDarwinSigning() {
 		throw new Error('macOS signing must run on a macOS host.');
 	}
 
-	const tempDir = process.env.AGENT_TEMPDIRECTORY
-		?? await fs.mkdtemp(path.join(os.tmpdir(), 'hucode-signing-'));
+	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
+	await fs.mkdir(tempRoot, { recursive: true });
+	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
 	const keychain = path.join(tempDir, 'buildagent.keychain');
 	const p12Path = path.join(tempDir, 'developer-id-application.p12');
 	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
 	const keychainPassword = 'hucode-signing';
 	const teamId = requireEnv('APPLE_TEAM_ID');
 
-	await fs.mkdir(tempDir, { recursive: true });
 	await fs.writeFile(
 		p12Path,
 		Buffer.from(
