@@ -11,10 +11,18 @@ import {
 	hucodeResolveRendererReplyTargetWithLookup,
 } from '../../common/hucodeRendererReplyTarget.js';
 import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	FOCUS_WORKSPACE_COMMAND_ID,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellCommandForwardingDisabled,
 	isHucodeOmniShellLayoutAction,
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+	RELOAD_WORKSPACE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 	withHucodeOmniShellCommandForwardingDisabled,
 } from '../../common/hucodeOmniCommandRouting.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
@@ -154,12 +162,25 @@ suite('HucodeOmniCommandRouting', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('identifies shell-owned actions', () => {
-		assert.strictEqual(
-			isHucodeOmniShellAction(
-				'workbench.action.omniWindow.focusProjectPane'
-			),
-			true
-		);
+		assert.deepStrictEqual([
+			FOCUS_PROJECT_PANE_COMMAND_ID,
+			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+			FOCUS_WORKSPACE_COMMAND_ID,
+			RELOAD_WORKSPACE_COMMAND_ID,
+			CLOSE_WORKSPACE_COMMAND_ID,
+			UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+		].map(commandId => isHucodeOmniShellAction(commandId)), [
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+		]);
 		assert.strictEqual(
 			isHucodeOmniShellAction('hucode.projectSwitcher.refresh'),
 			true

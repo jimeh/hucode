@@ -12,15 +12,32 @@ const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
 	'hucode.projectSwitcher.',
 ];
 
+export const UNLOAD_CURRENT_WORKTREE_COMMAND_ID =
+	'workbench.action.omniWindow.unloadCurrentWorktree';
+export const FOCUS_PROJECT_PANE_COMMAND_ID =
+	'workbench.action.omniWindow.focusProjectPane';
+export const OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID =
+	'workbench.action.omniWindow.openSelectedInOmniWindow';
+export const OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID =
+	'workbench.action.omniWindow.openSelectedInNewWindow';
+export const FOCUS_WORKSPACE_COMMAND_ID =
+	'workbench.action.omniWindow.focusWorkspace';
+export const RELOAD_WORKSPACE_COMMAND_ID =
+	'workbench.action.omniWindow.reloadWorkspace';
+export const CLOSE_WORKSPACE_COMMAND_ID =
+	'workbench.action.omniWindow.closeWorkspace';
+export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
+	'workbench.action.omniWindow.toggleProjectsSidebar';
+
 const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
-	'workbench.action.omniWindow.focusProjectPane',
-	'workbench.action.omniWindow.openSelectedInOmniWindow',
-	'workbench.action.omniWindow.openSelectedInNewWindow',
-	'workbench.action.omniWindow.focusWorkspace',
-	'workbench.action.omniWindow.reloadWorkspace',
-	'workbench.action.omniWindow.closeWorkspace',
-	'workbench.action.omniWindow.unloadCurrentWorktree',
-	'workbench.action.omniWindow.toggleProjectsSidebar',
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	FOCUS_WORKSPACE_COMMAND_ID,
+	RELOAD_WORKSPACE_COMMAND_ID,
+	CLOSE_WORKSPACE_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
 ]);
 
 const HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS = new Set([

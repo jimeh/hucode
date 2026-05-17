@@ -30,10 +30,11 @@ import {
 	Parts,
 } from '../../workbench/services/layout/browser/layoutService.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
+import { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID } from
+	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { Menus } from './menus.js';
 
-export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
-	'workbench.action.omniWindow.toggleProjectsSidebar';
+export { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID };
 
 export const PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING =
 	'hucode.omni.titleBar.projectControls.enabled';

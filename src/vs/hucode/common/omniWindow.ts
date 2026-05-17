@@ -16,8 +16,8 @@ import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecy
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
-export const UNLOAD_CURRENT_WORKTREE_COMMAND_ID =
-	'workbench.action.omniWindow.unloadCurrentWorktree';
+export { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from
+	'../../platform/window/common/hucodeOmniCommandRouting.js';
 
 /**
  * Lifecycle state of a hosted Omni workbench instance.

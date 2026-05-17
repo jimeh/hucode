@@ -19,7 +19,15 @@ import { IsDevelopmentContext } from '../../platform/contextkey/common/contextke
 import { ContextKeyExpr } from '../../platform/contextkey/common/contextkey.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from '../../platform/keybinding/common/keybindingsRegistry.js';
-import { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from '../common/omniWindow.js';
+import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	FOCUS_WORKSPACE_COMMAND_ID,
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+	RELOAD_WORKSPACE_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { HasLoadedWorkbenchContext } from './omniProjectsSidebarActions.js';
 
 interface IHucodeOmniWindowUIDelegate {
@@ -116,7 +124,7 @@ abstract class BaseOmniWindowAction extends Action2 {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.focusProjectPane',
+			FOCUS_PROJECT_PANE_COMMAND_ID,
 			localize2(
 				'omniWindowFocusProjectPane',
 				'Omni-Window: Focus Project Pane'
@@ -132,7 +140,7 @@ registerAction2(class extends BaseOmniWindowAction {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.openSelectedInOmniWindow',
+			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
 			localize2(
 				'omniWindowOpenSelectedInOmniWindow',
 				'Omni-Window: Open Selected Worktree'
@@ -148,7 +156,7 @@ registerAction2(class extends BaseOmniWindowAction {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.openSelectedInNewWindow',
+			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 			localize2(
 				'omniWindowOpenSelectedInNewWindow',
 				'Omni-Window: Open Selected Worktree In New Window'
@@ -164,7 +172,7 @@ registerAction2(class extends BaseOmniWindowAction {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.focusWorkspace',
+			FOCUS_WORKSPACE_COMMAND_ID,
 			localize2(
 				'omniWindowFocusWorkspace',
 				'Omni-Window: Focus Workspace'
@@ -180,7 +188,7 @@ registerAction2(class extends BaseOmniWindowAction {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.reloadWorkspace',
+			RELOAD_WORKSPACE_COMMAND_ID,
 			localize2(
 				'omniWindowReloadWorkspace',
 				'Omni-Window: Reload Workspace'
@@ -204,7 +212,7 @@ registerAction2(class extends BaseOmniWindowAction {
 registerAction2(class extends BaseOmniWindowAction {
 	constructor() {
 		super(
-			'workbench.action.omniWindow.closeWorkspace',
+			CLOSE_WORKSPACE_COMMAND_ID,
 			localize2(
 				'omniWindowCloseWorkspace',
 				'Omni-Window: Close Workspace'
