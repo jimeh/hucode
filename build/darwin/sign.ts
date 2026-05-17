@@ -149,7 +149,9 @@ if (import.meta.main) {
 		if (tempDir) {
 			const keychain = path.join(tempDir, 'buildagent.keychain');
 			const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
-			console.error(`Available identities:\n${identities}`);
+			const match = /(\d+) valid identities found/.exec(identities);
+			const count = match?.[1] ?? 'unknown';
+			console.error(`Available codesigning identities: ${count}`);
 		}
 		process.exit(1);
 	});
