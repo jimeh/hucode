@@ -20,6 +20,11 @@ on:
           - linux-armhf
           - win32-x64
           - win32-arm64
+      sign:
+        description: Sign and notarize macOS release assets
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target || 'tag' }}
@@ -274,6 +279,32 @@ jobs:
             exit 1
           fi
 
+      - name: Validate macOS signing configuration
+        if: matrix.platform == 'darwin' && (github.event_name == 'push' || inputs.sign)
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_NOTARIZATION_ISSUER_ID \
+            APPLE_NOTARIZATION_KEY_ID \
+            APPLE_NOTARIZATION_KEY_P8_BASE64 \
+            APPLE_TEAM_ID \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "$name is required for macOS signing" >&2
+              exit 1
+            fi
+          done
+
       - name: Install Linux build tools
         if: matrix.platform == 'linux'
         shell: bash
@@ -421,15 +452,30 @@ jobs:
 
       - name: Build release artifacts
         run: |
+          set -euo pipefail
+          sign_args=()
+          if [ "${{ matrix.platform }}" = "darwin" ] && \
+            [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
+            sign_args+=(--sign)
+          fi
+
           node build/hucode/release-build.js \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
             --artifacts "${{ matrix.artifacts }}" \
             --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
-            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
+            "${sign_args[@]}"
         shell: bash
         env:
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUCODE_SIGN_RELEASE: ${{ github.event_name == 'push' || inputs.sign }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
 
       - name: Report release size
         run: |
@@ -475,7 +521,7 @@ jobs:
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
               --title "$TAG_NAME" \
-              --notes "Unsigned Hucode release build artifacts."
+              --notes "Hucode release build artifacts."
           fi
 
           mapfile -t files < <(find release-artifacts -type f)

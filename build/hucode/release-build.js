@@ -5,6 +5,7 @@
 
 import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
@@ -43,7 +44,7 @@ Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
---sign               Enable package signing. Not implemented yet.
+--sign               Sign and notarize macOS release artifacts.
 --include-source-maps  Keep local source maps in the packaged app.
 --skip-build         Package an existing ../VSCode-* app output.
 -h, --help           Show this help.
@@ -146,8 +147,8 @@ function parseArgs(args) {
 		}
 	}
 
-	if (options.sign) {
-		throw new Error('Package signing is not implemented for Hucode builds yet.');
+	if (options.sign && options.platform !== 'darwin') {
+		throw new Error('Package signing is only implemented for macOS builds.');
 	}
 
 	if (options.skipBuild && options.copilotVsix) {
@@ -171,6 +172,15 @@ const cliTargets = new Map([
 	['linux-armhf', 'armv7-unknown-linux-gnueabihf'],
 	['win32-x64', 'x86_64-pc-windows-msvc'],
 	['win32-arm64', 'aarch64-pc-windows-msvc']
+]);
+
+const MACHO_MAGIC_NUMBERS = new Set([
+	0xFEEDFACE,
+	0xCEFAEDFE,
+	0xFEEDFACF,
+	0xCFFAEDFE,
+	0xCAFEBABE,
+	0xBEBAFECA
 ]);
 
 function getNodePlatformArch(options) {
@@ -210,6 +220,27 @@ async function run(command, args, cwd, env = {}) {
 	});
 }
 
+async function runQuiet(command, args, cwd, env = {}) {
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd,
+			env: { ...process.env, ...env },
+			stdio: 'ignore',
+			shell: process.platform === 'win32'
+		});
+
+		child.on('error', reject);
+		child.on('exit', code => {
+			if (code === 0) {
+				resolve(undefined);
+				return;
+			}
+
+			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+		});
+	});
+}
+
 async function capture(command, args, cwd) {
 	const chunks = [];
 	await new Promise((resolve, reject) => {
@@ -228,6 +259,38 @@ async function capture(command, args, cwd) {
 			}
 
 			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+		});
+	});
+
+	return Buffer.concat(chunks).toString('utf8').trim();
+}
+
+async function captureCombined(command, args, cwd, env = {}) {
+	const chunks = [];
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd,
+			env: { ...process.env, ...env },
+			stdio: ['ignore', 'pipe', 'pipe'],
+			shell: process.platform === 'win32'
+		});
+
+		child.stdout.on('data', chunk => chunks.push(chunk));
+		child.stderr.on('data', chunk => chunks.push(chunk));
+		child.on('error', reject);
+		child.on('exit', code => {
+			if (code === 0) {
+				resolve(undefined);
+				return;
+			}
+
+			const output = Buffer.concat(chunks).toString('utf8').trim();
+			reject(
+				new Error(
+					`${command} exited with code ${code ?? 'null'}.` +
+					(output ? `\n${output}` : '')
+				)
+			);
 		});
 	});
 
@@ -681,6 +744,289 @@ export async function validateAppCliArtifact(options, buildOutput) {
 	return cliPath;
 }
 
+async function getDarwinAppPath(options, buildOutput) {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
+	}
+
+	const product = await readJson(appProductPath);
+	return path.join(buildOutput, `${product.nameLong}.app`);
+}
+
+function requireEnv(name) {
+	const value = process.env[name];
+	if (!value) {
+		throw new Error(`$${name} is required for macOS signing.`);
+	}
+
+	return value;
+}
+
+async function prepareDarwinSigning() {
+	if (process.platform !== 'darwin') {
+		throw new Error('macOS signing must run on a macOS host.');
+	}
+
+	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
+	await fs.mkdir(tempRoot, { recursive: true });
+	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
+	const keychain = path.join(tempDir, 'buildagent.keychain');
+	const p12Path = path.join(tempDir, 'developer-id-application.p12');
+	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
+	const keychainPassword = 'hucode-signing';
+	const teamId = requireEnv('APPLE_TEAM_ID');
+
+	await fs.writeFile(
+		p12Path,
+		Buffer.from(
+			requireEnv('MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64'),
+			'base64'
+		),
+		{ mode: 0o600 }
+	);
+	await fs.writeFile(
+		notaryKeyPath,
+		Buffer.from(requireEnv('APPLE_NOTARIZATION_KEY_P8_BASE64'), 'base64'),
+		{ mode: 0o600 }
+	);
+
+	await fs.rm(keychain, { recursive: true, force: true });
+	await run('security', [
+		'create-keychain',
+		'-p',
+		keychainPassword,
+		keychain
+	], repoRoot);
+	await run('security', [
+		'unlock-keychain',
+		'-p',
+		keychainPassword,
+		keychain
+	], repoRoot);
+	await run('security', [
+		'default-keychain',
+		'-s',
+		keychain
+	], repoRoot);
+	await run('security', [
+		'list-keychains',
+		'-d',
+		'user',
+		'-s',
+		keychain
+	], repoRoot);
+	await runQuiet('security', [
+		'import',
+		p12Path,
+		'-k',
+		keychain,
+		'-P',
+		requireEnv('MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD'),
+		'-T',
+		'/usr/bin/codesign'
+	], repoRoot);
+	await runQuiet('security', [
+		'set-key-partition-list',
+		'-S',
+		'apple-tool:,apple:,codesign:',
+		'-s',
+		'-k',
+		keychainPassword,
+		keychain
+	], repoRoot);
+
+	const identities = await capture(
+		'security',
+		['find-identity', '-v', '-p', 'codesigning', keychain],
+		repoRoot
+	);
+	const identityLine = identities
+		.split(/\r?\n/)
+		.find(line => line.includes('Developer ID Application'));
+	const identity = /([0-9A-F]{40})/.exec(identityLine ?? '')?.[1];
+	if (!identity) {
+		throw new Error(`Developer ID Application identity not found:\n${identities}`);
+	}
+
+	if (!identityLine.includes(`(${teamId})`)) {
+		throw new Error(
+			`Developer ID identity does not match APPLE_TEAM_ID=${teamId}:\n` +
+			identityLine
+		);
+	}
+
+	return {
+		env: {
+			AGENT_TEMPDIRECTORY: tempDir,
+			CODESIGN_IDENTITY: identity
+		},
+		identity,
+		keychain,
+		notaryKeyPath,
+		tempDir
+	};
+}
+
+async function cleanupDarwinSigning(signing) {
+	if (!signing) {
+		return;
+	}
+
+	await run('security', ['delete-keychain', signing.keychain], repoRoot)
+		.catch(error => {
+			console.warn(`Failed to delete signing keychain: ${error.message}`);
+		});
+	await fs.rm(signing.tempDir, { recursive: true, force: true })
+		.catch(error => {
+			console.warn(`Failed to remove signing temp directory: ${error.message}`);
+		});
+}
+
+async function signDarwinApp(options, buildRoot, signing) {
+	await runWithMixin([
+		process.execPath,
+		path.join('build', 'darwin', 'sign.ts'),
+		buildRoot
+	], options, signing.env);
+}
+
+async function signDarwinDmg(dmgPath, signing) {
+	await run('codesign', [
+		'--sign',
+		signing.identity,
+		'--keychain',
+		signing.keychain,
+		'--timestamp',
+		'--force',
+		dmgPath
+	], repoRoot);
+}
+
+async function notarizeArtifact(artifactPath, signing) {
+	await run('xcrun', [
+		'notarytool',
+		'submit',
+		artifactPath,
+		'--key',
+		signing.notaryKeyPath,
+		'--key-id',
+		requireEnv('APPLE_NOTARIZATION_KEY_ID'),
+		'--issuer',
+		requireEnv('APPLE_NOTARIZATION_ISSUER_ID'),
+		'--wait'
+	], repoRoot);
+}
+
+async function stapleArtifact(artifactPath) {
+	await run('xcrun', ['stapler', 'staple', artifactPath], repoRoot);
+	await run('xcrun', ['stapler', 'validate', artifactPath], repoRoot);
+}
+
+async function createNotarizationZip(appPath, zipPath) {
+	await fs.rm(zipPath, { force: true });
+	await fs.mkdir(path.dirname(zipPath), { recursive: true });
+	await run('ditto', [
+		'-c',
+		'-k',
+		'--sequesterRsrc',
+		'--keepParent',
+		appPath,
+		zipPath
+	], repoRoot);
+}
+
+async function isMachOBinary(filePath) {
+	let file;
+	try {
+		file = await fs.open(filePath, 'r');
+		const buffer = Buffer.alloc(4);
+		const result = await file.read(buffer, 0, 4, 0);
+		if (result.bytesRead < 4) {
+			return false;
+		}
+
+		return MACHO_MAGIC_NUMBERS.has(buffer.readUInt32BE(0));
+	} catch {
+		return false;
+	} finally {
+		await file?.close();
+	}
+}
+
+async function findMachOBinaries(root) {
+	const result = [];
+	const entries = await fs.readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		const filePath = path.join(root, entry.name);
+		if (entry.isDirectory()) {
+			result.push(...await findMachOBinaries(filePath));
+			continue;
+		}
+
+		if (entry.isFile() && await isMachOBinary(filePath)) {
+			result.push(filePath);
+		}
+	}
+
+	return result;
+}
+
+async function verifyMachOSignatures(appPath) {
+	await run('codesign', [
+		'--verify',
+		'--deep',
+		'--strict',
+		'--verbose=4',
+		appPath
+	], repoRoot);
+	await run('codesign', [
+		'-dvvv',
+		'--entitlements',
+		':-',
+		appPath
+	], repoRoot);
+
+	const machOBinaries = await findMachOBinaries(appPath);
+	for (const filePath of machOBinaries) {
+		await run('codesign', [
+			'--verify',
+			'--strict',
+			'--verbose=2',
+			filePath
+		], repoRoot);
+
+		const details = await captureCombined('codesign', [
+			'-dv',
+			'--verbose=4',
+			filePath
+		], repoRoot);
+		if (/\bSignature=adhoc\b/.test(details)) {
+			throw new Error(`Mach-O binary is ad hoc signed: ${filePath}`);
+		}
+	}
+
+	console.log(`Verified ${machOBinaries.length} signed Mach-O binaries.`);
+}
+
+async function notarizeAndStapleDarwinApp(options, buildOutput, distRoot, signing) {
+	const appPath = await getDarwinAppPath(options, buildOutput);
+	await signDarwinApp(options, path.dirname(repoRoot), signing);
+	await verifyMachOSignatures(appPath);
+
+	const zipPath = path.join(
+		distRoot,
+		'.tmp',
+		`hucode-${options.platform}-${options.arch}`,
+		'notarization',
+		`${path.basename(appPath)}.zip`
+	);
+	await createNotarizationZip(appPath, zipPath);
+	await notarizeArtifact(zipPath, signing);
+	await stapleArtifact(appPath);
+	await run('spctl', ['-a', '-vvv', '-t', 'exec', appPath], repoRoot);
+}
+
 async function getLinuxCliEnv(options) {
 	if (options.platform !== 'linux') {
 		return {};
@@ -898,13 +1244,20 @@ async function mixInCli(options, buildOutput) {
 	console.log(`Hucode CLI: ${destination}`);
 }
 
-async function packageArchive(buildOutput, distRoot, distName) {
+async function packageArchive(options, buildOutput, distRoot, distName) {
 	const archivePath = path.join(distRoot, `${distName}.zip`);
+	if (options.platform === 'darwin') {
+		const appPath = await getDarwinAppPath(options, buildOutput);
+		await createNotarizationZip(appPath, archivePath);
+		console.log(`Hucode archive: ${archivePath}`);
+		return;
+	}
+
 	await createArchive(buildOutput, archivePath);
 	console.log(`Hucode archive: ${archivePath}`);
 }
 
-async function packageDmg(options, buildRoot, distRoot, distName) {
+async function packageDmg(options, buildRoot, distRoot, distName, signing) {
 	const dmgOut = path.join(distRoot, '.tmp', distName, 'dmg');
 	await fs.mkdir(dmgOut, { recursive: true });
 
@@ -918,6 +1271,22 @@ async function packageDmg(options, buildRoot, distRoot, distName) {
 	const source = path.join(dmgOut, `VSCode-darwin-${options.arch}.dmg`);
 	const destination = path.join(distRoot, `${distName}.dmg`);
 	await moveFile(source, destination);
+
+	if (signing) {
+		await signDarwinDmg(destination, signing);
+		await notarizeArtifact(destination, signing);
+		await stapleArtifact(destination);
+		await run('spctl', [
+			'-a',
+			'-vvv',
+			'-t',
+			'open',
+			'--context',
+			'context:primary-signature',
+			destination
+		], repoRoot);
+	}
+
 	console.log(`Hucode DMG: ${destination}`);
 }
 
@@ -1015,10 +1384,21 @@ async function packageWindowsSetup(options, distRoot, distName, target) {
 async function packageArtifact(artifact, options, paths) {
 	switch (artifact) {
 		case 'archive':
-			await packageArchive(paths.buildOutput, paths.distRoot, paths.distName);
+			await packageArchive(
+				options,
+				paths.buildOutput,
+				paths.distRoot,
+				paths.distName
+			);
 			return;
 		case 'dmg':
-			await packageDmg(options, paths.buildRoot, paths.distRoot, paths.distName);
+			await packageDmg(
+				options,
+				paths.buildRoot,
+				paths.distRoot,
+				paths.distName,
+				paths.signing
+			);
 			return;
 		case 'deb':
 			await packageDeb(options, paths.distRoot);
@@ -1073,13 +1453,29 @@ async function main() {
 
 	await mixInCli(options, buildOutput);
 
-	for (const artifact of options.artifacts) {
-		await packageArtifact(artifact, options, {
-			buildOutput,
-			buildRoot,
-			distName,
-			distRoot
-		});
+	let signing;
+	try {
+		if (options.sign) {
+			signing = await prepareDarwinSigning();
+			await notarizeAndStapleDarwinApp(
+				options,
+				buildOutput,
+				distRoot,
+				signing
+			);
+		}
+
+		for (const artifact of options.artifacts) {
+			await packageArtifact(artifact, options, {
+				buildOutput,
+				buildRoot,
+				distName,
+				distRoot,
+				signing
+			});
+		}
+	} finally {
+		await cleanupDarwinSigning(signing);
 	}
 
 	if (options.moveToDist) {
