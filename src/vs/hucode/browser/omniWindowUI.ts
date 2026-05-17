@@ -19,6 +19,8 @@ import { IsDevelopmentContext } from '../../platform/contextkey/common/contextke
 import { ContextKeyExpr } from '../../platform/contextkey/common/contextkey.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from '../../platform/keybinding/common/keybindingsRegistry.js';
+import { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from '../common/omniWindow.js';
+import { HasLoadedWorkbenchContext } from './omniProjectsSidebarActions.js';
 
 interface IHucodeOmniWindowUIDelegate {
 	focusProjectPane(): void;
@@ -208,6 +210,27 @@ registerAction2(class extends BaseOmniWindowAction {
 				'Omni-Window: Close Workspace'
 			)
 		);
+	}
+
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			title: localize2(
+				'omniWindowUnloadCurrentWorktree',
+				'Omni-Window: Unload Current Worktree'
+			),
+			f1: true,
+			precondition: ContextKeyExpr.and(
+				IsOmniWindowContext,
+				HasLoadedWorkbenchContext
+			),
+		});
 	}
 
 	override run(accessor: ServicesAccessor): Promise<void> {

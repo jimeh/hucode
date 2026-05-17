@@ -19,6 +19,9 @@ import {
 } from '../../electron-browser/hucodeOmniCommandForwarding.js';
 import { INativeWorkbenchEnvironmentService } from '../../services/environment/electron-browser/environmentService.js';
 
+const UNLOAD_CURRENT_WORKTREE_COMMAND_ID =
+	'workbench.action.omniWindow.unloadCurrentWorktree';
+
 suite('HucodeOmniCommandForwarding', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -125,6 +128,25 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, []);
 		assert.deepStrictEqual(fixture.commandCalls, [{
 			commandId: 'workbench.action.omniWindow.focusWorkspace',
+			args: [{ from: 'menu' }]
+		}]);
+	});
+
+	test('keeps Omni unload current worktree action local', async () => {
+		const fixture = createFixture({ isOmniWindow: true });
+		const request: INativeRunActionInWindowRequest = {
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			from: 'menu'
+		};
+
+		await fixture.forwarding.handleRunActionInWindow(
+			request,
+			fixture.handlers
+		);
+
+		assert.deepStrictEqual(fixture.channel.calls, []);
+		assert.deepStrictEqual(fixture.commandCalls, [{
+			commandId: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 			args: [{ from: 'menu' }]
 		}]);
 	});
