@@ -62,6 +62,10 @@ VS Code code that Hucode customizes.
   near the code they exercise: `src/vs/hucode/test/...` for Hucode-owned modules
   under `src/vs/hucode/`, and the matching subsystem's `test/...` tree for
   layer-compatible `hucode*` companion files.
+- Prefer new Hucode-named test files for Hucode-specific coverage instead of
+  adding tests to existing upstream VS Code test files. Use names such as
+  `hucode*.test.ts` and keep upstream test files unchanged unless the test is a
+  narrow integration assertion that depends heavily on upstream fixtures.
 - For Hucode behavior changes, assume tests are required unless they are not
   practical or would be lower value than manual verification. Before finalizing
   or committing, inspect nearby test suites and either add focused automated
@@ -90,6 +94,12 @@ VS Code code that Hucode customizes.
   gates, Node unit tests, and targeted Hucode Electron tests. Treat full
   upstream VS Code electron/browser/remote/integration/smoke matrices as a
   separate deliberate decision, not the default fork baseline.
+- When adding, moving, or modifying Hucode-specific tests, update
+  `.github/workflows/hucode-ci.yml` so the relevant Node/common and
+  Electron/browser tests run in CI. Keep tests in the runner environment they
+  expect; for example, Node-only path/env tests should stay in `npm run
+  test-node`, while Electron-main/browser tests should stay in the targeted
+  `scripts/test.sh` pass.
 - Hucode warms Linux x64 `node_modules` archives through
   `.github/workflows/hucode-node-modules-cache.yml` on trusted branch pushes or
   manual dispatch. PR CI should restore those archives but not save them; keep
