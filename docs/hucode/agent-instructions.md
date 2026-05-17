@@ -122,6 +122,23 @@ VS Code code that Hucode customizes.
 - Hucode's macOS DMG volume title comes from the overlay field
   `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
   changing upstream VS Code's stable/insider/exploration title defaults.
+- Hucode macOS release signing is enabled with
+  `build/hucode/release-build.js --sign`. Signing must happen after every app
+  payload mutation, including Copilot VSIX packaging, target-specific ripgrep
+  shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
+  notarized through a temporary ZIP, stapled, then used to create the release
+  ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+- Hucode release CI signs macOS tag builds by default and also signs manual
+  `workflow_dispatch` builds unless the dispatch input disables signing. The
+  required GitHub secrets are `APPLE_NOTARIZATION_KEY_P8_BASE64`,
+  `MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64`, and
+  `MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD`; the required GitHub variables
+  are `APPLE_NOTARIZATION_ISSUER_ID`, `APPLE_NOTARIZATION_KEY_ID`, and
+  `APPLE_TEAM_ID`.
+- Do not add upstream `build/darwin/patch-dmg.py` to Hucode release packaging
+  unless a Hucode `disk.icns` volume icon exists. The script only injects a
+  custom Finder volume icon into an already-created DMG; it is unrelated to app
+  signing or notarization and must run before DMG signing if ever enabled.
 - Hucode's release wrapper cleans `.build/extensions` directly before packaging
   with an external Copilot VSIX. Upstream defines `clean-extensions-build` as an
   internal task object but does not register it as a public gulp task.

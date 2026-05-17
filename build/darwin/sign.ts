@@ -64,6 +64,7 @@ async function main(buildDir?: string): Promise<void> {
 	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
 	const identity = process.env['CODESIGN_IDENTITY'];
+	const applicationName = product.nameLong;
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
@@ -98,28 +99,28 @@ async function main(buildDir?: string): Promise<void> {
 			'-insert',
 			'NSAppleEventsUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use AppleScript.',
+			`An application in ${applicationName} wants to use AppleScript.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSMicrophoneUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use the Microphone.',
+			`An application in ${applicationName} wants to use the Microphone.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSCameraUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use the Camera.',
+			`An application in ${applicationName} wants to use the Camera.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSAudioCaptureUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use Audio Capture.',
+			`An application in ${applicationName} wants to use Audio Capture.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
