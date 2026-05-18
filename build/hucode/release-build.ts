@@ -1076,6 +1076,7 @@ async function signDarwinApp(
 }
 
 async function signDarwinDmg(dmgPath: string, signing: DarwinSigning): Promise<void> {
+	console.log(`Signing DMG: ${dmgPath}`);
 	await run('codesign', [
 		'--sign',
 		signing.identity,
@@ -1083,8 +1084,10 @@ async function signDarwinDmg(dmgPath: string, signing: DarwinSigning): Promise<v
 		signing.keychain,
 		'--timestamp',
 		'--force',
+		'--verbose=4',
 		dmgPath
 	], repoRoot);
+	console.log(`Signed DMG: ${dmgPath}`);
 }
 
 async function notarizeArtifact(
@@ -1490,8 +1493,11 @@ async function packageDmg(
 
 	if (signing) {
 		await signDarwinDmg(destination, signing);
+		console.log(`Notarizing DMG: ${destination}`);
 		await notarizeArtifact(destination, signing);
+		console.log(`Stapling DMG: ${destination}`);
 		await stapleArtifact(destination);
+		console.log(`Validating DMG signature: ${destination}`);
 		await run('spctl', [
 			'-a',
 			'-vvv',
