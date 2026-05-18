@@ -81,6 +81,12 @@ interface PackageArtifactPaths extends PackagePaths {
 	signing: DarwinSigning | undefined;
 }
 
+function isExdevError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error
+		&& 'code' in error
+		&& error.code === 'EXDEV';
+}
+
 const archAliases = new Map<string, ReleaseArch>([
 	['x64', 'x64'],
 	['arm64', 'arm64'],
@@ -738,7 +744,7 @@ async function movePackage(source: string, destination: string): Promise<void> {
 	try {
 		await fs.rename(source, destination);
 	} catch (error) {
-		if (error?.code !== 'EXDEV') {
+		if (!isExdevError(error)) {
 			throw error;
 		}
 
