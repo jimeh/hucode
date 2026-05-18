@@ -427,7 +427,7 @@ jobs:
       - name: Build release app
         run: |
           set -euo pipefail
-          node build/hucode/release-build.js \
+          node build/hucode/release-build.ts \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
             --phase build \
@@ -609,7 +609,7 @@ jobs:
             sign_args+=(--sign)
           fi
 
-          node build/hucode/release-build.js \
+          node build/hucode/release-build.ts \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
             --phase package \

@@ -281,7 +281,7 @@ After that, the CI package task consumes `.build/extensions/copilot` directly.
 Hucode's release wrapper runs:
 
 ```text
-node build/hucode/release-build.js
+node build/hucode/release-build.ts
 ```
 
 That script chooses:
@@ -380,7 +380,7 @@ builds.
 
 The Hucode release workflow now has a `copilot-vsix` job that builds Copilot as
 a VSIX and uploads it as `hucode-copilot-vsix`. Platform build jobs download
-that artifact and pass it to `build/hucode/release-build.js --copilot-vsix`,
+that artifact and pass it to `build/hucode/release-build.ts --copilot-vsix`,
 which extracts the VSIX into `.build/extensions/copilot` before the desktop app
 package task.
 
@@ -429,7 +429,7 @@ files that are copied or shimmed during `extensions/copilot/script/postinstall.t
 
 For local `npm run hucode:build:production` and
 `npm run hucode:build:release`, Hucode now forces release packaging to strip
-local source maps even outside CI. `build/hucode/release-build.js` sets
+local source maps even outside CI. `build/hucode/release-build.ts` sets
 `GITHUB_WORKSPACE` for the upstream gulp build subprocess, which reuses the
 existing upstream CI packaging path without modifying `build/gulpfile.vscode.ts`.
 Pass `--include-source-maps` to keep source maps in a local package.
@@ -527,7 +527,7 @@ NODE
 
 Core package flow:
 
-- `build/hucode/release-build.js`
+- `build/hucode/release-build.ts`
 - `build/gulpfile.vscode.ts`
 - `build/gulpfile.extensions.ts`
 - `build/lib/extensions.ts`

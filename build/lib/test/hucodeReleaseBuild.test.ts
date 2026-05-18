@@ -16,7 +16,7 @@ import {
 	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
-} from '../../hucode/release-build.js';
+} from '../../hucode/release-build.ts';
 
 suite('Hucode release build', () => {
 
