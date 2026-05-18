@@ -39,6 +39,15 @@ export function validateAppCliArtifact(
 ): Promise<string>;
 
 /**
+ * Validates that an assembled release app can be packaged without further
+ * payload mutation.
+ */
+export function validateAssembledAppOutput(
+	options: HucodeReleaseTargetOptions,
+	buildOutput: string
+): Promise<void>;
+
+/**
  * Validates that an extracted Copilot VSIX has no bundled target binaries.
  */
 export function validateExtractedCopilotVsix(outputDir: string): Promise<void>;
