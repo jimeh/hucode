@@ -13,6 +13,7 @@ import {
 	applyRpmPackageVersion,
 	findBuiltInCopilotExtension,
 	validateAppCliArtifact,
+	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
 } from '../../hucode/release-build.js';
@@ -89,6 +90,38 @@ suite('Hucode release build', () => {
 		await validatePackagedCopilot(
 			{ platform: 'linux', arch: 'x64' },
 			buildOutput
+		);
+	});
+
+	test('validates assembled app output before packaging', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-linux-x64');
+		await createPackagedCopilotExtension(buildOutput, 'linux-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+		const cliPath = path.join(buildOutput, 'bin', 'hucode-tunnel');
+		await fs.mkdir(path.dirname(cliPath), { recursive: true });
+		await fs.writeFile(cliPath, '');
+		await fs.chmod(cliPath, 0o755);
+
+		await validateAssembledAppOutput(
+			{ platform: 'linux', arch: 'x64' },
+			buildOutput
+		);
+	});
+
+	test('rejects assembled app output without final payloads', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-linux-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+
+		await assert.rejects(
+			validateAssembledAppOutput(
+				{ platform: 'linux', arch: 'x64' },
+				buildOutput
+			),
+			/Built-in Copilot extension not found/
 		);
 	});
 

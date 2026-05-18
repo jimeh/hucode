@@ -109,6 +109,13 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- `build/hucode/release-build.js --phase build` creates the final unsigned app
+  output under `../VSCode-<platform>-<arch>`. This phase must include every app
+  payload mutation needed before packaging, including Copilot target ripgrep
+  shims and the Hucode Rust CLI. `--phase package` consumes that existing app
+  output and must not rebuild or mutate the app payload before signing or
+  producing release assets. The default `--phase all` preserves the combined
+  local flow.
 - Hucode local release packaging strips source maps by default by running the
   upstream gulp build with `GITHUB_WORKSPACE` set for that subprocess. Pass
   `--include-source-maps` to `build/hucode/release-build.js` only when a local

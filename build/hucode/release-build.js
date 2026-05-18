@@ -41,12 +41,15 @@ Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
+--phase <name>      Phase to run: all, build, package. Defaults to all.
+--phase build       Creates the final unsigned app output.
+--phase package     Consumes an existing app output and emits artifacts.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
 --sign               Sign and notarize macOS release artifacts.
 --include-source-maps  Keep local source maps in the packaged app.
---skip-build         Package an existing ../VSCode-* app output.
+--skip-build         Skip the gulp build and use existing ../VSCode-* output.
 -h, --help           Show this help.
 `);
 }
@@ -69,6 +72,7 @@ function parseArgs(args) {
 		quality: 'stable',
 		out: 'dist',
 		copilotVsix: undefined,
+		phase: 'all',
 		sign: false,
 		stripSourceMaps: true,
 		skipBuild: false,
@@ -100,6 +104,9 @@ function parseArgs(args) {
 					repoRoot,
 					readValue(args, ++i, arg)
 				);
+				break;
+			case '--phase':
+				options.phase = readValue(args, ++i, arg);
 				break;
 			case '--platform':
 				options.platform = readValue(args, ++i, arg);
@@ -155,8 +162,22 @@ function parseArgs(args) {
 		throw new Error('--copilot-vsix cannot be used with --skip-build.');
 	}
 
+	if (!supportedPhases.has(options.phase)) {
+		throw new Error(`Unsupported phase '${options.phase}'.`);
+	}
+
+	if (options.phase === 'package' && options.copilotVsix) {
+		throw new Error('--copilot-vsix cannot be used with --phase package.');
+	}
+
+	if (options.phase === 'build' && options.sign) {
+		throw new Error('--sign cannot be used with --phase build.');
+	}
+
 	return options;
 }
+
+const supportedPhases = new Set(['all', 'build', 'package']);
 
 const supportedArtifacts = new Map([
 	['darwin', new Set(['archive', 'dmg'])],
@@ -563,6 +584,22 @@ async function runBuildWithCopilotVsix(options, buildOutput) {
 	await extractCopilotVsix(options.copilotVsix);
 	await runGulpTask(packageTask, options, env);
 	await validatePackagedCopilot(options, buildOutput);
+}
+
+/**
+ * Validates that an assembled release app can be packaged without further
+ * payload mutation.
+ *
+ * @param {{ platform: string; arch: string }} options
+ * @param {string} buildOutput
+ */
+export async function validateAssembledAppOutput(options, buildOutput) {
+	if (!(await exists(buildOutput))) {
+		throw new Error(`Build output not found: ${buildOutput}`);
+	}
+
+	await validatePackagedCopilot(options, buildOutput);
+	await validateAppCliArtifact(options, buildOutput);
 }
 
 async function movePackage(source, destination) {
@@ -1427,6 +1464,48 @@ async function packageArtifact(artifact, options, paths) {
 	}
 }
 
+async function buildAppOutput(options, buildOutput) {
+	if (options.skipBuild) {
+		if (!(await exists(buildOutput))) {
+			throw new Error(`Build output not found: ${buildOutput}`);
+		}
+	} else if (options.copilotVsix) {
+		await runBuildWithCopilotVsix(options, buildOutput);
+	} else {
+		const taskName = `vscode-${options.platform}-${options.arch}-min`;
+		await runGulpTask(taskName, options, getBuildEnv(options));
+	}
+
+	await mixInCli(options, buildOutput);
+	await validateAssembledAppOutput(options, buildOutput);
+}
+
+async function packageAppOutput(options, paths) {
+	await validateAssembledAppOutput(options, paths.buildOutput);
+
+	let signing;
+	try {
+		if (options.sign) {
+			signing = await prepareDarwinSigning();
+			await notarizeAndStapleDarwinApp(
+				options,
+				paths.buildOutput,
+				paths.distRoot,
+				signing
+			);
+		}
+
+		for (const artifact of options.artifacts) {
+			await packageArtifact(artifact, options, {
+				...paths,
+				signing
+			});
+		}
+	} finally {
+		await cleanupDarwinSigning(signing);
+	}
+}
+
 async function main() {
 	const options = parseArgs(process.argv.slice(2));
 	if (options.help) {
@@ -1436,46 +1515,25 @@ async function main() {
 
 	const buildName = `VSCode-${options.platform}-${options.arch}`;
 	const distName = `hucode-${options.platform}-${options.arch}`;
-	const taskName = `vscode-${options.platform}-${options.arch}-min`;
 	const buildRoot = path.dirname(repoRoot);
 	const buildOutput = path.join(buildRoot, buildName);
 	const distRoot = path.resolve(repoRoot, options.out);
 	const distOutput = path.join(distRoot, distName);
+	const paths = {
+		buildOutput,
+		buildRoot,
+		distName,
+		distRoot
+	};
 
 	await prepareMixin(options.quality);
-	if (!options.skipBuild) {
-		if (options.copilotVsix) {
-			await runBuildWithCopilotVsix(options, buildOutput);
-		} else {
-			await runGulpTask(taskName, options, getBuildEnv(options));
-		}
+
+	if (options.phase === 'all' || options.phase === 'build') {
+		await buildAppOutput(options, buildOutput);
 	}
 
-	await mixInCli(options, buildOutput);
-
-	let signing;
-	try {
-		if (options.sign) {
-			signing = await prepareDarwinSigning();
-			await notarizeAndStapleDarwinApp(
-				options,
-				buildOutput,
-				distRoot,
-				signing
-			);
-		}
-
-		for (const artifact of options.artifacts) {
-			await packageArtifact(artifact, options, {
-				buildOutput,
-				buildRoot,
-				distName,
-				distRoot,
-				signing
-			});
-		}
-	} finally {
-		await cleanupDarwinSigning(signing);
+	if (options.phase === 'all' || options.phase === 'package') {
+		await packageAppOutput(options, paths);
 	}
 
 	if (options.moveToDist) {
