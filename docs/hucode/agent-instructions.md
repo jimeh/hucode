@@ -114,8 +114,10 @@ VS Code code that Hucode customizes.
   payload mutation needed before packaging, including Copilot target ripgrep
   shims and the Hucode Rust CLI. `--phase package` consumes that existing app
   output and must not rebuild or mutate the app payload before signing or
-  producing release assets. The default `--phase all` preserves the combined
-  local flow.
+  producing release assets. Do not combine `--phase build` with
+  `--move-to-dist`; package phase expects the app output to stay in its upstream
+  `../VSCode-<platform>-<arch>` handoff location. The default `--phase all`
+  preserves the combined local flow.
 - Keep `build/hucode/release-build.ts` as TypeScript without a parallel
   hand-written `.d.ts`; `cd build && npm run typecheck` should validate its
   exported helpers directly.

@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { afterEach, beforeEach, suite, test } from 'node:test';
+import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -21,6 +22,13 @@ import {
 suite('Hucode release build', () => {
 
 	let tmpDir: string;
+	const releaseBuildScript = path.resolve(
+		import.meta.dirname,
+		'..',
+		'..',
+		'hucode',
+		'release-build.ts'
+	);
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hucode-release-'));
@@ -122,6 +130,25 @@ suite('Hucode release build', () => {
 				buildOutput
 			),
 			/Built-in Copilot extension not found/
+		);
+	});
+
+	test('rejects moving build-only phase output to dist', () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				releaseBuildScript,
+				'--phase',
+				'build',
+				'--move-to-dist'
+			],
+			{ encoding: 'utf8' }
+		);
+
+		assert.strictEqual(result.status, 1);
+		assert.match(
+			result.stderr,
+			/--move-to-dist cannot be used with --phase build/
 		);
 	});
 

@@ -258,6 +258,10 @@ function parseArgs(args: string[]): ReleaseOptions {
 		throw new Error('--sign cannot be used with --phase build.');
 	}
 
+	if (options.phase === 'build' && options.moveToDist) {
+		throw new Error('--move-to-dist cannot be used with --phase build.');
+	}
+
 	return options;
 }
 
