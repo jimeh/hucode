@@ -56,8 +56,10 @@ Current local workflow:
   prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
   desktop app, matching the release workflow's smaller Copilot package shape.
 - `node build/hucode/release-build.ts --platform darwin --arch <arch> --sign`:
-  sign and notarize macOS app, ZIP, and DMG release assets. This requires the
-  configured Developer ID Application certificate and App Store Connect API key
-  environment used by release CI.
+  sign the macOS app, then sign, notarize, staple, and validate DMG release
+  assets. Signed Darwin ZIP archives are still supported for explicit local
+  artifact requests by notarizing and stapling the app before archiving it.
+  This requires the configured Developer ID Application certificate and App
+  Store Connect API key environment used by release CI.
 - `node build/hucode/release-size-report.js --app <path>`: report packaged app
   size, key subdirectory sizes, source-map totals, and release size guardrails.

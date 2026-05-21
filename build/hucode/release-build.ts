@@ -31,6 +31,9 @@ type PackageType = 'deb' | 'rpm';
 type SetupTarget = 'user' | 'system';
 type StringEnv = Record<string, string>;
 
+const DMG_CODESIGN_ATTEMPTS = 2;
+const DMG_CODESIGN_TIMEOUT_MS = 15 * 60 * 1000;
+
 interface ReleaseOptions {
 	artifacts: ReleaseArtifact[];
 	arch: ReleaseArch;
@@ -52,6 +55,7 @@ interface ReleaseTargetOptions {
 }
 
 interface ProductJson {
+	darwinBundleIdentifier?: string;
 	nameLong: string;
 	tunnelApplicationName: string;
 	[name: string]: unknown;
@@ -85,6 +89,24 @@ function isExdevError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error
 		&& 'code' in error
 		&& error.code === 'EXDEV';
+}
+
+class CommandTimeoutError extends Error {
+	constructor(command: string, timeoutMs: number) {
+		super(`${command} timed out after ${formatDuration(timeoutMs)}.`);
+		this.name = 'CommandTimeoutError';
+	}
+}
+
+function formatDuration(ms: number): string {
+	const seconds = Math.round(ms / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	if (minutes === 0) {
+		return `${seconds}s`;
+	}
+
+	return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
 }
 
 const archAliases = new Map<string, ReleaseArch>([
@@ -322,9 +344,11 @@ async function run(
 	command: string,
 	args: string[],
 	cwd: string,
-	env: StringEnv = {}
+	env: StringEnv = {},
+	timeoutMs?: number
 ): Promise<void> {
 	await new Promise<void>((resolve, reject) => {
+		let settled = false;
 		const child = spawn(command, args, {
 			cwd,
 			env: { ...process.env, ...env },
@@ -332,14 +356,45 @@ async function run(
 			shell: process.platform === 'win32'
 		});
 
-		child.on('error', reject);
-		child.on('exit', code => {
-			if (code === 0) {
-				resolve(undefined);
+		let killTimeout: NodeJS.Timeout | undefined;
+		let timeoutError: CommandTimeoutError | undefined;
+		const timeout = timeoutMs
+			? setTimeout(() => {
+				timeoutError = new CommandTimeoutError(command, timeoutMs);
+				child.kill('SIGTERM');
+				killTimeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+			}, timeoutMs)
+			: undefined;
+
+		const finish = (error?: Error) => {
+			if (settled) {
 				return;
 			}
 
-			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+			settled = true;
+			clearTimeout(timeout);
+			clearTimeout(killTimeout);
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(undefined);
+		};
+
+		child.on('error', error => finish(timeoutError ?? error));
+		child.on('exit', code => {
+			if (timeoutError) {
+				finish(timeoutError);
+				return;
+			}
+
+			if (code === 0) {
+				finish();
+				return;
+			}
+
+			finish(new Error(`${command} exited with code ${code ?? 'null'}.`));
 		});
 	});
 }
@@ -1075,19 +1130,67 @@ async function signDarwinApp(
 	], options, signing.env);
 }
 
-async function signDarwinDmg(dmgPath: string, signing: DarwinSigning): Promise<void> {
-	console.log(`Signing DMG: ${dmgPath}`);
-	await run('codesign', [
+async function getDarwinDmgIdentifier(
+	options: ReleaseOptions,
+	buildOutput: string
+): Promise<string> {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
+	}
+
+	const product = await readJson<ProductJson>(appProductPath);
+	const prefix = product.darwinBundleIdentifier ?? product.tunnelApplicationName;
+	return `${prefix}.dmg.${options.arch}`;
+}
+
+async function signDarwinDmg(
+	dmgPath: string,
+	identifier: string,
+	signing: DarwinSigning
+): Promise<void> {
+	const args = [
 		'--sign',
 		signing.identity,
+		'--identifier',
+		identifier,
 		'--keychain',
 		signing.keychain,
 		'--timestamp',
 		'--force',
 		'--verbose=4',
 		dmgPath
-	], repoRoot);
-	console.log(`Signed DMG: ${dmgPath}`);
+	];
+
+	for (let attempt = 1; attempt <= DMG_CODESIGN_ATTEMPTS; attempt++) {
+		console.log(
+			`Signing DMG (${attempt}/${DMG_CODESIGN_ATTEMPTS}): ${dmgPath}`
+		);
+		console.log(`DMG signing identifier: ${identifier}`);
+		try {
+			await run(
+				'codesign',
+				args,
+				repoRoot,
+				{},
+				DMG_CODESIGN_TIMEOUT_MS
+			);
+			console.log(`Signed DMG: ${dmgPath}`);
+			return;
+		} catch (error) {
+			if (
+				error instanceof CommandTimeoutError &&
+				attempt < DMG_CODESIGN_ATTEMPTS
+			) {
+				console.warn(
+					`DMG signing timed out; retrying: ${error.message}`
+				);
+				continue;
+			}
+
+			throw error;
+		}
+	}
 }
 
 async function notarizeArtifact(
@@ -1201,14 +1304,10 @@ async function verifyMachOSignatures(appPath: string): Promise<void> {
 
 async function notarizeAndStapleDarwinApp(
 	options: ReleaseOptions,
-	buildOutput: string,
+	appPath: string,
 	distRoot: string,
 	signing: DarwinSigning
 ): Promise<void> {
-	const appPath = await getDarwinAppPath(options, buildOutput);
-	await signDarwinApp(options, path.dirname(repoRoot), signing);
-	await verifyMachOSignatures(appPath);
-
 	const zipPath = path.join(
 		distRoot,
 		'.tmp',
@@ -1220,6 +1319,18 @@ async function notarizeAndStapleDarwinApp(
 	await notarizeArtifact(zipPath, signing);
 	await stapleArtifact(appPath);
 	await run('spctl', ['-a', '-vvv', '-t', 'exec', appPath], repoRoot);
+}
+
+async function signAndVerifyDarwinApp(
+	options: ReleaseOptions,
+	buildOutput: string,
+	signing: DarwinSigning
+): Promise<string> {
+	const appPath = await getDarwinAppPath(options, buildOutput);
+	await signDarwinApp(options, path.dirname(repoRoot), signing);
+	await verifyMachOSignatures(appPath);
+
+	return appPath;
 }
 
 async function getLinuxCliEnv(options: ReleaseOptions): Promise<StringEnv> {
@@ -1472,6 +1583,7 @@ async function packageArchive(
 
 async function packageDmg(
 	options: ReleaseOptions,
+	buildOutput: string,
 	buildRoot: string,
 	distRoot: string,
 	distName: string,
@@ -1492,7 +1604,8 @@ async function packageDmg(
 	await moveFile(source, destination);
 
 	if (signing) {
-		await signDarwinDmg(destination, signing);
+		const identifier = await getDarwinDmgIdentifier(options, buildOutput);
+		await signDarwinDmg(destination, identifier, signing);
 		console.log(`Notarizing DMG: ${destination}`);
 		await notarizeArtifact(destination, signing);
 		console.log(`Stapling DMG: ${destination}`);
@@ -1625,6 +1738,7 @@ async function packageArtifact(
 		case 'dmg':
 			await packageDmg(
 				options,
+				paths.buildOutput,
 				paths.buildRoot,
 				paths.distRoot,
 				paths.distName,
@@ -1687,12 +1801,19 @@ async function packageAppOutput(
 	try {
 		if (options.sign) {
 			signing = await prepareDarwinSigning();
-			await notarizeAndStapleDarwinApp(
+			const appPath = await signAndVerifyDarwinApp(
 				options,
 				paths.buildOutput,
-				paths.distRoot,
 				signing
 			);
+			if (options.artifacts.includes('archive')) {
+				await notarizeAndStapleDarwinApp(
+					options,
+					appPath,
+					paths.distRoot,
+					signing
+				);
+			}
 		}
 
 		for (const artifact of options.artifacts) {

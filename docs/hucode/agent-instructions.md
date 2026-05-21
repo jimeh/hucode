@@ -158,9 +158,12 @@ VS Code code that Hucode customizes.
 - Hucode macOS release signing is enabled with
   `build/hucode/release-build.ts --sign`. Signing must happen after every app
   payload mutation, including Copilot VSIX packaging, target-specific ripgrep
-  shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
-  notarized through a temporary ZIP, stapled, then used to create the release
-  ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+  shims, native modules, resources, and the mixed-in Rust CLI. Release CI ships
+  macOS as a DMG-only distributable: sign and verify the app, create the DMG,
+  sign the DMG, notarize the DMG, then staple and validate the DMG. Do not
+  notarize the app before creating the DMG unless a signed Darwin ZIP artifact
+  is explicitly requested, because Apple recommends notarizing only the
+  outermost distributed container.
 - macOS signing CI must make the temporary signing keychain the default user
   keychain and the active user keychain search list before running
   `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
