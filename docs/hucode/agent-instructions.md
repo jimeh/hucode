@@ -168,7 +168,9 @@ VS Code code that Hucode customizes.
   keychain and the active user keychain search list before running
   `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
   `codesign` failures even when `security find-identity` sees the imported
-  Developer ID identity.
+  Developer ID identity. Keep that behavior behind `--signing-mode ci`; the
+  default `--signing-mode local` must use the caller's existing keychain search
+  list and must not change the default keychain or search list.
 - `@electron/osx-sign` treats binary-looking `.wasm` files as signing
   candidates. Keep WebAssembly payloads ignored during macOS signing; they are
   not Mach-O code and cannot be signed by `codesign`.

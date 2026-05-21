@@ -59,7 +59,12 @@ Current local workflow:
   sign the macOS app, then sign, notarize, staple, and validate DMG release
   assets. Signed Darwin ZIP archives are still supported for explicit local
   artifact requests by notarizing and stapling the app before archiving it.
-  This requires the configured Developer ID Application certificate and App
-  Store Connect API key environment used by release CI.
+  Local signing uses the current keychain search list by default and does not
+  create or switch keychains. It needs `APPLE_TEAM_ID` plus either
+  `APPLE_NOTARIZATION_KEYCHAIN_PROFILE`, `APPLE_NOTARIZATION_KEY_PATH`, or
+  `APPLE_NOTARIZATION_KEY_P8_BASE64`; API-key paths/base64 also need
+  `APPLE_NOTARIZATION_ISSUER_ID` and `APPLE_NOTARIZATION_KEY_ID`. Release CI
+  passes `--signing-mode ci` to import its base64 certificate and notary key
+  into a temporary keychain.
 - `node build/hucode/release-size-report.js --app <path>`: report packaged app
   size, key subdirectory sizes, source-map totals, and release size guardrails.

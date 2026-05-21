@@ -606,7 +606,7 @@ jobs:
           sign_args=()
           if [ "${{ matrix.platform }}" = "darwin" ] && \
             [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
-            sign_args+=(--sign)
+            sign_args+=(--sign --signing-mode ci)
           fi
 
           node build/hucode/release-build.ts \

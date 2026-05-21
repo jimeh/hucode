@@ -28,6 +28,18 @@ type ReleaseArtifact =
 	| 'user-setup'
 	| 'system-setup';
 type PackageType = 'deb' | 'rpm';
+type NotarizationAuth =
+	| {
+		kind: 'api-key';
+		issuerId: string;
+		keyId: string;
+		keyPath: string;
+	}
+	| {
+		kind: 'keychain-profile';
+		profile: string;
+	};
+type SigningMode = 'local' | 'ci';
 type SetupTarget = 'user' | 'system';
 type StringEnv = Record<string, string>;
 
@@ -44,6 +56,7 @@ interface ReleaseOptions {
 	copilotVsix: string | undefined;
 	phase: ReleasePhase;
 	sign: boolean;
+	signingMode: SigningMode;
 	stripSourceMaps: boolean;
 	skipBuild: boolean;
 	help: boolean;
@@ -69,9 +82,9 @@ interface MixinProductJson {
 interface DarwinSigning {
 	env: StringEnv;
 	identity: string;
-	keychain: string;
-	notaryKeyPath: string;
-	tempDir: string;
+	keychain: string | undefined;
+	notarization: NotarizationAuth;
+	tempDir: string | undefined;
 }
 
 interface PackagePaths {
@@ -141,6 +154,8 @@ Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
 --sign               Sign and notarize macOS release artifacts.
+--signing-mode <mode> Signing backend: local or ci. Defaults to local.
+--ci-signing         Alias for --signing-mode ci.
 --include-source-maps  Keep local source maps in the packaged app.
 --skip-build         Skip the gulp build and use existing ../VSCode-* output.
 -h, --help           Show this help.
@@ -180,6 +195,14 @@ function normalizeArtifact(artifact: string): ReleaseArtifact {
 	return artifact as ReleaseArtifact;
 }
 
+function normalizeSigningMode(mode: string): SigningMode {
+	if (!supportedSigningModes.has(mode as SigningMode)) {
+		throw new Error(`Unsupported signing mode '${mode}'.`);
+	}
+
+	return mode as SigningMode;
+}
+
 function parseArgs(args: string[]): ReleaseOptions {
 	const options: ReleaseOptions = {
 		artifacts: [],
@@ -191,6 +214,7 @@ function parseArgs(args: string[]): ReleaseOptions {
 		copilotVsix: undefined,
 		phase: 'all',
 		sign: false,
+		signingMode: 'local',
 		stripSourceMaps: true,
 		skipBuild: false,
 		help: false
@@ -237,6 +261,12 @@ function parseArgs(args: string[]): ReleaseOptions {
 				break;
 			case '--sign':
 				options.sign = true;
+				break;
+			case '--signing-mode':
+				options.signingMode = normalizeSigningMode(readValue(args, ++i, arg));
+				break;
+			case '--ci-signing':
+				options.signingMode = 'ci';
 				break;
 			case '--include-source-maps':
 				options.stripSourceMaps = false;
@@ -294,6 +324,8 @@ function parseArgs(args: string[]): ReleaseOptions {
 }
 
 const supportedPhases = new Set<ReleasePhase>(['all', 'build', 'package']);
+
+const supportedSigningModes = new Set<SigningMode>(['local', 'ci']);
 
 const supportedArtifacts = new Map<ReleasePlatform, Set<ReleaseArtifact>>([
 	['darwin', new Set(['archive', 'dmg'])],
@@ -998,19 +1030,115 @@ function requireEnv(name: string): string {
 	return value;
 }
 
-async function prepareDarwinSigning(): Promise<DarwinSigning> {
-	if (process.platform !== 'darwin') {
-		throw new Error('macOS signing must run on a macOS host.');
+async function writeNotarizationKey(
+	tempDir: string,
+	base64Value: string
+): Promise<string> {
+	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
+	await fs.writeFile(
+		notaryKeyPath,
+		Buffer.from(base64Value, 'base64'),
+		{ mode: 0o600 }
+	);
+
+	return notaryKeyPath;
+}
+
+function getApiKeyNotarizationAuth(keyPath: string): NotarizationAuth {
+	return {
+		kind: 'api-key',
+		issuerId: requireEnv('APPLE_NOTARIZATION_ISSUER_ID'),
+		keyId: requireEnv('APPLE_NOTARIZATION_KEY_ID'),
+		keyPath
+	};
+}
+
+async function prepareLocalNotarizationAuth(
+	tempDir: string
+): Promise<NotarizationAuth> {
+	const profile = process.env.APPLE_NOTARIZATION_KEYCHAIN_PROFILE;
+	if (profile) {
+		return { kind: 'keychain-profile', profile };
 	}
 
-	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
-	await fs.mkdir(tempRoot, { recursive: true });
-	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
+	const keyPath = process.env.APPLE_NOTARIZATION_KEY_PATH;
+	if (keyPath) {
+		return getApiKeyNotarizationAuth(keyPath);
+	}
+
+	const base64Key = process.env.APPLE_NOTARIZATION_KEY_P8_BASE64;
+	if (base64Key) {
+		return getApiKeyNotarizationAuth(
+			await writeNotarizationKey(tempDir, base64Key)
+		);
+	}
+
+	throw new Error(
+		'Local signing requires APPLE_NOTARIZATION_KEYCHAIN_PROFILE, ' +
+		'APPLE_NOTARIZATION_KEY_PATH, or APPLE_NOTARIZATION_KEY_P8_BASE64.'
+	);
+}
+
+async function findDeveloperIdIdentity(
+	teamId: string,
+	keychain?: string
+): Promise<{ identity: string; line: string }> {
+	const args = ['find-identity', '-v', '-p', 'codesigning'];
+	if (keychain) {
+		args.push(keychain);
+	}
+
+	const identities = await capture('security', args, repoRoot);
+	const identityLine = identities
+		.split(/\r?\n/)
+		.find(line =>
+			line.includes('Developer ID Application') &&
+			line.includes(`(${teamId})`)
+		);
+	const identity = /([0-9A-F]{40})/.exec(identityLine ?? '')?.[1];
+	if (!identity || !identityLine) {
+		throw new Error(
+			`Developer ID Application identity not found for APPLE_TEAM_ID=${teamId}:\n` +
+			identities
+		);
+	}
+
+	return { identity, line: identityLine };
+}
+
+async function prepareLocalDarwinSigning(
+	tempDir: string,
+	teamId: string
+): Promise<DarwinSigning> {
+	const identity = process.env.CODESIGN_IDENTITY ||
+		(await findDeveloperIdIdentity(teamId)).identity;
+	const notarization = await prepareLocalNotarizationAuth(tempDir);
+
+	return {
+		env: {
+			CODESIGN_IDENTITY: identity
+		},
+		identity,
+		keychain: undefined,
+		notarization,
+		tempDir
+	};
+}
+
+async function prepareCiDarwinSigning(
+	tempDir: string,
+	teamId: string
+): Promise<DarwinSigning> {
 	const keychain = path.join(tempDir, 'buildagent.keychain');
 	const p12Path = path.join(tempDir, 'developer-id-application.p12');
-	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
 	const keychainPassword = 'hucode-signing';
-	const teamId = requireEnv('APPLE_TEAM_ID');
+
+	const notaryKeyPath = await writeNotarizationKey(
+		tempDir,
+		requireEnv('APPLE_NOTARIZATION_KEY_P8_BASE64')
+	);
+
+	const notarization = getApiKeyNotarizationAuth(notaryKeyPath);
 
 	await fs.writeFile(
 		p12Path,
@@ -1018,11 +1146,6 @@ async function prepareDarwinSigning(): Promise<DarwinSigning> {
 			requireEnv('MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64'),
 			'base64'
 		),
-		{ mode: 0o600 }
-	);
-	await fs.writeFile(
-		notaryKeyPath,
-		Buffer.from(requireEnv('APPLE_NOTARIZATION_KEY_P8_BASE64'), 'base64'),
 		{ mode: 0o600 }
 	);
 
@@ -1071,36 +1194,49 @@ async function prepareDarwinSigning(): Promise<DarwinSigning> {
 		keychain
 	], repoRoot);
 
-	const identities = await capture(
-		'security',
-		['find-identity', '-v', '-p', 'codesigning', keychain],
-		repoRoot
-	);
-	const identityLine = identities
-		.split(/\r?\n/)
-		.find(line => line.includes('Developer ID Application'));
-	const identity = /([0-9A-F]{40})/.exec(identityLine ?? '')?.[1];
-	if (!identity) {
-		throw new Error(`Developer ID Application identity not found:\n${identities}`);
-	}
-
-	if (!identityLine!.includes(`(${teamId})`)) {
+	const { identity, line } = await findDeveloperIdIdentity(teamId, keychain);
+	if (!line.includes(`(${teamId})`)) {
 		throw new Error(
 			`Developer ID identity does not match APPLE_TEAM_ID=${teamId}:\n` +
-			identityLine!
+			line
 		);
 	}
 
 	return {
 		env: {
 			AGENT_TEMPDIRECTORY: tempDir,
+			CODESIGN_KEYCHAIN: keychain,
 			CODESIGN_IDENTITY: identity
 		},
 		identity,
 		keychain,
-		notaryKeyPath,
+		notarization,
 		tempDir
 	};
+}
+
+async function prepareDarwinSigning(
+	options: ReleaseOptions
+): Promise<DarwinSigning> {
+	if (process.platform !== 'darwin') {
+		throw new Error('macOS signing must run on a macOS host.');
+	}
+
+	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
+	await fs.mkdir(tempRoot, { recursive: true });
+	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
+	const teamId = requireEnv('APPLE_TEAM_ID');
+
+	try {
+		if (options.signingMode === 'ci') {
+			return await prepareCiDarwinSigning(tempDir, teamId);
+		}
+
+		return await prepareLocalDarwinSigning(tempDir, teamId);
+	} catch (error) {
+		await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+		throw error;
+	}
 }
 
 async function cleanupDarwinSigning(signing: DarwinSigning | undefined): Promise<void> {
@@ -1108,14 +1244,21 @@ async function cleanupDarwinSigning(signing: DarwinSigning | undefined): Promise
 		return;
 	}
 
-	await run('security', ['delete-keychain', signing.keychain], repoRoot)
-		.catch(error => {
-			console.warn(`Failed to delete signing keychain: ${error.message}`);
-		});
-	await fs.rm(signing.tempDir, { recursive: true, force: true })
-		.catch(error => {
-			console.warn(`Failed to remove signing temp directory: ${error.message}`);
-		});
+	if (signing.keychain) {
+		await run('security', ['delete-keychain', signing.keychain], repoRoot)
+			.catch(error => {
+				console.warn(`Failed to delete signing keychain: ${error.message}`);
+			});
+	}
+
+	if (signing.tempDir) {
+		await fs.rm(signing.tempDir, { recursive: true, force: true })
+			.catch(error => {
+				console.warn(
+					`Failed to remove signing temp directory: ${error.message}`
+				);
+			});
+	}
 }
 
 async function signDarwinApp(
@@ -1154,13 +1297,14 @@ async function signDarwinDmg(
 		signing.identity,
 		'--identifier',
 		identifier,
-		'--keychain',
-		signing.keychain,
 		'--timestamp',
 		'--force',
 		'--verbose=4',
 		dmgPath
 	];
+	if (signing.keychain) {
+		args.splice(4, 0, '--keychain', signing.keychain);
+	}
 
 	for (let attempt = 1; attempt <= DMG_CODESIGN_ATTEMPTS; attempt++) {
 		console.log(
@@ -1197,18 +1341,27 @@ async function notarizeArtifact(
 	artifactPath: string,
 	signing: DarwinSigning
 ): Promise<void> {
-	await run('xcrun', [
+	const args = [
 		'notarytool',
 		'submit',
 		artifactPath,
-		'--key',
-		signing.notaryKeyPath,
-		'--key-id',
-		requireEnv('APPLE_NOTARIZATION_KEY_ID'),
-		'--issuer',
-		requireEnv('APPLE_NOTARIZATION_ISSUER_ID'),
 		'--wait'
-	], repoRoot);
+	];
+
+	if (signing.notarization.kind === 'keychain-profile') {
+		args.push('--keychain-profile', signing.notarization.profile);
+	} else {
+		args.push(
+			'--key',
+			signing.notarization.keyPath,
+			'--key-id',
+			signing.notarization.keyId,
+			'--issuer',
+			signing.notarization.issuerId
+		);
+	}
+
+	await run('xcrun', args, repoRoot);
 }
 
 async function stapleArtifact(artifactPath: string): Promise<void> {
@@ -1800,7 +1953,7 @@ async function packageAppOutput(
 	let signing: DarwinSigning | undefined;
 	try {
 		if (options.sign) {
-			signing = await prepareDarwinSigning();
+			signing = await prepareDarwinSigning(options);
 			const appPath = await signAndVerifyDarwinApp(
 				options,
 				paths.buildOutput,
