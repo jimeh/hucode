@@ -164,6 +164,11 @@ VS Code code that Hucode customizes.
   notarize the app before creating the DMG unless a signed Darwin ZIP artifact
   is explicitly requested, because Apple recommends notarizing only the
   outermost distributed container.
+- Hucode's `darwin-x64` release app build uses the Intel macOS runner, but its
+  package job should run on the standard arm64 `macos-15` runner. GitHub-hosted
+  Intel macOS runners have repeatedly hung in `codesign --timestamp` while
+  signing the x64 DMG; package phase consumes the prebuilt app artifact and
+  does not need to execute target-architecture binaries.
 - macOS signing CI must make the temporary signing keychain the default user
   keychain and the active user keychain search list before running
   `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
