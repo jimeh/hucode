@@ -109,9 +109,21 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- `build/hucode/release-build.ts --phase build` creates the final unsigned app
+  output under `../VSCode-<platform>-<arch>`. This phase must include every app
+  payload mutation needed before packaging, including Copilot target ripgrep
+  shims and the Hucode Rust CLI. `--phase package` consumes that existing app
+  output and must not rebuild or mutate the app payload before signing or
+  producing release assets. Do not combine `--phase build` with
+  `--move-to-dist`; package phase expects the app output to stay in its upstream
+  `../VSCode-<platform>-<arch>` handoff location. The default `--phase all`
+  preserves the combined local flow.
+- Keep `build/hucode/release-build.ts` as TypeScript without a parallel
+  hand-written `.d.ts`; `cd build && npm run typecheck` should validate its
+  exported helpers directly.
 - Hucode local release packaging strips source maps by default by running the
   upstream gulp build with `GITHUB_WORKSPACE` set for that subprocess. Pass
-  `--include-source-maps` to `build/hucode/release-build.js` only when a local
+  `--include-source-maps` to `build/hucode/release-build.ts` only when a local
   package needs debuggable bundled source maps.
 - For release app size work, read
   [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
@@ -119,7 +131,7 @@ VS Code code that Hucode customizes.
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
   release workflow builds a Copilot VSIX once, uploads it as
   `hucode-copilot-vsix`, downloads it in each platform job, and passes
-  `--copilot-vsix` to `build/hucode/release-build.js`. Local release builds
+  `--copilot-vsix` to `build/hucode/release-build.ts`. Local release builds
   without `--copilot-vsix` still package Copilot from source and can ship a much
   larger `extensions/copilot/node_modules` tree. The release wrapper rejects a
   VSIX that already contains platform-specific Copilot executable packages or
@@ -144,16 +156,26 @@ VS Code code that Hucode customizes.
   `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
   changing upstream VS Code's stable/insider/exploration title defaults.
 - Hucode macOS release signing is enabled with
-  `build/hucode/release-build.js --sign`. Signing must happen after every app
+  `build/hucode/release-build.ts --sign`. Signing must happen after every app
   payload mutation, including Copilot VSIX packaging, target-specific ripgrep
-  shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
-  notarized through a temporary ZIP, stapled, then used to create the release
-  ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+  shims, native modules, resources, and the mixed-in Rust CLI. Release CI ships
+  macOS as a DMG-only distributable: sign and verify the app, create the DMG,
+  sign the DMG, notarize the DMG, then staple and validate the DMG. Do not
+  notarize the app before creating the DMG unless a signed Darwin ZIP artifact
+  is explicitly requested, because Apple recommends notarizing only the
+  outermost distributed container.
+- Hucode's `darwin-x64` release app build uses the Intel macOS runner, but its
+  package job should run on the standard arm64 `macos-15` runner. GitHub-hosted
+  Intel macOS runners have repeatedly hung in `codesign --timestamp` while
+  signing the x64 DMG; package phase consumes the prebuilt app artifact and
+  does not need to execute target-architecture binaries.
 - macOS signing CI must make the temporary signing keychain the default user
   keychain and the active user keychain search list before running
   `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
   `codesign` failures even when `security find-identity` sees the imported
-  Developer ID identity.
+  Developer ID identity. Keep that behavior behind `--signing-mode ci`; the
+  default `--signing-mode local` must use the caller's existing keychain search
+  list and must not change the default keychain or search list.
 - `@electron/osx-sign` treats binary-looking `.wasm` files as signing
   candidates. Keep WebAssembly payloads ignored during macOS signing; they are
   not Mach-O code and cannot be signed by `codesign`.

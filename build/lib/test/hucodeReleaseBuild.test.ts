@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { afterEach, beforeEach, suite, test } from 'node:test';
+import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -13,13 +14,21 @@ import {
 	applyRpmPackageVersion,
 	findBuiltInCopilotExtension,
 	validateAppCliArtifact,
+	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
-} from '../../hucode/release-build.js';
+} from '../../hucode/release-build.ts';
 
 suite('Hucode release build', () => {
 
 	let tmpDir: string;
+	const releaseBuildScript = path.resolve(
+		import.meta.dirname,
+		'..',
+		'..',
+		'hucode',
+		'release-build.ts'
+	);
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hucode-release-'));
@@ -92,6 +101,57 @@ suite('Hucode release build', () => {
 		);
 	});
 
+	test('validates assembled app output before packaging', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-linux-x64');
+		await createPackagedCopilotExtension(buildOutput, 'linux-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+		const cliPath = path.join(buildOutput, 'bin', 'hucode-tunnel');
+		await fs.mkdir(path.dirname(cliPath), { recursive: true });
+		await fs.writeFile(cliPath, '');
+		await fs.chmod(cliPath, 0o755);
+
+		await validateAssembledAppOutput(
+			{ platform: 'linux', arch: 'x64' },
+			buildOutput
+		);
+	});
+
+	test('rejects assembled app output without final payloads', async () => {
+		const buildOutput = path.join(tmpDir, 'VSCode-linux-x64');
+		await createAppProduct(
+			path.join(buildOutput, 'resources', 'app', 'product.json')
+		);
+
+		await assert.rejects(
+			validateAssembledAppOutput(
+				{ platform: 'linux', arch: 'x64' },
+				buildOutput
+			),
+			/Built-in Copilot extension not found/
+		);
+	});
+
+	test('rejects moving build-only phase output to dist', () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				releaseBuildScript,
+				'--phase',
+				'build',
+				'--move-to-dist'
+			],
+			{ encoding: 'utf8' }
+		);
+
+		assert.strictEqual(result.status, 1);
+		assert.match(
+			result.stderr,
+			/--move-to-dist cannot be used with --phase build/
+		);
+	});
+
 	test('rejects packaged Copilot without target ripgrep shim', async () => {
 		const buildOutput = path.join(tmpDir, 'VSCode-darwin-arm64');
 		await createPackagedCopilotExtension(buildOutput, 'darwin-x64');
@@ -105,7 +165,7 @@ suite('Hucode release build', () => {
 		);
 	});
 
-	test('patches Linux package versions from Hucode release metadata', () => {
+	test('patches Debian package version from Hucode release metadata', () => {
 		assert.strictEqual(
 			applyDebianPackageVersion(
 				'Package: hucode\nVersion: 1.119.1-1757688183\n',
@@ -113,6 +173,9 @@ suite('Hucode release build', () => {
 			),
 			'Package: hucode\nVersion: 0.48.0-1757688183\n'
 		);
+	});
+
+	test('patches RPM package version from Hucode release metadata', () => {
 		assert.strictEqual(
 			applyRpmPackageVersion(
 				'Name: hucode\nVersion:  1.119.1\nRelease: 1757688183\n',
@@ -120,6 +183,9 @@ suite('Hucode release build', () => {
 			),
 			'Name: hucode\nVersion:  0.48.0\nRelease: 1757688183\n'
 		);
+	});
+
+	test('rejects Debian package metadata without version field', () => {
 		assert.throws(
 			() => applyDebianPackageVersion('Package: hucode\n', '0.48.0'),
 			/DEB control file does not contain a Version field/

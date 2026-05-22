@@ -46,12 +46,25 @@ Current local workflow:
   `-- --include-source-maps` to keep them for debugging.
 - `npm run hucode:build:release`: build a minified desktop app, create a zip
   archive, and move the app output into `dist/`.
-- `node build/hucode/release-build.js --copilot-vsix <path>`: inject a
+- `node build/hucode/release-build.ts --phase build`: build the final unsigned
+  app output at `../VSCode-<platform>-<arch>`, including Copilot target shims
+  and the Hucode Rust CLI.
+- `node build/hucode/release-build.ts --phase package --artifacts <list>`:
+  package an existing final app output into release assets. The default phase is
+  `all`, which preserves the older build-and-package flow.
+- `node build/hucode/release-build.ts --copilot-vsix <path>`: inject a
   prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
   desktop app, matching the release workflow's smaller Copilot package shape.
-- `node build/hucode/release-build.js --platform darwin --arch <arch> --sign`:
-  sign and notarize macOS app, ZIP, and DMG release assets. This requires the
-  configured Developer ID Application certificate and App Store Connect API key
-  environment used by release CI.
+- `node build/hucode/release-build.ts --platform darwin --arch <arch> --sign`:
+  sign the macOS app, then sign, notarize, staple, and validate DMG release
+  assets. Signed Darwin ZIP archives are still supported for explicit local
+  artifact requests by notarizing and stapling the app before archiving it.
+  Local signing uses the current keychain search list by default and does not
+  create or switch keychains. It needs `APPLE_TEAM_ID` plus either
+  `APPLE_NOTARIZATION_KEYCHAIN_PROFILE`, `APPLE_NOTARIZATION_KEY_PATH`, or
+  `APPLE_NOTARIZATION_KEY_P8_BASE64`; API-key paths/base64 also need
+  `APPLE_NOTARIZATION_ISSUER_ID` and `APPLE_NOTARIZATION_KEY_ID`. Release CI
+  passes `--signing-mode ci` to import its base64 certificate and notary key
+  into a temporary keychain.
 - `node build/hucode/release-size-report.js --app <path>`: report packaged app
   size, key subdirectory sizes, source-map totals, and release size guardrails.

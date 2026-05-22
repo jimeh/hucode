@@ -10,27 +10,133 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { pipeline } from 'stream/promises';
-import yauzl from 'yauzl';
+import type { Readable } from 'stream';
+import yauzl, { type Entry, type ZipFile } from 'yauzl';
 import { prepareMixin } from './prepare-mixin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
-const archAliases = new Map([
+type ReleasePlatform = 'darwin' | 'linux' | 'win32';
+type ReleaseArch = 'x64' | 'arm64' | 'armhf';
+type ReleasePhase = 'all' | 'build' | 'package';
+type ReleaseArtifact =
+	| 'archive'
+	| 'dmg'
+	| 'deb'
+	| 'rpm'
+	| 'user-setup'
+	| 'system-setup';
+type PackageType = 'deb' | 'rpm';
+type NotarizationAuth =
+	| {
+		kind: 'api-key';
+		issuerId: string;
+		keyId: string;
+		keyPath: string;
+	}
+	| {
+		kind: 'keychain-profile';
+		profile: string;
+	};
+type SigningMode = 'local' | 'ci';
+type SetupTarget = 'user' | 'system';
+type StringEnv = Record<string, string>;
+
+const DMG_CODESIGN_ATTEMPTS = 2;
+const DMG_CODESIGN_TIMEOUT_MS = 15 * 60 * 1000;
+
+interface ReleaseOptions {
+	artifacts: ReleaseArtifact[];
+	arch: ReleaseArch;
+	moveToDist: boolean;
+	platform: ReleasePlatform;
+	quality: string;
+	out: string;
+	copilotVsix: string | undefined;
+	phase: ReleasePhase;
+	sign: boolean;
+	signingMode: SigningMode;
+	stripSourceMaps: boolean;
+	skipBuild: boolean;
+	help: boolean;
+}
+
+interface ReleaseTargetOptions {
+	platform: ReleasePlatform;
+	arch: ReleaseArch;
+}
+
+interface ProductJson {
+	darwinBundleIdentifier?: string;
+	nameLong: string;
+	tunnelApplicationName: string;
+	[name: string]: unknown;
+}
+
+interface MixinProductJson {
+	hucodeVersion?: string;
+	[name: string]: unknown;
+}
+
+interface DarwinSigning {
+	env: StringEnv;
+	identity: string;
+	keychain: string | undefined;
+	notarization: NotarizationAuth;
+	tempDir: string | undefined;
+}
+
+interface PackagePaths {
+	buildOutput: string;
+	buildRoot: string;
+	distName: string;
+	distRoot: string;
+}
+
+interface PackageArtifactPaths extends PackagePaths {
+	signing: DarwinSigning | undefined;
+}
+
+function isExdevError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error
+		&& 'code' in error
+		&& error.code === 'EXDEV';
+}
+
+class CommandTimeoutError extends Error {
+	constructor(command: string, timeoutMs: number) {
+		super(`${command} timed out after ${formatDuration(timeoutMs)}.`);
+		this.name = 'CommandTimeoutError';
+	}
+}
+
+function formatDuration(ms: number): string {
+	const seconds = Math.round(ms / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	if (minutes === 0) {
+		return `${seconds}s`;
+	}
+
+	return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
+}
+
+const archAliases = new Map<string, ReleaseArch>([
 	['x64', 'x64'],
 	['arm64', 'arm64'],
 	['arm', 'armhf'],
 	['armhf', 'armhf']
 ]);
 
-const supportedTargets = new Map([
+const supportedTargets = new Map<ReleasePlatform, Set<ReleaseArch>>([
 	['darwin', new Set(['x64', 'arm64'])],
 	['linux', new Set(['x64', 'arm64', 'armhf'])],
 	['win32', new Set(['x64', 'arm64'])]
 ]);
 
 function printHelp() {
-	console.log(`Usage: node build/hucode/release-build.js [options]
+	console.log(`Usage: node build/hucode/release-build.ts [options]
 
 Builds a minified Hucode desktop package with the stable product mixin.
 
@@ -41,17 +147,22 @@ Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
+--phase <name>      Phase to run: all, build, package. Defaults to all.
+--phase build       Creates the final unsigned app output.
+--phase package     Consumes an existing app output and emits artifacts.
 --platform <name>    Target platform. Defaults to the host platform.
 --quality <name>     Product mixin quality. Defaults to stable.
 --out <dir>          Output directory. Defaults to dist.
 --sign               Sign and notarize macOS release artifacts.
+--signing-mode <mode> Signing backend: local or ci. Defaults to local.
+--ci-signing         Alias for --signing-mode ci.
 --include-source-maps  Keep local source maps in the packaged app.
---skip-build         Package an existing ../VSCode-* app output.
+--skip-build         Skip the gulp build and use existing ../VSCode-* output.
 -h, --help           Show this help.
 `);
 }
 
-function normalizeArch(arch) {
+function normalizeArch(arch: string): ReleaseArch {
 	const normalized = archAliases.get(arch);
 	if (!normalized) {
 		throw new Error(`Unsupported architecture '${arch}'.`);
@@ -60,16 +171,50 @@ function normalizeArch(arch) {
 	return normalized;
 }
 
-function parseArgs(args) {
-	const options = {
+function normalizePlatform(platform: string): ReleasePlatform {
+	if (!supportedTargets.has(platform as ReleasePlatform)) {
+		throw new Error(`Unsupported platform '${platform}'.`);
+	}
+
+	return platform as ReleasePlatform;
+}
+
+function normalizePhase(phase: string): ReleasePhase {
+	if (!supportedPhases.has(phase as ReleasePhase)) {
+		throw new Error(`Unsupported phase '${phase}'.`);
+	}
+
+	return phase as ReleasePhase;
+}
+
+function normalizeArtifact(artifact: string): ReleaseArtifact {
+	if (!allSupportedArtifacts.has(artifact as ReleaseArtifact)) {
+		throw new Error(`Unsupported release artifact '${artifact}'.`);
+	}
+
+	return artifact as ReleaseArtifact;
+}
+
+function normalizeSigningMode(mode: string): SigningMode {
+	if (!supportedSigningModes.has(mode as SigningMode)) {
+		throw new Error(`Unsupported signing mode '${mode}'.`);
+	}
+
+	return mode as SigningMode;
+}
+
+function parseArgs(args: string[]): ReleaseOptions {
+	const options: ReleaseOptions = {
 		artifacts: [],
 		arch: normalizeArch(process.arch),
 		moveToDist: false,
-		platform: process.platform,
+		platform: normalizePlatform(process.platform),
 		quality: 'stable',
 		out: 'dist',
 		copilotVsix: undefined,
+		phase: 'all',
 		sign: false,
+		signingMode: 'local',
 		stripSourceMaps: true,
 		skipBuild: false,
 		help: false
@@ -87,6 +232,7 @@ function parseArgs(args) {
 						.split(',')
 						.map(value => value.trim())
 						.filter(Boolean)
+						.map(normalizeArtifact)
 				);
 				break;
 			case '--arch':
@@ -101,8 +247,11 @@ function parseArgs(args) {
 					readValue(args, ++i, arg)
 				);
 				break;
+			case '--phase':
+				options.phase = normalizePhase(readValue(args, ++i, arg));
+				break;
 			case '--platform':
-				options.platform = readValue(args, ++i, arg);
+				options.platform = normalizePlatform(readValue(args, ++i, arg));
 				break;
 			case '--quality':
 				options.quality = readValue(args, ++i, arg);
@@ -112,6 +261,12 @@ function parseArgs(args) {
 				break;
 			case '--sign':
 				options.sign = true;
+				break;
+			case '--signing-mode':
+				options.signingMode = normalizeSigningMode(readValue(args, ++i, arg));
+				break;
+			case '--ci-signing':
+				options.signingMode = 'ci';
 				break;
 			case '--include-source-maps':
 				options.stripSourceMaps = false;
@@ -128,19 +283,17 @@ function parseArgs(args) {
 		}
 	}
 
-	if (!supportedTargets.has(options.platform)) {
-		throw new Error(`Unsupported platform '${options.platform}'.`);
-	}
-
-	if (!supportedTargets.get(options.platform).has(options.arch)) {
+	const supportedArchs = supportedTargets.get(options.platform)!;
+	if (!supportedArchs.has(options.arch)) {
 		throw new Error(
 			`Unsupported target '${options.platform}-${options.arch}'.`
 		);
 	}
 
 	options.artifacts = Array.from(new Set(options.artifacts));
+	const supportedPlatformArtifacts = supportedArtifacts.get(options.platform)!;
 	for (const artifact of options.artifacts) {
-		if (!supportedArtifacts.get(options.platform).has(artifact)) {
+		if (!supportedPlatformArtifacts.has(artifact)) {
 			throw new Error(
 				`Unsupported ${options.platform} artifact '${artifact}'.`
 			);
@@ -155,16 +308,36 @@ function parseArgs(args) {
 		throw new Error('--copilot-vsix cannot be used with --skip-build.');
 	}
 
+	if (options.phase === 'package' && options.copilotVsix) {
+		throw new Error('--copilot-vsix cannot be used with --phase package.');
+	}
+
+	if (options.phase === 'build' && options.sign) {
+		throw new Error('--sign cannot be used with --phase build.');
+	}
+
+	if (options.phase === 'build' && options.moveToDist) {
+		throw new Error('--move-to-dist cannot be used with --phase build.');
+	}
+
 	return options;
 }
 
-const supportedArtifacts = new Map([
+const supportedPhases = new Set<ReleasePhase>(['all', 'build', 'package']);
+
+const supportedSigningModes = new Set<SigningMode>(['local', 'ci']);
+
+const supportedArtifacts = new Map<ReleasePlatform, Set<ReleaseArtifact>>([
 	['darwin', new Set(['archive', 'dmg'])],
 	['linux', new Set(['archive', 'deb', 'rpm'])],
 	['win32', new Set(['archive', 'user-setup', 'system-setup'])]
 ]);
 
-const cliTargets = new Map([
+const allSupportedArtifacts = new Set<ReleaseArtifact>(
+	Array.from(supportedArtifacts.values()).flatMap(artifacts => [...artifacts])
+);
+
+const cliTargets = new Map<string, string>([
 	['darwin-x64', 'x86_64-apple-darwin'],
 	['darwin-arm64', 'aarch64-apple-darwin'],
 	['linux-x64', 'x86_64-unknown-linux-gnu'],
@@ -174,7 +347,7 @@ const cliTargets = new Map([
 	['win32-arm64', 'aarch64-pc-windows-msvc']
 ]);
 
-const MACHO_MAGIC_NUMBERS = new Set([
+const MACHO_MAGIC_NUMBERS = new Set<number>([
 	0xFEEDFACE,
 	0xCEFAEDFE,
 	0xFEEDFACF,
@@ -183,14 +356,14 @@ const MACHO_MAGIC_NUMBERS = new Set([
 	0xBEBAFECA
 ]);
 
-function getNodePlatformArch(options) {
-	const nodePlatform = options.platform === 'alpine' ? 'linux' : options.platform;
+function getNodePlatformArch(options: ReleaseTargetOptions): string {
+	const nodePlatform = options.platform;
 	const nodeArch = options.arch === 'armhf' ? 'arm' : options.arch;
 
 	return `${nodePlatform}-${nodeArch}`;
 }
 
-function readValue(args, index, option) {
+function readValue(args: string[], index: number, option: string): string {
 	const value = args[index];
 	if (!value || value.startsWith('--')) {
 		throw new Error(`Missing value for ${option}.`);
@@ -199,8 +372,15 @@ function readValue(args, index, option) {
 	return value;
 }
 
-async function run(command, args, cwd, env = {}) {
-	await new Promise((resolve, reject) => {
+async function run(
+	command: string,
+	args: string[],
+	cwd: string,
+	env: StringEnv = {},
+	timeoutMs?: number
+): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		let settled = false;
 		const child = spawn(command, args, {
 			cwd,
 			env: { ...process.env, ...env },
@@ -208,20 +388,56 @@ async function run(command, args, cwd, env = {}) {
 			shell: process.platform === 'win32'
 		});
 
-		child.on('error', reject);
-		child.on('exit', code => {
-			if (code === 0) {
-				resolve(undefined);
+		let killTimeout: NodeJS.Timeout | undefined;
+		let timeoutError: CommandTimeoutError | undefined;
+		const timeout = timeoutMs
+			? setTimeout(() => {
+				timeoutError = new CommandTimeoutError(command, timeoutMs);
+				child.kill('SIGTERM');
+				killTimeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+			}, timeoutMs)
+			: undefined;
+
+		const finish = (error?: Error) => {
+			if (settled) {
 				return;
 			}
 
-			reject(new Error(`${command} exited with code ${code ?? 'null'}.`));
+			settled = true;
+			clearTimeout(timeout);
+			clearTimeout(killTimeout);
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve(undefined);
+		};
+
+		child.on('error', error => finish(timeoutError ?? error));
+		child.on('exit', code => {
+			if (timeoutError) {
+				finish(timeoutError);
+				return;
+			}
+
+			if (code === 0) {
+				finish();
+				return;
+			}
+
+			finish(new Error(`${command} exited with code ${code ?? 'null'}.`));
 		});
 	});
 }
 
-async function runQuiet(command, args, cwd, env = {}) {
-	await new Promise((resolve, reject) => {
+async function runQuiet(
+	command: string,
+	args: string[],
+	cwd: string,
+	env: StringEnv = {}
+): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd,
 			env: { ...process.env, ...env },
@@ -241,16 +457,16 @@ async function runQuiet(command, args, cwd, env = {}) {
 	});
 }
 
-async function capture(command, args, cwd) {
-	const chunks = [];
-	await new Promise((resolve, reject) => {
+async function capture(command: string, args: string[], cwd: string): Promise<string> {
+	const chunks: Buffer[] = [];
+	await new Promise<void>((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd,
 			stdio: ['ignore', 'pipe', 'inherit'],
 			shell: process.platform === 'win32'
 		});
 
-		child.stdout.on('data', chunk => chunks.push(chunk));
+		child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
 		child.on('error', reject);
 		child.on('exit', code => {
 			if (code === 0) {
@@ -265,9 +481,14 @@ async function capture(command, args, cwd) {
 	return Buffer.concat(chunks).toString('utf8').trim();
 }
 
-async function captureCombined(command, args, cwd, env = {}) {
-	const chunks = [];
-	await new Promise((resolve, reject) => {
+async function captureCombined(
+	command: string,
+	args: string[],
+	cwd: string,
+	env: StringEnv = {}
+): Promise<string> {
+	const chunks: Buffer[] = [];
+	await new Promise<void>((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd,
 			env: { ...process.env, ...env },
@@ -275,8 +496,8 @@ async function captureCombined(command, args, cwd, env = {}) {
 			shell: process.platform === 'win32'
 		});
 
-		child.stdout.on('data', chunk => chunks.push(chunk));
-		child.stderr.on('data', chunk => chunks.push(chunk));
+		child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+		child.stderr.on('data', (chunk: Buffer) => chunks.push(chunk));
 		child.on('error', reject);
 		child.on('exit', code => {
 			if (code === 0) {
@@ -297,7 +518,11 @@ async function captureCombined(command, args, cwd, env = {}) {
 	return Buffer.concat(chunks).toString('utf8').trim();
 }
 
-async function runWithMixin(args, options, env = {}) {
+async function runWithMixin(
+	args: string[],
+	options: ReleaseOptions,
+	env: StringEnv = {}
+): Promise<void> {
 	await run(process.execPath, [
 		path.join('build', 'hucode', 'run-with-mixin.js'),
 		'--quality',
@@ -311,11 +536,15 @@ async function runWithMixin(args, options, env = {}) {
 	});
 }
 
-async function runGulpTask(taskName, options, env = {}) {
+async function runGulpTask(
+	taskName: string,
+	options: ReleaseOptions,
+	env: StringEnv = {}
+): Promise<void> {
 	await runWithMixin(['npm', 'run', 'gulp', taskName], options, env);
 }
 
-function getBuildEnv(options) {
+function getBuildEnv(options: ReleaseOptions): StringEnv {
 	if (!options.stripSourceMaps) {
 		return {};
 	}
@@ -325,13 +554,13 @@ function getBuildEnv(options) {
 	};
 }
 
-function getLinuxPackageDepsEnv() {
+function getLinuxPackageDepsEnv(): StringEnv {
 	return {
 		HUCODE_LINUX_PACKAGE_DEPS_WARN_ONLY: '1'
 	};
 }
 
-async function exists(filePath) {
+async function exists(filePath: string): Promise<boolean> {
 	try {
 		await fs.access(filePath);
 		return true;
@@ -340,7 +569,7 @@ async function exists(filePath) {
 	}
 }
 
-async function writeBuildDate() {
+async function writeBuildDate(): Promise<void> {
 	let date;
 	try {
 		date = await capture(
@@ -357,7 +586,7 @@ async function writeBuildDate() {
 	await fs.writeFile(path.join(outBuild, 'date'), date, 'utf8');
 }
 
-function openZip(zipPath) {
+function openZip(zipPath: string): Promise<ZipFile> {
 	return new Promise((resolve, reject) => {
 		yauzl.open(zipPath, {
 			autoClose: true,
@@ -368,16 +597,26 @@ function openZip(zipPath) {
 				return;
 			}
 
+			if (!zipfile) {
+				reject(new Error(`Failed to open ZIP: ${zipPath}`));
+				return;
+			}
+
 			resolve(zipfile);
 		});
 	});
 }
 
-function openZipEntry(zipfile, entry) {
+function openZipEntry(zipfile: ZipFile, entry: Entry): Promise<Readable> {
 	return new Promise((resolve, reject) => {
 		zipfile.openReadStream(entry, (error, stream) => {
 			if (error) {
 				reject(error);
+				return;
+			}
+
+			if (!stream) {
+				reject(new Error(`Failed to open ZIP entry: ${entry.fileName}`));
 				return;
 			}
 
@@ -386,7 +625,7 @@ function openZipEntry(zipfile, entry) {
 	});
 }
 
-function getExtensionRelativePath(entryName) {
+function getExtensionRelativePath(entryName: string): string | undefined {
 	if (!entryName.startsWith('extension/')) {
 		return undefined;
 	}
@@ -408,7 +647,7 @@ function getExtensionRelativePath(entryName) {
 	return normalized;
 }
 
-async function extractCopilotVsix(vsixPath) {
+async function extractCopilotVsix(vsixPath: string): Promise<void> {
 	if (!(await exists(vsixPath))) {
 		throw new Error(`Copilot VSIX not found: ${vsixPath}`);
 	}
@@ -418,8 +657,8 @@ async function extractCopilotVsix(vsixPath) {
 	await fs.mkdir(outputDir, { recursive: true });
 
 	const zipfile = await openZip(vsixPath);
-	await new Promise((resolve, reject) => {
-		zipfile.on('entry', async entry => {
+	await new Promise<void>((resolve, reject) => {
+		zipfile.on('entry', async (entry: Entry) => {
 			try {
 				const relativePath = getExtensionRelativePath(entry.fileName);
 				if (!relativePath) {
@@ -454,10 +693,8 @@ async function extractCopilotVsix(vsixPath) {
 
 /**
  * Validates that an extracted Copilot VSIX has no bundled target binaries.
- *
- * @param {string} outputDir
  */
-export async function validateExtractedCopilotVsix(outputDir) {
+export async function validateExtractedCopilotVsix(outputDir: string): Promise<void> {
 	const copilotModules = path.join(outputDir, 'node_modules', '@github');
 	if (await exists(copilotModules)) {
 		const entries = await fs.readdir(copilotModules, { withFileTypes: true });
@@ -492,11 +729,10 @@ export async function validateExtractedCopilotVsix(outputDir) {
 
 /**
  * Finds the built-in Copilot extension inside a packaged app output.
- *
- * @param {string} buildOutput
- * @returns {Promise<string | undefined>}
  */
-export async function findBuiltInCopilotExtension(buildOutput) {
+export async function findBuiltInCopilotExtension(
+	buildOutput: string
+): Promise<string | undefined> {
 	const manifest = await findFirst(buildOutput, filePath => {
 		if (path.basename(filePath) !== 'package.json') {
 			return false;
@@ -513,11 +749,11 @@ export async function findBuiltInCopilotExtension(buildOutput) {
 
 /**
  * Validates the packaged Copilot extension for a release target.
- *
- * @param {{ platform: string; arch: string }} options
- * @param {string} buildOutput
  */
-export async function validatePackagedCopilot(options, buildOutput) {
+export async function validatePackagedCopilot(
+	options: ReleaseTargetOptions,
+	buildOutput: string
+): Promise<void> {
 	const extensionDir = await findBuiltInCopilotExtension(buildOutput);
 	if (!extensionDir) {
 		throw new Error(`Built-in Copilot extension not found in ${buildOutput}`);
@@ -544,7 +780,10 @@ export async function validatePackagedCopilot(options, buildOutput) {
 	}
 }
 
-async function runBuildWithCopilotVsix(options, buildOutput) {
+async function runBuildWithCopilotVsix(
+	options: ReleaseOptions,
+	buildOutput: string
+): Promise<void> {
 	const env = getBuildEnv(options);
 	const packageTask = `vscode-${options.platform}-${options.arch}-min-ci`;
 
@@ -560,12 +799,28 @@ async function runBuildWithCopilotVsix(options, buildOutput) {
 		process.execPath,
 		path.join('build', 'hucode', 'esbuild-bundle.js')
 	], options, env);
-	await extractCopilotVsix(options.copilotVsix);
+	await extractCopilotVsix(options.copilotVsix!);
 	await runGulpTask(packageTask, options, env);
 	await validatePackagedCopilot(options, buildOutput);
 }
 
-async function movePackage(source, destination) {
+/**
+ * Validates that an assembled release app can be packaged without further
+ * payload mutation.
+ */
+export async function validateAssembledAppOutput(
+	options: ReleaseTargetOptions,
+	buildOutput: string
+): Promise<void> {
+	if (!(await exists(buildOutput))) {
+		throw new Error(`Build output not found: ${buildOutput}`);
+	}
+
+	await validatePackagedCopilot(options, buildOutput);
+	await validateAppCliArtifact(options, buildOutput);
+}
+
+async function movePackage(source: string, destination: string): Promise<void> {
 	if (!(await exists(source))) {
 		throw new Error(`Build output not found: ${source}`);
 	}
@@ -576,7 +831,7 @@ async function movePackage(source, destination) {
 	try {
 		await fs.rename(source, destination);
 	} catch (error) {
-		if (error?.code !== 'EXDEV') {
+		if (!isExdevError(error)) {
 			throw error;
 		}
 
@@ -589,7 +844,7 @@ async function movePackage(source, destination) {
 	}
 }
 
-async function moveFile(source, destination) {
+async function moveFile(source: string, destination: string): Promise<void> {
 	if (!(await exists(source))) {
 		throw new Error(`Build output not found: ${source}`);
 	}
@@ -600,7 +855,7 @@ async function moveFile(source, destination) {
 	try {
 		await fs.rename(source, destination);
 	} catch (error) {
-		if (error?.code !== 'EXDEV') {
+		if (!isExdevError(error)) {
 			throw error;
 		}
 
@@ -609,7 +864,7 @@ async function moveFile(source, destination) {
 	}
 }
 
-async function createArchive(source, archivePath) {
+async function createArchive(source: string, archivePath: string): Promise<void> {
 	await fs.rm(archivePath, { force: true });
 	await fs.mkdir(path.dirname(archivePath), { recursive: true });
 
@@ -629,7 +884,10 @@ async function createArchive(source, archivePath) {
 	await run('zip', ['-Xry', archivePath, '.'], source);
 }
 
-async function findFirst(root, predicate) {
+async function findFirst(
+	root: string,
+	predicate: (filePath: string) => boolean
+): Promise<string | undefined> {
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	for (const entry of entries) {
 		const entryPath = path.join(root, entry.name);
@@ -649,7 +907,7 @@ async function findFirst(root, predicate) {
 	return undefined;
 }
 
-function getCliTarget(options) {
+function getCliTarget(options: ReleaseTargetOptions): string {
 	const target = cliTargets.get(`${options.platform}-${options.arch}`);
 	if (!target) {
 		throw new Error(
@@ -660,7 +918,10 @@ function getCliTarget(options) {
 	return target;
 }
 
-async function findAppProductJson(options, buildOutput) {
+async function findAppProductJson(
+	options: ReleaseTargetOptions,
+	buildOutput: string
+): Promise<string | undefined> {
 	const appProductPath = path.join(
 		buildOutput,
 		'resources',
@@ -676,13 +937,13 @@ async function findAppProductJson(options, buildOutput) {
 			return false;
 		}
 
-		const parts = path.relative(buildOutput, filePath).split(path.sep);
-		if (options.platform === 'darwin') {
-			return parts.length >= 5
-				&& parts.at(-5).endsWith('.app')
-				&& parts.at(-4) === 'Contents'
-				&& parts.at(-3) === 'Resources'
-				&& parts.at(-2) === 'app';
+			const parts = path.relative(buildOutput, filePath).split(path.sep);
+			if (options.platform === 'darwin') {
+				return parts.length >= 5
+					&& parts.at(-5)!.endsWith('.app')
+					&& parts.at(-4) === 'Contents'
+					&& parts.at(-3) === 'Resources'
+					&& parts.at(-2) === 'app';
 		}
 
 		return parts.length >= 3
@@ -691,7 +952,11 @@ async function findAppProductJson(options, buildOutput) {
 	});
 }
 
-function getAppCliDestination(options, buildOutput, product) {
+function getAppCliDestination(
+	options: ReleaseTargetOptions,
+	buildOutput: string,
+	product: ProductJson
+): string {
 	if (options.platform === 'darwin') {
 		return path.join(
 			buildOutput,
@@ -713,18 +978,17 @@ function getAppCliDestination(options, buildOutput, product) {
 
 /**
  * Validates that a packaged app output includes the Hucode CLI artifact.
- *
- * @param {{ platform: string; arch: string }} options
- * @param {string} buildOutput
- * @returns {Promise<string>}
  */
-export async function validateAppCliArtifact(options, buildOutput) {
+export async function validateAppCliArtifact(
+	options: ReleaseTargetOptions,
+	buildOutput: string
+): Promise<string> {
 	const appProductPath = await findAppProductJson(options, buildOutput);
 	if (!appProductPath) {
 		throw new Error(`App product.json not found in build output: ${buildOutput}`);
 	}
 
-	const product = await readJson(appProductPath);
+	const product = await readJson<ProductJson>(appProductPath);
 	const cliPath = getAppCliDestination(options, buildOutput, product);
 	let stats;
 	try {
@@ -744,17 +1008,20 @@ export async function validateAppCliArtifact(options, buildOutput) {
 	return cliPath;
 }
 
-async function getDarwinAppPath(options, buildOutput) {
+async function getDarwinAppPath(
+	options: ReleaseTargetOptions,
+	buildOutput: string
+): Promise<string> {
 	const appProductPath = await findAppProductJson(options, buildOutput);
 	if (!appProductPath) {
 		throw new Error(`App product.json not found in build output: ${buildOutput}`);
 	}
 
-	const product = await readJson(appProductPath);
+	const product = await readJson<ProductJson>(appProductPath);
 	return path.join(buildOutput, `${product.nameLong}.app`);
 }
 
-function requireEnv(name) {
+function requireEnv(name: string): string {
 	const value = process.env[name];
 	if (!value) {
 		throw new Error(`$${name} is required for macOS signing.`);
@@ -763,19 +1030,115 @@ function requireEnv(name) {
 	return value;
 }
 
-async function prepareDarwinSigning() {
-	if (process.platform !== 'darwin') {
-		throw new Error('macOS signing must run on a macOS host.');
+async function writeNotarizationKey(
+	tempDir: string,
+	base64Value: string
+): Promise<string> {
+	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
+	await fs.writeFile(
+		notaryKeyPath,
+		Buffer.from(base64Value, 'base64'),
+		{ mode: 0o600 }
+	);
+
+	return notaryKeyPath;
+}
+
+function getApiKeyNotarizationAuth(keyPath: string): NotarizationAuth {
+	return {
+		kind: 'api-key',
+		issuerId: requireEnv('APPLE_NOTARIZATION_ISSUER_ID'),
+		keyId: requireEnv('APPLE_NOTARIZATION_KEY_ID'),
+		keyPath
+	};
+}
+
+async function prepareLocalNotarizationAuth(
+	tempDir: string
+): Promise<NotarizationAuth> {
+	const profile = process.env.APPLE_NOTARIZATION_KEYCHAIN_PROFILE;
+	if (profile) {
+		return { kind: 'keychain-profile', profile };
 	}
 
-	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
-	await fs.mkdir(tempRoot, { recursive: true });
-	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
+	const keyPath = process.env.APPLE_NOTARIZATION_KEY_PATH;
+	if (keyPath) {
+		return getApiKeyNotarizationAuth(keyPath);
+	}
+
+	const base64Key = process.env.APPLE_NOTARIZATION_KEY_P8_BASE64;
+	if (base64Key) {
+		return getApiKeyNotarizationAuth(
+			await writeNotarizationKey(tempDir, base64Key)
+		);
+	}
+
+	throw new Error(
+		'Local signing requires APPLE_NOTARIZATION_KEYCHAIN_PROFILE, ' +
+		'APPLE_NOTARIZATION_KEY_PATH, or APPLE_NOTARIZATION_KEY_P8_BASE64.'
+	);
+}
+
+async function findDeveloperIdIdentity(
+	teamId: string,
+	keychain?: string
+): Promise<{ identity: string; line: string }> {
+	const args = ['find-identity', '-v', '-p', 'codesigning'];
+	if (keychain) {
+		args.push(keychain);
+	}
+
+	const identities = await capture('security', args, repoRoot);
+	const identityLine = identities
+		.split(/\r?\n/)
+		.find(line =>
+			line.includes('Developer ID Application') &&
+			line.includes(`(${teamId})`)
+		);
+	const identity = /([0-9A-F]{40})/.exec(identityLine ?? '')?.[1];
+	if (!identity || !identityLine) {
+		throw new Error(
+			`Developer ID Application identity not found for APPLE_TEAM_ID=${teamId}:\n` +
+			identities
+		);
+	}
+
+	return { identity, line: identityLine };
+}
+
+async function prepareLocalDarwinSigning(
+	tempDir: string,
+	teamId: string
+): Promise<DarwinSigning> {
+	const identity = process.env.CODESIGN_IDENTITY ||
+		(await findDeveloperIdIdentity(teamId)).identity;
+	const notarization = await prepareLocalNotarizationAuth(tempDir);
+
+	return {
+		env: {
+			CODESIGN_IDENTITY: identity
+		},
+		identity,
+		keychain: undefined,
+		notarization,
+		tempDir
+	};
+}
+
+async function prepareCiDarwinSigning(
+	tempDir: string,
+	teamId: string
+): Promise<DarwinSigning> {
 	const keychain = path.join(tempDir, 'buildagent.keychain');
 	const p12Path = path.join(tempDir, 'developer-id-application.p12');
-	const notaryKeyPath = path.join(tempDir, 'notarization-key.p8');
 	const keychainPassword = 'hucode-signing';
-	const teamId = requireEnv('APPLE_TEAM_ID');
+
+	const notaryKeyPath = await writeNotarizationKey(
+		tempDir,
+		requireEnv('APPLE_NOTARIZATION_KEY_P8_BASE64')
+	);
+
+	const notarization = getApiKeyNotarizationAuth(notaryKeyPath);
 
 	await fs.writeFile(
 		p12Path,
@@ -783,11 +1146,6 @@ async function prepareDarwinSigning() {
 			requireEnv('MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64'),
 			'base64'
 		),
-		{ mode: 0o600 }
-	);
-	await fs.writeFile(
-		notaryKeyPath,
-		Buffer.from(requireEnv('APPLE_NOTARIZATION_KEY_P8_BASE64'), 'base64'),
 		{ mode: 0o600 }
 	);
 
@@ -836,54 +1194,78 @@ async function prepareDarwinSigning() {
 		keychain
 	], repoRoot);
 
-	const identities = await capture(
-		'security',
-		['find-identity', '-v', '-p', 'codesigning', keychain],
-		repoRoot
-	);
-	const identityLine = identities
-		.split(/\r?\n/)
-		.find(line => line.includes('Developer ID Application'));
-	const identity = /([0-9A-F]{40})/.exec(identityLine ?? '')?.[1];
-	if (!identity) {
-		throw new Error(`Developer ID Application identity not found:\n${identities}`);
-	}
-
-	if (!identityLine.includes(`(${teamId})`)) {
+	const { identity, line } = await findDeveloperIdIdentity(teamId, keychain);
+	if (!line.includes(`(${teamId})`)) {
 		throw new Error(
 			`Developer ID identity does not match APPLE_TEAM_ID=${teamId}:\n` +
-			identityLine
+			line
 		);
 	}
 
 	return {
 		env: {
 			AGENT_TEMPDIRECTORY: tempDir,
+			CODESIGN_KEYCHAIN: keychain,
 			CODESIGN_IDENTITY: identity
 		},
 		identity,
 		keychain,
-		notaryKeyPath,
+		notarization,
 		tempDir
 	};
 }
 
-async function cleanupDarwinSigning(signing) {
+async function prepareDarwinSigning(
+	options: ReleaseOptions
+): Promise<DarwinSigning> {
+	if (process.platform !== 'darwin') {
+		throw new Error('macOS signing must run on a macOS host.');
+	}
+
+	const tempRoot = process.env.AGENT_TEMPDIRECTORY ?? os.tmpdir();
+	await fs.mkdir(tempRoot, { recursive: true });
+	const tempDir = await fs.mkdtemp(path.join(tempRoot, 'hucode-signing-'));
+	const teamId = requireEnv('APPLE_TEAM_ID');
+
+	try {
+		if (options.signingMode === 'ci') {
+			return await prepareCiDarwinSigning(tempDir, teamId);
+		}
+
+		return await prepareLocalDarwinSigning(tempDir, teamId);
+	} catch (error) {
+		await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+		throw error;
+	}
+}
+
+async function cleanupDarwinSigning(signing: DarwinSigning | undefined): Promise<void> {
 	if (!signing) {
 		return;
 	}
 
-	await run('security', ['delete-keychain', signing.keychain], repoRoot)
-		.catch(error => {
-			console.warn(`Failed to delete signing keychain: ${error.message}`);
-		});
-	await fs.rm(signing.tempDir, { recursive: true, force: true })
-		.catch(error => {
-			console.warn(`Failed to remove signing temp directory: ${error.message}`);
-		});
+	if (signing.keychain) {
+		await run('security', ['delete-keychain', signing.keychain], repoRoot)
+			.catch(error => {
+				console.warn(`Failed to delete signing keychain: ${error.message}`);
+			});
+	}
+
+	if (signing.tempDir) {
+		await fs.rm(signing.tempDir, { recursive: true, force: true })
+			.catch(error => {
+				console.warn(
+					`Failed to remove signing temp directory: ${error.message}`
+				);
+			});
+	}
 }
 
-async function signDarwinApp(options, buildRoot, signing) {
+async function signDarwinApp(
+	options: ReleaseOptions,
+	buildRoot: string,
+	signing: DarwinSigning
+): Promise<void> {
 	await runWithMixin([
 		process.execPath,
 		path.join('build', 'darwin', 'sign.ts'),
@@ -891,39 +1273,103 @@ async function signDarwinApp(options, buildRoot, signing) {
 	], options, signing.env);
 }
 
-async function signDarwinDmg(dmgPath, signing) {
-	await run('codesign', [
-		'--sign',
-		signing.identity,
-		'--keychain',
-		signing.keychain,
-		'--timestamp',
-		'--force',
-		dmgPath
-	], repoRoot);
+async function getDarwinDmgIdentifier(
+	options: ReleaseOptions,
+	buildOutput: string
+): Promise<string> {
+	const appProductPath = await findAppProductJson(options, buildOutput);
+	if (!appProductPath) {
+		throw new Error(`App product.json not found in build output: ${buildOutput}`);
+	}
+
+	const product = await readJson<ProductJson>(appProductPath);
+	const prefix = product.darwinBundleIdentifier ?? product.tunnelApplicationName;
+	return `${prefix}.dmg.${options.arch}`;
 }
 
-async function notarizeArtifact(artifactPath, signing) {
-	await run('xcrun', [
+async function signDarwinDmg(
+	dmgPath: string,
+	identifier: string,
+	signing: DarwinSigning
+): Promise<void> {
+	const args = [
+		'--sign',
+		signing.identity,
+		'--identifier',
+		identifier,
+		'--timestamp',
+		'--force',
+		'--verbose=4',
+		dmgPath
+	];
+	if (signing.keychain) {
+		args.splice(4, 0, '--keychain', signing.keychain);
+	}
+
+	for (let attempt = 1; attempt <= DMG_CODESIGN_ATTEMPTS; attempt++) {
+		console.log(
+			`Signing DMG (${attempt}/${DMG_CODESIGN_ATTEMPTS}): ${dmgPath}`
+		);
+		console.log(`DMG signing identifier: ${identifier}`);
+		try {
+			await run(
+				'codesign',
+				args,
+				repoRoot,
+				{},
+				DMG_CODESIGN_TIMEOUT_MS
+			);
+			console.log(`Signed DMG: ${dmgPath}`);
+			return;
+		} catch (error) {
+			if (
+				error instanceof CommandTimeoutError &&
+				attempt < DMG_CODESIGN_ATTEMPTS
+			) {
+				console.warn(
+					`DMG signing timed out; retrying: ${error.message}`
+				);
+				continue;
+			}
+
+			throw error;
+		}
+	}
+}
+
+async function notarizeArtifact(
+	artifactPath: string,
+	signing: DarwinSigning
+): Promise<void> {
+	const args = [
 		'notarytool',
 		'submit',
 		artifactPath,
-		'--key',
-		signing.notaryKeyPath,
-		'--key-id',
-		requireEnv('APPLE_NOTARIZATION_KEY_ID'),
-		'--issuer',
-		requireEnv('APPLE_NOTARIZATION_ISSUER_ID'),
 		'--wait'
-	], repoRoot);
+	];
+
+	if (signing.notarization.kind === 'keychain-profile') {
+		args.push('--keychain-profile', signing.notarization.profile);
+	} else {
+		args.push(
+			'--key',
+			signing.notarization.keyPath,
+			'--key-id',
+			signing.notarization.keyId,
+			'--issuer',
+			signing.notarization.issuerId
+		);
+	}
+
+	await run('xcrun', args, repoRoot);
 }
 
-async function stapleArtifact(artifactPath) {
+async function stapleArtifact(artifactPath: string): Promise<void> {
 	await run('xcrun', ['stapler', 'staple', artifactPath], repoRoot);
 	await run('xcrun', ['stapler', 'validate', artifactPath], repoRoot);
 }
 
-async function createNotarizationZip(appPath, zipPath) {
+async function createNotarizationZip(appPath: string, zipPath: string): Promise<void> {
 	await fs.rm(zipPath, { force: true });
 	await fs.mkdir(path.dirname(zipPath), { recursive: true });
 	await run('ditto', [
@@ -936,7 +1382,7 @@ async function createNotarizationZip(appPath, zipPath) {
 	], repoRoot);
 }
 
-async function isMachOBinary(filePath) {
+async function isMachOBinary(filePath: string): Promise<boolean> {
 	let file;
 	try {
 		file = await fs.open(filePath, 'r');
@@ -954,8 +1400,8 @@ async function isMachOBinary(filePath) {
 	}
 }
 
-async function findMachOBinaries(root) {
-	const result = [];
+async function findMachOBinaries(root: string): Promise<string[]> {
+	const result: string[] = [];
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	for (const entry of entries) {
 		const filePath = path.join(root, entry.name);
@@ -972,7 +1418,7 @@ async function findMachOBinaries(root) {
 	return result;
 }
 
-async function verifyMachOSignatures(appPath) {
+async function verifyMachOSignatures(appPath: string): Promise<void> {
 	await run('codesign', [
 		'--verify',
 		'--deep',
@@ -1009,11 +1455,12 @@ async function verifyMachOSignatures(appPath) {
 	console.log(`Verified ${machOBinaries.length} signed Mach-O binaries.`);
 }
 
-async function notarizeAndStapleDarwinApp(options, buildOutput, distRoot, signing) {
-	const appPath = await getDarwinAppPath(options, buildOutput);
-	await signDarwinApp(options, path.dirname(repoRoot), signing);
-	await verifyMachOSignatures(appPath);
-
+async function notarizeAndStapleDarwinApp(
+	options: ReleaseOptions,
+	appPath: string,
+	distRoot: string,
+	signing: DarwinSigning
+): Promise<void> {
 	const zipPath = path.join(
 		distRoot,
 		'.tmp',
@@ -1027,7 +1474,19 @@ async function notarizeAndStapleDarwinApp(options, buildOutput, distRoot, signin
 	await run('spctl', ['-a', '-vvv', '-t', 'exec', appPath], repoRoot);
 }
 
-async function getLinuxCliEnv(options) {
+async function signAndVerifyDarwinApp(
+	options: ReleaseOptions,
+	buildOutput: string,
+	signing: DarwinSigning
+): Promise<string> {
+	const appPath = await getDarwinAppPath(options, buildOutput);
+	await signDarwinApp(options, path.dirname(repoRoot), signing);
+	await verifyMachOSignatures(appPath);
+
+	return appPath;
+}
+
+async function getLinuxCliEnv(options: ReleaseOptions): Promise<StringEnv> {
 	if (options.platform !== 'linux') {
 		return {};
 	}
@@ -1105,12 +1564,12 @@ async function getLinuxCliEnv(options) {
 	};
 }
 
-async function readJson(filePath) {
+async function readJson<T>(filePath: string): Promise<T> {
 	return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
-async function readMixinProduct(options) {
-	return readJson(
+async function readMixinProduct(options: ReleaseOptions): Promise<MixinProductJson> {
+	return readJson<MixinProductJson>(
 		path.join(
 			repoRoot,
 			'.build',
@@ -1122,7 +1581,10 @@ async function readMixinProduct(options) {
 	);
 }
 
-async function getHucodePackageVersion(options, packageType) {
+async function getHucodePackageVersion(
+	options: ReleaseOptions,
+	packageType: PackageType
+): Promise<string> {
 	const product = await readMixinProduct(options);
 	const version = product.hucodeVersion;
 	if (!version) {
@@ -1144,7 +1606,10 @@ async function getHucodePackageVersion(options, packageType) {
 	return version;
 }
 
-export function applyDebianPackageVersion(controlContent, hucodeVersion) {
+export function applyDebianPackageVersion(
+	controlContent: string,
+	hucodeVersion: string
+): string {
 	const match = /^Version:[^\S\r\n]*(\S+)[^\S\r\n]*$/m.exec(controlContent);
 	if (!match) {
 		throw new Error('DEB control file does not contain a Version field.');
@@ -1162,7 +1627,10 @@ export function applyDebianPackageVersion(controlContent, hucodeVersion) {
 	);
 }
 
-export function applyRpmPackageVersion(specContent, hucodeVersion) {
+export function applyRpmPackageVersion(
+	specContent: string,
+	hucodeVersion: string
+): string {
 	if (!/^Version:[^\S\r\n]*\S+[^\S\r\n]*$/m.test(specContent)) {
 		throw new Error('RPM spec file does not contain a Version field.');
 	}
@@ -1173,7 +1641,11 @@ export function applyRpmPackageVersion(specContent, hucodeVersion) {
 	);
 }
 
-async function patchLinuxPackageVersion(options, buildRoot, packageType) {
+async function patchLinuxPackageVersion(
+	options: ReleaseOptions,
+	buildRoot: string,
+	packageType: PackageType
+): Promise<void> {
 	const version = await getHucodePackageVersion(options, packageType);
 	const filePath = await findFirst(buildRoot, candidate => {
 		if (packageType === 'deb') {
@@ -1200,13 +1672,13 @@ async function patchLinuxPackageVersion(options, buildRoot, packageType) {
 	console.log(`Hucode ${packageType.toUpperCase()} version: ${version}`);
 }
 
-async function mixInCli(options, buildOutput) {
+async function mixInCli(options: ReleaseOptions, buildOutput: string): Promise<void> {
 	const appProductPath = await findAppProductJson(options, buildOutput);
 	if (!appProductPath) {
 		throw new Error(`App product.json not found in build output: ${buildOutput}`);
 	}
 
-	const product = await readJson(appProductPath);
+	const product = await readJson<ProductJson>(appProductPath);
 	const target = getCliTarget(options);
 	const commit = process.env.GITHUB_SHA
 		?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
@@ -1244,7 +1716,12 @@ async function mixInCli(options, buildOutput) {
 	console.log(`Hucode CLI: ${destination}`);
 }
 
-async function packageArchive(options, buildOutput, distRoot, distName) {
+async function packageArchive(
+	options: ReleaseOptions,
+	buildOutput: string,
+	distRoot: string,
+	distName: string
+): Promise<void> {
 	const archivePath = path.join(distRoot, `${distName}.zip`);
 	if (options.platform === 'darwin') {
 		const appPath = await getDarwinAppPath(options, buildOutput);
@@ -1257,7 +1734,14 @@ async function packageArchive(options, buildOutput, distRoot, distName) {
 	console.log(`Hucode archive: ${archivePath}`);
 }
 
-async function packageDmg(options, buildRoot, distRoot, distName, signing) {
+async function packageDmg(
+	options: ReleaseOptions,
+	buildOutput: string,
+	buildRoot: string,
+	distRoot: string,
+	distName: string,
+	signing: DarwinSigning | undefined
+): Promise<void> {
 	const dmgOut = path.join(distRoot, '.tmp', distName, 'dmg');
 	await fs.mkdir(dmgOut, { recursive: true });
 
@@ -1273,9 +1757,13 @@ async function packageDmg(options, buildRoot, distRoot, distName, signing) {
 	await moveFile(source, destination);
 
 	if (signing) {
-		await signDarwinDmg(destination, signing);
+		const identifier = await getDarwinDmgIdentifier(options, buildOutput);
+		await signDarwinDmg(destination, identifier, signing);
+		console.log(`Notarizing DMG: ${destination}`);
 		await notarizeArtifact(destination, signing);
+		console.log(`Stapling DMG: ${destination}`);
 		await stapleArtifact(destination);
+		console.log(`Validating DMG signature: ${destination}`);
 		await run('spctl', [
 			'-a',
 			'-vvv',
@@ -1290,7 +1778,7 @@ async function packageDmg(options, buildRoot, distRoot, distName, signing) {
 	console.log(`Hucode DMG: ${destination}`);
 }
 
-async function packageDeb(options, distRoot) {
+async function packageDeb(options: ReleaseOptions, distRoot: string): Promise<void> {
 	const buildRoot = path.join(repoRoot, '.build', 'linux', 'deb');
 	await fs.rm(buildRoot, { recursive: true, force: true });
 
@@ -1321,7 +1809,7 @@ async function packageDeb(options, distRoot) {
 	console.log(`Hucode DEB: ${destination}`);
 }
 
-async function packageRpm(options, distRoot) {
+async function packageRpm(options: ReleaseOptions, distRoot: string): Promise<void> {
 	const buildRoot = path.join(repoRoot, '.build', 'linux', 'rpm');
 	await fs.rm(buildRoot, { recursive: true, force: true });
 
@@ -1352,7 +1840,12 @@ async function packageRpm(options, distRoot) {
 	console.log(`Hucode RPM: ${destination}`);
 }
 
-async function packageWindowsSetup(options, distRoot, distName, target) {
+async function packageWindowsSetup(
+	options: ReleaseOptions,
+	distRoot: string,
+	distName: string,
+	target: SetupTarget
+): Promise<void> {
 	await runWithMixin([
 		'npm',
 		'run',
@@ -1381,7 +1874,11 @@ async function packageWindowsSetup(options, distRoot, distName, target) {
 	console.log(`Hucode ${target} setup: ${destination}`);
 }
 
-async function packageArtifact(artifact, options, paths) {
+async function packageArtifact(
+	artifact: ReleaseArtifact,
+	options: ReleaseOptions,
+	paths: PackageArtifactPaths
+): Promise<void> {
 	switch (artifact) {
 		case 'archive':
 			await packageArchive(
@@ -1394,6 +1891,7 @@ async function packageArtifact(artifact, options, paths) {
 		case 'dmg':
 			await packageDmg(
 				options,
+				paths.buildOutput,
 				paths.buildRoot,
 				paths.distRoot,
 				paths.distName,
@@ -1427,7 +1925,62 @@ async function packageArtifact(artifact, options, paths) {
 	}
 }
 
-async function main() {
+async function buildAppOutput(
+	options: ReleaseOptions,
+	buildOutput: string
+): Promise<void> {
+	if (options.skipBuild) {
+		if (!(await exists(buildOutput))) {
+			throw new Error(`Build output not found: ${buildOutput}`);
+		}
+	} else if (options.copilotVsix) {
+		await runBuildWithCopilotVsix(options, buildOutput);
+	} else {
+		const taskName = `vscode-${options.platform}-${options.arch}-min`;
+		await runGulpTask(taskName, options, getBuildEnv(options));
+	}
+
+	await mixInCli(options, buildOutput);
+	await validateAssembledAppOutput(options, buildOutput);
+}
+
+async function packageAppOutput(
+	options: ReleaseOptions,
+	paths: PackagePaths
+): Promise<void> {
+	await validateAssembledAppOutput(options, paths.buildOutput);
+
+	let signing: DarwinSigning | undefined;
+	try {
+		if (options.sign) {
+			signing = await prepareDarwinSigning(options);
+			const appPath = await signAndVerifyDarwinApp(
+				options,
+				paths.buildOutput,
+				signing
+			);
+			if (options.artifacts.includes('archive')) {
+				await notarizeAndStapleDarwinApp(
+					options,
+					appPath,
+					paths.distRoot,
+					signing
+				);
+			}
+		}
+
+		for (const artifact of options.artifacts) {
+			await packageArtifact(artifact, options, {
+				...paths,
+				signing
+			});
+		}
+	} finally {
+		await cleanupDarwinSigning(signing);
+	}
+}
+
+async function main(): Promise<void> {
 	const options = parseArgs(process.argv.slice(2));
 	if (options.help) {
 		printHelp();
@@ -1436,46 +1989,25 @@ async function main() {
 
 	const buildName = `VSCode-${options.platform}-${options.arch}`;
 	const distName = `hucode-${options.platform}-${options.arch}`;
-	const taskName = `vscode-${options.platform}-${options.arch}-min`;
 	const buildRoot = path.dirname(repoRoot);
 	const buildOutput = path.join(buildRoot, buildName);
 	const distRoot = path.resolve(repoRoot, options.out);
 	const distOutput = path.join(distRoot, distName);
+	const paths = {
+		buildOutput,
+		buildRoot,
+		distName,
+		distRoot
+	};
 
 	await prepareMixin(options.quality);
-	if (!options.skipBuild) {
-		if (options.copilotVsix) {
-			await runBuildWithCopilotVsix(options, buildOutput);
-		} else {
-			await runGulpTask(taskName, options, getBuildEnv(options));
-		}
+
+	if (options.phase === 'all' || options.phase === 'build') {
+		await buildAppOutput(options, buildOutput);
 	}
 
-	await mixInCli(options, buildOutput);
-
-	let signing;
-	try {
-		if (options.sign) {
-			signing = await prepareDarwinSigning();
-			await notarizeAndStapleDarwinApp(
-				options,
-				buildOutput,
-				distRoot,
-				signing
-			);
-		}
-
-		for (const artifact of options.artifacts) {
-			await packageArtifact(artifact, options, {
-				buildOutput,
-				buildRoot,
-				distName,
-				distRoot,
-				signing
-			});
-		}
-	} finally {
-		await cleanupDarwinSigning(signing);
+	if (options.phase === 'all' || options.phase === 'package') {
+		await packageAppOutput(options, paths);
 	}
 
 	if (options.moveToDist) {

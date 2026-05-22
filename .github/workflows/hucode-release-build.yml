@@ -57,7 +57,8 @@ jobs:
               npm_arch: 'x64',
               rust_target: 'x86_64-apple-darwin',
               runner: 'macos-15-intel',
-              artifacts: 'archive,dmg'
+              package_runner: 'macos-15',
+              artifacts: 'dmg'
             },
             {
               platform: 'darwin',
@@ -65,7 +66,7 @@ jobs:
               npm_arch: 'arm64',
               rust_target: 'aarch64-apple-darwin',
               runner: 'macos-15',
-              artifacts: 'archive,dmg'
+              artifacts: 'dmg'
             },
             {
               platform: 'linux',
@@ -230,8 +231,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  build:
-    name: ${{ matrix.platform }}-${{ matrix.arch }}
+  app-build:
+    name: Build app (${{ matrix.platform }}-${{ matrix.arch }})
     needs:
       - prepare-matrix
       - copilot-vsix
@@ -278,32 +279,6 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match hucodeVersion $hucode_version" >&2
             exit 1
           fi
-
-      - name: Validate macOS signing configuration
-        if: matrix.platform == 'darwin' && (github.event_name == 'push' || inputs.sign)
-        shell: bash
-        env:
-          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
-          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
-          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
-          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for name in \
-            APPLE_NOTARIZATION_ISSUER_ID \
-            APPLE_NOTARIZATION_KEY_ID \
-            APPLE_NOTARIZATION_KEY_P8_BASE64 \
-            APPLE_TEAM_ID \
-            MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 \
-            MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD
-          do
-            if [ -z "${!name}" ]; then
-              echo "$name is required for macOS signing" >&2
-              exit 1
-            fi
-          done
 
       - name: Install Linux build tools
         if: matrix.platform == 'linux'
@@ -450,20 +425,196 @@ jobs:
           name: hucode-copilot-vsix
           path: .build/hucode/copilot
 
-      - name: Build release artifacts
+      - name: Build release app
+        run: |
+          set -euo pipefail
+          node build/hucode/release-build.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --phase build \
+            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_name="VSCode-${{ matrix.platform }}-${{ matrix.arch }}"
+          app_path="../$app_name"
+          archive=".build/hucode/app/${app_name}.tar"
+          if [ ! -d "$app_path" ]; then
+            echo "Release app output not found: $app_path" >&2
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$archive")"
+          tar -cf "$archive" -C .. "$app_name"
+
+      - name: Upload release app artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-app-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/app/VSCode-${{ matrix.platform }}-${{ matrix.arch }}.tar
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package (${{ matrix.platform }}-${{ matrix.arch }})
+    needs:
+      - prepare-matrix
+      - app-build
+    runs-on: ${{ matrix.package_runner || matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          {
+            echo "describe=$describe"
+            echo "safe_version=$safe_version"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release tag version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          hucode_version="$(node -p "require('./build/hucode/mixin/stable/product.json').hucodeVersion")"
+          if [ "$tag_version" != "$hucode_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match hucodeVersion $hucode_version" >&2
+            exit 1
+          fi
+
+      - name: Validate macOS signing configuration
+        if: matrix.platform == 'darwin' && (github.event_name == 'push' || inputs.sign)
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_NOTARIZATION_ISSUER_ID \
+            APPLE_NOTARIZATION_KEY_ID \
+            APPLE_NOTARIZATION_KEY_P8_BASE64 \
+            APPLE_TEAM_ID \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "$name is required for macOS signing" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Linux package tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            file \
+            libkrb5-dev \
+            libnotify-bin \
+            libssl-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            rpm \
+            zip
+
+          if [ "${{ matrix.arch }}" = "armhf" ]; then
+            sudo apt-get install -y \
+              gcc-arm-linux-gnueabihf \
+              g++-arm-linux-gnueabihf \
+              libc6-dev-armhf-cross
+          fi
+
+      - name: Install macOS packaging tools
+        if: matrix.platform == 'darwin'
+        run: python3 -m pip install --user --break-system-packages setuptools
+
+      - name: Install dependencies
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_arch: ${{ matrix.npm_arch }}
+
+      - name: Download release app artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-app-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/app
+
+      - name: Restore release app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_name="VSCode-${{ matrix.platform }}-${{ matrix.arch }}"
+          archive=".build/hucode/app/${app_name}.tar"
+          rm -rf "../$app_name"
+          tar -xf "$archive" -C ..
+
+      - name: Package release artifacts
         run: |
           set -euo pipefail
           sign_args=()
           if [ "${{ matrix.platform }}" = "darwin" ] && \
             [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
-            sign_args+=(--sign)
+            sign_args+=(--sign --signing-mode ci)
           fi
 
-          node build/hucode/release-build.js \
+          node build/hucode/release-build.ts \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
+            --phase package \
             --artifacts "${{ matrix.artifacts }}" \
-            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
             --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
             "${sign_args[@]}"
         shell: bash
@@ -499,7 +650,7 @@ jobs:
   publish-release:
     name: Publish GitHub release (disabled by default)
     if: github.event_name == 'push' && vars.HUCODE_ENABLE_RELEASE_PUBLISH == 'true'
-    needs: build
+    needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -524,5 +675,7 @@ jobs:
               --notes "Hucode release build artifacts."
           fi
 
-          mapfile -t files < <(find release-artifacts -type f)
+          mapfile -t files < <(find release-artifacts -type f \
+            ! -path '*/hucode-app-*/*' \
+            ! -path '*/hucode-copilot-vsix/*')
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
