@@ -165,7 +165,7 @@ suite('Hucode release build', () => {
 		);
 	});
 
-	test('patches Linux package versions from Hucode release metadata', () => {
+	test('patches Debian package version from Hucode release metadata', () => {
 		assert.strictEqual(
 			applyDebianPackageVersion(
 				'Package: hucode\nVersion: 1.119.1-1757688183\n',
@@ -173,6 +173,9 @@ suite('Hucode release build', () => {
 			),
 			'Package: hucode\nVersion: 0.48.0-1757688183\n'
 		);
+	});
+
+	test('patches RPM package version from Hucode release metadata', () => {
 		assert.strictEqual(
 			applyRpmPackageVersion(
 				'Name: hucode\nVersion:  1.119.1\nRelease: 1757688183\n',
@@ -180,6 +183,9 @@ suite('Hucode release build', () => {
 			),
 			'Name: hucode\nVersion:  0.48.0\nRelease: 1757688183\n'
 		);
+	});
+
+	test('rejects Debian package metadata without version field', () => {
 		assert.throws(
 			() => applyDebianPackageVersion('Package: hucode\n', '0.48.0'),
 			/DEB control file does not contain a Version field/

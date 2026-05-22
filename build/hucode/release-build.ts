@@ -855,7 +855,7 @@ async function moveFile(source: string, destination: string): Promise<void> {
 	try {
 		await fs.rename(source, destination);
 	} catch (error) {
-		if (error?.code !== 'EXDEV') {
+		if (!isExdevError(error)) {
 			throw error;
 		}
 
