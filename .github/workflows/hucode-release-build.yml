@@ -236,7 +236,7 @@ jobs:
     needs:
       - prepare-matrix
       - copilot-vsix
-    runs-on: ${{ matrix.package_runner || matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -466,7 +466,7 @@ jobs:
     needs:
       - prepare-matrix
       - app-build
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.package_runner || matrix.runner }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
