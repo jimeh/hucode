@@ -4,8 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../base/common/lifecycle.js';
-import { onUnexpectedError } from '../../base/common/errors.js';
-import { URI } from '../../base/common/uri.js';
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { localize } from '../../nls.js';
@@ -27,62 +25,34 @@ import {
 	getSelectedProjectSwitcherTarget,
 } from './projectSwitcher/projectSwitcher.contribution.js';
 import {
-	setLastActiveWorktreeBestEffort,
-} from './projectSwitcher/switchProjectWorktree.contribution.js';
-import {
 	focusWorkspaceBestEffort,
 } from '../common/omniWindowFocus.js';
 import {
-	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../common/omniWindow.js';
 import { IHucodeOmniWindowUIService } from './omniWindowUI.js';
+import {
+	openSelectionInOmniWindow,
+	openSelectionInStandaloneWindow,
+} from './omniSelectionOpen.js';
 
 async function openSelectedInOmniWindow(
 	windowId: number,
 	shellService: IHucodeShellService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
-): Promise<IHucodeHostedWorkspaceState | undefined> {
-	const selection = getSelectedProjectSwitcherTarget();
-	if (!selection) {
-		notificationService.info(localize(
+): ReturnType<typeof openSelectionInOmniWindow> {
+	return openSelectionInOmniWindow(
+		getSelectedProjectSwitcherTarget(),
+		windowId,
+		shellService,
+		projectManagerService,
+		notificationService,
+		localize(
 			'omniSelectWorktreeFirst',
 			'Select a project or worktree first.'
-		));
-		return undefined;
-	}
-
-	await setLastActiveWorktreeBestEffort(
-		projectManagerService,
-		selection.projectId,
-		selection.worktreePath
+		)
 	);
-
-	if (await focusNormalWindowByPathBestEffort(
-		shellService,
-		selection.worktreePath
-	)) {
-		return undefined;
-	}
-
-	return shellService.openWorkspace(
-		windowId,
-		selection.worktreePath,
-		selection.projectId
-	);
-}
-
-async function focusNormalWindowByPathBestEffort(
-	shellService: IHucodeShellService,
-	worktreePath: string
-): Promise<boolean> {
-	try {
-		return await shellService.focusNormalWindowByPath(worktreePath);
-	} catch (error) {
-		onUnexpectedError(error);
-		return false;
-	}
 }
 
 async function openSelectedInStandaloneWindow(
@@ -91,46 +61,16 @@ async function openSelectedInStandaloneWindow(
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): Promise<void> {
-	const selection = getSelectedProjectSwitcherTarget();
-	if (!selection) {
-		notificationService.info(localize(
+	return openSelectionInStandaloneWindow(
+		getSelectedProjectSwitcherTarget(),
+		hostService,
+		shellService,
+		projectManagerService,
+		notificationService,
+		localize(
 			'omniSelectWorktreeFirstStandalone',
 			'Select a project or worktree first.'
-		));
-		return;
-	}
-
-	await setLastActiveWorktreeBestEffort(
-		projectManagerService,
-		selection.projectId,
-		selection.worktreePath
-	);
-
-	const owner = await shellService.findHostedWorkspaceByPath(
-		selection.worktreePath
-	);
-	if (owner) {
-		const closed = await shellService.closeWorkspace(
-			owner.windowId,
-			owner.instanceId
-		).then(state => !state.instances.some(instance =>
-			instance.instanceId === owner.instanceId
-		));
-		if (!closed) {
-			return;
-		}
-	}
-
-	if (await focusNormalWindowByPathBestEffort(
-		shellService,
-		selection.worktreePath
-	)) {
-		return;
-	}
-
-	await hostService.openWindow(
-		[{ folderUri: URI.file(selection.worktreePath) }],
-		{ forceNewWindow: true }
+		)
 	);
 }
 

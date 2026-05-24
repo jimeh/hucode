@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { errorHandler } from '../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
@@ -33,6 +34,40 @@ suite('HucodeOmniWorkspaceOpen', () => {
 		pinned: false,
 		order: 0,
 		worktrees
+	});
+
+	const withExpectedUnexpectedError = async <T>(
+		callback: () => Promise<T>
+	): Promise<T> => {
+		const originalHandler = errorHandler.getUnexpectedErrorHandler();
+		const errors: unknown[] = [];
+		errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+		try {
+			const result = await callback();
+			assert.strictEqual(errors.length, 1);
+			return result;
+		} finally {
+			errorHandler.setUnexpectedErrorHandler(originalHandler);
+		}
+	};
+
+	test('ignores non-file folders before loading services', async () => {
+		const accessor = {
+			get() {
+				throw new Error('Should not load services');
+			}
+		} as unknown as ServicesAccessor;
+
+		assert.strictEqual(
+			await tryOpenFolderInHucodeHostedWorkspace(
+				accessor,
+				[],
+				URI.parse('vscode-remote://ssh-remote/repo'),
+				undefined,
+				undefined
+			),
+			undefined
+		);
 	});
 
 	test('ignores folders without hosted owners', async () => {
@@ -137,6 +172,69 @@ suite('HucodeOmniWorkspaceOpen', () => {
 		assert.strictEqual(focusedWorktreePath, '/repo');
 		assert.strictEqual(focusedProjectId, 'project');
 	});
+
+	test('focuses hosted workspace when last active persistence fails',
+		async () => {
+			const omni = {
+				id: 1,
+				isOmniWindow: true,
+			} as ICodeWindow;
+			let focusedWorktreePath: string | undefined;
+			let focusedProjectId: string | undefined;
+
+			const accessor = {
+				get(serviceId: unknown): unknown {
+					if (serviceId === IProjectManagerMainService) {
+						return {
+							async getProjects() {
+								return [project('project', [worktree('/repo')])];
+							},
+							async setLastActiveWorktree() {
+								throw new Error('persistence failed');
+							}
+						};
+					}
+
+					if (serviceId === IHucodeShellMainService) {
+						return {
+							async findHostedWorkspaceByPath() {
+								return {
+									windowId: omni.id,
+									instanceId: 'instance',
+									worktreePath: '/repo',
+								};
+							},
+							async focusHostedWorkspaceByPath(
+								worktreePath: string,
+								projectId?: string
+							) {
+								focusedWorktreePath = worktreePath;
+								focusedProjectId = projectId;
+								return true;
+							}
+						};
+					}
+
+					throw new Error('Unexpected service lookup');
+				}
+			} as ServicesAccessor;
+
+			await withExpectedUnexpectedError(async () =>
+				assert.deepStrictEqual(
+					await tryOpenFolderInHucodeHostedWorkspace(
+						accessor,
+						[omni],
+						URI.file('/repo'),
+						undefined,
+						undefined
+					),
+					{ window: omni, openedFiles: false }
+				)
+			);
+			assert.strictEqual(focusedWorktreePath, '/repo');
+			assert.strictEqual(focusedProjectId, 'project');
+		}
+	);
 
 	test('opens files in existing hosted workspace', async () => {
 		const omni = {
