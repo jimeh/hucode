@@ -133,10 +133,11 @@ class OmniWindowShellContribution extends Disposable
 				this.shellService.reloadWorkspace(
 					this.windowId
 				),
-			closeWorkspace: () =>
-				this.shellService.closeWorkspace(
+			closeWorkspace: async () => {
+				await this.shellService.closeWorkspace(
 					this.windowId
-				).then(() => undefined),
+				);
+			},
 		}));
 
 		this.updateProjectsSidebarVisibility();

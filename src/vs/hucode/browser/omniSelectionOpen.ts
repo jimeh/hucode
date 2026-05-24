@@ -81,12 +81,13 @@ export async function openSelectionInStandaloneWindow(
 		selection.worktreePath
 	);
 	if (owner) {
-		const closed = await shellService.closeWorkspace(
+		const state = await shellService.closeWorkspace(
 			owner.windowId,
 			owner.instanceId
-		).then(state => !state.instances.some(instance =>
+		);
+		const closed = !state.instances.some(instance =>
 			instance.instanceId === owner.instanceId
-		));
+		);
 		if (!closed) {
 			return;
 		}
