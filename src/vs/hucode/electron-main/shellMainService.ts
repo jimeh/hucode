@@ -37,6 +37,8 @@ import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecy
 import { IBrowserViewMainService } from
 	'../../platform/browserView/electron-main/browserViewMainService.js';
 import { ResidentHostedWorkspacesController } from './hostedWorkspacesController.js';
+import { reopenHucodeHostedWorkspaceInNormalWindow } from
+	'./omniWorkspaceReopen.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -213,40 +215,25 @@ export class HucodeShellMainService extends Disposable
 	): Promise<boolean> {
 		const controller = this.getOrCreateController(windowId);
 		await controller.ensureRestored();
-
-		const instance = controller.getState().instances.find(candidate =>
-			candidate.instanceId === instanceId
-		);
-		if (
-			!instance ||
-			instance.state === 'crashed' ||
-			instance.state === 'unloaded'
-		) {
-			return false;
-		}
-
-		const worktreePath = instance.worktreePath;
-		await controller.closeWorkspace(instanceId);
-		if (controller.getState().instances.some(candidate =>
-			candidate.instanceId === instanceId
-		)) {
-			return false;
-		}
-
-		if (await this.focusNormalWindowByPath(worktreePath)) {
-			return true;
-		}
-
-		await this.windowsMainService.open({
-			context: OpenContext.API,
-			cli: {
-				...this.environmentMainService.args,
-				_: [],
+		return reopenHucodeHostedWorkspaceInNormalWindow({
+			getState: () => controller.getState(),
+			closeWorkspace: async targetInstanceId => {
+				await controller.closeWorkspace(targetInstanceId);
 			},
-			urisToOpen: [{ folderUri: URI.file(worktreePath) }],
-			forceNewWindow: true,
-		});
-		return true;
+			focusNormalWindowByPath: worktreePath =>
+				this.focusNormalWindowByPath(worktreePath),
+			openNormalWindow: async worktreePath => {
+				await this.windowsMainService.open({
+					context: OpenContext.API,
+					cli: {
+						...this.environmentMainService.args,
+						_: [],
+					},
+					urisToOpen: [{ folderUri: URI.file(worktreePath) }],
+					forceNewWindow: true,
+				});
+			},
+		}, instanceId);
 	}
 
 	async notifyHostedWorkspaceReady(

@@ -11,7 +11,6 @@ import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
-import { onUnexpectedError } from '../../../base/common/errors.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
@@ -49,9 +48,6 @@ import {
 	IsOmniWindowContext,
 } from '../../../workbench/common/contextkeys.js';
 import {
-	focusWorkspaceBestEffort,
-} from '../../common/omniWindowFocus.js';
-import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -84,9 +80,13 @@ import {
 	SWITCH_PREVIOUS_WORKTREE_COMMAND_ID,
 	SWITCH_WORKTREE_COMMAND_ID,
 } from './projectSwitcherCommon.js';
+import {
+	openProjectSwitcherTargetInWindow,
+} from './openProjectSwitcherTarget.js';
 
 export type { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
+export { setLastActiveWorktreeBestEffort } from './openProjectSwitcherTarget.js';
 
 interface ILoadedWorkbenchWorktree {
 	readonly path: string;
@@ -280,64 +280,14 @@ export async function openProjectSwitcherTarget(
 	shellService: IHucodeShellService,
 	hostService: IHostService
 ): Promise<void> {
-	await setLastActiveWorktreeBestEffort(
+	await openProjectSwitcherTargetInWindow(
+		target,
+		dom.getWindowId(mainWindow),
 		projectManagerService,
-		target.projectId,
-		target.worktreePath
+		environmentService,
+		shellService,
+		hostService
 	);
-
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
-		if (await focusNormalWindowByPathBestEffort(
-			shellService,
-			target.worktreePath
-		)) {
-			return;
-		}
-
-		const windowId = dom.getWindowId(mainWindow);
-		await shellService.openWorkspace(
-			windowId,
-			target.worktreePath,
-			target.projectId
-		);
-		await focusWorkspaceBestEffort(shellService, windowId);
-		return;
-	}
-
-	await hostService.openWindow(
-		[{ folderUri: URI.file(target.worktreePath) }],
-		{ forceReuseWindow: true }
-	);
-}
-
-async function focusNormalWindowByPathBestEffort(
-	shellService: IHucodeShellService,
-	worktreePath: string
-): Promise<boolean> {
-	try {
-		return await shellService.focusNormalWindowByPath(worktreePath);
-	} catch (error) {
-		onUnexpectedError(error);
-		return false;
-	}
-}
-
-export async function setLastActiveWorktreeBestEffort(
-	projectManagerService: IProjectManagerService,
-	projectId: string,
-	worktreePath: string
-): Promise<void> {
-	try {
-		await projectManagerService.setLastActiveWorktree(
-			projectId,
-			worktreePath
-		);
-	} catch (error) {
-		onUnexpectedError(error);
-	}
 }
 
 function pickSwitchWorktree(
