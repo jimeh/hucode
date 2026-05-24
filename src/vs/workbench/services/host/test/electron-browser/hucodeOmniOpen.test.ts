@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { errorHandler } from '../../../../../base/common/errors.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { INativeHostService } from '../../../../../platform/native/common/native.js';
@@ -88,9 +89,22 @@ suite('HucodeOmniOpen', () => {
 			projectId?: string;
 		}[] = [];
 		const focusWorkspaceCalls: number[] = [];
+		const focusNormalWindowByPathCalls: string[] = [];
+		const normalWindowPaths = new Set<string>();
+		let focusNormalWindowByPathError: Error | undefined;
 
 		return {
 			service: {
+				async focusNormalWindowByPath(
+					worktreePath: string
+				): Promise<boolean> {
+					focusNormalWindowByPathCalls.push(worktreePath);
+					if (focusNormalWindowByPathError) {
+						throw focusNormalWindowByPathError;
+					}
+
+					return normalWindowPaths.has(worktreePath);
+				},
 				async openWorkspace(
 					windowId: number,
 					worktreePath: string,
@@ -109,6 +123,11 @@ suite('HucodeOmniOpen', () => {
 			} satisfies IHucodeOmniOpenShellService,
 			openWorkspaceCalls,
 			focusWorkspaceCalls,
+			focusNormalWindowByPathCalls,
+			normalWindowPaths,
+			setFocusNormalWindowByPathError(error: Error): void {
+				focusNormalWindowByPathError = error;
+			},
 		};
 	};
 
@@ -119,6 +138,21 @@ suite('HucodeOmniOpen', () => {
 		}
 	): IWorkbenchEnvironmentService =>
 		options as Partial<IWorkbenchEnvironmentService> as IWorkbenchEnvironmentService;
+
+	const withExpectedUnexpectedError = async <T>(
+		callback: () => Promise<T>
+	): Promise<T> => {
+		const originalHandler = errorHandler.getUnexpectedErrorHandler();
+		const errors: unknown[] = [];
+		errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+		try {
+			const result = await callback();
+			assert.strictEqual(errors.length, 1);
+			return result;
+		} finally {
+			errorHandler.setUnexpectedErrorHandler(originalHandler);
+		}
+	};
 
 	test('does nothing outside Omni windows', async () => {
 		const nativeHost = createNativeHostService();
@@ -162,6 +196,10 @@ suite('HucodeOmniOpen', () => {
 			true
 		);
 		assert.deepStrictEqual(
+			shell.focusNormalWindowByPathCalls,
+			['/repo']
+		);
+		assert.deepStrictEqual(
 			projectManager.setLastActiveWorktreeCalls,
 			[{ projectId: 'project', worktreePath: '/repo' }]
 		);
@@ -174,6 +212,65 @@ suite('HucodeOmniOpen', () => {
 			shell.focusWorkspaceCalls,
 			[nativeHost.service.windowId]
 		);
+		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+	});
+
+	test('focuses an existing normal window for known folders', async () => {
+		const nativeHost = createNativeHostService();
+		const projectManager = createProjectManagerService([
+			project('project', [worktree('/repo')])
+		]);
+		const shell = createShellService();
+		shell.normalWindowPaths.add('/repo');
+
+		assert.strictEqual(
+			await tryOpenHucodeOmniWindow(
+				[{ folderUri: URI.file('/repo') }],
+				undefined,
+				nativeHost.service,
+				environment({ isOmniWindow: true }),
+				shell.service,
+				projectManager.service
+			),
+			true
+		);
+		assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, ['/repo']);
+		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
+		assert.deepStrictEqual(shell.focusWorkspaceCalls, []);
+		assert.deepStrictEqual(
+			projectManager.setLastActiveWorktreeCalls,
+			[]
+		);
+		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+	});
+
+	test('opens known folders in Omni when normal-window lookup fails', async () => {
+		const nativeHost = createNativeHostService();
+		const projectManager = createProjectManagerService([
+			project('project', [worktree('/repo')])
+		]);
+		const shell = createShellService();
+		shell.setFocusNormalWindowByPathError(new Error('lookup failed'));
+
+		await withExpectedUnexpectedError(async () =>
+			assert.strictEqual(
+				await tryOpenHucodeOmniWindow(
+					[{ folderUri: URI.file('/repo') }],
+					undefined,
+					nativeHost.service,
+					environment({ isOmniWindow: true }),
+					shell.service,
+					projectManager.service
+				),
+				true
+			)
+		);
+		assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, ['/repo']);
+		assert.deepStrictEqual(shell.openWorkspaceCalls, [{
+			windowId: nativeHost.service.windowId,
+			worktreePath: '/repo',
+			projectId: 'project'
+		}]);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 

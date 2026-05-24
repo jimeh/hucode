@@ -20,6 +20,7 @@ import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
 
 export interface IHucodeOmniOpenShellService {
+	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
 		windowId: number,
 		worktreePath: string,
@@ -66,6 +67,12 @@ export async function tryOpenHucodeOmniWindow(
 			openable.folderUri.fsPath
 		);
 		if (target) {
+			if (await focusNormalWindowByPathBestEffort(
+				shellService,
+				target.worktreePath
+			)) {
+				return true;
+			}
 			await setLastActiveWorktreeBestEffort(
 				projectManagerService,
 				target.projectId,
@@ -116,6 +123,18 @@ async function getProjectWorktreeTarget(
 	}
 
 	return undefined;
+}
+
+async function focusNormalWindowByPathBestEffort(
+	shellService: IHucodeOmniOpenShellService,
+	worktreePath: string
+): Promise<boolean> {
+	try {
+		return await shellService.focusNormalWindowByPath(worktreePath);
+	} catch (error) {
+		onUnexpectedError(error);
+		return false;
+	}
 }
 
 async function setLastActiveWorktreeBestEffort(

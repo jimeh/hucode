@@ -44,6 +44,7 @@ export interface IHucodeShellService {
 		readonly state: IHucodeHostedWorkspaceState;
 	}>;
 	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
+	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
 		windowId: number,
 		worktreePath: string,

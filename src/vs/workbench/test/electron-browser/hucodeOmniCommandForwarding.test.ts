@@ -15,6 +15,8 @@ import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
 	FOCUS_WORKSPACE_COMMAND_ID,
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 } from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
@@ -148,6 +150,29 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, []);
 		assert.deepStrictEqual(fixture.commandCalls, [{
 			commandId: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			args: [{ from: 'menu' }]
+		}]);
+	});
+
+	test('keeps Omni selected worktree open actions local', async () => {
+		const fixture = createFixture({ isOmniWindow: true });
+
+		for (const id of [
+			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+		]) {
+			await fixture.forwarding.handleRunActionInWindow(
+				{ id, from: 'menu' },
+				fixture.handlers
+			);
+		}
+
+		assert.deepStrictEqual(fixture.channel.calls, []);
+		assert.deepStrictEqual(fixture.commandCalls, [{
+			commandId: OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+			args: [{ from: 'menu' }]
+		}, {
+			commandId: OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 			args: [{ from: 'menu' }]
 		}]);
 	});

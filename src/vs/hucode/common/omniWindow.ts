@@ -65,6 +65,16 @@ export interface IHucodeShellWindowStateChange {
 	readonly state: IHucodeHostedWorkspaceState;
 }
 
+/**
+ * Existing hosted Omni workbench that owns a worktree path.
+ */
+export interface IHucodeHostedWorkspaceOwner {
+	readonly windowId: number;
+	readonly instanceId: string;
+	readonly projectId?: string;
+	readonly worktreePath: string;
+}
+
 export const IHucodeShellService =
 	createDecorator<IHucodeShellService>('hucodeShellService');
 
@@ -77,6 +87,14 @@ export interface IHucodeShellService {
 	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
 
 	getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState>;
+	findHostedWorkspaceByPath(
+		worktreePath: string
+	): Promise<IHucodeHostedWorkspaceOwner | undefined>;
+	focusHostedWorkspaceByPath(
+		worktreePath: string,
+		projectId?: string
+	): Promise<boolean>;
+	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
 		windowId: number,
 		worktreePath: string,
@@ -103,6 +121,10 @@ export interface IHucodeShellService {
 		windowId: number,
 		instanceId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	reopenWorkspaceInNormalWindow(
+		windowId: number,
+		instanceId: string
+	): Promise<boolean>;
 	/**
 	 * Marks a hosted workspace as ready after its workbench reaches Restored.
 	 */
