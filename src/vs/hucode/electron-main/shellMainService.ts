@@ -5,7 +5,10 @@
 
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
+import { isEqual } from '../../base/common/extpath.js';
 import { Disposable } from '../../base/common/lifecycle.js';
+import { isLinux } from '../../base/common/platform.js';
+import { URI } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
 	'../../platform/environment/electron-main/environmentMainService.js';
 import { ILogService } from '../../platform/log/common/log.js';
@@ -20,13 +23,16 @@ import {
 	INativeRunKeybindingInWindowRequest,
 	IRectangle,
 } from '../../platform/window/common/window.js';
-import { IWindowsMainService } from
+import { IWindowsMainService, OpenContext } from
 	'../../platform/windows/electron-main/windows.js';
 import {
 	IHucodeHostedWorkspaceState,
+	IHucodeHostedWorkspaceOwner,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
 import { IHucodeShellMainService } from './omniWindow.js';
+import { findWindowOnWorkspaceOrFolder } from
+	'../../platform/windows/electron-main/windowsFinder.js';
 import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserViewMainService } from
 	'../../platform/browserView/electron-main/browserViewMainService.js';
@@ -88,6 +94,72 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
+	async findHostedWorkspaceByPath(
+		worktreePath: string
+	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
+		const omniWindows = this.windowsMainService.getWindows()
+			.filter(window => window.isOmniWindow)
+			.toSorted((a, b) => b.lastFocusTime - a.lastFocusTime);
+
+		for (const window of omniWindows) {
+			const controller = this.getOrCreateController(window.id);
+			await controller.ensureRestored();
+			const instance = controller.getState().instances.find(candidate =>
+				candidate.state !== 'crashed' &&
+				candidate.state !== 'unloaded' &&
+				isEqual(candidate.worktreePath, worktreePath, !isLinux)
+			);
+			if (instance) {
+				return {
+					windowId: window.id,
+					instanceId: instance.instanceId,
+					projectId: instance.projectId,
+					worktreePath: instance.worktreePath,
+				};
+			}
+		}
+
+		return undefined;
+	}
+
+	async focusHostedWorkspaceByPath(
+		worktreePath: string,
+		projectId?: string
+	): Promise<boolean> {
+		const owner = await this.findHostedWorkspaceByPath(worktreePath);
+		if (!owner) {
+			return false;
+		}
+
+		const window = this.windowsMainService.getWindowById(owner.windowId);
+		if (!window?.isOmniWindow) {
+			return false;
+		}
+
+		window.focus();
+		await this.openWorkspace(
+			owner.windowId,
+			owner.worktreePath,
+			projectId ?? owner.projectId
+		);
+		await this.focusWorkspace(owner.windowId);
+		return true;
+	}
+
+	async focusNormalWindowByPath(worktreePath: string): Promise<boolean> {
+		const window = findWindowOnWorkspaceOrFolder(
+			this.windowsMainService.getWindows()
+				.filter(window => !window.isOmniWindow),
+			URI.file(worktreePath)
+		);
+		if (!window) {
+			return false;
+		}
+
+		window.focus();
+		return true;
+	}
+
 	async openWorkspace(
 		windowId: number,
 		worktreePath: string,
@@ -133,6 +205,48 @@ export class HucodeShellMainService extends Disposable
 		const controller = this.getOrCreateController(windowId);
 		await controller.closeWorkspace(instanceId);
 		return controller.getState();
+	}
+
+	async reopenWorkspaceInNormalWindow(
+		windowId: number,
+		instanceId: string
+	): Promise<boolean> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.ensureRestored();
+
+		const instance = controller.getState().instances.find(candidate =>
+			candidate.instanceId === instanceId
+		);
+		if (
+			!instance ||
+			instance.state === 'crashed' ||
+			instance.state === 'unloaded'
+		) {
+			return false;
+		}
+
+		const worktreePath = instance.worktreePath;
+		await controller.closeWorkspace(instanceId);
+		if (controller.getState().instances.some(candidate =>
+			candidate.instanceId === instanceId
+		)) {
+			return false;
+		}
+
+		if (await this.focusNormalWindowByPath(worktreePath)) {
+			return true;
+		}
+
+		await this.windowsMainService.open({
+			context: OpenContext.API,
+			cli: {
+				...this.environmentMainService.args,
+				_: [],
+			},
+			urisToOpen: [{ folderUri: URI.file(worktreePath) }],
+			forceNewWindow: true,
+		});
+		return true;
 	}
 
 	async notifyHostedWorkspaceReady(

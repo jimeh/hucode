@@ -290,6 +290,13 @@ export async function openProjectSwitcherTarget(
 		environmentService.isOmniWindow ||
 		environmentService.isHostedOmniWorkspace
 	) {
+		if (await focusNormalWindowByPathBestEffort(
+			shellService,
+			target.worktreePath
+		)) {
+			return;
+		}
+
 		const windowId = dom.getWindowId(mainWindow);
 		await shellService.openWorkspace(
 			windowId,
@@ -304,6 +311,18 @@ export async function openProjectSwitcherTarget(
 		[{ folderUri: URI.file(target.worktreePath) }],
 		{ forceReuseWindow: true }
 	);
+}
+
+async function focusNormalWindowByPathBestEffort(
+	shellService: IHucodeShellService,
+	worktreePath: string
+): Promise<boolean> {
+	try {
+		return await shellService.focusNormalWindowByPath(worktreePath);
+	} catch (error) {
+		onUnexpectedError(error);
+		return false;
+	}
 }
 
 export async function setLastActiveWorktreeBestEffort(

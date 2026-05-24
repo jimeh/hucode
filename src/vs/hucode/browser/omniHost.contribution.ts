@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../base/common/lifecycle.js';
+import { onUnexpectedError } from '../../base/common/errors.js';
 import { URI } from '../../base/common/uri.js';
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
@@ -58,6 +59,13 @@ async function openSelectedInOmniWindow(
 		selection.worktreePath
 	);
 
+	if (await focusNormalWindowByPathBestEffort(
+		shellService,
+		selection.worktreePath
+	)) {
+		return undefined;
+	}
+
 	return shellService.openWorkspace(
 		windowId,
 		selection.worktreePath,
@@ -65,8 +73,21 @@ async function openSelectedInOmniWindow(
 	);
 }
 
+async function focusNormalWindowByPathBestEffort(
+	shellService: IHucodeShellService,
+	worktreePath: string
+): Promise<boolean> {
+	try {
+		return await shellService.focusNormalWindowByPath(worktreePath);
+	} catch (error) {
+		onUnexpectedError(error);
+		return false;
+	}
+}
+
 async function openSelectedInStandaloneWindow(
 	hostService: IHostService,
+	shellService: IHucodeShellService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): Promise<void> {
@@ -84,6 +105,28 @@ async function openSelectedInStandaloneWindow(
 		selection.projectId,
 		selection.worktreePath
 	);
+
+	const owner = await shellService.findHostedWorkspaceByPath(
+		selection.worktreePath
+	);
+	if (owner) {
+		const closed = await shellService.closeWorkspace(
+			owner.windowId,
+			owner.instanceId
+		).then(state => !state.instances.some(instance =>
+			instance.instanceId === owner.instanceId
+		));
+		if (!closed) {
+			return;
+		}
+	}
+
+	if (await focusNormalWindowByPathBestEffort(
+		shellService,
+		selection.worktreePath
+	)) {
+		return;
+	}
 
 	await hostService.openWindow(
 		[{ folderUri: URI.file(selection.worktreePath) }],
@@ -138,6 +181,7 @@ class OmniWindowShellContribution extends Disposable
 			},
 			openSelectedInStandalone: () => openSelectedInStandaloneWindow(
 				this.hostService,
+				this.shellService,
 				this.projectManagerService,
 				this.notificationService
 			),

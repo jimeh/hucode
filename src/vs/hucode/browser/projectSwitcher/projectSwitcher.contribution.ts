@@ -71,8 +71,10 @@ import {
 	IProjectManagerService,
 	ProjectRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
-import { OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID } from
-	'../../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+} from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
@@ -1356,6 +1358,22 @@ export class ProjectSwitcherWidget extends Disposable {
 					run: () => this.commandService.executeCommand(
 						REFRESH_PROJECTS_COMMAND_ID,
 						worktreeHandle
+					),
+				}),
+				new Separator(),
+				toAction({
+					id: OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+					label: hostedWorkbenchInstanceId
+						? localize(
+							'reopenWorktreeInNewWindow',
+							'Re-open in New Window'
+						)
+						: localize(
+							'openWorktreeInNewWindow',
+							'Open in New Window'
+						),
+					run: () => this.commandService.executeCommand(
+						OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID
 					),
 				}),
 			];

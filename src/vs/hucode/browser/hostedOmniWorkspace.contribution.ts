@@ -59,6 +59,9 @@ import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
 import {
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
 	HasLoadedWorkbenchContext,
 	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
 	ProjectsSidebarHiddenContext,
@@ -369,6 +372,38 @@ registerAction2(class extends Action2 {
 		}
 
 		await accessor.get(IHucodeShellService).closeWorkspace(
+			getWindowId(mainWindow),
+			environmentService.hostedInstanceId
+		);
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+			title: localize2(
+				'hostedOmniReopenCurrentWorktreeInNewWindow',
+				'Omni-Window: Re-open Current Worktree In New Window'
+			),
+			f1: true,
+			precondition: ContextKeyExpr.and(
+				IsHostedOmniWorkspaceContext,
+				HasLoadedWorkbenchContext
+			),
+		});
+	}
+
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (
+			!environmentService.isHostedOmniWorkspace ||
+			!environmentService.hostedInstanceId
+		) {
+			return;
+		}
+
+		await accessor.get(IHucodeShellService).reopenWorkspaceInNormalWindow(
 			getWindowId(mainWindow),
 			environmentService.hostedInstanceId
 		);

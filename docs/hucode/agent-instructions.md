@@ -358,6 +358,10 @@ VS Code code that Hucode customizes.
   `vs/workbench/workbench.desktop.main.js`, not `vs/hucode/omni.desktop.main.js`.
   Hosted-only commands or services must be imported into the standard desktop
   workbench bundle if they need to appear inside the embedded workspace.
+- Host-layer Omni integrations keep a local shell-service subset in
+  `src/vs/workbench/services/host/electron-browser/hucodeHostedOmniHost.ts`.
+  When adding shell IPC methods used by native host integration, update that
+  subset along with `src/vs/hucode/common/omniWindow.ts`.
 - Hosted Omni workspace `WebContentsView`s are deliberately laid out from
   `y: 0` so their own titlebars are visible. Keep shell titlebar drag regions
   pointer-transparent over the hosted surface and re-add the active hosted view
