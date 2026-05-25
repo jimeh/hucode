@@ -27,7 +27,7 @@ runs:
 
     - name: Setup npm 11.1
       shell: bash
-      run: npm install -g npm@11.1.0 --min-release-age=0
+      run: npm install -g npm@11.1.0
 
     - name: Prepare node_modules cache key
       shell: bash

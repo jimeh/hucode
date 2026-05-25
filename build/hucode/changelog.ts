@@ -108,7 +108,8 @@ export async function checkPullRequest(
 
 	const requiredChangeTypes = await getRequiredChangeTypes();
 	const needsFragment = title.breaking || requiredChangeTypes.has(title.type);
-	if (needsFragment && matchingFragments.length === 0) {
+	const hasAnyFragment = fragments.length > 0;
+	if ((needsFragment || hasAnyFragment) && matchingFragments.length === 0) {
 		throw new Error(
 			`PR title '${options.title}' requires a matching .changes/` +
 			`${options.number}-*.md file.`

@@ -98,6 +98,27 @@ suite('Hucode changelog', () => {
 		});
 	});
 
+	test('requires hidden-type fragments to match the PR title', async () => {
+		await initRepo(tmpDir);
+		const baseRef = currentHead(tmpDir);
+		await writeChange(
+			tmpDir,
+			'1234-fix-release-upload-filtering.md',
+			'chore(ci): fix release upload filtering\n'
+		);
+		commitAll(tmpDir, 'chore: add change fragment');
+
+		await assert.rejects(
+			() => checkPullRequest({
+				baseRef,
+				number: 1234,
+				root: tmpDir,
+				title: 'chore(ci): update release documentation',
+			}),
+			/requires a matching \.changes\/1234-\*\.md file/
+		);
+	});
+
 	test('rejects fragments with the wrong PR number', async () => {
 		await initRepo(tmpDir);
 		const baseRef = currentHead(tmpDir);
