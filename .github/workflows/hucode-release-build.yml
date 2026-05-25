@@ -141,8 +141,8 @@ jobs:
             package-lock.json
             extensions/copilot/package-lock.json
 
-      - name: Setup npm 11
-        run: npm install -g npm@11.15.0 --min-release-age=0
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0 --min-release-age=0
 
       - name: Setup emsdk
         shell: bash
@@ -257,8 +257,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Setup npm 11
-        run: npm install -g npm@11.15.0 --min-release-age=0
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0 --min-release-age=0
 
       - name: Determine build version
         id: version
@@ -491,8 +491,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Setup npm 11
-        run: npm install -g npm@11.15.0 --min-release-age=0
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0 --min-release-age=0
 
       - name: Determine build version
         id: version
