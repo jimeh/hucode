@@ -18,7 +18,7 @@ import { distinct, equals as arrayEquals } from '../../../../base/common/arrays.
 import { OS, OperatingSystem } from '../../../../base/common/platform.js';
 import { IConfigurationChange, IConfigurationChangeEvent, IConfigurationData, IConfigurationOverrides, IConfigurationUpdateOptions, IConfigurationUpdateOverrides, IConfigurationValue, ConfigurationTarget, isConfigurationOverrides, isConfigurationUpdateOverrides } from '../../../../platform/configuration/common/configuration.js';
 import { ChatConfiguration } from '../../../../workbench/contrib/chat/common/constants.js';
-import { ConfigurationChangeEvent, ConfigurationModel } from '../../../../platform/configuration/common/configurationModels.js';
+import { ConfigurationChangeEvent, ConfigurationModel, mergeChanges } from '../../../../platform/configuration/common/configurationModels.js';
 import { DefaultConfiguration, IPolicyConfiguration, NullPolicyConfiguration, PolicyConfiguration } from '../../../../platform/configuration/common/configurations.js';
 import { Extensions, IConfigurationRegistry, IRegisteredConfigurationPropertySchema, keyFromOverrideIdentifiers } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { IFileService, FileOperationError, FileOperationResult } from '../../../../platform/files/common/files.js';
@@ -131,6 +131,7 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 	private readonly workspaceConfiguration: WorkspaceConfiguration;
 	private readonly cachedFolderConfigs = this._register(new DisposableMap<URI, FolderConfiguration>(new ResourceMap()));
 	private readonly omniReadOnlyKeys = new Set<string>();
+	private readonly pendingFolderConfigurationChanges: IConfigurationChange[] = [];
 
 	private readonly _onDidChangeConfiguration = this._register(new Emitter<IConfigurationChangeEvent>());
 	readonly onDidChangeConfiguration = this._onDidChangeConfiguration.event;
@@ -183,7 +184,13 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 		this._register(this.policyConfiguration.onDidChangeConfiguration(configurationModel => this.onPolicyConfigurationChanged(configurationModel)));
 		this._register(this.userConfiguration.onDidChangeConfiguration(userConfiguration => this.onUserConfigurationChanged(userConfiguration)));
 		this._register(this.workspaceConfiguration.onDidUpdateConfiguration(() => this.onWorkspaceConfigurationChanged()));
-		this._register(this.workspaceService.onWillChangeWorkspaceFolders(e => e.join(this.loadFolderConfigurations(e.changes.added))));
+		this._register(this.workspaceService.onWillChangeWorkspaceFolders(e => e.join(
+			this.loadFolderConfigurations(e.changes.added).then(change => {
+				if (change.keys.length || change.overrides.length) {
+					this.pendingFolderConfigurationChanges.push(change);
+				}
+			})
+		)));
 		this._register(this.workspaceService.onDidChangeWorkspaceFolders(e => this.onWorkspaceFoldersChanged(e)));
 	}
 
@@ -453,19 +460,14 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 	}
 
 	private onWorkspaceFoldersChanged(e: IWorkspaceFoldersChangeEvent): void {
-		// Remove configurations for removed folders
 		const previousData = this._configuration.toData();
-		const keys: string[] = [];
-		const overrides: [string, string[]][] = [];
+		const changes = this.pendingFolderConfigurationChanges.splice(0);
 		for (const folder of e.removed) {
 			const change = this._configuration.compareAndDeleteFolderConfiguration(folder.uri);
-			keys.push(...change.keys);
-			overrides.push(...change.overrides);
+			changes.push(change);
 			this.cachedFolderConfigs.deleteAndDispose(folder.uri);
 		}
-		if (keys.length || overrides.length) {
-			this.triggerConfigurationChange({ keys, overrides }, previousData, ConfigurationTarget.WORKSPACE_FOLDER);
-		}
+		this.triggerConfigurationChange(mergeChanges(...changes), previousData, ConfigurationTarget.WORKSPACE_FOLDER);
 	}
 
 	private onWorkspaceFolderConfigurationChanged(folder: IWorkspaceFolder): void {
@@ -479,7 +481,8 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 		}
 	}
 
-	private async loadFolderConfigurations(folders: readonly IWorkspaceFolder[]): Promise<void> {
+	private async loadFolderConfigurations(folders: readonly IWorkspaceFolder[]): Promise<IConfigurationChange> {
+		const changes: IConfigurationChange[] = [];
 		for (const folder of folders) {
 			let folderConfiguration = this.cachedFolderConfigs.get(folder.uri);
 			if (!folderConfiguration) {
@@ -488,12 +491,13 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 				this.cachedFolderConfigs.set(folder.uri, folderConfiguration);
 			}
 			const configurationModel = await folderConfiguration.loadConfiguration();
-			this._configuration.updateFolderConfiguration(folder.uri, configurationModel);
+			changes.push(this._configuration.compareAndUpdateFolderConfiguration(folder.uri, configurationModel));
 		}
+		return mergeChanges(...changes);
 	}
 
 	private triggerConfigurationChange(change: IConfigurationChange, previousData: IConfigurationData, target: ConfigurationTarget): void {
-		if (change.keys.length) {
+		if (change.keys.length || change.overrides.length) {
 			const workspace = this.workspaceService.getWorkspace() as Workspace;
 			const event = new ConfigurationChangeEvent(change, { data: previousData, workspace }, this._configuration, workspace, this.logService);
 			event.source = target;

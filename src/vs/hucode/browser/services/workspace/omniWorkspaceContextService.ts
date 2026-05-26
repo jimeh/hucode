@@ -8,7 +8,7 @@ import { Queue } from '../../../../base/common/async.js';
 import { removeTrailingPathSeparator } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { Workspace, WorkspaceFolder, IWorkspace, IWorkspaceContextService, IWorkspaceFoldersChangeEvent, IWorkspaceFoldersWillChangeEvent, IWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { Workspace, WorkspaceFolder, IWorkspace, IWorkspaceContextService, IWorkspaceFoldersChangeEvent, IWorkspaceFoldersWillChangeEvent, IWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier, IWorkspaceFolder, WorkbenchState, isSingleFolderWorkspaceIdentifier, isWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceFolderCreationData } from '../../../../platform/workspaces/common/workspaces.js';
 import { getWorkspaceIdentifier } from '../../../../workbench/services/workspaces/browser/workspaces.js';
 import { IWorkspaceEditingService } from '../../../../workbench/services/workspaces/common/workspaceEditing.js';
@@ -24,7 +24,7 @@ export class OmniWorkspaceContextService extends Disposable implements IWorkspac
 	readonly onDidChangeWorkspaceName = Event.None;
 	readonly onDidEnterWorkspace = Event.None;
 
-	private readonly _onWillChangeWorkspaceFolders = new Emitter<IWorkspaceFoldersWillChangeEvent>();
+	private readonly _onWillChangeWorkspaceFolders = this._register(new Emitter<IWorkspaceFoldersWillChangeEvent>());
 	readonly onWillChangeWorkspaceFolders = this._onWillChangeWorkspaceFolders.event;
 
 	private readonly _onDidChangeWorkspaceFolders = this._register(new Emitter<IWorkspaceFoldersChangeEvent>());
@@ -66,6 +66,20 @@ export class OmniWorkspaceContextService extends Disposable implements IWorkspac
 	}
 
 	public isCurrentWorkspace(workspaceIdOrFolder: IWorkspaceIdentifier | ISingleFolderWorkspaceIdentifier | URI): boolean {
+		if (URI.isUri(workspaceIdOrFolder)) {
+			return this.isInsideWorkspace(workspaceIdOrFolder);
+		}
+		if (isWorkspaceIdentifier(workspaceIdOrFolder)) {
+			return workspaceIdOrFolder.id === this.workspace.id;
+		}
+		if (isSingleFolderWorkspaceIdentifier(workspaceIdOrFolder)) {
+			return this.workspace.folders.some(folder =>
+				this.uriIdentityService.extUri.isEqual(
+					folder.uri,
+					workspaceIdOrFolder.uri
+				)
+			);
+		}
 		return false;
 	}
 

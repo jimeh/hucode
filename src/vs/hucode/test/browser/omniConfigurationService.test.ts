@@ -9,9 +9,10 @@ import { VSBuffer } from '../../../base/common/buffer.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../base/test/common/timeTravelScheduler.js';
+import { Event } from '../../../base/common/event.js';
 import { Schemas } from '../../../base/common/network.js';
 import { ConfigurationTarget } from '../../../platform/configuration/common/configuration.js';
-import { IConfigurationRegistry, Extensions as ConfigurationExtensions, ConfigurationScope } from '../../../platform/configuration/common/configurationRegistry.js';
+import { IConfigurationNode, IConfigurationRegistry, Extensions as ConfigurationExtensions, ConfigurationScope } from '../../../platform/configuration/common/configurationRegistry.js';
 import { FileService } from '../../../platform/files/common/fileService.js';
 import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { FileUserDataProvider } from '../../../platform/userData/common/fileUserDataProvider.js';
@@ -42,6 +43,7 @@ suite('OmniConfigurationService', () => {
 	const configurationRegistry =
 		Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+	let testConfigurationRegistration: IConfigurationNode | undefined;
 
 	const testOverrides: OmniConfigurationOverrides = {
 		...OMNI_CONFIGURATION_OVERRIDES,
@@ -55,7 +57,7 @@ suite('OmniConfigurationService', () => {
 	};
 
 	suiteSetup(() => {
-		configurationRegistry.registerConfiguration({
+		testConfigurationRegistration = configurationRegistry.registerConfiguration({
 			id: '_test_hucode_omni',
 			type: 'object',
 			properties: {
@@ -82,6 +84,15 @@ suite('OmniConfigurationService', () => {
 				},
 			}
 		});
+	});
+
+	suiteTeardown(() => {
+		if (testConfigurationRegistration) {
+			configurationRegistry.deregisterConfigurations([
+				testConfigurationRegistration
+			]);
+		}
+		testConfigurationRegistration = undefined;
 	});
 
 	setup(async () => {
@@ -181,6 +192,60 @@ suite('OmniConfigurationService', () => {
 			);
 		}));
 
+	test('fires configuration changes when folders with settings are added',
+		() => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+			const folder = joinPath(ROOT, 'folderWithSettings');
+			await fileService.createFolder(joinPath(folder, '.vscode'));
+			await fileService.writeFile(
+				joinPath(folder, '.vscode', 'settings.json'),
+				VSBuffer.fromString(JSON.stringify({
+					'hucodeOmniConfigurationService.testSetting': 'folderValue'
+				}))
+			);
+
+			const eventPromise = Event.toPromise(testObject.onDidChangeConfiguration);
+			await workspaceService.addFolders([{ uri: folder }]);
+			const event = await eventPromise;
+
+			assert.ok(event.affectsConfiguration(
+				'hucodeOmniConfigurationService.testSetting'
+			));
+			assert.strictEqual(
+				testObject.getValue(
+					'hucodeOmniConfigurationService.testSetting',
+					{ resource: folder }
+				),
+				'folderValue'
+			);
+		}));
+
+	test('fires configuration changes for override-only updates',
+		() => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+			const eventPromise = Event.toPromise(testObject.onDidChangeConfiguration);
+			await fileService.writeFile(
+				userDataProfileService.currentProfile.settingsResource,
+				VSBuffer.fromString(JSON.stringify({
+					'[jsonc]': {
+						'hucodeOmniConfigurationService.testSetting': 'jsonValue'
+					}
+				}))
+			);
+			await testObject.reloadConfiguration();
+			const event = await eventPromise;
+
+			assert.ok(event.affectsConfiguration(
+				'hucodeOmniConfigurationService.testSetting',
+				{ overrideIdentifier: 'jsonc' }
+			));
+			assert.strictEqual(
+				testObject.getValue(
+					'hucodeOmniConfigurationService.testSetting',
+					{ overrideIdentifier: 'jsonc' }
+				),
+				'jsonValue'
+			);
+		}));
+
 	test('explicit Omni read-only settings ignore persisted values',
 		() => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
 			await fileService.writeFile(
@@ -235,5 +300,35 @@ suite('OmniWorkspaceContextService', () => {
 		));
 
 		assert.strictEqual(service.getWorkspace().name, 'Hucode Omni Window');
+	});
+
+	test('matches current workspace and contained folders', async () => {
+		const logService = new NullLogService();
+		const fileService = disposables.add(new FileService(logService));
+		const uriIdentityService =
+			disposables.add(new UriIdentityService(fileService));
+		const workspaceResource = joinPath(ROOT, 'hucode-omni.code-workspace');
+		const workspaceIdentifier = getWorkspaceIdentifier(workspaceResource);
+		const service = disposables.add(new OmniWorkspaceContextService(
+			workspaceIdentifier,
+			uriIdentityService
+		));
+		const folder = joinPath(ROOT, 'currentWorkspaceFolder');
+
+		await service.addFolders([{ uri: folder }]);
+
+		assert.strictEqual(service.isCurrentWorkspace(workspaceIdentifier), true);
+		assert.strictEqual(service.isCurrentWorkspace(folder), true);
+		assert.strictEqual(
+			service.isCurrentWorkspace({
+				id: 'single-folder',
+				uri: folder
+			}),
+			true
+		);
+		assert.strictEqual(
+			service.isCurrentWorkspace(joinPath(ROOT, 'outsideFolder')),
+			false
+		);
 	});
 });
