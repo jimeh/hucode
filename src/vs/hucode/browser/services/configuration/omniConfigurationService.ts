@@ -131,7 +131,10 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 	private readonly workspaceConfiguration: WorkspaceConfiguration;
 	private readonly cachedFolderConfigs = this._register(new DisposableMap<URI, FolderConfiguration>(new ResourceMap()));
 	private readonly omniReadOnlyKeys = new Set<string>();
-	private readonly pendingFolderConfigurationChanges: IConfigurationChange[] = [];
+	private readonly pendingFolderConfigurationChanges: Array<{
+		previousData: IConfigurationData;
+		change: IConfigurationChange;
+	}> = [];
 
 	private readonly _onDidChangeConfiguration = this._register(new Emitter<IConfigurationChangeEvent>());
 	readonly onDidChangeConfiguration = this._onDidChangeConfiguration.event;
@@ -184,13 +187,14 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 		this._register(this.policyConfiguration.onDidChangeConfiguration(configurationModel => this.onPolicyConfigurationChanged(configurationModel)));
 		this._register(this.userConfiguration.onDidChangeConfiguration(userConfiguration => this.onUserConfigurationChanged(userConfiguration)));
 		this._register(this.workspaceConfiguration.onDidUpdateConfiguration(() => this.onWorkspaceConfigurationChanged()));
-		this._register(this.workspaceService.onWillChangeWorkspaceFolders(e => e.join(
-			this.loadFolderConfigurations(e.changes.added).then(change => {
+		this._register(this.workspaceService.onWillChangeWorkspaceFolders(e => {
+			const previousData = this._configuration.toData();
+			e.join(this.loadFolderConfigurations(e.changes.added).then(change => {
 				if (change.keys.length || change.overrides.length) {
-					this.pendingFolderConfigurationChanges.push(change);
+					this.pendingFolderConfigurationChanges.push({ previousData, change });
 				}
-			})
-		)));
+			}));
+		}));
 		this._register(this.workspaceService.onDidChangeWorkspaceFolders(e => this.onWorkspaceFoldersChanged(e)));
 	}
 
@@ -460,8 +464,9 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 	}
 
 	private onWorkspaceFoldersChanged(e: IWorkspaceFoldersChangeEvent): void {
-		const previousData = this._configuration.toData();
-		const changes = this.pendingFolderConfigurationChanges.splice(0);
+		const pending = this.pendingFolderConfigurationChanges.shift();
+		const previousData = pending?.previousData ?? this._configuration.toData();
+		const changes: IConfigurationChange[] = pending ? [pending.change] : [];
 		for (const folder of e.removed) {
 			const change = this._configuration.compareAndDeleteFolderConfiguration(folder.uri);
 			changes.push(change);

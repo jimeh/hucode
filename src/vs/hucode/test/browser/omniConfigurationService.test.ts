@@ -208,7 +208,8 @@ suite('OmniConfigurationService', () => {
 			const event = await eventPromise;
 
 			assert.ok(event.affectsConfiguration(
-				'hucodeOmniConfigurationService.testSetting'
+				'hucodeOmniConfigurationService.testSetting',
+				{ resource: folder }
 			));
 			assert.strictEqual(
 				testObject.getValue(
@@ -317,18 +318,21 @@ suite('OmniWorkspaceContextService', () => {
 
 		await service.addFolders([{ uri: folder }]);
 
-		assert.strictEqual(service.isCurrentWorkspace(workspaceIdentifier), true);
-		assert.strictEqual(service.isCurrentWorkspace(folder), true);
-		assert.strictEqual(
-			service.isCurrentWorkspace({
+		assert.deepStrictEqual({
+			workspaceIdentifier: service.isCurrentWorkspace(workspaceIdentifier),
+			folder: service.isCurrentWorkspace(folder),
+			singleFolderIdentifier: service.isCurrentWorkspace({
 				id: 'single-folder',
 				uri: folder
 			}),
-			true
-		);
-		assert.strictEqual(
-			service.isCurrentWorkspace(joinPath(ROOT, 'outsideFolder')),
-			false
-		);
+			outsideFolder: service.isCurrentWorkspace(
+				joinPath(ROOT, 'outsideFolder')
+			)
+		}, {
+			workspaceIdentifier: true,
+			folder: true,
+			singleFolderIdentifier: true,
+			outsideFolder: false
+		});
 	});
 });
