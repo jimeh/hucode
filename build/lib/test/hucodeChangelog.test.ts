@@ -48,7 +48,13 @@ suite('Hucode changelog', () => {
 
 	test('renders conventional-changelog sections for all fragment types', async () => {
 		const output = await renderReleaseSection([
-			fragment('feat', 'release', 'publish macOS releases', 1234),
+			fragment(
+				'feat',
+				'release',
+				'publish macOS releases',
+				1234,
+				'Release tags now upload signed macOS DMG assets.'
+			),
 			fragment('chore', 'ci', 'fix release upload filtering', 1235),
 		]);
 
@@ -181,8 +187,6 @@ suite('Hucode changelog', () => {
 				'',
 				'- **release:** publish macOS releases (#1234)',
 				'',
-				'  Release tags now upload signed macOS DMG assets.',
-				'',
 				'### Miscellaneous Chores',
 				'',
 				'- **ci:** fix release upload filtering (#1235)',
@@ -241,10 +245,11 @@ function fragment(
 	type: string,
 	scope: string | null,
 	subject: string,
-	prNumber: number
+	prNumber: number,
+	body = ''
 ): ChangeFragment {
 	return {
-		body: '',
+		body,
 		breaking: false,
 		filePath: `.changes/${prNumber}-${subject.replaceAll(' ', '-')}.md`,
 		header: scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`,

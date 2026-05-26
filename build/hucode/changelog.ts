@@ -259,12 +259,6 @@ export async function renderReleaseSection(
 		lines.push(`### ${type.section}`, '');
 		for (const fragment of group) {
 			lines.push(renderChangeBullet(fragment));
-			if (fragment.body) {
-				lines.push('');
-				for (const bodyLine of fragment.body.split(/\r?\n/)) {
-					lines.push(bodyLine ? `  ${bodyLine}` : '');
-				}
-			}
 		}
 		lines.push('');
 	}
