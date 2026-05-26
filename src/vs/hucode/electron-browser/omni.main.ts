@@ -132,10 +132,10 @@ import { NativeMenubarControl } from
 	'../../workbench/electron-browser/parts/titlebar/menubarControl.js';
 import { IWorkspaceEditingService } from
 	'../../workbench/services/workspaces/common/workspaceEditing.js';
-import { ConfigurationService } from
-	'../../sessions/services/configuration/browser/configurationService.js';
-import { SessionsWorkspaceContextService } from
-	'../../sessions/services/workspace/browser/workspaceContextService.js';
+import { OmniConfigurationService } from
+	'../browser/services/configuration/omniConfigurationService.js';
+import { OmniWorkspaceContextService } from
+	'../browser/services/workspace/omniWorkspaceContextService.js';
 import { getWorkspaceIdentifier } from
 	'../../workbench/services/workspaces/browser/workspaces.js';
 import {
@@ -315,7 +315,7 @@ export class OmniMain extends Disposable {
 		serviceCollection: ServiceCollection;
 		logService: ILogService;
 		storageService: NativeWorkbenchStorageService;
-		configurationService: ConfigurationService;
+		configurationService: OmniConfigurationService;
 		shellService: IHucodeShellService;
 	}> {
 		const serviceCollection = new ServiceCollection();
@@ -512,7 +512,7 @@ export class OmniMain extends Disposable {
 		const workspaceIdentifier = getWorkspaceIdentifier(
 			environmentService.agentSessionsWorkspace
 		);
-		const workspaceContextService = new SessionsWorkspaceContextService(
+		const workspaceContextService = new OmniWorkspaceContextService(
 			workspaceIdentifier,
 			uriIdentityService
 		);
@@ -583,14 +583,14 @@ export class OmniMain extends Disposable {
 	}
 
 	private async createConfigurationService(
-		workspaceContextService: SessionsWorkspaceContextService,
+		workspaceContextService: OmniWorkspaceContextService,
 		userDataProfileService: IUserDataProfileService,
 		uriIdentityService: IUriIdentityService,
 		fileService: FileService,
 		logService: ILogService,
 		policyService: IPolicyService
-	): Promise<ConfigurationService> {
-		const configurationService = new ConfigurationService(
+	): Promise<OmniConfigurationService> {
+		const configurationService = new OmniConfigurationService(
 			userDataProfileService,
 			workspaceContextService,
 			uriIdentityService,

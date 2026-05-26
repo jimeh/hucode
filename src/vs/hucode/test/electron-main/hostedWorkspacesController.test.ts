@@ -236,10 +236,20 @@ class TestBrowserWindow extends EventEmitter {
 		new TestHostedWorkspaceIpcMain()
 	).asElectronWebContents();
 	readonly contentView = {
+		children: [] as IHostedWorkbenchView[],
 		added: [] as IHostedWorkbenchView[],
 		removed: [] as IHostedWorkbenchView[],
-		addChildView: (view: IHostedWorkbenchView) => this.contentView.added.push(view),
-		removeChildView: (view: IHostedWorkbenchView) => this.contentView.removed.push(view),
+		addChildView: (view: IHostedWorkbenchView) => {
+			this.contentView.children = this.contentView.children
+				.filter(child => child !== view);
+			this.contentView.children.push(view);
+			this.contentView.added.push(view);
+		},
+		removeChildView: (view: IHostedWorkbenchView) => {
+			this.contentView.children = this.contentView.children
+				.filter(child => child !== view);
+			this.contentView.removed.push(view);
+		},
 	};
 
 	getContentBounds(): Electron.Rectangle {
@@ -817,12 +827,14 @@ suite('ResidentHostedWorkspacesController', () => {
 			]);
 			assert.strictEqual(browserViewMainService.frontCalls.at(-1), 1);
 			assert.deepStrictEqual(
-				(window.win as unknown as TestBrowserWindow).contentView.removed
+				(window.win as unknown as TestBrowserWindow).contentView.children
 					.map(view => view.webContents.id),
-				[2]
+				[1]
 			);
 
 			now = 4000;
+			const bravoInvalidateCallsBefore =
+				viewFactory.views[1].rawWebContents.invalidateCalls.length;
 			await controller.openWorkspace(bravo, 'project-bravo');
 
 			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
@@ -830,12 +842,53 @@ suite('ResidentHostedWorkspacesController', () => {
 				{ id: 2, visible: true },
 			]);
 			assert.deepStrictEqual(
-				(window.win as unknown as TestBrowserWindow).contentView.removed
+				(window.win as unknown as TestBrowserWindow).contentView.children
 					.map(view => view.webContents.id),
-				[2, 1]
+				[2]
 			);
-			assert.strictEqual(viewFactory.views[1].rawWebContents
-				.invalidateCalls.length, 1);
+			assert.strictEqual(
+				viewFactory.views[1].rawWebContents.invalidateCalls.length,
+				bravoInvalidateCallsBefore + 1
+			);
+		});
+
+	test('opening a new active workspace reconciles stale active views',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { browserViewMainService, controller, viewFactory, window } =
+				createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+
+			assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+				worktreePath: instance.worktreePath,
+				state: instance.state,
+				visible: instance.visible,
+			})), [
+				{ worktreePath: bravo, state: 'active', visible: true },
+				{ worktreePath: alpha, state: 'loaded', visible: false },
+			]);
+			assert.deepStrictEqual(
+				(browserWindow.contentView.children as IHostedWorkbenchView[])
+					.map(view => view.webContents.id),
+				[2]
+			);
+			assert.deepStrictEqual(viewFactory.views[0].visibleCalls.slice(-1), [
+				false,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.slice(-2),
+				[
+					{ id: 1, visible: false },
+					{ id: 2, visible: true },
+				]
+			);
 		});
 
 	test('overlay occlusion restores active workspace with repaint',
@@ -850,10 +903,13 @@ suite('ResidentHostedWorkspacesController', () => {
 
 			await controller.openWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
 
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 			const view = viewFactory.views[0];
 			const removedBefore = browserWindow.contentView.removed.length;
+			const boundsBefore = view.boundsCalls.length;
+			const invalidateCallsBefore = view.rawWebContents.invalidateCalls.length;
 
 			controller.setWorkspaceOverlayOcclusion(true);
 
@@ -866,17 +922,110 @@ suite('ResidentHostedWorkspacesController', () => {
 				browserViewMainService.visibleCalls.at(-1),
 				{ id: 1, visible: false }
 			);
-			assert.strictEqual(view.rawWebContents.invalidateCalls.length, 0);
+			assert.strictEqual(
+				view.rawWebContents.invalidateCalls.length,
+				invalidateCallsBefore
+			);
 
 			controller.setWorkspaceOverlayOcclusion(false);
 
 			assert.deepStrictEqual(view.visibleCalls.slice(-1), [true]);
+			assert.deepStrictEqual(view.boundsCalls.slice(boundsBefore), [{
+				x: 280,
+				y: 0,
+				width: 1000,
+				height: 800,
+			}]);
 			assert.deepStrictEqual(
 				browserViewMainService.visibleCalls.at(-1),
 				{ id: 1, visible: true }
 			);
 			assert.strictEqual(browserViewMainService.frontCalls.at(-1), 1);
-			assert.strictEqual(view.rawWebContents.invalidateCalls.length, 1);
+			assert.strictEqual(
+				view.rawWebContents.invalidateCalls.length,
+				invalidateCallsBefore + 1
+			);
+		});
+
+	test('closing active workspace under overlay keeps MRU hidden until clear',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { browserViewMainService, controller, viewFactory, window } =
+				createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			now = 3000;
+			await controller.openWorkspace(alpha, 'project-alpha');
+
+			controller.setWorkspaceOverlayOcclusion(true);
+			await controller.closeWorkspace('instance-1');
+
+			assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+				worktreePath: instance.worktreePath,
+				state: instance.state,
+				visible: instance.visible,
+			})), [
+				{ worktreePath: bravo, state: 'active', visible: true },
+			]);
+			assert.deepStrictEqual(browserWindow.contentView.children, []);
+			assert.deepStrictEqual(viewFactory.views[1].visibleCalls.slice(-1), [
+				false,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.at(-1),
+				{ id: 2, visible: false }
+			);
+
+			controller.setWorkspaceOverlayOcclusion(false);
+
+			assert.deepStrictEqual(
+				(browserWindow.contentView.children as IHostedWorkbenchView[])
+					.map(view => view.webContents.id),
+				[2]
+			);
+			assert.deepStrictEqual(viewFactory.views[1].visibleCalls.slice(-1), [
+				true,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.at(-1),
+				{ id: 2, visible: true }
+			);
+		});
+
+	test('repeated overlay occlusion reconciles promoted active workspace',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { browserViewMainService, controller, viewFactory, window } =
+				createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			now = 2000;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			now = 3000;
+			await controller.openWorkspace(alpha, 'project-alpha');
+
+			controller.setWorkspaceOverlayOcclusion(true);
+			await controller.closeWorkspace('instance-1');
+			controller.setWorkspaceOverlayOcclusion(true);
+
+			assert.deepStrictEqual(browserWindow.contentView.children, []);
+			assert.deepStrictEqual(viewFactory.views[1].visibleCalls.slice(-1), [
+				false,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.visibleCalls.at(-1),
+				{ id: 2, visible: false }
+			);
 		});
 
 	test('closing inactive workspace cleans up its BrowserViews and trust',
