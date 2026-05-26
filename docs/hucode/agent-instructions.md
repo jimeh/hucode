@@ -28,6 +28,9 @@ VS Code code that Hucode customizes.
 
 - `npm run hucode:prepare` generates the Hucode mixin overlay.
 - `npm run hucode:validate` verifies the Hucode mixin and generated output.
+- `npm run hucode:prepare-release -- --version <version>` consumes
+  `.changes/*.md` fragments, updates `CHANGELOG.md`, and bumps
+  `build/hucode/mixin/stable/product.json` `hucodeVersion`.
 - `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
   compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
@@ -83,6 +86,17 @@ VS Code code that Hucode customizes.
 
 ## CI Workflow
 
+- Hucode PR titles must use Conventional Commit format with commitlint's
+  conventional types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+  `refactor`, `revert`, `style`, or `test`.
+- For PRs titled with `feat`, `fix`, `perf`, `revert`, or any breaking `!`
+  marker, add a matching `.changes/<pr-number>-<slug>.md` fragment. Hidden
+  types such as `build`, `chore`, `ci`, `docs`, `refactor`, `style`, and
+  `test` may still add a fragment when the change should appear in release
+  notes. The fragment's first non-empty line must match the PR title's type,
+  scope, breaking marker, and subject. Do not invent a PR number; if the PR does
+  not exist yet, create the PR first, then add and push the fragment with the
+  assigned PR number.
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
   default. Do not reintroduce upstream VS Code self-hosted `1ES.Pool` runners or
   larger macOS runners such as `macos-14-xlarge` unless the cost and need are
@@ -186,6 +200,10 @@ VS Code code that Hucode customizes.
   `MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD`; the required GitHub variables
   are `APPLE_NOTARIZATION_ISSUER_ID`, `APPLE_NOTARIZATION_KEY_ID`, and
   `APPLE_TEAM_ID`.
+- Hucode release CI publishes GitHub Releases from tag builds and uses the
+  matching `CHANGELOG.md` version section as release notes. Release publishing
+  currently builds and uploads only macOS DMG artifacts for supported public
+  releases; Linux and Windows targets remain manual build targets until tested.
 - Do not add upstream `build/darwin/patch-dmg.py` to Hucode release packaging
   unless a Hucode `disk.icns` volume icon exists. The script only injects a
   custom Finder volume icon into an already-created DMG; it is unrelated to app
@@ -278,6 +296,9 @@ VS Code code that Hucode customizes.
   reaches `build/lib/preLaunch.ts`, which runs `npm ci` only when the root
   `node_modules` directory is absent. Seeding root `node_modules` before launch
   avoids that fallback.
+- Hucode uses npm 11.1 for `min-release-age`; repo npm configs set a 3-day
+  package age gate, and CI setup upgrades to pinned npm 11.1 before dependency
+  installs. VS Code's preinstall guard currently rejects npm 11.2.0 and newer.
 - For parallel local git worktrees, dependency state is per worktree because
   VS Code's install hash lives under root `node_modules`. Use
   `npm run hucode:seed-worktree-node-modules` to copy every `node_modules` tree

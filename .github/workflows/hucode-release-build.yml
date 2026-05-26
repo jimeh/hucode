@@ -141,6 +141,9 @@ jobs:
             package-lock.json
             extensions/copilot/package-lock.json
 
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
+
       - name: Setup emsdk
         shell: bash
         run: |
@@ -253,6 +256,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
 
       - name: Determine build version
         id: version
@@ -463,6 +469,7 @@ jobs:
 
   package:
     name: Package (${{ matrix.platform }}-${{ matrix.arch }})
+    if: always() && needs.app-build.result != 'cancelled'
     needs:
       - prepare-matrix
       - app-build
@@ -483,6 +490,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
 
       - name: Determine build version
         id: version
@@ -648,20 +658,45 @@ jobs:
           retention-days: 14
 
   publish-release:
-    name: Publish GitHub release (disabled by default)
-    if: github.event_name == 'push' && vars.HUCODE_ENABLE_RELEASE_PUBLISH == 'true'
+    name: Publish GitHub release
+    if: always() && github.event_name == 'push'
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Extract release notes
+        shell: bash
+        if: needs.package.result != 'cancelled'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          node build/hucode/changelog.ts release-notes \
+            --version "$version" \
+            --out release-notes.md
+
       - name: Download workflow artifacts
+        if: needs.package.result != 'cancelled'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: release-artifacts
 
       - name: Upload release assets
+        if: needs.package.result != 'cancelled'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -672,10 +707,20 @@ jobs:
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
               --title "$TAG_NAME" \
-              --notes "Hucode release build artifacts."
+              --notes-file release-notes.md
+          else
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release-notes.md
           fi
 
           mapfile -t files < <(find release-artifacts -type f \
             ! -path '*/hucode-app-*/*' \
-            ! -path '*/hucode-copilot-vsix/*')
+            ! -path '*/hucode-copilot-vsix/*' \
+            -path '*/hucode-*-darwin-*/*' \
+            -name '*.dmg')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No macOS DMG release assets found." >&2
+            exit 1
+          fi
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
