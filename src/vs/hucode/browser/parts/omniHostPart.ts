@@ -63,6 +63,7 @@ export class OmniHostPart extends Part {
 	private screenshotCaptureInFlight: Promise<boolean> | undefined;
 	private hasScreenshot = false;
 	private overlayOccluded = false;
+	private mainOverlayOccluded = false;
 	private overlayOcclusionToken = 0;
 	private activeInstanceId: string | undefined;
 	private readonly hasLoadedWorkbenchContext: IContextKey<boolean>;
@@ -190,8 +191,8 @@ export class OmniHostPart extends Part {
 		const activeInstanceChanged = this.activeInstanceId !== activeInstanceId;
 		this.activeInstanceId = activeInstanceId;
 		if (activeInstanceChanged) {
-			this.clearOverlayOcclusion();
 			this.clearScreenshot();
+			this.handleActiveInstanceChanged();
 		}
 
 		if (activeInstance) {
@@ -391,16 +392,41 @@ export class OmniHostPart extends Part {
 
 	private clearOverlayOcclusion(): void {
 		this.overlayOcclusionToken++;
-		if (!this.overlayOccluded) {
+		if (!this.overlayOccluded && !this.mainOverlayOccluded) {
 			this.updateScreenshotVisibility();
 			return;
 		}
 
 		this.overlayOccluded = false;
 		this.updateScreenshotVisibility();
+		this.setMainOverlayOcclusion(false);
+	}
+
+	private handleActiveInstanceChanged(): void {
+		const keepMainOccluded =
+			(this.overlayOccluded || this.mainOverlayOccluded) &&
+			this.hasOverlappingShellOverlay();
+		this.overlayOcclusionToken++;
+		if (!this.overlayOccluded && !this.mainOverlayOccluded) {
+			this.updateScreenshotVisibility();
+			return;
+		}
+
+		this.overlayOccluded = false;
+		this.updateScreenshotVisibility();
+		if (keepMainOccluded) {
+			void this.updateOverlayOcclusion();
+			return;
+		}
+
+		this.setMainOverlayOcclusion(false);
+	}
+
+	private setMainOverlayOcclusion(occluded: boolean): void {
+		this.mainOverlayOccluded = occluded;
 		void this.shellService.setWorkspaceOverlayOcclusion(
 			this.windowId,
-			false
+			occluded
 		);
 	}
 
@@ -416,6 +442,7 @@ export class OmniHostPart extends Part {
 	private async updateOverlayOcclusion(): Promise<void> {
 		const occluded = this.hasOverlappingShellOverlay();
 		const token = ++this.overlayOcclusionToken;
+		const activeInstanceId = this.activeInstanceId;
 
 		if (!occluded) {
 			this.clearOverlayOcclusion();
@@ -429,6 +456,7 @@ export class OmniHostPart extends Part {
 		const hasScreenshot = await this.refreshScreenshot();
 		if (
 			token !== this.overlayOcclusionToken
+			|| activeInstanceId !== this.activeInstanceId
 			|| !hasScreenshot
 			|| !this.hasOverlappingShellOverlay()
 		) {
@@ -438,14 +466,15 @@ export class OmniHostPart extends Part {
 		this.overlayOccluded = true;
 		this.updateScreenshotVisibility();
 		mainWindow.requestAnimationFrame(() => {
-			if (!this.overlayOccluded) {
+			if (
+				!this.overlayOccluded
+				|| token !== this.overlayOcclusionToken
+				|| activeInstanceId !== this.activeInstanceId
+			) {
 				return;
 			}
 
-			void this.shellService.setWorkspaceOverlayOcclusion(
-				this.windowId,
-				true
-			);
+			this.setMainOverlayOcclusion(true);
 		});
 	}
 }

@@ -393,7 +393,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 		this.updateInstanceState(instance, { state });
 		if (state === 'active') {
-			this.applyViewVisibility(instance);
+			this.reconcileViewVisibility('ready:active');
 		}
 	}
 
@@ -402,30 +402,38 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		visible: boolean
 	): void {
 		instance.visible = visible;
-		this.applyViewVisibility(instance);
+		this.reconcileViewVisibility('setViewVisible');
 	}
 
 	private isViewActuallyVisible(instance: IHostedWorkbenchInstance): boolean {
 		return instance.visible
-			&& (
-				instance.instanceId !== this.activeInstanceId
-				|| !this.overlayOccluded
-			);
+			&& instance.instanceId === this.activeInstanceId
+			&& !instance.disposed
+			&& instance.state !== 'crashed'
+			&& instance.state !== 'unloaded'
+			&& !this.overlayOccluded;
 	}
 
-	private getLiveWebContents(
-		instance: IHostedWorkbenchInstance
-	): Electron.WebContents | undefined {
-		const webContents = instance.view?.webContents;
-		if (!webContents || webContents.isDestroyed()) {
-			return undefined;
+	private reconcileViewVisibility(reason: string): void {
+		this.traceRestore(`reconcile:visibility reason=${reason}`);
+		const instances = Array.from(this.instancesById.values());
+		for (const instance of instances) {
+			if (!this.isViewActuallyVisible(instance)) {
+				this.applyInstanceViewVisibility(instance, false);
+			}
 		}
 
-		return webContents;
+		for (const instance of instances) {
+			if (this.isViewActuallyVisible(instance)) {
+				this.applyInstanceViewVisibility(instance, true);
+			}
+		}
 	}
 
-	private applyViewVisibility(instance: IHostedWorkbenchInstance): void {
-		const visible = this.isViewActuallyVisible(instance);
+	private applyInstanceViewVisibility(
+		instance: IHostedWorkbenchInstance,
+		visible: boolean
+	): void {
 		const wasActuallyVisible = instance.attached && visible;
 		this.traceRestore(
 			`visibility requested=${instance.visible} actual=${visible} ` +
@@ -445,16 +453,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (view && webContents) {
 			if (visible) {
 				this.attachInstanceView(instance);
+				if (!wasActuallyVisible) {
+					this.setInstanceBounds(instance, this.bounds);
+				}
 				view.setVisible(true);
+				this.browserViewMainService.setHostedWebContentsVisible(
+					webContents.id,
+					true
+				);
 			} else {
+				this.browserViewMainService.setHostedWebContentsVisible(
+					webContents.id,
+					false
+				);
 				view.setVisible(false);
 				this.detachInstanceView(instance);
 			}
-
-			this.browserViewMainService.setHostedWebContentsVisible(
-				webContents.id,
-				visible
-			);
 		}
 		if (visible) {
 			this.bringInstanceToFront(instance);
@@ -465,6 +479,27 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				webContents?.invalidate();
 			}
 		}
+	}
+
+	private canBringInstanceToFront(
+		instance: IHostedWorkbenchInstance
+	): boolean {
+		return this.isViewActuallyVisible(instance)
+			&& (
+				!instance.view
+				|| !!this.getLiveWebContents(instance)
+			);
+	}
+
+	private getLiveWebContents(
+		instance: IHostedWorkbenchInstance
+	): Electron.WebContents | undefined {
+		const webContents = instance.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return undefined;
+		}
+
+		return webContents;
 	}
 
 	private attachInstanceView(instance: IHostedWorkbenchInstance): void {
@@ -487,6 +522,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private bringInstanceToFront(instance: IHostedWorkbenchInstance): void {
+		if (!this.canBringInstanceToFront(instance)) {
+			return;
+		}
+
 		const webContents = this.getLiveWebContents(instance);
 		if (!instance.view || !webContents) {
 			return;
@@ -819,7 +858,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		instance.state = 'loading';
 		if (makeActive) {
 			instance.lastActiveAt = this.now();
-			this.activeInstanceId = instance.instanceId;
 		}
 
 		this.instancesById.set(instance.instanceId, instance);
@@ -881,6 +919,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 
 		view.setBackgroundColor(this.themeMainService.getBackgroundColor());
+		view.setVisible(false);
 		view.webContents.on('focus', () => {
 			if (!this.instancesById.has(instance.instanceId)) {
 				return;
@@ -919,9 +958,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				return;
 			}
 
-			if (instance.instanceId === this.activeInstanceId) {
-				this.setWorkspaceOverlayOcclusion(false);
-			}
 			this.untrustView(instance);
 			this.browserViewMainService
 				.destroyBrowserViewsForHostedWebContents(webContentsId);
@@ -938,9 +974,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.instancesById.has(instance.instanceId)) {
 				this.browserViewMainService
 					.destroyBrowserViewsForHostedWebContents(webContentsId);
-				if (instance.instanceId === this.activeInstanceId) {
-					this.setWorkspaceOverlayOcclusion(false);
-				}
 				instance.view = undefined;
 				instance.attached = false;
 				this.updateInstanceState(instance, {
@@ -1087,7 +1120,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		if (wasActive) {
-			this.setWorkspaceOverlayOcclusion(false);
 			this.activeInstanceId = undefined;
 			if (nextActive) {
 				this.activateInstance(nextActive);
@@ -1133,9 +1165,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		instance.state = 'unloaded';
 		instance.focused = false;
 		instance.visible = false;
-		if (instance.instanceId === this.activeInstanceId) {
-			this.setWorkspaceOverlayOcclusion(false);
-		}
 
 		if (instance.view) {
 			const view = instance.view;
@@ -1434,14 +1463,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	setWorkspaceOverlayOcclusion(occluded: boolean): void {
 		const wasOccluded = this.overlayOccluded;
 		if (wasOccluded === occluded) {
+			this.reconcileViewVisibility('overlay:unchanged');
 			return;
 		}
 
 		this.overlayOccluded = occluded;
-		const activeInstance = this.getActiveInstance();
-		if (activeInstance) {
-			this.applyViewVisibility(activeInstance);
-		}
+		this.reconcileViewVisibility('overlay:changed');
 	}
 
 	async runActionInWorkspace(
