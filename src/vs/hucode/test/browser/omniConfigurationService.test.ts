@@ -284,6 +284,37 @@ suite('OmniConfigurationService', () => {
 				/Hucode Omni window/
 			);
 		}));
+
+	test('workspace folder settings require a matching folder resource',
+		() => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+			await fileService.writeFile(
+				userDataProfileService.currentProfile.settingsResource,
+				VSBuffer.fromString('{}')
+			);
+
+			await assert.rejects(
+				() => testObject.updateValue(
+					'hucodeOmniConfigurationService.testSetting',
+					'folderValue',
+					ConfigurationTarget.WORKSPACE_FOLDER
+				),
+				/folder resource/
+			);
+			await assert.rejects(
+				() => testObject.updateValue(
+					'hucodeOmniConfigurationService.testSetting',
+					'folderValue',
+					{ resource: joinPath(ROOT, 'outsideFolder') },
+					ConfigurationTarget.WORKSPACE_FOLDER
+				),
+				/Unable to resolve workspace folder/
+			);
+
+			const userSettings = await fileService.readFile(
+				userDataProfileService.currentProfile.settingsResource
+			);
+			assert.strictEqual(userSettings.value.toString(), '{}');
+		}));
 });
 
 suite('OmniWorkspaceContextService', () => {

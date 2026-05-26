@@ -31,6 +31,7 @@ import { FolderConfiguration, UserConfiguration, WorkspaceConfiguration } from '
 import { APPLICATION_SCOPES, APPLY_ALL_PROFILES_SETTING, FOLDER_CONFIG_FOLDER_NAME, FOLDER_SETTINGS_PATH, IWorkbenchConfigurationService, RestrictedSettings } from '../../../../workbench/services/configuration/common/configuration.js';
 import { Configuration } from '../../../../workbench/services/configuration/common/configurationModels.js';
 import { IUserDataProfileService } from '../../../../workbench/services/userDataProfile/common/userDataProfile.js';
+import { localize } from '../../../../nls.js';
 
 // Import to register configuration contributions
 import '../../../../workbench/services/configuration/browser/configurationService.js';
@@ -263,11 +264,19 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 
 		const inspect = this.inspect(key, { resource: overrides?.resource, overrideIdentifier: overrides?.overrideIdentifiers ? overrides.overrideIdentifiers[0] : undefined });
 		if (inspect.policyValue !== undefined) {
-			throw new Error(`Unable to write ${key} because it is configured in system policy.`);
+			throw new Error(localize(
+				'omniConfigurationPolicyWriteError',
+				"Unable to write {0} because it is configured in system policy.",
+				key
+			));
 		}
 
 		if (this.omniReadOnlyKeys.has(key)) {
-			throw new Error(`Unable to write ${key} because it is read-only in the Hucode Omni window.`);
+			throw new Error(localize(
+				'omniConfigurationReadOnlyWriteError',
+				"Unable to write {0} because it is read-only in the Hucode Omni window.",
+				key
+			));
 		}
 
 		if (!targets.length) {
@@ -335,12 +344,21 @@ export class OmniConfigurationService extends Disposable implements IWorkbenchCo
 
 	private getSettingsResource(target: ConfigurationTarget | undefined, resource: URI | undefined): URI {
 		if (target === ConfigurationTarget.WORKSPACE_FOLDER) {
-			if (resource) {
-				const folder = this.workspaceService.getWorkspaceFolder(resource);
-				if (folder) {
-					return this.uriIdentityService.extUri.joinPath(folder.uri, FOLDER_SETTINGS_PATH);
-				}
+			if (!resource) {
+				throw new Error(localize(
+					'omniConfigurationFolderResourceMissing',
+					"Unable to write workspace folder setting without a folder resource."
+				));
 			}
+			const folder = this.workspaceService.getWorkspaceFolder(resource);
+			if (!folder) {
+				throw new Error(localize(
+					'omniConfigurationFolderResourceNotFound',
+					"Unable to resolve workspace folder for resource: {0}",
+					resource.toString()
+				));
+			}
+			return this.uriIdentityService.extUri.joinPath(folder.uri, FOLDER_SETTINGS_PATH);
 		}
 		if (target === ConfigurationTarget.WORKSPACE) {
 			const workspace = this.workspaceService.getWorkspace();
@@ -542,7 +560,10 @@ class ConfigurationEditing {
 		const parseErrors: ParseError[] = [];
 		parse(content, parseErrors, { allowTrailingComma: true, allowEmptyContent: true });
 		if (parseErrors.length > 0) {
-			throw new Error('Unable to write into the settings file. Please open the file to correct errors/warnings in the file and try again.');
+			throw new Error(localize(
+				'omniConfigurationInvalidSettings',
+				"Unable to write into the settings file. Please open the file to correct errors/warnings in the file and try again."
+			));
 		}
 
 		const edits = this.getEdits(content, path, value);
