@@ -6,20 +6,41 @@ on:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
-      target:
-        description: Build target
+      darwin_x64:
+        description: Build macOS x64
         required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - darwin-x64
-          - darwin-arm64
-          - linux-x64
-          - linux-arm64
-          - linux-armhf
-          - win32-x64
-          - win32-arm64
+        default: true
+        type: boolean
+      darwin_arm64:
+        description: Build macOS arm64
+        required: true
+        default: true
+        type: boolean
+      linux_x64:
+        description: Build Linux x64
+        required: true
+        default: true
+        type: boolean
+      linux_arm64:
+        description: Build Linux arm64
+        required: true
+        default: true
+        type: boolean
+      linux_armhf:
+        description: Build Linux armhf
+        required: true
+        default: true
+        type: boolean
+      win32_x64:
+        description: Build Windows x64
+        required: true
+        default: true
+        type: boolean
+      win32_arm64:
+        description: Build Windows arm64
+        required: true
+        default: true
+        type: boolean
       sign:
         description: Sign and notarize macOS release assets
         required: true
@@ -27,7 +48,7 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target || 'tag' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.darwin_x64 }}-${{ inputs.darwin_arm64 }}-${{ inputs.linux_x64 }}-${{ inputs.linux_arm64 }}-${{ inputs.linux_armhf }}-${{ inputs.win32_x64 }}-${{ inputs.win32_arm64 }}-${{ inputs.sign }}
   cancel-in-progress: true
 
 permissions:
@@ -47,28 +68,37 @@ jobs:
       - name: Select targets
         id: matrix
         env:
-          TARGET: ${{ inputs.target || 'all' }}
+          BUILD_DARWIN_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.darwin_x64 }}
+          BUILD_DARWIN_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.darwin_arm64 }}
+          BUILD_LINUX_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_x64 }}
+          BUILD_LINUX_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_arm64 }}
+          BUILD_LINUX_ARMHF: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_armhf }}
+          BUILD_WIN32_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.win32_x64 }}
+          BUILD_WIN32_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.win32_arm64 }}
         run: |
           node <<'NODE'
           const targets = [
             {
+              id: 'darwin-x64',
               platform: 'darwin',
               arch: 'x64',
               npm_arch: 'x64',
               rust_target: 'x86_64-apple-darwin',
               runner: 'macos-15-intel',
               package_runner: 'macos-15',
-              artifacts: 'dmg'
+              artifacts: 'dmg,archive'
             },
             {
+              id: 'darwin-arm64',
               platform: 'darwin',
               arch: 'arm64',
               npm_arch: 'arm64',
               rust_target: 'aarch64-apple-darwin',
               runner: 'macos-15',
-              artifacts: 'dmg'
+              artifacts: 'dmg,archive'
             },
             {
+              id: 'linux-x64',
               platform: 'linux',
               arch: 'x64',
               npm_arch: 'x64',
@@ -78,6 +108,7 @@ jobs:
               artifacts: 'archive,deb,rpm'
             },
             {
+              id: 'linux-arm64',
               platform: 'linux',
               arch: 'arm64',
               npm_arch: 'arm64',
@@ -87,6 +118,7 @@ jobs:
               artifacts: 'archive,deb,rpm'
             },
             {
+              id: 'linux-armhf',
               platform: 'linux',
               arch: 'armhf',
               npm_arch: 'arm',
@@ -96,6 +128,7 @@ jobs:
               artifacts: 'archive,deb,rpm'
             },
             {
+              id: 'win32-x64',
               platform: 'win32',
               arch: 'x64',
               npm_arch: 'x64',
@@ -105,6 +138,7 @@ jobs:
               artifacts: 'archive,user-setup,system-setup'
             },
             {
+              id: 'win32-arm64',
               platform: 'win32',
               arch: 'arm64',
               npm_arch: 'arm64',
@@ -114,10 +148,19 @@ jobs:
               artifacts: 'archive,user-setup,system-setup'
             }
           ];
-          const target = process.env.TARGET;
-          const include = target === 'all'
-            ? targets
-            : targets.filter(item => `${item.platform}-${item.arch}` === target);
+          const selectedTargets = new Map([
+            ['darwin-x64', process.env.BUILD_DARWIN_X64],
+            ['darwin-arm64', process.env.BUILD_DARWIN_ARM64],
+            ['linux-x64', process.env.BUILD_LINUX_X64],
+            ['linux-arm64', process.env.BUILD_LINUX_ARM64],
+            ['linux-armhf', process.env.BUILD_LINUX_ARMHF],
+            ['win32-x64', process.env.BUILD_WIN32_X64],
+            ['win32-arm64', process.env.BUILD_WIN32_ARM64]
+          ]);
+          const include = targets.filter(item => selectedTargets.get(item.id) === 'true');
+          if (!include.length) {
+            throw new Error('At least one build target must be selected.');
+          }
           const output = `matrix=${JSON.stringify({ include })}\n`;
           require('fs').appendFileSync(process.env.GITHUB_OUTPUT, output);
           NODE
@@ -718,9 +761,21 @@ jobs:
             ! -path '*/hucode-app-*/*' \
             ! -path '*/hucode-copilot-vsix/*' \
             -path '*/hucode-*-darwin-*/*' \
-            -name '*.dmg')
+            \( -name '*.dmg' -o -name '*.zip' \))
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No macOS DMG release assets found." >&2
+            echo "No macOS DMG or ZIP release assets found." >&2
             exit 1
           fi
+          required_patterns=(
+            '*/hucode-*-darwin-x64/*.dmg'
+            '*/hucode-*-darwin-x64/*.zip'
+            '*/hucode-*-darwin-arm64/*.dmg'
+            '*/hucode-*-darwin-arm64/*.zip'
+          )
+          for pattern in "${required_patterns[@]}"; do
+            if ! find release-artifacts -type f -path "$pattern" | grep -q .; then
+              echo "Missing required macOS release asset: $pattern" >&2
+              exit 1
+            fi
+          done
           gh release upload "$TAG_NAME" "${files[@]}" --clobber

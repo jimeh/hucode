@@ -178,11 +178,11 @@ VS Code code that Hucode customizes.
   `build/hucode/release-build.ts --sign`. Signing must happen after every app
   payload mutation, including Copilot VSIX packaging, target-specific ripgrep
   shims, native modules, resources, and the mixed-in Rust CLI. Release CI ships
-  macOS as a DMG-only distributable: sign and verify the app, create the DMG,
-  sign the DMG, notarize the DMG, then staple and validate the DMG. Do not
-  notarize the app before creating the DMG unless a signed Darwin ZIP artifact
-  is explicitly requested, because Apple recommends notarizing only the
-  outermost distributed container.
+  macOS DMGs for manual installs and ZIPs for Squirrel.Mac auto-updates. For
+  DMGs, create the DMG from the signed app before app notarization/stapling,
+  sign the DMG, notarize the DMG, then staple and validate the DMG. For ZIP
+  artifacts, notarize a temporary app ZIP, staple the app, then create the
+  public ZIP from the stapled app.
 - Hucode's `darwin-x64` release app build uses the Intel macOS runner, but its
   package job should run on the standard arm64 `macos-15` runner. GitHub-hosted
   Intel macOS runners have repeatedly hung in `codesign --timestamp` while
@@ -207,7 +207,7 @@ VS Code code that Hucode customizes.
   `APPLE_TEAM_ID`.
 - Hucode release CI publishes GitHub Releases from tag builds and uses the
   matching `CHANGELOG.md` version section as release notes. Release publishing
-  currently builds and uploads only macOS DMG artifacts for supported public
+  currently builds and uploads macOS DMG and ZIP artifacts for supported public
   releases; Linux and Windows targets remain manual build targets until tested.
 - Do not add upstream `build/darwin/patch-dmg.py` to Hucode release packaging
   unless a Hucode `disk.icns` volume icon exists. The script only injects a

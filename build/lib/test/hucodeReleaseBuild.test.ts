@@ -13,6 +13,7 @@ import {
 	applyDebianPackageVersion,
 	applyRpmPackageVersion,
 	findBuiltInCopilotExtension,
+	orderReleaseArtifactsForPackaging,
 	validateAppCliArtifact,
 	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
@@ -162,6 +163,37 @@ suite('Hucode release build', () => {
 				buildOutput
 			),
 			/Copilot ripgrep shim not found/
+		);
+	});
+
+	test('orders release artifacts for packaging', () => {
+		const cases = [
+			{
+				platform: 'darwin' as const,
+				sign: true,
+				artifacts: ['archive', 'dmg'] as const
+			},
+			{
+				platform: 'darwin' as const,
+				sign: false,
+				artifacts: ['archive', 'dmg'] as const
+			},
+			{
+				platform: 'linux' as const,
+				sign: true,
+				artifacts: ['archive', 'deb'] as const
+			}
+		];
+
+		assert.deepStrictEqual(
+			cases.map(({ platform, sign, artifacts }) =>
+				orderReleaseArtifactsForPackaging(platform, sign, [...artifacts])
+			),
+			[
+				['dmg', 'archive'],
+				['archive', 'dmg'],
+				['archive', 'deb']
+			]
 		);
 	});
 
