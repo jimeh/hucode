@@ -17,10 +17,10 @@ import { prepareMixin } from './prepare-mixin.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
-type ReleasePlatform = 'darwin' | 'linux' | 'win32';
+export type ReleasePlatform = 'darwin' | 'linux' | 'win32';
 type ReleaseArch = 'x64' | 'arm64' | 'armhf';
 type ReleasePhase = 'all' | 'build' | 'package';
-type ReleaseArtifact =
+export type ReleaseArtifact =
 	| 'archive'
 	| 'dmg'
 	| 'deb'
@@ -201,6 +201,24 @@ function normalizeSigningMode(mode: string): SigningMode {
 	}
 
 	return mode as SigningMode;
+}
+
+/**
+ * Orders artifacts so signed Darwin archives are created after DMGs.
+ */
+export function orderReleaseArtifactsForPackaging(
+	platform: ReleasePlatform,
+	sign: boolean,
+	artifacts: ReleaseArtifact[]
+): ReleaseArtifact[] {
+	if (!sign || platform !== 'darwin' || !artifacts.includes('archive')) {
+		return artifacts;
+	}
+
+	return [
+		...artifacts.filter(artifact => artifact !== 'archive'),
+		'archive'
+	];
 }
 
 function parseArgs(args: string[]): ReleaseOptions {
@@ -1951,25 +1969,39 @@ async function packageAppOutput(
 	await validateAssembledAppOutput(options, paths.buildOutput);
 
 	let signing: DarwinSigning | undefined;
+	let signedDarwinAppPath: string | undefined;
+	let notarizedDarwinApp = false;
 	try {
 		if (options.sign) {
 			signing = await prepareDarwinSigning(options);
-			const appPath = await signAndVerifyDarwinApp(
+			signedDarwinAppPath = await signAndVerifyDarwinApp(
 				options,
 				paths.buildOutput,
 				signing
 			);
-			if (options.artifacts.includes('archive')) {
+		}
+
+		for (const artifact of orderReleaseArtifactsForPackaging(
+			options.platform,
+			options.sign,
+			options.artifacts
+		)) {
+			if (
+				artifact === 'archive'
+				&& options.platform === 'darwin'
+				&& signing
+				&& signedDarwinAppPath
+				&& !notarizedDarwinApp
+			) {
 				await notarizeAndStapleDarwinApp(
 					options,
-					appPath,
+					signedDarwinAppPath,
 					paths.distRoot,
 					signing
 				);
+				notarizedDarwinApp = true;
 			}
-		}
 
-		for (const artifact of options.artifacts) {
 			await packageArtifact(artifact, options, {
 				...paths,
 				signing
