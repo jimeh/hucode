@@ -28,6 +28,9 @@ VS Code code that Hucode customizes.
 
 - `npm run hucode:prepare` generates the Hucode mixin overlay.
 - `npm run hucode:validate` verifies the Hucode mixin and generated output.
+- `npm run hucode:prepare-release -- --version <version>` consumes
+  `.changes/*.md` fragments, updates `CHANGELOG.md`, and bumps
+  `build/hucode/mixin/stable/product.json` `hucodeVersion`.
 - `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
   compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
@@ -88,6 +91,17 @@ VS Code code that Hucode customizes.
 
 ## CI Workflow
 
+- Hucode PR titles must use Conventional Commit format with commitlint's
+  conventional types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+  `refactor`, `revert`, `style`, or `test`.
+- For PRs titled with `feat`, `fix`, `perf`, `revert`, or any breaking `!`
+  marker, add a matching `.changes/<pr-number>-<slug>.md` fragment. Hidden
+  types such as `build`, `chore`, `ci`, `docs`, `refactor`, `style`, and
+  `test` may still add a fragment when the change should appear in release
+  notes. The fragment's first non-empty line must match the PR title's type,
+  scope, breaking marker, and subject. Do not invent a PR number; if the PR does
+  not exist yet, create the PR first, then add and push the fragment with the
+  assigned PR number.
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
   default. Do not reintroduce upstream VS Code self-hosted `1ES.Pool` runners or
   larger macOS runners such as `macos-14-xlarge` unless the cost and need are
@@ -114,9 +128,21 @@ VS Code code that Hucode customizes.
   can build archives, DMGs, DEB, RPM, and setup artifacts. Use
   `--move-to-dist` only for local build commands that should relocate the app
   directory into the configured output directory, `dist/` by default.
+- `build/hucode/release-build.ts --phase build` creates the final unsigned app
+  output under `../VSCode-<platform>-<arch>`. This phase must include every app
+  payload mutation needed before packaging, including Copilot target ripgrep
+  shims and the Hucode Rust CLI. `--phase package` consumes that existing app
+  output and must not rebuild or mutate the app payload before signing or
+  producing release assets. Do not combine `--phase build` with
+  `--move-to-dist`; package phase expects the app output to stay in its upstream
+  `../VSCode-<platform>-<arch>` handoff location. The default `--phase all`
+  preserves the combined local flow.
+- Keep `build/hucode/release-build.ts` as TypeScript without a parallel
+  hand-written `.d.ts`; `cd build && npm run typecheck` should validate its
+  exported helpers directly.
 - Hucode local release packaging strips source maps by default by running the
   upstream gulp build with `GITHUB_WORKSPACE` set for that subprocess. Pass
-  `--include-source-maps` to `build/hucode/release-build.js` only when a local
+  `--include-source-maps` to `build/hucode/release-build.ts` only when a local
   package needs debuggable bundled source maps.
 - For release app size work, read
   [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
@@ -124,7 +150,7 @@ VS Code code that Hucode customizes.
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
   release workflow builds a Copilot VSIX once, uploads it as
   `hucode-copilot-vsix`, downloads it in each platform job, and passes
-  `--copilot-vsix` to `build/hucode/release-build.js`. Local release builds
+  `--copilot-vsix` to `build/hucode/release-build.ts`. Local release builds
   without `--copilot-vsix` still package Copilot from source and can ship a much
   larger `extensions/copilot/node_modules` tree. The release wrapper rejects a
   VSIX that already contains platform-specific Copilot executable packages or
@@ -149,16 +175,26 @@ VS Code code that Hucode customizes.
   `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
   changing upstream VS Code's stable/insider/exploration title defaults.
 - Hucode macOS release signing is enabled with
-  `build/hucode/release-build.js --sign`. Signing must happen after every app
+  `build/hucode/release-build.ts --sign`. Signing must happen after every app
   payload mutation, including Copilot VSIX packaging, target-specific ripgrep
-  shims, native modules, resources, and the mixed-in Rust CLI. The signed app is
-  notarized through a temporary ZIP, stapled, then used to create the release
-  ZIP and DMG. The DMG is separately signed, notarized, and stapled.
+  shims, native modules, resources, and the mixed-in Rust CLI. Release CI ships
+  macOS DMGs for manual installs and ZIPs for Squirrel.Mac auto-updates. For
+  DMGs, create the DMG from the signed app before app notarization/stapling,
+  sign the DMG, notarize the DMG, then staple and validate the DMG. For ZIP
+  artifacts, notarize a temporary app ZIP, staple the app, then create the
+  public ZIP from the stapled app.
+- Hucode's `darwin-x64` release app build uses the Intel macOS runner, but its
+  package job should run on the standard arm64 `macos-15` runner. GitHub-hosted
+  Intel macOS runners have repeatedly hung in `codesign --timestamp` while
+  signing the x64 DMG; package phase consumes the prebuilt app artifact and
+  does not need to execute target-architecture binaries.
 - macOS signing CI must make the temporary signing keychain the default user
   keychain and the active user keychain search list before running
   `@electron/osx-sign`; matching upstream VS Code's keychain setup avoids
   `codesign` failures even when `security find-identity` sees the imported
-  Developer ID identity.
+  Developer ID identity. Keep that behavior behind `--signing-mode ci`; the
+  default `--signing-mode local` must use the caller's existing keychain search
+  list and must not change the default keychain or search list.
 - `@electron/osx-sign` treats binary-looking `.wasm` files as signing
   candidates. Keep WebAssembly payloads ignored during macOS signing; they are
   not Mach-O code and cannot be signed by `codesign`.
@@ -169,6 +205,10 @@ VS Code code that Hucode customizes.
   `MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD`; the required GitHub variables
   are `APPLE_NOTARIZATION_ISSUER_ID`, `APPLE_NOTARIZATION_KEY_ID`, and
   `APPLE_TEAM_ID`.
+- Hucode release CI publishes GitHub Releases from tag builds and uses the
+  matching `CHANGELOG.md` version section as release notes. Release publishing
+  currently builds and uploads macOS DMG and ZIP artifacts for supported public
+  releases; Linux and Windows targets remain manual build targets until tested.
 - Do not add upstream `build/darwin/patch-dmg.py` to Hucode release packaging
   unless a Hucode `disk.icns` volume icon exists. The script only injects a
   custom Finder volume icon into an already-created DMG; it is unrelated to app
@@ -261,6 +301,9 @@ VS Code code that Hucode customizes.
   reaches `build/lib/preLaunch.ts`, which runs `npm ci` only when the root
   `node_modules` directory is absent. Seeding root `node_modules` before launch
   avoids that fallback.
+- Hucode uses npm 11.1 for `min-release-age`; repo npm configs set a 3-day
+  package age gate, and CI setup upgrades to pinned npm 11.1 before dependency
+  installs. VS Code's preinstall guard currently rejects npm 11.2.0 and newer.
 - For parallel local git worktrees, dependency state is per worktree because
   VS Code's install hash lives under root `node_modules`. Use
   `npm run hucode:seed-worktree-node-modules` to copy every `node_modules` tree
