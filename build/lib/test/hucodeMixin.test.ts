@@ -40,6 +40,14 @@ suite('Hucode mixin', () => {
 		assert.strictEqual(generated.urlProtocol, 'hucode');
 		assert.strictEqual(generated.darwinBundleIdentifier, 'dev.hucode.app');
 		assert.strictEqual(generated.win32AppUserModelId, 'dev.hucode.app');
+		assert.deepStrictEqual(generated.win32ContextMenu, {
+			x64: {
+				clsid: 'CBF04039-9B72-42B3-A8D4-1032F5AD4F98'
+			},
+			arm64: {
+				clsid: '0CC1A8D8-97FC-4B66-BD42-DAEE39E4EDE8'
+			}
+		});
 		assert.strictEqual(generated.embedderIdentifier, 'dev.hucode.app');
 		assert.strictEqual(
 			generated.extensionsGallery.serviceUrl,
