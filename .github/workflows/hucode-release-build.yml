@@ -474,6 +474,39 @@ jobs:
           name: hucode-copilot-vsix
           path: .build/hucode/copilot
 
+      - name: Add Windows SDK tools to PATH
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $kitsRoot = Join-Path `
+            ([Environment]::GetFolderPath('ProgramFilesX86')) `
+            'Windows Kits\10\bin'
+          $sdkTool = Get-ChildItem `
+            -Path $kitsRoot `
+            -Filter signtool.exe `
+            -Recurse |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $sdkTool) {
+            throw "signtool.exe not found under $kitsRoot"
+          }
+          $makeappx = Join-Path $sdkTool.Directory.FullName 'makeappx.exe'
+          if (-not (Test-Path -LiteralPath $makeappx)) {
+            throw "makeappx.exe not found next to $($sdkTool.FullName)"
+          }
+          $sdkTool.Directory.FullName |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "Added $($sdkTool.Directory.FullName) to PATH"
+
+      - name: Download Windows Explorer command DLL
+        if: matrix.platform == 'win32'
+        shell: bash
+        run: node build/win32/explorer-dll-fetcher.ts .build/win32/appx
+        env:
+          VSCODE_ARCH: ${{ matrix.arch }}
+
       - name: Build release app
         run: |
           set -euo pipefail
@@ -486,6 +519,21 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Windows AppX package
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appxRoot = (Resolve-Path `
+            "../VSCode-${{ matrix.platform }}-${{ matrix.arch }}/appx").Path
+          $manifest = Join-Path $appxRoot 'manifest'
+          $appx = Join-Path $appxRoot 'code_${{ matrix.arch }}.appx'
+          if (-not (Test-Path -LiteralPath $manifest)) {
+            throw "AppX manifest directory not found: $manifest"
+          }
+          makeappx pack /d $manifest /p $appx /nv
+          Remove-Item -Path $manifest -Recurse -Force
 
       - name: Upload release app
         shell: bash
@@ -782,7 +830,10 @@ jobs:
 
   refresh-update-service:
     name: Refresh update service
-    if: github.event_name == 'push'
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      needs.publish-release.result == 'success'
     needs: publish-release
     runs-on: ubuntu-latest
     timeout-minutes: 10

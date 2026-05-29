@@ -171,6 +171,20 @@ VS Code code that Hucode customizes.
   the package metadata. The release wrapper patches generated DEB/RPM metadata
   after upstream prepare tasks so package versions come from Hucode's
   `hucodeVersion`, not upstream VS Code's `package.json` version.
+- Stable and insider Windows app builds expect per-arch `win32ContextMenu`
+  CLSIDs in the generated product config for AppX manifest generation. Keep
+  those Hucode-specific CLSIDs in `build/hucode/mixin/stable/product.json`.
+- Windows release app builds run upstream `patchWin32DependenciesTask`, which
+  shells out to `signtool.exe` to strip invalidated Authenticode signatures
+  before `rcedit`. GitHub-hosted Windows runners can have the Windows SDK
+  installed without SDK tools on PATH, so release CI must add the SDK tools
+  directory before `build/hucode/release-build.ts --phase build`.
+- Stable and insider Windows release app artifacts need the AppX sidecar created
+  in the app-build job before upload. Run
+  `node build/win32/explorer-dll-fetcher.ts .build/win32/appx` before the build
+  so the Explorer command DLL is copied into the app output, then run `makeappx
+  pack` against `../VSCode-win32-*/appx/manifest` after the build and remove the
+  raw manifest directory before the app tarball is uploaded.
 - Hucode's macOS DMG volume title comes from the overlay field
   `darwinDmgTitle`. Keep the field in the Hucode product mixin rather than
   changing upstream VS Code's stable/insider/exploration title defaults.
