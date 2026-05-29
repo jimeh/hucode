@@ -71,3 +71,16 @@ Current local workflow:
   into a temporary keychain.
 - `node build/hucode/release-size-report.js --app <path>`: report packaged app
   size, key subdirectory sizes, source-map totals, and release size guardrails.
+
+## Updates
+
+Hucode stable builds use `https://updates.hucode.dev` as the built-in update
+feed. The feed serves VS Code updater responses at
+`/api/update/<platform>/stable/<commit>`, where macOS x64 uses `darwin` and
+macOS arm64 uses `darwin-arm64`.
+
+Release DMGs are manual install assets. Release ZIPs are the Squirrel.Mac
+auto-update assets consumed by Electron's macOS updater. Builds produced before
+the Hucode product mixin included `updateUrl` cannot discover updates
+automatically, so the first updater-enabled release is the bootstrap for later
+auto-updates.
