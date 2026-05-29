@@ -209,6 +209,16 @@ VS Code code that Hucode customizes.
   matching `CHANGELOG.md` version section as release notes. Release publishing
   currently builds and uploads macOS DMG and ZIP artifacts for supported public
   releases; Linux and Windows targets remain manual build targets until tested.
+- Hucode stable builds use `https://updates.hucode.dev` as the built-in update
+  feed. Keep `quality`, `updateUrl`, and `downloadUrl` in the Hucode product
+  mixin and covered by `npm run hucode:validate`; the updater disables itself
+  without `updateUrl`, `commit`, and product quality.
+- Hucode macOS DMGs are manual install assets. ZIPs are the Squirrel.Mac
+  auto-update assets returned by the update service. Builds released before the
+  product mixin includes `updateUrl` cannot discover updates automatically.
+- After publishing GitHub Release assets, release CI must trigger
+  `jimeh/hucode-updates` with repository dispatch event
+  `hucode-release-published` so update metadata is refreshed for older commits.
 - Do not add upstream `build/darwin/patch-dmg.py` to Hucode release packaging
   unless a Hucode `disk.icns` volume icon exists. The script only injects a
   custom Finder volume icon into an already-created DMG; it is unrelated to app

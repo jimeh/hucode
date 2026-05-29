@@ -59,6 +59,12 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(generated.nameShort, 'Hucode');
 	assert.strictEqual(generated.nameLong, 'Hucode');
 	assert.strictEqual(generated.hucodeVersion, sourceProduct.hucodeVersion);
+	assert.strictEqual(generated.quality, 'stable');
+	assert.strictEqual(generated.updateUrl, 'https://updates.hucode.dev');
+	assert.strictEqual(
+		generated.downloadUrl,
+		'https://github.com/jimeh/hucode/releases/latest'
+	);
 	assert.strictEqual(generated.applicationName, 'hucode');
 	assert.strictEqual(generated.dataFolderName, '.hucode');
 	assert.strictEqual(generated.serverApplicationName, 'hucode-server');
