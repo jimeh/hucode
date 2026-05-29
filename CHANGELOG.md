@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.21 - 2026-05-29
+
+### Features
+
+- **update:** enable built-in Hucode updater (#57)
+
 ## 0.0.20 - 2026-05-28
 
 ### Continuous Integration
