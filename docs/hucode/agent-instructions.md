@@ -100,8 +100,8 @@ VS Code code that Hucode customizes.
   `test` may still add a fragment when the change should appear in release
   notes. The fragment's first non-empty line must match the PR title's type,
   scope, breaking marker, and subject. Do not invent a PR number; if the PR does
-  not exist yet, create the PR first, then add and push the fragment with the
-  assigned PR number.
+  not exist yet, use an unnumbered `.changes/<slug>.md` fragment and rename it
+  later only if a numbered fragment is desired.
 - Hucode GitHub Actions should use only standard GitHub-hosted runner labels by
   default. Do not reintroduce upstream VS Code self-hosted `1ES.Pool` runners or
   larger macOS runners such as `macos-14-xlarge` unless the cost and need are

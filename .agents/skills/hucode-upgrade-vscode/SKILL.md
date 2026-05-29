@@ -235,18 +235,35 @@ generated runtime state, not source state to commit.
 
 ## Version And Release Metadata
 
-Keep VS Code's root `version` aligned with upstream. Bump Hucode's own release
-version only in:
+Keep VS Code's root `version` aligned with upstream. Do not bump Hucode's own
+release version as part of the VS Code upgrade. Hucode release version bumps
+should happen later, after the upgraded branch has been manually tested and is
+ready for release.
 
 ```text
 build/hucode/mixin/stable/product.json
 ```
 
-Use `hucodeVersion` for Hucode patch releases. After bumping it, ensure
+Use `hucodeVersion` only for Hucode patch releases. After bumping it, ensure
 `build/hucode/validate-mixin.js` validates against the source overlay value
 rather than a stale hardcoded version.
 
-Commit the version bump separately from replay/conflict-resolution commits.
+Instead of a version bump, add a `.changes` fragment for the underlying VS Code
+baseline upgrade, such as:
+
+```text
+.changes/upgrade-vscode-1-122-0.md
+```
+
+The first non-empty line should be a Conventional Commit header matching the
+eventual PR title, for example:
+
+```text
+feat(deps): upgrade VS Code baseline to 1.122.0
+```
+
+If a PR number already exists, the numbered fragment form is also valid:
+`.changes/<pr-number>-upgrade-vscode-1-122-0.md`.
 
 ## Final Checks
 
