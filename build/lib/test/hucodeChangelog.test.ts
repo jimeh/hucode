@@ -56,6 +56,7 @@ suite('Hucode changelog', () => {
 				'Release tags now upload signed macOS DMG assets.'
 			),
 			fragment('chore', 'ci', 'fix release upload filtering', 1235),
+			fragment('feat', 'deps', 'upgrade VS Code baseline to 1.122.0'),
 		]);
 
 		assert.strictEqual(
@@ -63,6 +64,7 @@ suite('Hucode changelog', () => {
 			[
 				'### Features',
 				'',
+				'- **deps:** upgrade VS Code baseline to 1.122.0',
 				'- **release:** publish macOS releases (#1234)',
 				'',
 				'### Miscellaneous Chores',
@@ -82,7 +84,7 @@ suite('Hucode changelog', () => {
 				root: tmpDir,
 				title: 'feat(release): publish macOS releases',
 			}),
-			/requires a matching \.changes\/1234-\*\.md file/
+			/requires a matching \.changes\/1234-\*\.md or \.changes\/<slug>\.md file/
 		);
 	});
 
@@ -91,7 +93,7 @@ suite('Hucode changelog', () => {
 		const baseRef = currentHead(tmpDir);
 		await writeChange(
 			tmpDir,
-			'1234-fix-release-upload-filtering.md',
+			'fix-release-upload-filtering.md',
 			'chore(ci): fix release upload filtering\n'
 		);
 		commitAll(tmpDir, 'chore: add change fragment');
@@ -121,7 +123,7 @@ suite('Hucode changelog', () => {
 				root: tmpDir,
 				title: 'chore(ci): update release documentation',
 			}),
-			/requires a matching \.changes\/1234-\*\.md file/
+			/requires a matching \.changes\/1234-\*\.md or \.changes\/<slug>\.md file/
 		);
 	});
 
@@ -159,7 +161,7 @@ suite('Hucode changelog', () => {
 		);
 		await writeChange(
 			tmpDir,
-			'1235-fix-release-upload-filtering.md',
+			'fix-release-upload-filtering.md',
 			'chore(ci): fix release upload filtering\n'
 		);
 		await writeChange(
@@ -189,7 +191,7 @@ suite('Hucode changelog', () => {
 				'',
 				'### Miscellaneous Chores',
 				'',
-				'- **ci:** fix release upload filtering (#1235)',
+				'- **ci:** fix release upload filtering',
 				'',
 			].join('\n')
 		);
@@ -245,17 +247,18 @@ function fragment(
 	type: string,
 	scope: string | null,
 	subject: string,
-	prNumber: number,
+	prNumber?: number,
 	body = ''
 ): ChangeFragment {
+	const slug = subject.replaceAll(' ', '-');
 	return {
 		body,
 		breaking: false,
-		filePath: `.changes/${prNumber}-${subject.replaceAll(' ', '-')}.md`,
+		filePath: `.changes/${prNumber === undefined ? '' : `${prNumber}-`}${slug}.md`,
 		header: scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`,
 		prNumber,
 		scope,
-		slug: subject.replaceAll(' ', '-'),
+		slug,
 		subject,
 		type,
 	};

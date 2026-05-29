@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
-const changeFilePattern = /^(\d+)-([a-z0-9][a-z0-9-]*)\.md$/;
+const changeFilePattern = /^(?:(\d+)-)?([a-z0-9][a-z0-9-]*)\.md$/;
 const conventionalParserOptions = {
 	headerCorrespondence: ['type', 'scope', 'subject'],
 	headerPattern: /^(\w*)(?:\((.*)\))?!?: (.*)$/,
@@ -48,7 +48,7 @@ export interface ParsedChange {
 
 export interface ChangeFragment extends ParsedChange {
 	filePath: string;
-	prNumber: number;
+	prNumber?: number;
 	slug: string;
 }
 
@@ -98,7 +98,10 @@ export async function checkPullRequest(
 	);
 
 	for (const fragment of fragments) {
-		if (fragment.prNumber !== options.number) {
+		if (
+			fragment.prNumber !== undefined &&
+			fragment.prNumber !== options.number
+		) {
 			throw new Error(
 				`${fragment.filePath} uses PR #${fragment.prNumber}, expected ` +
 				`#${options.number}.`
@@ -112,7 +115,7 @@ export async function checkPullRequest(
 	if ((needsFragment || hasAnyFragment) && matchingFragments.length === 0) {
 		throw new Error(
 			`PR title '${options.title}' requires a matching .changes/` +
-			`${options.number}-*.md file.`
+			`${options.number}-*.md or .changes/<slug>.md file.`
 		);
 	}
 }
@@ -257,7 +260,7 @@ export async function renderReleaseSection(
 		}
 
 		lines.push(`### ${type.section}`, '');
-		for (const fragment of group) {
+		for (const fragment of group.toSorted(compareFragmentScope)) {
 			lines.push(renderChangeBullet(fragment));
 		}
 		lines.push('');
@@ -296,7 +299,7 @@ async function readChangeFragment(
 	if (!match) {
 		throw new Error(
 			`Invalid change fragment name '${filePath}'. Expected ` +
-			`.changes/<pr-number>-<slug>.md.`
+			`.changes/<pr-number>-<slug>.md or .changes/<slug>.md.`
 		);
 	}
 
@@ -305,7 +308,7 @@ async function readChangeFragment(
 	return {
 		...parsed,
 		filePath: normalizePath(filePath),
-		prNumber: Number(match[1]),
+		prNumber: match[1] === undefined ? undefined : Number(match[1]),
 		slug: match[2],
 	};
 }
@@ -440,15 +443,23 @@ function readChangelog(changelogPath: string): Promise<string> {
 }
 
 function renderChangeBullet(fragment: ChangeFragment): string {
-	const pr = `(#${fragment.prNumber})`;
 	const subject = fragment.breaking
 		? `BREAKING: ${fragment.subject}`
 		: fragment.subject;
+	const suffix = fragment.prNumber === undefined ? '' : ` (#${fragment.prNumber})`;
 	if (!fragment.scope) {
-		return `- ${subject} ${pr}`;
+		return `- ${subject}${suffix}`;
 	}
 
-	return `- **${fragment.scope}:** ${subject} ${pr}`;
+	return `- **${fragment.scope}:** ${subject}${suffix}`;
+}
+
+function compareFragmentScope(
+	left: ChangeFragment,
+	right: ChangeFragment
+): number {
+	return (left.scope ?? '').localeCompare(right.scope ?? '', 'en')
+		|| left.subject.localeCompare(right.subject, 'en');
 }
 
 function stripPullRequestSuffix(subject: string): string {
