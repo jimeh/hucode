@@ -77,6 +77,11 @@ VS Code code that Hucode customizes.
   the behavior cannot be covered at a lower layer. Cover empty-window,
   no-workbench, last-workbench close/unload/crash, command-palette, keybinding,
   and context-key transitions when touched.
+- Resident Omni hosted-workbench visibility is reconciled centrally in
+  `ResidentHostedWorkspacesController`. Keep the invariant that only the active,
+  requested-visible, non-occluded live hosted workbench may be attached and
+  visible; owned integrated browser views must be hidden before their host is
+  detached and shown only after the host is attached.
 - When splitting an upstream patch, keep high-level integration tests in the
   upstream subsystem focused on verifier/adapter selection and routing, and move
   detailed Hucode behavior tests with the extracted Hucode helper.
@@ -336,6 +341,10 @@ VS Code code that Hucode customizes.
   `vs/workbench/workbench.desktop.main.js`, not `vs/hucode/omni.desktop.main.js`.
   Hosted-only commands or services must be imported into the standard desktop
   workbench bundle if they need to appear inside the embedded workspace.
+- Host-layer Omni integrations keep a local shell-service subset in
+  `src/vs/workbench/services/host/electron-browser/hucodeHostedOmniHost.ts`.
+  When adding shell IPC methods used by native host integration, update that
+  subset along with `src/vs/hucode/common/omniWindow.ts`.
 - Hosted Omni workspace `WebContentsView`s are deliberately laid out from
   `y: 0` so their own titlebars are visible. Keep shell titlebar drag regions
   pointer-transparent over the hosted surface and re-add the active hosted view

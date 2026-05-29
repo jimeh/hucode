@@ -41,6 +41,7 @@ import { IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfigur
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
 import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
+import { tryOpenFolderInHucodeHostedWorkspace } from '../../../hucode/electron-main/omniWorkspaceOpen.js';
 import {
 	createHucodeOmniWindowPath,
 	distinctHucodeOmniWindowPaths,
@@ -745,10 +746,37 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}
 
+			const foldersOpenedInOmni = new ResourceSet([], uri => extUriBiasedIgnorePathCase.getComparisonKey(uri));
+			for (const folderToOpen of allFoldersToOpen) {
+				if (windowsOnFolderPath.some(window => isSingleFolderWorkspaceIdentifier(window.openedWorkspace) && extUriBiasedIgnorePathCase.isEqual(window.openedWorkspace.uri, folderToOpen.workspace.uri))) {
+					continue;
+				}
+
+				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, folderToOpen.remoteAuthority) ? filesToOpen : undefined;
+				const result = await this.instantiationService.invokeFunction(
+					accessor => tryOpenFolderInHucodeHostedWorkspace(
+						accessor,
+						this.getWindows(),
+						folderToOpen.workspace.uri,
+						filesToOpenInWindow,
+						openConfig.userEnv?.['TERM_PROGRAM']
+					)
+				);
+				if (result) {
+					addUsedWindow(result.window, result.openedFiles);
+					foldersOpenedInOmni.add(folderToOpen.workspace.uri);
+					openFolderInNewWindow = true; // any other folders to open must open in new window then
+				}
+			}
+
 			// Open remaining ones
 			for (const folderToOpen of allFoldersToOpen) {
 				if (windowsOnFolderPath.some(window => isSingleFolderWorkspaceIdentifier(window.openedWorkspace) && extUriBiasedIgnorePathCase.isEqual(window.openedWorkspace.uri, folderToOpen.workspace.uri))) {
 					continue; // ignore folders that are already open
+				}
+
+				if (foldersOpenedInOmni.has(folderToOpen.workspace.uri)) {
+					continue; // ignore folders that are already open in Omni
 				}
 
 				const remoteAuthority = folderToOpen.remoteAuthority;
