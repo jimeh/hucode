@@ -11,7 +11,6 @@ import { ILabelService, Verbosity } from '../../../../platform/label/common/labe
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { IWindowOpenable, IOpenWindowOptions, isFolderToOpen, isWorkspaceToOpen, IOpenEmptyWindowOptions, IPoint, IRectangle, IOpenedAuxiliaryWindow, IOpenedMainWindow } from '../../../../platform/window/common/window.js';
 import { Disposable, DisposableSet, IDisposable } from '../../../../base/common/lifecycle.js';
-import { NativeHostService } from '../../../../platform/native/common/nativeHostService.js';
 import { INativeWorkbenchEnvironmentService } from '../../environment/electron-browser/environmentService.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { disposableWindowInterval, getActiveDocument, getWindowId, getWindowsCount, hasWindow, onDidRegisterWindow } from '../../../../base/browser/dom.js';
@@ -21,14 +20,23 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { IProjectManagerService } from '../../../../platform/projectManager/common/projectManager.js';
+import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
+import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeShellService } from './hucodeHostedOmniHost.js';
 
-class WorkbenchNativeHostService extends NativeHostService {
+// @ts-expect-error: interface is implemented via proxy
+class WorkbenchNativeHostService implements INativeHostService {
+
+	declare readonly _serviceBrand: undefined;
 
 	constructor(
 		@INativeWorkbenchEnvironmentService environmentService: INativeWorkbenchEnvironmentService,
 		@IMainProcessService mainProcessService: IMainProcessService
 	) {
-		super(environmentService.window.id, mainProcessService);
+		return createHucodeWorkbenchNativeHostService(
+			environmentService,
+			mainProcessService
+		) as unknown as WorkbenchNativeHostService;
 	}
 }
 
@@ -36,18 +44,31 @@ class WorkbenchHostService extends Disposable implements IHostService {
 
 	declare readonly _serviceBrand: undefined;
 
+	private readonly hucodeHostedOmniFocusTracker: HucodeHostedOmniFocusTracker;
+
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ILabelService private readonly labelService: ILabelService,
-		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IHucodeShellService private readonly hucodeShellService: IHucodeShellService,
+		@IProjectManagerService private readonly projectManagerService: IProjectManagerService
 	) {
 		super();
+
+		this.hucodeHostedOmniFocusTracker = this._register(
+			new HucodeHostedOmniFocusTracker(
+				nativeHostService,
+				environmentService,
+				hucodeShellService
+			)
+		);
 
 		this.onDidChangeFocus = Event.latch(
 			Event.any(
 				Event.map(Event.filter(this.nativeHostService.onDidFocusMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
 				Event.map(Event.filter(this.nativeHostService.onDidBlurMainOrAuxiliaryWindow, id => hasWindow(id), this._store), () => this.hasFocus, this._store),
-				Event.map(this.onDidChangeActiveWindow, () => this.hasFocus, this._store)
+				Event.map(this.onDidChangeActiveWindow, () => this.hasFocus, this._store),
+				Event.map(this.hucodeHostedOmniFocusTracker.onDidChangeFocus, () => this.hasFocus, this._store)
 			), undefined, this._store
 		);
 
@@ -71,10 +92,17 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	readonly onDidChangeFocus: Event<boolean>;
 
 	get hasFocus(): boolean {
-		return getActiveDocument().hasFocus();
+		return this.hucodeHostedOmniFocusTracker.hasFocus ??
+			getActiveDocument().hasFocus();
 	}
 
 	async hadLastFocus(): Promise<boolean> {
+		const hucodeHadLastFocus =
+			await this.hucodeHostedOmniFocusTracker.hadLastFocus();
+		if (hucodeHadLastFocus !== undefined) {
+			return hucodeHadLastFocus;
+		}
+
 		const activeWindowId = await this.nativeHostService.getActiveWindowId();
 
 		if (typeof activeWindowId === 'undefined') {
@@ -125,7 +153,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 		return this.doOpenEmptyWindow(arg1);
 	}
 
-	private doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
+	private async doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
 		const remoteAuthority = this.environmentService.remoteAuthority;
 		if (remoteAuthority) {
 			toOpen.forEach(openable => openable.label = openable.label || this.getRecentLabel(openable));
@@ -135,6 +163,17 @@ class WorkbenchHostService extends Disposable implements IHostService {
 				// It will be used when the input is neither file nor vscode-remote.
 				options = options ? { ...options, remoteAuthority } : { remoteAuthority };
 			}
+		}
+
+		if (await tryOpenHucodeOmniWindow(
+			toOpen,
+			options,
+			this.nativeHostService,
+			this.environmentService,
+			this.hucodeShellService,
+			this.projectManagerService
+		)) {
+			return;
 		}
 
 		return this.nativeHostService.openWindow(toOpen, options);
@@ -227,6 +266,16 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	//#region Screenshots
 
 	getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> {
+		const hucodeScreenshot = getHucodeHostedOmniScreenshot(
+			this.environmentService,
+			this.hucodeShellService,
+			this.nativeHostService.windowId,
+			rect
+		);
+		if (hucodeScreenshot) {
+			return hucodeScreenshot;
+		}
+
 		return this.nativeHostService.getScreenshot(rect);
 	}
 

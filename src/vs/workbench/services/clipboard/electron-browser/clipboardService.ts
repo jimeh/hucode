@@ -10,6 +10,10 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { INativeHostService } from '../../../../platform/native/common/native.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { INativeWorkbenchEnvironmentService } from '../../environment/electron-browser/environmentService.js';
+import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+
+const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
 export class NativeClipboardService implements IClipboardService {
 
@@ -19,11 +23,22 @@ export class NativeClipboardService implements IClipboardService {
 
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@INativeWorkbenchEnvironmentService private readonly environmentService: INativeWorkbenchEnvironmentService,
+		@IMainProcessService private readonly mainProcessService: IMainProcessService
 	) { }
 
 	async triggerPaste(targetWindowId: number): Promise<void> {
 		this.logService.trace('NativeClipboardService#triggerPaste called');
+		if (this.environmentService.isHostedOmniWorkspace) {
+			const triggered = await this.mainProcessService
+				.getChannel(HUCODE_SHELL_CHANNEL_NAME)
+				.call<boolean>('triggerPasteInWorkspace', [targetWindowId]);
+			if (triggered) {
+				return;
+			}
+		}
+
 		return this.nativeHostService.triggerPaste({ targetWindowId });
 	}
 
