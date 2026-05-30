@@ -46,14 +46,41 @@ has the clean baseline and Hucode series branch available.
 
 ## Create The Replay Branch
 
-Only do this from a clean worktree. The replay branch should normally be a
-fresh compaction of the final `series-<old-version>` tree, not a preservation of
-the old development history. Prefer compacting unless every existing commit
-already reads like a curated replay commit from a previous upgrade and there
-are no later fixes, feature commits, version bumps, debugging commits, or other
-small follow-up changes mixed in.
+Only do this from a clean worktree. The replay branch must normally be a fresh
+compaction of the final `series-<old-version>` tree, not a preservation of the
+old development history. Reusing the existing series commits is an exception,
+not the default, and is allowed only when every existing commit already reads
+like a durable replay topic and there is no later development churn mixed in.
 
-The preferred compaction setup is:
+Before creating or reusing the replay branch, write a short decision note in the
+conversation:
+
+```text
+Existing series commits: <count>
+Disqualifying commits: <list, or none>
+Decision: full reconstruction | reuse existing commits
+Reason: <why this preserves durable replay topics>
+```
+
+If the disqualifying list is non-empty, the decision must be full
+reconstruction from the final tree. Do not create a replay branch by
+cherry-picking the existing `series-<old-version>` commits one by one unless the
+list is empty and the reuse reason is explicit.
+
+Disqualifying commits include:
+
+- Standalone `fix:` follow-ups that repair earlier Hucode topics.
+- Historical `chore: bump Hucode version to ...` commits.
+- Baseline-documentation commits such as
+  `feat(deps): document VS Code baseline upgrade`.
+- PR-numbered cleanup or release-parity fixes such as
+  `ci: fix Windows release packaging (#58)`.
+- Commits that only consume `.changes` fragments, update `CHANGELOG.md`, or
+  carry release artifacts.
+- Debugging, conflict-resolution, file-move churn, generated-asset churn, or
+  other commits whose main purpose is fixing the previous series history.
+
+The default compaction setup is:
 
 ```sh
 git switch --create series-<old-version>-replay series-<old-version>
@@ -92,7 +119,7 @@ shared files such as `platform.ts`, `native.ts`, `windowActions.ts`,
 `desktop.contribution.ts`, and service registration files as integration points,
 not as automatic single-topic commits.
 
-Prefer squashing intermediate debugging, file-move churn, generated-asset churn,
+Squash intermediate debugging, file-move churn, generated-asset churn,
 historical Hucode version bumps, refactors caused by later tests, and
 conflict-resolution fallout. Hucode feature development history remains on the
 previous `series-<old-version>` branch. The replay branch exists to make the
@@ -120,6 +147,12 @@ npm run hucode:compile
 
 If equivalence fails, either fix the replay branch or document intentional
 differences before using it as the upgrade source.
+
+Audit the replay log before upgrading. Unless explicitly documented as a durable
+topic, `git log --oneline upstream-<old-version>..series-<old-version>-replay`
+should not contain standalone fix commits, historical Hucode version-bump
+commits, baseline-documentation commits, release-fragment consumption commits,
+or cleanup commits whose purpose is to repair earlier series history.
 
 The replay branch is only needed as the source for this upgrade's
 cherry-pick. Do not push it by default; the new `series-<new-version>` branch
