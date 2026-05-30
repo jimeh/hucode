@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Promises } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { revive } from '../../../base/common/marshalling.js';
@@ -130,14 +131,19 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 
 			case 'updateItems': {
 				const items: ISerializableUpdateRequest = arg;
+				const writePromises: Promise<void>[] = [];
 
 				if (items.insert) {
 					for (const [key, value] of items.insert) {
-						storage.set(key, value);
+						writePromises.push(storage.set(key, value));
 					}
 				}
 
-				items.delete?.forEach(key => storage.delete(key));
+				items.delete?.forEach(key => {
+					writePromises.push(storage.delete(key));
+				});
+
+				await Promises.settled(writePromises);
 
 				break;
 			}
