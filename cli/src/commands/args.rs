@@ -46,7 +46,7 @@ const COMMIT_IN_VERSION: &str = match constants::VSCODE_CLI_COMMIT {
 	Some(c) => c,
 	None => "unknown",
 };
-const NUMBER_IN_VERSION: &str = match constants::VSCODE_CLI_VERSION {
+const NUMBER_IN_VERSION: &str = match constants::DISPLAY_VERSION {
 	Some(c) => c,
 	None => "dev",
 };
