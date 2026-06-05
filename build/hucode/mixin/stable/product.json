@@ -1,7 +1,7 @@
 {
 	"nameShort": "Hucode",
 	"nameLong": "Hucode",
-	"hucodeVersion": "0.0.23",
+	"hucodeVersion": "0.0.24",
 	"quality": "stable",
 	"updateUrl": "https://updates.hucode.dev",
 	"downloadUrl": "https://github.com/jimeh/hucode/releases/latest",
