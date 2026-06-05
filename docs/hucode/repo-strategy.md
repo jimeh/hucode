@@ -57,9 +57,12 @@ git diff upstream-<version>..series-<version>
 git log --oneline upstream-<version>..series-<version>
 ```
 
-Publish each `upstream-<version>` and `series-<version>` branch to `origin`
-once it is created. The remote should always contain both the clean VS Code
-baseline and the matching Hucode series branch for each release line.
+Publish each `upstream-<version>` branch to `origin` once it is created. Do
+not publish `series-<version>` while it still points at the same commit as the
+upstream baseline; that branch does not contain Hucode's disabled/customized CI
+workflow state yet, so GitHub can run regular upstream VS Code CI jobs. Publish
+the matching Hucode series branch only after the Hucode patch stack has been
+replayed and validated.
 
 Use the `series-<version>` branch as the working branch for development and
 upgrade conflict resolution. When starting the next upgrade, first create or
@@ -127,8 +130,11 @@ To upgrade from `1.117.0` to `1.118.1`:
 
    ```sh
    git switch --create series-1.118.1 upstream-1.118.1
-   git push -u origin series-1.118.1
    ```
+
+   Keep this branch local until after the Hucode changes have been replayed.
+   Pushing it at the bare upstream baseline can trigger upstream VS Code CI
+   instead of Hucode's customized CI workflow set.
 
 7. Refresh dependencies on the new baseline before replaying Hucode patches:
 
@@ -175,6 +181,13 @@ To upgrade from `1.117.0` to `1.118.1`:
    should remain upstream OSS; if validation fails because it is mixed to
    Hucode, restore or ignore that local generated runtime state before treating
    validation as meaningful.
+
+11. Publish the completed Hucode series branch only after the replayed patch
+    stack, validation fixes, and release metadata changes are committed:
+
+   ```sh
+   git push -u origin series-1.118.1
+   ```
 
 If an upgrade replay has to be abandoned, reset only the new
 `series-<version>` branch. Do not rewrite an older completed

@@ -21,8 +21,10 @@ Use this branch model:
   should be tree-equivalent to `series-<version>` but with curated topic
   commits.
 
-Push both `upstream-<version>` and `series-<version>` to `origin` so the remote
-has the clean baseline and Hucode series branch available.
+Push `upstream-<version>` to `origin` after creating the clean baseline. Do
+not push `series-<version>` while it still points at the same commit as
+`upstream-<version>`. Publish the series branch only after the Hucode patch
+stack has been replayed and validated.
 
 ## Preflight
 
@@ -168,12 +170,18 @@ git switch --create upstream-<new-version> <new-version>
 git push -u origin upstream-<new-version>
 ```
 
-Create and publish the new series branch:
+Create the new series branch locally:
 
 ```sh
 git switch --create series-<new-version> upstream-<new-version>
-git push -u origin series-<new-version>
 ```
+
+Do not push the new series branch yet. At this point it is still an unmodified
+upstream VS Code branch, so GitHub would run the regular upstream VS Code CI
+workflows instead of Hucode's disabled/customized workflow set. That can fail
+and spend CI minutes unnecessarily. The first push of
+`series-<new-version>` must happen only after the replayed Hucode commits are
+present, including the Hucode workflow customizations.
 
 Before cherry-picking the replay series, refresh dependencies on the new
 baseline/series so hooks and build tooling match the upgraded VS Code version:
@@ -297,6 +305,14 @@ feat(deps): upgrade VS Code baseline to 1.122.0
 
 If a PR number already exists, the numbered fragment form is also valid:
 `.changes/<pr-number>-upgrade-vscode-1-122-0.md`.
+
+After the replayed Hucode patch stack, compatibility fixes, validation updates,
+and baseline `.changes` fragment are all committed, push the completed series
+branch:
+
+```sh
+git push -u origin series-<new-version>
+```
 
 ## Final Checks
 
