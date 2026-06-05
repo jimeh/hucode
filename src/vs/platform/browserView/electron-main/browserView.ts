@@ -833,7 +833,9 @@ export class BrowserView extends Disposable {
 	 * to. Returns `undefined` if no host window can be resolved (e.g. during teardown).
 	 */
 	private get _hostWindow(): Electron.BrowserWindow | undefined {
-		return this._currentWindow?.win ?? this._ownerWindow.win ?? undefined;
+		return this._nativeHost.getElectronWindow()
+			?? this._ownerWindow.win
+			?? undefined;
 	}
 
 	override dispose(): void {

@@ -37,6 +37,26 @@ export const MultipleSessionsVisibleContext = new RawContextKey<boolean>('multip
 
 //#endregion
 
+//#region < --- Chat Bar Part --- >
+
+export const ActiveChatBarContext = new RawContextKey<string>(
+	'activeChatBar',
+	'',
+	localize('activeChatBar', "The identifier of the active chat bar panel")
+);
+export const ChatBarFocusContext = new RawContextKey<boolean>(
+	'chatBarFocus',
+	false,
+	localize('chatBarFocus', "Whether the chat bar has keyboard focus")
+);
+export const ChatBarVisibleContext = new RawContextKey<boolean>(
+	'chatBarVisible',
+	false,
+	localize('chatBarVisible', "Whether the chat bar is visible")
+);
+
+//#endregion
+
 //#region < --- Welcome --- >
 
 export const SessionsWelcomeVisibleContext = new RawContextKey<boolean>('sessionsWelcomeVisible', false, localize('sessionsWelcomeVisible', "Whether the sessions welcome overlay is visible"));
