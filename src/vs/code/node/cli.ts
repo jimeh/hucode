@@ -30,6 +30,8 @@ import { addUNCHostToAllowlist } from '../../base/node/unc.js';
 import { URI } from '../../base/common/uri.js';
 import { DeferredPromise } from '../../base/common/async.js';
 
+const displayVersion = product.hucodeVersion ?? product.version;
+
 function shouldSpawnCliProcess(argv: NativeParsedArgs): boolean {
 	return !!argv['install-source']
 		|| !!argv['list-extensions']
@@ -92,18 +94,24 @@ export async function main(argv: string[]): Promise<void> {
 	// Help (general)
 	if (args.help) {
 		const executable = `${product.applicationName}${isWindows ? '.exe' : ''}`;
-		console.log(buildHelpMessage(product.nameLong, executable, product.version, OPTIONS));
+		console.log(buildHelpMessage(product.nameLong, executable, displayVersion, OPTIONS));
 	}
 
 	// Help (chat)
 	else if (args.chat?.help) {
 		const executable = `${product.applicationName}${isWindows ? '.exe' : ''}`;
-		console.log(buildHelpMessage(product.nameLong, executable, product.version, OPTIONS.chat.options, { isChat: true }));
+		console.log(buildHelpMessage(
+			product.nameLong,
+			executable,
+			displayVersion,
+			OPTIONS.chat.options,
+			{ isChat: true }
+		));
 	}
 
 	// Version Info
 	else if (args.version) {
-		console.log(buildVersionMessage(product.version, product.commit));
+		console.log(buildVersionMessage(displayVersion, product.commit));
 	}
 
 	// Shell integration
