@@ -9,7 +9,6 @@ import { MenuId } from '../../platform/actions/common/actions.js';
  * Menu IDs for the Omni shell layout.
  */
 export const Menus = {
-	ChatBarTitle: new MenuId('ChatBarTitle'),
 	CommandCenter: new MenuId('HucodeOmniCommandCenter'),
 	CommandCenterCenter: new MenuId('HucodeOmniCommandCenterCenter'),
 	TitleBarContext: new MenuId('HucodeOmniTitleBarContext'),

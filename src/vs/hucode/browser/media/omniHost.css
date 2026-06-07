@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar > .content {
+	.part.hucode-omni-host > .content {
 	padding: 0;
 }
 
@@ -166,38 +166,38 @@
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar > .content .monaco-editor,
+	.part.hucode-omni-host > .content .monaco-editor,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar > .content .monaco-editor .margin,
+	.part.hucode-omni-host > .content .monaco-editor .margin,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar > .content .monaco-editor .monaco-editor-background,
+	.part.hucode-omni-host > .content .monaco-editor .monaco-editor-background,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar {
+	.part.hucode-omni-host {
 	background: var(--vscode-editor-background);
 	border: 0;
 	border-radius: 0;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .split-view-view,
+	.part.hucode-omni-host .split-view-view,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .pane,
+	.part.hucode-omni-host .pane,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .pane > .pane-body,
+	.part.hucode-omni-host .pane > .pane-body,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .monaco-scrollable-element,
+	.part.hucode-omni-host .monaco-scrollable-element,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .split-view-container {
+	.part.hucode-omni-host .split-view-container {
 	height: 100%;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .pane > .pane-header {
+	.part.hucode-omni-host .pane > .pane-header {
 	display: none;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
-	.part.chatbar .pane > .pane-body {
+	.part.hucode-omni-host .pane > .pane-body {
 	top: 0 !important;
 	border: 0;
 }

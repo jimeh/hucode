@@ -83,7 +83,7 @@ enum LayoutClasses {
 	MAIN_EDITOR_AREA_HIDDEN = 'nomaineditorarea',
 	PANEL_HIDDEN = 'nopanel',
 	AUXILIARYBAR_HIDDEN = 'noauxiliarybar',
-	CHATBAR_HIDDEN = 'nochatbar',
+	OMNI_HOST_HIDDEN = 'noomnihost',
 	STATUSBAR_HIDDEN = 'nostatusbar',
 	FULLSCREEN = 'fullscreen',
 	MAXIMIZED = 'maximized'
@@ -98,7 +98,7 @@ interface IPartVisibilityState {
 	auxiliaryBar: boolean;
 	editor: boolean;
 	panel: boolean;
-	chatBar: boolean;
+	omniHost: boolean;
 }
 
 //#endregion
@@ -232,7 +232,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private panelPartView!: ISerializableView;
 	private auxiliaryBarPartView!: ISerializableView;
 
-	private chatBarPartView!: ISerializableView;
+	private omniHostPartView!: ISerializableView;
 	private projectsPart!: ProjectsPart;
 
 	private readonly partVisibility: IPartVisibilityState = {
@@ -240,7 +240,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		auxiliaryBar: false,
 		editor: false,
 		panel: false,
-		chatBar: true
+		omniHost: true
 	};
 
 	private mainWindowFullscreen = false;
@@ -528,7 +528,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			{ id: Parts.TITLEBAR_PART, role: 'none', classes: ['titlebar'] },
 			{ id: Parts.SIDEBAR_PART, role: 'none', classes: ['sidebar', 'left'] },
 			{ id: Parts.AUXILIARYBAR_PART, role: 'none', classes: ['auxiliarybar', 'basepanel', 'right'] },
-			{ id: Parts.CHATBAR_PART, role: 'main', classes: ['chatbar', 'basepanel', 'right'] },
+			{ id: Parts.HUCODE_OMNI_HOST_PART, role: 'main', classes: ['hucode-omni-host', 'basepanel', 'right'] },
 			{ id: Parts.PANEL_PART, role: 'none', classes: ['panel', 'basepanel', positionToString(this.getPanelPosition())] },
 		]) {
 			const partContainer = this.createPartContainer(id, role, classes);
@@ -722,21 +722,21 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		const panelPart = this.getPart(Parts.PANEL_PART);
 		const auxiliaryBarPart = this.getPart(Parts.AUXILIARYBAR_PART);
 		const sideBar = this.getPart(Parts.SIDEBAR_PART);
-		const chatBarPart = this.getPart(Parts.CHATBAR_PART);
+		const omniHostPartView = this.getPart(Parts.HUCODE_OMNI_HOST_PART);
 
 		// View references for parts in the grid (editor is NOT in grid)
 		this.titleBarPartView = titleBar;
 		this.sideBarPartView = sideBar;
 		this.panelPartView = panelPart;
 		this.auxiliaryBarPartView = auxiliaryBarPart;
-		this.chatBarPartView = chatBarPart;
+		this.omniHostPartView = omniHostPartView;
 
 		const viewMap: { [key: string]: ISerializableView } = {
 			[Parts.TITLEBAR_PART]: this.titleBarPartView,
 			[Parts.PANEL_PART]: this.panelPartView,
 			[Parts.SIDEBAR_PART]: this.sideBarPartView,
 			[Parts.AUXILIARYBAR_PART]: this.auxiliaryBarPartView,
-			[Parts.CHATBAR_PART]: this.chatBarPartView
+			[Parts.HUCODE_OMNI_HOST_PART]: this.omniHostPartView
 		};
 
 		const fromJSON = ({ type }: { type: string }) => viewMap[type];
@@ -752,7 +752,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		this.workbenchGrid.edgeSnapping = this.mainWindowFullscreen;
 
 		// Listen for part visibility changes (for parts in grid)
-		for (const part of [titleBar, panelPart, sideBar, auxiliaryBarPart, chatBarPart]) {
+		for (const part of [titleBar, panelPart, sideBar, auxiliaryBarPart, omniHostPartView]) {
 			this._register(part.onDidVisibilityChange(visible => {
 				if (part === sideBar) {
 					this.setSideBarHidden(!visible);
@@ -760,8 +760,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 					this.setPanelHidden(!visible);
 				} else if (part === auxiliaryBarPart) {
 					this.setAuxiliaryBarHidden(!visible);
-				} else if (part === chatBarPart) {
-					this.setChatBarHidden(!visible);
+				} else if (part === omniHostPartView) {
+					this.setOmniHostHidden(!visible);
 				}
 
 				this._onDidChangePartVisibility.fire({ partId: part.getId(), visible });
@@ -799,7 +799,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			titleBarHeight: this.titleBarPartView?.minimumHeight ?? 30,
 			sideBarVisible: this.partVisibility.sidebar,
 			auxiliaryBarVisible: this.partVisibility.auxiliaryBar,
-			chatBarVisible: this.partVisibility.chatBar,
+			omniHostVisible: this.partVisibility.omniHost,
 			panelVisible: this.partVisibility.panel,
 		});
 	}
@@ -860,7 +860,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			!this.partVisibility.editor ? LayoutClasses.MAIN_EDITOR_AREA_HIDDEN : undefined,
 			!this.partVisibility.panel ? LayoutClasses.PANEL_HIDDEN : undefined,
 			!this.partVisibility.auxiliaryBar ? LayoutClasses.AUXILIARYBAR_HIDDEN : undefined,
-			!this.partVisibility.chatBar ? LayoutClasses.CHATBAR_HIDDEN : undefined,
+			!this.partVisibility.omniHost ? LayoutClasses.OMNI_HOST_HIDDEN : undefined,
 			LayoutClasses.STATUSBAR_HIDDEN, // agents window never has a status bar
 			this.mainWindowFullscreen ? LayoutClasses.FULLSCREEN : undefined
 		]);
@@ -914,7 +914,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			case Parts.AUXILIARYBAR_PART:
 				this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)?.focus();
 				break;
-			case Parts.CHATBAR_PART:
+			case Parts.HUCODE_OMNI_HOST_PART:
 				this.omniHostPart.focus();
 				break;
 			default: {
@@ -925,7 +925,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	focus(): void {
-		this.focusPart(Parts.CHATBAR_PART);
+		this.focusPart(Parts.HUCODE_OMNI_HOST_PART);
 	}
 
 	//#endregion
@@ -981,8 +981,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 				return this.partVisibility.editor;
 			case Parts.PANEL_PART:
 				return this.partVisibility.panel;
-			case Parts.CHATBAR_PART:
-				return this.partVisibility.chatBar;
+			case Parts.HUCODE_OMNI_HOST_PART:
+				return this.partVisibility.omniHost;
 			case Parts.ACTIVITYBAR_PART:
 			case Parts.STATUSBAR_PART:
 			case Parts.BANNER_PART:
@@ -1005,8 +1005,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			case Parts.PANEL_PART:
 				this.setPanelHidden(hidden);
 				break;
-			case Parts.CHATBAR_PART:
-				this.setChatBarHidden(hidden);
+			case Parts.HUCODE_OMNI_HOST_PART:
+				this.setOmniHostHidden(hidden);
 				break;
 		}
 	}
@@ -1028,7 +1028,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		);
 
 		if (hidden && this.hasFocus(Parts.SIDEBAR_PART)) {
-			this.focusPart(Parts.CHATBAR_PART);
+			this.focusPart(Parts.HUCODE_OMNI_HOST_PART);
 		}
 	}
 
@@ -1096,23 +1096,23 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
 			this.paneCompositeService.hideActivePaneComposite(ViewContainerLocation.Panel);
 
-			// Focus the chat bar when hiding the panel if it had focus
+			// Focus the Omni host when hiding the panel if it had focus.
 			if (panelHadFocus) {
-				this.focusPart(Parts.CHATBAR_PART);
+				this.focusPart(Parts.HUCODE_OMNI_HOST_PART);
 			}
 		}
 	}
 
-	private setChatBarHidden(hidden: boolean): void {
-		if (this.partVisibility.chatBar === !hidden) {
+	private setOmniHostHidden(hidden: boolean): void {
+		if (this.partVisibility.omniHost === !hidden) {
 			return;
 		}
 
-		this.partVisibility.chatBar = !hidden;
-		this.mainContainer.classList.toggle(LayoutClasses.CHATBAR_HIDDEN, hidden);
+		this.partVisibility.omniHost = !hidden;
+		this.mainContainer.classList.toggle(LayoutClasses.OMNI_HOST_HIDDEN, hidden);
 
 		// Propagate to grid
-		this.workbenchGrid.setViewVisible(this.chatBarPartView, !hidden);
+		this.workbenchGrid.setViewVisible(this.omniHostPartView, !hidden);
 	}
 
 	//#endregion
@@ -1183,8 +1183,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 				return undefined; // Editor is not in the grid, it's a modal
 			case Parts.PANEL_PART:
 				return this.panelPartView;
-			case Parts.CHATBAR_PART:
-				return this.chatBarPartView;
+			case Parts.HUCODE_OMNI_HOST_PART:
+				return this.omniHostPartView;
 			default:
 				return undefined;
 		}
@@ -1322,8 +1322,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		if (neighborView === this.panelPartView) {
 			return Parts.PANEL_PART;
 		}
-		if (neighborView === this.chatBarPartView) {
-			return Parts.CHATBAR_PART;
+		if (neighborView === this.omniHostPartView) {
+			return Parts.HUCODE_OMNI_HOST_PART;
 		}
 
 		return undefined;

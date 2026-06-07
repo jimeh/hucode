@@ -33,8 +33,8 @@ import { IThemeService } from
 	'../../../platform/theme/common/themeService.js';
 import { WORKBENCH_BACKGROUND } from '../../../workbench/common/theme.js';
 import {
-	chatBarTitleBackground,
-	chatBarTitleForeground,
+	hucodeOmniTitleBackground,
+	hucodeOmniTitleForeground,
 } from '../../common/theme.js';
 import {
 	isMacintosh,
@@ -308,7 +308,7 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		this.element.classList.toggle('inactive', this.isInactive);
 
 		const titleBackground = this.getColor(
-			chatBarTitleBackground,
+			hucodeOmniTitleBackground,
 			(color, theme) => color.isOpaque()
 				? color
 				: color.makeOpaque(WORKBENCH_BACKGROUND(theme))
@@ -321,7 +321,7 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 			this.element.classList.remove('light');
 		}
 
-		const titleForeground = this.getColor(chatBarTitleForeground);
+		const titleForeground = this.getColor(hucodeOmniTitleForeground);
 		this.element.style.color = titleForeground || '';
 	}
 
