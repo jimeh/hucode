@@ -19,6 +19,7 @@ import {
 	encodeWorktreeHandle,
 	isWorktreeItem,
 	MAIN_WORKTREE_CONTEXT_VALUE,
+	MISSING_WORKTREE_CONTEXT_VALUE,
 	ProjectSwitcherTreeElement,
 	WORKTREE_CONTEXT_VALUE,
 } from '../../../common/projectSwitcher/projectSwitcherTreeModel.js';
@@ -195,7 +196,7 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
 	});
 
-	test('ignores stale hosted instances without matching project worktrees', () => {
+	test('renders missing hosted instances under matching projects', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
 				createProject({
@@ -212,6 +213,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				instances: [
 					{
 						instanceId: 'stale-instance',
+						projectId: 'hucode',
 						worktreePath: '/repos/hucode.worktrees/stale',
 						state: 'loaded',
 						visible: false,
@@ -221,15 +223,168 @@ suite('ProjectSwitcherTreeModel', () => {
 			}),
 		});
 
+		const staleItem = getWorktree(
+			model.roots,
+			'/repos/hucode.worktrees/stale'
+		);
 		assert.strictEqual(
 			model.itemsById.has(
 				encodeWorktreeHandle('hucode', '/repos/hucode.worktrees/stale')
 			),
-			false
+			true
+		);
+		assert.deepStrictEqual(
+			{
+				label: staleItem.label,
+				description: staleItem.description,
+				contextValue: staleItem.contextValue,
+				hostedWorkbenchInstanceId: staleItem.hostedWorkbenchInstanceId,
+				missingGitWorktree: staleItem.missingGitWorktree,
+				iconClasses: ThemeIcon.asClassNameArray(staleItem.themeIcon!),
+			},
+			{
+				label: 'stale',
+				description: 'Missing',
+				contextValue: MISSING_WORKTREE_CONTEXT_VALUE,
+				hostedWorkbenchInstanceId: 'stale-instance',
+				missingGitWorktree: true,
+				iconClasses: ['codicon', 'codicon-warning'],
+			}
 		);
 		assert.strictEqual(
 			getWorktree(model.roots, '/repos/hucode').contextValue,
 			MAIN_WORKTREE_CONTEXT_VALUE
+		);
+	});
+
+	test('renders projects with only missing hosted worktrees', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'missing-root',
+					worktrees: [],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			activeWorktreePath: '/repos/missing-root.worktrees/feature',
+			hostedWorkspaceState: createHostedState({
+				activeInstanceId: 'feature-instance',
+				instances: [
+					{
+						instanceId: 'feature-instance',
+						projectId: 'missing-root',
+						worktreePath: '/repos/missing-root.worktrees/feature',
+						state: 'active',
+						visible: true,
+						focused: true,
+					},
+				],
+			}),
+		});
+
+		const project = model.roots[0].element;
+		const worktree = getWorktree(
+			model.roots,
+			'/repos/missing-root.worktrees/feature'
+		);
+
+		assert.deepStrictEqual(
+			{
+				projectLabel: project.label,
+				worktreeLabel: worktree.label,
+				isActive: worktree.isActive,
+				missingGitWorktree: worktree.missingGitWorktree,
+			},
+			{
+				projectLabel: 'missing-root',
+				worktreeLabel: 'feature',
+				isActive: true,
+				missingGitWorktree: true,
+			}
+		);
+	});
+
+	test('does not render invalid missing hosted worktree rows', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'hucode',
+					worktrees: [
+						createWorktree('/repos/hucode', { isMain: true }),
+						createWorktree('/repos/hucode.worktrees/loaded', {
+							branch: 'loaded',
+						}),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState({
+				instances: [
+					{
+						instanceId: 'known-instance',
+						projectId: 'hucode',
+						worktreePath: '/repos/hucode.worktrees/loaded',
+						state: 'loaded',
+						visible: false,
+						focused: false,
+					},
+					{
+						instanceId: 'unknown-project-instance',
+						projectId: 'unknown',
+						worktreePath: '/repos/hucode.worktrees/unknown',
+						state: 'loaded',
+						visible: false,
+						focused: false,
+					},
+					{
+						instanceId: 'missing-project-instance',
+						worktreePath: '/repos/hucode.worktrees/no-project',
+						state: 'loaded',
+						visible: false,
+						focused: false,
+					},
+					{
+						instanceId: 'unloaded-instance',
+						projectId: 'hucode',
+						worktreePath: '/repos/hucode.worktrees/unloaded',
+						state: 'unloaded',
+						visible: false,
+						focused: false,
+					},
+					{
+						instanceId: 'crashed-instance',
+						projectId: 'hucode',
+						worktreePath: '/repos/hucode.worktrees/crashed',
+						state: 'crashed',
+						visible: false,
+						focused: false,
+					},
+				],
+			}),
+		});
+
+		assert.deepStrictEqual(
+			flatten(model.roots)
+				.map(element => element.element)
+				.filter(isWorktreeItem)
+				.map(item => ({
+					worktreePath: item.worktreePath,
+					missingGitWorktree: item.missingGitWorktree,
+				})),
+			[
+				{
+					worktreePath: '/repos/hucode',
+					missingGitWorktree: false,
+				},
+				{
+					worktreePath: '/repos/hucode.worktrees/loaded',
+					missingGitWorktree: false,
+				},
+			]
 		);
 	});
 });
@@ -297,6 +452,7 @@ function createHostedState(options: Partial<{
 	readonly activeInstanceId: string;
 	readonly instances: readonly {
 		readonly instanceId: string;
+		readonly projectId?: string;
 		readonly worktreePath: string;
 		readonly state: 'restore-pending' | 'loading' | 'active' | 'loaded' |
 		'dormant' | 'unloaded' | 'crashed';

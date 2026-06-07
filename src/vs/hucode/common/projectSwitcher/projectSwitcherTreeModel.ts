@@ -37,6 +37,10 @@ export const WORKTREE_CONTEXT_VALUE = 'hucode-worktree';
  */
 export const MAIN_WORKTREE_CONTEXT_VALUE = 'hucode-worktree-main';
 /**
+ * Context value used by hosted workbench rows whose git worktree disappeared.
+ */
+export const MISSING_WORKTREE_CONTEXT_VALUE = 'hucode-worktree-missing';
+/**
  * Context value used by pinned/unpinned separator rows.
  */
 export const PROJECT_GROUP_SEPARATOR_CONTEXT_VALUE =
@@ -106,6 +110,7 @@ export interface ProjectSwitcherWorktreeItem
 	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
 	readonly hasCustomLabel: boolean;
+	readonly missingGitWorktree: boolean;
 }
 
 /**
@@ -306,26 +311,38 @@ export function buildProjectSwitcherTreeModel(
 	const unpinnedProjectElements: ProjectSwitcherTreeElement[] = [];
 
 	for (const project of options.projects) {
+		const missingHostedInstances = getMissingHostedWorkbenchInstances(
+			project,
+			options
+		);
 		const pinnedWorktrees = project.pinned
 			? project.worktrees
 			: project.worktrees.filter(worktree => worktree.pinned);
 		const unpinnedWorktrees = project.pinned
 			? []
 			: project.worktrees.filter(worktree => !worktree.pinned);
+		const pinnedMissingInstances = project.pinned
+			? missingHostedInstances
+			: [];
+		const unpinnedMissingInstances = project.pinned
+			? []
+			: missingHostedInstances;
 
-		if (pinnedWorktrees.length) {
+		if (pinnedWorktrees.length || pinnedMissingInstances.length) {
 			pinnedProjectElements.push(toProjectElement(
 				project,
 				pinnedWorktrees,
+				pinnedMissingInstances,
 				PINNED_SECTION,
 				options,
 				itemsById
 			));
 		}
-		if (unpinnedWorktrees.length) {
+		if (unpinnedWorktrees.length || unpinnedMissingInstances.length) {
 			unpinnedProjectElements.push(toProjectElement(
 				project,
 				unpinnedWorktrees,
+				unpinnedMissingInstances,
 				UNPINNED_SECTION,
 				options,
 				itemsById
@@ -366,6 +383,7 @@ export function buildProjectSwitcherTreeModel(
 function toProjectElement(
 	project: ProjectRecord,
 	worktrees: readonly WorktreeRecord[],
+	missingHostedInstances: readonly IHucodeHostedWorkbenchInstance[],
 	section: ProjectSwitcherSection,
 	options: IProjectSwitcherTreeModelOptions,
 	itemsById: Map<string, ProjectSwitcherItem>
@@ -398,9 +416,20 @@ function toProjectElement(
 		collapsible: true,
 		collapsed: options.collapsedProjectIds.has(item.id) ||
 			options.collapsedProjectIds.has(project.id),
-		children: worktrees.map(worktree =>
-			toWorktreeElement(project, worktree, section, options, itemsById)
-		),
+		children: [
+			...worktrees.map(worktree =>
+				toWorktreeElement(project, worktree, section, options, itemsById)
+			),
+			...missingHostedInstances.map(instance =>
+				toMissingWorktreeElement(
+					project,
+					instance,
+					section,
+					options,
+					itemsById
+				)
+			),
+		],
 	};
 }
 
@@ -439,6 +468,7 @@ function toWorktreeElement(
 		hostedWorkbenchState: hostedWorkbenchInstance?.state,
 		isActive,
 		hasCustomLabel: !!worktree.customLabel,
+		missingGitWorktree: false,
 		label: worktreeLabel,
 		description: worktreeLabel === worktreeDescription
 			? undefined
@@ -455,6 +485,46 @@ function toWorktreeElement(
 	return { element: item };
 }
 
+function toMissingWorktreeElement(
+	project: ProjectRecord,
+	hostedWorkbenchInstance: IHucodeHostedWorkbenchInstance,
+	section: ProjectSwitcherSection,
+	options: IProjectSwitcherTreeModelOptions,
+	itemsById: Map<string, ProjectSwitcherItem>
+): ProjectSwitcherTreeElement {
+	const isActive = typeof options.activeWorktreePath === 'string' &&
+		pathsEqual(options.activeWorktreePath, hostedWorkbenchInstance.worktreePath);
+	const item: ProjectSwitcherWorktreeItem = {
+		id: getWorktreeItemId(
+			project.id,
+			hostedWorkbenchInstance.worktreePath,
+			hostedWorkbenchInstance.instanceId
+		),
+		handle: encodeWorktreeHandle(
+			project.id,
+			hostedWorkbenchInstance.worktreePath
+		),
+		kind: 'worktree',
+		projectId: project.id,
+		worktreePath: hostedWorkbenchInstance.worktreePath,
+		isMain: false,
+		pinned: false,
+		section,
+		hostedWorkbenchInstanceId: hostedWorkbenchInstance.instanceId,
+		hostedWorkbenchState: hostedWorkbenchInstance.state,
+		isActive,
+		hasCustomLabel: false,
+		missingGitWorktree: true,
+		label: basename(hostedWorkbenchInstance.worktreePath),
+		description: localize('missingGitWorktree', 'Missing'),
+		tooltip: options.getPathLabel(hostedWorkbenchInstance.worktreePath),
+		contextValue: MISSING_WORKTREE_CONTEXT_VALUE,
+		themeIcon: Codicon.warning,
+	};
+	itemsById.set(item.handle, item);
+	return { element: item };
+}
+
 function getHostedWorkbenchInstance(
 	worktreePath: string,
 	options: IProjectSwitcherTreeModelOptions
@@ -465,5 +535,23 @@ function getHostedWorkbenchInstance(
 
 	return options.hostedWorkspaceState.instances.find(instance =>
 		pathsEqual(instance.worktreePath, worktreePath)
+	);
+}
+
+function getMissingHostedWorkbenchInstances(
+	project: ProjectRecord,
+	options: IProjectSwitcherTreeModelOptions
+): readonly IHucodeHostedWorkbenchInstance[] {
+	if (!options.isOmniWindow) {
+		return [];
+	}
+
+	return options.hostedWorkspaceState.instances.filter(instance =>
+		instance.projectId === project.id &&
+		instance.state !== 'crashed' &&
+		instance.state !== 'unloaded' &&
+		!project.worktrees.some(worktree =>
+			pathsEqual(worktree.path, instance.worktreePath)
+		)
 	);
 }
