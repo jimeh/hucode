@@ -12,7 +12,7 @@
 
 //#region --- workbench common
 
-import '../workbench/workbench.common.main.js';
+import './omni.common.main.js';
 
 // Use the local Omni pane composite implementation for the Hucode shell layout.
 import './browser/paneCompositePartService.js';
