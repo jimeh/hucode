@@ -17,7 +17,7 @@ export interface IOmniLayoutDescriptorOptions {
 	readonly titleBarHeight: number;
 	readonly sideBarVisible: boolean;
 	readonly auxiliaryBarVisible: boolean;
-	readonly chatBarVisible: boolean;
+	readonly omniHostVisible: boolean;
 	readonly panelVisible: boolean;
 }
 
@@ -31,7 +31,7 @@ export function createOmniGridDescriptor(
 	const panelSize = 300;
 	const titleBarHeight = options.titleBarHeight;
 	const rightSectionWidth = Math.max(0, width - sideBarSize);
-	const chatBarWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
+	const omniHostWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
 	const contentHeight = height - titleBarHeight;
 	const topRightHeight = Math.max(0, contentHeight - panelSize);
 
@@ -56,11 +56,11 @@ export function createOmniGridDescriptor(
 		visible: options.auxiliaryBarVisible,
 	};
 
-	const chatBarNode: ISerializedLeafNode = {
+	const omniHostNode: ISerializedLeafNode = {
 		type: 'leaf',
-		data: { type: Parts.CHATBAR_PART },
-		size: chatBarWidth,
-		visible: options.chatBarVisible,
+		data: { type: Parts.HUCODE_OMNI_HOST_PART },
+		size: omniHostWidth,
+		visible: options.omniHostVisible,
 	};
 
 	const panelNode: ISerializedLeafNode = {
@@ -72,7 +72,7 @@ export function createOmniGridDescriptor(
 
 	const topRightSection: ISerializedNode = {
 		type: 'branch',
-		data: [chatBarNode, auxiliaryBarNode],
+		data: [omniHostNode, auxiliaryBarNode],
 		size: topRightHeight,
 	};
 

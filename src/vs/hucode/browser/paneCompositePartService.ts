@@ -101,9 +101,7 @@ export class OmniPaneCompositePartService extends Disposable
 			return part.partId;
 		}
 
-		return viewContainerLocation === ViewContainerLocation.ChatBar
-			? Parts.CHATBAR_PART
-			: Parts.SIDEBAR_PART;
+		return Parts.SIDEBAR_PART;
 	}
 
 	openPaneComposite(
@@ -193,8 +191,6 @@ export class OmniPaneCompositePartService extends Disposable
 				return PaneCompositeExtensions.Panels;
 			case ViewContainerLocation.AuxiliaryBar:
 				return PaneCompositeExtensions.Auxiliary;
-			case ViewContainerLocation.ChatBar:
-				return PaneCompositeExtensions.ChatBar;
 		}
 	}
 }

@@ -71,7 +71,6 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
 
 	private readonly logger: Lazy<ILogger>;
 	private readonly isSessionsWindow: boolean;
-	private readonly isOmniWindow: boolean;
 
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
@@ -86,7 +85,6 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
 
 		this.logger = new Lazy(() => loggerService.createLogger(VIEWS_LOG_ID, { name: VIEWS_LOG_NAME, group: windowLogGroup }));
 		this.isSessionsWindow = environmentService.isSessionsWindow;
-		this.isOmniWindow = environmentService.isOmniWindow;
 
 		this.activeViewContextKeys = new Map<string, IContextKey<boolean>>();
 		this.movableViewContextKeys = new Map<string, IContextKey<boolean>>();
@@ -315,11 +313,6 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
 	}
 
 	private getEffectiveViewContainerLocation(location: ViewContainerLocation): ViewContainerLocation {
-		// When not in agent sessions workspace, view containers contributed to ChatBar
-		// should be registered at the AuxiliaryBar location instead
-		if (!this.isSessionsWindow && !this.isOmniWindow && location === ViewContainerLocation.ChatBar) {
-			return ViewContainerLocation.AuxiliaryBar;
-		}
 		return location;
 	}
 

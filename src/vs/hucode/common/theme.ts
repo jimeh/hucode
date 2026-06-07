@@ -46,18 +46,6 @@ export const sessionsPanelBackground = registerColor(
 	localize('sessionsPanel.background', 'Background color of the panel in the agent sessions window.')
 );
 
-// Sessions chat bar background color
-export const sessionsChatBarBackground = registerColor(
-	'sessionsChatBar.background',
-	{
-		dark: SIDE_BAR_BACKGROUND,
-		light: editorBackground,
-		hcDark: SIDE_BAR_BACKGROUND,
-		hcLight: SIDE_BAR_BACKGROUND,
-	},
-	localize('sessionsChatBar.background', 'Background color of the chat bar in the agent sessions window.')
-);
-
 // Sessions sidebar header colors
 export const sessionsSidebarHeaderBackground = registerColor(
 	'sessionsSidebarHeader.background',
@@ -71,17 +59,17 @@ export const sessionsSidebarHeaderForeground = registerColor(
 	localize('sessionsSidebarHeader.foreground', 'Foreground color of the sidebar header area in the agent sessions window.')
 );
 
-// Chat bar title colors
-export const chatBarTitleBackground = registerColor(
-	'chatBarTitle.background',
+// Hucode Omni title colors
+export const hucodeOmniTitleBackground = registerColor(
+	'hucodeOmniTitle.background',
 	sessionsSidebarBackground,
-	localize('chatBarTitle.background', 'Background color of the chat bar title area in the agent sessions window.')
+	localize('hucodeOmniTitle.background', 'Background color of the title area in the Hucode Omni window.')
 );
 
-export const chatBarTitleForeground = registerColor(
-	'chatBarTitle.foreground',
+export const hucodeOmniTitleForeground = registerColor(
+	'hucodeOmniTitle.foreground',
 	SIDE_BAR_FOREGROUND,
-	localize('chatBarTitle.foreground', 'Foreground color of the chat bar title area in the agent sessions window.')
+	localize('hucodeOmniTitle.foreground', 'Foreground color of the title area in the Hucode Omni window.')
 );
 
 // Agent feedback input widget border color

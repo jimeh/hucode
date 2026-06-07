@@ -34,7 +34,7 @@ import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
 /**
  * Dedicated Omni shell host surface.
  *
- * Unlike the generic pane-composite chatbar, this part has no view-container
+ * Unlike a generic pane-composite part, this host has no view-container
  * menus or chat-window chrome.
  */
 export class OmniHostPart extends Part {
@@ -79,7 +79,7 @@ export class OmniHostPart extends Part {
 		private readonly shellService: IHucodeShellService,
 	) {
 		super(
-			Parts.CHATBAR_PART,
+			Parts.HUCODE_OMNI_HOST_PART,
 			{ hasTitle: false },
 			themeService,
 			storageService,
@@ -157,7 +157,7 @@ export class OmniHostPart extends Part {
 	}
 
 	override toJSON(): object {
-		return { type: Parts.CHATBAR_PART };
+		return { type: Parts.HUCODE_OMNI_HOST_PART };
 	}
 
 	private async initialize(): Promise<void> {
@@ -215,7 +215,7 @@ export class OmniHostPart extends Part {
 		if (
 			!this.surface
 			|| this.layoutScheduled
-			|| !this.layoutService.isVisible(Parts.CHATBAR_PART)
+			|| !this.layoutService.isVisible(Parts.HUCODE_OMNI_HOST_PART)
 			|| this.bodyHeight <= 0
 			|| this.bodyWidth <= 0
 		) {
@@ -232,7 +232,7 @@ export class OmniHostPart extends Part {
 	private async layoutHostedWorkspace(): Promise<void> {
 		if (
 			!this.surface
-			|| !this.layoutService.isVisible(Parts.CHATBAR_PART)
+			|| !this.layoutService.isVisible(Parts.HUCODE_OMNI_HOST_PART)
 		) {
 			return;
 		}
@@ -302,7 +302,7 @@ export class OmniHostPart extends Part {
 			&& activeInstance.visible
 			&& activeInstance.state !== 'crashed'
 			&& activeInstance.state !== 'unloaded'
-			&& this.layoutService.isVisible(Parts.CHATBAR_PART);
+			&& this.layoutService.isVisible(Parts.HUCODE_OMNI_HOST_PART);
 	}
 
 	private updateScreenshotRefresh(): void {

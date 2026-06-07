@@ -24,14 +24,14 @@ suite('OmniLayoutModel', () => {
 			titleBarHeight: 34,
 			sideBarVisible: true,
 			auxiliaryBarVisible: false,
-			chatBarVisible: true,
+			omniHostVisible: true,
 			panelVisible: false,
 		});
 
 		const root = descriptor.root as ISerializedNode;
 		const sideBar = getLeaf(root, Parts.SIDEBAR_PART);
 		const titleBar = getLeaf(root, Parts.TITLEBAR_PART);
-		const host = getLeaf(root, Parts.CHATBAR_PART);
+		const host = getLeaf(root, Parts.HUCODE_OMNI_HOST_PART);
 		const panel = getLeaf(root, Parts.PANEL_PART);
 
 		assert.deepStrictEqual({
@@ -86,13 +86,13 @@ suite('OmniLayoutModel', () => {
 			titleBarHeight: 30,
 			sideBarVisible: false,
 			auxiliaryBarVisible: false,
-			chatBarVisible: true,
+			omniHostVisible: true,
 			panelVisible: false,
 		});
 
 		const root = descriptor.root as ISerializedNode;
 		const sideBar = getLeaf(root, Parts.SIDEBAR_PART);
-		const host = getLeaf(root, Parts.CHATBAR_PART);
+		const host = getLeaf(root, Parts.HUCODE_OMNI_HOST_PART);
 
 		assert.strictEqual(sideBar.visible, false);
 		assert.strictEqual(host.visible, true);
@@ -106,13 +106,13 @@ suite('OmniLayoutModel', () => {
 			titleBarHeight: 30,
 			sideBarVisible: true,
 			auxiliaryBarVisible: true,
-			chatBarVisible: true,
+			omniHostVisible: true,
 			panelVisible: true,
 		});
 
 		const root = descriptor.root as ISerializedNode;
-		const host = getLeaf(root, Parts.CHATBAR_PART);
-		const topRight = getBranchContainingLeaf(root, Parts.CHATBAR_PART);
+		const host = getLeaf(root, Parts.HUCODE_OMNI_HOST_PART);
+		const topRight = getBranchContainingLeaf(root, Parts.HUCODE_OMNI_HOST_PART);
 
 		assert.deepStrictEqual({
 			hostSize: host.size,
