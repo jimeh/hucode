@@ -88,6 +88,8 @@ export class OmniAgentHostService implements IAgentHostService {
 	readonly onDidNotification: Event<INotification> = Event.None;
 	readonly onDidAction: Event<ActionEnvelope> = Event.None;
 
+	// Match NullAgentHostService: Omni never starts an agent-host auth flow, so
+	// consumers should always observe a settled false state.
 	readonly authenticationPending: IObservable<boolean> = constObservable(false);
 	readonly rootState = new StaticAgentSubscription<RootState>(
 		createRootState(),

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '../../base/common/event.js';
+import { assertNever } from '../../base/common/assert.js';
 import { IInstantiationService } from
 	'../../platform/instantiation/common/instantiation.js';
 import { IProgressIndicator } from
@@ -191,6 +192,8 @@ export class OmniPaneCompositePartService extends Disposable
 				return PaneCompositeExtensions.Panels;
 			case ViewContainerLocation.AuxiliaryBar:
 				return PaneCompositeExtensions.Auxiliary;
+			default:
+				return assertNever(viewContainerLocation);
 		}
 	}
 }

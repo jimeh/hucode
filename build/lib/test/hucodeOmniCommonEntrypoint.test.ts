@@ -87,17 +87,6 @@ suite('Hucode Omni common entrypoint', () => {
 			omniImports.map(importRecord => importRecord.canonical)
 		);
 
-		assert.deepStrictEqual(
-			setDifference(new Set(omittedFromOmni.keys()), upstreamImportPaths),
-			[],
-			'Omni omission allow-list contains imports no longer present upstream'
-		);
-		assert.deepStrictEqual(
-			setDifference(new Set(addedByOmni.keys()), omniImportPaths),
-			[],
-			'Omni addition allow-list contains imports no longer present in Omni'
-		);
-
 		const expectedOmniImports = new Set(
 			workbenchImports
 				.map(importRecord => importRecord.canonical)
@@ -107,21 +96,33 @@ suite('Hucode Omni common entrypoint', () => {
 			expectedOmniImports.add(importPath);
 		}
 
-		assert.deepStrictEqual(
-			setDifference(expectedOmniImports, omniImportPaths),
-			[],
-			'Omni is missing upstream common workbench imports'
-		);
-		assert.deepStrictEqual(
-			setDifference(omniImportPaths, expectedOmniImports),
-			[],
-			'Omni has imports not documented as upstream common workbench deltas'
+		const workbenchSharedImports = sharedImportStatements(
+			workbenchImports,
+			omittedFromOmni
 		);
 
 		assert.deepStrictEqual(
-			sharedImportStatements(omniImports, addedByOmni),
-			sharedImportStatements(workbenchImports, omittedFromOmni),
-			'Shared Omni imports should stay in upstream workbench order'
+			{
+				staleOmissions: setDifference(
+					new Set(omittedFromOmni.keys()),
+					upstreamImportPaths
+				),
+				staleAdditions: setDifference(
+					new Set(addedByOmni.keys()),
+					omniImportPaths
+				),
+				missingFromOmni: setDifference(expectedOmniImports, omniImportPaths),
+				undocumentedInOmni: setDifference(omniImportPaths, expectedOmniImports),
+				sharedImports: sharedImportStatements(omniImports, addedByOmni),
+			},
+			{
+				staleOmissions: [],
+				staleAdditions: [],
+				missingFromOmni: [],
+				undocumentedInOmni: [],
+				sharedImports: workbenchSharedImports,
+			},
+			'Omni import contract'
 		);
 	});
 });
