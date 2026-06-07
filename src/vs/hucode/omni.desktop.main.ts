@@ -94,9 +94,6 @@ import '../workbench/services/auxiliaryWindow/electron-browser/auxiliaryWindowSe
 import '../platform/extensionManagement/electron-browser/extensionsProfileScannerService.js';
 import '../platform/sandbox/electron-browser/sandboxHelperService.js';
 import '../platform/webContentExtractor/electron-browser/webContentExtractorService.js';
-import '../workbench/services/agentHost/electron-browser/agentHostService.js';
-import '../platform/agentHost/electron-browser/remoteAgentHostService.js';
-import '../platform/agentHost/electron-browser/sshRemoteAgentHostService.js';
 import '../workbench/services/browserView/electron-browser/playwrightWorkbenchService.js';
 import '../workbench/services/process/electron-browser/processService.js';
 import '../workbench/services/power/electron-browser/powerService.js';
@@ -105,7 +102,11 @@ import './electron-browser/omniWindowService.js';
 import './browser/omniWindowUI.js';
 import './browser/omniProjectsSidebarActions.js';
 
-import { registerSingleton } from
+import { IAgentHostService } from
+	'../platform/agentHost/common/agentService.js';
+import { OmniAgentHostService } from
+	'./browser/services/omniAgentHostService.js';
+import { InstantiationType, registerSingleton } from
 	'../platform/instantiation/common/extensions.js';
 import {
 	IUserDataInitializationService,
@@ -117,6 +118,11 @@ import { SyncDescriptor } from
 registerSingleton(
 	IUserDataInitializationService,
 	new SyncDescriptor(UserDataInitializationService, [[]], true)
+);
+registerSingleton(
+	IAgentHostService,
+	OmniAgentHostService,
+	InstantiationType.Delayed
 );
 
 //#endregion
@@ -149,13 +155,11 @@ import '../workbench/contrib/localHistory/electron-browser/localHistory.contribu
 import '../workbench/contrib/mergeEditor/electron-browser/mergeEditor.contribution.js';
 import '../workbench/contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 import '../workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
-import '../workbench/contrib/chat/electron-browser/chat.contribution.js';
 import './browser/projectSwitcher/createProjectWorktree.contribution.js';
 import './browser/projectSwitcher/renameProjectWorktree.contribution.js';
 import './browser/projectSwitcher/projectSwitcher.contribution.js';
 import '../workbench/contrib/encryption/electron-browser/encryption.contribution.js';
 import '../workbench/contrib/emergencyAlert/electron-browser/emergencyAlert.contribution.js';
-import '../workbench/contrib/mcp/electron-browser/mcp.contribution.js';
 import '../workbench/contrib/policyExport/electron-browser/policyExport.contribution.js';
 import '../workbench/contrib/keybindingsExport/electron-browser/keybindingsExport.contribution.js';
 import './browser/layoutActions.js';
