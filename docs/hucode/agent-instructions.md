@@ -366,6 +366,11 @@ VS Code code that Hucode customizes.
   the live ordering source for loaded worktrees, while project-manager
   `lastVisitedAt` is the persisted fallback. Sidebar open paths must call
   `setLastActiveWorktree` immediately instead of relying on later sidebar sync.
+- Omni Projects must keep resident hosted workbenches reachable when Git stops
+  reporting their worktree but the project record still exists. Render those
+  hosted instances as missing worktree rows under the project and avoid
+  git-worktree management actions for them; unloading the resident workbench
+  remains valid.
 - Generic folder/workspace opens from an Omni shell or hosted Omni workbench
   must not reuse the Omni window for unknown paths. Known project worktrees
   should route through the shell; unknown folders/workspaces should open in a

@@ -100,7 +100,6 @@ import {
 import {
 	buildProjectSwitcherTreeModel,
 	encodeProjectHandle,
-	encodeWorktreeHandle,
 	isHostedWorkbenchInProgress,
 	isProjectItem,
 	isSeparatorItem,
@@ -412,24 +411,26 @@ class ProjectSwitcherRenderer
 				row?.setAttribute('aria-current', 'true');
 			}
 
-			const pinLabel = item.pinned
-				? localize('unpinWorktreeButton', 'Unpin Worktree')
-				: localize('pinWorktreeButton', 'Pin Worktree');
-			const pinIcon = item.pinned ? Codicon.pinned : Codicon.pin;
-			this.setAction(
-				templateData,
-				templateData.leadingAction,
-				pinLabel,
-				pinIcon,
-				() => {
-					void this.commandService.executeCommand(
-						item.pinned
-							? UNPIN_WORKTREE_COMMAND_ID
-							: PIN_WORKTREE_COMMAND_ID,
-						toHandleArg(item)
-					);
-				}
-			);
+			if (!item.missingGitWorktree) {
+				const pinLabel = item.pinned
+					? localize('unpinWorktreeButton', 'Unpin Worktree')
+					: localize('pinWorktreeButton', 'Pin Worktree');
+				const pinIcon = item.pinned ? Codicon.pinned : Codicon.pin;
+				this.setAction(
+					templateData,
+					templateData.leadingAction,
+					pinLabel,
+					pinIcon,
+					() => {
+						void this.commandService.executeCommand(
+							item.pinned
+								? UNPIN_WORKTREE_COMMAND_ID
+								: PIN_WORKTREE_COMMAND_ID,
+							toHandleArg(item)
+						);
+					}
+				);
+			}
 
 			if (item.hostedWorkbenchInstanceId) {
 				templateData.container.classList.add(
@@ -437,6 +438,11 @@ class ProjectSwitcherRenderer
 						? 'hucode-project-switcher-worktree-loading'
 						: 'hucode-project-switcher-worktree-loaded'
 				);
+				if (item.missingGitWorktree) {
+					templateData.container.classList.add(
+						'hucode-project-switcher-worktree-missing'
+					);
+				}
 
 				const label = localize('unloadWorkbenchButton', 'Unload');
 				this.setAction(
@@ -1021,7 +1027,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.projects = projects;
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
-		await this.updateCurrentWorktreeSelection(projects);
+		await this.updateCurrentWorktreeSelection();
 		this.recordActiveWorktree(projects);
 	}
 
@@ -1041,7 +1047,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private async handleWorkspaceContextChange(): Promise<void> {
 		this.renderProjects(this.projects);
 		await this.syncCurrentWorkspace(this.projects);
-		await this.updateCurrentWorktreeSelection(this.projects);
+		await this.updateCurrentWorktreeSelection();
 		this.recordActiveWorktree(this.projects);
 	}
 
@@ -1159,7 +1165,7 @@ export class ProjectSwitcherWidget extends Disposable {
 
 		this.renderProjects(this.projects);
 		this.updateItemContext();
-		void this.updateCurrentWorktreeSelection(this.projects).catch(error => {
+		void this.updateCurrentWorktreeSelection().catch(error => {
 			this.notificationService.error(String(error));
 		});
 		void this.syncOmniActiveWorktree(this.projects).catch(error => {
@@ -1316,6 +1322,19 @@ export class ProjectSwitcherWidget extends Disposable {
 			const worktreeHandle = toHandleArg(item);
 			const hostedWorkbenchInstanceId =
 				this.getHostedWorkbenchInstance(item.worktreePath)?.instanceId;
+			if (item.missingGitWorktree) {
+				return hostedWorkbenchInstanceId
+					? [toAction({
+						id: UNLOAD_WORKTREE_COMMAND_ID,
+						label: localize('unloadWorkbench', 'Unload'),
+						run: () => this.commandService.executeCommand(
+							UNLOAD_WORKTREE_COMMAND_ID,
+							worktreeHandle
+						),
+					})]
+					: [];
+			}
+
 			const actions: IAction[] = [
 				toAction({
 					id: RENAME_WORKTREE_COMMAND_ID,
@@ -1463,14 +1482,12 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
-	private async updateCurrentWorktreeSelection(
-		projects: readonly ProjectRecord[]
-	): Promise<void> {
+	private async updateCurrentWorktreeSelection(): Promise<void> {
 		if (!this.tree) {
 			return;
 		}
 
-		const currentWorktree = this.getCurrentWorktreeItem(projects);
+		const currentWorktree = this.getCurrentWorktreeItem();
 		if (!currentWorktree) {
 			this.tree.setSelection([]);
 			this.tree.setFocus([]);
@@ -1494,25 +1511,18 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.viewItemContext?.set(currentWorktree.contextValue);
 	}
 
-	private getCurrentWorktreeItem(
-		projects: readonly ProjectRecord[]
-	): ProjectSwitcherWorktreeItem | undefined {
+	private getCurrentWorktreeItem(): ProjectSwitcherWorktreeItem | undefined {
 		const activeWorktreePath = this.getActiveWorktreePath();
 		if (!activeWorktreePath) {
 			return undefined;
 		}
 
-		for (const project of projects) {
-			const worktree = project.worktrees.find(entry =>
-				pathsEqual(entry.path, activeWorktreePath)
-			);
-			if (worktree) {
-				const item = this.itemsById.get(
-					encodeWorktreeHandle(project.id, worktree.path)
-				);
-				if (isWorktreeItem(item)) {
-					return item;
-				}
+		for (const item of this.itemsById.values()) {
+			if (
+				isWorktreeItem(item) &&
+				pathsEqual(item.worktreePath, activeWorktreePath)
+			) {
+				return item;
 			}
 		}
 
@@ -1524,7 +1534,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		const activeTarget = this.getActiveSelectionTarget(projects);
+		const activeTarget = this.getActiveSelectionTarget();
 		if (!activeTarget) {
 			this.updateNavigationContexts();
 			return;
@@ -1581,20 +1591,19 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.updateNavigationContexts();
 	}
 
-	private getActiveSelectionTarget(
-		projects: readonly ProjectRecord[]
-	): IProjectSwitcherSelectionTarget | undefined {
+	private getActiveSelectionTarget(): IProjectSwitcherSelectionTarget | undefined {
 		const activeWorktreePath = this.getActiveWorktreePath();
 		if (!activeWorktreePath) {
 			return undefined;
 		}
 
-		for (const project of projects) {
-			if (project.worktrees.some(worktree =>
-				pathsEqual(worktree.path, activeWorktreePath)
-			)) {
+		for (const item of this.itemsById.values()) {
+			if (
+				isWorktreeItem(item) &&
+				pathsEqual(item.worktreePath, activeWorktreePath)
+			) {
 				return {
-					projectId: project.id,
+					projectId: item.projectId,
 					worktreePath: activeWorktreePath,
 				};
 			}
