@@ -127,6 +127,29 @@ suite('Hucode changelog', () => {
 		);
 	});
 
+	test('accepts numbered backfill fragments for prior PRs', async () => {
+		await initRepo(tmpDir);
+		const baseRef = currentHead(tmpDir);
+		await writeChange(
+			tmpDir,
+			'59-decouple-omni-from-agent-session-ui.md',
+			'refactor: decouple Omni from agent-session UI\n'
+		);
+		await writeChange(
+			tmpDir,
+			'1234-retain-pr-attribution-for-unnumbered-fragments.md',
+			'fix(changelog): retain PR attribution for unnumbered fragments\n'
+		);
+		commitAll(tmpDir, 'fix(changelog): retain PR attribution');
+
+		await checkPullRequest({
+			baseRef,
+			number: 1234,
+			root: tmpDir,
+			title: 'fix(changelog): retain PR attribution for unnumbered fragments',
+		});
+	});
+
 	test('rejects fragments with the wrong PR number', async () => {
 		await initRepo(tmpDir);
 		const baseRef = currentHead(tmpDir);
@@ -207,6 +230,84 @@ suite('Hucode changelog', () => {
 		);
 	});
 
+	test('infers PR numbers from unnumbered fragment commits', async () => {
+		await createReleaseRoot(tmpDir);
+		initGitRepo(tmpDir);
+		execFileSync('git', ['add', 'CHANGELOG.md', 'build'], {
+			cwd: tmpDir,
+		});
+		execFileSync('git', ['commit', '-m', 'chore: initial commit'], {
+			cwd: tmpDir,
+		});
+		await writeChange(
+			tmpDir,
+			'keep-missing-hosted-worktrees-reachable.md',
+			'fix: keep missing hosted worktrees reachable\n'
+		);
+		commitAll(
+			tmpDir,
+			'fix: keep missing hosted worktrees reachable (#60)'
+		);
+
+		await prepareRelease({
+			date: '2026-06-08',
+			root: tmpDir,
+			version: '0.0.25',
+		});
+
+		assert.match(
+			await fs.readFile(path.join(tmpDir, 'CHANGELOG.md'), 'utf8'),
+			/- keep missing hosted worktrees reachable \(#60\)/
+		);
+	});
+
+	test('infers PR numbers from GitHub merge commits', async () => {
+		await createReleaseRoot(tmpDir);
+		initGitRepo(tmpDir);
+		execFileSync('git', ['add', 'CHANGELOG.md', 'build'], {
+			cwd: tmpDir,
+		});
+		execFileSync('git', ['commit', '-m', 'chore: initial commit'], {
+			cwd: tmpDir,
+		});
+		execFileSync('git', ['branch', '-M', 'main'], { cwd: tmpDir });
+		execFileSync('git', ['checkout', '-b', 'keep-worktrees'], {
+			cwd: tmpDir,
+			stdio: 'ignore',
+		});
+		await writeChange(
+			tmpDir,
+			'keep-missing-hosted-worktrees-reachable.md',
+			'fix: keep missing hosted worktrees reachable\n'
+		);
+		commitAll(tmpDir, 'fix: keep missing hosted worktrees reachable');
+		execFileSync('git', ['checkout', 'main'], {
+			cwd: tmpDir,
+			stdio: 'ignore',
+		});
+		execFileSync('git', [
+			'merge',
+			'--no-ff',
+			'keep-worktrees',
+			'-m',
+			'Merge pull request #61 from jimeh/keep-worktrees',
+		], {
+			cwd: tmpDir,
+			stdio: 'ignore',
+		});
+
+		await prepareRelease({
+			date: '2026-06-08',
+			root: tmpDir,
+			version: '0.0.25',
+		});
+
+		assert.match(
+			await fs.readFile(path.join(tmpDir, 'CHANGELOG.md'), 'utf8'),
+			/- keep missing hosted worktrees reachable \(#61\)/
+		);
+	});
+
 	test('extracts release notes for the requested version', async () => {
 		await createReleaseRoot(tmpDir);
 		await fs.writeFile(
@@ -282,14 +383,18 @@ async function createReleaseRoot(root: string): Promise<void> {
 
 async function initRepo(root: string): Promise<void> {
 	await fs.mkdir(path.join(root, '.changes'), { recursive: true });
+	initGitRepo(root);
+	await fs.writeFile(path.join(root, 'README.md'), '# Test\n', 'utf8');
+	execFileSync('git', ['add', 'README.md'], { cwd: root });
+	execFileSync('git', ['commit', '-m', 'chore: initial commit'], { cwd: root });
+}
+
+function initGitRepo(root: string): void {
 	execFileSync('git', ['init'], { cwd: root });
 	execFileSync('git', ['config', 'user.email', 'hucode@example.com'], {
 		cwd: root,
 	});
 	execFileSync('git', ['config', 'user.name', 'Hucode Test'], { cwd: root });
-	await fs.writeFile(path.join(root, 'README.md'), '# Test\n', 'utf8');
-	execFileSync('git', ['add', 'README.md'], { cwd: root });
-	execFileSync('git', ['commit', '-m', 'chore: initial commit'], { cwd: root });
 }
 
 function commitAll(root: string, message: string): void {
