@@ -265,7 +265,7 @@ VS Code code that Hucode customizes.
   resources and surface as a generic "operation was canceled" failure.
 - The split bundle jobs intentionally prepare bundle inputs on each runner
   instead of consuming a prep artifact. `build/next/index.ts bundle` reads
-  source-tree generated inputs such as `src/.../codicon.ttf` in addition to
+  source-tree-generated inputs such as `src/.../codicon.ttf` in addition to
   `.build/extensions`, so cross-runner artifact boundaries are easy to make
   incomplete.
 - Linux Electron tests on GitHub-hosted runners need Chromium sandbox setup:
