@@ -258,11 +258,11 @@ VS Code code that Hucode customizes.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
   explicitly exempted.
-- Hucode CI's `Core Compile` job sets `HUCODE_CORE_CI_SERIAL_BUNDLES=1` for
-  `npm run core-ci` so the desktop, server, and server-web minified bundles run
-  serially on GitHub-hosted Linux runners. Running those bundles in parallel can
-  exhaust runner resources and surface as a generic "operation was canceled"
-  failure even when the same command has no TypeScript or bundling errors.
+- Hucode CI splits core compile into `Core Compile Prep` and separate desktop,
+  server, and server-web bundle jobs through `build/hucode/core-ci.ts`. Keep
+  that orchestration in Hucode-owned workflow/script files; running those
+  bundles in parallel inside one GitHub-hosted Linux runner can exhaust runner
+  resources and surface as a generic "operation was canceled" failure.
 - Linux Electron tests on GitHub-hosted runners need Chromium sandbox setup:
   enable unprivileged user namespaces for Ubuntu runners, install
   `bubblewrap`/`socat`, set `.build/electron/chrome-sandbox` to root-owned

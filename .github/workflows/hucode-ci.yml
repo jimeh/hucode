@@ -68,8 +68,8 @@ jobs:
       - name: Run hygiene
         run: npm run hygiene
 
-  core-compile:
-    name: Core Compile
+  core-compile-prepare:
+    name: Core Compile Prep
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -99,14 +99,60 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compile core
-        run: npm run core-ci
+      - name: Prepare core compile
+        run: node build/hucode/core-ci.ts prepare
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HUCODE_CORE_CI_SERIAL_BUNDLES: 1
 
       - name: Check cyclic dependencies
         run: node build/lib/checkCyclicDependencies.ts out-build
+
+      - name: Pack core compile inputs
+        run: tar -czf .build/hucode-core-ci-inputs.tgz out-build .build/extensions
+
+      - name: Upload core compile inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-core-ci-inputs
+          path: .build/hucode-core-ci-inputs.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  core-compile-bundle:
+    name: Core Compile (${{ matrix.name }})
+    needs: core-compile-prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: desktop
+            target: desktop
+          - name: server
+            target: server
+          - name: server-web
+            target: server-web
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download core compile inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-core-ci-inputs
+          path: .build
+
+      - name: Extract core compile inputs
+        run: tar -xzf .build/hucode-core-ci-inputs.tgz
+
+      - name: Bundle core
+        run: node build/hucode/core-ci.ts bundle ${{ matrix.target }}
 
   eslint:
     name: ESLint
