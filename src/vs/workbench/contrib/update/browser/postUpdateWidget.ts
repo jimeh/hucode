@@ -162,7 +162,7 @@ export class PostUpdateWidgetContribution extends Disposable implements IWorkben
 				{ url, callSite },
 				CancellationToken.None
 			);
-			return await asTextOrError(context);
+			return await asTextOrError(context) ?? undefined;
 		} catch {
 			return undefined;
 		}
