@@ -224,7 +224,8 @@ VS Code code that Hucode customizes.
   currently builds and uploads macOS DMG and ZIP artifacts for supported public
   releases; Linux and Windows targets remain manual build targets until tested.
 - Hucode stable builds use `https://updates.hucode.dev` as the built-in update
-  feed. Keep `quality`, `updateUrl`, and `downloadUrl` in the Hucode product
+  feed. Keep `quality`, `updateUrl`, `downloadUrl`,
+  `hucodeReleaseNotesUrlTemplate`, and `releaseNotesUrl` in the Hucode product
   mixin and covered by `npm run hucode:validate`; the updater disables itself
   without `updateUrl`, `commit`, and product quality.
 - Hucode macOS DMGs are manual install assets. ZIPs are the Squirrel.Mac
@@ -257,6 +258,11 @@ VS Code code that Hucode customizes.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
   explicitly exempted.
+- Hucode CI's `Core Compile` job sets `HUCODE_CORE_CI_SERIAL_BUNDLES=1` for
+  `npm run core-ci` so the desktop, server, and server-web minified bundles run
+  serially on GitHub-hosted Linux runners. Running those bundles in parallel can
+  exhaust runner resources and surface as a generic "operation was canceled"
+  failure even when the same command has no TypeScript or bundling errors.
 - Linux Electron tests on GitHub-hosted runners need Chromium sandbox setup:
   enable unprivileged user namespaces for Ubuntu runners, install
   `bubblewrap`/`socat`, set `.build/electron/chrome-sandbox` to root-owned

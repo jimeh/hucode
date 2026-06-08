@@ -36,6 +36,7 @@ import { Schemas } from '../../../../base/common/network.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
 import { dirname } from '../../../../base/common/resources.js';
 import { asWebviewUri } from '../../webview/common/webview.js';
+import { getHucodeReleaseNotesMarkdownUrl } from '../../../../platform/product/common/hucodeProductVersion.js';
 
 export class ReleaseNotesManager extends Disposable {
 	private readonly _simpleSettingRenderer: SimpleSettingRenderer;
@@ -80,19 +81,26 @@ export class ReleaseNotesManager extends Disposable {
 		}
 	}
 
-	private async getBase(useCurrentFile: boolean) {
+	private async getBase(useCurrentFile: boolean, version: string) {
 		if (useCurrentFile) {
 			const currentFileUri = this._codeEditorService.getActiveCodeEditor()?.getModel()?.uri;
 			if (currentFileUri) {
 				return dirname(currentFileUri);
 			}
 		}
+		const releaseNotesUrl = getHucodeReleaseNotesMarkdownUrl(
+			this._productService,
+			version
+		);
+		if (releaseNotesUrl) {
+			return dirname(URI.parse(releaseNotesUrl));
+		}
 		return URI.parse('https://code.visualstudio.com/raw');
 	}
 
 	public async show(version: string, useCurrentFile: boolean): Promise<boolean> {
 		const releaseNoteText = await this.loadReleaseNotes(version, useCurrentFile);
-		const base = await this.getBase(useCurrentFile);
+		const base = await this.getBase(useCurrentFile, version);
 		this._lastMeta = { text: releaseNoteText, base };
 		const html = await this.renderBody(this._lastMeta);
 		const title = nls.localize('releaseNotesInputName', "Release Notes: {0}", version);
@@ -148,14 +156,21 @@ export class ReleaseNotesManager extends Disposable {
 	}
 
 	private async loadReleaseNotes(version: string, useCurrentFile: boolean): Promise<string> {
-		const match = /^(\d+\.\d+)\./.exec(version);
-		if (!match) {
-			throw new Error('not found');
+		let url: string | undefined;
+		if (!useCurrentFile) {
+			url = getHucodeReleaseNotesMarkdownUrl(this._productService, version);
+			if (!url) {
+				const match = /^(\d+\.\d+)\./.exec(version);
+				if (!match) {
+					throw new Error('not found');
+				}
+
+				const versionLabel = match[1].replace(/\./g, '_');
+				const baseUrl = 'https://code.visualstudio.com/raw';
+				url = `${baseUrl}/v${versionLabel}.md`;
+			}
 		}
 
-		const versionLabel = match[1].replace(/\./g, '_');
-		const baseUrl = 'https://code.visualstudio.com/raw';
-		const url = `${baseUrl}/v${versionLabel}.md`;
 		const unassigned = nls.localize('unassigned', "unassigned");
 
 		const escapeMdHtml = (text: string): string => {
@@ -213,7 +228,7 @@ export class ReleaseNotesManager extends Disposable {
 					const file = this._codeEditorService.getActiveCodeEditor()?.getModel()?.getValue();
 					text = file ? file.substring(file.indexOf('#')) : undefined;
 				} else {
-					text = await asTextOrError(await this._requestService.request({ url, callSite: 'releaseNotesEditor.fetchReleaseNotes' }, CancellationToken.None));
+					text = await asTextOrError(await this._requestService.request({ url: url!, callSite: 'releaseNotesEditor.fetchReleaseNotes' }, CancellationToken.None));
 				}
 			} catch {
 				throw new Error('Failed to fetch release notes');

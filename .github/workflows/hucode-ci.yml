@@ -103,6 +103,7 @@ jobs:
         run: npm run core-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUCODE_CORE_CI_SERIAL_BUNDLES: 1
 
       - name: Check cyclic dependencies
         run: node build/lib/checkCyclicDependencies.ts out-build

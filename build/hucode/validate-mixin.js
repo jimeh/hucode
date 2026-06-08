@@ -59,10 +59,18 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(generated.nameShort, 'Hucode');
 	assert.strictEqual(generated.nameLong, 'Hucode');
 	assert.strictEqual(generated.hucodeVersion, sourceProduct.hucodeVersion);
+	assert.strictEqual(
+		generated.hucodeReleaseNotesUrlTemplate,
+		'https://updates.hucode.dev/release-notes/{version}.md'
+	);
 	assert.strictEqual(generated.quality, 'stable');
 	assert.strictEqual(generated.updateUrl, 'https://updates.hucode.dev');
 	assert.strictEqual(
 		generated.downloadUrl,
+		'https://github.com/jimeh/hucode/releases/latest'
+	);
+	assert.strictEqual(
+		generated.releaseNotesUrl,
 		'https://github.com/jimeh/hucode/releases/latest'
 	);
 	assert.strictEqual(generated.applicationName, 'hucode');
@@ -106,6 +114,17 @@ export async function validateMixin(quality = 'stable') {
 	);
 	await assertFileExists(
 		path.join(generatedRoot, 'resources', 'darwin', 'Assets.car')
+	);
+	await assertFileExists(
+		path.join(
+			generatedRoot,
+			'src',
+			'vs',
+			'workbench',
+			'browser',
+			'media',
+			'code-icon.svg'
+		)
 	);
 }
 
