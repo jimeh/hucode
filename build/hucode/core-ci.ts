@@ -64,9 +64,6 @@ async function writeBuildDate(): Promise<void> {
 }
 
 async function prepare(): Promise<void> {
-	await runGulpTask('copy-codicons');
-	await runGulpTask('compile-non-native-extensions-build');
-	await runGulpTask('compile-extension-media-build');
 	await writeBuildDate();
 	await spawnTsgo(
 		path.join(repoRoot, 'src', 'tsconfig.json'),
@@ -78,6 +75,13 @@ async function prepare(): Promise<void> {
 		'--out',
 		'out-build'
 	]);
+}
+
+async function prepareBundle(): Promise<void> {
+	await runGulpTask('copy-codicons');
+	await runGulpTask('compile-non-native-extensions-build');
+	await runGulpTask('compile-extension-media-build');
+	await writeBuildDate();
 }
 
 async function bundle(target: BundleTarget): Promise<void> {
@@ -120,12 +124,15 @@ async function main(): Promise<void> {
 		case 'prepare':
 			await prepare();
 			return;
+		case 'prepare-bundle':
+			await prepareBundle();
+			return;
 		case 'bundle':
 			await bundle(assertBundleTarget(target));
 			return;
 		default:
 			throw new Error(
-				'Usage: node build/hucode/core-ci.ts prepare | ' +
+				'Usage: node build/hucode/core-ci.ts prepare | prepare-bundle | ' +
 				'bundle <desktop|server|server-web>'
 			);
 	}
