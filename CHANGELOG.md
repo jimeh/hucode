@@ -2,6 +2,18 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.25 - 2026-06-08
+
+### Bug Fixes
+
+- keep missing hosted worktrees reachable (#60)
+- show Hucode update identity in product UI (#62)
+- **changelog:** retain PR attribution for unnumbered fragments (#61)
+
+### Code Refactoring
+
+- decouple Omni from agent-session UI (#59)
+
 ## 0.0.24 - 2026-06-05
 
 ### Features
