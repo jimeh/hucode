@@ -32,7 +32,10 @@ import { Event } from '../../../../base/common/event.js';
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
 import { getInternalOrg } from '../../../../platform/assignment/common/assignment.js';
 import { IVersion, tryParseVersion } from '../common/updateUtils.js';
-import { getHucodeApplicationVersion } from '../../../../platform/product/common/hucodeProductVersion.js';
+import {
+	getHucodeApplicationVersion,
+	getHucodeReleaseNotesMarkdownUrl,
+} from '../../../../platform/product/common/hucodeProductVersion.js';
 
 export const CONTEXT_UPDATE_STATE = new RawContextKey<string>('updateState', StateType.Uninitialized);
 export const MAJOR_MINOR_UPDATE_AVAILABLE = new RawContextKey<boolean>('majorMinorUpdateAvailable', false);
@@ -47,12 +50,14 @@ export function showReleaseNotesInEditor(instantiationService: IInstantiationSer
 	return releaseNotesManager.show(version, useCurrentFile);
 }
 
-async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor) {
+async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor, version: string) {
 	const openerService = accessor.get(IOpenerService);
 	const productService = accessor.get(IProductService);
+	const fallbackUrl = productService.releaseNotesUrl
+		?? getHucodeReleaseNotesMarkdownUrl(productService, version);
 
-	if (productService.releaseNotesUrl) {
-		const uri = URI.parse(productService.releaseNotesUrl);
+	if (fallbackUrl) {
+		const uri = URI.parse(fallbackUrl);
 		await openerService.open(uri);
 	} else {
 		throw new Error(nls.localize('update.noReleaseNotesOnline', "This version of {0} does not have release notes online", productService.nameLong));
@@ -65,7 +70,9 @@ async function showReleaseNotes(accessor: ServicesAccessor, version: string) {
 		await showReleaseNotesInEditor(instantiationService, version, false);
 	} catch (err) {
 		try {
-			await instantiationService.invokeFunction(openLatestReleaseNotesInBrowser);
+			await instantiationService.invokeFunction(
+				accessor => openLatestReleaseNotesInBrowser(accessor, version)
+			);
 		} catch (err2) {
 			throw new Error(`${err.message} and ${err2.message}`);
 		}

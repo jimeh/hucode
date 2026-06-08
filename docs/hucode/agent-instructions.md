@@ -224,7 +224,8 @@ VS Code code that Hucode customizes.
   currently builds and uploads macOS DMG and ZIP artifacts for supported public
   releases; Linux and Windows targets remain manual build targets until tested.
 - Hucode stable builds use `https://updates.hucode.dev` as the built-in update
-  feed. Keep `quality`, `updateUrl`, and `downloadUrl` in the Hucode product
+  feed. Keep `quality`, `updateUrl`, `downloadUrl`,
+  `hucodeReleaseNotesUrlTemplate`, and `releaseNotesUrl` in the Hucode product
   mixin and covered by `npm run hucode:validate`; the updater disables itself
   without `updateUrl`, `commit`, and product quality.
 - Hucode macOS DMGs are manual install assets. ZIPs are the Squirrel.Mac

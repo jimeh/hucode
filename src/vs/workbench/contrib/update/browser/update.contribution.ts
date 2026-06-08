@@ -26,7 +26,11 @@ import { IsWebContext } from '../../../../platform/contextkey/common/contextkeys
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { URI } from '../../../../base/common/uri.js';
-import { getHucodeApplicationVersion } from '../../../../platform/product/common/hucodeProductVersion.js';
+import {
+	getHucodeApplicationVersion,
+	getHucodeReleaseNotesMarkdownUrl,
+	hasHucodeReleaseNotes,
+} from '../../../../platform/product/common/hucodeProductVersion.js';
 
 const workbench = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 
@@ -41,7 +45,7 @@ workbench.registerWorkbenchContribution(PostUpdateWidgetContribution, LifecycleP
 
 export class ShowReleaseNotesAction extends Action2 {
 
-	static readonly AVAILABLE = !!product.releaseNotesUrl;
+	static readonly AVAILABLE = hasHucodeReleaseNotes(product);
 
 	constructor() {
 		super({
@@ -69,8 +73,10 @@ export class ShowReleaseNotesAction extends Action2 {
 		try {
 			await showReleaseNotesInEditor(instantiationService, targetVersion, false);
 		} catch (err) {
-			if (productService.releaseNotesUrl) {
-				await openerService.open(URI.parse(productService.releaseNotesUrl));
+			const fallbackUrl = productService.releaseNotesUrl
+				?? getHucodeReleaseNotesMarkdownUrl(productService, targetVersion);
+			if (fallbackUrl) {
+				await openerService.open(URI.parse(fallbackUrl));
 			} else {
 				throw new Error(localize('update.noReleaseNotesOnline', "This version of {0} does not have release notes online", productService.nameLong));
 			}
