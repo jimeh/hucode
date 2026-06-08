@@ -22,6 +22,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { getHucodeApplicationVersion } from '../../../../platform/product/common/hucodeProductVersion.js';
 import { ShowCurrentReleaseNotesActionId } from '../common/update.js';
 import { IParsedUpdateInfoInput, parseUpdateInfoInput } from '../common/updateInfoParser.js';
 import { getUpdateInfoUrl, isMajorMinorVersionChange } from '../common/updateUtils.js';
@@ -112,9 +113,10 @@ export class PostUpdateWidgetContribution extends Disposable implements IWorkben
 	}
 
 	private async getUpdateInfo(input?: string | null): Promise<IParsedUpdateInfoInput | undefined> {
+		const applicationVersion = getHucodeApplicationVersion(this.productService);
 		if (!input) {
 			try {
-				const url = getUpdateInfoUrl(this.productService.version);
+				const url = getUpdateInfoUrl(applicationVersion);
 				const context = await this.requestService.request({ url, callSite: 'postUpdateWidget' }, CancellationToken.None);
 				input = await asTextOrError(context);
 			} catch { }
@@ -130,7 +132,7 @@ export class PostUpdateWidgetContribution extends Disposable implements IWorkben
 				...info, buttons: [{
 					label: localize('postUpdate.releaseNotes', "Release Notes"),
 					commandId: ShowCurrentReleaseNotesActionId,
-					args: [this.productService.version],
+					args: [applicationVersion],
 					style: 'secondary'
 				}]
 			};
@@ -178,7 +180,7 @@ export class PostUpdateWidgetContribution extends Disposable implements IWorkben
 		// Title
 		const titleEl = dom.append(body, dom.$('.title'));
 		titleEl.id = titleId;
-		titleEl.textContent = title ?? localize('postUpdate.title', "New in {0}", this.productService.version);
+		titleEl.textContent = title ?? localize('postUpdate.title', "New in {0}", getHucodeApplicationVersion(this.productService));
 
 		// Features (preferred) or markdown body
 		if (features?.length) {
@@ -273,7 +275,7 @@ export class PostUpdateWidgetContribution extends Disposable implements IWorkben
 		} catch { }
 
 		const to: ILastKnownVersion = {
-			version: this.productService.version,
+			version: getHucodeApplicationVersion(this.productService),
 			commit: this.productService.commit,
 			timestamp: Date.now(),
 		};

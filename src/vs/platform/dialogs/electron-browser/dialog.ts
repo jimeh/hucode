@@ -9,6 +9,7 @@ import { localize } from '../../../nls.js';
 import { IOSProperties } from '../../native/common/native.js';
 import { IProductService } from '../../product/common/productService.js';
 import { process } from '../../../base/parts/sandbox/electron-browser/globals.js';
+import { getHucodeApplicationVersion } from '../../product/common/hucodeProductVersion.js';
 
 export function createNativeAboutDialogDetails(productService: IProductService, osProps: IOSProperties): { title: string; details: string; detailsToCopy: string } {
 	let vscodeVersion = productService.version;
@@ -33,7 +34,7 @@ export function createNativeAboutDialogDetails(productService: IProductService, 
 		if (productService.hucodeVersion) {
 			return localize({ key: 'aboutDetailHucode', comment: ['Electron, Chromium, Node.js and V8 are product names that need no translation'] },
 				"Version: {0}\nVSCode Version: {1}\nCommit: {2}\nDate: {3}\nElectron: {4}\nElectronBuildId: {5}\nChromium: {6}\nNode.js: {7}\nV8: {8}\nOS: {9}",
-				productService.hucodeVersion,
+				getHucodeApplicationVersion(productService),
 				vscodeVersion,
 				...commonDetails
 			);

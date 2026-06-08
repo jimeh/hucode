@@ -29,8 +29,9 @@ import { cwd } from '../../base/common/process.js';
 import { addUNCHostToAllowlist } from '../../base/node/unc.js';
 import { URI } from '../../base/common/uri.js';
 import { DeferredPromise } from '../../base/common/async.js';
+import { getHucodeApplicationVersion } from '../../platform/product/common/hucodeProductVersion.js';
 
-const displayVersion = product.hucodeVersion ?? product.version;
+const displayVersion = getHucodeApplicationVersion(product);
 
 function shouldSpawnCliProcess(argv: NativeParsedArgs): boolean {
 	return !!argv['install-source']

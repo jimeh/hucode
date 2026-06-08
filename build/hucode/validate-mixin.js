@@ -107,6 +107,17 @@ export async function validateMixin(quality = 'stable') {
 	await assertFileExists(
 		path.join(generatedRoot, 'resources', 'darwin', 'Assets.car')
 	);
+	await assertFileExists(
+		path.join(
+			generatedRoot,
+			'src',
+			'vs',
+			'workbench',
+			'browser',
+			'media',
+			'code-icon.svg'
+		)
+	);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
