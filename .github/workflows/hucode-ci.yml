@@ -72,8 +72,8 @@ jobs:
       - name: Run hygiene
         run: npm run hygiene
 
-  core-compile-prepare:
-    name: Core Compile Prep
+  core-compile-checks:
+    name: Core Compile Checks
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -87,8 +87,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare core compile
-        run: node build/hucode/core-ci.ts prepare
+      - name: Check core compile
+        run: node build/hucode/core-ci.ts check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

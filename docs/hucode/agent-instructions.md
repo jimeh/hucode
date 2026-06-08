@@ -258,9 +258,9 @@ VS Code code that Hucode customizes.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
   explicitly exempted.
-- Hucode CI splits core compile into `Core Compile Prep` and separate desktop,
-  server, and server-web bundle jobs through `build/hucode/core-ci.ts`. Keep
-  that orchestration in Hucode-owned workflow/script files; running those
+- Hucode CI splits core compile into `Core Compile Checks` and separate
+  desktop, server, and server-web bundle jobs through `build/hucode/core-ci.ts`.
+  Keep that orchestration in Hucode-owned workflow/script files; running those
   bundles in parallel inside one GitHub-hosted Linux runner can exhaust runner
   resources and surface as a generic "operation was canceled" failure.
 - The split bundle jobs intentionally prepare bundle inputs on each runner

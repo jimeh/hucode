@@ -63,7 +63,7 @@ async function writeBuildDate(): Promise<void> {
 	);
 }
 
-async function prepare(): Promise<void> {
+async function check(): Promise<void> {
 	await writeBuildDate();
 	await spawnTsgo(
 		path.join(repoRoot, 'src', 'tsconfig.json'),
@@ -121,8 +121,8 @@ async function main(): Promise<void> {
 	const [command, target] = process.argv.slice(2);
 
 	switch (command) {
-		case 'prepare':
-			await prepare();
+		case 'check':
+			await check();
 			return;
 		case 'prepare-bundle':
 			await prepareBundle();
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
 			return;
 		default:
 			throw new Error(
-				'Usage: node build/hucode/core-ci.ts prepare | prepare-bundle | ' +
+				'Usage: node build/hucode/core-ci.ts check | prepare-bundle | ' +
 				'bundle <desktop|server|server-web>'
 			);
 	}
