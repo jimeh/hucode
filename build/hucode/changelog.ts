@@ -100,7 +100,8 @@ export async function checkPullRequest(
 	for (const fragment of fragments) {
 		if (
 			fragment.prNumber !== undefined &&
-			fragment.prNumber !== options.number
+			fragment.prNumber !== options.number &&
+			headersMatch(title, fragment)
 		) {
 			throw new Error(
 				`${fragment.filePath} uses PR #${fragment.prNumber}, expected ` +
@@ -131,6 +132,7 @@ export async function prepareRelease(
 	if (fragments.length === 0) {
 		throw new Error('No .changes fragments found.');
 	}
+	inferMissingFragmentPrNumbers(options.root, fragments);
 
 	const changelogPath = path.join(options.root, 'CHANGELOG.md');
 	const productPath = path.join(
@@ -368,11 +370,56 @@ function getAddedChangeFiles(root: string, baseRef: string | undefined): string[
 		.map(normalizePath);
 }
 
+function getFileAddingCommitSubject(
+	root: string,
+	filePath: string,
+	firstParent: boolean
+): string | undefined {
+	try {
+		const args = [
+			'log',
+			...(firstParent ? ['--first-parent'] : []),
+			'--diff-filter=A',
+			'--format=%s',
+			'-n',
+			'1',
+			'--',
+			filePath,
+		];
+		const subject = firstNonEmptyLine(execFileSync('git', args, {
+			cwd: root,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}));
+		return subject || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function headersMatch(left: ParsedChange, right: ParsedChange): boolean {
 	return left.breaking === right.breaking
 		&& left.type === right.type
 		&& left.scope === right.scope
 		&& left.subject === right.subject;
+}
+
+function inferMissingFragmentPrNumbers(
+	root: string,
+	fragments: ChangeFragment[]
+): void {
+	for (const fragment of fragments) {
+		if (fragment.prNumber !== undefined) {
+			continue;
+		}
+
+		const subject = getFileAddingCommitSubject(root, fragment.filePath, true)
+			?? getFileAddingCommitSubject(root, fragment.filePath, false);
+		const prNumber = subject ? parsePullRequestNumber(subject) : undefined;
+		if (prNumber !== undefined) {
+			fragment.prNumber = prNumber;
+		}
+	}
 }
 
 function hasVersionSection(changelog: string, version: string): boolean {
@@ -514,6 +561,16 @@ function parseCliOptions(args: string[]): CliOptions {
 	}
 
 	return options;
+}
+
+function parsePullRequestNumber(subject: string): number | undefined {
+	const suffixMatch = /\(#(\d+)\)\s*$/.exec(subject);
+	if (suffixMatch) {
+		return Number(suffixMatch[1]);
+	}
+
+	const mergeMatch = /^Merge pull request #(\d+)\b/.exec(subject);
+	return mergeMatch ? Number(mergeMatch[1]) : undefined;
 }
 
 async function readPullRequestContext(options: CliOptions): Promise<PullRequestContext> {
