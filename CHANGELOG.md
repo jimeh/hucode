@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.26 - 2026-06-09
+
+### Bug Fixes
+
+- keep macOS serve-web release assets usable (#64)
+
 ## 0.0.25 - 2026-06-08
 
 ### Bug Fixes
