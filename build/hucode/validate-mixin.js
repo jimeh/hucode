@@ -75,6 +75,7 @@ export async function validateMixin(quality = 'stable') {
 	);
 	assert.strictEqual(generated.applicationName, 'hucode');
 	assert.strictEqual(generated.dataFolderName, '.hucode');
+	assert.strictEqual(generated.sharedDataFolderName, '.hucode-shared');
 	assert.strictEqual(generated.serverApplicationName, 'hucode-server');
 	assert.strictEqual(generated.serverDataFolderName, '.hucode-server');
 	assert.strictEqual(generated.tunnelApplicationName, 'hucode-tunnel');
@@ -106,6 +107,7 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(rootProduct.nameShort, 'Code - OSS');
 	assert.strictEqual(rootProduct.applicationName, 'code-oss');
 	assert.strictEqual(rootProduct.dataFolderName, '.vscode-oss');
+	assert.strictEqual(rootProduct.sharedDataFolderName, '.vscode-oss-shared');
 	assert.strictEqual(rootProduct.serverApplicationName, 'code-server-oss');
 	assert.strictEqual(rootProduct.tunnelApplicationName, 'code-tunnel-oss');
 	assert.strictEqual(rootProduct.urlProtocol, 'code-oss');

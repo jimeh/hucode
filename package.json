@@ -17,6 +17,7 @@
 		"hucode:watch": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run watch",
 		"hucode:run": "npm run hucode:prepare && ./scripts/hucode.sh",
 		"hucode:cli": "npm run hucode:prepare && ./scripts/hucode-cli.sh",
+		"hucode:web": "npm run hucode:prepare && ./scripts/hucode-web.sh",
 		"hucode:generate-icons": "node build/hucode/generate-darwin-icon.js",
 		"hucode:seed-worktree-node-modules": "node build/hucode/seed-worktree-node-modules.js",
 		"hucode:changelog": "node build/hucode/changelog.ts",

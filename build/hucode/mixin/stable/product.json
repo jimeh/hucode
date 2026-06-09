@@ -9,6 +9,7 @@
 	"releaseNotesUrl": "https://github.com/jimeh/hucode/releases/latest",
 	"applicationName": "hucode",
 	"dataFolderName": ".hucode",
+	"sharedDataFolderName": ".hucode-shared",
 	"win32MutexName": "hucode",
 	"licenseUrl": "https://github.com/jimeh/hucode/blob/main/LICENSE.txt",
 	"serverLicenseUrl": "https://github.com/jimeh/hucode/blob/main/LICENSE.txt",
