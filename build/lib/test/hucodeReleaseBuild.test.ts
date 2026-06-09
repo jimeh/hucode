@@ -12,6 +12,7 @@ import path from 'path';
 import {
 	applyDebianPackageVersion,
 	applyRpmPackageVersion,
+	darwinCliLinkIssues,
 	findBuiltInCopilotExtension,
 	orderReleaseArtifactsForPackaging,
 	validateAppCliArtifact,
@@ -194,6 +195,34 @@ suite('Hucode release build', () => {
 				['archive', 'dmg'],
 				['archive', 'deb']
 			]
+		);
+	});
+
+	test('flags Homebrew OpenSSL runtime links in macOS CLI', () => {
+		const issues = darwinCliLinkIssues(`
+/Applications/Hucode.app/Contents/Resources/app/bin/hucode-tunnel:
+\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)
+\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0)
+\t/usr/local/opt/openssl@3/lib/libcrypto.3.dylib (compatibility version 3.0.0)
+`);
+
+		assert.deepStrictEqual(
+			issues.map(issue => issue.library),
+			[
+				'/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib',
+				'/usr/local/opt/openssl@3/lib/libcrypto.3.dylib'
+			]
+		);
+	});
+
+	test('allows system macOS CLI runtime links', () => {
+		assert.deepStrictEqual(
+			darwinCliLinkIssues(`
+/Applications/Hucode.app/Contents/Resources/app/bin/hucode-tunnel:
+\t/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+\t/usr/lib/libSystem.B.dylib
+`),
+			[]
 		);
 	});
 

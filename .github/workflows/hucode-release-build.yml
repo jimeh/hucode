@@ -83,6 +83,7 @@ jobs:
               platform: 'darwin',
               arch: 'x64',
               npm_arch: 'x64',
+              openssl_arch: 'x64-osx',
               rust_target: 'x86_64-apple-darwin',
               runner: 'macos-15-intel',
               package_runner: 'macos-15',
@@ -93,6 +94,7 @@ jobs:
               platform: 'darwin',
               arch: 'arm64',
               npm_arch: 'arm64',
+              openssl_arch: 'arm64-osx',
               rust_target: 'aarch64-apple-darwin',
               runner: 'macos-15',
               artifacts: 'dmg,archive'
@@ -358,7 +360,7 @@ jobs:
           fi
 
       - name: Download OpenSSL prebuilt
-        if: matrix.platform == 'linux' || matrix.platform == 'win32'
+        if: matrix.platform == 'darwin' || matrix.platform == 'linux' || matrix.platform == 'win32'
         shell: bash
         run: |
           set -euo pipefail
@@ -371,6 +373,10 @@ jobs:
           openssl_arch_root="$openssl_root/out/${{ matrix.openssl_arch }}"
           if [ ! -d "$openssl_arch_root/lib" ]; then
             echo "OpenSSL prebuilt not found: $openssl_arch_root" >&2
+            exit 1
+          fi
+          if [ ! -d "$openssl_arch_root/include" ]; then
+            echo "OpenSSL prebuilt include dir not found: $openssl_arch_root" >&2
             exit 1
           fi
 
@@ -520,6 +526,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build server-web archive
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_root=".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+          reh_name="vscode-reh-web-darwin-${{ matrix.arch }}"
+          server_name="vscode-server-darwin-${{ matrix.arch }}-web"
+          archive_name="hucode-server-darwin-${{ matrix.arch }}-web.zip"
+          archive_path="$PWD/$dist_root/$archive_name"
+
+          npm run gulp "vscode-reh-web-darwin-${{ matrix.arch }}-min-ci"
+
+          rm -rf "../$server_name"
+          mv "../$reh_name" "../$server_name"
+          mkdir -p "$dist_root"
+          (cd .. && zip -Xry "$archive_path" "$server_name")
+
       - name: Prepare Windows AppX package
         if: matrix.platform == 'win32'
         shell: pwsh
@@ -555,6 +579,15 @@ jobs:
         with:
           name: hucode-app-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: .build/hucode/app/VSCode-${{ matrix.platform }}-${{ matrix.arch }}.tar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload server-web artifact
+        if: matrix.platform == 'darwin'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-server-web-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-server-darwin-${{ matrix.arch }}-web.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -815,10 +848,12 @@ jobs:
             exit 1
           fi
           required_patterns=(
-            '*/hucode-*-darwin-x64/*.dmg'
-            '*/hucode-*-darwin-x64/*.zip'
-            '*/hucode-*-darwin-arm64/*.dmg'
-            '*/hucode-*-darwin-arm64/*.zip'
+            '*/hucode-*-darwin-x64/hucode-darwin-x64.dmg'
+            '*/hucode-*-darwin-x64/hucode-darwin-x64.zip'
+            '*/hucode-server-web-*-darwin-x64/hucode-server-darwin-x64-web.zip'
+            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.dmg'
+            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.zip'
+            '*/hucode-server-web-*-darwin-arm64/hucode-server-darwin-arm64-web.zip'
           )
           for pattern in "${required_patterns[@]}"; do
             if ! find release-artifacts -type f -path "$pattern" | grep -q .; then
