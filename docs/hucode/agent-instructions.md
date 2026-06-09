@@ -171,6 +171,14 @@ VS Code code that Hucode customizes.
   the package metadata. The release wrapper patches generated DEB/RPM metadata
   after upstream prepare tasks so package versions come from Hucode's
   `hucodeVersion`, not upstream VS Code's `package.json` version.
+- Hucode macOS release builds must compile the Rust CLI against the downloaded
+  `@vscode/openssl-prebuilt` macOS libraries. Do not let `hucode-tunnel` link
+  Homebrew OpenSSL from `/opt/homebrew` or `/usr/local`; hardened runtime rejects
+  those unsigned external dylibs inside the signed app.
+- Hucode macOS release builds publish `hucode-server-darwin-<arch>-web.zip`
+  alongside the desktop DMG/ZIP assets. These archives are consumed by
+  `hucode serve-web` via the `hucode-updates` update service and are built in
+  the app-build job while the minified server-web inputs are available.
 - Stable and insider Windows app builds expect per-arch `win32ContextMenu`
   CLSIDs in the generated product config for AppX manifest generation. Keep
   those Hucode-specific CLSIDs in `build/hucode/mixin/stable/product.json`.

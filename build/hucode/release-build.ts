@@ -74,6 +74,11 @@ interface ProductJson {
 	[name: string]: unknown;
 }
 
+interface DarwinCliLinkIssue {
+	library: string;
+	reason: string;
+}
+
 interface MixinProductJson {
 	hucodeVersion?: string;
 	[name: string]: unknown;
@@ -936,6 +941,37 @@ function getCliTarget(options: ReleaseTargetOptions): string {
 	return target;
 }
 
+/**
+ * Returns macOS CLI runtime links that cannot ship in a signed app bundle.
+ */
+export function darwinCliLinkIssues(otoolOutput: string): DarwinCliLinkIssue[] {
+	return otoolOutput
+		.split(/\r?\n/)
+		.map(line => line.trim())
+		.filter(Boolean)
+		.map(line => line.split(/\s+\(/)[0])
+		.filter(library => /\/(?:opt\/homebrew|usr\/local)\/.*\/lib(?:ssl|crypto)\.\d+\.dylib/.test(library))
+		.map(library => ({
+			library,
+			reason: 'Homebrew OpenSSL dylibs are not app-bundled and signed'
+		}));
+}
+
+async function validateDarwinCliRuntimeLinks(cliPath: string): Promise<void> {
+	const output = await captureCombined('otool', ['-L', cliPath], repoRoot);
+	const issues = darwinCliLinkIssues(output);
+	if (issues.length === 0) {
+		return;
+	}
+
+	throw new Error(
+		`Hucode CLI links unsupported macOS runtime libraries: ${cliPath}\n` +
+		issues
+			.map(issue => `- ${issue.library} (${issue.reason})`)
+			.join('\n')
+	);
+}
+
 async function findAppProductJson(
 	options: ReleaseTargetOptions,
 	buildOutput: string
@@ -1582,6 +1618,39 @@ async function getLinuxCliEnv(options: ReleaseOptions): Promise<StringEnv> {
 	};
 }
 
+async function getDarwinCliEnv(options: ReleaseOptions): Promise<StringEnv> {
+	if (options.platform !== 'darwin') {
+		return {};
+	}
+
+	if (process.env.OPENSSL_LIB_DIR || process.env.OPENSSL_INCLUDE_DIR) {
+		return {};
+	}
+
+	const opensslRoot = process.env.HUCODE_OPENSSL_PREBUILT_ROOT
+		?? path.join(repoRoot, '.build', 'hucode', 'openssl');
+	const opensslArch = options.arch === 'arm64' ? 'arm64-osx' : 'x64-osx';
+	const opensslArchRoot = path.join(opensslRoot, 'out', opensslArch);
+	const libDir = path.join(opensslArchRoot, 'lib');
+	const includeDir = path.join(opensslArchRoot, 'include');
+
+	if (!(await exists(libDir)) || !(await exists(includeDir))) {
+		return {};
+	}
+
+	return {
+		OPENSSL_LIB_DIR: libDir,
+		OPENSSL_INCLUDE_DIR: includeDir
+	};
+}
+
+async function getCliEnv(options: ReleaseOptions): Promise<StringEnv> {
+	return {
+		...await getLinuxCliEnv(options),
+		...await getDarwinCliEnv(options)
+	};
+}
+
 async function readJson<T>(filePath: string): Promise<T> {
 	return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
@@ -1711,7 +1780,7 @@ async function mixInCli(options: ReleaseOptions, buildOutput: string): Promise<v
 		CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
 		VSCODE_CLI_COMMIT: commit,
 		VSCODE_CLI_PRODUCT_JSON: appProductPath,
-		...await getLinuxCliEnv(options)
+		...await getCliEnv(options)
 	});
 
 	const cliBinary = path.join(
@@ -1728,6 +1797,9 @@ async function mixInCli(options: ReleaseOptions, buildOutput: string): Promise<v
 
 	if (options.platform !== 'win32') {
 		await fs.chmod(destination, 0o755);
+	}
+	if (options.platform === 'darwin') {
+		await validateDarwinCliRuntimeLinks(destination);
 	}
 
 	await validateAppCliArtifact(options, buildOutput);

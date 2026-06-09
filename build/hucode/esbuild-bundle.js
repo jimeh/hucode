@@ -27,3 +27,11 @@ await runEsbuildBundle(
 	'desktop',
 	sourceMapBaseUrl
 );
+
+await runEsbuildBundle(
+	'out-vscode-reh-web-min',
+	true,
+	true,
+	'server-web',
+	sourceMapBaseUrl
+);
