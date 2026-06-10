@@ -9,6 +9,7 @@ import vfs from 'vinyl-fs';
 import { filter, jsonEditor } from './gulp/facade.ts';
 import * as util from './util.ts';
 import { getVersion } from './getVersion.ts';
+import { patchDarwinInfoPlistVersion } from './darwinProductVersion.ts';
 import electron from '@vscode/gulp-electron';
 
 type DarwinDocumentSuffix = 'document' | 'script' | 'file' | 'source code';
@@ -111,6 +112,7 @@ export const config = {
 	copyright: 'Copyright (C) 2026 Microsoft. All rights reserved',
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
+	darwinAssetsCar: product.darwinAssetsCar,
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
 	darwinApplicationCategoryType: 'public.app-category.developer-tools',
 	darwinHelpBookFolder: 'VS Code HelpBook',
@@ -220,9 +222,18 @@ function getElectron(arch: string): () => NodeJS.ReadWriteStream {
 			keepDefaultApp: true
 		};
 
-		return vfs.src('package.json')
+		let result: NodeJS.ReadWriteStream = vfs.src('package.json')
 			.pipe(jsonEditor({ name: product.nameShort }))
-			.pipe(electron(electronOpts))
+			.pipe(electron(electronOpts));
+
+		if (process.platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[`${product.nameLong}.app/Contents/Info.plist`]
+			));
+		}
+
+		return result
 			.pipe(filter(['**', '!**/app/package.json']))
 			.pipe(vfs.dest('.build/electron'));
 	};
