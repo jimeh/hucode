@@ -34,6 +34,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { isEqual } from '../../../../base/common/resources.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { localChatSessionType } from '../../chat/common/chatSessionsService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { getBrowserViewOwner, ownsBrowserView } from '../common/browserViewOwnership.js';
 
 /**
  * When enabled, integrated browser tools are exposed as client-provided tools
@@ -99,6 +101,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IThemeService private readonly themeService: IThemeService,
 		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
 	) {
 		super();
 		const channel = mainProcessService.getChannel(ipcBrowserViewChannelName);
@@ -149,7 +152,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 
 		// Listen for new browser views
 		this._register(this._browserViewService.onDidCreateBrowserView(e => {
-			if (e.info.owner.mainWindowId !== this._mainWindowId) {
+			if (!ownsBrowserView(
+				e.info.owner,
+				this._mainWindowId,
+				this.environmentService
+			)) {
 				return; // Not for this window
 			}
 
@@ -186,10 +193,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 				);
 				return this._createModel(id, this._getDefaultOwner(), state);
 			});
-			input.onWillDispose(() => {
+			const inputDisposeListener = this._register(input.onWillDispose(() => {
+				inputDisposeListener.dispose();
 				this._known.delete(id);
 				this._onDidChangeBrowserViews.fire();
-			});
+			}));
 			if (model) {
 				input.model = model;
 			}
@@ -210,7 +218,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	}
 
 	private _getDefaultOwner(): IBrowserViewOwner {
-		return { mainWindowId: this._mainWindowId };
+		return getBrowserViewOwner(this._mainWindowId, this.environmentService);
 	}
 
 	private async _resolveStorageScope(): Promise<BrowserViewStorageScope> {
@@ -234,6 +242,13 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	private async _initializeExistingViews(): Promise<void> {
 		const views = await this._browserViewService.getBrowserViews(this._mainWindowId);
 		for (const info of views) {
+			if (!ownsBrowserView(
+				info.owner,
+				this._mainWindowId,
+				this.environmentService
+			)) {
+				continue;
+			}
 			this._createModel(info.id, info.owner, info.state);
 		}
 	}
