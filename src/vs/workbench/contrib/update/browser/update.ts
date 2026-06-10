@@ -32,6 +32,10 @@ import { Event } from '../../../../base/common/event.js';
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
 import { getInternalOrg } from '../../../../platform/assignment/common/assignment.js';
 import { IVersion, tryParseVersion } from '../common/updateUtils.js';
+import {
+	getHucodeApplicationVersion,
+	getHucodeReleaseNotesMarkdownUrl,
+} from '../../../../platform/product/common/hucodeProductVersion.js';
 
 export const CONTEXT_UPDATE_STATE = new RawContextKey<string>('updateState', StateType.Uninitialized);
 export const MAJOR_MINOR_UPDATE_AVAILABLE = new RawContextKey<boolean>('majorMinorUpdateAvailable', false);
@@ -46,12 +50,14 @@ export function showReleaseNotesInEditor(instantiationService: IInstantiationSer
 	return releaseNotesManager.show(version, useCurrentFile);
 }
 
-async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor) {
+async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor, version: string) {
 	const openerService = accessor.get(IOpenerService);
 	const productService = accessor.get(IProductService);
+	const fallbackUrl = productService.releaseNotesUrl
+		?? getHucodeReleaseNotesMarkdownUrl(productService, version);
 
-	if (productService.releaseNotesUrl) {
-		const uri = URI.parse(productService.releaseNotesUrl);
+	if (fallbackUrl) {
+		const uri = URI.parse(fallbackUrl);
 		await openerService.open(uri);
 	} else {
 		throw new Error(nls.localize('update.noReleaseNotesOnline', "This version of {0} does not have release notes online", productService.nameLong));
@@ -64,7 +70,9 @@ async function showReleaseNotes(accessor: ServicesAccessor, version: string) {
 		await showReleaseNotesInEditor(instantiationService, version, false);
 	} catch (err) {
 		try {
-			await instantiationService.invokeFunction(openLatestReleaseNotesInBrowser);
+			await instantiationService.invokeFunction(
+				accessor => openLatestReleaseNotesInBrowser(accessor, version)
+			);
 		} catch (err2) {
 			throw new Error(`${err.message} and ${err2.message}`);
 		}
@@ -174,18 +182,19 @@ export class ProductContribution implements IWorkbenchContribution {
 			}
 
 			const lastVersion = tryParseVersion(storageService.get(ProductContribution.KEY, StorageScope.APPLICATION, ''));
-			const currentVersion = tryParseVersion(productService.version);
+			const applicationVersion = getHucodeApplicationVersion(productService);
+			const currentVersion = tryParseVersion(applicationVersion);
 			const shouldShowReleaseNotes = configurationService.getValue<boolean>('update.showReleaseNotes');
 			const shouldShowPostInstallInfo = configurationService.getValue<boolean>('update.showPostInstallInfo');
 			const releaseNotesUrl = productService.releaseNotesUrl;
 
 			// was there a major/minor update? if so, open release notes (unless post-install info is enabled, which takes over)
 			if (shouldShowReleaseNotes && !shouldShowPostInstallInfo && !environmentService.skipReleaseNotes && releaseNotesUrl && lastVersion && currentVersion && isMajorMinorUpdate(lastVersion, currentVersion)) {
-				showReleaseNotesInEditor(instantiationService, productService.version, false)
+				showReleaseNotesInEditor(instantiationService, applicationVersion, false)
 					.then(undefined, () => {
 						notificationService.prompt(
 							severity.Info,
-							nls.localize('read the release notes', "Welcome to {0} v{1}! Would you like to read the Release Notes?", productService.nameLong, productService.version),
+							nls.localize('read the release notes', "Welcome to {0} v{1}! Would you like to read the Release Notes?", productService.nameLong, applicationVersion),
 							[{
 								label: nls.localize('releaseNotes', "Release Notes"),
 								run: () => {
@@ -198,7 +207,7 @@ export class ProductContribution implements IWorkbenchContribution {
 					});
 			}
 
-			storageService.store(ProductContribution.KEY, productService.version, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			storageService.store(ProductContribution.KEY, applicationVersion, StorageScope.APPLICATION, StorageTarget.MACHINE);
 		});
 	}
 }
@@ -253,7 +262,8 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 			case StateType.Ready: {
 				const productVersion = state.update.productVersion;
 				if (productVersion) {
-					const currentVersion = tryParseVersion(this.productService.version);
+					const applicationVersion = getHucodeApplicationVersion(this.productService);
+					const currentVersion = tryParseVersion(applicationVersion);
 					const nextVersion = tryParseVersion(productVersion);
 					this.majorMinorUpdateAvailableContextKey.set(Boolean(currentVersion && nextVersion && isMajorMinorUpdate(currentVersion, nextVersion)));
 				}
