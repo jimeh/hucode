@@ -7,13 +7,19 @@ import './media/window.css';
 import { localize } from '../../nls.js';
 import { URI } from '../../base/common/uri.js';
 import { equals } from '../../base/common/objects.js';
-import { EventType, EventHelper, addDisposableListener, ModifierKeyEmitter, getActiveElement, hasWindow, getWindowById, getWindows, $ } from '../../base/browser/dom.js';
+import { EventType, EventHelper, addDisposableListener, ModifierKeyEmitter, hasWindow, getWindowById, getWindows, $ } from '../../base/browser/dom.js';
 import { Action, Separator, WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../base/common/actions.js';
 import { IFileService } from '../../platform/files/common/files.js';
 import { EditorResourceAccessor, IUntitledTextResourceEditorInput, SideBySideEditor, pathsToEditors, IResourceDiffEditorInput, IUntypedEditorInput, IEditorPane, isResourceEditorInput, IResourceMergeEditorInput } from '../common/editor.js';
 import { IEditorService } from '../services/editor/common/editorService.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
-import { WindowMinimumSize, IOpenFileRequest, IAddRemoveFoldersRequest, INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest, INativeOpenFileRequest, hasNativeTitlebar } from '../../platform/window/common/window.js';
+import {
+	WindowMinimumSize,
+	IOpenFileRequest,
+	IAddRemoveFoldersRequest,
+	INativeOpenFileRequest,
+	hasNativeTitlebar,
+} from '../../platform/window/common/window.js';
 import { ITitleService } from '../services/title/browser/titleService.js';
 import { IWorkbenchThemeService } from '../services/themes/common/workbenchThemeService.js';
 import { ApplyZoomTarget, applyZoom } from '../../platform/window/electron-browser/window.js';
@@ -80,6 +86,8 @@ import { DynamicWorkbenchSecurityConfiguration } from '../common/configuration.j
 import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
+import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
+import { HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
 
 export class NativeWindow extends BaseWindow {
 
@@ -90,6 +98,7 @@ export class NativeWindow extends BaseWindow {
 	private pendingFoldersToRemove: URI[] = [];
 
 	private isDocumentedEdited = false;
+	private readonly hucodeOmniCommandForwarding: HucodeOmniCommandForwarding;
 
 	constructor(
 		@IEditorService private readonly editorService: IEditorService,
@@ -130,9 +139,15 @@ export class NativeWindow extends BaseWindow {
 		@IUtilityProcessWorkerWorkbenchService private readonly utilityProcessWorkerWorkbenchService: IUtilityProcessWorkerWorkbenchService,
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
+		@IMainProcessService mainProcessService: IMainProcessService,
 	) {
 		super(mainWindow, undefined, hostService, nativeEnvironmentService, contextMenuService, layoutService);
 
+		this.hucodeOmniCommandForwarding = new HucodeOmniCommandForwarding(
+			nativeEnvironmentService,
+			mainProcessService,
+			logService,
+		);
 		this.configuredWindowZoomLevel = this.resolveConfiguredWindowZoomLevel();
 
 		this.registerListeners();
@@ -154,42 +169,29 @@ export class NativeWindow extends BaseWindow {
 			}));
 		}
 
-		// Support `runAction` event
-		ipcRenderer.on('vscode:runAction', async (event: unknown, ...argsRaw: unknown[]) => {
-			const request = argsRaw[0] as INativeRunActionInWindowRequest;
-			const args: unknown[] = request.args || [];
-
-			// If we run an action from the touchbar, we fill in the currently active resource
-			// as payload because the touch bar items are context aware depending on the editor
-			if (request.from === 'touchbar') {
+		this._register(this.hucodeOmniCommandForwarding.registerWindowListeners({
+			document: mainWindow.document,
+			getActiveEditorResource: () => {
 				const activeEditor = this.editorService.activeEditor;
-				if (activeEditor) {
-					const resource = EditorResourceAccessor.getOriginalUri(activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
-					if (resource) {
-						args.push(resource);
-					}
-				}
-			} else {
-				args.push({ from: request.from });
-			}
-
-			try {
-				await this.commandService.executeCommand(request.id, ...args);
-
-				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from });
-			} catch (error) {
-				this.notificationService.error(error);
-			}
-		});
-
-		// Support runKeybinding event
-		ipcRenderer.on('vscode:runKeybinding', (event: unknown, ...argsRaw: unknown[]) => {
-			const request = argsRaw[0] as INativeRunKeybindingInWindowRequest;
-			const activeElement = getActiveElement();
-			if (activeElement) {
-				this.keybindingService.dispatchByUserSettingsLabel(request.userSettingsLabel, activeElement);
-			}
-		});
+				return activeEditor
+					? EditorResourceAccessor.getOriginalUri(
+						activeEditor,
+						{ supportSideBySide: SideBySideEditor.PRIMARY }
+					)
+					: undefined;
+			},
+			executeCommand: (commandId, ...args) =>
+				this.commandService.executeCommand(commandId, ...args),
+			dispatchKeybinding: (userSettingsLabel, target) =>
+				this.keybindingService.dispatchByUserSettingsLabel(
+					userSettingsLabel,
+					target
+				),
+			onActionExecuted: request =>
+				this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: request.id, from: request.from }),
+			onActionError: error =>
+				this.notificationService.error(toErrorMessage(error))
+		}));
 
 		// Shared Process crash reported from main
 		ipcRenderer.on('vscode:reportSharedProcessCrash', (event: unknown, ...argsRaw: unknown[]) => {
