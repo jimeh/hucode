@@ -20,6 +20,7 @@ const requiredRootKeys = [
 	'nameLong',
 	'applicationName',
 	'dataFolderName',
+	'sharedDataFolderName',
 	'urlProtocol',
 	'darwinBundleIdentifier',
 	'linuxIconName'
@@ -30,6 +31,7 @@ const requiredOverlayKeys = [
 	'nameLong',
 	'applicationName',
 	'dataFolderName',
+	'sharedDataFolderName',
 	'urlProtocol',
 	'darwinBundleIdentifier',
 	'linuxIconName',

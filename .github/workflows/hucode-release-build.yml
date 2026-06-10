@@ -537,10 +537,31 @@ jobs:
           archive_name="hucode-server-darwin-${{ matrix.arch }}-web.zip"
           archive_path="$PWD/$dist_root/$archive_name"
 
-          npm run gulp "vscode-reh-web-darwin-${{ matrix.arch }}-min-ci"
+          node build/hucode/run-with-mixin.js --quality stable -- \
+            npm run gulp "vscode-reh-web-darwin-${{ matrix.arch }}-min-ci"
 
           rm -rf "../$server_name"
           mv "../$reh_name" "../$server_name"
+          node --input-type=module - "../$server_name/product.json" <<'NODE'
+          import fs from 'node:fs';
+
+          const productPath = process.argv[2];
+          const product = JSON.parse(fs.readFileSync(productPath, 'utf8'));
+          const expected = {
+            quality: 'stable',
+            serverApplicationName: 'hucode-server',
+            serverDataFolderName: '.hucode-server'
+          };
+
+          for (const [key, value] of Object.entries(expected)) {
+            if (product[key] !== value) {
+              throw new Error(
+                `${productPath} has ${key}=${JSON.stringify(product[key])}; ` +
+                `expected ${JSON.stringify(value)}`
+              );
+            }
+          }
+          NODE
           mkdir -p "$dist_root"
           (cd .. && zip -Xry "$archive_path" "$server_name")
 

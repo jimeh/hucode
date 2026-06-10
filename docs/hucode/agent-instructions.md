@@ -179,6 +179,11 @@ VS Code code that Hucode customizes.
   alongside the desktop DMG/ZIP assets. These archives are consumed by
   `hucode serve-web` via the `hucode-updates` update service and are built in
   the app-build job while the minified server-web inputs are available.
+- The server-web archive build must stage the Hucode product mixin while
+  running the `vscode-reh-web-*-min-ci` gulp task. If it packages root
+  `product.json` as Code OSS while the browser bundle uses Hucode product
+  metadata, `/stable-<commit>/vscode-remote-resource` requests can 404 even
+  when the files exist in the extracted archive.
 - Stable and insider Windows app builds expect per-arch `win32ContextMenu`
   CLSIDs in the generated product config for AppX manifest generation. Keep
   those Hucode-specific CLSIDs in `build/hucode/mixin/stable/product.json`.
