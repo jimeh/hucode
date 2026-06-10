@@ -412,7 +412,39 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: "1.88"
 
+      - name: Prepare build node_modules cache key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-release-build \
+            "${{ matrix.platform }}" \
+            "${{ matrix.arch }}" \
+            "${{ matrix.npm_arch }}" \
+            "${{ runner.os }}" \
+            "${{ runner.arch }}" \
+            "$(node -p process.arch)" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform != 'win32'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
+
       - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
           set -e
 
@@ -429,6 +461,36 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           npm_config_arch: ${{ matrix.npm_arch }}
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform != 'win32'
+        run: |
+          set -euo pipefail
+          node build/azure-pipelines/common/listNodeModules.ts \
+            .build/node_modules_list.txt
+          mkdir -p .build/node_modules_cache
+          tar -czf .build/node_modules_cache/cache.tgz \
+            --files-from .build/node_modules_list.txt
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node build/azure-pipelines/common/listNodeModules.ts `
+            .build/node_modules_list.txt
+          mkdir -Force .build/node_modules_cache
+          7z.exe a .build/node_modules_cache/cache.7z `
+            -mx3 `
+            `@.build/node_modules_list.txt
+
+      - name: Save node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
 
       - name: Download Linux sysroot
         if: matrix.platform == 'linux' && matrix.arch != 'arm64'
@@ -723,7 +785,42 @@ jobs:
         if: matrix.platform == 'darwin'
         run: python3 -m pip install --user --break-system-packages setuptools
 
+      - name: Determine package Node arch
+        id: package-node
+        shell: bash
+        run: echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare package node_modules cache key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-release-package \
+            "${{ matrix.platform }}" \
+            "${{ runner.os }}" \
+            "${{ runner.arch }}" \
+            "${{ steps.package-node.outputs.arch }}" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-package-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform != 'win32'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
+
       - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
           set -e
 
@@ -739,7 +836,37 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          npm_config_arch: ${{ matrix.npm_arch }}
+          npm_config_arch: ${{ steps.package-node.outputs.arch }}
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform != 'win32'
+        run: |
+          set -euo pipefail
+          node build/azure-pipelines/common/listNodeModules.ts \
+            .build/node_modules_list.txt
+          mkdir -p .build/node_modules_cache
+          tar -czf .build/node_modules_cache/cache.tgz \
+            --files-from .build/node_modules_list.txt
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node build/azure-pipelines/common/listNodeModules.ts `
+            .build/node_modules_list.txt
+          mkdir -Force .build/node_modules_cache
+          7z.exe a .build/node_modules_cache/cache.7z `
+            -mx3 `
+            `@.build/node_modules_list.txt
+
+      - name: Save node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-package-${{ hashFiles('.build/packagelockhash') }}"
 
       - name: Download release app artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
