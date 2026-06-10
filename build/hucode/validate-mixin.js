@@ -79,6 +79,11 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(generated.serverApplicationName, 'hucode-server');
 	assert.strictEqual(generated.serverDataFolderName, '.hucode-server');
 	assert.strictEqual(generated.tunnelApplicationName, 'hucode-tunnel');
+	assert.deepStrictEqual(generated.tunnelServerQualities, {
+		stable: {
+			serverApplicationName: 'hucode-server'
+		}
+	});
 	assert.strictEqual(generated.urlProtocol, 'hucode');
 	assert.strictEqual(generated.win32MutexName, 'hucode');
 	assert.strictEqual(generated.win32TunnelServiceMutex, 'hucode-tunnelservice');

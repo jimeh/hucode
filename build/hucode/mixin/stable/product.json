@@ -16,6 +16,11 @@
 	"serverApplicationName": "hucode-server",
 	"serverDataFolderName": ".hucode-server",
 	"tunnelApplicationName": "hucode-tunnel",
+	"tunnelServerQualities": {
+		"stable": {
+			"serverApplicationName": "hucode-server"
+		}
+	},
 	"win32DirName": "Hucode",
 	"win32NameVersion": "Hucode",
 	"win32RegValueName": "Hucode",

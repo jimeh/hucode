@@ -179,6 +179,10 @@ VS Code code that Hucode customizes.
   alongside the desktop DMG/ZIP assets. These archives are consumed by
   `hucode serve-web` via the `hucode-updates` update service and are built in
   the app-build job while the minified server-web inputs are available.
+- `hucode serve-web` starts the downloaded server through the Rust CLI's
+  `tunnelServerQualities` product metadata. Keep that map aligned with
+  `serverApplicationName`; otherwise the CLI can download a valid archive and
+  then try to spawn the upstream `code-server-oss` entrypoint.
 - The server-web archive build must stage the Hucode product mixin while
   running the `vscode-reh-web-*-min-ci` gulp task. If it packages root
   `product.json` as Code OSS while the browser bundle uses Hucode product
