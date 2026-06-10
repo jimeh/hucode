@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.28 - 2026-06-10
+
+### Bug Fixes
+
+- align serve-web CLI server entrypoint (#66)
+
 ## 0.0.27 - 2026-06-10
 
 ### Bug Fixes
