@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.27 - 2026-06-10
+
+### Bug Fixes
+
+- keep Hucode serve-web assets aligned (#65)
+- use a Hucode shared data folder (#65)
+
 ## 0.0.26 - 2026-06-09
 
 ### Bug Fixes
