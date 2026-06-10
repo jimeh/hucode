@@ -18,6 +18,10 @@ as the required Hucode instruction set for work in this fork.
   temporarily for a subprocess.
 - Hucode's app release version lives in the overlay as `hucodeVersion`. Keep
   upstream `version` for VS Code compatibility and extension checks.
+- Before opening or updating a Hucode PR titled with `feat`, `fix`, `perf`,
+  `revert`, or a breaking `!` marker, add a matching `.changes/*.md` fragment.
+  Once a PR number exists, name it `.changes/<pr-number>-<slug>.md`; the first
+  non-empty line must exactly match the PR title's Conventional Commit header.
 - Common local commands:
   - `npm run hucode:prepare`: generate the stable mixin overlay into
     `.build/distro/mixin/stable/`.

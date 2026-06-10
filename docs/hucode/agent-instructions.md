@@ -94,6 +94,9 @@ VS Code code that Hucode customizes.
 - Hucode PR titles must use Conventional Commit format with commitlint's
   conventional types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
   `refactor`, `revert`, `style`, or `test`.
+- Before opening or updating a Hucode PR titled with `feat`, `fix`, `perf`,
+  `revert`, or a breaking `!` marker, add the matching `.changes` fragment in
+  the same branch. Do this even for small fixes; the changelog CI enforces it.
 - For PRs titled with `feat`, `fix`, `perf`, `revert`, or any breaking `!`
   marker, add a matching `.changes/<pr-number>-<slug>.md` fragment. Hidden
   types such as `build`, `chore`, `ci`, `docs`, `refactor`, `style`, and
