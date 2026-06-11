@@ -1,6 +1,16 @@
 [settings]
 idiomatic_version_file_enable_tools = ["node"]
+minimum_release_age = "3d"
+
+[settings.npm]
+package_manager = "aube"
 
 [tools]
+aube = "latest"
+jq = "latest"
 npm = "11.1"
 pinact = "latest"
+
+[tools."npm:gitnexus"]
+version = "latest"
+allow_builds = ["@ladybugdb/core", "gitnexus", "tree-sitter"]

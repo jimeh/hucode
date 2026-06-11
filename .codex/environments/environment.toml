@@ -12,6 +12,27 @@ fi
 
 mise x -- npm run hucode:seed-worktree-node-modules
 mise x -- npm install
+
+if [ -d "$CODEX_SOURCE_TREE_PATH/.gitnexus" ]; then
+	rm -rf "$CODEX_WORKTREE_PATH/.gitnexus"
+	cp -av "$CODEX_SOURCE_TREE_PATH/.gitnexus" "$CODEX_WORKTREE_PATH/.gitnexus"
+
+	if [ -f "$CODEX_WORKTREE_PATH/.gitnexus/meta.json" ]; then
+		tmp_meta="$(mktemp)"
+		if jq --arg repoPath "$CODEX_WORKTREE_PATH" \
+			'.repoPath = $repoPath' \
+			"$CODEX_WORKTREE_PATH/.gitnexus/meta.json" > "$tmp_meta"; then
+			mv "$tmp_meta" "$CODEX_WORKTREE_PATH/.gitnexus/meta.json"
+		else
+			rm -f "$tmp_meta"
+			exit 1
+		fi
+	fi
+
+	mise x -- npx -y gitnexus index
+fi
+
+mise x -- npx -y gitnexus analyze --skip-agents-md
 '''
 
 [[actions]]
