@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.30 - 2026-06-11
+
+### Continuous Integration
+
+- catch Copilot VSIX release drift in PRs (#68)
+- keep win32 x64 release builds on VS 2022 (#69)
+
 ## 0.0.29 - 2026-06-10
 
 ### Features
