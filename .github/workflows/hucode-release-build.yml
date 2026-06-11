@@ -136,7 +136,7 @@ jobs:
               npm_arch: 'x64',
               openssl_arch: 'x64-windows-static',
               rust_target: 'x86_64-pc-windows-msvc',
-              runner: 'windows-latest',
+              runner: 'windows-2022',
               artifacts: 'archive,user-setup,system-setup'
             },
             {
