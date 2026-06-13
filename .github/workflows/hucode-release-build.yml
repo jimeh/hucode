@@ -1,0 +1,958 @@
+name: Hucode release build
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      darwin_x64:
+        description: Build macOS x64
+        required: true
+        default: true
+        type: boolean
+      darwin_arm64:
+        description: Build macOS arm64
+        required: true
+        default: true
+        type: boolean
+      linux_x64:
+        description: Build Linux x64
+        required: true
+        default: true
+        type: boolean
+      linux_arm64:
+        description: Build Linux arm64
+        required: true
+        default: true
+        type: boolean
+      linux_armhf:
+        description: Build Linux armhf
+        required: true
+        default: true
+        type: boolean
+      win32_x64:
+        description: Build Windows x64
+        required: true
+        default: true
+        type: boolean
+      win32_arm64:
+        description: Build Windows arm64
+        required: true
+        default: true
+        type: boolean
+      sign:
+        description: Sign and notarize macOS release assets
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.darwin_x64 }}-${{ inputs.darwin_arm64 }}-${{ inputs.linux_x64 }}-${{ inputs.linux_arm64 }}-${{ inputs.linux_armhf }}-${{ inputs.win32_x64 }}-${{ inputs.win32_arm64 }}-${{ inputs.sign }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+  VSCODE_QUALITY: stable
+
+jobs:
+  prepare-matrix:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Select targets
+        id: matrix
+        env:
+          BUILD_DARWIN_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.darwin_x64 }}
+          BUILD_DARWIN_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.darwin_arm64 }}
+          BUILD_LINUX_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_x64 }}
+          BUILD_LINUX_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_arm64 }}
+          BUILD_LINUX_ARMHF: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_armhf }}
+          BUILD_WIN32_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.win32_x64 }}
+          BUILD_WIN32_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.win32_arm64 }}
+        run: |
+          node <<'NODE'
+          const targets = [
+            {
+              id: 'darwin-x64',
+              platform: 'darwin',
+              arch: 'x64',
+              npm_arch: 'x64',
+              openssl_arch: 'x64-osx',
+              rust_target: 'x86_64-apple-darwin',
+              runner: 'macos-15-intel',
+              package_runner: 'macos-15',
+              artifacts: 'dmg,archive'
+            },
+            {
+              id: 'darwin-arm64',
+              platform: 'darwin',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              openssl_arch: 'arm64-osx',
+              rust_target: 'aarch64-apple-darwin',
+              runner: 'macos-15',
+              artifacts: 'dmg,archive'
+            },
+            {
+              id: 'linux-x64',
+              platform: 'linux',
+              arch: 'x64',
+              npm_arch: 'x64',
+              openssl_arch: 'x64-linux',
+              rust_target: 'x86_64-unknown-linux-gnu',
+              runner: 'ubuntu-latest',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              id: 'linux-arm64',
+              platform: 'linux',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              openssl_arch: 'arm64-linux',
+              rust_target: 'aarch64-unknown-linux-gnu',
+              runner: 'ubuntu-24.04-arm',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              id: 'linux-armhf',
+              platform: 'linux',
+              arch: 'armhf',
+              npm_arch: 'arm',
+              openssl_arch: 'arm-linux',
+              rust_target: 'armv7-unknown-linux-gnueabihf',
+              runner: 'ubuntu-latest',
+              artifacts: 'archive,deb,rpm'
+            },
+            {
+              id: 'win32-x64',
+              platform: 'win32',
+              arch: 'x64',
+              npm_arch: 'x64',
+              openssl_arch: 'x64-windows-static',
+              rust_target: 'x86_64-pc-windows-msvc',
+              runner: 'windows-2022',
+              artifacts: 'archive,user-setup,system-setup'
+            },
+            {
+              id: 'win32-arm64',
+              platform: 'win32',
+              arch: 'arm64',
+              npm_arch: 'arm64',
+              openssl_arch: 'arm64-windows-static',
+              rust_target: 'aarch64-pc-windows-msvc',
+              runner: 'windows-11-arm',
+              artifacts: 'archive,user-setup,system-setup'
+            }
+          ];
+          const selectedTargets = new Map([
+            ['darwin-x64', process.env.BUILD_DARWIN_X64],
+            ['darwin-arm64', process.env.BUILD_DARWIN_ARM64],
+            ['linux-x64', process.env.BUILD_LINUX_X64],
+            ['linux-arm64', process.env.BUILD_LINUX_ARM64],
+            ['linux-armhf', process.env.BUILD_LINUX_ARMHF],
+            ['win32-x64', process.env.BUILD_WIN32_X64],
+            ['win32-arm64', process.env.BUILD_WIN32_ARM64]
+          ]);
+          const include = targets.filter(item => selectedTargets.get(item.id) === 'true');
+          if (!include.length) {
+            throw new Error('At least one build target must be selected.');
+          }
+          const output = `matrix=${JSON.stringify({ include })}\n`;
+          require('fs').appendFileSync(process.env.GITHUB_OUTPUT, output);
+          NODE
+
+  copilot-vsix:
+    name: Build Copilot VSIX
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Build Copilot VSIX
+        uses: ./.github/actions/build-copilot-vsix
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Copilot VSIX
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-copilot-vsix
+          path: extensions/copilot/copilot-chat.vsix
+          if-no-files-found: error
+          retention-days: 14
+
+  app-build:
+    name: Build app (${{ matrix.platform }}-${{ matrix.arch }})
+    needs:
+      - prepare-matrix
+      - copilot-vsix
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
+
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          {
+            echo "describe=$describe"
+            echo "safe_version=$safe_version"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release tag version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          hucode_version="$(node -p "require('./build/hucode/mixin/stable/product.json').hucodeVersion")"
+          if [ "$tag_version" != "$hucode_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match hucodeVersion $hucode_version" >&2
+            exit 1
+          fi
+
+      - name: Install Linux build tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            file \
+            libkrb5-dev \
+            libnotify-bin \
+            libssl-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            rpm \
+            zip
+
+          if [ "${{ matrix.arch }}" = "armhf" ]; then
+            sudo apt-get install -y \
+              gcc-arm-linux-gnueabihf \
+              g++-arm-linux-gnueabihf \
+              libc6-dev-armhf-cross
+          fi
+
+      - name: Download OpenSSL prebuilt
+        if: matrix.platform == 'darwin' || matrix.platform == 'linux' || matrix.platform == 'win32'
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl_root="$PWD/.build/hucode/openssl"
+          mkdir -p "$openssl_root"
+          tarball="$(npm pack @vscode/openssl-prebuilt@0.0.11 --pack-destination "$openssl_root")"
+          tar -xzf "$openssl_root/$tarball" \
+            --strip-components=1 \
+            --directory="$openssl_root"
+          openssl_arch_root="$openssl_root/out/${{ matrix.openssl_arch }}"
+          if [ ! -d "$openssl_arch_root/lib" ]; then
+            echo "OpenSSL prebuilt not found: $openssl_arch_root" >&2
+            exit 1
+          fi
+          if [ ! -d "$openssl_arch_root/include" ]; then
+            echo "OpenSSL prebuilt include dir not found: $openssl_arch_root" >&2
+            exit 1
+          fi
+
+          openssl_lib_dir="$openssl_arch_root/lib"
+          openssl_include_dir="$openssl_arch_root/include"
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            openssl_lib_dir="$(cygpath -w "$openssl_lib_dir")"
+            openssl_include_dir="$(cygpath -w "$openssl_include_dir")"
+          fi
+
+          {
+            echo "OPENSSL_LIB_DIR=$openssl_lib_dir"
+            echo "OPENSSL_INCLUDE_DIR=$openssl_include_dir"
+            if [ "${{ matrix.platform }}" = "win32" ]; then
+              echo "OPENSSL_STATIC=1"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Install macOS build tools
+        if: matrix.platform == 'darwin'
+        run: python3 -m pip install --user --break-system-packages setuptools
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup set profile minimal
+          rustup toolchain install "$RUSTUP_TOOLCHAIN"
+          rustup default "$RUSTUP_TOOLCHAIN"
+          rustup target add "${{ matrix.rust_target }}"
+          rustc --version
+          cargo --version
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
+
+      - name: Prepare build node_modules cache key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-release-build \
+            "${{ matrix.platform }}" \
+            "${{ matrix.arch }}" \
+            "${{ matrix.npm_arch }}" \
+            "${{ runner.os }}" \
+            "${{ runner.arch }}" \
+            "$(node -p process.arch)" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform != 'win32'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_arch: ${{ matrix.npm_arch }}
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform != 'win32'
+        run: |
+          set -euo pipefail
+          node build/azure-pipelines/common/listNodeModules.ts \
+            .build/node_modules_list.txt
+          mkdir -p .build/node_modules_cache
+          tar -czf .build/node_modules_cache/cache.tgz \
+            --files-from .build/node_modules_list.txt
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node build/azure-pipelines/common/listNodeModules.ts `
+            .build/node_modules_list.txt
+          mkdir -Force .build/node_modules_cache
+          7z.exe a .build/node_modules_cache/cache.7z `
+            -mx3 `
+            `@.build/node_modules_list.txt
+
+      - name: Save node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Download Linux sysroot
+        if: matrix.platform == 'linux' && matrix.arch != 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sysroot_arch="${{ matrix.arch }}"
+          if [ "$sysroot_arch" = "x64" ]; then
+            sysroot_arch="amd64"
+          fi
+          export VSCODE_SYSROOT_DIR="$PWD/.build/sysroots"
+          export VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-10.5.0"
+          {
+            echo "VSCODE_SYSROOT_DIR=$VSCODE_SYSROOT_DIR"
+            echo "VSCODE_SYSROOT_PREFIX=$VSCODE_SYSROOT_PREFIX"
+          } >> "$GITHUB_ENV"
+          SYSROOT_ARCH="$sysroot_arch" \
+            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+
+      - name: Prepare Hucode mixin
+        run: npm run hucode:prepare
+
+      - name: Validate Hucode mixin
+        run: npm run hucode:validate
+
+      - name: Prepare built-in extensions cache key
+        shell: bash
+        run: |
+          mkdir -p .build
+          node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts > .build/builtindepshash
+
+      - name: Restore built-in extensions cache
+        id: cache-builtin-extensions
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-${{ hashFiles('.build/builtindepshash') }}"
+
+      - name: Download built-in extensions
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Copilot VSIX
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-copilot-vsix
+          path: .build/hucode/copilot
+
+      - name: Add Windows SDK tools to PATH
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $kitsRoot = Join-Path `
+            ([Environment]::GetFolderPath('ProgramFilesX86')) `
+            'Windows Kits\10\bin'
+          $sdkTool = Get-ChildItem `
+            -Path $kitsRoot `
+            -Filter signtool.exe `
+            -Recurse |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $sdkTool) {
+            throw "signtool.exe not found under $kitsRoot"
+          }
+          $makeappx = Join-Path $sdkTool.Directory.FullName 'makeappx.exe'
+          if (-not (Test-Path -LiteralPath $makeappx)) {
+            throw "makeappx.exe not found next to $($sdkTool.FullName)"
+          }
+          $sdkTool.Directory.FullName |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "Added $($sdkTool.Directory.FullName) to PATH"
+
+      - name: Download Windows Explorer command DLL
+        if: matrix.platform == 'win32'
+        shell: bash
+        run: node build/win32/explorer-dll-fetcher.ts .build/win32/appx
+        env:
+          VSCODE_ARCH: ${{ matrix.arch }}
+
+      - name: Build release app
+        run: |
+          set -euo pipefail
+          node build/hucode/release-build.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --phase build \
+            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build server-web archive
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_root=".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+          reh_name="vscode-reh-web-darwin-${{ matrix.arch }}"
+          server_name="vscode-server-darwin-${{ matrix.arch }}-web"
+          archive_name="hucode-server-darwin-${{ matrix.arch }}-web.zip"
+          archive_path="$PWD/$dist_root/$archive_name"
+
+          node build/hucode/run-with-mixin.js --quality stable -- \
+            npm run gulp "vscode-reh-web-darwin-${{ matrix.arch }}-min-ci"
+
+          rm -rf "../$server_name"
+          mv "../$reh_name" "../$server_name"
+          node --input-type=module - "../$server_name/product.json" <<'NODE'
+          import fs from 'node:fs';
+
+          const productPath = process.argv[2];
+          const product = JSON.parse(fs.readFileSync(productPath, 'utf8'));
+          const expected = {
+            quality: 'stable',
+            serverApplicationName: 'hucode-server',
+            serverDataFolderName: '.hucode-server'
+          };
+
+          for (const [key, value] of Object.entries(expected)) {
+            if (product[key] !== value) {
+              throw new Error(
+                `${productPath} has ${key}=${JSON.stringify(product[key])}; ` +
+                `expected ${JSON.stringify(value)}`
+              );
+            }
+          }
+          NODE
+          mkdir -p "$dist_root"
+          (cd .. && zip -Xry "$archive_path" "$server_name")
+
+      - name: Prepare Windows AppX package
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appxRoot = (Resolve-Path `
+            "../VSCode-${{ matrix.platform }}-${{ matrix.arch }}/appx").Path
+          $manifest = Join-Path $appxRoot 'manifest'
+          $appx = Join-Path $appxRoot 'code_${{ matrix.arch }}.appx'
+          if (-not (Test-Path -LiteralPath $manifest)) {
+            throw "AppX manifest directory not found: $manifest"
+          }
+          makeappx pack /d $manifest /p $appx /nv
+          Remove-Item -Path $manifest -Recurse -Force
+
+      - name: Upload release app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_name="VSCode-${{ matrix.platform }}-${{ matrix.arch }}"
+          app_path="../$app_name"
+          archive=".build/hucode/app/${app_name}.tar"
+          if [ ! -d "$app_path" ]; then
+            echo "Release app output not found: $app_path" >&2
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$archive")"
+          tar -cf "$archive" -C .. "$app_name"
+
+      - name: Upload release app artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-app-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/app/VSCode-${{ matrix.platform }}-${{ matrix.arch }}.tar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload server-web artifact
+        if: matrix.platform == 'darwin'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-server-web-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-server-darwin-${{ matrix.arch }}-web.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package (${{ matrix.platform }}-${{ matrix.arch }})
+    if: always() && needs.app-build.result != 'cancelled'
+    needs:
+      - prepare-matrix
+      - app-build
+    runs-on: ${{ matrix.package_runner || matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
+
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          {
+            echo "describe=$describe"
+            echo "safe_version=$safe_version"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release tag version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          hucode_version="$(node -p "require('./build/hucode/mixin/stable/product.json').hucodeVersion")"
+          if [ "$tag_version" != "$hucode_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match hucodeVersion $hucode_version" >&2
+            exit 1
+          fi
+
+      - name: Validate macOS signing configuration
+        if: matrix.platform == 'darwin' && (github.event_name == 'push' || inputs.sign)
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_NOTARIZATION_ISSUER_ID \
+            APPLE_NOTARIZATION_KEY_ID \
+            APPLE_NOTARIZATION_KEY_P8_BASE64 \
+            APPLE_TEAM_ID \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 \
+            MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD
+          do
+            if [ -z "${!name}" ]; then
+              echo "$name is required for macOS signing" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Linux package tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            fakeroot \
+            file \
+            libkrb5-dev \
+            libnotify-bin \
+            libssl-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            rpm \
+            zip
+
+          if [ "${{ matrix.arch }}" = "armhf" ]; then
+            sudo apt-get install -y \
+              gcc-arm-linux-gnueabihf \
+              g++-arm-linux-gnueabihf \
+              libc6-dev-armhf-cross
+          fi
+
+      - name: Install macOS packaging tools
+        if: matrix.platform == 'darwin'
+        run: python3 -m pip install --user --break-system-packages setuptools
+
+      - name: Determine package Node arch
+        id: package-node
+        shell: bash
+        run: echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare package node_modules cache key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-release-package \
+            "${{ matrix.platform }}" \
+            "${{ runner.os }}" \
+            "${{ runner.arch }}" \
+            "${{ steps.package-node.outputs.arch }}" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-package-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform != 'win32'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_arch: ${{ steps.package-node.outputs.arch }}
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform != 'win32'
+        run: |
+          set -euo pipefail
+          node build/azure-pipelines/common/listNodeModules.ts \
+            .build/node_modules_list.txt
+          mkdir -p .build/node_modules_cache
+          tar -czf .build/node_modules_cache/cache.tgz \
+            --files-from .build/node_modules_list.txt
+
+      - name: Create node_modules archive
+        if: steps.cache-node-modules.outputs.cache-hit != 'true' && matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node build/azure-pipelines/common/listNodeModules.ts `
+            .build/node_modules_list.txt
+          mkdir -Force .build/node_modules_cache
+          7z.exe a .build/node_modules_cache/cache.7z `
+            -mx3 `
+            `@.build/node_modules_list.txt
+
+      - name: Save node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-release-package-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Download release app artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-app-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/app
+
+      - name: Restore release app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_name="VSCode-${{ matrix.platform }}-${{ matrix.arch }}"
+          archive=".build/hucode/app/${app_name}.tar"
+          rm -rf "../$app_name"
+          tar -xf "$archive" -C ..
+
+      - name: Package release artifacts
+        run: |
+          set -euo pipefail
+          sign_args=()
+          if [ "${{ matrix.platform }}" = "darwin" ] && \
+            [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
+            sign_args+=(--sign --signing-mode ci)
+          fi
+
+          node build/hucode/release-build.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --phase package \
+            --artifacts "${{ matrix.artifacts }}" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
+            "${sign_args[@]}"
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUCODE_SIGN_RELEASE: ${{ github.event_name == 'push' || inputs.sign }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+
+      - name: Report release size
+        run: |
+          node build/hucode/release-size-report.js \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --app "../VSCode-${{ matrix.platform }}-${{ matrix.arch }}" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}/size-report-${{ matrix.platform }}-${{ matrix.arch }}.json" \
+            --markdown-out ".build/hucode/release/${{ steps.version.outputs.safe_version }}/size-report-${{ matrix.platform }}-${{ matrix.arch }}.md" \
+            --copilot-node-modules-warn-mb 100
+        shell: bash
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub release
+    if: always() && github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Extract release notes
+        shell: bash
+        if: needs.package.result != 'cancelled'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          node build/hucode/changelog.ts release-notes \
+            --version "$version" \
+            --out release-notes.md
+
+      - name: Download workflow artifacts
+        if: needs.package.result != 'cancelled'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-artifacts
+
+      - name: Upload release assets
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release-notes.md
+          else
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release-notes.md
+          fi
+
+          mapfile -t files < <(find release-artifacts -type f \
+            ! -path '*/hucode-app-*/*' \
+            ! -path '*/hucode-copilot-vsix/*' \
+            -path '*/hucode-*-darwin-*/*' \
+            \( -name '*.dmg' -o -name '*.zip' \))
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No macOS DMG or ZIP release assets found." >&2
+            exit 1
+          fi
+          required_patterns=(
+            '*/hucode-*-darwin-x64/hucode-darwin-x64.dmg'
+            '*/hucode-*-darwin-x64/hucode-darwin-x64.zip'
+            '*/hucode-server-web-*-darwin-x64/hucode-server-darwin-x64-web.zip'
+            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.dmg'
+            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.zip'
+            '*/hucode-server-web-*-darwin-arm64/hucode-server-darwin-arm64-web.zip'
+          )
+          for pattern in "${required_patterns[@]}"; do
+            if ! find release-artifacts -type f -path "$pattern" | grep -q .; then
+              echo "Missing required macOS release asset: $pattern" >&2
+              exit 1
+            fi
+          done
+          gh release upload "$TAG_NAME" "${files[@]}" --clobber
+
+  refresh-update-service:
+    name: Refresh update service
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      needs.publish-release.result == 'success'
+    needs: publish-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Create release bot token
+        id: release-bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: jimeh
+          repositories: hucode-updates
+          permission-contents: write
+
+      - name: Trigger update metadata refresh
+        env:
+          GH_TOKEN: ${{ steps.release-bot-token.outputs.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          gh api \
+            --method POST \
+            /repos/jimeh/hucode-updates/dispatches \
+            -f event_type=hucode-release-published \
+            -f "client_payload[tag]=$TAG_NAME" \
+            -f "client_payload[commit]=$COMMIT_SHA"
