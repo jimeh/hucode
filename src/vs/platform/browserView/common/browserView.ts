@@ -120,6 +120,7 @@ export interface IBrowserViewWindowConfiguration {
 
 export interface IBrowserViewBounds {
 	windowId: number;
+	hostedWebContentsId?: number;
 	x: number;
 	y: number;
 	width: number;
@@ -169,6 +170,8 @@ export interface IBrowserViewOwner {
 	readonly mainWindowId: number;
 	/** Optional session ID identifying the agent session that created this view. */
 	readonly sessionId?: string;
+	/** Hosted Omni workbench webContents ID that owns this view, if any. */
+	readonly hostedWebContentsId?: number;
 }
 
 /**

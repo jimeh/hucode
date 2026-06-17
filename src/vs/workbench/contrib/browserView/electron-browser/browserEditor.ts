@@ -26,6 +26,8 @@ import { getZoomFactor, onDidChangeZoomLevel } from '../../../../base/browser/br
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { getHostedBrowserViewWebContentsId } from '../common/browserViewOwnership.js';
 
 export const CONTEXT_BROWSER_FOCUSED = new RawContextKey<boolean>('browserFocused', true, localize('browser.editorFocused', "Whether the browser editor is focused"));
 export const CONTEXT_BROWSER_HAS_URL = new RawContextKey<boolean>('browserHasUrl', false, localize('browser.hasUrl', "Whether the browser has a URL loaded"));
@@ -439,6 +441,7 @@ export class BrowserEditor extends EditorPane {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@ILayoutService private readonly layoutService: ILayoutService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 	) {
 		super(BrowserEditorInput.EDITOR_ID, group, telemetryService, themeService, storageService);
 	}
@@ -717,6 +720,7 @@ export class BrowserEditor extends EditorPane {
 		const cornerRadius = parseFloat(this.window.getComputedStyle(this._browserContainer).borderTopLeftRadius ?? '0');
 		void this._model.layout({
 			windowId: this.group.windowId,
+			hostedWebContentsId: getHostedBrowserViewWebContentsId(this.environmentService),
 			x: wrapperRect.left + left,
 			y: wrapperRect.top + top,
 			width: layout.width,
