@@ -1569,7 +1569,9 @@ export default defineConfig(
 						'yauzl',
 						'yazl',
 						'zlib',
-						'chrome-remote-interface'
+						'chrome-remote-interface',
+						'vs/hucode/common/**',
+						'vs/hucode/electron-main/**'
 					]
 				},
 				{
@@ -1885,6 +1887,22 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
 					'target': 'src/vs/sessions/electron-browser/sessions.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -1984,6 +2002,23 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/omni.common.main.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/contrib/terminal/terminal.all.js'
+					]
+				},
+				{
 					'target': 'src/vs/workbench/workbench.desktop.main.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -1997,7 +2032,28 @@ export default defineConfig(
 						'vs/workbench/api/~',
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
-						'vs/workbench/workbench.common.main.js'
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/electron-browser/omniWindowService.js',
+						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/omni.desktop.main.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/*/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/omni.common.main.js',
+						'vs/hucode/~'
 					]
 				},
 				{
