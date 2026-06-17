@@ -21,6 +21,7 @@ import { assertType } from '../../base/common/types.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { registerContextMenuListener } from '../../base/parts/contextmenu/electron-main/contextmenu.js';
+import { hucodeCreateLazyEventService } from '../../base/parts/ipc/common/hucodeLazyEventService.js';
 import { getDelayedChannel, ProxyChannel, StaticRouter } from '../../base/parts/ipc/common/ipc.js';
 import { Server as ElectronIPCServer } from '../../base/parts/ipc/electron-main/ipc.electron.js';
 import { Client as MessagePortClient } from '../../base/parts/ipc/electron-main/ipc.mp.js';
@@ -41,6 +42,11 @@ import { ipcBrowserViewGroupChannelName } from '../../platform/browserView/commo
 import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/browserView/electron-main/browserViewMainService.js';
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
 import { ISharedProcessTunnelProxyService, ipcSharedProcessTunnelProxyChannelName } from '../../platform/tunnel/common/sharedProcessTunnelProxyService.js';
+import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import { PROJECT_MANAGER_CHANNEL_NAME } from '../../platform/projectManager/common/projectManager.js';
+import { HUCODE_SHELL_CHANNEL_NAME } from '../../hucode/common/omniWindow.js';
+import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
+import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { isLaunchedFromCli } from '../../platform/environment/node/argvHelper.js';
@@ -160,6 +166,7 @@ export class CodeApplication extends Disposable {
 	private windowsMainService: IWindowsMainService | undefined;
 	private auxiliaryWindowsMainService: IAuxiliaryWindowsMainService | undefined;
 	private nativeHostMainService: INativeHostMainService | undefined;
+	private hucodeShellMainService: IHucodeShellMainService | undefined;
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -322,6 +329,18 @@ export class CodeApplication extends Disposable {
 				}
 			}
 
+			const webContentsId = (
+				details as Electron.OnBeforeRequestListenerDetails & {
+					readonly webContentsId?: number;
+				}
+			).webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
+			}
+
 			return false;
 		};
 
@@ -342,6 +361,18 @@ export class CodeApplication extends Disposable {
 						return true;
 					}
 				}
+			}
+
+			const webContentsId = (
+				details as Electron.OnBeforeRequestListenerDetails & {
+					readonly webContentsId?: number;
+				}
+			).webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
 			}
 
 			return false;
@@ -711,6 +742,7 @@ export class CodeApplication extends Disposable {
 
 	private async setupProtocolUrlHandlers(accessor: ServicesAccessor, mainProcessElectronServer: ElectronIPCServer): Promise<IInitialProtocolUrls | undefined> {
 		const windowsMainService = this.windowsMainService = accessor.get(IWindowsMainService);
+		this.hucodeShellMainService = accessor.get(IHucodeShellMainService);
 		const urlService = accessor.get(IURLService);
 		const nativeHostMainService = this.nativeHostMainService = accessor.get(INativeHostMainService);
 		const dialogMainService = accessor.get(IDialogMainService);
@@ -1106,6 +1138,7 @@ export class CodeApplication extends Disposable {
 		// Windows
 		services.set(IWindowsMainService, new SyncDescriptor(WindowsMainService, [machineId, sqmId, devDeviceId, this.userEnv], false));
 		services.set(IAuxiliaryWindowsMainService, new SyncDescriptor(AuxiliaryWindowsMainService, undefined, false));
+		services.set(IHucodeShellMainService, new SyncDescriptor(HucodeShellMainService, undefined, false));
 
 		// Dialogs
 		const dialogMainService = new DialogMainService(this.logService, this.productService);
@@ -1306,6 +1339,26 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel);
 		sharedProcessClient.then(client => client.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel));
 
+		// Hucode Project Manager
+		const projectManagerChannel = ProxyChannel.fromService(
+			accessor.get(IProjectManagerMainService),
+			disposables
+		);
+		mainProcessElectronServer.registerChannel(
+			PROJECT_MANAGER_CHANNEL_NAME,
+			projectManagerChannel
+		);
+
+		// Hucode Omni Shell
+		const hucodeShellChannel = ProxyChannel.fromService(
+			accessor.get(IHucodeShellMainService),
+			disposables
+		);
+		mainProcessElectronServer.registerChannel(
+			HUCODE_SHELL_CHANNEL_NAME,
+			hucodeShellChannel
+		);
+
 		// Signing
 		const signChannel = ProxyChannel.fromService(accessor.get(ISignService), disposables);
 		mainProcessElectronServer.registerChannel('sign', signChannel);
@@ -1316,7 +1369,15 @@ export class CodeApplication extends Disposable {
 
 		// Native host (main & shared process)
 		this.nativeHostMainService = accessor.get(INativeHostMainService);
-		const nativeHostChannel = ProxyChannel.fromService(this.nativeHostMainService, disposables);
+		const nativeHostChannel = ProxyChannel.fromService(
+			hucodeCreateLazyEventService(this.nativeHostMainService, [
+				'onDidBlurMainWindow',
+				'onDidFocusMainWindow',
+				'onDidBlurMainOrAuxiliaryWindow',
+				'onDidFocusMainOrAuxiliaryWindow',
+			]),
+			disposables
+		);
 		mainProcessElectronServer.registerChannel('nativeHost', nativeHostChannel);
 		sharedProcessClient.then(client => client.registerChannel('nativeHost', nativeHostChannel));
 
@@ -1350,7 +1411,15 @@ export class CodeApplication extends Disposable {
 		sharedProcessClient.then(client => client.registerChannel('profileStorageListener', profileStorageListener));
 
 		// Terminal
-		const ptyHostChannel = ProxyChannel.fromService(accessor.get(ILocalPtyService), disposables);
+		const ptyHostChannel = ProxyChannel.fromService(
+			hucodeCreateLazyEventService(accessor.get(ILocalPtyService), [
+				'onProcessData',
+				'onProcessExit',
+				'onProcessReady',
+				'onDidChangeProperty',
+			]),
+			disposables
+		);
 		mainProcessElectronServer.registerChannel(TerminalIpcChannels.LocalPty, ptyHostChannel);
 
 		// External Terminal
