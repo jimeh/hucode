@@ -14,6 +14,7 @@ import { ResultKind } from '../../../../platform/keybinding/common/keybindingRes
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { defaultButtonStyles, defaultCheckboxStyles, defaultInputBoxStyles, defaultDialogStyles } from '../../../../platform/theme/browser/defaultStyles.js';
+import { getHucodeApplicationVersion } from '../../../../platform/product/common/hucodeProductVersion.js';
 
 const defaultDialogAllowableCommands = new Set([
 	'workbench.action.quit',
@@ -47,6 +48,17 @@ export function createWorkbenchDialogOptions(options: Partial<IDialogOptions>, k
 
 export function createBrowserAboutDialogDetails(productService: IProductService): { title: string; details: string; detailsToCopy: string } {
 	const detailString = (useAgo: boolean): string => {
+		if (productService.hucodeVersion) {
+			return localize('aboutDetailHucode',
+				"Version: {0}\nVSCode Version: {1}\nCommit: {2}\nDate: {3}\nBrowser: {4}",
+				getHucodeApplicationVersion(productService),
+				productService.version || 'Unknown',
+				productService.commit || 'Unknown',
+				productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown',
+				navigator.userAgent
+			);
+		}
+
 		return localize('aboutDetail',
 			"Version: {0}\nCommit: {1}\nDate: {2}\nBrowser: {3}",
 			productService.version || 'Unknown',
@@ -65,4 +77,3 @@ export function createBrowserAboutDialogDetails(productService: IProductService)
 		detailsToCopy: detailsToCopy
 	};
 }
-
