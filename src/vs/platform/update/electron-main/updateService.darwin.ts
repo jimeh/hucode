@@ -18,12 +18,15 @@ import { asJson, IRequestService } from '../../request/common/request.js';
 import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { AvailableForDownload, IUpdate, State, StateType, UpdateType } from '../common/update.js';
+import { mergeHucodeUpdateMetadata } from '../common/hucodeUpdateVersion.js';
 import { IMeteredConnectionService } from '../../meteredConnection/common/meteredConnection.js';
 import { AbstractUpdateService, createUpdateURL, getUpdateRequestHeaders, IUpdateURLOptions, UpdateErrorClassification } from './abstractUpdateService.js';
 
 export class DarwinUpdateService extends AbstractUpdateService implements IRelaunchHandler {
 
 	private readonly disposables = new DisposableStore();
+	private updateFeedUrl: string | undefined;
+	private updateMetadata: IUpdate | undefined;
 
 	@memoize private get onRawError(): Event<string> { return Event.fromNodeEventEmitter(electron.autoUpdater, 'error', (_, message) => message); }
 	@memoize private get onRawCheckingForUpdate(): Event<void> { return Event.fromNodeEventEmitter<void>(electron.autoUpdater, 'checking-for-update'); }
@@ -121,6 +124,8 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 			this.setState(State.Idle(UpdateType.Archive));
 			return;
 		}
+		this.updateFeedUrl = url;
+		this.updateMetadata = undefined;
 
 		// When connection is metered and this is not an explicit check, avoid electron call as to not to trigger auto-download.
 		if (!explicit && this.meteredConnectionService.isConnectionMetered) {
@@ -139,21 +144,15 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 	 * @param canInstall When false, signals that the update cannot be installed from this app.
 	 */
 	private async checkForUpdateNoDownload(url: string, canInstall?: boolean): Promise<void> {
-		const headers = getUpdateRequestHeaders(this.productService.version);
-		this.logService.trace('update#checkForUpdateNoDownload - checking update server', { url, headers });
-
 		try {
-			const context = await this.requestService.request({ url, headers, callSite: 'updateService.darwin.checkForUpdates' }, CancellationToken.None);
-			const statusCode = context.res.statusCode;
-			this.logService.trace('update#checkForUpdateNoDownload - response', { statusCode });
-
-			const update = await asJson<IUpdate>(context);
-			if (!update || !update.url || !update.version || !update.productVersion) {
+			const update = await this.requestUpdateMetadata(url, 'updateService.darwin.checkForUpdates');
+			if (!update) {
 				this.logService.trace('update#checkForUpdateNoDownload - no update available');
 				const notAvailable = this.state.type === StateType.CheckingForUpdates && this.state.explicit;
 				this.setState(State.Idle(UpdateType.Archive, undefined, notAvailable || undefined));
 			} else {
 				this.logService.trace('update#checkForUpdateNoDownload - update available', { version: update.version, productVersion: update.productVersion });
+				this.updateMetadata = update;
 				this.setState(State.AvailableForDownload(update, canInstall));
 			}
 		} catch (err) {
@@ -169,10 +168,16 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 			return;
 		}
 
-		this.setState(State.Downloading(this.state.type === StateType.Overwriting ? this.state.update : undefined, this.state.explicit, this._overwrite));
+		const update = this.state.type === StateType.Overwriting ? this.state.update : this.updateMetadata;
+		this.setState(State.Downloading(update, this.state.explicit, this._overwrite));
 	}
 
-	private onUpdateDownloaded(update: IUpdate): void {
+	private async onUpdateDownloaded(update: IUpdate): Promise<void> {
+		if (this.state.type !== StateType.Downloading) {
+			return;
+		}
+
+		update = await this.resolveDownloadedUpdateMetadata(update, this.state.update);
 		if (this.state.type !== StateType.Downloading) {
 			return;
 		}
@@ -196,9 +201,47 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 
 	protected override async doDownloadUpdate(state: AvailableForDownload): Promise<void> {
 		// Rebuild feed URL and trigger download via Electron's auto-updater
-		this.buildUpdateFeedUrl(this.quality!, state.update.version, { internalOrg: this.getInternalOrg() });
+		const url = this.buildUpdateFeedUrl(this.quality!, state.update.version, { internalOrg: this.getInternalOrg() });
+		this.updateFeedUrl = url;
+		this.updateMetadata = state.update;
 		this.setState(State.CheckingForUpdates(true));
 		electron.autoUpdater.checkForUpdates();
+	}
+
+	private async requestUpdateMetadata(url: string, callSite: string): Promise<IUpdate | undefined> {
+		const headers = getUpdateRequestHeaders(this.productService.version);
+		this.logService.trace('update#requestUpdateMetadata - checking update server', { url, headers });
+
+		const context = await this.requestService.request({ url, headers, callSite }, CancellationToken.None);
+		const statusCode = context.res.statusCode;
+		this.logService.trace('update#requestUpdateMetadata - response', { statusCode });
+
+		const update = await asJson<IUpdate>(context);
+		return update?.url && update.version && update.productVersion ? update : undefined;
+	}
+
+	private async resolveDownloadedUpdateMetadata(update: IUpdate, stateUpdate: IUpdate | undefined): Promise<IUpdate> {
+		if (update.hucodeVersion) {
+			return update;
+		}
+
+		let metadata = stateUpdate?.version === update.version ? stateUpdate : undefined;
+		metadata ??= this.updateMetadata?.version === update.version ? this.updateMetadata : undefined;
+
+		if (!metadata && this.updateFeedUrl) {
+			try {
+				metadata = await this.requestUpdateMetadata(this.updateFeedUrl, 'updateService.darwin.mergeUpdateMetadata');
+			} catch (err) {
+				this.logService.warn('update#mergeUpdateMetadata - failed to fetch update metadata');
+				this.logService.warn(err);
+			}
+		}
+
+		if (metadata?.version !== update.version) {
+			return update;
+		}
+
+		return mergeHucodeUpdateMetadata(update, metadata);
 	}
 
 	protected override doQuitAndInstall(): void {
