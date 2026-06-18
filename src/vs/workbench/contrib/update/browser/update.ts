@@ -31,6 +31,7 @@ import { IUserDataSyncWorkbenchService } from '../../../services/userDataSync/co
 import { Event } from '../../../../base/common/event.js';
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
 import { getInternalOrg } from '../../../../platform/assignment/common/assignment.js';
+import { getHucodeUpdateDisplayVersion } from '../../../../platform/update/common/hucodeUpdateVersion.js';
 import { IVersion, tryParseVersion } from '../common/updateUtils.js';
 import {
 	getHucodeApplicationVersion,
@@ -260,11 +261,11 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 
 		switch (state.type) {
 			case StateType.Ready: {
-				const productVersion = state.update.productVersion;
-				if (productVersion) {
+				const updateVersion = getHucodeUpdateDisplayVersion(state.update);
+				if (updateVersion) {
 					const applicationVersion = getHucodeApplicationVersion(this.productService);
 					const currentVersion = tryParseVersion(applicationVersion);
-					const nextVersion = tryParseVersion(productVersion);
+					const nextVersion = tryParseVersion(updateVersion);
 					this.majorMinorUpdateAvailableContextKey.set(Boolean(currentVersion && nextVersion && isMajorMinorUpdate(currentVersion, nextVersion)));
 				}
 				break;
@@ -312,9 +313,9 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 					return;
 				}
 
-				const productVersion = this.updateService.state.update.productVersion;
-				if (productVersion) {
-					this.instantiationService.invokeFunction(accessor => showReleaseNotes(accessor, productVersion));
+				const updateVersion = getHucodeUpdateDisplayVersion(this.updateService.state.update);
+				if (updateVersion) {
+					this.instantiationService.invokeFunction(accessor => showReleaseNotes(accessor, updateVersion));
 				}
 
 			});
