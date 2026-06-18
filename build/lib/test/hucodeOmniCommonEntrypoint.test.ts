@@ -18,6 +18,10 @@ const repoRoot = path.resolve(
 
 const workbenchCommonMain = 'src/vs/workbench/workbench.common.main.ts';
 const omniCommonMain = 'src/vs/hucode/omni.common.main.ts';
+const workbenchHtml = 'src/vs/code/electron-browser/workbench/workbench.html';
+const workbenchDevHtml = 'src/vs/code/electron-browser/workbench/workbench-dev.html';
+const omniHtml = 'src/vs/hucode/electron-browser/omni.html';
+const omniDevHtml = 'src/vs/hucode/electron-browser/omni-dev.html';
 
 const omittedFromOmni = new Map([
 	[
@@ -121,6 +125,20 @@ suite('Hucode Omni common entrypoint', () => {
 			'Omni import contract'
 		);
 	});
+
+	test('tracks upstream trusted type policies', async () => {
+		assert.deepStrictEqual(
+			{
+				omni: await readTrustedTypes(omniHtml),
+				omniDev: await readTrustedTypes(omniDevHtml),
+			},
+			{
+				omni: await readTrustedTypes(workbenchHtml),
+				omniDev: await readTrustedTypes(workbenchDevHtml),
+			},
+			'Omni trusted type policy contract'
+		);
+	});
 });
 
 async function readImportRecords(entrypoint: string): Promise<ImportRecord[]> {
@@ -174,4 +192,17 @@ function sharedImportStatements(
 	return importRecords
 		.filter(importRecord => !ignoredImports.has(importRecord.canonical))
 		.map(importRecord => importRecord.normalizedStatement);
+}
+
+async function readTrustedTypes(entrypoint: string): Promise<string[]> {
+	const source = await fs.readFile(path.join(repoRoot, entrypoint), 'utf8');
+	const match = /trusted-types\s+([\s\S]*?)\s*;/m.exec(source);
+	if (!match) {
+		throw new Error(`Missing trusted-types directive in ${entrypoint}`);
+	}
+
+	return match[1]
+		.split(/\s+/)
+		.map(policyName => policyName.trim())
+		.filter(Boolean);
 }

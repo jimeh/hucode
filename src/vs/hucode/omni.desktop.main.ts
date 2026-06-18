@@ -79,6 +79,7 @@ import '../workbench/services/integrity/electron-browser/integrityService.js';
 import '../workbench/services/workingCopy/electron-browser/workingCopyBackupService.js';
 import '../workbench/services/checksum/electron-browser/checksumService.js';
 import '../platform/remote/electron-browser/sharedProcessTunnelService.js';
+import '../platform/tunnel/electron-browser/sharedProcessTunnelProxyService.js';
 import '../workbench/services/tunnel/electron-browser/tunnelService.js';
 import '../platform/diagnostics/electron-browser/diagnosticsService.js';
 import '../platform/profiling/electron-browser/profilingService.js';
@@ -106,6 +107,11 @@ import { IAgentHostService } from
 	'../platform/agentHost/common/agentService.js';
 import { OmniAgentHostService } from
 	'./browser/services/omniAgentHostService.js';
+import {
+	AgentTitleBarStatusService,
+	IAgentTitleBarStatusService,
+} from
+	'../workbench/contrib/chat/browser/agentSessions/experiments/agentTitleBarStatusService.js';
 import { InstantiationType, registerSingleton } from
 	'../platform/instantiation/common/extensions.js';
 import {
@@ -122,6 +128,11 @@ registerSingleton(
 registerSingleton(
 	IAgentHostService,
 	OmniAgentHostService,
+	InstantiationType.Delayed
+);
+registerSingleton(
+	IAgentTitleBarStatusService,
+	AgentTitleBarStatusService,
 	InstantiationType.Delayed
 );
 
