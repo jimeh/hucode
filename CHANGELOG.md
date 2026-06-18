@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.33 - 2026-06-18
+
+### Bug Fixes
+
+- separate Hucode and VS Code update versions (#71)
+
 ## 0.0.32 - 2026-06-18
 
 ### Features
