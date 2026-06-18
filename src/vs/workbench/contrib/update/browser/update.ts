@@ -267,6 +267,8 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 					const currentVersion = tryParseVersion(applicationVersion);
 					const nextVersion = tryParseVersion(updateVersion);
 					this.majorMinorUpdateAvailableContextKey.set(Boolean(currentVersion && nextVersion && isMajorMinorUpdate(currentVersion, nextVersion)));
+				} else {
+					this.majorMinorUpdateAvailableContextKey.set(false);
 				}
 				break;
 			}

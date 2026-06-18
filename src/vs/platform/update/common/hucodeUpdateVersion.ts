@@ -29,7 +29,6 @@ export function mergeHucodeUpdateMetadata(update: IUpdate, ...candidates: Array<
 	}
 
 	return {
-		...metadata,
 		...update,
 		hucodeVersion: metadata.hucodeVersion,
 	};

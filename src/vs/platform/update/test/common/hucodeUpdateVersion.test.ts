@@ -46,7 +46,6 @@ suite('HucodeUpdateVersion', () => {
 			version: '006ad6478f8affa04343ab19b08d2ad97dd324f2',
 			productVersion: '1.125.0',
 			hucodeVersion: '0.0.32',
-			url: 'https://updates.hucode.dev/Hucode-darwin-arm64.zip',
 			timestamp: 1781787600000,
 		});
 	});
