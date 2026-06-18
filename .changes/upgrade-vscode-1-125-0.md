@@ -1,3 +1,0 @@
-feat(deps): upgrade VS Code baseline to 1.125.0
-
-Upgrade the Hucode baseline from VS Code 1.124.2 to 1.125.0.
