@@ -259,7 +259,17 @@ npm run precommit
 npm run hucode:compile
 ```
 
-Also run targeted tests for touched Hucode areas when available. A broader
+Also run the build package tests on upgrade branches. They cover Hucode release
+tooling and entrypoint-drift contracts that normal TypeScript compilation can
+miss:
+
+```sh
+cd build && node --test "{lib,next}/**/*.test.ts"
+```
+
+This `node --test` glob form requires Node v21 or later.
+
+Run targeted tests for touched Hucode areas when available. A broader
 `npm run test-node` pass is valuable after platform, browser-view, IPC,
 extension-host, or utility-process changes.
 
@@ -273,6 +283,46 @@ npm run hucode:validate
 `hucode:validate` expects root `product.json` to remain upstream `Code - OSS`.
 If it fails because root `product.json` is mixed to Hucode, treat that as local
 generated runtime state, not source state to commit.
+
+### Entrypoint And Runtime Smoke Checks
+
+Compile success is not enough for forked workbench entrypoints. Side-effect
+imports and service registrations can fail only when the Omni shell starts.
+
+If the replay touches `omni.common.main.ts`, `omni.desktop.main.ts`,
+`workbench.common.main.ts`, `workbench.desktop.main.ts`, or Omni/workbench HTML
+entrypoints, explicitly check for entrypoint drift:
+
+- Compare Omni Trusted Types policy directives with upstream
+  `workbench.html` and `workbench-dev.html`.
+- Audit new common-workbench imports for required side-effect service
+  registrations. Prefer registering the minimal required service in Omni over
+  importing broad contributions that Omni intentionally omits.
+- Re-run the `Hucode Omni common entrypoint` build test after entrypoint or CSP
+  changes.
+
+After `npm run hucode:compile`, run a short Omni startup smoke with inherited
+extension-host environment cleared:
+
+```sh
+env -u ELECTRON_RUN_AS_NODE \
+	-u VSCODE_CODE_CACHE_PATH \
+	-u VSCODE_CRASH_REPORTER_PROCESS_TYPE \
+	-u VSCODE_CWD \
+	-u VSCODE_ESM_ENTRYPOINT \
+	-u VSCODE_HANDLES_UNCAUGHT_ERRORS \
+	-u VSCODE_IPC_HOOK \
+	-u VSCODE_NLS_CONFIG \
+	-u VSCODE_PID \
+	npm run hucode:run
+```
+
+Let startup settle, then stop the dev app. Inspect the startup log for
+runtime-only failures such as Trusted Types policy errors, `NOT registered`
+service errors, `Cannot instantiate named customer`, and `Missing proxy
+instance`. Extension deprecation warnings and managed-account fallback messages
+are not upgrade blockers by themselves, but do not ignore new `ERR` lines
+without tracing them.
 
 ## Version And Release Metadata
 
