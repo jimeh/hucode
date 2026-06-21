@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.34 - 2026-06-21
+
+### Bug Fixes
+
+- stabilize built-in extension cache for Omni (#72)
+
 ## 0.0.33 - 2026-06-18
 
 ### Bug Fixes
