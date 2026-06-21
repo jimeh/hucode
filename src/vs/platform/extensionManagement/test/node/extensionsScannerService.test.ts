@@ -437,10 +437,15 @@ suite('NativeExtensionsScanerService Test', () => {
 			const system = await testObject.scanSystemExtensions({});
 			const all = await testObject.scanAllExtensions({}, { profileLocation: instantiationService.get(IUserDataProfilesService).defaultProfile.extensionsResource, includeInvalid: false });
 
-			assert.notEqual(scanned, null);
-			assert.deepStrictEqual(scanned!.forceAutoUpdate, true);
-			assert.deepStrictEqual(system.length, 0);
-			assert.deepStrictEqual(all.length, 0);
+			assert.deepStrictEqual({
+				forceAutoUpdate: scanned?.forceAutoUpdate,
+				systemLength: system.length,
+				allLength: all.length,
+			}, {
+				forceAutoUpdate: true,
+				systemLength: 0,
+				allLength: 0,
+			});
 		});
 
 		test('system extension has autoUpdate set to false when not in autoUpdateBuiltinExtensions', async () => {
