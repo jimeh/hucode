@@ -427,6 +427,22 @@ suite('NativeExtensionsScanerService Test', () => {
 			assert.deepStrictEqual(actual[0].forceAutoUpdate, true);
 		});
 
+		test('skipped system extension keeps autoUpdate scanner metadata', async () => {
+			instantiationService.stub(IProductService, { version: '1.66.0', quality: 'stable', builtInExtensionsEnabledWithAutoUpdates: ['pub.name'] });
+			instantiationService.stub(INativeEnvironmentService, 'skipBuiltinExtensions', ['pub.name']);
+			const extensionLocation = await aSystemExtension(anExtensionManifest({ 'name': 'name', 'publisher': 'pub' }));
+			const testObject: IExtensionsScannerService = disposables.add(instantiationService.createInstance(ExtensionsScannerService));
+
+			const scanned = await testObject.scanExistingExtension(extensionLocation, ExtensionType.System, {});
+			const system = await testObject.scanSystemExtensions({});
+			const all = await testObject.scanAllExtensions({}, { profileLocation: instantiationService.get(IUserDataProfilesService).defaultProfile.extensionsResource, includeInvalid: false });
+
+			assert.notEqual(scanned, null);
+			assert.deepStrictEqual(scanned!.forceAutoUpdate, true);
+			assert.deepStrictEqual(system.length, 0);
+			assert.deepStrictEqual(all.length, 0);
+		});
+
 		test('system extension has autoUpdate set to false when not in autoUpdateBuiltinExtensions', async () => {
 			instantiationService.stub(IProductService, { version: '1.66.0', quality: 'stable', builtInExtensionsEnabledWithAutoUpdates: ['pub.other'] });
 			await aSystemExtension(anExtensionManifest({ 'name': 'name', 'publisher': 'pub' }));
