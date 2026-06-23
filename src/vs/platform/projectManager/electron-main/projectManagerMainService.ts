@@ -27,6 +27,7 @@ import {
 	StoredProjectManagerState,
 	StoredProjectRecord,
 	WorktreeRecord,
+	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
 } from '../common/projectManager.js';
 import { IProjectManagerMainService } from './projectManager.js';
@@ -376,14 +377,19 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	async getWorktreeRefs(
-		projectId: string
+		projectId: string,
+		options?: WorktreeRefQueryOptions
 	): Promise<readonly WorktreeRefRecord[]> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
 		const worktrees = this.projectWorktrees.get(projectId) ??
 			await this.gitWorktreeService.listWorktrees(project.rootPath);
 
-		return this.gitWorktreeService.listRefs(project.rootPath, worktrees);
+		return this.gitWorktreeService.listRefs(
+			project.rootPath,
+			worktrees,
+			options
+		);
 	}
 
 	async isValidBranchName(

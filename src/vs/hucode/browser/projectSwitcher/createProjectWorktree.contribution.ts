@@ -8,6 +8,8 @@ import { mainWindow } from '../../../base/browser/window.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
+import { IConfigurationService } from
+	'../../../platform/configuration/common/configuration.js';
 import { ServicesAccessor } from
 	'../../../platform/instantiation/common/instantiation.js';
 import { INotificationService } from
@@ -16,6 +18,7 @@ import {
 	CreateWorktreeOptions,
 	IProjectManagerService,
 	WorktreeRefRecord,
+	WorktreeRefSortOrder,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
 	IQuickInputService,
@@ -37,6 +40,7 @@ type CreateWorktreeRefQuickPick = IQuickPickItem & {
 type CreateWorktreeQuickPick = IQuickPickItem & (
 	| { readonly kind: 'createBranch' }
 	| { readonly kind: 'createBranchFrom' }
+	| { readonly kind: 'createDetached' }
 	| CreateWorktreeRefQuickPick
 );
 
@@ -68,10 +72,13 @@ async function pickCreateWorktreeOptions(
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
 	notificationService: INotificationService,
+	configurationService: IConfigurationService,
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellService
 ): Promise<CreateWorktreeOptions | undefined> {
-	const refs = await projectManagerService.getWorktreeRefs(projectId);
+	const refs = await projectManagerService.getWorktreeRefs(projectId, {
+		sort: getGitBranchSortOrder(configurationService),
+	});
 	const createBranchPick: CreateWorktreeQuickPick = {
 		kind: 'createBranch',
 		label: localize(
@@ -88,9 +95,18 @@ async function pickCreateWorktreeOptions(
 			'$(plus)'
 		),
 	};
+	const createDetachedPick: CreateWorktreeQuickPick = {
+		kind: 'createDetached',
+		label: localize(
+			'createWorktreeDetached',
+			'{0} Create detached worktree...',
+			'$(debug-disconnect)'
+		),
+	};
 	const picks: QuickPickInput<CreateWorktreeQuickPick>[] = [
 		createBranchPick,
 		createBranchFromPick,
+		createDetachedPick,
 		{ type: 'separator' },
 		...toCreateWorktreeRefPicks(refs, 'head'),
 		...toCreateWorktreeRefPicks(refs, 'remote'),
@@ -105,6 +121,7 @@ async function pickCreateWorktreeOptions(
 				'createWorktreePickRef',
 				'Select a branch or tag to create the new worktree from'
 			),
+			sortByLabel: false,
 		})
 	);
 	if (!choice) {
@@ -135,6 +152,7 @@ async function pickCreateWorktreeOptions(
 						'createWorktreePickBranchFromRef',
 						'Select a branch or tag to create the new branch from'
 					),
+					sortByLabel: false,
 				}
 			)
 		);
@@ -155,6 +173,28 @@ async function pickCreateWorktreeOptions(
 			: undefined;
 	}
 
+	if (choice.kind === 'createDetached') {
+		const startPoint = await runCreateWorktreeQuickInput(
+			quickInputService,
+			environmentService,
+			shellService,
+			() => quickInputService.pick(
+				toCreateWorktreeDetachedRefPicks(refs),
+				{
+					placeHolder: localize(
+						'createWorktreePickDetachedRef',
+						'Select a branch to create the detached worktree from'
+					),
+					sortByLabel: false,
+				}
+			)
+		);
+
+		return startPoint
+			? { detached: true, startPoint: startPoint.ref.name }
+			: undefined;
+	}
+
 	if (choice.ref.checkedOutPath) {
 		notificationService.error(localize(
 			'createWorktreeRefAlreadyCheckedOut',
@@ -166,6 +206,17 @@ async function pickCreateWorktreeOptions(
 	}
 
 	return { startPoint: choice.ref.name };
+}
+
+function getGitBranchSortOrder(
+	configurationService: IConfigurationService
+): WorktreeRefSortOrder {
+	const value = configurationService.getValue<WorktreeRefSortOrder>(
+		'git.branchSortOrder'
+	);
+	return value === 'alphabetically' || value === 'committerdate'
+		? value
+		: 'committerdate';
 }
 
 function pickCreateWorktreeBranchName(
@@ -226,6 +277,15 @@ function toCreateWorktreeBaseRefPicks(
 		...toCreateWorktreeRefPicks(refs, 'head'),
 		...toCreateWorktreeRefPicks(refs, 'remote'),
 		...toCreateWorktreeRefPicks(refs, 'tag'),
+	];
+}
+
+function toCreateWorktreeDetachedRefPicks(
+	refs: readonly WorktreeRefRecord[]
+): QuickPickInput<CreateWorktreeRefQuickPick>[] {
+	return [
+		...toCreateWorktreeRefPicks(refs, 'head'),
+		...toCreateWorktreeRefPicks(refs, 'remote'),
 	];
 }
 
@@ -397,6 +457,7 @@ registerAction2(class extends Action2 {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const quickInputService = accessor.get(IQuickInputService);
 		const notificationService = accessor.get(INotificationService);
+		const configurationService = accessor.get(IConfigurationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const shellService = accessor.get(IHucodeShellService);
 
@@ -420,6 +481,7 @@ registerAction2(class extends Action2 {
 				projectManagerService,
 				quickInputService,
 				notificationService,
+				configurationService,
 				environmentService,
 				shellService
 			);

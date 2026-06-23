@@ -19,6 +19,7 @@ import {
 	PROJECT_MANAGER_STORAGE_VERSION,
 	StoredProjectManagerState,
 	WorktreeRecord,
+	WorktreeRefQueryOptions,
 	WorktreeRefRecord
 } from '../../common/projectManager.js';
 import {
@@ -84,6 +85,11 @@ class TestGitWorktreeService {
 	readonly refs = new Map<string, readonly WorktreeRefRecord[]>();
 	readonly validBranchNames = new Set<string>();
 	readonly listWorktreesCalls: string[] = [];
+	readonly listRefsCalls: {
+		projectRoot: string;
+		worktrees: readonly WorktreeRecord[];
+		options?: WorktreeRefQueryOptions;
+	}[] = [];
 	readonly createdCalls: {
 		projectRoot: string;
 		options: CreateWorktreeOptions;
@@ -120,8 +126,10 @@ class TestGitWorktreeService {
 
 	async listRefs(
 		projectRoot: string,
-		_worktrees: readonly WorktreeRecord[]
+		worktrees: readonly WorktreeRecord[],
+		options?: WorktreeRefQueryOptions
 	): Promise<readonly WorktreeRefRecord[]> {
+		this.listRefsCalls.push({ projectRoot, worktrees, options });
 		return this.refs.get(projectRoot) ?? [];
 	}
 
@@ -146,10 +154,12 @@ class TestGitWorktreeService {
 			)}`;
 		this.worktrees.set(projectRoot, [
 			...(this.worktrees.get(projectRoot) ?? []),
-			createLinkedWorktree(
-				worktreePath,
-				options.branchName ?? options.startPoint ?? 'HEAD'
-			),
+			options.detached
+				? createDetachedWorktree(worktreePath)
+				: createLinkedWorktree(
+					worktreePath,
+					options.branchName ?? options.startPoint ?? 'HEAD'
+				),
 		]);
 		return worktreePath;
 	}
@@ -221,6 +231,16 @@ function createLinkedWorktree(
 		branch,
 		isMain: false,
 		isDetached: false,
+	};
+}
+
+function createDetachedWorktree(worktreePath: string): WorktreeRecord {
+	return {
+		path: worktreePath,
+		label: basename(worktreePath),
+		branch: undefined,
+		isMain: false,
+		isDetached: true,
 	};
 }
 
@@ -345,6 +365,72 @@ suite('GitWorktreeService', () => {
 		]);
 	});
 
+	test('parseRefList preserves git order for committerdate sort', () => {
+		const refs = GitWorktreeService.parseRefList(
+			[
+				[
+					'refs/remotes/origin/newer',
+					'1111111',
+					'',
+					'1 hour ago',
+					'Jim Myhrberg',
+					'',
+					'newer remote',
+				].join('\0'),
+				[
+					'refs/heads/main',
+					'2222222',
+					'origin/main',
+					'1 day ago',
+					'Jim Myhrberg',
+					'',
+					'main branch',
+				].join('\0'),
+				[
+					'refs/heads/alpha',
+					'3333333',
+					'',
+					'2 days ago',
+					'Jim Myhrberg',
+					'',
+					'older branch',
+				].join('\0'),
+			].join('\n'),
+			[createMainWorktree('/repo')],
+			'committerdate'
+		);
+
+		assert.deepStrictEqual(
+			refs.map(ref => `${ref.type}:${ref.name}`),
+			['remote:origin/newer', 'head:main', 'head:alpha']
+		);
+	});
+
+	test('listRefs defaults to committerdate sort', async () => {
+		const mutableCalls: string[][] = [];
+		const format = '--format=%(refname)%00%(objectname:short)%00' +
+			'%(upstream:short)%00%(committerdate:relative)%00' +
+			'%(authorname)%00%(upstream:track)%00%(subject)';
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async args => {
+				mutableCalls.push([...args]);
+				return { stdout: '', stderr: '' };
+			},
+			async () => false,
+			async () => { },
+		);
+
+		await service.listRefs('/repo', []);
+		await service.listRefs('/repo', [], { sort: 'alphabetically' });
+
+		assert.deepStrictEqual(
+			mutableCalls[0].slice(0, 4),
+			['for-each-ref', format, '--sort', '-committerdate']
+		);
+		assert.strictEqual(mutableCalls[1].includes('--sort'), false);
+	});
+
 	test('createWorktree can add either a new branch or an existing ref', async () => {
 		const calls: { args: readonly string[]; cwd: string }[] = [];
 		const service = new GitWorktreeService(
@@ -372,6 +458,14 @@ suite('GitWorktreeService', () => {
 			{
 				branchName: 'feature/three',
 				startPoint: 'origin/main',
+			},
+			['/repo']
+		);
+		await service.createWorktree(
+			'/repo',
+			{
+				detached: true,
+				startPoint: 'feature/four',
 			},
 			['/repo']
 		);
@@ -405,6 +499,16 @@ suite('GitWorktreeService', () => {
 					'feature/three',
 					'/repo.worktrees/feature-three',
 					'origin/main',
+				],
+				cwd: '/repo',
+			},
+			{
+				args: [
+					'worktree',
+					'add',
+					'--detach',
+					'/repo.worktrees/feature-four',
+					'feature/four',
 				],
 				cwd: '/repo',
 			},
