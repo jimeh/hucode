@@ -11,6 +11,7 @@ import { isLinux } from '../../../base/common/platform.js';
 import { ILogService } from '../../log/common/log.js';
 import {
 	WorktreeRecord,
+	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
 } from '../common/projectManager.js';
 
@@ -119,27 +120,41 @@ export class GitWorktreeService {
 
 	async listRefs(
 		projectRoot: string,
-		worktrees: readonly WorktreeRecord[]
+		worktrees: readonly WorktreeRecord[],
+		options: WorktreeRefQueryOptions = {}
 	): Promise<readonly WorktreeRefRecord[]> {
+		const sort = options.sort ?? 'committerdate';
+		const args = [
+			'for-each-ref',
+			'--format=%(refname)%00%(objectname:short)%00' +
+			'%(upstream:short)%00%(committerdate:relative)%00' +
+			'%(authorname)%00%(upstream:track)%00%(subject)',
+		];
+		if (sort === 'committerdate') {
+			args.push('--sort', '-committerdate');
+		}
+		args.push('refs/heads', 'refs/remotes', 'refs/tags');
+
 		const result = await this.runGit(
-			[
-				'for-each-ref',
-				'--format=%(refname)%00%(objectname:short)%00' +
-				'%(upstream:short)%00%(committerdate:relative)%00' +
-				'%(authorname)%00%(upstream:track)%00%(subject)',
-				'refs/heads',
-				'refs/remotes',
-				'refs/tags',
-			],
+			args,
 			projectRoot
 		);
 
-		return GitWorktreeService.parseRefList(result.stdout, worktrees);
+		return GitWorktreeService.parseRefList(
+			result.stdout,
+			worktrees,
+			sort
+		);
 	}
 
 	async createWorktree(
 		projectRoot: string,
-		options: { branchName?: string; startPoint?: string; path?: string },
+		options: {
+			branchName?: string;
+			startPoint?: string;
+			detached?: boolean;
+			path?: string;
+		},
 		existingPaths: readonly string[],
 	): Promise<string> {
 		const branchName = options.branchName?.trim();
@@ -159,9 +174,13 @@ export class GitWorktreeService {
 		);
 
 		await this.ensureDir(dirname(worktreePath));
-		const args = branchName
-			? ['worktree', 'add', '-b', branchName, worktreePath, startPoint]
-			: ['worktree', 'add', worktreePath, startPoint];
+		const args = ['worktree', 'add'];
+		if (branchName) {
+			args.push('-b', branchName);
+		} else if (options.detached) {
+			args.push('--detach');
+		}
+		args.push(worktreePath, startPoint);
 		await this.runGit(args, projectRoot);
 
 		return worktreePath;
@@ -292,7 +311,8 @@ export class GitWorktreeService {
 
 	static parseRefList(
 		stdout: string,
-		worktrees: readonly WorktreeRecord[]
+		worktrees: readonly WorktreeRecord[],
+		sort: WorktreeRefQueryOptions['sort'] = 'alphabetically'
 	): readonly WorktreeRefRecord[] {
 		const checkedOutPaths = new Map<string, string>();
 		for (const worktree of worktrees) {
@@ -349,10 +369,11 @@ export class GitWorktreeService {
 			});
 		}
 
-		return refs.sort((a, b) => {
-			const typeOrder = refTypeOrder(a.type) - refTypeOrder(b.type);
-			return typeOrder || a.name.localeCompare(b.name);
-		});
+		if (sort === 'committerdate') {
+			return refs;
+		}
+
+		return refs.sort(compareRefsByTypeAndName);
 	}
 
 	static sanitizeBranchName(branchName: string): string {
@@ -409,6 +430,14 @@ function normalizeTrackingStatus(
 ): string | undefined {
 	const value = tracking?.trim().replace(/^\[|\]$/g, '');
 	return value || undefined;
+}
+
+function compareRefsByTypeAndName(
+	a: WorktreeRefRecord,
+	b: WorktreeRefRecord
+): number {
+	const typeOrder = refTypeOrder(a.type) - refTypeOrder(b.type);
+	return typeOrder || a.name.localeCompare(b.name);
 }
 
 function refTypeOrder(type: WorktreeRefRecord['type']): number {

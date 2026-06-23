@@ -63,6 +63,18 @@ export interface WorktreeRefRecord {
 }
 
 /**
+ * Supported ordering modes for git refs shown in worktree pickers.
+ */
+export type WorktreeRefSortOrder = 'alphabetically' | 'committerdate';
+
+/**
+ * Options for listing git references that can start a new worktree.
+ */
+export interface WorktreeRefQueryOptions {
+	readonly sort?: WorktreeRefSortOrder;
+}
+
+/**
  * Persisted custom display label for a git worktree path.
  */
 export interface StoredWorktreeLabel {
@@ -108,6 +120,7 @@ export interface StoredProjectManagerState {
 export interface CreateWorktreeOptions {
 	readonly branchName?: string;
 	readonly startPoint?: string;
+	readonly detached?: boolean;
 	readonly path?: string;
 }
 
@@ -144,7 +157,10 @@ export interface IProjectManagerService {
 	removeProject(id: string): Promise<void>;
 	moveProject(id: string, beforeProjectId?: string): Promise<void>;
 	refresh(id?: string): Promise<readonly ProjectRecord[]>;
-	getWorktreeRefs(projectId: string): Promise<readonly WorktreeRefRecord[]>;
+	getWorktreeRefs(
+		projectId: string,
+		options?: WorktreeRefQueryOptions
+	): Promise<readonly WorktreeRefRecord[]>;
 	isValidBranchName(projectId: string, branchName: string): Promise<boolean>;
 	createWorktree(
 		projectId: string,
