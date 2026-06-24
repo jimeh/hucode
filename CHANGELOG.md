@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.35 - 2026-06-24
+
+### Bug Fixes
+
+- align Omni worktree ref picker with checkout (#73)
+
 ## 0.0.34 - 2026-06-21
 
 ### Bug Fixes
