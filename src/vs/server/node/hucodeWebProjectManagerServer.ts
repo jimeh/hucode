@@ -3,21 +3,21 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'fs/promises';
+import * as fs from 'fs';
 import type * as http from 'http';
 import * as url from 'url';
-import { basename, join } from '../../base/common/path.js';
-import { isLinux } from '../../base/common/platform.js';
-import { generateUuid } from '../../base/common/uuid.js';
+import { join } from '../../base/common/path.js';
+import { URI } from '../../base/common/uri.js';
+import { ILogService } from '../../platform/log/common/log.js';
 import {
-	createStoredProjectManagerState,
-	loadStoredProjectManagerState,
-	projectManagerPathsEqual,
-} from '../../platform/projectManager/common/projectManagerState.js';
-import {
+	CreateWorktreeOptions,
+	PROJECT_MANAGER_STORAGE_KEY,
+	ProjectRecord,
 	StoredProjectManagerState,
-	StoredProjectRecord,
+	WorktreeRefQueryOptions,
 } from '../../platform/projectManager/common/projectManager.js';
+import { ProjectManagerMainService } from '../../platform/projectManager/node/projectManagerMainService.js';
+import { IStateService } from '../../platform/state/node/state.js';
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
 
@@ -25,135 +25,291 @@ export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
  * Returns whether a request path targets the Hucode serve-web Projects API.
  */
 export function isHucodeWebProjectsApiPath(pathname: string): boolean {
-	return pathname === HUCODE_WEB_PROJECTS_API_PATH ||
-		pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`);
+	return (
+		pathname === HUCODE_WEB_PROJECTS_API_PATH ||
+		pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`)
+	);
 }
 
-interface HucodeWebProjectRecord {
-	readonly id: string;
-	readonly label: string;
-	readonly rootPath: string;
-	readonly pinned: boolean;
-	readonly order: number;
-}
-
-interface AddProjectRequest {
-	readonly rootPath?: unknown;
-	readonly folder?: unknown;
-	readonly path?: unknown;
-}
-
-/**
- * File-backed project registry for the Hucode serve-web Omni shell.
- */
-export class HucodeWebProjectManagerServer {
+class HucodeProjectFileStateService implements IStateService {
+	declare readonly _serviceBrand: undefined;
 
 	private readonly storagePath: string;
+	private state: StoredProjectManagerState | undefined;
+	private loaded = false;
 
 	constructor(private readonly serverDataPath: string) {
 		this.storagePath = join(serverDataPath, 'hucode', 'projects.json');
 	}
 
+	getItem<T>(key: string, defaultValue: T): T;
+	getItem<T>(key: string, defaultValue?: T): T | undefined;
+	getItem<T>(key: string, defaultValue?: T): T | undefined {
+		if (key !== PROJECT_MANAGER_STORAGE_KEY) {
+			return defaultValue;
+		}
+
+		this.ensureLoaded();
+		return (this.state as T | undefined) ?? defaultValue;
+	}
+
+	setItem(
+		key: string,
+		data?: object | string | number | boolean | undefined | null,
+	): void {
+		if (key !== PROJECT_MANAGER_STORAGE_KEY) {
+			return;
+		}
+
+		this.state = data as StoredProjectManagerState | undefined;
+		this.writeState();
+	}
+
+	setItems(
+		items: readonly {
+			key: string;
+			data?: object | string | number | boolean | undefined | null;
+		}[],
+	): void {
+		for (const item of items) {
+			this.setItem(item.key, item.data);
+		}
+	}
+
+	removeItem(key: string): void {
+		if (key !== PROJECT_MANAGER_STORAGE_KEY) {
+			return;
+		}
+
+		this.state = undefined;
+		this.writeState();
+	}
+
+	async close(): Promise<void> { }
+
+	private ensureLoaded(): void {
+		if (this.loaded) {
+			return;
+		}
+
+		try {
+			this.state = JSON.parse(
+				fs.readFileSync(this.storagePath, 'utf8'),
+			) as StoredProjectManagerState;
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				(error as NodeJS.ErrnoException).code !== 'ENOENT'
+			) {
+				throw error;
+			}
+			this.state = undefined;
+		}
+		this.loaded = true;
+	}
+
+	private writeState(): void {
+		fs.mkdirSync(join(this.serverDataPath, 'hucode'), { recursive: true });
+		if (!this.state) {
+			try {
+				fs.unlinkSync(this.storagePath);
+			} catch (error) {
+				if (
+					!(error instanceof Error) ||
+					(error as NodeJS.ErrnoException).code !== 'ENOENT'
+				) {
+					throw error;
+				}
+			}
+			return;
+		}
+
+		fs.writeFileSync(
+			this.storagePath,
+			`${JSON.stringify(this.state, null, '\t')}\n`,
+		);
+	}
+}
+
+/**
+ * HTTP adapter for the serve-web Project Manager service.
+ */
+export class HucodeWebProjectManagerServer {
+	private readonly service: ProjectManagerMainService;
+
+	constructor(serverDataPath: string, logService: ILogService) {
+		this.service = new ProjectManagerMainService(
+			new HucodeProjectFileStateService(serverDataPath),
+			logService,
+		);
+	}
+
 	async handle(
 		req: http.IncomingMessage,
 		res: http.ServerResponse,
-		parsedUrl: url.UrlWithParsedQuery,
-		pathname: string
+		_parsedUrl: url.UrlWithParsedQuery,
+		pathname: string,
 	): Promise<boolean> {
 		if (!isHucodeWebProjectsApiPath(pathname)) {
 			return false;
 		}
 
 		try {
-			if (req.method === 'GET' && pathname === HUCODE_WEB_PROJECTS_API_PATH) {
-				return this.writeJson(res, 200, {
-					projects: this.toClientProjects(await this.readProjects()),
-				});
+			const relativePath = pathname
+				.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
+				.replace(/^\/+/, '');
+
+			if (req.method === 'GET' && !relativePath) {
+				return this.writeProjects(res, 200, await this.service.getProjects());
 			}
 
-			if (req.method === 'POST' && pathname === HUCODE_WEB_PROJECTS_API_PATH) {
-				const project = await this.addProject(await this.readJson(req));
-				return this.writeJson(res, 201, {
-					project: this.toClientProject(project),
-					projects: this.toClientProjects(await this.readProjects()),
-				});
-			}
-
-			if (req.method === 'DELETE' &&
-				pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`)) {
-				const id = decodeURIComponent(
-					pathname.substring(HUCODE_WEB_PROJECTS_API_PATH.length + 1)
+			if (req.method === 'POST' && !relativePath) {
+				const body = await this.readJson(req);
+				const project = await this.service.addProject(
+					URI.file(requireString(body, 'rootPath')),
 				);
-				await this.removeProject(id);
-				return this.writeJson(res, 200, {
-					projects: this.toClientProjects(await this.readProjects()),
+				return this.writeJson(res, 201, {
+					project,
+					projects: await this.service.getProjects(),
 				});
 			}
 
-			return this.writeJson(res, 405, { error: `Unsupported method ${req.method}` });
+			if (req.method === 'DELETE' && relativePath) {
+				await this.service.removeProject(decodePathSegment(relativePath));
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			}
+
+			if (req.method === 'POST') {
+				return this.handlePost(res, relativePath, await this.readJson(req));
+			}
+
+			return this.writeJson(res, 405, {
+				error: `Unsupported method ${req.method}`,
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const status = message === 'Missing project path.' ? 400 : 500;
+			const status = isBadRequestMessage(message) ? 400 : 500;
 			return this.writeJson(res, status, { error: message });
 		}
 	}
 
-	async getProjects(): Promise<readonly HucodeWebProjectRecord[]> {
-		return this.toClientProjects(await this.readProjects());
+	async getProjects(): Promise<readonly ProjectRecord[]> {
+		return this.service.getProjects();
 	}
 
-	private async addProject(body: unknown): Promise<StoredProjectRecord> {
-		const rootPath = normalizeProjectPath(body);
-		const projects = await this.readProjects();
-		const existing = projects.find(project =>
-			projectManagerPathsEqual(project.rootPath, rootPath, isLinux)
-		);
-		if (existing) {
-			return existing;
+	dispose(): void {
+		this.service.dispose();
+	}
+
+	private async handlePost(
+		res: http.ServerResponse,
+		relativePath: string,
+		body: unknown,
+	): Promise<boolean> {
+		const [projectId, ...parts] = relativePath
+			.split('/')
+			.map(decodeURIComponent);
+		const command = parts.join('/');
+
+		if (relativePath === 'refresh') {
+			return this.writeProjects(res, 200, await this.service.refresh());
 		}
 
-		const order = projects.reduce(
-			(max, project) => Math.max(max, project.order),
-			0
-		) + 1;
-		const project: StoredProjectRecord = {
-			id: generateUuid(),
-			label: basename(rootPath),
-			rootPath,
-			pinned: false,
-			order,
-		};
-		await this.writeProjects([...projects, project]);
-		return project;
-	}
-
-	private async removeProject(id: string): Promise<void> {
-		const projects = await this.readProjects();
-		await this.writeProjects(projects.filter(project => project.id !== id));
-	}
-
-	private async readProjects(): Promise<StoredProjectRecord[]> {
-		try {
-			const raw = await fs.readFile(this.storagePath, 'utf8');
-			return loadStoredProjectManagerState(
-				JSON.parse(raw) as StoredProjectManagerState
-			);
-		} catch (error) {
-			if (isNodeErrorCode(error, 'ENOENT')) {
-				return [];
-			}
-			throw error;
+		if (!projectId) {
+			return this.writeJson(res, 404, { error: 'Not found.' });
 		}
-	}
 
-	private async writeProjects(
-		projects: readonly StoredProjectRecord[]
-	): Promise<void> {
-		await fs.mkdir(join(this.serverDataPath, 'hucode'), { recursive: true });
-		await fs.writeFile(
-			this.storagePath,
-			`${JSON.stringify(createStoredProjectManagerState(projects), null, '\t')}\n`
-		);
+		switch (command) {
+			case 'refresh':
+				return this.writeProjects(
+					res,
+					200,
+					await this.service.refresh(projectId),
+				);
+			case 'label':
+				await this.service.renameProject(
+					projectId,
+					requireString(body, 'label'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'label/reset':
+				await this.service.resetProjectLabel(projectId);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'pinned':
+				await this.service.setPinned(projectId, requireBoolean(body, 'pinned'));
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'move':
+				await this.service.moveProject(
+					projectId,
+					optionalString(body, 'beforeProjectId'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/refs':
+				return this.writeJson(res, 200, {
+					refs: await this.service.getWorktreeRefs(
+						projectId,
+						optionalObject(body, 'options') as
+						| WorktreeRefQueryOptions
+						| undefined,
+					),
+				});
+			case 'worktrees/branch-name':
+				return this.writeJson(res, 200, {
+					valid: await this.service.isValidBranchName(
+						projectId,
+						requireString(body, 'branchName'),
+					),
+				});
+			case 'worktrees':
+				return this.writeJson(res, 201, {
+					worktree: await this.service.createWorktree(
+						projectId,
+						(optionalObject(body, 'options') ?? {}) as CreateWorktreeOptions,
+					),
+					projects: await this.service.getProjects(),
+				});
+			case 'worktrees/remove':
+				await this.service.removeWorktree(
+					projectId,
+					requireString(body, 'worktreePath'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/move':
+				await this.service.moveWorktree(
+					projectId,
+					requireString(body, 'worktreePath'),
+					optionalString(body, 'beforeWorktreePath'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/label':
+				await this.service.renameWorktree(
+					projectId,
+					requireString(body, 'worktreePath'),
+					requireString(body, 'label'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/label/reset':
+				await this.service.resetWorktreeLabel(
+					projectId,
+					requireString(body, 'worktreePath'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/pinned':
+				await this.service.setWorktreePinned(
+					projectId,
+					requireString(body, 'worktreePath'),
+					requireBoolean(body, 'pinned'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+			case 'worktrees/last-active':
+				await this.service.setLastActiveWorktree(
+					projectId,
+					requireString(body, 'worktreePath'),
+				);
+				return this.writeProjects(res, 200, await this.service.getProjects());
+		}
+
+		return this.writeJson(res, 404, { error: 'Not found.' });
 	}
 
 	private async readJson(req: http.IncomingMessage): Promise<unknown> {
@@ -167,29 +323,18 @@ export class HucodeWebProjectManagerServer {
 		return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 	}
 
-	private toClientProjects(
-		projects: readonly StoredProjectRecord[]
-	): readonly HucodeWebProjectRecord[] {
-		return projects
-			.slice()
-			.sort((a, b) => a.order - b.order)
-			.map(project => this.toClientProject(project));
-	}
-
-	private toClientProject(project: StoredProjectRecord): HucodeWebProjectRecord {
-		return {
-			id: project.id,
-			label: project.label,
-			rootPath: project.rootPath,
-			pinned: project.pinned,
-			order: project.order,
-		};
+	private writeProjects(
+		res: http.ServerResponse,
+		status: number,
+		projects: readonly ProjectRecord[],
+	): true {
+		return this.writeJson(res, status, { projects });
 	}
 
 	private writeJson(
 		res: http.ServerResponse,
 		status: number,
-		body: unknown
+		body: unknown,
 	): true {
 		res.writeHead(status, {
 			'Content-Type': 'application/json',
@@ -200,20 +345,42 @@ export class HucodeWebProjectManagerServer {
 	}
 }
 
-function normalizeProjectPath(body: unknown): string {
-	if (!body || typeof body !== 'object') {
-		throw new Error('Missing project path.');
+function requireString(body: unknown, key: string): string {
+	const value = readProperty(body, key);
+	if (typeof value !== 'string' || !value.trim()) {
+		throw new Error(`Missing ${key}.`);
 	}
-
-	const request = body as AddProjectRequest;
-	const rawPath = request.rootPath ?? request.folder ?? request.path;
-	if (typeof rawPath !== 'string' || !rawPath.trim()) {
-		throw new Error('Missing project path.');
-	}
-
-	return rawPath.trim();
+	return value.trim();
 }
 
-function isNodeErrorCode(error: unknown, code: string): boolean {
-	return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
+function optionalString(body: unknown, key: string): string | undefined {
+	const value = readProperty(body, key);
+	return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function requireBoolean(body: unknown, key: string): boolean {
+	const value = readProperty(body, key);
+	if (typeof value !== 'boolean') {
+		throw new Error(`Missing ${key}.`);
+	}
+	return value;
+}
+
+function optionalObject(body: unknown, key: string): object | undefined {
+	const value = readProperty(body, key);
+	return value && typeof value === 'object' ? value : undefined;
+}
+
+function readProperty(body: unknown, key: string): unknown {
+	return body && typeof body === 'object'
+		? (body as Record<string, unknown>)[key]
+		: undefined;
+}
+
+function decodePathSegment(path: string): string {
+	return decodeURIComponent(path.split('/')[0]);
+}
+
+function isBadRequestMessage(message: string): boolean {
+	return message.startsWith('Missing ');
 }

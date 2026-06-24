@@ -4,25 +4,34 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import * as cp from 'child_process';
 import * as fs from 'fs/promises';
 import type * as http from 'http';
 import * as os from 'os';
 import type * as url from 'url';
+import { promisify } from 'util';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import {
 	HUCODE_WEB_PROJECTS_API_PATH,
 	HucodeWebProjectManagerServer,
 	isHucodeWebProjectsApiPath,
 } from '../../node/hucodeWebProjectManagerServer.js';
 
+const execFile = promisify(cp.execFile);
+
 suite('HucodeWebProjectManagerServer', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let serverDataPath: string;
+	let projectPath: string;
 
 	setup(async () => {
 		serverDataPath = await fs.mkdtemp(join(os.tmpdir(), 'hucode-projects-'));
+		projectPath = join(serverDataPath, 'example');
+		await createGitProject(projectPath);
+		projectPath = await fs.realpath(projectPath);
 	});
 
 	teardown(async () => {
@@ -30,17 +39,19 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('persists projects under the server data dir', async () => {
-		const server = new HucodeWebProjectManagerServer(serverDataPath);
+		const server = createServer(serverDataPath, disposables);
 		const add = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: '/tmp/example',
+			rootPath: projectPath,
 		});
 
 		assert.strictEqual(add.statusCode, 201);
 		assert.strictEqual(add.body.project.label, 'example');
-		assert.strictEqual(add.body.project.rootPath, '/tmp/example');
+		assert.strictEqual(add.body.project.rootUri.path, projectPath);
+		assert.strictEqual(add.body.project.worktrees.length, 1);
+		assert.strictEqual(add.body.project.worktrees[0].isMain, true);
 
 		const loaded = await handle(
-			new HucodeWebProjectManagerServer(serverDataPath),
+			createServer(serverDataPath, disposables),
 			'GET',
 			HUCODE_WEB_PROJECTS_API_PATH
 		);
@@ -50,12 +61,12 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('deduplicates projects by path', async () => {
-		const server = new HucodeWebProjectManagerServer(serverDataPath);
+		const server = createServer(serverDataPath, disposables);
 		const first = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: '/tmp/example',
+			rootPath: projectPath,
 		});
 		const second = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: '/tmp/example',
+			rootPath: projectPath,
 		});
 
 		assert.strictEqual(second.statusCode, 201);
@@ -63,9 +74,9 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('removes projects by id', async () => {
-		const server = new HucodeWebProjectManagerServer(serverDataPath);
+		const server = createServer(serverDataPath, disposables);
 		const add = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: '/tmp/example',
+			rootPath: projectPath,
 		});
 		const remove = await handle(
 			server,
@@ -92,6 +103,32 @@ suite('HucodeWebProjectManagerServer', () => {
 		);
 	});
 });
+
+function createServer(
+	serverDataPath: string,
+	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>
+): HucodeWebProjectManagerServer {
+	return disposables.add(new HucodeWebProjectManagerServer(
+		serverDataPath,
+		new NullLogService()
+	));
+}
+
+async function createGitProject(projectPath: string): Promise<void> {
+	await fs.mkdir(projectPath, { recursive: true });
+	await execFile('git', ['init'], { cwd: projectPath });
+	await execFile('git', ['config', 'user.email', 'test@example.com'], {
+		cwd: projectPath,
+	});
+	await execFile('git', ['config', 'user.name', 'Test User'], {
+		cwd: projectPath,
+	});
+	await fs.writeFile(join(projectPath, 'README.md'), 'test\n');
+	await execFile('git', ['add', 'README.md'], { cwd: projectPath });
+	await execFile('git', ['commit', '-m', 'Initial commit'], {
+		cwd: projectPath,
+	});
+}
 
 async function handle(
 	server: HucodeWebProjectManagerServer,

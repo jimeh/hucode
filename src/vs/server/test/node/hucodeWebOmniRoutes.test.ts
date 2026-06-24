@@ -10,11 +10,9 @@ import {
 	toHucodeWebRouteLocation,
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
-	getHucodeWebOmniContentSecurityPolicy,
 	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniWorkbenchBase,
-	renderHucodeWebOmniShell,
 } from '../../node/hucodeWebOmniShell.js';
 
 suite('HucodeWebOmniRoutes', () => {
@@ -117,50 +115,6 @@ suite('HucodeWebOmniRoutes', () => {
 		assert.strictEqual(getHucodeWebOmniProjectsApi('/x'), '/x/_hucode/projects');
 	});
 
-	test('allows the Omni shell script, API, and iframes in CSP', () => {
-		const csp = getHucodeWebOmniContentSecurityPolicy();
-
-		assert.ok(csp.includes('script-src \'unsafe-inline\''));
-		assert.ok(csp.includes('connect-src \'self\''));
-		assert.ok(csp.includes('frame-src \'self\''));
-	});
-
-	test('escapes the Omni hosted workbench iframe URL', () => {
-		const html = renderHucodeWebOmniShell(
-			'/workbench?base=a"b&x=1',
-			'/workbench?label=c"d&y=2',
-			'/_hucode/projects?z=e"f&y=3'
-		);
-
-		assert.ok(html.includes(
-			'data-workbench-base="/workbench?base=a&quot;b&amp;x=1"'
-		));
-		assert.ok(html.includes(
-			'data-initial-workbench-src="/workbench?label=c&quot;d&amp;y=2"'
-		));
-		assert.ok(html.includes(
-			'data-projects-api="/_hucode/projects?z=e&quot;f&amp;y=3"'
-		));
-	});
-
-	test('renders the Omni hosted iframe message bridge', () => {
-		const html = renderHucodeWebOmniShell(
-			'/workbench',
-			'/workbench?ew=true',
-			'/_hucode/projects'
-		);
-
-		for (const messageType of [
-			'hucode.omni.beforeUnload',
-			'hucode.omni.unloadReady',
-			'hucode.omni.runCommand',
-			'hucode.omni.hostedWorkbenchReady',
-			'hucode.omni.commandResult',
-			'hucode.omni.shellCommand',
-		]) {
-			assert.ok(html.includes(messageType));
-		}
-	});
 });
 
 function parsePayload(payload: string | null): Map<string, string> {

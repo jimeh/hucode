@@ -21,6 +21,7 @@ import { isFolderToOpen, isWorkspaceToOpen } from '../../../platform/window/comm
 import type { IWorkbenchConstructionOptions, IWorkspace, IWorkspaceProvider } from '../../../workbench/browser/web.api.js';
 import { AuthenticationSessionInfo } from '../../../workbench/services/authentication/browser/authenticationService.js';
 import type { IURLCallbackProvider } from '../../../workbench/services/url/browser/urlService.js';
+import { isHucodeOmniWebConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
 import { create } from '../../../workbench/workbench.web.main.internal.js';
 
 interface ISecretStorageCrypto {
@@ -601,7 +602,7 @@ function readCookie(name: string): string | undefined {
 	return undefined;
 }
 
-(function () {
+(async function () {
 
 	// Find config by checking for DOM
 	// eslint-disable-next-line no-restricted-syntax
@@ -615,8 +616,12 @@ function readCookie(name: string): string | undefined {
 	const secretStorageCrypto = secretStorageKeyPath && ServerKeyedAESCrypto.supported()
 		? new ServerKeyedAESCrypto(secretStorageKeyPath) : new TransparentCrypto();
 
+	const createWorkbench = isHucodeOmniWebConfiguration(config)
+		? (await import('../../../hucode/browser/omni.web.main.js')).create
+		: create;
+
 	// Create workbench
-	create(mainWindow.document.body, {
+	createWorkbench(mainWindow.document.body, {
 		...config,
 		windowIndicator: config.windowIndicator ?? { label: '$(remote)', tooltip: `${product.nameShort} Web` },
 		settingsSyncOptions: config.settingsSyncOptions ? { enabled: config.settingsSyncOptions.enabled, } : undefined,

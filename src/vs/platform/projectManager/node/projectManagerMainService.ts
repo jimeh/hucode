@@ -20,6 +20,7 @@ import { ILogService } from '../../log/common/log.js';
 import { IFileService } from '../../files/common/files.js';
 import {
 	CreateWorktreeOptions,
+	IProjectManagerService,
 	PROJECT_MANAGER_STORAGE_KEY,
 	ProjectRecord,
 	StoredProjectRecord,
@@ -43,7 +44,6 @@ import {
 	pruneStoredWorktreeVisits,
 	setStoredWorktreeVisited,
 } from '../common/projectManagerState.js';
-import { IProjectManagerMainService } from './projectManager.js';
 import { GitWorktreeService } from './gitWorktreeService.js';
 
 const PROJECT_AUTO_REFRESH_DEBOUNCE_MS = 1000;
@@ -105,7 +105,7 @@ class FileServiceProjectMetadataWatcher implements IProjectMetadataWatcher {
  * Main-process Hucode project registry and worktree orchestration service.
  */
 export class ProjectManagerMainService extends Disposable
-	implements IProjectManagerMainService {
+	implements IProjectManagerService {
 
 	declare readonly _serviceBrand: undefined;
 

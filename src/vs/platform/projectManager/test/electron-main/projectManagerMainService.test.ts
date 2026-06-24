@@ -25,12 +25,12 @@ import {
 import {
 	GitCommandError,
 	GitWorktreeService
-} from '../../electron-main/gitWorktreeService.js';
+} from '../../node/gitWorktreeService.js';
 import {
 	ProjectManagerMainService,
 	type ProjectManagerMainServiceOptions,
 } from
-	'../../electron-main/projectManagerMainService.js';
+	'../../node/projectManagerMainService.js';
 
 class TestStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;

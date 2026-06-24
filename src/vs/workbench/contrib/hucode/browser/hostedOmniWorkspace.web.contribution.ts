@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mainWindow } from '../../../../base/browser/window.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
 import { isObject } from '../../../../base/common/types.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandActionTitle } from '../../../../platform/action/common/action.js';
@@ -20,16 +21,10 @@ import { IsHostedOmniWorkspaceContext } from '../../../common/contextkeys.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
-
-const enum HucodeHostedOmniWebMessageType {
-	Ready = 'hucode.omni.hostedWorkbenchReady',
-	Focus = 'hucode.omni.hostedWorkbenchFocus',
-	BeforeUnload = 'hucode.omni.beforeUnload',
-	UnloadReady = 'hucode.omni.unloadReady',
-	RunCommand = 'hucode.omni.runCommand',
-	CommandResult = 'hucode.omni.commandResult',
-	ShellCommand = 'hucode.omni.shellCommand',
-}
+import {
+	HucodeOmniWebChildMessageType,
+	HucodeOmniWebParentMessageType,
+} from '../../../../platform/window/common/hucodeOmniWebMessages.js';
 
 interface HucodeHostedOmniWebMessage {
 	readonly type?: unknown;
@@ -38,7 +33,8 @@ interface HucodeHostedOmniWebMessage {
 	readonly args?: unknown;
 }
 
-class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
+class HostedOmniWebBridgeContribution extends Disposable
+	implements IWorkbenchContribution {
 
 	static readonly ID = 'hucode.hostedOmniWebBridge';
 
@@ -48,13 +44,16 @@ class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
 		@ICommandService private readonly commandService: ICommandService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 	) {
+		super();
+
 		const instanceId = environmentService.hostedInstanceId;
 		if (!environmentService.isHostedOmniWorkspace || !instanceId) {
 			return;
 		}
 
+		this.registerHostedShellCommands();
 		this.postToShell({
-			type: HucodeHostedOmniWebMessageType.Ready,
+			type: HucodeOmniWebChildMessageType.Ready,
 			instanceId,
 		});
 
@@ -70,7 +69,7 @@ class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
 
 	private postFocus(instanceId: string, focused: boolean): void {
 		this.postToShell({
-			type: HucodeHostedOmniWebMessageType.Focus,
+			type: HucodeOmniWebChildMessageType.Focus,
 			instanceId,
 			focused,
 		});
@@ -90,14 +89,14 @@ class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
 		}
 
 		switch (message.type) {
-			case HucodeHostedOmniWebMessageType.BeforeUnload:
+			case HucodeOmniWebParentMessageType.BeforeUnload:
 				await this.lifecycleService.shutdown();
 				this.postToShell({
-					type: HucodeHostedOmniWebMessageType.UnloadReady,
+					type: HucodeOmniWebChildMessageType.UnloadReady,
 					instanceId,
 				});
 				return;
-			case HucodeHostedOmniWebMessageType.RunCommand:
+			case HucodeOmniWebParentMessageType.RunCommand:
 				await this.runCommand(instanceId, message);
 				return;
 		}
@@ -115,14 +114,14 @@ class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
 			const args = Array.isArray(message.args) ? message.args : [];
 			await this.commandService.executeCommand(message.commandId, ...args);
 			this.postToShell({
-				type: HucodeHostedOmniWebMessageType.CommandResult,
+				type: HucodeOmniWebChildMessageType.CommandResult,
 				instanceId,
 				commandId: message.commandId,
 				ok: true,
 			});
 		} catch (error) {
 			this.postToShell({
-				type: HucodeHostedOmniWebMessageType.CommandResult,
+				type: HucodeOmniWebChildMessageType.CommandResult,
 				instanceId,
 				commandId: message.commandId,
 				ok: false,
@@ -138,6 +137,29 @@ class HostedOmniWebBridgeContribution implements IWorkbenchContribution {
 
 		mainWindow.parent.postMessage(message, mainWindow.location.origin);
 	}
+
+	private registerHostedShellCommands(): void {
+		this._register(registerHostedOmniWebShellCommand(
+			FOCUS_PROJECT_PANE_COMMAND_ID,
+			'Omni-Window: Focus Projects'
+		));
+		this._register(registerHostedOmniWebShellCommand(
+			FOCUS_WORKSPACE_COMMAND_ID,
+			'Omni-Window: Focus Workbench'
+		));
+		this._register(registerHostedOmniWebShellCommand(
+			RELOAD_WORKSPACE_COMMAND_ID,
+			'Omni-Window: Reload Workbench'
+		));
+		this._register(registerHostedOmniWebShellCommand(
+			CLOSE_WORKSPACE_COMMAND_ID,
+			'Omni-Window: Close Workbench'
+		));
+		this._register(registerHostedOmniWebShellCommand(
+			UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			'Omni-Window: Unload Current Worktree'
+		));
+	}
 }
 
 registerWorkbenchContribution2(
@@ -149,8 +171,8 @@ registerWorkbenchContribution2(
 function registerHostedOmniWebShellCommand(
 	id: string,
 	title: string
-): void {
-	registerAction2(class extends Action2 {
+) {
+	return registerAction2(class extends Action2 {
 		constructor() {
 			super({
 				id,
@@ -171,34 +193,13 @@ function registerHostedOmniWebShellCommand(
 			}
 
 			mainWindow.parent.postMessage({
-				type: HucodeHostedOmniWebMessageType.ShellCommand,
+				type: HucodeOmniWebChildMessageType.ShellCommand,
 				instanceId: environmentService.hostedInstanceId,
 				commandId: id,
 			}, mainWindow.location.origin);
 		}
 	});
 }
-
-registerHostedOmniWebShellCommand(
-	FOCUS_PROJECT_PANE_COMMAND_ID,
-	'Omni-Window: Focus Projects'
-);
-registerHostedOmniWebShellCommand(
-	FOCUS_WORKSPACE_COMMAND_ID,
-	'Omni-Window: Focus Workbench'
-);
-registerHostedOmniWebShellCommand(
-	RELOAD_WORKSPACE_COMMAND_ID,
-	'Omni-Window: Reload Workbench'
-);
-registerHostedOmniWebShellCommand(
-	CLOSE_WORKSPACE_COMMAND_ID,
-	'Omni-Window: Close Workbench'
-);
-registerHostedOmniWebShellCommand(
-	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-	'Omni-Window: Unload Current Worktree'
-);
 
 function literalTitle(value: string): ICommandActionTitle {
 	return { value, original: value };

@@ -240,9 +240,25 @@
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-surface {
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	background: var(--vscode-editor-background);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-iframe {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: var(--vscode-editor-background);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-iframe.hidden {
+	display: none;
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window

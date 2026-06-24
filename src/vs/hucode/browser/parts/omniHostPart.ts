@@ -30,6 +30,8 @@ import {
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
 import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
+import { IHucodeWebOmniHostSurfaceService } from
+	'../webOmniHostSurfaceService.js';
 
 /**
  * Dedicated Omni shell host surface.
@@ -77,6 +79,8 @@ export class OmniHostPart extends Part {
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
+		@IHucodeWebOmniHostSurfaceService
+		private readonly hostSurfaceService: IHucodeWebOmniHostSurfaceService,
 	) {
 		super(
 			Parts.HUCODE_OMNI_HOST_PART,
@@ -129,6 +133,7 @@ export class OmniHostPart extends Part {
 		this.screenshotImage.alt = '';
 		this.screenshotImage.setAttribute('aria-hidden', 'true');
 		this.surface = append(root, $('.hucode-omni-host-surface'));
+		this.hostSurfaceService.setSurface(this.surface);
 		this.emptyState = append(
 			root,
 			$('.hucode-omni-host-empty', undefined,
@@ -140,6 +145,13 @@ export class OmniHostPart extends Part {
 
 		void this.initialize();
 		return content;
+	}
+
+	override dispose(): void {
+		if (this.hostSurfaceService.getSurface() === this.surface) {
+			this.hostSurfaceService.setSurface(undefined);
+		}
+		super.dispose();
 	}
 
 	override layout(width: number, height: number, top: number, left: number): void {
@@ -306,7 +318,10 @@ export class OmniHostPart extends Part {
 	}
 
 	private updateScreenshotRefresh(): void {
-		if (!this.hasVisibleHostedWorkspace()) {
+		if (
+			!this.shellService.supportsWorkspaceScreenshotOverlay
+			|| !this.hasVisibleHostedWorkspace()
+		) {
 			this.stopScreenshotRefresh();
 			return;
 		}
@@ -431,7 +446,11 @@ export class OmniHostPart extends Part {
 	}
 
 	private hasOverlappingShellOverlay(): boolean {
-		if (!this.screenshot || !this.hasVisibleHostedWorkspace()) {
+		if (
+			!this.shellService.supportsWorkspaceScreenshotOverlay
+			|| !this.screenshot
+			|| !this.hasVisibleHostedWorkspace()
+		) {
 			return false;
 		}
 

@@ -222,7 +222,11 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get disableExtensions() { return this.payload?.get('disableExtensions') === 'true'; }
 
 	@memoize
-	get isOmniWindow(): boolean { return this.payload?.get('isOmniWindow') === 'true'; }
+	get isOmniWindow(): boolean {
+		return this.payload?.get('isOmniWindow') === 'true' ||
+			(this.options as { readonly hucodeOmniShell?: boolean })
+				.hucodeOmniShell === true;
+	}
 
 	@memoize
 	get isHostedOmniWorkspace(): boolean { return this.payload?.get('isHostedOmniWorkspace') === 'true'; }

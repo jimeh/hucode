@@ -34,11 +34,8 @@ import {
 	toHucodeWebRouteLocation,
 } from './hucodeWebOmniRoutes.js';
 import {
-	getHucodeWebOmniContentSecurityPolicy,
 	getHucodeWebOmniWorkbenchBase,
-	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniProjectsApi,
-	renderHucodeWebOmniShell,
 } from './hucodeWebOmniShell.js';
 import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
 
@@ -145,7 +142,10 @@ export class WebClientServer {
 	) {
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
 		this._hucodeProjectManagerServer =
-			new HucodeWebProjectManagerServer(this._environmentService.userDataPath);
+			new HucodeWebProjectManagerServer(
+				this._environmentService.userDataPath,
+				this._logService
+			);
 	}
 
 	/**
@@ -185,7 +185,13 @@ export class WebClientServer {
 				case 'workbench':
 					return this._handleWorkbench(req, res, parsedUrl, route.routePath);
 				case 'omni':
-					return this._handleOmni(req, res, parsedUrl, route.routePath);
+					return this._handleWorkbench(
+						req,
+						res,
+						parsedUrl,
+						route.routePath,
+						{ hucodeOmniShell: true }
+					);
 				case 'redirect': {
 					const basePath = this._getClientBasePath(req);
 					const location = toHucodeWebRouteLocation(
@@ -352,7 +358,8 @@ export class WebClientServer {
 		req: http.IncomingMessage,
 		res: http.ServerResponse,
 		parsedUrl: url.UrlWithParsedQuery,
-		routePath: '/' | '/workbench' | '/omni'
+		routePath: '/' | '/workbench' | '/omni',
+		options: { readonly hucodeOmniShell?: boolean } = {}
 	): Promise<void> {
 		// Prefix routes with basePath for clients
 		const basePath = this._getClientBasePath(req);
@@ -447,6 +454,9 @@ export class WebClientServer {
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
+			hucodeOmniShell: options.hucodeOmniShell,
+			hucodeOmniWorkbenchRoute: getHucodeWebOmniWorkbenchBase(basePath),
+			hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
 			_wrapWebWorkerExtHostInIframe,
 			developmentOptions: { enableSmokeTestDriver: this._environmentService.args['enable-smoke-test-driver'] ? true : undefined, logLevel: this._logService.getLevel() },
 			settingsSyncOptions: !this._environmentService.isBuilt && this._environmentService.args['enable-sync'] ? { enabled: true } : undefined,
@@ -528,40 +538,6 @@ export class WebClientServer {
 			// At this point we know the client has a valid cookie
 			// and we want to set it prolong it to ensure that this
 			// client is valid for another 1 week at least
-			headers['Set-Cookie'] = cookie.serialize(
-				connectionTokenCookieName,
-				this._connectionToken.value,
-				{
-					sameSite: 'lax',
-					maxAge: 60 * 60 * 24 * 7 /* 1 week */
-				}
-			);
-		}
-
-		res.writeHead(200, headers);
-		return void res.end(data);
-	}
-
-	/**
-	 * Handle HTTP requests for the Hucode Omni web shell.
-	 */
-	private async _handleOmni(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, routePath: '/' | '/omni'): Promise<void> {
-		if (this._handleConnectionTokenRedirect(req, res, parsedUrl, routePath)) {
-			return;
-		}
-
-		const basePath = this._getClientBasePath(req);
-		const data = renderHucodeWebOmniShell(
-			getHucodeWebOmniWorkbenchBase(basePath),
-			getHucodeWebOmniWorkbenchSrc(basePath, parsedUrl.query),
-			getHucodeWebOmniProjectsApi(basePath)
-		);
-		const headers: http.OutgoingHttpHeaders = {
-			'Content-Type': 'text/html',
-			'Content-Security-Policy': getHucodeWebOmniContentSecurityPolicy()
-		};
-
-		if (this._connectionToken.type !== ServerConnectionTokenType.None) {
 			headers['Set-Cookie'] = cookie.serialize(
 				connectionTokenCookieName,
 				this._connectionToken.value,
