@@ -15,21 +15,34 @@ import { basename, join } from '../../../base/common/path.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { URI } from '../../../base/common/uri.js';
 import { isLinux } from '../../../base/common/platform.js';
-import { isEqual } from '../../../base/common/extpath.js';
 import { IStateService } from '../../state/node/state.js';
 import { ILogService } from '../../log/common/log.js';
 import { IFileService } from '../../files/common/files.js';
 import {
 	CreateWorktreeOptions,
 	PROJECT_MANAGER_STORAGE_KEY,
-	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
-	StoredProjectManagerState,
 	StoredProjectRecord,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
 } from '../common/projectManager.js';
+import {
+	applyStoredWorktreeLabels,
+	applyStoredWorktreeOrder,
+	applyStoredWorktreePins,
+	applyStoredWorktreeVisits,
+	createStoredProjectManagerState,
+	filterStoredWorktreeLabel,
+	filterStoredWorktreePath,
+	loadStoredProjectManagerState,
+	projectManagerPathsEqual,
+	pruneStoredPinnedWorktreePaths,
+	pruneStoredWorktreeLabels,
+	pruneStoredWorktreeOrder,
+	pruneStoredWorktreeVisits,
+	setStoredWorktreeVisited,
+} from '../common/projectManagerState.js';
 import { IProjectManagerMainService } from './projectManager.js';
 import { GitWorktreeService } from './gitWorktreeService.js';
 
@@ -733,177 +746,62 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	private loadState(): StoredProjectRecord[] {
-		const state = this.stateService.getItem<StoredProjectManagerState>(
+		return loadStoredProjectManagerState(this.stateService.getItem(
 			PROJECT_MANAGER_STORAGE_KEY
-		);
-		if (!state || state.version !== PROJECT_MANAGER_STORAGE_VERSION) {
-			return [];
-		}
-
-		return state.projects.map(project => ({ ...project }));
+		));
 	}
 
 	private saveState(): void {
-		const state: StoredProjectManagerState = {
-			version: PROJECT_MANAGER_STORAGE_VERSION,
-			projects: this.storedProjects,
-		};
-		this.stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, state);
+		this.stateService.setItem(
+			PROJECT_MANAGER_STORAGE_KEY,
+			createStoredProjectManagerState(this.storedProjects)
+		);
 	}
 
 	private pathsEqual(pathA: string, pathB: string): boolean {
-		return isEqual(pathA, pathB, !isLinux);
-	}
-
-	private getPathComparisonKey(path: string): string {
-		return isLinux ? path : path.toLowerCase();
+		return projectManagerPathsEqual(pathA, pathB, isLinux);
 	}
 
 	private filterWorktreePath(
 		paths: readonly string[],
 		worktreePath: string
 	): string[] {
-		return paths.filter(path => !this.pathsEqual(path, worktreePath));
+		return filterStoredWorktreePath(paths, worktreePath, isLinux);
 	}
 
 	private filterWorktreeLabel(
 		labels: readonly { readonly path: string; readonly label: string }[],
 		worktreePath: string
 	): { readonly path: string; readonly label: string }[] {
-		return labels.filter(entry =>
-			!this.pathsEqual(entry.path, worktreePath)
-		);
+		return filterStoredWorktreeLabel(labels, worktreePath, isLinux);
 	}
 
 	private applyWorktreeLabels(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): readonly WorktreeRecord[] {
-		const labelsByPath = new Map(
-			(project.worktreeLabels ?? []).map(entry => [
-				this.getPathComparisonKey(entry.path),
-				entry.label,
-			])
-		);
-		return worktrees.map(worktree => {
-			const customLabel = labelsByPath.get(
-				this.getPathComparisonKey(worktree.path)
-			);
-			const baseWorktree = this.toBaseWorktreeRecord(worktree);
-			return customLabel
-				? { ...baseWorktree, customLabel }
-				: baseWorktree;
-		});
-	}
-
-	private toBaseWorktreeRecord(worktree: WorktreeRecord): WorktreeRecord {
-		return {
-			path: worktree.path,
-			label: worktree.label,
-			...(worktree.branch !== undefined
-				? { branch: worktree.branch }
-				: {}),
-			isMain: worktree.isMain,
-			isDetached: worktree.isDetached,
-			...(worktree.pinned !== undefined
-				? { pinned: worktree.pinned }
-				: {}),
-			...(worktree.lastVisitedAt !== undefined
-				? { lastVisitedAt: worktree.lastVisitedAt }
-				: {}),
-		};
+		return applyStoredWorktreeLabels(project, worktrees, isLinux);
 	}
 
 	private applyWorktreeOrder(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): readonly WorktreeRecord[] {
-		const orderedPaths = project.worktreeOrder ?? [];
-		const orderIndex = new Map<string, number>(
-			orderedPaths.map((path, index) => [
-				this.getPathComparisonKey(path),
-				index
-			])
-		);
-		const mainWorktrees = worktrees.filter(entry => entry.isMain);
-		const linkedWorktrees = worktrees
-			.filter(entry => !entry.isMain)
-			.slice()
-			.sort((a, b) => {
-				const aIndex = orderIndex.get(
-					this.getPathComparisonKey(a.path)
-				);
-				const bIndex = orderIndex.get(
-					this.getPathComparisonKey(b.path)
-				);
-				if (aIndex !== undefined || bIndex !== undefined) {
-					if (aIndex === undefined) {
-						return 1;
-					}
-					if (bIndex === undefined) {
-						return -1;
-					}
-					return aIndex - bIndex;
-				}
-
-				return a.label.localeCompare(b.label) ||
-					a.path.localeCompare(b.path);
-			});
-
-		return [...mainWorktrees, ...linkedWorktrees];
+		return applyStoredWorktreeOrder(project, worktrees, isLinux);
 	}
 
 	private applyWorktreePins(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): readonly WorktreeRecord[] {
-		const pinnedPaths = new Set(
-			(project.pinnedWorktreePaths ?? []).map(path =>
-				this.getPathComparisonKey(path)
-			)
-		);
-		return worktrees.map(worktree => {
-			const unpinnedWorktree: WorktreeRecord = {
-				path: worktree.path,
-				label: worktree.label,
-				...(worktree.customLabel !== undefined
-					? { customLabel: worktree.customLabel }
-					: {}),
-				...(worktree.branch !== undefined
-					? { branch: worktree.branch }
-					: {}),
-				isMain: worktree.isMain,
-				isDetached: worktree.isDetached,
-				...(worktree.lastVisitedAt !== undefined
-					? { lastVisitedAt: worktree.lastVisitedAt }
-					: {}),
-			};
-			if (!pinnedPaths.has(this.getPathComparisonKey(worktree.path))) {
-				return unpinnedWorktree;
-			}
-
-			return { ...unpinnedWorktree, pinned: true };
-		});
+		return applyStoredWorktreePins(project, worktrees, isLinux);
 	}
 
 	private applyWorktreeVisits(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): readonly WorktreeRecord[] {
-		const visitsByPath = new Map(
-			(project.worktreeVisits ?? []).map(entry => [
-				this.getPathComparisonKey(entry.path),
-				entry.lastVisitedAt,
-			])
-		);
-		return worktrees.map(worktree => {
-			const lastVisitedAt = visitsByPath.get(
-				this.getPathComparisonKey(worktree.path)
-			);
-			return lastVisitedAt !== undefined
-				? { ...worktree, lastVisitedAt }
-				: worktree;
-		});
+		return applyStoredWorktreeVisits(project, worktrees, isLinux);
 	}
 
 	private setWorktreeVisited(
@@ -911,13 +809,7 @@ export class ProjectManagerMainService extends Disposable
 		worktreePath: string,
 		lastVisitedAt: number
 	): void {
-		const visits = (project.worktreeVisits ?? []).filter(entry =>
-			!this.pathsEqual(entry.path, worktreePath)
-		);
-		project.worktreeVisits = [
-			...visits,
-			{ path: worktreePath, lastVisitedAt },
-		];
+		setStoredWorktreeVisited(project, worktreePath, lastVisitedAt, isLinux);
 
 		const worktrees = this.projectWorktrees.get(project.id);
 		if (!worktrees) {
@@ -938,78 +830,28 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): void {
-		if (!project.worktreeOrder?.length) {
-			return;
-		}
-
-		const existingPaths = new Set(
-			worktrees
-				.filter(entry => !entry.isMain)
-				.map(entry => this.getPathComparisonKey(entry.path))
-		);
-		const worktreeOrder = project.worktreeOrder.filter(path =>
-			existingPaths.has(this.getPathComparisonKey(path))
-		);
-		project.worktreeOrder = worktreeOrder.length
-			? worktreeOrder
-			: undefined;
+		pruneStoredWorktreeOrder(project, worktrees, isLinux);
 	}
 
 	private prunePinnedWorktreePaths(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): void {
-		if (!project.pinnedWorktreePaths?.length) {
-			return;
-		}
-
-		const existingPaths = new Set(
-			worktrees.map(entry => this.getPathComparisonKey(entry.path))
-		);
-		const pinnedWorktreePaths = project.pinnedWorktreePaths.filter(path =>
-			existingPaths.has(this.getPathComparisonKey(path))
-		);
-		project.pinnedWorktreePaths = pinnedWorktreePaths.length
-			? pinnedWorktreePaths
-			: undefined;
+		pruneStoredPinnedWorktreePaths(project, worktrees, isLinux);
 	}
 
 	private pruneWorktreeLabels(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): void {
-		if (!project.worktreeLabels?.length) {
-			return;
-		}
-
-		const existingPaths = new Set(
-			worktrees.map(entry => this.getPathComparisonKey(entry.path))
-		);
-		const worktreeLabels = project.worktreeLabels.filter(entry =>
-			existingPaths.has(this.getPathComparisonKey(entry.path))
-		);
-		project.worktreeLabels = worktreeLabels.length
-			? worktreeLabels
-			: undefined;
+		pruneStoredWorktreeLabels(project, worktrees, isLinux);
 	}
 
 	private pruneWorktreeVisits(
 		project: StoredProjectRecord,
 		worktrees: readonly WorktreeRecord[]
 	): void {
-		if (!project.worktreeVisits?.length) {
-			return;
-		}
-
-		const existingPaths = new Set(
-			worktrees.map(entry => this.getPathComparisonKey(entry.path))
-		);
-		const worktreeVisits = project.worktreeVisits.filter(entry =>
-			existingPaths.has(this.getPathComparisonKey(entry.path))
-		);
-		project.worktreeVisits = worktreeVisits.length
-			? worktreeVisits
-			: undefined;
+		pruneStoredWorktreeVisits(project, worktrees, isLinux);
 	}
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
