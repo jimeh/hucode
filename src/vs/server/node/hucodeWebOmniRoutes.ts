@@ -1,0 +1,56 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as url from 'url';
+import { posix } from '../../base/common/path.js';
+
+export const HUCODE_WEB_OMNI_ROOT_ARG = 'hucode-web-omni-root';
+export const HUCODE_WEB_OMNI_PATH = '/omni';
+export const HUCODE_WEB_WORKBENCH_PATH = '/workbench';
+
+export type HucodeWebClientRoute =
+	| { readonly type: 'workbench'; readonly routePath: '/' | typeof HUCODE_WEB_WORKBENCH_PATH }
+	| { readonly type: 'omni'; readonly routePath: '/' | typeof HUCODE_WEB_OMNI_PATH }
+	| { readonly type: 'redirect'; readonly locationPath: typeof HUCODE_WEB_OMNI_PATH | typeof HUCODE_WEB_WORKBENCH_PATH }
+	| { readonly type: 'notFound' };
+
+/**
+ * Selects the Hucode web route for server-web requests.
+ */
+export function getHucodeWebClientRoute(
+	pathname: string,
+	omniRoot: boolean
+): HucodeWebClientRoute {
+	switch (pathname) {
+		case '/':
+			return omniRoot
+				? { type: 'omni', routePath: '/' }
+				: { type: 'workbench', routePath: '/' };
+		case HUCODE_WEB_OMNI_PATH:
+			return { type: 'omni', routePath: HUCODE_WEB_OMNI_PATH };
+		case HUCODE_WEB_WORKBENCH_PATH:
+			return { type: 'workbench', routePath: HUCODE_WEB_WORKBENCH_PATH };
+		case `${HUCODE_WEB_OMNI_PATH}/`:
+			return { type: 'redirect', locationPath: HUCODE_WEB_OMNI_PATH };
+		case `${HUCODE_WEB_WORKBENCH_PATH}/`:
+			return { type: 'redirect', locationPath: HUCODE_WEB_WORKBENCH_PATH };
+		default:
+			return { type: 'notFound' };
+	}
+}
+
+/**
+ * Builds a redirect location under the client-facing base path.
+ */
+export function toHucodeWebRouteLocation(
+	basePath: string,
+	routePath: string,
+	query: url.UrlWithParsedQuery['query']
+): string {
+	const pathname = routePath === '/'
+		? (basePath || '/')
+		: posix.join(basePath || '/', routePath);
+	return url.format({ pathname, query });
+}

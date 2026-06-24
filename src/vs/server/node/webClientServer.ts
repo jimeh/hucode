@@ -28,6 +28,15 @@ import { isString, Mutable } from '../../base/common/types.js';
 import { CharCode } from '../../base/common/charCode.js';
 import { IExtensionManifest } from '../../platform/extensions/common/extensions.js';
 import { ICSSDevelopmentService } from '../../platform/cssDev/node/cssDevService.js';
+import {
+	getHucodeWebClientRoute,
+	HUCODE_WEB_OMNI_ROOT_ARG,
+	toHucodeWebRouteLocation,
+} from './hucodeWebOmniRoutes.js';
+import {
+	getHucodeWebOmniWorkbenchSrc,
+	renderHucodeWebOmniShell,
+} from './hucodeWebOmniShell.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
 	'.html': 'text/html',
@@ -144,9 +153,6 @@ export class WebClientServer {
 			if (pathname.startsWith(STATIC_PATH) && pathname.charCodeAt(STATIC_PATH.length) === CharCode.Slash) {
 				return this._handleStatic(req, res, pathname.substring(STATIC_PATH.length));
 			}
-			if (pathname === '/') {
-				return this._handleRoot(req, res, parsedUrl);
-			}
 			if (pathname === CALLBACK_PATH) {
 				// callback support
 				return this._handleCallback(res);
@@ -154,6 +160,27 @@ export class WebClientServer {
 			if (pathname.startsWith(WEB_EXTENSION_PATH) && pathname.charCodeAt(WEB_EXTENSION_PATH.length) === CharCode.Slash) {
 				// extension resource support
 				return this._handleWebExtensionResource(req, res, pathname.substring(WEB_EXTENSION_PATH.length));
+			}
+
+			const route = getHucodeWebClientRoute(
+				pathname,
+				!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG]
+			);
+			switch (route.type) {
+				case 'workbench':
+					return this._handleWorkbench(req, res, parsedUrl, route.routePath);
+				case 'omni':
+					return this._handleOmni(req, res, parsedUrl, route.routePath);
+				case 'redirect': {
+					const basePath = this._getClientBasePath(req);
+					const location = toHucodeWebRouteLocation(
+						basePath,
+						route.locationPath,
+						parsedUrl.query
+					);
+					res.writeHead(302, { Location: location });
+					return void res.end();
+				}
 			}
 
 			return serveError(req, res, 404, 'Not found.');
@@ -180,6 +207,55 @@ export class WebClientServer {
 		}
 
 		return serveFile(filePath, this._environmentService.isBuilt ? CacheControl.NO_EXPIRY : CacheControl.ETAG, this._logService, req, res, headers);
+	}
+
+	private _getFirstHeader(req: http.IncomingMessage, headerName: string): string | undefined {
+		const val = req.headers[headerName];
+		return Array.isArray(val) ? val[0] : val;
+	}
+
+	private _getClientBasePath(req: http.IncomingMessage): string {
+		return this._getFirstHeader(req, 'x-forwarded-prefix') || this._basePath;
+	}
+
+	private _handleConnectionTokenRedirect(
+		req: http.IncomingMessage,
+		res: http.ServerResponse,
+		parsedUrl: url.UrlWithParsedQuery,
+		routePath: '/' | '/workbench' | '/omni'
+	): boolean {
+		const queryConnectionToken = parsedUrl.query[connectionTokenQueryName];
+		if (typeof queryConnectionToken !== 'string') {
+			return false;
+		}
+
+		// We got a connection token as a query parameter.
+		// We want to have a clean URL, so we strip it
+		const responseHeaders: Record<string, string> = Object.create(null);
+		responseHeaders['Set-Cookie'] = cookie.serialize(
+			connectionTokenCookieName,
+			queryConnectionToken,
+			{
+				sameSite: 'lax',
+				maxAge: 60 * 60 * 24 * 7 /* 1 week */
+			}
+		);
+
+		const newQuery = Object.create(null);
+		for (const key in parsedUrl.query) {
+			if (key !== connectionTokenQueryName) {
+				newQuery[key] = parsedUrl.query[key];
+			}
+		}
+		responseHeaders['Location'] = toHucodeWebRouteLocation(
+			this._getClientBasePath(req),
+			routePath,
+			newQuery
+		);
+
+		res.writeHead(302, responseHeaders);
+		res.end();
+		return true;
 	}
 
 	private _getResourceURLTemplateAuthority(uri: URI): string | undefined {
@@ -255,43 +331,19 @@ export class WebClientServer {
 	}
 
 	/**
-	 * Handle HTTP requests for /
+	 * Handle HTTP requests for workbench routes.
 	 */
-	private async _handleRoot(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery): Promise<void> {
-
-		const getFirstHeader = (headerName: string) => {
-			const val = req.headers[headerName];
-			return Array.isArray(val) ? val[0] : val;
-		};
-
+	private async _handleWorkbench(
+		req: http.IncomingMessage,
+		res: http.ServerResponse,
+		parsedUrl: url.UrlWithParsedQuery,
+		routePath: '/' | '/workbench' | '/omni'
+	): Promise<void> {
 		// Prefix routes with basePath for clients
-		const basePath = getFirstHeader('x-forwarded-prefix') || this._basePath;
+		const basePath = this._getClientBasePath(req);
 
-		const queryConnectionToken = parsedUrl.query[connectionTokenQueryName];
-		if (typeof queryConnectionToken === 'string') {
-			// We got a connection token as a query parameter.
-			// We want to have a clean URL, so we strip it
-			const responseHeaders: Record<string, string> = Object.create(null);
-			responseHeaders['Set-Cookie'] = cookie.serialize(
-				connectionTokenCookieName,
-				queryConnectionToken,
-				{
-					sameSite: 'lax',
-					maxAge: 60 * 60 * 24 * 7 /* 1 week */
-				}
-			);
-
-			const newQuery = Object.create(null);
-			for (const key in parsedUrl.query) {
-				if (key !== connectionTokenQueryName) {
-					newQuery[key] = parsedUrl.query[key];
-				}
-			}
-			const newLocation = url.format({ pathname: basePath, query: newQuery });
-			responseHeaders['Location'] = newLocation;
-
-			res.writeHead(302, responseHeaders);
-			return void res.end();
+		if (this._handleConnectionTokenRedirect(req, res, parsedUrl, routePath)) {
+			return;
 		}
 
 		const replacePort = (host: string, port: string) => {
@@ -307,12 +359,12 @@ export class WebClientServer {
 		let remoteAuthority = (
 			useTestResolver
 				? 'test+test'
-				: (getFirstHeader('x-original-host') || getFirstHeader('x-forwarded-host') || req.headers.host)
+				: (this._getFirstHeader(req, 'x-original-host') || this._getFirstHeader(req, 'x-forwarded-host') || req.headers.host)
 		);
 		if (!remoteAuthority) {
 			return serveError(req, res, 400, `Bad request.`);
 		}
-		const forwardedPort = getFirstHeader('x-forwarded-port');
+		const forwardedPort = this._getFirstHeader(req, 'x-forwarded-port');
 		if (forwardedPort) {
 			remoteAuthority = replacePort(remoteAuthority, forwardedPort);
 		}
@@ -330,7 +382,7 @@ export class WebClientServer {
 
 		if (this._logService.getLevel() === LogLevel.Trace) {
 			['x-original-host', 'x-forwarded-host', 'x-forwarded-port', 'host'].forEach(header => {
-				const value = getFirstHeader(header);
+				const value = this._getFirstHeader(req, header);
 				if (value) {
 					this._logService.trace(`[WebClientServer] ${header}: ${value}`);
 				}
@@ -461,6 +513,45 @@ export class WebClientServer {
 			// At this point we know the client has a valid cookie
 			// and we want to set it prolong it to ensure that this
 			// client is valid for another 1 week at least
+			headers['Set-Cookie'] = cookie.serialize(
+				connectionTokenCookieName,
+				this._connectionToken.value,
+				{
+					sameSite: 'lax',
+					maxAge: 60 * 60 * 24 * 7 /* 1 week */
+				}
+			);
+		}
+
+		res.writeHead(200, headers);
+		return void res.end(data);
+	}
+
+	/**
+	 * Handle HTTP requests for the Hucode Omni web shell.
+	 */
+	private async _handleOmni(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, routePath: '/' | '/omni'): Promise<void> {
+		if (this._handleConnectionTokenRedirect(req, res, parsedUrl, routePath)) {
+			return;
+		}
+
+		const data = renderHucodeWebOmniShell(getHucodeWebOmniWorkbenchSrc(
+			this._getClientBasePath(req),
+			parsedUrl.query
+		));
+		const headers: http.OutgoingHttpHeaders = {
+			'Content-Type': 'text/html',
+			'Content-Security-Policy': [
+				'default-src \'none\';',
+				'style-src \'unsafe-inline\';',
+				'frame-src \'self\';',
+				'child-src \'self\';',
+				'base-uri \'none\';',
+				'form-action \'none\';'
+			].join(' ')
+		};
+
+		if (this._connectionToken.type !== ServerConnectionTokenType.None) {
 			headers['Set-Cookie'] = cookie.serialize(
 				connectionTokenCookieName,
 				this._connectionToken.value,
