@@ -39,6 +39,8 @@ VS Code code that Hucode customizes.
   `build/hucode/mixin/stable/product.json` `hucodeVersion`.
 - `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
   compiled output.
+- `npm run hucode:web` prepares the Hucode mixin overlay and launches the
+  local serve-web development server from existing compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
   `npm run hucode:compile` before launch for a full one-shot rebuild.
 - `npm run hucode:compile` must build the client, built-in extension outputs,

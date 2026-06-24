@@ -30,6 +30,8 @@ as the required Hucode instruction set for work in this fork.
     media with Hucode product config.
   - `npm run hucode:watch`: run the incremental Hucode watch flow.
   - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
+  - `npm run hucode:web`: launch the local serve-web development server
+    through the Hucode wrapper.
 - For VS Code release upgrades, use the project-local
   `hucode-upgrade-vscode` skill and follow
   [Repo Strategy](docs/hucode/repo-strategy.md).

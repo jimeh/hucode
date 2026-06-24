@@ -186,6 +186,7 @@ Use the narrowest validation that covers the change:
 - product overlay changes: `npm run hucode:validate`
 - Hucode TypeScript changes: `npm run hucode:compile`
 - incremental UI work: `npm run hucode:watch` plus `npm run hucode:run`
+- serve-web UI work: `npm run hucode:watch` plus `npm run hucode:web`
 - project/worktree model changes: run the related `src/vs/hucode/test` or
   `src/vs/platform/projectManager/test` suites when practical
 
