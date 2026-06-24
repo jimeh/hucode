@@ -604,6 +604,28 @@ export function renderHucodeWebOmniShell(
 						renderList();
 					}
 				}
+				if (event.data.type === 'hucode.omni.shellCommand') {
+					const instance = instances.get(event.data.instanceId);
+					if (!instance) {
+						return;
+					}
+
+					switch (event.data.commandId) {
+						case 'workbench.action.omniWindow.focusProjectPane':
+							folderInput.focus();
+							break;
+						case 'workbench.action.omniWindow.focusWorkspace':
+							activateInstance(instance.id);
+							break;
+						case 'workbench.action.omniWindow.reloadWorkspace':
+							reloadInstance(instance.id);
+							break;
+						case 'workbench.action.omniWindow.closeWorkspace':
+						case 'workbench.action.omniWindow.unloadCurrentWorktree':
+							void closeInstance(instance.id);
+							break;
+					}
+				}
 			});
 
 			openInstance({

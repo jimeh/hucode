@@ -156,6 +156,7 @@ suite('HucodeWebOmniRoutes', () => {
 			'hucode.omni.runCommand',
 			'hucode.omni.hostedWorkbenchReady',
 			'hucode.omni.commandResult',
+			'hucode.omni.shellCommand',
 		]) {
 			assert.ok(html.includes(messageType));
 		}

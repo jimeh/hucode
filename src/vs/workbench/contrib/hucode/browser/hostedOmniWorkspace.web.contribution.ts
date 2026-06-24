@@ -5,7 +5,18 @@
 
 import { mainWindow } from '../../../../base/browser/window.js';
 import { isObject } from '../../../../base/common/types.js';
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ICommandActionTitle } from '../../../../platform/action/common/action.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	FOCUS_WORKSPACE_COMMAND_ID,
+	RELOAD_WORKSPACE_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from '../../../../platform/window/common/hucodeOmniCommandRouting.js';
+import { IsHostedOmniWorkspaceContext } from '../../../common/contextkeys.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
@@ -17,6 +28,7 @@ const enum HucodeHostedOmniWebMessageType {
 	UnloadReady = 'hucode.omni.unloadReady',
 	RunCommand = 'hucode.omni.runCommand',
 	CommandResult = 'hucode.omni.commandResult',
+	ShellCommand = 'hucode.omni.shellCommand',
 }
 
 interface HucodeHostedOmniWebMessage {
@@ -133,3 +145,61 @@ registerWorkbenchContribution2(
 	HostedOmniWebBridgeContribution,
 	WorkbenchPhase.AfterRestored
 );
+
+function registerHostedOmniWebShellCommand(
+	id: string,
+	title: string
+): void {
+	registerAction2(class extends Action2 {
+		constructor() {
+			super({
+				id,
+				title: literalTitle(title),
+				f1: true,
+				precondition: IsHostedOmniWorkspaceContext,
+			});
+		}
+
+		override run(accessor: ServicesAccessor): void {
+			const environmentService = accessor.get(IWorkbenchEnvironmentService);
+			if (
+				!environmentService.isHostedOmniWorkspace ||
+				!environmentService.hostedInstanceId ||
+				mainWindow.parent === mainWindow
+			) {
+				return;
+			}
+
+			mainWindow.parent.postMessage({
+				type: HucodeHostedOmniWebMessageType.ShellCommand,
+				instanceId: environmentService.hostedInstanceId,
+				commandId: id,
+			}, mainWindow.location.origin);
+		}
+	});
+}
+
+registerHostedOmniWebShellCommand(
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	'Omni-Window: Focus Projects'
+);
+registerHostedOmniWebShellCommand(
+	FOCUS_WORKSPACE_COMMAND_ID,
+	'Omni-Window: Focus Workbench'
+);
+registerHostedOmniWebShellCommand(
+	RELOAD_WORKSPACE_COMMAND_ID,
+	'Omni-Window: Reload Workbench'
+);
+registerHostedOmniWebShellCommand(
+	CLOSE_WORKSPACE_COMMAND_ID,
+	'Omni-Window: Close Workbench'
+);
+registerHostedOmniWebShellCommand(
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+	'Omni-Window: Unload Current Worktree'
+);
+
+function literalTitle(value: string): ICommandActionTitle {
+	return { value, original: value };
+}
