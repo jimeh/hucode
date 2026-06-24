@@ -166,6 +166,58 @@ suite('ProjectSwitcherTreeModel', () => {
 		});
 	});
 
+	test('keeps worktree row identity stable when hosted state changes', () => {
+		const worktreePath = '/repos/hucode.worktrees/active';
+		const projects = [
+			createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree(worktreePath, { branch: 'active' }),
+				],
+			}),
+		];
+		const idle = buildProjectSwitcherTreeModel({
+			projects,
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+		const loaded = buildProjectSwitcherTreeModel({
+			projects,
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			activeWorktreePath: worktreePath,
+			hostedWorkspaceState: createHostedState({
+				activeInstanceId: 'active-instance',
+				instances: [
+					{
+						instanceId: 'active-instance',
+						worktreePath,
+						state: 'active',
+						visible: true,
+						focused: true,
+					},
+				],
+			}),
+		});
+
+		const idleItem = getWorktree(idle.roots, worktreePath);
+		const loadedItem = getWorktree(loaded.roots, worktreePath);
+
+		assert.strictEqual(idleItem.id, encodeWorktreeHandle(
+			'hucode',
+			worktreePath
+		));
+		assert.strictEqual(loadedItem.id, idleItem.id);
+		assert.strictEqual(
+			loadedItem.hostedWorkbenchInstanceId,
+			'active-instance'
+		);
+		assert.strictEqual(loadedItem.hostedWorkbenchState, 'active');
+	});
+
 	test('preserves custom labels used by rename flows', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
