@@ -13,15 +13,15 @@ export function getHucodeUpdateDisplayVersion(update: IUpdate | undefined): stri
 }
 
 /**
- * Restores Hucode-specific update fields that platform update backends can drop.
+ * Restores update metadata that platform update backends can drop or rewrite.
  */
-export function mergeHucodeUpdateMetadata(update: IUpdate, ...candidates: Array<IUpdate | undefined>): IUpdate {
-	if (update.hucodeVersion) {
-		return update;
-	}
-
+export function mergeHucodeUpdateMetadata(
+	update: IUpdate,
+	...candidates: Array<IUpdate | undefined>
+): IUpdate {
 	const metadata = candidates.find(candidate =>
-		candidate?.version === update.version && candidate.hucodeVersion
+		candidate?.version === update.version &&
+		(candidate.productVersion || candidate.hucodeVersion)
 	);
 
 	if (!metadata) {
@@ -30,6 +30,7 @@ export function mergeHucodeUpdateMetadata(update: IUpdate, ...candidates: Array<
 
 	return {
 		...update,
-		hucodeVersion: metadata.hucodeVersion,
+		productVersion: metadata.productVersion ?? update.productVersion,
+		hucodeVersion: metadata.hucodeVersion ?? update.hucodeVersion,
 	};
 }

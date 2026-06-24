@@ -221,10 +221,6 @@ export class DarwinUpdateService extends AbstractUpdateService implements IRelau
 	}
 
 	private async resolveDownloadedUpdateMetadata(update: IUpdate, stateUpdate: IUpdate | undefined): Promise<IUpdate> {
-		if (update.hucodeVersion) {
-			return update;
-		}
-
 		let metadata = stateUpdate?.version === update.version ? stateUpdate : undefined;
 		metadata ??= this.updateMetadata?.version === update.version ? this.updateMetadata : undefined;
 
