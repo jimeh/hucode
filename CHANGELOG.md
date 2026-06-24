@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.36 - 2026-06-24
+
+### Bug Fixes
+
+- preserve VS Code product version for pending updates (#75)
+
 ## 0.0.35 - 2026-06-24
 
 ### Bug Fixes
