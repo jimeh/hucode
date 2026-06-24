@@ -133,6 +133,24 @@ suite('HucodeWebOmniRoutes', () => {
 			'data-projects-api="/_hucode/projects?z=e&quot;f&amp;y=3"'
 		));
 	});
+
+	test('renders the Omni hosted iframe message bridge', () => {
+		const html = renderHucodeWebOmniShell(
+			'/workbench',
+			'/workbench?ew=true',
+			'/_hucode/projects'
+		);
+
+		for (const messageType of [
+			'hucode.omni.beforeUnload',
+			'hucode.omni.unloadReady',
+			'hucode.omni.runCommand',
+			'hucode.omni.hostedWorkbenchReady',
+			'hucode.omni.commandResult',
+		]) {
+			assert.ok(html.includes(messageType));
+		}
+	});
 });
 
 function parsePayload(payload: string | null): Map<string, string> {

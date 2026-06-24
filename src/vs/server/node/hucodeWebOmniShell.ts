@@ -282,6 +282,7 @@ export function renderHucodeWebOmniShell(
 			const folderForm = document.querySelector('[data-hucode-open-folder-form]');
 			const emptyButton = document.querySelector('[data-hucode-open-empty]');
 			const instances = new Map();
+			const pendingUnload = new Map();
 			let projects = [];
 			let activeId;
 
@@ -470,20 +471,49 @@ export function renderHucodeWebOmniShell(
 				}
 
 				instance.state = 'loading';
-				instance.iframe.src = instance.iframe.src;
+				runCommandInInstance(instance, 'workbench.action.reloadWindow');
+				setTimeout(() => {
+					if (instances.get(id)?.state === 'loading') {
+						instance.iframe.src = instance.iframe.src;
+					}
+				}, 500);
 				renderList();
 			};
 
-			const closeInstance = id => {
+			const closeInstance = async id => {
 				const instance = instances.get(id);
 				if (!instance) {
 					return;
 				}
 
+				instance.state = 'closing';
+				renderList();
+				await requestUnload(instance);
+				removeInstance(id);
+			};
+
+			const requestUnload = instance => new Promise(resolve => {
+				const timeout = setTimeout(() => {
+					pendingUnload.delete(instance.id);
+					resolve();
+				}, 1500);
+				pendingUnload.set(instance.id, () => {
+					clearTimeout(timeout);
+					pendingUnload.delete(instance.id);
+					resolve();
+				});
 				instance.iframe.contentWindow?.postMessage({
 					type: 'hucode.omni.beforeUnload',
-					instanceId: id,
+					instanceId: instance.id,
 				}, location.origin);
+			});
+
+			const removeInstance = id => {
+				const instance = instances.get(id);
+				if (!instance) {
+					return;
+				}
+
 				instance.iframe.remove();
 				instances.delete(id);
 				if (activeId === id) {
@@ -494,6 +524,15 @@ export function renderHucodeWebOmniShell(
 					}
 				}
 				renderList();
+			};
+
+			const runCommandInInstance = (instance, commandId, args = []) => {
+				instance.iframe.contentWindow?.postMessage({
+					type: 'hucode.omni.runCommand',
+					instanceId: instance.id,
+					commandId,
+					args,
+				}, location.origin);
 			};
 
 			folderForm.addEventListener('submit', async event => {
@@ -525,6 +564,29 @@ export function renderHucodeWebOmniShell(
 				}
 				if (event.data.type === 'hucode.omni.focusProjects') {
 					folderInput.focus();
+				}
+				if (event.data.type === 'hucode.omni.hostedWorkbenchReady') {
+					const instance = instances.get(event.data.instanceId);
+					if (instance) {
+						instance.state = 'loaded';
+						renderList();
+					}
+				}
+				if (event.data.type === 'hucode.omni.hostedWorkbenchFocus') {
+					const instance = instances.get(event.data.instanceId);
+					if (instance && event.data.focused) {
+						activateInstance(instance.id);
+					}
+				}
+				if (event.data.type === 'hucode.omni.unloadReady') {
+					pendingUnload.get(event.data.instanceId)?.();
+				}
+				if (event.data.type === 'hucode.omni.commandResult') {
+					const instance = instances.get(event.data.instanceId);
+					if (instance) {
+						instance.state = event.data.ok ? 'loaded' : 'failed';
+						renderList();
+					}
 				}
 			});
 
