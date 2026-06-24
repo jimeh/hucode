@@ -14,6 +14,22 @@ import { HUCODE_WEB_PROJECTS_API_PATH } from './hucodeWebProjectManagerServer.js
 const HUCODE_WEB_OMNI_INITIAL_INSTANCE_ID = 'initial';
 
 /**
+ * Builds the CSP needed by the Hucode Omni web shell.
+ */
+export function getHucodeWebOmniContentSecurityPolicy(): string {
+	return [
+		'default-src \'none\';',
+		'style-src \'unsafe-inline\';',
+		'script-src \'unsafe-inline\';',
+		'connect-src \'self\';',
+		'frame-src \'self\';',
+		'child-src \'self\';',
+		'base-uri \'none\';',
+		'form-action \'none\';'
+	].join(' ');
+}
+
+/**
  * Builds the hosted workbench URL used by the Hucode Omni web shell.
  */
 export function getHucodeWebOmniWorkbenchSrc(

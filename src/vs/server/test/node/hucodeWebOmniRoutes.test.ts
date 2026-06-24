@@ -10,6 +10,7 @@ import {
 	toHucodeWebRouteLocation,
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniContentSecurityPolicy,
 	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniWorkbenchBase,
@@ -114,6 +115,14 @@ suite('HucodeWebOmniRoutes', () => {
 
 	test('builds the Omni projects API route', () => {
 		assert.strictEqual(getHucodeWebOmniProjectsApi('/x'), '/x/_hucode/projects');
+	});
+
+	test('allows the Omni shell script, API, and iframes in CSP', () => {
+		const csp = getHucodeWebOmniContentSecurityPolicy();
+
+		assert.ok(csp.includes('script-src \'unsafe-inline\''));
+		assert.ok(csp.includes('connect-src \'self\''));
+		assert.ok(csp.includes('frame-src \'self\''));
 	});
 
 	test('escapes the Omni hosted workbench iframe URL', () => {

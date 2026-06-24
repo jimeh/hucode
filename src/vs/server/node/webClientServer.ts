@@ -34,6 +34,7 @@ import {
 	toHucodeWebRouteLocation,
 } from './hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniContentSecurityPolicy,
 	getHucodeWebOmniWorkbenchBase,
 	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniProjectsApi,
@@ -557,14 +558,7 @@ export class WebClientServer {
 		);
 		const headers: http.OutgoingHttpHeaders = {
 			'Content-Type': 'text/html',
-			'Content-Security-Policy': [
-				'default-src \'none\';',
-				'style-src \'unsafe-inline\';',
-				'frame-src \'self\';',
-				'child-src \'self\';',
-				'base-uri \'none\';',
-				'form-action \'none\';'
-			].join(' ')
+			'Content-Security-Policy': getHucodeWebOmniContentSecurityPolicy()
 		};
 
 		if (this._connectionToken.type !== ServerConnectionTokenType.None) {
