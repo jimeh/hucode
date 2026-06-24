@@ -10,6 +10,7 @@ import {
 	toHucodeWebRouteLocation,
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniWorkbenchBase,
 	renderHucodeWebOmniShell,
@@ -111,10 +112,15 @@ suite('HucodeWebOmniRoutes', () => {
 		assert.strictEqual(getHucodeWebOmniWorkbenchBase('/x'), '/x/workbench');
 	});
 
+	test('builds the Omni projects API route', () => {
+		assert.strictEqual(getHucodeWebOmniProjectsApi('/x'), '/x/_hucode/projects');
+	});
+
 	test('escapes the Omni hosted workbench iframe URL', () => {
 		const html = renderHucodeWebOmniShell(
 			'/workbench?base=a"b&x=1',
-			'/workbench?label=c"d&y=2'
+			'/workbench?label=c"d&y=2',
+			'/_hucode/projects?z=e"f&y=3'
 		);
 
 		assert.ok(html.includes(
@@ -122,6 +128,9 @@ suite('HucodeWebOmniRoutes', () => {
 		));
 		assert.ok(html.includes(
 			'data-initial-workbench-src="/workbench?label=c&quot;d&amp;y=2"'
+		));
+		assert.ok(html.includes(
+			'data-projects-api="/_hucode/projects?z=e&quot;f&amp;y=3"'
 		));
 	});
 });

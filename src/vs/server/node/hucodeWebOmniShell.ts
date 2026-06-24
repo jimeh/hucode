@@ -9,6 +9,7 @@ import {
 	HUCODE_WEB_WORKBENCH_PATH,
 	toHucodeWebRouteLocation,
 } from './hucodeWebOmniRoutes.js';
+import { HUCODE_WEB_PROJECTS_API_PATH } from './hucodeWebProjectManagerServer.js';
 
 const HUCODE_WEB_OMNI_INITIAL_INSTANCE_ID = 'initial';
 
@@ -45,14 +46,23 @@ export function getHucodeWebOmniWorkbenchBase(basePath: string): string {
 }
 
 /**
+ * Builds the project API route used by the Hucode Omni web shell.
+ */
+export function getHucodeWebOmniProjectsApi(basePath: string): string {
+	return toHucodeWebRouteLocation(basePath, HUCODE_WEB_PROJECTS_API_PATH, {});
+}
+
+/**
  * Renders the first-pass Hucode Omni web shell.
  */
 export function renderHucodeWebOmniShell(
 	workbenchBase: string,
-	initialWorkbenchSrc: string
+	initialWorkbenchSrc: string,
+	projectsApi: string
 ): string {
 	const base = escapeAttribute(workbenchBase);
 	const src = escapeAttribute(initialWorkbenchSrc);
+	const api = escapeAttribute(projectsApi);
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -177,8 +187,18 @@ export function renderHucodeWebOmniShell(
 			color: #8f8f8f;
 		}
 
-		.hucode-omni-workspaces:empty + .hucode-omni-empty {
+		.hucode-omni-workspaces:empty + .hucode-omni-empty,
+		.hucode-omni-project-list:empty + .hucode-omni-empty {
 			display: block;
+		}
+
+		.hucode-omni-section-title {
+			margin: 18px 0 6px;
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0;
+			text-transform: uppercase;
+			color: #9d9d9d;
 		}
 
 		.hucode-omni-host {
@@ -205,6 +225,7 @@ export function renderHucodeWebOmniShell(
 <body
 	data-workbench-base="${base}"
 	data-initial-workbench-src="${src}"
+	data-projects-api="${api}"
 >
 	<main class="hucode-omni-shell">
 		<aside class="hucode-omni-projects" aria-label="Projects">
@@ -226,6 +247,14 @@ export function renderHucodeWebOmniShell(
 				>
 				<button class="hucode-omni-button" type="submit">Open</button>
 			</form>
+			<h2 class="hucode-omni-section-title">Saved</h2>
+			<div
+				class="hucode-omni-workspaces hucode-omni-project-list"
+				aria-label="Saved projects"
+				data-hucode-projects
+			></div>
+			<p class="hucode-omni-empty">No saved projects</p>
+			<h2 class="hucode-omni-section-title">Open</h2>
 			<div
 				class="hucode-omni-workspaces"
 				aria-label="Open workbenches"
@@ -245,12 +274,15 @@ export function renderHucodeWebOmniShell(
 			const body = document.body;
 			const workbenchBase = body.dataset.workbenchBase;
 			const initialWorkbenchSrc = body.dataset.initialWorkbenchSrc;
+			const projectsApi = body.dataset.projectsApi;
 			const host = document.querySelector('[data-hucode-workbench-host]');
 			const list = document.querySelector('[data-hucode-workspaces]');
+			const projectList = document.querySelector('[data-hucode-projects]');
 			const folderInput = document.querySelector('[data-hucode-folder-input]');
 			const folderForm = document.querySelector('[data-hucode-open-folder-form]');
 			const emptyButton = document.querySelector('[data-hucode-open-empty]');
 			const instances = new Map();
+			let projects = [];
 			let activeId;
 
 			const nextId = () => (
@@ -274,6 +306,73 @@ export function renderHucodeWebOmniShell(
 				}
 				target.searchParams.set('payload', payload(id));
 				return target.pathname + target.search;
+			};
+
+			const requestProjects = async (method, path, body) => {
+				const response = await fetch(path, {
+					method,
+					credentials: 'same-origin',
+					headers: body ? { 'Content-Type': 'application/json' } : undefined,
+					body: body ? JSON.stringify(body) : undefined,
+				});
+				if (!response.ok) {
+					throw new Error(\`Project request failed: \${response.status}\`);
+				}
+				return response.json();
+			};
+
+			const loadProjects = async () => {
+				const data = await requestProjects('GET', projectsApi);
+				projects = Array.isArray(data.projects) ? data.projects : [];
+				renderProjects();
+			};
+
+			const addProject = async folder => {
+				const data = await requestProjects('POST', projectsApi, {
+					rootPath: folder,
+				});
+				projects = Array.isArray(data.projects) ? data.projects : [];
+				renderProjects();
+				return data.project;
+			};
+
+			const removeProject = async id => {
+				const data = await requestProjects(
+					'DELETE',
+					\`\${projectsApi}/\${encodeURIComponent(id)}\`
+				);
+				projects = Array.isArray(data.projects) ? data.projects : [];
+				renderProjects();
+			};
+
+			const renderProjects = () => {
+				projectList.textContent = '';
+				for (const project of projects) {
+					const row = document.createElement('div');
+					row.className = 'hucode-omni-workspace';
+
+					const open = document.createElement('button');
+					open.className = 'hucode-omni-button hucode-omni-workspace-label';
+					open.type = 'button';
+					open.textContent = project.label || project.rootPath;
+					open.title = project.rootPath;
+					open.addEventListener('click', () => openInstance({
+						key: \`folder:\${project.rootPath}\`,
+						label: project.label || project.rootPath,
+						folder: project.rootPath,
+					}));
+
+					const spacer = document.createElement('span');
+
+					const remove = document.createElement('button');
+					remove.className = 'hucode-omni-button';
+					remove.type = 'button';
+					remove.textContent = 'Remove';
+					remove.addEventListener('click', () => removeProject(project.id));
+
+					row.append(open, spacer, remove);
+					projectList.append(row);
+				}
 			};
 
 			const renderList = () => {
@@ -397,16 +496,17 @@ export function renderHucodeWebOmniShell(
 				renderList();
 			};
 
-			folderForm.addEventListener('submit', event => {
+			folderForm.addEventListener('submit', async event => {
 				event.preventDefault();
 				const folder = folderInput.value.trim();
 				if (!folder) {
 					return;
 				}
 
+				const project = await addProject(folder);
 				openInstance({
 					key: \`folder:\${folder}\`,
-					label: folder,
+					label: project.label || folder,
 					folder,
 				});
 				folderInput.value = '';
@@ -434,6 +534,7 @@ export function renderHucodeWebOmniShell(
 				label: 'Initial Workbench',
 				src: initialWorkbenchSrc,
 			});
+			loadProjects().catch(error => console.error(error));
 		})();
 	</script>
 </body>

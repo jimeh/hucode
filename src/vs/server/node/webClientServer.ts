@@ -36,8 +36,10 @@ import {
 import {
 	getHucodeWebOmniWorkbenchBase,
 	getHucodeWebOmniWorkbenchSrc,
+	getHucodeWebOmniProjectsApi,
 	renderHucodeWebOmniShell,
 } from './hucodeWebOmniShell.js';
+import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
 	'.html': 'text/html',
@@ -128,6 +130,7 @@ const WEB_EXTENSION_PATH = `/web-extension-resource`;
 export class WebClientServer {
 
 	private readonly _webExtensionResourceUrlTemplate: URI | undefined;
+	private readonly _hucodeProjectManagerServer: HucodeWebProjectManagerServer;
 
 	constructor(
 		private readonly _connectionToken: ServerConnectionToken,
@@ -140,6 +143,8 @@ export class WebClientServer {
 		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService
 	) {
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
+		this._hucodeProjectManagerServer =
+			new HucodeWebProjectManagerServer(this._environmentService.userDataPath);
 	}
 
 	/**
@@ -161,6 +166,14 @@ export class WebClientServer {
 			if (pathname.startsWith(WEB_EXTENSION_PATH) && pathname.charCodeAt(WEB_EXTENSION_PATH.length) === CharCode.Slash) {
 				// extension resource support
 				return this._handleWebExtensionResource(req, res, pathname.substring(WEB_EXTENSION_PATH.length));
+			}
+			if (await this._hucodeProjectManagerServer.handle(
+				req,
+				res,
+				parsedUrl,
+				pathname
+			)) {
+				return;
 			}
 
 			const route = getHucodeWebClientRoute(
@@ -539,7 +552,8 @@ export class WebClientServer {
 		const basePath = this._getClientBasePath(req);
 		const data = renderHucodeWebOmniShell(
 			getHucodeWebOmniWorkbenchBase(basePath),
-			getHucodeWebOmniWorkbenchSrc(basePath, parsedUrl.query)
+			getHucodeWebOmniWorkbenchSrc(basePath, parsedUrl.query),
+			getHucodeWebOmniProjectsApi(basePath)
 		);
 		const headers: http.OutgoingHttpHeaders = {
 			'Content-Type': 'text/html',
