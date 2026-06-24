@@ -13,6 +13,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import {
 	HUCODE_WEB_PROJECTS_API_PATH,
 	HucodeWebProjectManagerServer,
+	isHucodeWebProjectsApiPath,
 } from '../../node/hucodeWebProjectManagerServer.js';
 
 suite('HucodeWebProjectManagerServer', () => {
@@ -74,6 +75,21 @@ suite('HucodeWebProjectManagerServer', () => {
 
 		assert.strictEqual(remove.statusCode, 200);
 		assert.deepStrictEqual(remove.body.projects, []);
+	});
+
+	test('matches project API paths', () => {
+		assert.strictEqual(
+			isHucodeWebProjectsApiPath(HUCODE_WEB_PROJECTS_API_PATH),
+			true
+		);
+		assert.strictEqual(
+			isHucodeWebProjectsApiPath(`${HUCODE_WEB_PROJECTS_API_PATH}/id`),
+			true
+		);
+		assert.strictEqual(
+			isHucodeWebProjectsApiPath('/_hucode/projects-old'),
+			false
+		);
 	});
 });
 

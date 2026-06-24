@@ -21,6 +21,14 @@ import {
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
 
+/**
+ * Returns whether a request path targets the Hucode serve-web Projects API.
+ */
+export function isHucodeWebProjectsApiPath(pathname: string): boolean {
+	return pathname === HUCODE_WEB_PROJECTS_API_PATH ||
+		pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`);
+}
+
 interface HucodeWebProjectRecord {
 	readonly id: string;
 	readonly label: string;
@@ -52,8 +60,7 @@ export class HucodeWebProjectManagerServer {
 		parsedUrl: url.UrlWithParsedQuery,
 		pathname: string
 	): Promise<boolean> {
-		if (pathname !== HUCODE_WEB_PROJECTS_API_PATH &&
-			!pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`)) {
+		if (!isHucodeWebProjectsApiPath(pathname)) {
 			return false;
 		}
 
