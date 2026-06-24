@@ -34,6 +34,7 @@ import {
 	toHucodeWebRouteLocation,
 } from './hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniWorkbenchBase,
 	getHucodeWebOmniWorkbenchSrc,
 	renderHucodeWebOmniShell,
 } from './hucodeWebOmniShell.js';
@@ -535,10 +536,11 @@ export class WebClientServer {
 			return;
 		}
 
-		const data = renderHucodeWebOmniShell(getHucodeWebOmniWorkbenchSrc(
-			this._getClientBasePath(req),
-			parsedUrl.query
-		));
+		const basePath = this._getClientBasePath(req);
+		const data = renderHucodeWebOmniShell(
+			getHucodeWebOmniWorkbenchBase(basePath),
+			getHucodeWebOmniWorkbenchSrc(basePath, parsedUrl.query)
+		);
 		const headers: http.OutgoingHttpHeaders = {
 			'Content-Type': 'text/html',
 			'Content-Security-Policy': [

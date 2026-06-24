@@ -11,6 +11,7 @@ import {
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
 	getHucodeWebOmniWorkbenchSrc,
+	getHucodeWebOmniWorkbenchBase,
 	renderHucodeWebOmniShell,
 } from '../../node/hucodeWebOmniShell.js';
 
@@ -81,16 +82,51 @@ suite('HucodeWebOmniRoutes', () => {
 	});
 
 	test('builds the Omni hosted workbench iframe URL', () => {
-		assert.strictEqual(
-			getHucodeWebOmniWorkbenchSrc('/x', {
-				folder: '/tmp/project',
-			}),
-			'/x/workbench?folder=%2Ftmp%2Fproject'
-		);
+		const src = getHucodeWebOmniWorkbenchSrc('/x', {
+			folder: '/tmp/project',
+		});
+		const location = new URL(src, 'http://localhost');
+
+		assert.strictEqual(location.pathname, '/x/workbench');
+		assert.strictEqual(location.searchParams.get('folder'), '/tmp/project');
+
+		const payload = parsePayload(location.searchParams.get('payload'));
+		assert.strictEqual(payload.get('isHostedOmniWorkspace'), 'true');
+		assert.strictEqual(payload.get('hostedInstanceId'), 'initial');
+	});
+
+	test('adds an empty-window target for Omni hosted iframe URLs', () => {
+		const src = getHucodeWebOmniWorkbenchSrc('/', {}, 'empty-1');
+		const location = new URL(src, 'http://localhost');
+
+		assert.strictEqual(location.pathname, '/workbench');
+		assert.strictEqual(location.searchParams.get('ew'), 'true');
+
+		const payload = parsePayload(location.searchParams.get('payload'));
+		assert.strictEqual(payload.get('isHostedOmniWorkspace'), 'true');
+		assert.strictEqual(payload.get('hostedInstanceId'), 'empty-1');
+	});
+
+	test('builds the Omni hosted workbench base route', () => {
+		assert.strictEqual(getHucodeWebOmniWorkbenchBase('/x'), '/x/workbench');
 	});
 
 	test('escapes the Omni hosted workbench iframe URL', () => {
-		const html = renderHucodeWebOmniShell('/workbench?label=a"b&x=1');
-		assert.ok(html.includes('src="/workbench?label=a&quot;b&amp;x=1"'));
+		const html = renderHucodeWebOmniShell(
+			'/workbench?base=a"b&x=1',
+			'/workbench?label=c"d&y=2'
+		);
+
+		assert.ok(html.includes(
+			'data-workbench-base="/workbench?base=a&quot;b&amp;x=1"'
+		));
+		assert.ok(html.includes(
+			'data-initial-workbench-src="/workbench?label=c&quot;d&amp;y=2"'
+		));
 	});
 });
+
+function parsePayload(payload: string | null): Map<string, string> {
+	assert.ok(payload);
+	return new Map(JSON.parse(payload));
+}

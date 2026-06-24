@@ -225,6 +225,12 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get isOmniWindow(): boolean { return this.payload?.get('isOmniWindow') === 'true'; }
 
 	@memoize
+	get isHostedOmniWorkspace(): boolean { return this.payload?.get('isHostedOmniWorkspace') === 'true'; }
+
+	@memoize
+	get hostedInstanceId(): string | undefined { return this.payload?.get('hostedInstanceId'); }
+
+	@memoize
 	get enableExtensions() { return this.options.enabledExtensions; }
 
 	@memoize
