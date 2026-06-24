@@ -15,6 +15,7 @@ export interface IOmniLayoutDescriptorOptions {
 	readonly width: number;
 	readonly height: number;
 	readonly titleBarHeight: number;
+	readonly titleBarVisible?: boolean;
 	readonly sideBarVisible: boolean;
 	readonly auxiliaryBarVisible: boolean;
 	readonly omniHostVisible: boolean;
@@ -29,17 +30,18 @@ export function createOmniGridDescriptor(
 	const sideBarSize = 300;
 	const auxiliaryBarSize = 380;
 	const panelSize = 300;
+	const titleBarVisible = options.titleBarVisible ?? true;
 	const titleBarHeight = options.titleBarHeight;
 	const rightSectionWidth = Math.max(0, width - sideBarSize);
 	const omniHostWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
-	const contentHeight = height - titleBarHeight;
+	const contentHeight = height - (titleBarVisible ? titleBarHeight : 0);
 	const topRightHeight = Math.max(0, contentHeight - panelSize);
 
 	const titleBarNode: ISerializedLeafNode = {
 		type: 'leaf',
 		data: { type: Parts.TITLEBAR_PART },
 		size: titleBarHeight,
-		visible: true,
+		visible: titleBarVisible,
 	};
 
 	const sideBarNode: ISerializedLeafNode = {

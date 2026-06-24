@@ -262,6 +262,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private paneCompositeService!: IPaneCompositePartService;
 	private viewDescriptorService!: IViewDescriptorService;
 	private omniHostPart!: OmniHostPart;
+	private readonly isWebOmniShell: boolean;
 
 	//#endregion
 
@@ -272,6 +273,9 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		private readonly logService: ILogService
 	) {
 		super();
+
+		this.isWebOmniShell =
+			options?.extraClasses?.includes('hucode-omni-web-window') ?? false;
 
 		// Perf: measure workbench startup time
 		mark('code/willStartWorkbench');
@@ -797,7 +801,10 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		return createOmniGridDescriptor({
 			width: this._mainContainerDimension.width,
 			height: this._mainContainerDimension.height,
-			titleBarHeight: this.titleBarPartView?.minimumHeight ?? 30,
+			titleBarVisible: !this.isWebOmniShell,
+			titleBarHeight: this.isWebOmniShell
+				? 0
+				: this.titleBarPartView?.minimumHeight ?? 30,
 			sideBarVisible: this.partVisibility.sidebar,
 			auxiliaryBarVisible: this.partVisibility.auxiliaryBar,
 			omniHostVisible: this.partVisibility.omniHost,

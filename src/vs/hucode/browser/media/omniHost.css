@@ -8,6 +8,16 @@
 	padding: 0;
 }
 
+.monaco-workbench.hucode-omni-workbench.hucode-omni-web-window
+	.part.titlebar {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-web-window
+	.part.hucode-omni-host {
+	margin: 0;
+}
+
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.titlebar {
 	box-shadow: none;

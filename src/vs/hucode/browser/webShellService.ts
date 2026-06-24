@@ -81,7 +81,6 @@ export class WebHucodeShellService extends Disposable
 	private projectsSidebarVisible = true;
 	private projectSwitcherCanGoBack = false;
 	private projectSwitcherCanGoForward = false;
-	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 
 	private readonly _onDidChangeWindowState =
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
@@ -332,9 +331,8 @@ export class WebHucodeShellService extends Disposable
 
 	async layoutWorkspace(
 		_windowId: number,
-		bounds: IRectangle
+		_bounds: IRectangle
 	): Promise<void> {
-		this.bounds = bounds;
 		this.applyIframeLayout();
 	}
 
@@ -571,13 +569,13 @@ export class WebHucodeShellService extends Disposable
 
 	private applyIframeLayout(): void {
 		const surface = this.hostSurfaceService.getSurface();
-		if (!surface || this.bounds.width <= 0 || this.bounds.height <= 0) {
+		if (!surface) {
 			return;
 		}
 
 		for (const instance of this.instancesById.values()) {
-			instance.iframe.style.width = `${Math.max(0, this.bounds.width)}px`;
-			instance.iframe.style.height = `${Math.max(0, this.bounds.height)}px`;
+			instance.iframe.style.width = '';
+			instance.iframe.style.height = '';
 		}
 	}
 
