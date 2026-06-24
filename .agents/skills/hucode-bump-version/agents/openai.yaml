@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hucode Version Bump"
+  short_description: "Prepare Hucode release metadata bumps"
+  default_prompt: "Use $hucode-bump-version to bump Hucode to the next release version."

@@ -1,6 +1,6 @@
 ---
 name: hucode-upgrade-vscode
-description: Upgrade Hucode to a selected upstream VS Code release tag. Use when preparing or executing a Hucode series upgrade, creating versioned upstream, series, or replay branches, replaying Hucode patches onto a new VS Code version, resolving upgrade conflicts, validating Hucode after a VS Code baseline bump, or bumping Hucode overlay release metadata.
+description: Upgrade Hucode to a selected upstream VS Code release tag. Use when preparing or executing a Hucode series upgrade, creating versioned upstream, series, or replay branches, replaying Hucode patches onto a new VS Code version, resolving upgrade conflicts, or validating Hucode after a VS Code baseline bump.
 ---
 
 # Hucode VS Code Upgrade
