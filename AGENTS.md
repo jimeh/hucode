@@ -56,7 +56,8 @@ as the required Hucode instruction set for work in this fork.
   run `cd build && node --test --test-name-pattern <pattern> \
   '{lib,next}/**/*.test.ts'`.
 - TOML files cannot carry VS Code's standard block copyright header. Keep
-  `*.toml` excluded from copyright hygiene rather than adding invalid TOML.
+  `*.toml` and TOML-formatted lockfiles such as `mise.lock` excluded from
+  copyright hygiene rather than adding invalid TOML.
 - Do not run `npm run test-node -- --run ...` concurrently with
   `npm run gulp compile-client`; the compile task cleans `out/`, which can make
   the test runner fail to resolve freshly built modules.
