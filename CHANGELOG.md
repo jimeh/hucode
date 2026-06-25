@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.37 - 2026-06-25
+
+### Bug Fixes
+
+- prioritize worktree labels in Projects (#76)
+
 ## 0.0.36 - 2026-06-24
 
 ### Bug Fixes
