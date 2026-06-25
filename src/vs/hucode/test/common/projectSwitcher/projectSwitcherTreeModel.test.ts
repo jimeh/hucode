@@ -196,6 +196,53 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
 	});
 
+	test('hides branch descriptions identical to worktree names', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'hucode',
+					worktrees: [
+						createWorktree('/repos/hucode.worktrees/user-login', {
+							branch: 'user-login',
+						}),
+						createWorktree('/repos/hucode.worktrees/fix-user-login', {
+							branch: 'fix/user-login',
+						}),
+						createWorktree('/repos/hucode.worktrees/user-session', {
+							branch: 'fix/user-login',
+						}),
+					],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: false,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.deepStrictEqual(
+			[
+				getWorktree(
+					model.roots,
+					'/repos/hucode.worktrees/user-login'
+				).description,
+				getWorktree(
+					model.roots,
+					'/repos/hucode.worktrees/fix-user-login'
+				).description,
+				getWorktree(
+					model.roots,
+					'/repos/hucode.worktrees/user-session'
+				).description,
+			],
+			[
+				undefined,
+				'fix/user-login',
+				'fix/user-login',
+			]
+		);
+	});
+
 	test('renders missing hosted instances under matching projects', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
