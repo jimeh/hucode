@@ -5,15 +5,11 @@
 
 import { mainWindow } from '../../base/browser/window.js';
 import { addDisposableListener } from '../../base/browser/dom.js';
-import { coalesce } from '../../base/common/arrays.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isObject } from '../../base/common/types.js';
-import { URI } from '../../base/common/uri.js';
 import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
-import { IResourceEditorInput } from
-	'../../platform/editor/common/editor.js';
 import { IFileService } from '../../platform/files/common/files.js';
 import {
 	IInstantiationService,
@@ -24,16 +20,6 @@ import {
 	INativeOpenFileRequest,
 } from '../../platform/window/common/window.js';
 import { localize2 } from '../../nls.js';
-import { whenEditorClosed } from '../../workbench/browser/editor.js';
-import {
-	IEditorPane,
-	IResourceDiffEditorInput,
-	IResourceMergeEditorInput,
-	isResourceEditorInput,
-	IUntitledTextResourceEditorInput,
-	IUntypedEditorInput,
-	pathsToEditors,
-} from '../../workbench/common/editor.js';
 import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
@@ -50,6 +36,7 @@ import {
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
+import { openHostedOmniFiles } from './hostedOmniOpenFiles.js';
 import './hostedOmniWebShellService.js';
 import './projectManager/webProjectManagerService.js';
 import './hostedOmniWorkspace.contribution.js';
@@ -193,106 +180,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 			return false;
 		}
 
-		const diffMode = !!(request.filesToDiff?.length === 2);
-		const mergeMode = !!(request.filesToMerge?.length === 4);
-		const paths = mergeMode
-			? request.filesToMerge
-			: diffMode
-				? request.filesToDiff
-				: request.filesToOpenOrCreate;
-		const inputs = coalesce(await pathsToEditors(
-			paths,
-			this.fileService,
-			this.logService
-		));
-		if (!inputs.length) {
-			await this.deleteWaitMarker(request);
-			return false;
-		}
-
-		const openedEditorPanes = await this.openResources(
-			inputs,
-			diffMode,
-			mergeMode
-		);
-		if (request.filesToWait) {
-			if (openedEditorPanes.length) {
-				void this.trackClosedWaitFiles(
-					URI.revive(request.filesToWait.waitMarkerFileUri),
-					coalesce(request.filesToWait.paths.map(path =>
-						URI.revive(path.fileUri)
-					))
-				);
-			} else {
-				await this.deleteWaitMarker(request);
-			}
-		}
-
-		return openedEditorPanes.length > 0;
-	}
-
-	private async openResources(
-		resources: Array<IResourceEditorInput | IUntitledTextResourceEditorInput>,
-		diffMode: boolean,
-		mergeMode: boolean
-	): Promise<readonly IEditorPane[]> {
-		const editors: IUntypedEditorInput[] = [];
-
-		if (
-			mergeMode &&
-			isResourceEditorInput(resources[0]) &&
-			isResourceEditorInput(resources[1]) &&
-			isResourceEditorInput(resources[2]) &&
-			isResourceEditorInput(resources[3])
-		) {
-			const mergeEditor: IResourceMergeEditorInput = {
-				input1: { resource: resources[0].resource },
-				input2: { resource: resources[1].resource },
-				base: { resource: resources[2].resource },
-				result: { resource: resources[3].resource },
-				options: { pinned: true },
-			};
-			editors.push(mergeEditor);
-		} else if (
-			diffMode &&
-			isResourceEditorInput(resources[0]) &&
-			isResourceEditorInput(resources[1])
-		) {
-			const diffEditor: IResourceDiffEditorInput = {
-				original: { resource: resources[0].resource },
-				modified: { resource: resources[1].resource },
-				options: { pinned: true },
-			};
-			editors.push(diffEditor);
-		} else {
-			editors.push(...resources);
-		}
-
-		return this.editorService.openEditors(
-			editors,
-			undefined,
-			{ validateTrust: true }
-		);
-	}
-
-	private async trackClosedWaitFiles(
-		waitMarkerFile: URI,
-		resourcesToWaitFor: URI[]
-	): Promise<void> {
-		await this.instantiationService.invokeFunction(accessor =>
-			whenEditorClosed(accessor, resourcesToWaitFor)
-		);
-		await this.fileService.del(waitMarkerFile);
-	}
-
-	private async deleteWaitMarker(
-		request: INativeOpenFileRequest
-	): Promise<void> {
-		if (request.filesToWait) {
-			await this.fileService.del(URI.revive(
-				request.filesToWait.waitMarkerFileUri
-			));
-		}
+		return openHostedOmniFiles(request, {
+			editorService: this.editorService,
+			fileService: this.fileService,
+			instantiationService: this.instantiationService,
+			logService: this.logService,
+		});
 	}
 
 	private postToShell(message: object): void {

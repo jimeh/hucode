@@ -322,7 +322,11 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
+            src/vs/hucode/test/browser/hostedOmniOpenFiles.test.ts \
+            --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
+            --run \
+            src/vs/hucode/test/browser/webShellService.test.ts \
             --run \
             src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts \
             --run \

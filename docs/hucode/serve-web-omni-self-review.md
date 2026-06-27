@@ -55,6 +55,24 @@ items remain open.
     `waitForHostedWorkspaceReady`, with platform adapters supplying only their
     state-change event and unavailable-instance predicate.
 
+- [x] P2: Do not reuse crashed hosted iframes in the web shell.
+  - Web now uses the shared hosted-workspace availability predicate when
+    opening a worktree and removes terminal iframe instances before creating a
+    replacement.
+  - Browser coverage simulates a failed hosted iframe and verifies reopening
+    the same worktree creates a new instance.
+
+- [x] P3: Extract hosted web open-file handling out of the iframe bridge.
+  - `HostedOmniWebBridgeContribution` now delegates `vscode:openFiles` to a
+    Hucode-owned helper that owns path-to-editor conversion, diff/merge editor
+    construction, and wait-marker cleanup.
+  - Focused helper tests cover normal, diff, and merge editor input creation.
+
+- [x] P3: Add direct web shell adapter coverage.
+  - `src/vs/hucode/test/browser/webShellService.test.ts` covers the
+    iframe-specific crashed-instance reopen path through the public shell
+    service API.
+
 ## Verification
 
 - [x] Add or update focused tests for changed shared hosted-workspace behavior.
@@ -66,5 +84,7 @@ items remain open.
 - [x] Add focused coverage for Hucode web workbench entrypoint selection.
 - [x] Add focused coverage for Hucode server-web route/config integration.
 - [x] Add focused coverage for shared hosted-workspace readiness waiting.
+- [x] Add focused browser coverage for hosted web open-file handling.
+- [x] Add focused browser coverage for the web shell iframe adapter.
 - [x] Run focused tests for changed files.
 - [x] Run required Hucode hygiene checks.

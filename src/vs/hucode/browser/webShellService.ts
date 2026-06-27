@@ -40,6 +40,7 @@ import {
 	getMostRecentHostedWorkspace,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
+	isHostedWorkspaceAvailable,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import {
@@ -170,9 +171,13 @@ export class WebHucodeShellService extends Disposable
 
 		const existing = this.getInstanceByPath(worktreePath);
 		if (existing) {
-			existing.projectId = projectId ?? existing.projectId;
-			this.activateInstance(existing);
-			return this.getState();
+			if (isHostedWorkspaceAvailable(existing)) {
+				existing.projectId = projectId ?? existing.projectId;
+				this.activateInstance(existing);
+				return this.getState();
+			}
+
+			this.removeInstance(existing);
 		}
 
 		const instance = this.createInstance(worktreePath, projectId);

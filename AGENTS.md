@@ -63,6 +63,9 @@ as the required Hucode instruction set for work in this fork.
 - Do not run `npm run test-node -- --run ...` concurrently with
   `npm run gulp compile-client`; the compile task cleans `out/`, which can make
   the test runner fail to resolve freshly built modules.
+- Do not run multiple `./scripts/test.sh` invocations concurrently. They share
+  the same `.build/electron` app preparation path and can race while creating
+  framework symlinks.
 - IDE-integrated shells can inherit extension-host variables such as
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
