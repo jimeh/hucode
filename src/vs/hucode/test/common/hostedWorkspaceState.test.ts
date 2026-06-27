@@ -28,14 +28,19 @@ suite('HostedWorkspaceState', () => {
 			entry('three', { lastActiveAt: 20 }),
 		], 'three', true, false, true);
 
-		assert.deepStrictEqual(
-			state.instances.map(instance => instance.instanceId),
-			['three', 'two', 'one']
-		);
-		assert.strictEqual(state.activeInstanceId, 'three');
-		assert.strictEqual(state.projectsSidebarVisible, true);
-		assert.strictEqual(state.projectSwitcherCanGoBack, false);
-		assert.strictEqual(state.projectSwitcherCanGoForward, true);
+		assert.deepStrictEqual({
+			instances: state.instances.map(instance => instance.instanceId),
+			activeInstanceId: state.activeInstanceId,
+			projectsSidebarVisible: state.projectsSidebarVisible,
+			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
+			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
+		}, {
+			instances: ['three', 'two', 'one'],
+			activeInstanceId: 'three',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: true,
+		});
 	});
 
 	test('reports loaded workspaces while excluding terminal states', () => {

@@ -19,6 +19,7 @@ import { isUndefined } from '../../../../base/common/types.js';
 import { refineServiceDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ITextEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { EXTENSION_IDENTIFIER_WITH_LOG_REGEX } from '../../../../platform/environment/common/environmentService.js';
+import { isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
 
 export const IBrowserWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IBrowserWorkbenchEnvironmentService>(IEnvironmentService);
 
@@ -224,8 +225,7 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	@memoize
 	get isOmniWindow(): boolean {
 		return this.payload?.get('isOmniWindow') === 'true' ||
-			(this.options as { readonly hucodeOmniShell?: boolean })
-				.hucodeOmniShell === true;
+			isHucodeOmniWebConfiguration(this.options);
 	}
 
 	@memoize

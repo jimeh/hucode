@@ -321,7 +321,7 @@ export class WebHucodeShellService extends Disposable
 		void this.postCommand(instance, 'workbench.action.reloadWindow', []);
 		mainWindow.setTimeout(() => {
 			if (instance.state === 'loading') {
-				instance.iframe.src = instance.iframe.src;
+				instance.iframe.contentWindow?.location.reload();
 			}
 		}, 500);
 		this.emitState();

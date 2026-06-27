@@ -21,6 +21,9 @@ export interface IHostedWorkspaceStateEntry {
 	readonly lastActiveAt?: number;
 }
 
+/**
+ * Builds the external hosted-workspace state with the active instance first.
+ */
 export function createHostedWorkspaceState<T extends IHostedWorkspaceStateEntry>(
 	entries: Iterable<T>,
 	activeInstanceId: string | undefined,
@@ -42,6 +45,9 @@ export function createHostedWorkspaceState<T extends IHostedWorkspaceStateEntry>
 	};
 }
 
+/**
+ * Returns whether any entry represents a non-terminal hosted workbench.
+ */
 export function hasLoadedHostedWorkspace<T extends IHostedWorkspaceStateEntry>(
 	entries: Iterable<T>,
 	isDisposed: (entry: T) => boolean = () => false
@@ -53,6 +59,9 @@ export function hasLoadedHostedWorkspace<T extends IHostedWorkspaceStateEntry>(
 	);
 }
 
+/**
+ * Converts a ready hosted workbench to active or loaded state.
+ */
 export function getReadyHostedWorkspaceState(
 	entry: IHostedWorkspaceStateEntry,
 	activeInstanceId: string | undefined
@@ -60,12 +69,18 @@ export function getReadyHostedWorkspaceState(
 	return entry.instanceId === activeInstanceId ? 'active' : 'loaded';
 }
 
+/**
+ * Returns whether an entry is still waiting for hosted workbench readiness.
+ */
 export function isHostedWorkspacePendingReady(
 	entry: IHostedWorkspaceStateEntry
 ): boolean {
 	return entry.state === 'restore-pending' || entry.state === 'loading';
 }
 
+/**
+ * Selects the most recently active available hosted workbench.
+ */
 export function getMostRecentHostedWorkspace<
 	T extends IHostedWorkspaceStateEntry
 >(
@@ -83,6 +98,9 @@ export function getMostRecentHostedWorkspace<
 		.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0];
 }
 
+/**
+ * Selects the restore target, preferring a still-present configured worktree.
+ */
 export function getRestoreActiveWorktreePath(
 	entries: readonly IOmniWorkspaceRestoreEntry[],
 	configuredActiveWorktreePath: string | undefined
@@ -104,6 +122,9 @@ export function getRestoreActiveWorktreePath(
 		mostRecentWorktreePath;
 }
 
+/**
+ * Sorts restore entries with the selected active worktree first.
+ */
 export function sortRestoreEntries(
 	entries: readonly IOmniWorkspaceRestoreEntry[],
 	activeWorktreePath: string | undefined
@@ -121,6 +142,9 @@ export function sortRestoreEntries(
 	});
 }
 
+/**
+ * Creates persisted restore entries for live hosted workbenches.
+ */
 export function createHostedWorkspaceRestoreEntries<
 	T extends IHostedWorkspaceStateEntry
 >(
@@ -145,6 +169,9 @@ export function createHostedWorkspaceRestoreEntries<
 		.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
 }
 
+/**
+ * Converts an internal hosted-workspace entry to the public instance shape.
+ */
 export function defaultExternalInstance(
 	entry: IHostedWorkspaceStateEntry
 ): IHucodeHostedWorkbenchInstance {

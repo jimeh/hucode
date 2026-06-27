@@ -59,8 +59,8 @@ export class WebProjectManagerService implements IProjectManagerService {
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
-		return this.reviveProjects(
-			(await this.request<ProjectsResponse>('', { method: 'GET' })).projects
+		return this.readProjectsResponse(
+			await this.request<ProjectsResponse>('', { method: 'GET' })
 		);
 	}
 

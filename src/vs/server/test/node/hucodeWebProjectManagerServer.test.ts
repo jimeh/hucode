@@ -6,9 +6,7 @@
 import assert from 'assert';
 import * as cp from 'child_process';
 import * as fs from 'fs/promises';
-import type * as http from 'http';
 import * as os from 'os';
-import type * as url from 'url';
 import { promisify } from 'util';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
@@ -18,6 +16,25 @@ import {
 	HucodeWebProjectManagerServer,
 	isHucodeWebProjectsApiPath,
 } from '../../node/hucodeWebProjectManagerServer.js';
+
+interface ProjectManagerResponse<TBody = unknown> {
+	readonly statusCode: number;
+	readonly body: TBody;
+}
+
+interface ProjectResponseBody {
+	readonly project: {
+		readonly id: string;
+		readonly label: string;
+		readonly rootUri: { readonly path: string };
+		readonly worktrees: readonly { readonly isMain: boolean }[];
+	};
+	readonly projects: readonly unknown[];
+}
+
+interface ProjectsResponseBody {
+	readonly projects: readonly unknown[];
+}
 
 const execFile = promisify(cp.execFile);
 
@@ -40,17 +57,27 @@ suite('HucodeWebProjectManagerServer', () => {
 
 	test('persists projects under the server data dir', async () => {
 		const server = createServer(serverDataPath, disposables);
-		const add = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: projectPath,
-		});
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
 
 		assert.strictEqual(add.statusCode, 201);
-		assert.strictEqual(add.body.project.label, 'example');
-		assert.strictEqual(add.body.project.rootUri.path, projectPath);
-		assert.strictEqual(add.body.project.worktrees.length, 1);
-		assert.strictEqual(add.body.project.worktrees[0].isMain, true);
+		assert.deepStrictEqual({
+			label: add.body.project.label,
+			rootPath: add.body.project.rootUri.path,
+			worktreeCount: add.body.project.worktrees.length,
+			isMainWorktree: add.body.project.worktrees[0].isMain,
+		}, {
+			label: 'example',
+			rootPath: projectPath,
+			worktreeCount: 1,
+			isMainWorktree: true,
+		});
 
-		const loaded = await handle(
+		const loaded = await handle<ProjectsResponseBody>(
 			createServer(serverDataPath, disposables),
 			'GET',
 			HUCODE_WEB_PROJECTS_API_PATH
@@ -62,12 +89,18 @@ suite('HucodeWebProjectManagerServer', () => {
 
 	test('deduplicates projects by path', async () => {
 		const server = createServer(serverDataPath, disposables);
-		const first = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: projectPath,
-		});
-		const second = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: projectPath,
-		});
+		const first = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const second = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
 
 		assert.strictEqual(second.statusCode, 201);
 		assert.deepStrictEqual(second.body.projects, [first.body.project]);
@@ -75,10 +108,13 @@ suite('HucodeWebProjectManagerServer', () => {
 
 	test('removes projects by id', async () => {
 		const server = createServer(serverDataPath, disposables);
-		const add = await handle(server, 'POST', HUCODE_WEB_PROJECTS_API_PATH, {
-			rootPath: projectPath,
-		});
-		const remove = await handle(
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const remove = await handle<ProjectsResponseBody>(
 			server,
 			'DELETE',
 			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}`
@@ -86,6 +122,21 @@ suite('HucodeWebProjectManagerServer', () => {
 
 		assert.strictEqual(remove.statusCode, 200);
 		assert.deepStrictEqual(remove.body.projects, []);
+	});
+
+	test('returns bad request for malformed JSON', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const response = await handle<{ readonly error: string }>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			'{'
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'Invalid JSON request body.' },
+		});
 	});
 
 	test('matches project API paths', () => {
@@ -135,15 +186,29 @@ async function handle(
 	method: string,
 	pathname: string,
 	body?: unknown
-): Promise<{ readonly statusCode: number; readonly body: any }> {
+): Promise<ProjectManagerResponse>;
+async function handle<TBody>(
+	server: HucodeWebProjectManagerServer,
+	method: string,
+	pathname: string,
+	body?: unknown
+): Promise<ProjectManagerResponse<TBody>>;
+async function handle<TBody = unknown>(
+	server: HucodeWebProjectManagerServer,
+	method: string,
+	pathname: string,
+	body?: unknown
+): Promise<ProjectManagerResponse<TBody>> {
 	const req = {
 		method,
 		async *[Symbol.asyncIterator]() {
 			if (body !== undefined) {
-				yield Buffer.from(JSON.stringify(body));
+				yield Buffer.from(
+					typeof body === 'string' ? body : JSON.stringify(body)
+				);
 			}
 		},
-	} as unknown as http.IncomingMessage;
+	};
 
 	let statusCode = 0;
 	let rawBody = '';
@@ -154,9 +219,8 @@ async function handle(
 		end(data?: string) {
 			rawBody = data ?? '';
 		},
-	} as unknown as http.ServerResponse;
+	};
 
-	const parsedUrl = { query: {} } as url.UrlWithParsedQuery;
-	assert.strictEqual(await server.handle(req, res, parsedUrl, pathname), true);
-	return { statusCode, body: JSON.parse(rawBody) };
+	assert.strictEqual(await server.handle(req, res, pathname), true);
+	return { statusCode, body: JSON.parse(rawBody) as TBody };
 }

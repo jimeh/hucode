@@ -5,7 +5,6 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
-import * as url from 'url';
 import { join } from '../../base/common/path.js';
 import { URI } from '../../base/common/uri.js';
 import { ILogService } from '../../platform/log/common/log.js';
@@ -29,6 +28,16 @@ export function isHucodeWebProjectsApiPath(pathname: string): boolean {
 		pathname === HUCODE_WEB_PROJECTS_API_PATH ||
 		pathname.startsWith(`${HUCODE_WEB_PROJECTS_API_PATH}/`)
 	);
+}
+
+interface HucodeWebProjectManagerRequest
+	extends AsyncIterable<Buffer | string | Uint8Array> {
+	readonly method?: string;
+}
+
+interface HucodeWebProjectManagerResponse {
+	writeHead(status: number, headers?: http.OutgoingHttpHeaders): unknown;
+	end(data?: string): unknown;
 }
 
 class HucodeProjectFileStateService implements IStateService {
@@ -145,9 +154,8 @@ export class HucodeWebProjectManagerServer {
 	}
 
 	async handle(
-		req: http.IncomingMessage,
-		res: http.ServerResponse,
-		_parsedUrl: url.UrlWithParsedQuery,
+		req: HucodeWebProjectManagerRequest,
+		res: HucodeWebProjectManagerResponse,
 		pathname: string,
 	): Promise<boolean> {
 		if (!isHucodeWebProjectsApiPath(pathname)) {
@@ -188,7 +196,7 @@ export class HucodeWebProjectManagerServer {
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const status = isBadRequestMessage(message) ? 400 : 500;
+			const status = error instanceof BadRequestError ? 400 : 500;
 			return this.writeJson(res, status, { error: message });
 		}
 	}
@@ -202,7 +210,7 @@ export class HucodeWebProjectManagerServer {
 	}
 
 	private async handlePost(
-		res: http.ServerResponse,
+		res: HucodeWebProjectManagerResponse,
 		relativePath: string,
 		body: unknown,
 	): Promise<boolean> {
@@ -312,7 +320,9 @@ export class HucodeWebProjectManagerServer {
 		return this.writeJson(res, 404, { error: 'Not found.' });
 	}
 
-	private async readJson(req: http.IncomingMessage): Promise<unknown> {
+	private async readJson(
+		req: HucodeWebProjectManagerRequest
+	): Promise<unknown> {
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) {
 			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -320,11 +330,18 @@ export class HucodeWebProjectManagerServer {
 		if (!chunks.length) {
 			return {};
 		}
-		return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+		try {
+			return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+		} catch (error) {
+			if (error instanceof SyntaxError) {
+				throw new BadRequestError('Invalid JSON request body.');
+			}
+			throw error;
+		}
 	}
 
 	private writeProjects(
-		res: http.ServerResponse,
+		res: HucodeWebProjectManagerResponse,
 		status: number,
 		projects: readonly ProjectRecord[],
 	): true {
@@ -332,7 +349,7 @@ export class HucodeWebProjectManagerServer {
 	}
 
 	private writeJson(
-		res: http.ServerResponse,
+		res: HucodeWebProjectManagerResponse,
 		status: number,
 		body: unknown,
 	): true {
@@ -345,10 +362,12 @@ export class HucodeWebProjectManagerServer {
 	}
 }
 
+class BadRequestError extends Error { }
+
 function requireString(body: unknown, key: string): string {
 	const value = readProperty(body, key);
 	if (typeof value !== 'string' || !value.trim()) {
-		throw new Error(`Missing ${key}.`);
+		throw new BadRequestError(`Missing ${key}.`);
 	}
 	return value.trim();
 }
@@ -361,7 +380,7 @@ function optionalString(body: unknown, key: string): string | undefined {
 function requireBoolean(body: unknown, key: string): boolean {
 	const value = readProperty(body, key);
 	if (typeof value !== 'boolean') {
-		throw new Error(`Missing ${key}.`);
+		throw new BadRequestError(`Missing ${key}.`);
 	}
 	return value;
 }
@@ -379,8 +398,4 @@ function readProperty(body: unknown, key: string): unknown {
 
 function decodePathSegment(path: string): string {
 	return decodeURIComponent(path.split('/')[0]);
-}
-
-function isBadRequestMessage(message: string): boolean {
-	return message.startsWith('Missing ');
 }

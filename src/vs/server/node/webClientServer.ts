@@ -23,6 +23,7 @@ import { IHeaders } from '../../base/parts/request/common/request.js';
 import { CancellationToken } from '../../base/common/cancellation.js';
 import { URI } from '../../base/common/uri.js';
 import { streamToBuffer } from '../../base/common/buffer.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { IProductConfiguration } from '../../base/common/product.js';
 import { isString, Mutable } from '../../base/common/types.js';
 import { CharCode } from '../../base/common/charCode.js';
@@ -125,7 +126,7 @@ const STATIC_PATH = `/static`;
 const CALLBACK_PATH = `/callback`;
 const WEB_EXTENSION_PATH = `/web-extension-resource`;
 
-export class WebClientServer {
+export class WebClientServer extends Disposable {
 
 	private readonly _webExtensionResourceUrlTemplate: URI | undefined;
 	private readonly _hucodeProjectManagerServer: HucodeWebProjectManagerServer;
@@ -140,12 +141,13 @@ export class WebClientServer {
 		@IProductService private readonly _productService: IProductService,
 		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService
 	) {
+		super();
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
 		this._hucodeProjectManagerServer =
-			new HucodeWebProjectManagerServer(
+			this._register(new HucodeWebProjectManagerServer(
 				this._environmentService.userDataPath,
 				this._logService
-			);
+			));
 	}
 
 	/**
@@ -171,7 +173,6 @@ export class WebClientServer {
 			if (await this._hucodeProjectManagerServer.handle(
 				req,
 				res,
-				parsedUrl,
 				pathname
 			)) {
 				return;

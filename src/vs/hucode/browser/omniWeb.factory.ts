@@ -47,10 +47,18 @@ export function create(
 	created = true;
 
 	let instantiatedWorkbench: IWorkbench | undefined;
-	new HucodeOmniBrowserMain(domElement, options).open().then(workbench => {
-		instantiatedWorkbench = workbench;
-		workbenchPromise.complete(workbench);
-	});
+	const startup = (async () => {
+		try {
+			const workbench = await new HucodeOmniBrowserMain(
+				domElement,
+				options
+			).open();
+			instantiatedWorkbench = workbench;
+			await workbenchPromise.complete(workbench);
+		} catch (error) {
+			await workbenchPromise.error(error);
+		}
+	})();
 
 	return toDisposable(() => {
 		if (instantiatedWorkbench) {
@@ -58,7 +66,7 @@ export function create(
 			return;
 		}
 
-		workbenchPromise.p.then(workbench => workbench.shutdown());
+		void startup.then(() => instantiatedWorkbench?.shutdown());
 	});
 }
 

@@ -10,6 +10,7 @@ import {
 	registerAction2,
 	type IAction2Options,
 } from '../../platform/actions/common/actions.js';
+import { CommandsRegistry } from '../../platform/commands/common/commands.js';
 import type { ILocalizedString } from
 	'../../platform/action/common/action.js';
 import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
@@ -121,13 +122,7 @@ abstract class BaseOmniWindowAction extends Action2 {
 	}
 }
 
-const hucodeOmniWindowUIGlobal = globalThis as {
-	__hucodeOmniWindowUIActionsRegistered?: boolean;
-};
-
-if (!hucodeOmniWindowUIGlobal.__hucodeOmniWindowUIActionsRegistered) {
-	hucodeOmniWindowUIGlobal.__hucodeOmniWindowUIActionsRegistered = true;
-
+if (!CommandsRegistry.getCommand(OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID)) {
 	registerAction2(class extends BaseOmniWindowAction {
 		constructor() {
 			super(

@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mainWindow } from '../../base/browser/window.js';
+import { addDisposableListener } from '../../base/browser/dom.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isObject } from '../../base/common/types.js';
 import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
+import { localize2 } from '../../nls.js';
 import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
@@ -60,14 +62,22 @@ class HostedOmniWebBridgeContribution extends Disposable
 			instanceId,
 		});
 
-		mainWindow.addEventListener('focus', () => this.postFocus(instanceId, true));
-		mainWindow.addEventListener('blur', () => this.postFocus(instanceId, false));
-		mainWindow.addEventListener('message', event => {
+		this._register(addDisposableListener(
+			mainWindow,
+			'focus',
+			() => this.postFocus(instanceId, true)
+		));
+		this._register(addDisposableListener(
+			mainWindow,
+			'blur',
+			() => this.postFocus(instanceId, false)
+		));
+		this._register(addDisposableListener(mainWindow, 'message', event => {
 			if (event.origin !== mainWindow.location.origin) {
 				return;
 			}
 			void this.handleMessage(instanceId, event.data);
-		});
+		}));
 	}
 
 	private postFocus(instanceId: string, focused: boolean): void {
@@ -150,19 +160,31 @@ class HostedOmniWebBridgeContribution extends Disposable
 	private registerHostedShellCommands(): void {
 		this._register(registerHostedOmniWebShellCommand(
 			FOCUS_PROJECT_PANE_COMMAND_ID,
-			'Omni-Window: Focus Projects'
+			localize2(
+				'hostedOmniWebShellFocusProjects',
+				'Omni-Window: Focus Projects'
+			)
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			FOCUS_WORKSPACE_COMMAND_ID,
-			'Omni-Window: Focus Workbench'
+			localize2(
+				'hostedOmniWebShellFocusWorkbench',
+				'Omni-Window: Focus Workbench'
+			)
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			RELOAD_WORKSPACE_COMMAND_ID,
-			'Omni-Window: Reload Workbench'
+			localize2(
+				'hostedOmniWebShellReloadWorkbench',
+				'Omni-Window: Reload Workbench'
+			)
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			CLOSE_WORKSPACE_COMMAND_ID,
-			'Omni-Window: Close Workbench'
+			localize2(
+				'hostedOmniWebShellCloseWorkbench',
+				'Omni-Window: Close Workbench'
+			)
 		));
 	}
 }
@@ -175,13 +197,13 @@ registerWorkbenchContribution2(
 
 function registerHostedOmniWebShellCommand(
 	id: string,
-	title: string
+	title: ICommandActionTitle
 ) {
 	return registerAction2(class extends Action2 {
 		constructor() {
 			super({
 				id,
-				title: literalTitle(title),
+				title,
 				f1: true,
 				precondition: IsHostedOmniWorkspaceContext,
 			});
@@ -204,8 +226,4 @@ function registerHostedOmniWebShellCommand(
 			}, mainWindow.location.origin);
 		}
 	});
-}
-
-function literalTitle(value: string): ICommandActionTitle {
-	return { value, original: value };
 }

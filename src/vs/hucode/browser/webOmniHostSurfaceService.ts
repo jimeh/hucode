@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../base/common/event.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { createDecorator } from
 	'../../platform/instantiation/common/instantiation.js';
 import { InstantiationType, registerSingleton } from
@@ -28,13 +29,14 @@ export interface IHucodeWebOmniHostSurfaceService {
  * Browser service that exposes the Omni host surface to iframe adapters.
  */
 export class HucodeWebOmniHostSurfaceService
+	extends Disposable
 	implements IHucodeWebOmniHostSurfaceService {
 
 	declare readonly _serviceBrand: undefined;
 
 	private surface: HTMLElement | undefined;
 	private readonly _onDidChangeSurface =
-		new Emitter<HTMLElement | undefined>();
+		this._register(new Emitter<HTMLElement | undefined>());
 	readonly onDidChangeSurface = this._onDidChangeSurface.event;
 
 	getSurface(): HTMLElement | undefined {
