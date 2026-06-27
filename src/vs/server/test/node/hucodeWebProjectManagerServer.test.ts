@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import * as cp from 'child_process';
+import { EventEmitter } from 'events';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { promisify } from 'util';
@@ -20,6 +21,13 @@ import {
 interface ProjectManagerResponse<TBody = unknown> {
 	readonly statusCode: number;
 	readonly body: TBody;
+}
+
+interface ProjectManagerEventResponse {
+	readonly statusCode: number;
+	readonly headers: Record<string, unknown>;
+	readonly body: string;
+	close(): void;
 }
 
 interface ProjectResponseBody {
@@ -124,6 +132,34 @@ suite('HucodeWebProjectManagerServer', () => {
 		assert.deepStrictEqual(remove.body.projects, []);
 	});
 
+	test('streams project changes to event clients', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const events = await handleEvents(server);
+
+		assert.strictEqual(events.statusCode, 200);
+		assert.strictEqual(
+			headersValue(events.headers, 'Content-Type'),
+			'text/event-stream'
+		);
+		assert.deepStrictEqual(readProjectEvents(events.body), [
+			{ projects: [] },
+		]);
+
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+
+		assert.deepStrictEqual(
+			readProjectEvents(events.body).at(-1),
+			{ projects: add.body.projects }
+		);
+
+		events.close();
+	});
+
 	test('returns bad request for malformed JSON', async () => {
 		const server = createServer(serverDataPath, disposables);
 		const response = await handle<{ readonly error: string }>(
@@ -181,6 +217,51 @@ async function createGitProject(projectPath: string): Promise<void> {
 	});
 }
 
+async function handleEvents(
+	server: HucodeWebProjectManagerServer
+): Promise<ProjectManagerEventResponse> {
+	const req = Object.assign(new EventEmitter(), {
+		method: 'GET',
+		async *[Symbol.asyncIterator]() { },
+	});
+
+	let statusCode = 0;
+	let headers: Record<string, unknown> = {};
+	let rawBody = '';
+	const res = {
+		writeHead(status: number, nextHeaders?: Record<string, unknown>) {
+			statusCode = status;
+			headers = nextHeaders ?? {};
+		},
+		write(data: string) {
+			rawBody += data;
+		},
+		end(data?: string) {
+			rawBody += data ?? '';
+		},
+	};
+
+	assert.strictEqual(
+		await server.handle(
+			req,
+			res,
+			`${HUCODE_WEB_PROJECTS_API_PATH}/events`
+		),
+		true
+	);
+
+	return {
+		statusCode,
+		headers,
+		get body() {
+			return rawBody;
+		},
+		close() {
+			req.emit('close');
+		},
+	};
+}
+
 async function handle(
 	server: HucodeWebProjectManagerServer,
 	method: string,
@@ -223,4 +304,22 @@ async function handle<TBody = unknown>(
 
 	assert.strictEqual(await server.handle(req, res, pathname), true);
 	return { statusCode, body: JSON.parse(rawBody) as TBody };
+}
+
+function headersValue(
+	headers: Record<string, unknown>,
+	name: string
+): string | undefined {
+	const entry = Object.entries(headers).find(([key]) =>
+		key.toLowerCase() === name.toLowerCase()
+	);
+	return typeof entry?.[1] === 'string' ? entry[1] : undefined;
+}
+
+function readProjectEvents(body: string): unknown[] {
+	return body
+		.split(/\n\n/)
+		.map(chunk => chunk.split('\n').find(line => line.startsWith('data: ')))
+		.filter(line => !!line)
+		.map(line => JSON.parse(line!.substring('data: '.length)));
 }

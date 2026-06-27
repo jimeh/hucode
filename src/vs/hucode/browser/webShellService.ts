@@ -43,6 +43,8 @@ import {
 	isHostedWorkspaceAvailable,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
+import { reopenHucodeHostedWorkspaceInNormalWindow } from
+	'../common/omniWorkspaceReopen.js';
 import {
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
@@ -130,7 +132,7 @@ export class WebHucodeShellService extends Disposable
 	async findHostedWorkspaceByPath(
 		worktreePath: string
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
-		const instance = this.getInstanceByPath(worktreePath);
+		const instance = this.getAvailableInstanceByPath(worktreePath);
 		return instance
 			? {
 				windowId: this.windowId,
@@ -145,7 +147,7 @@ export class WebHucodeShellService extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<boolean> {
-		const instance = this.getInstanceByPath(worktreePath);
+		const instance = this.getAvailableInstanceByPath(worktreePath);
 		if (!instance) {
 			return false;
 		}
@@ -199,7 +201,7 @@ export class WebHucodeShellService extends Disposable
 
 		await this.openWorkspace(windowId, worktreePath, projectId);
 
-		const instance = this.getInstanceByPath(worktreePath);
+		const instance = this.getAvailableInstanceByPath(worktreePath);
 		if (!instance || instance.instanceId !== this.activeInstanceId) {
 			return false;
 		}
@@ -215,7 +217,7 @@ export class WebHucodeShellService extends Disposable
 			return false;
 		}
 
-		const instance = this.getActiveInstance();
+		const instance = this.getAvailableActiveInstance();
 		return instance
 			? this.openFilesInInstance(instance, request)
 			: false;
@@ -242,16 +244,23 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	async reopenWorkspaceInNormalWindow(
-		_windowId: number,
+		windowId: number,
 		instanceId: string
 	): Promise<boolean> {
-		const instance = this.instancesById.get(instanceId);
-		if (!instance) {
+		if (windowId !== this.windowId) {
 			return false;
 		}
 
-		mainWindow.open(this.toWorkbenchUrl(instance.instanceId, instance.worktreePath));
-		return true;
+		return reopenHucodeHostedWorkspaceInNormalWindow({
+			getState: () => this.getState(),
+			closeWorkspace: targetInstanceId =>
+				this.closeWorkspace(this.windowId, targetInstanceId),
+			focusNormalWindowByPath: worktreePath =>
+				this.focusNormalWindowByPath(worktreePath),
+			openNormalWindow: worktreePath => {
+				mainWindow.open(this.toNormalWorkbenchUrl(worktreePath));
+			},
+		}, instanceId);
 	}
 
 	async notifyHostedWorkspaceReady(
@@ -263,7 +272,7 @@ export class WebHucodeShellService extends Disposable
 		}
 
 		const instance = this.instancesById.get(instanceId);
-		if (!instance) {
+		if (!instance || !isHostedWorkspaceAvailable(instance)) {
 			return;
 		}
 
@@ -272,7 +281,7 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	async focusWorkspace(_windowId: number): Promise<void> {
-		const instance = this.getActiveInstance();
+		const instance = this.getAvailableActiveInstance();
 		if (instance) {
 			this.focusIframe(instance);
 		}
@@ -330,17 +339,17 @@ export class WebHucodeShellService extends Disposable
 		_windowId: number,
 		_request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
-		this.getActiveInstance()?.iframe.contentWindow?.focus();
+		this.getAvailableActiveInstance()?.iframe.contentWindow?.focus();
 		return false;
 	}
 
 	async triggerPasteInWorkspace(_windowId: number): Promise<boolean> {
-		this.getActiveInstance()?.iframe.contentWindow?.focus();
+		this.getAvailableActiveInstance()?.iframe.contentWindow?.focus();
 		return false;
 	}
 
 	async reloadWorkspace(_windowId: number): Promise<void> {
-		const instance = this.getActiveInstance();
+		const instance = this.getAvailableActiveInstance();
 		if (!instance) {
 			return;
 		}
@@ -413,20 +422,6 @@ export class WebHucodeShellService extends Disposable
 		}
 
 		switch (message.type) {
-			case HucodeOmniWebChildMessageType.Ready:
-				void this.notifyHostedWorkspaceReady(
-					this.windowId,
-					message.instanceId
-				);
-				break;
-			case HucodeOmniWebChildMessageType.Focus:
-				instance.focused = message.focused;
-				if (message.focused) {
-					this.activateInstance(instance);
-				} else {
-					this.emitState();
-				}
-				break;
 			case HucodeOmniWebChildMessageType.UnloadReady:
 				this.pendingUnload.get(message.instanceId)?.();
 				break;
@@ -441,10 +436,36 @@ export class WebHucodeShellService extends Disposable
 					this.emitState();
 				}
 				break;
+			case HucodeOmniWebChildMessageType.Ready:
+				if (!isHostedWorkspaceAvailable(instance)) {
+					return;
+				}
+				void this.notifyHostedWorkspaceReady(
+					this.windowId,
+					message.instanceId
+				);
+				break;
+			case HucodeOmniWebChildMessageType.Focus:
+				if (!isHostedWorkspaceAvailable(instance)) {
+					return;
+				}
+				instance.focused = message.focused;
+				if (message.focused) {
+					this.activateInstance(instance);
+				} else {
+					this.emitState();
+				}
+				break;
 			case HucodeOmniWebChildMessageType.ShellCommand:
+				if (!isHostedWorkspaceAvailable(instance)) {
+					return;
+				}
 				void this.handleShellCommand(instance, message.commandId);
 				break;
 			case HucodeOmniWebChildMessageType.ShellRequest:
+				if (!isHostedWorkspaceAvailable(instance)) {
+					return;
+				}
 				void this.handleShellRequest(instance, message);
 				break;
 		}
@@ -550,7 +571,7 @@ export class WebHucodeShellService extends Disposable
 		commandId: string,
 		args: readonly unknown[]
 	): Promise<boolean> {
-		const instance = this.getActiveInstance();
+		const instance = this.getAvailableActiveInstance();
 		if (!instance) {
 			return Promise.resolve(false);
 		}
@@ -811,9 +832,22 @@ export class WebHucodeShellService extends Disposable
 		return workbenchUrl.toString();
 	}
 
+	private toNormalWorkbenchUrl(worktreePath: string): string {
+		const workbenchUrl = new URL(this.workbenchRoute, mainWindow.location.origin);
+		workbenchUrl.searchParams.set('folder', worktreePath);
+		return workbenchUrl.toString();
+	}
+
 	private getActiveInstance(): IHostedIframeInstance | undefined {
 		return this.activeInstanceId
 			? this.instancesById.get(this.activeInstanceId)
+			: undefined;
+	}
+
+	private getAvailableActiveInstance(): IHostedIframeInstance | undefined {
+		const instance = this.getActiveInstance();
+		return instance && isHostedWorkspaceAvailable(instance)
+			? instance
 			: undefined;
 	}
 
@@ -821,6 +855,15 @@ export class WebHucodeShellService extends Disposable
 		worktreePath: string
 	): IHostedIframeInstance | undefined {
 		return this.hostedWorkspaces.getInstanceByPath(worktreePath);
+	}
+
+	private getAvailableInstanceByPath(
+		worktreePath: string
+	): IHostedIframeInstance | undefined {
+		const instance = this.getInstanceByPath(worktreePath);
+		return instance && isHostedWorkspaceAvailable(instance)
+			? instance
+			: undefined;
 	}
 
 	private getState(): IHucodeHostedWorkspaceState {

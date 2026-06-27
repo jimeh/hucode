@@ -73,6 +73,27 @@ items remain open.
     iframe-specific crashed-instance reopen path through the public shell
     service API.
 
+- [x] P2: Treat terminal hosted iframes as unavailable across web shell APIs.
+  - Web `find`, `focus`, readiness, reopen, active command, paste/keybinding,
+    and reload paths now use the shared availability predicate or ignore late
+    terminal iframe messages.
+  - Browser coverage verifies crashed iframes are not surfaced as existing
+    hosted workspaces and cannot be revived by late readiness messages.
+
+- [x] P2: Reopen hosted web workspaces as normal workbench URLs.
+  - Web `reopenWorkspaceInNormalWindow` now delegates through the shared
+    Hucode reopen helper and opens `/workbench?folder=...` without hosted
+    iframe payload when no normal window is already focused.
+  - Browser coverage verifies the hosted iframe is closed and the opened URL is
+    a plain workbench URL.
+
+- [x] P2: Propagate serve-web project-manager changes across clients.
+  - The serve-web project manager now supplies a Node metadata watcher to the
+    shared `ProjectManagerMainService` and exposes project changes through an
+    SSE endpoint.
+  - The browser project manager subscribes to those events, keeping Omni shells
+    in sync when another request or shell changes project metadata.
+
 ## Verification
 
 - [x] Add or update focused tests for changed shared hosted-workspace behavior.
@@ -86,5 +107,6 @@ items remain open.
 - [x] Add focused coverage for shared hosted-workspace readiness waiting.
 - [x] Add focused browser coverage for hosted web open-file handling.
 - [x] Add focused browser coverage for the web shell iframe adapter.
+- [x] Add focused server coverage for serve-web project-manager events.
 - [x] Run focused tests for changed files.
 - [x] Run required Hucode hygiene checks.

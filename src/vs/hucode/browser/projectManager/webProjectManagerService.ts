@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '../../../base/common/event.js';
+import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
+import { mainWindow } from '../../../base/browser/window.js';
 import { InstantiationType, registerSingleton } from
 	'../../../platform/instantiation/common/extensions.js';
 import {
@@ -42,20 +44,24 @@ interface BranchNameResponse {
 /**
  * Browser-side Project Manager client for the serve-web Omni shell.
  */
-export class WebProjectManagerService implements IProjectManagerService {
+export class WebProjectManagerService extends Disposable
+	implements IProjectManagerService {
 
 	declare readonly _serviceBrand: undefined;
 
 	private readonly projectsApi: string;
 	private readonly _onDidChangeProjects =
-		new Emitter<readonly ProjectRecord[]>();
+		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
 
 	constructor(
 		@IBrowserWorkbenchEnvironmentService
 		environmentService: IBrowserWorkbenchEnvironmentService,
 	) {
+		super();
+
 		this.projectsApi = getHucodeOmniProjectsApi(environmentService.options);
+		this.registerProjectEvents();
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
@@ -262,6 +268,24 @@ export class WebProjectManagerService implements IProjectManagerService {
 		const suffix = path ? `/${path}` : '';
 		return `${this.projectsApi}${suffix}`;
 	}
+
+	private registerProjectEvents(): void {
+		if (typeof mainWindow.EventSource !== 'function') {
+			return;
+		}
+
+		const events = new mainWindow.EventSource(
+			this.toApiUrl('events'),
+			{ withCredentials: true }
+		);
+		this._register(toDisposable(() => events.close()));
+		events.addEventListener('projects', event => {
+			const projects = readProjectEvent(event);
+			if (projects) {
+				this._onDidChangeProjects.fire(projects);
+			}
+		});
+	}
 }
 
 function reviveProject(project: ProjectRecord): ProjectRecord {
@@ -282,6 +306,19 @@ function getErrorMessage(body: unknown): string | undefined {
 
 	const error = (body as { readonly error?: unknown }).error;
 	return typeof error === 'string' ? error : undefined;
+}
+
+function readProjectEvent(event: MessageEvent): readonly ProjectRecord[] | undefined {
+	try {
+		const body = JSON.parse(event.data) as ProjectsResponse;
+		if (!Array.isArray(body.projects)) {
+			return undefined;
+		}
+
+		return body.projects.map(project => reviveProject(project));
+	} catch {
+		return undefined;
+	}
 }
 
 registerSingleton(

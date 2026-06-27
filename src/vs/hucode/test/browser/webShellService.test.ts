@@ -24,8 +24,8 @@ import { WebHucodeShellService } from '../../browser/webShellService.js';
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('recreates a crashed iframe when reopening the same worktree', async () => {
-		const service = disposables.add(new WebHucodeShellService(
+	function createService(): WebHucodeShellService {
+		return disposables.add(new WebHucodeShellService(
 			{
 				options: {
 					hucodeOmniWorkbenchRoute: '/workbench',
@@ -43,6 +43,44 @@ suite('WebHucodeShellService', () => {
 				setSurface() { },
 			} as unknown as IHucodeWebOmniHostSurfaceService
 		));
+	}
+
+	function postMessage(instanceId: string, data: object): void {
+		mainWindow.dispatchEvent(new MessageEvent('message', {
+			origin: mainWindow.location.origin,
+			data: { instanceId, ...data },
+		}));
+	}
+
+	function markCrashed(instanceId: string): void {
+		postMessage(instanceId, {
+			type: HucodeOmniWebChildMessageType.CommandResult,
+			requestId: 'load',
+			ok: false,
+		});
+	}
+
+	function markReady(instanceId: string): void {
+		postMessage(instanceId, {
+			type: HucodeOmniWebChildMessageType.Ready,
+		});
+	}
+
+	function markFocused(instanceId: string): void {
+		postMessage(instanceId, {
+			type: HucodeOmniWebChildMessageType.Focus,
+			focused: true,
+		});
+	}
+
+	function markUnloadReady(instanceId: string): void {
+		postMessage(instanceId, {
+			type: HucodeOmniWebChildMessageType.UnloadReady,
+		});
+	}
+
+	test('recreates a crashed iframe when reopening the same worktree', async () => {
+		const service = createService();
 		const windowId = getWindowId(mainWindow);
 
 		const firstState = await service.openWorkspace(
@@ -52,15 +90,7 @@ suite('WebHucodeShellService', () => {
 		);
 		const firstInstanceId = firstState.instances[0].instanceId;
 
-		mainWindow.dispatchEvent(new MessageEvent('message', {
-			origin: mainWindow.location.origin,
-			data: {
-				type: HucodeOmniWebChildMessageType.CommandResult,
-				instanceId: firstInstanceId,
-				requestId: 'load',
-				ok: false,
-			},
-		}));
+		markCrashed(firstInstanceId);
 
 		const crashedState = await service.getWindowState(windowId);
 		assert.strictEqual(crashedState.instances[0].state, 'crashed');
@@ -77,5 +107,96 @@ suite('WebHucodeShellService', () => {
 			firstInstanceId
 		);
 		assert.strictEqual(secondState.instances[0].state, 'loading');
+	});
+
+	test('does not surface or revive crashed iframe instances', async () => {
+		const service = createService();
+		const windowId = getWindowId(mainWindow);
+
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+
+		markCrashed(instanceId);
+
+		assert.strictEqual(
+			await service.findHostedWorkspaceByPath('/tmp/hucode-worktree'),
+			undefined
+		);
+		assert.strictEqual(
+			await service.focusHostedWorkspaceByPath('/tmp/hucode-worktree'),
+			false
+		);
+		assert.strictEqual(
+			await service.reopenWorkspaceInNormalWindow(windowId, instanceId),
+			false
+		);
+		assert.strictEqual(
+			await service.runActionInWorkspace(windowId, {
+				id: 'test.command',
+				from: 'menu',
+			}),
+			false
+		);
+
+		const activeState = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-two',
+			'project'
+		);
+		const activeInstanceId = activeState.activeInstanceId;
+		assert.ok(activeInstanceId);
+
+		await service.notifyHostedWorkspaceReady(windowId, instanceId);
+		markReady(instanceId);
+		markFocused(instanceId);
+
+		const nextState = await service.getWindowState(windowId);
+		const crashedInstance = nextState.instances.find(
+			instance => instance.instanceId === instanceId
+		);
+		assert.ok(crashedInstance);
+		assert.strictEqual(nextState.activeInstanceId, activeInstanceId);
+		assert.strictEqual(crashedInstance.state, 'crashed');
+	});
+
+	test('reopens hosted iframes as normal workbench URLs', async () => {
+		const service = createService();
+		const windowId = getWindowId(mainWindow);
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+		let openedUrl: string | undefined;
+		const originalOpen = mainWindow.open;
+		try {
+			mainWindow.open = ((url?: string | URL) => {
+				openedUrl = url?.toString();
+				return null;
+			}) as typeof mainWindow.open;
+
+			mainWindow.setTimeout(() => markUnloadReady(instanceId), 0);
+			assert.strictEqual(
+				await service.reopenWorkspaceInNormalWindow(windowId, instanceId),
+				true
+			);
+		} finally {
+			mainWindow.open = originalOpen;
+		}
+
+		assert.ok(openedUrl);
+		const opened = new URL(openedUrl);
+		assert.strictEqual(opened.pathname, '/workbench');
+		assert.strictEqual(opened.searchParams.get('folder'), '/tmp/hucode-worktree');
+		assert.strictEqual(opened.searchParams.has('payload'), false);
+		assert.strictEqual(
+			(await service.getWindowState(windowId)).instances.length,
+			0
+		);
 	});
 });

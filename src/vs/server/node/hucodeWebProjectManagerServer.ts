@@ -5,6 +5,8 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
+import { Disposable, IDisposable, toDisposable } from
+	'../../base/common/lifecycle.js';
 import { join } from '../../base/common/path.js';
 import { URI } from '../../base/common/uri.js';
 import { ILogService } from '../../platform/log/common/log.js';
@@ -15,7 +17,10 @@ import {
 	StoredProjectManagerState,
 	WorktreeRefQueryOptions,
 } from '../../platform/projectManager/common/projectManager.js';
-import { ProjectManagerMainService } from '../../platform/projectManager/node/projectManagerMainService.js';
+import {
+	IProjectMetadataWatcher,
+	ProjectManagerMainService,
+} from '../../platform/projectManager/node/projectManagerMainService.js';
 import { IStateService } from '../../platform/state/node/state.js';
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
@@ -33,11 +38,17 @@ export function isHucodeWebProjectsApiPath(pathname: string): boolean {
 interface HucodeWebProjectManagerRequest
 	extends AsyncIterable<Buffer | string | Uint8Array> {
 	readonly method?: string;
+	on?(event: 'close', listener: () => void): unknown;
 }
 
 interface HucodeWebProjectManagerResponse {
 	writeHead(status: number, headers?: http.OutgoingHttpHeaders): unknown;
+	write?(data: string): unknown;
 	end(data?: string): unknown;
+}
+
+interface HucodeWebProjectEventClient {
+	readonly res: HucodeWebProjectManagerResponse;
 }
 
 class HucodeProjectFileStateService implements IStateService {
@@ -140,17 +151,31 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 }
 
+class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
+	watch(path: string, onDidChange: () => void): IDisposable {
+		const watcher = fs.watch(path, { persistent: false }, () => onDidChange());
+		return toDisposable(() => watcher.close());
+	}
+}
+
 /**
  * HTTP adapter for the serve-web Project Manager service.
  */
-export class HucodeWebProjectManagerServer {
+export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly service: ProjectManagerMainService;
+	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 
 	constructor(serverDataPath: string, logService: ILogService) {
-		this.service = new ProjectManagerMainService(
+		super();
+
+		this.service = this._register(new ProjectManagerMainService(
 			new HucodeProjectFileStateService(serverDataPath),
 			logService,
-		);
+			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher() },
+		));
+		this._register(this.service.onDidChangeProjects(projects => {
+			this.broadcastProjects(projects);
+		}));
 	}
 
 	async handle(
@@ -166,6 +191,10 @@ export class HucodeWebProjectManagerServer {
 			const relativePath = pathname
 				.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
 				.replace(/^\/+/, '');
+
+			if (req.method === 'GET' && relativePath === 'events') {
+				return this.handleEvents(req, res);
+			}
 
 			if (req.method === 'GET' && !relativePath) {
 				return this.writeProjects(res, 200, await this.service.getProjects());
@@ -205,8 +234,12 @@ export class HucodeWebProjectManagerServer {
 		return this.service.getProjects();
 	}
 
-	dispose(): void {
-		this.service.dispose();
+	override dispose(): void {
+		super.dispose();
+		for (const client of this.eventClients) {
+			client.res.end();
+		}
+		this.eventClients.clear();
 	}
 
 	private async handlePost(
@@ -359,6 +392,41 @@ export class HucodeWebProjectManagerServer {
 		});
 		res.end(JSON.stringify(body));
 		return true;
+	}
+
+	private async handleEvents(
+		req: HucodeWebProjectManagerRequest,
+		res: HucodeWebProjectManagerResponse
+	): Promise<true> {
+		res.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-store',
+			Connection: 'keep-alive',
+		});
+
+		const client: HucodeWebProjectEventClient = { res };
+		this.eventClients.add(client);
+		req.on?.('close', () => {
+			this.eventClients.delete(client);
+		});
+
+		res.write?.(': connected\n\n');
+		this.writeProjectsEvent(client, await this.service.getProjects());
+		return true;
+	}
+
+	private broadcastProjects(projects: readonly ProjectRecord[]): void {
+		for (const client of this.eventClients) {
+			this.writeProjectsEvent(client, projects);
+		}
+	}
+
+	private writeProjectsEvent(
+		client: HucodeWebProjectEventClient,
+		projects: readonly ProjectRecord[]
+	): void {
+		client.res.write?.(`event: projects\n`);
+		client.res.write?.(`data: ${JSON.stringify({ projects })}\n\n`);
 	}
 }
 
