@@ -30,14 +30,11 @@ import { CharCode } from '../../base/common/charCode.js';
 import { IExtensionManifest } from '../../platform/extensions/common/extensions.js';
 import { ICSSDevelopmentService } from '../../platform/cssDev/node/cssDevService.js';
 import {
-	getHucodeWebClientRoute,
 	HUCODE_WEB_OMNI_ROOT_ARG,
+	getHucodeWebClientRouteAction,
+	getHucodeWebWorkbenchConfiguration,
 	toHucodeWebRouteLocation,
-} from './hucodeWebOmniRoutes.js';
-import {
-	getHucodeWebOmniWorkbenchBase,
-	getHucodeWebOmniProjectsApi,
-} from './hucodeWebOmniShell.js';
+} from './hucodeWebClientServerIntegration.js';
 import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
@@ -178,31 +175,25 @@ export class WebClientServer extends Disposable {
 				return;
 			}
 
-			const route = getHucodeWebClientRoute(
-				pathname,
-				!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG]
-			);
-			switch (route.type) {
+			const routeAction = getHucodeWebClientRouteAction(pathname, {
+				basePath: this._getClientBasePath(req),
+				query: parsedUrl.query,
+				omniRoot: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
+			});
+			switch (routeAction.type) {
 				case 'workbench':
-					return this._handleWorkbench(req, res, parsedUrl, route.routePath);
-				case 'omni':
 					return this._handleWorkbench(
 						req,
 						res,
 						parsedUrl,
-						route.routePath,
-						{ hucodeOmniShell: true }
+						routeAction.routePath,
+						{ hucodeOmniShell: routeAction.hucodeOmniShell }
 					);
-				case 'redirect': {
-					const basePath = this._getClientBasePath(req);
-					const location = toHucodeWebRouteLocation(
-						basePath,
-						route.locationPath,
-						parsedUrl.query
-					);
-					res.writeHead(302, { Location: location });
+				case 'redirect':
+					res.writeHead(302, { Location: routeAction.location });
 					return void res.end();
-				}
+				case 'notFound':
+					break;
 			}
 
 			return serveError(req, res, 404, 'Not found.');
@@ -457,9 +448,10 @@ export class WebClientServer extends Disposable {
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
-			hucodeOmniShell: options.hucodeOmniShell,
-			hucodeOmniWorkbenchRoute: getHucodeWebOmniWorkbenchBase(basePath),
-			hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
+			...getHucodeWebWorkbenchConfiguration(basePath, {
+				hucodeOmniShell: options.hucodeOmniShell,
+				serverPathCaseSensitive: isLinux,
+			}),
 			_wrapWebWorkerExtHostInIframe,
 			developmentOptions: { enableSmokeTestDriver: this._environmentService.args['enable-smoke-test-driver'] ? true : undefined, logLevel: this._logService.getLevel() },
 			settingsSyncOptions: !this._environmentService.isBuilt && this._environmentService.args['enable-sync'] ? { enabled: true } : undefined,

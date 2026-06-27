@@ -15,10 +15,127 @@ export interface IHostedWorkspaceStateEntry {
 	readonly instanceId: string;
 	readonly projectId?: string;
 	readonly worktreePath: string;
-	readonly state: HucodeHostedWorkbenchLifecycleState;
+	state: HucodeHostedWorkbenchLifecycleState;
 	readonly visible: boolean;
 	readonly focused: boolean;
-	readonly lastActiveAt?: number;
+	lastActiveAt?: number;
+}
+
+/**
+ * Shared mutable state for hosted workspace controllers.
+ */
+export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
+	readonly instancesById = new Map<string, T>();
+	readonly instanceIdsByPath = new Map<string, string>();
+
+	activeInstanceId: string | undefined;
+	projectsSidebarVisible = true;
+	projectSwitcherCanGoBack = false;
+	projectSwitcherCanGoForward = false;
+
+	constructor(
+		private readonly toPathKey: (path: string) => string = path => path,
+		private readonly now: () => number = () => Date.now()
+	) { }
+
+	/**
+	 * Adds a hosted workspace to the indexed state.
+	 */
+	addInstance(instance: T): void {
+		this.instancesById.set(instance.instanceId, instance);
+		this.instanceIdsByPath.set(
+			this.toPathKey(instance.worktreePath),
+			instance.instanceId
+		);
+	}
+
+	/**
+	 * Removes a hosted workspace from the indexed state.
+	 */
+	removeInstance(instance: T): void {
+		this.instancesById.delete(instance.instanceId);
+		this.instanceIdsByPath.delete(this.toPathKey(instance.worktreePath));
+		if (this.activeInstanceId === instance.instanceId) {
+			this.activeInstanceId = undefined;
+		}
+	}
+
+	/**
+	 * Returns a hosted workspace by its filesystem path.
+	 */
+	getInstanceByPath(worktreePath: string): T | undefined {
+		const instanceId = this.instanceIdsByPath.get(this.toPathKey(worktreePath));
+		return instanceId ? this.instancesById.get(instanceId) : undefined;
+	}
+
+	/**
+	 * Marks a hosted workspace as active and updates its recency.
+	 */
+	activateInstance(instance: T): void {
+		this.activeInstanceId = instance.instanceId;
+		instance.lastActiveAt = this.now();
+	}
+
+	/**
+	 * Applies the shared hosted-workbench ready transition.
+	 */
+	markInstanceReady(instance: T): void {
+		instance.state = getReadyHostedWorkspaceState(
+			instance,
+			this.activeInstanceId
+		);
+	}
+
+	/**
+	 * Stores project-switcher navigation state.
+	 */
+	setProjectSwitcherNavigationState(
+		canGoBack: boolean,
+		canGoForward: boolean
+	): boolean {
+		if (
+			this.projectSwitcherCanGoBack === canGoBack &&
+			this.projectSwitcherCanGoForward === canGoForward
+		) {
+			return false;
+		}
+
+		this.projectSwitcherCanGoBack = canGoBack;
+		this.projectSwitcherCanGoForward = canGoForward;
+		return true;
+	}
+
+	/**
+	 * Stores project-sidebar visibility while preserving the no-workbench guard.
+	 */
+	setProjectsSidebarVisible(
+		visible: boolean,
+		hasLoadedWorkbench: boolean
+	): boolean {
+		const nextVisible = !visible && !hasLoadedWorkbench ? true : visible;
+		if (this.projectsSidebarVisible === nextVisible) {
+			return false;
+		}
+
+		this.projectsSidebarVisible = nextVisible;
+		return true;
+	}
+
+	/**
+	 * Builds the public hosted-workspace state.
+	 */
+	toState(
+		toExternalInstance?: (entry: T) => IHucodeHostedWorkbenchInstance
+	): IHucodeHostedWorkspaceState {
+		return createHostedWorkspaceState(
+			this.instancesById.values(),
+			this.activeInstanceId,
+			this.projectsSidebarVisible,
+			this.projectSwitcherCanGoBack,
+			this.projectSwitcherCanGoForward,
+			toExternalInstance
+		);
+	}
 }
 
 /**

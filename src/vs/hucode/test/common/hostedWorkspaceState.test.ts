@@ -13,6 +13,7 @@ import {
 	getReadyHostedWorkspaceState,
 	getRestoreActiveWorktreePath,
 	hasLoadedHostedWorkspace,
+	HostedWorkspaceStateModel,
 	isHostedWorkspacePendingReady,
 	sortRestoreEntries,
 	type IHostedWorkspaceStateEntry,
@@ -66,6 +67,54 @@ suite('HostedWorkspaceState', () => {
 			isHostedWorkspacePendingReady(entry('loaded')),
 			false
 		);
+	});
+
+	test('models hosted workspace indexing and shell state', () => {
+		let clock = 10;
+		const model = new HostedWorkspaceStateModel<IHostedWorkspaceStateEntry>(
+			path => path.toLowerCase(),
+			() => clock
+		);
+		const first = entry('one', { worktreePath: '/Repo/One' });
+		const second = entry('two', { worktreePath: '/repo/two' });
+
+		model.addInstance(first);
+		model.addInstance(second);
+		assert.strictEqual(model.getInstanceByPath('/repo/one'), first);
+
+		clock = 20;
+		model.activateInstance(second);
+		assert.strictEqual(model.activeInstanceId, 'two');
+		assert.strictEqual(second.lastActiveAt, 20);
+
+		model.markInstanceReady(second);
+		assert.strictEqual(second.state, 'active');
+		assert.strictEqual(
+			model.setProjectSwitcherNavigationState(true, false),
+			true
+		);
+		assert.strictEqual(
+			model.setProjectSwitcherNavigationState(true, false),
+			false
+		);
+		assert.strictEqual(model.projectSwitcherCanGoBack, true);
+
+		assert.strictEqual(model.setProjectsSidebarVisible(false, false), false);
+		assert.strictEqual(model.projectsSidebarVisible, true);
+		assert.strictEqual(model.setProjectsSidebarVisible(false, true), true);
+		assert.strictEqual(model.projectsSidebarVisible, false);
+
+		assert.deepStrictEqual({
+			activeInstanceId: model.toState().activeInstanceId,
+			instances: model.toState().instances.map(instance => instance.instanceId),
+		}, {
+			activeInstanceId: 'two',
+			instances: ['two', 'one'],
+		});
+
+		model.removeInstance(second);
+		assert.strictEqual(model.activeInstanceId, undefined);
+		assert.strictEqual(model.getInstanceByPath('/repo/two'), undefined);
 	});
 
 	test('selects most recent available workspace', () => {

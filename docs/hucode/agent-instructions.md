@@ -96,6 +96,9 @@ VS Code code that Hucode customizes.
 - When splitting an upstream patch, keep high-level integration tests in the
   upstream subsystem focused on verifier/adapter selection and routing, and move
   detailed Hucode behavior tests with the extracted Hucode helper.
+- `npm run test-node -- --run <file>` accepts one test file per invocation.
+  Run focused Node tests separately; extra positional paths are passed through
+  to Mocha and can load from `src/` instead of compiled `out/`.
 
 ## CI Workflow
 

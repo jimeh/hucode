@@ -18,6 +18,7 @@ import {
 	applyStoredWorktreeVisits,
 	createStoredProjectManagerState,
 	filterStoredWorktreePath,
+	getProjectManagerPathComparisonKey,
 	loadStoredProjectManagerState,
 	projectManagerPathsEqual,
 	pruneStoredPinnedWorktreePaths,
@@ -87,6 +88,14 @@ suite('ProjectManagerState', () => {
 		assert.deepStrictEqual(
 			filterStoredWorktreePath(['/Repo', '/other'], '/repo', false),
 			['/other']
+		);
+		assert.strictEqual(
+			getProjectManagerPathComparisonKey('/Repo', true),
+			'/Repo'
+		);
+		assert.strictEqual(
+			getProjectManagerPathComparisonKey('/Repo', false),
+			'/repo'
 		);
 	});
 

@@ -10,6 +10,7 @@ export interface IHucodeWebWorkbenchConfiguration {
 	readonly hucodeOmniShell?: boolean;
 	readonly hucodeOmniWorkbenchRoute?: string;
 	readonly hucodeOmniProjectsApi?: string;
+	readonly hucodeServerPathCaseSensitive?: boolean;
 }
 
 /**
@@ -40,4 +41,14 @@ export function getHucodeOmniWorkbenchRoute(
 ): string {
 	return (config as IHucodeWebWorkbenchConfiguration | undefined)
 		?.hucodeOmniWorkbenchRoute ?? '/workbench';
+}
+
+/**
+ * Returns whether paths should be compared using server filesystem semantics.
+ */
+export function getHucodeServerPathCaseSensitive(
+	config: object | undefined
+): boolean {
+	return (config as IHucodeWebWorkbenchConfiguration | undefined)
+		?.hucodeServerPathCaseSensitive ?? false;
 }

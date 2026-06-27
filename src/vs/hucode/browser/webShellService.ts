@@ -37,10 +37,9 @@ import {
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
 import {
-	createHostedWorkspaceState,
 	getMostRecentHostedWorkspace,
-	getReadyHostedWorkspaceState,
 	hasLoadedHostedWorkspace,
+	HostedWorkspaceStateModel,
 } from '../common/hostedWorkspaceState.js';
 import {
 	HucodeOmniWebChildMessage,
@@ -48,8 +47,12 @@ import {
 	HucodeOmniWebParentMessageType,
 	IHucodeOmniWebShellRequestMessage,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
-import { getHucodeOmniWorkbenchRoute } from
-	'../../platform/environment/common/hucodeWebConfiguration.js';
+import {
+	getHucodeOmniWorkbenchRoute,
+	getHucodeServerPathCaseSensitive,
+} from '../../platform/environment/common/hucodeWebConfiguration.js';
+import { getProjectManagerPathComparisonKey } from
+	'../../platform/projectManager/common/projectManagerState.js';
 import { IHucodeWebOmniHostSurfaceService } from
 	'./webOmniHostSurfaceService.js';
 
@@ -75,14 +78,12 @@ export class WebHucodeShellService extends Disposable
 
 	private readonly windowId = getWindowId(mainWindow);
 	private readonly workbenchRoute: string;
-	private readonly instancesById = new Map<string, IHostedIframeInstance>();
-	private readonly instanceIdsByPath = new Map<string, string>();
+	private readonly serverPathCaseSensitive: boolean;
+	private readonly hostedWorkspaces: HostedWorkspaceStateModel<
+		IHostedIframeInstance
+	>;
 	private readonly pendingUnload = new Map<string, () => void>();
 	private readonly pendingCommands = new Map<string, (ok: boolean) => void>();
-	private activeInstanceId: string | undefined;
-	private projectsSidebarVisible = true;
-	private projectSwitcherCanGoBack = false;
-	private projectSwitcherCanGoForward = false;
 
 	private readonly _onDidChangeWindowState =
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
@@ -99,6 +100,12 @@ export class WebHucodeShellService extends Disposable
 
 		this.workbenchRoute = getHucodeOmniWorkbenchRoute(
 			environmentService.options
+		);
+		this.serverPathCaseSensitive = getHucodeServerPathCaseSensitive(
+			environmentService.options
+		);
+		this.hostedWorkspaces = new HostedWorkspaceStateModel(
+			path => this.toPathKey(path)
 		);
 		this._register(this.hostSurfaceService.onDidChangeSurface(surface => {
 			if (surface) {
@@ -167,8 +174,7 @@ export class WebHucodeShellService extends Disposable
 		}
 
 		const instance = this.createInstance(worktreePath, projectId);
-		this.instancesById.set(instance.instanceId, instance);
-		this.instanceIdsByPath.set(this.toPathKey(worktreePath), instance.instanceId);
+		this.hostedWorkspaces.addInstance(instance);
 		this.attachIframe(instance);
 		this.activateInstance(instance);
 		return this.getState();
@@ -237,10 +243,7 @@ export class WebHucodeShellService extends Disposable
 			return;
 		}
 
-		instance.state = getReadyHostedWorkspaceState(
-			instance,
-			this.activeInstanceId
-		);
+		this.hostedWorkspaces.markInstanceReady(instance);
 		this.emitState();
 	}
 
@@ -259,7 +262,10 @@ export class WebHucodeShellService extends Disposable
 		_windowId: number,
 		visible: boolean
 	): Promise<void> {
-		this.projectsSidebarVisible = visible;
+		this.hostedWorkspaces.setProjectsSidebarVisible(
+			visible,
+			hasLoadedHostedWorkspace(this.instancesById.values())
+		);
 		this.emitState();
 	}
 
@@ -268,15 +274,13 @@ export class WebHucodeShellService extends Disposable
 		canGoBack: boolean,
 		canGoForward: boolean
 	): Promise<void> {
-		if (
-			this.projectSwitcherCanGoBack === canGoBack &&
-			this.projectSwitcherCanGoForward === canGoForward
-		) {
+		if (!this.hostedWorkspaces.setProjectSwitcherNavigationState(
+			canGoBack,
+			canGoForward
+		)) {
 			return;
 		}
 
-		this.projectSwitcherCanGoBack = canGoBack;
-		this.projectSwitcherCanGoForward = canGoForward;
 		this.emitState();
 	}
 
@@ -390,7 +394,6 @@ export class WebHucodeShellService extends Disposable
 					this.windowId,
 					message.instanceId
 				);
-				this.postState(instance, this.getState());
 				break;
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused;
@@ -458,15 +461,6 @@ export class WebHucodeShellService extends Disposable
 		iframe.title = worktreePath;
 		iframe.dataset.hucodeHostedInstanceId = instanceId;
 		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
-		iframe.addEventListener('load', () => {
-			const instance = this.instancesById.get(instanceId);
-			if (instance && instance.state === 'loading') {
-				instance.state = instance.instanceId === this.activeInstanceId
-					? 'active'
-					: 'loaded';
-				this.emitState();
-			}
-		});
 
 		return {
 			instanceId,
@@ -481,9 +475,8 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	private activateInstance(instance: IHostedIframeInstance): void {
-		this.activeInstanceId = instance.instanceId;
+		this.hostedWorkspaces.activateInstance(instance);
 		instance.state = instance.state === 'loading' ? 'loading' : 'active';
-		instance.lastActiveAt = Date.now();
 		for (const candidate of this.instancesById.values()) {
 			const visible = candidate.instanceId === instance.instanceId;
 			candidate.visible = visible;
@@ -497,12 +490,11 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	private removeInstance(instance: IHostedIframeInstance): void {
+		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
 		instance.iframe.remove();
-		this.instancesById.delete(instance.instanceId);
-		this.instanceIdsByPath.delete(this.toPathKey(instance.worktreePath));
-		if (this.activeInstanceId === instance.instanceId) {
-			this.activeInstanceId = undefined;
+		this.hostedWorkspaces.removeInstance(instance);
+		if (wasActive) {
 			const next = getMostRecentHostedWorkspace(this.instancesById.values());
 			if (next) {
 				this.activateInstance(next);
@@ -785,24 +777,18 @@ export class WebHucodeShellService extends Disposable
 	private getInstanceByPath(
 		worktreePath: string
 	): IHostedIframeInstance | undefined {
-		const instanceId = this.instanceIdsByPath.get(this.toPathKey(worktreePath));
-		return instanceId ? this.instancesById.get(instanceId) : undefined;
+		return this.hostedWorkspaces.getInstanceByPath(worktreePath);
 	}
 
 	private getState(): IHucodeHostedWorkspaceState {
-		return createHostedWorkspaceState(
-			this.instancesById.values(),
-			this.activeInstanceId,
-			this.projectsSidebarVisible,
-			this.projectSwitcherCanGoBack,
-			this.projectSwitcherCanGoForward
-		);
+		return this.hostedWorkspaces.toState();
 	}
 
 	private emitState(): void {
-		if (!hasLoadedHostedWorkspace(this.instancesById.values())) {
-			this.projectsSidebarVisible = true;
-		}
+		this.hostedWorkspaces.setProjectsSidebarVisible(
+			this.hostedWorkspaces.projectsSidebarVisible,
+			hasLoadedHostedWorkspace(this.instancesById.values())
+		);
 		const state = this.getState();
 		this._onDidChangeWindowState.fire({
 			windowId: this.windowId,
@@ -825,11 +811,22 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	private toPathKey(path: string): string {
-		return path.toLowerCase();
+		return getProjectManagerPathComparisonKey(
+			path,
+			this.serverPathCaseSensitive
+		);
 	}
 
 	private toPendingRequestKey(instanceId: string, requestId: string): string {
 		return `${instanceId}:${requestId}`;
+	}
+
+	private get instancesById(): Map<string, IHostedIframeInstance> {
+		return this.hostedWorkspaces.instancesById;
+	}
+
+	private get activeInstanceId(): string | undefined {
+		return this.hostedWorkspaces.activeInstanceId;
 	}
 }
 

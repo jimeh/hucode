@@ -21,7 +21,7 @@ import { isFolderToOpen, isWorkspaceToOpen } from '../../../platform/window/comm
 import type { IWorkbenchConstructionOptions, IWorkspace, IWorkspaceProvider } from '../../../workbench/browser/web.api.js';
 import { AuthenticationSessionInfo } from '../../../workbench/services/authentication/browser/authenticationService.js';
 import type { IURLCallbackProvider } from '../../../workbench/services/url/browser/urlService.js';
-import { isHucodeOmniWebConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
+import { resolveHucodeWebWorkbenchCreate } from './hucodeWebWorkbenchEntrypoint.js';
 import { create } from '../../../workbench/workbench.web.main.internal.js';
 
 interface ISecretStorageCrypto {
@@ -602,26 +602,6 @@ function readCookie(name: string): string | undefined {
 	return undefined;
 }
 
-function isHucodeHostedOmniWebPayload(): boolean {
-	const payload = new URL(mainWindow.location.href).searchParams.get('payload');
-	if (!payload) {
-		return false;
-	}
-
-	try {
-		const value = parse(payload);
-		return Array.isArray(value) &&
-			value.some(entry =>
-				Array.isArray(entry) &&
-				entry[0] === 'isHostedOmniWorkspace' &&
-				entry[1] === 'true'
-			);
-	} catch (error) {
-		console.error(error); // possible invalid JSON
-		return false;
-	}
-}
-
 (async function () {
 
 	// Find config by checking for DOM
@@ -636,14 +616,11 @@ function isHucodeHostedOmniWebPayload(): boolean {
 	const secretStorageCrypto = secretStorageKeyPath && ServerKeyedAESCrypto.supported()
 		? new ServerKeyedAESCrypto(secretStorageKeyPath) : new TransparentCrypto();
 
-	let createWorkbench = create;
-	if (isHucodeOmniWebConfiguration(config)) {
-		createWorkbench =
-			(await import('../../../hucode/browser/omni.web.main.js')).create;
-	} else if (isHucodeHostedOmniWebPayload()) {
-		createWorkbench =
-			(await import('../../../hucode/browser/hostedOmniWeb.main.js')).create;
-	}
+	const createWorkbench = await resolveHucodeWebWorkbenchCreate(
+		config,
+		mainWindow.location.href,
+		create
+	);
 
 	// Create workbench
 	createWorkbench(mainWindow.document.body, {
