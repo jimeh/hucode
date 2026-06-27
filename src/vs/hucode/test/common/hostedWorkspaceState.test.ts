@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Emitter } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -14,8 +15,10 @@ import {
 	getRestoreActiveWorktreePath,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
+	isHostedWorkspaceAvailable,
 	isHostedWorkspacePendingReady,
 	sortRestoreEntries,
+	waitForHostedWorkspaceReady,
 	type IHostedWorkspaceStateEntry,
 } from '../../common/hostedWorkspaceState.js';
 
@@ -65,6 +68,10 @@ suite('HostedWorkspaceState', () => {
 		assert.strictEqual(isHostedWorkspacePendingReady(candidate), true);
 		assert.strictEqual(
 			isHostedWorkspacePendingReady(entry('loaded')),
+			false
+		);
+		assert.strictEqual(
+			isHostedWorkspaceAvailable(entry('crashed', { state: 'crashed' })),
 			false
 		);
 	});
@@ -190,6 +197,43 @@ suite('HostedWorkspaceState', () => {
 				state: 'loaded',
 			},
 		]);
+	});
+
+	test('waits for hosted workspace readiness through shared helper', async () => {
+		const stateEmitter = new Emitter<void>();
+		const candidate = entry('one', { state: 'loading' });
+
+		try {
+			const ready = waitForHostedWorkspaceReady(
+				candidate,
+				stateEmitter.event,
+				1000
+			);
+			candidate.state = 'active';
+			stateEmitter.fire();
+
+			assert.strictEqual(await ready, true);
+		} finally {
+			stateEmitter.dispose();
+		}
+	});
+
+	test('reports readiness timeout through shared helper', async () => {
+		const stateEmitter = new Emitter<void>();
+		const candidate = entry('one', { state: 'loading' });
+
+		try {
+			assert.strictEqual(
+				await waitForHostedWorkspaceReady(
+					candidate,
+					stateEmitter.event,
+					1
+				),
+				false
+			);
+		} finally {
+			stateEmitter.dispose();
+		}
 	});
 });
 

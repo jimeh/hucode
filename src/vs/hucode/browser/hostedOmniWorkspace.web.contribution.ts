@@ -5,13 +5,35 @@
 
 import { mainWindow } from '../../base/browser/window.js';
 import { addDisposableListener } from '../../base/browser/dom.js';
+import { coalesce } from '../../base/common/arrays.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isObject } from '../../base/common/types.js';
+import { URI } from '../../base/common/uri.js';
 import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
-import { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
+import { IResourceEditorInput } from
+	'../../platform/editor/common/editor.js';
+import { IFileService } from '../../platform/files/common/files.js';
+import {
+	IInstantiationService,
+	ServicesAccessor,
+} from '../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../platform/log/common/log.js';
+import {
+	INativeOpenFileRequest,
+} from '../../platform/window/common/window.js';
 import { localize2 } from '../../nls.js';
+import { whenEditorClosed } from '../../workbench/browser/editor.js';
+import {
+	IEditorPane,
+	IResourceDiffEditorInput,
+	IResourceMergeEditorInput,
+	isResourceEditorInput,
+	IUntitledTextResourceEditorInput,
+	IUntypedEditorInput,
+	pathsToEditors,
+} from '../../workbench/common/editor.js';
 import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
@@ -20,6 +42,8 @@ import {
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IsHostedOmniWorkspaceContext } from '../../workbench/common/contextkeys.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../workbench/common/contributions.js';
+import { IEditorService } from
+	'../../workbench/services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../workbench/services/environment/common/environmentService.js';
 import { ILifecycleService } from '../../workbench/services/lifecycle/common/lifecycle.js';
 import {
@@ -47,7 +71,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 		@IWorkbenchEnvironmentService
 		environmentService: IWorkbenchEnvironmentService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IEditorService private readonly editorService: IEditorService,
+		@IFileService private readonly fileService: IFileService,
+		@IInstantiationService
+		private readonly instantiationService: IInstantiationService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		super();
 
@@ -125,7 +154,9 @@ class HostedOmniWebBridgeContribution extends Disposable
 
 		try {
 			const args = Array.isArray(message.args) ? message.args : [];
-			await this.commandService.executeCommand(message.commandId, ...args);
+			const ok = message.commandId === 'vscode:openFiles'
+				? await this.openFiles(args[0] as INativeOpenFileRequest)
+				: await this.runWorkbenchCommand(message.commandId, args);
 			this.postToShell({
 				type: HucodeOmniWebChildMessageType.CommandResult,
 				instanceId,
@@ -133,7 +164,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 					? message.requestId
 					: undefined,
 				commandId: message.commandId,
-				ok: true,
+				ok,
 			});
 		} catch (error) {
 			this.postToShell({
@@ -146,6 +177,121 @@ class HostedOmniWebBridgeContribution extends Disposable
 				ok: false,
 				error: error instanceof Error ? error.message : String(error),
 			});
+		}
+	}
+
+	private async runWorkbenchCommand(
+		commandId: string,
+		args: readonly unknown[]
+	): Promise<boolean> {
+		await this.commandService.executeCommand(commandId, ...args);
+		return true;
+	}
+
+	private async openFiles(request: INativeOpenFileRequest): Promise<boolean> {
+		if (!isNativeOpenFileRequest(request)) {
+			return false;
+		}
+
+		const diffMode = !!(request.filesToDiff?.length === 2);
+		const mergeMode = !!(request.filesToMerge?.length === 4);
+		const paths = mergeMode
+			? request.filesToMerge
+			: diffMode
+				? request.filesToDiff
+				: request.filesToOpenOrCreate;
+		const inputs = coalesce(await pathsToEditors(
+			paths,
+			this.fileService,
+			this.logService
+		));
+		if (!inputs.length) {
+			await this.deleteWaitMarker(request);
+			return false;
+		}
+
+		const openedEditorPanes = await this.openResources(
+			inputs,
+			diffMode,
+			mergeMode
+		);
+		if (request.filesToWait) {
+			if (openedEditorPanes.length) {
+				void this.trackClosedWaitFiles(
+					URI.revive(request.filesToWait.waitMarkerFileUri),
+					coalesce(request.filesToWait.paths.map(path =>
+						URI.revive(path.fileUri)
+					))
+				);
+			} else {
+				await this.deleteWaitMarker(request);
+			}
+		}
+
+		return openedEditorPanes.length > 0;
+	}
+
+	private async openResources(
+		resources: Array<IResourceEditorInput | IUntitledTextResourceEditorInput>,
+		diffMode: boolean,
+		mergeMode: boolean
+	): Promise<readonly IEditorPane[]> {
+		const editors: IUntypedEditorInput[] = [];
+
+		if (
+			mergeMode &&
+			isResourceEditorInput(resources[0]) &&
+			isResourceEditorInput(resources[1]) &&
+			isResourceEditorInput(resources[2]) &&
+			isResourceEditorInput(resources[3])
+		) {
+			const mergeEditor: IResourceMergeEditorInput = {
+				input1: { resource: resources[0].resource },
+				input2: { resource: resources[1].resource },
+				base: { resource: resources[2].resource },
+				result: { resource: resources[3].resource },
+				options: { pinned: true },
+			};
+			editors.push(mergeEditor);
+		} else if (
+			diffMode &&
+			isResourceEditorInput(resources[0]) &&
+			isResourceEditorInput(resources[1])
+		) {
+			const diffEditor: IResourceDiffEditorInput = {
+				original: { resource: resources[0].resource },
+				modified: { resource: resources[1].resource },
+				options: { pinned: true },
+			};
+			editors.push(diffEditor);
+		} else {
+			editors.push(...resources);
+		}
+
+		return this.editorService.openEditors(
+			editors,
+			undefined,
+			{ validateTrust: true }
+		);
+	}
+
+	private async trackClosedWaitFiles(
+		waitMarkerFile: URI,
+		resourcesToWaitFor: URI[]
+	): Promise<void> {
+		await this.instantiationService.invokeFunction(accessor =>
+			whenEditorClosed(accessor, resourcesToWaitFor)
+		);
+		await this.fileService.del(waitMarkerFile);
+	}
+
+	private async deleteWaitMarker(
+		request: INativeOpenFileRequest
+	): Promise<void> {
+		if (request.filesToWait) {
+			await this.fileService.del(URI.revive(
+				request.filesToWait.waitMarkerFileUri
+			));
 		}
 	}
 
@@ -187,6 +333,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 			)
 		));
 	}
+}
+
+function isNativeOpenFileRequest(
+	value: unknown
+): value is INativeOpenFileRequest {
+	return isObject(value);
 }
 
 registerWorkbenchContribution2(

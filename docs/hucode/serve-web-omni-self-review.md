@@ -41,6 +41,20 @@ items remain open.
   - Target: move the remaining Hucode route/config decision-making into a
     Hucode-owned integration helper where practical.
 
+- [x] P2: Restore web file-open forwarding parity.
+  - `WebHucodeShellService` opened or activated the target iframe but always
+    returned `false` for `openFilesInWorkspace` and
+    `openFilesInActiveWorkspace`.
+  - Web now waits for hosted workbench readiness through the shared hosted
+    workspace helper and forwards `vscode:openFiles` to the iframe; the hosted
+    web bridge handles that command with the browser editor services.
+
+- [x] P3: Share hosted-workspace readiness waiting.
+  - Desktop and web should not each own their own pending-ready timeout loop.
+  - Readiness availability and timeout waiting now live in
+    `waitForHostedWorkspaceReady`, with platform adapters supplying only their
+    state-change event and unavailable-instance predicate.
+
 ## Verification
 
 - [x] Add or update focused tests for changed shared hosted-workspace behavior.
@@ -51,5 +65,6 @@ items remain open.
     `src/vs/hucode/test/common/hostedWorkspaceState.test.ts`.
 - [x] Add focused coverage for Hucode web workbench entrypoint selection.
 - [x] Add focused coverage for Hucode server-web route/config integration.
+- [x] Add focused coverage for shared hosted-workspace readiness waiting.
 - [x] Run focused tests for changed files.
 - [x] Run required Hucode hygiene checks.

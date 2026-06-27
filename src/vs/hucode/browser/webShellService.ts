@@ -40,6 +40,7 @@ import {
 	getMostRecentHostedWorkspace,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
+	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import {
 	HucodeOmniWebChildMessage,
@@ -75,6 +76,7 @@ export class WebHucodeShellService extends Disposable
 
 	declare readonly _serviceBrand: undefined;
 	readonly supportsWorkspaceScreenshotOverlay = false;
+	private static readonly READY_TIMEOUT_MS = 30000;
 
 	private readonly windowId = getWindowId(mainWindow);
 	private readonly workbenchRoute: string;
@@ -183,18 +185,35 @@ export class WebHucodeShellService extends Disposable
 	async openFilesInWorkspace(
 		windowId: number,
 		worktreePath: string,
-		_request: INativeOpenFileRequest,
+		request: INativeOpenFileRequest,
 		projectId?: string
 	): Promise<boolean> {
+		if (windowId !== this.windowId) {
+			return false;
+		}
+
 		await this.openWorkspace(windowId, worktreePath, projectId);
-		return false;
+
+		const instance = this.getInstanceByPath(worktreePath);
+		if (!instance || instance.instanceId !== this.activeInstanceId) {
+			return false;
+		}
+
+		return this.openFilesInInstance(instance, request);
 	}
 
 	async openFilesInActiveWorkspace(
-		_windowId: number,
-		_request: INativeOpenFileRequest
+		windowId: number,
+		request: INativeOpenFileRequest
 	): Promise<boolean> {
-		return false;
+		if (windowId !== this.windowId) {
+			return false;
+		}
+
+		const instance = this.getActiveInstance();
+		return instance
+			? this.openFilesInInstance(instance, request)
+			: false;
 	}
 
 	async closeWorkspace(
@@ -532,6 +551,25 @@ export class WebHucodeShellService extends Disposable
 		}
 
 		return this.postCommand(instance, commandId, args);
+	}
+
+	private async openFilesInInstance(
+		instance: IHostedIframeInstance,
+		request: INativeOpenFileRequest
+	): Promise<boolean> {
+		if (!await this.waitForInstanceReady(instance)) {
+			return false;
+		}
+
+		return this.postCommand(instance, 'vscode:openFiles', [request]);
+	}
+
+	private waitForInstanceReady(instance: IHostedIframeInstance): Promise<boolean> {
+		return waitForHostedWorkspaceReady(
+			instance,
+			this.onDidChangeWindowState,
+			WebHucodeShellService.READY_TIMEOUT_MS
+		);
 	}
 
 	private postCommand(

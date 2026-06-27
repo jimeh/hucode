@@ -47,6 +47,7 @@ import {
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
 	isHostedWorkspacePendingReady,
+	waitForHostedWorkspaceReady,
 	sortRestoreEntries,
 } from '../common/hostedWorkspaceState.js';
 import type { IBrowserViewMainService } from
@@ -273,36 +274,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private waitForInstanceReady(
 		instance: IHostedWorkbenchInstance
 	): Promise<boolean> {
-		if (!this.isInstancePendingReady(instance)) {
-			return Promise.resolve(
-				instance.state !== 'crashed' && instance.state !== 'unloaded'
-			);
-		}
-
-		return new Promise<boolean>(resolve => {
-			const listener = this.onDidChangeState(() => {
-				if (this.isInstancePendingReady(instance)) {
-					return;
-				}
-
-				listener.dispose();
-				clearTimeout(handle);
-				resolve(
-					instance.state !== 'crashed' && instance.state !== 'unloaded'
-				);
-			});
-
-			const handle = setTimeout(() => {
-				listener.dispose();
-				resolve(false);
-			}, this.readyTimeoutMs);
-		});
-	}
-
-	private isInstancePendingReady(
-		instance: IHostedWorkbenchInstance
-	): boolean {
-		return isHostedWorkspacePendingReady(instance);
+		return waitForHostedWorkspaceReady(
+			instance,
+			this.onDidChangeState,
+			this.readyTimeoutMs,
+			candidate => !!(candidate as IHostedWorkbenchInstance).disposed
+		);
 	}
 
 	private updateWindowRestoreState(): void {
@@ -1006,7 +983,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.updateInstanceState(previousActive, {
 				state: previousActive.state === 'crashed'
 					? 'crashed'
-					: this.isInstancePendingReady(previousActive)
+					: isHostedWorkspacePendingReady(previousActive)
 						? previousActive.state
 						: 'loaded',
 				focused: false,
@@ -1018,7 +995,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.updateInstanceState(instance, {
 			state: instance.state === 'crashed'
 				? 'crashed'
-				: this.isInstancePendingReady(instance)
+				: isHostedWorkspacePendingReady(instance)
 					? instance.state
 					: 'active',
 			visible: true,

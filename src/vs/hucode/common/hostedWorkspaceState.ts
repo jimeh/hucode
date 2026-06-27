@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Event } from '../../base/common/event.js';
 import { IOmniWorkspaceRestoreEntry } from
 	'../../platform/window/common/window.js';
 import {
@@ -171,8 +172,7 @@ export function hasLoadedHostedWorkspace<T extends IHostedWorkspaceStateEntry>(
 ): boolean {
 	return Array.from(entries).some(entry =>
 		!isDisposed(entry) &&
-		entry.state !== 'crashed' &&
-		entry.state !== 'unloaded'
+		isHostedWorkspaceAvailable(entry)
 	);
 }
 
@@ -193,6 +193,48 @@ export function isHostedWorkspacePendingReady(
 	entry: IHostedWorkspaceStateEntry
 ): boolean {
 	return entry.state === 'restore-pending' || entry.state === 'loading';
+}
+
+/**
+ * Returns whether a hosted workbench can still receive work.
+ */
+export function isHostedWorkspaceAvailable(
+	entry: IHostedWorkspaceStateEntry
+): boolean {
+	return entry.state !== 'crashed' && entry.state !== 'unloaded';
+}
+
+/**
+ * Waits until a hosted workspace leaves its pending-ready state.
+ */
+export function waitForHostedWorkspaceReady(
+	entry: IHostedWorkspaceStateEntry,
+	onDidChangeState: Event<unknown>,
+	timeoutMs: number,
+	isUnavailable: (entry: IHostedWorkspaceStateEntry) => boolean = () => false
+): Promise<boolean> {
+	if (!isHostedWorkspacePendingReady(entry)) {
+		return Promise.resolve(
+			isHostedWorkspaceAvailable(entry) && !isUnavailable(entry)
+		);
+	}
+
+	return new Promise<boolean>(resolve => {
+		const listener = onDidChangeState(() => {
+			if (isHostedWorkspacePendingReady(entry)) {
+				return;
+			}
+
+			listener.dispose();
+			clearTimeout(handle);
+			resolve(isHostedWorkspaceAvailable(entry) && !isUnavailable(entry));
+		});
+
+		const handle = setTimeout(() => {
+			listener.dispose();
+			resolve(false);
+		}, timeoutMs);
+	});
 }
 
 /**
