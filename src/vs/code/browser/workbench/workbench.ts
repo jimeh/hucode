@@ -602,6 +602,26 @@ function readCookie(name: string): string | undefined {
 	return undefined;
 }
 
+function isHucodeHostedOmniWebPayload(): boolean {
+	const payload = new URL(mainWindow.location.href).searchParams.get('payload');
+	if (!payload) {
+		return false;
+	}
+
+	try {
+		const value = parse(payload);
+		return Array.isArray(value) &&
+			value.some(entry =>
+				Array.isArray(entry) &&
+				entry[0] === 'isHostedOmniWorkspace' &&
+				entry[1] === 'true'
+			);
+	} catch (error) {
+		console.error(error); // possible invalid JSON
+		return false;
+	}
+}
+
 (async function () {
 
 	// Find config by checking for DOM
@@ -616,9 +636,14 @@ function readCookie(name: string): string | undefined {
 	const secretStorageCrypto = secretStorageKeyPath && ServerKeyedAESCrypto.supported()
 		? new ServerKeyedAESCrypto(secretStorageKeyPath) : new TransparentCrypto();
 
-	const createWorkbench = isHucodeOmniWebConfiguration(config)
-		? (await import('../../../hucode/browser/omni.web.main.js')).create
-		: create;
+	let createWorkbench = create;
+	if (isHucodeOmniWebConfiguration(config)) {
+		createWorkbench =
+			(await import('../../../hucode/browser/omni.web.main.js')).create;
+	} else if (isHucodeHostedOmniWebPayload()) {
+		createWorkbench =
+			(await import('../../../hucode/browser/hostedOmniWeb.main.js')).create;
+	}
 
 	// Create workbench
 	createWorkbench(mainWindow.document.body, {

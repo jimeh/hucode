@@ -46,6 +46,7 @@ import {
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
+	IHucodeOmniWebShellRequestMessage,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import { getHucodeOmniWorkbenchRoute } from
 	'../../platform/environment/common/hucodeWebConfiguration.js';
@@ -77,6 +78,7 @@ export class WebHucodeShellService extends Disposable
 	private readonly instancesById = new Map<string, IHostedIframeInstance>();
 	private readonly instanceIdsByPath = new Map<string, string>();
 	private readonly pendingUnload = new Map<string, () => void>();
+	private readonly pendingCommands = new Map<string, (ok: boolean) => void>();
 	private activeInstanceId: string | undefined;
 	private projectsSidebarVisible = true;
 	private projectSwitcherCanGoBack = false;
@@ -316,7 +318,7 @@ export class WebHucodeShellService extends Disposable
 		}
 
 		instance.state = 'loading';
-		this.postCommand(instance, 'workbench.action.reloadWindow', []);
+		void this.postCommand(instance, 'workbench.action.reloadWindow', []);
 		mainWindow.setTimeout(() => {
 			if (instance.state === 'loading') {
 				instance.iframe.src = instance.iframe.src;
@@ -388,6 +390,7 @@ export class WebHucodeShellService extends Disposable
 					this.windowId,
 					message.instanceId
 				);
+				this.postState(instance, this.getState());
 				break;
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused;
@@ -401,6 +404,11 @@ export class WebHucodeShellService extends Disposable
 				this.pendingUnload.get(message.instanceId)?.();
 				break;
 			case HucodeOmniWebChildMessageType.CommandResult:
+				this.resolvePendingCommand(
+					message.instanceId,
+					message.requestId,
+					message.ok
+				);
 				if (instance.state === 'loading') {
 					instance.state = message.ok ? 'loaded' : 'crashed';
 					this.emitState();
@@ -408,6 +416,9 @@ export class WebHucodeShellService extends Disposable
 				break;
 			case HucodeOmniWebChildMessageType.ShellCommand:
 				void this.handleShellCommand(instance, message.commandId);
+				break;
+			case HucodeOmniWebChildMessageType.ShellRequest:
+				void this.handleShellRequest(instance, message);
 				break;
 		}
 	}
@@ -522,26 +533,202 @@ export class WebHucodeShellService extends Disposable
 	private postCommandToActive(
 		commandId: string,
 		args: readonly unknown[]
-	): boolean {
+	): Promise<boolean> {
 		const instance = this.getActiveInstance();
 		if (!instance) {
-			return false;
+			return Promise.resolve(false);
 		}
 
-		this.postCommand(instance, commandId, args);
-		return true;
+		return this.postCommand(instance, commandId, args);
 	}
 
 	private postCommand(
 		instance: IHostedIframeInstance,
 		commandId: string,
 		args: readonly unknown[]
+	): Promise<boolean> {
+		const requestId = generateUuid();
+		const targetWindow = instance.iframe.contentWindow;
+		if (!targetWindow) {
+			return Promise.resolve(false);
+		}
+
+		return new Promise(resolve => {
+			const key = this.toPendingRequestKey(instance.instanceId, requestId);
+			const handle = mainWindow.setTimeout(() => {
+				this.pendingCommands.delete(key);
+				resolve(false);
+			}, 5000);
+			this.pendingCommands.set(key, ok => {
+				mainWindow.clearTimeout(handle);
+				resolve(ok);
+			});
+			targetWindow.postMessage({
+				type: HucodeOmniWebParentMessageType.RunCommand,
+				instanceId: instance.instanceId,
+				requestId,
+				commandId,
+				args,
+			}, mainWindow.location.origin);
+		});
+	}
+
+	private resolvePendingCommand(
+		instanceId: string,
+		requestId: string | undefined,
+		ok: boolean
+	): void {
+		if (!requestId) {
+			return;
+		}
+
+		const key = this.toPendingRequestKey(instanceId, requestId);
+		const resolve = this.pendingCommands.get(key);
+		if (!resolve) {
+			return;
+		}
+
+		this.pendingCommands.delete(key);
+		resolve(ok);
+	}
+
+	private async handleShellRequest(
+		instance: IHostedIframeInstance,
+		message: IHucodeOmniWebShellRequestMessage
+	): Promise<void> {
+		try {
+			const result = await this.runShellRequest(instance, message);
+			this.postShellResponse(instance, message.requestId, true, result);
+		} catch (error) {
+			this.postShellResponse(
+				instance,
+				message.requestId,
+				false,
+				undefined,
+				error instanceof Error ? error.message : String(error)
+			);
+		}
+	}
+
+	private async runShellRequest(
+		instance: IHostedIframeInstance,
+		message: IHucodeOmniWebShellRequestMessage
+	): Promise<unknown> {
+		const args = Array.isArray(message.args) ? message.args : [];
+		switch (message.method) {
+			case 'getWindowState':
+				return this.getState();
+			case 'findHostedWorkspaceByPath':
+				return this.findHostedWorkspaceByPath(getStringArg(args, 0));
+			case 'focusHostedWorkspaceByPath':
+				return this.focusHostedWorkspaceByPath(
+					getStringArg(args, 0),
+					getOptionalStringArg(args, 1)
+				);
+			case 'focusNormalWindowByPath':
+				return this.focusNormalWindowByPath(getStringArg(args, 0));
+			case 'openWorkspace':
+				return this.openWorkspace(
+					this.windowId,
+					getStringArg(args, 1),
+					getOptionalStringArg(args, 2)
+				);
+			case 'openFilesInWorkspace':
+				return this.openFilesInWorkspace(
+					this.windowId,
+					getStringArg(args, 1),
+					args[2] as INativeOpenFileRequest,
+					getOptionalStringArg(args, 3)
+				);
+			case 'openFilesInActiveWorkspace':
+				return this.openFilesInActiveWorkspace(
+					this.windowId,
+					args[1] as INativeOpenFileRequest
+				);
+			case 'closeWorkspace':
+				return this.closeWorkspace(
+					this.windowId,
+					getOptionalStringArg(args, 1) ?? instance.instanceId
+				);
+			case 'reopenWorkspaceInNormalWindow':
+				return this.reopenWorkspaceInNormalWindow(
+					this.windowId,
+					getStringArg(args, 1)
+				);
+			case 'notifyHostedWorkspaceReady':
+				return this.notifyHostedWorkspaceReady(
+					this.windowId,
+					getStringArg(args, 1)
+				);
+			case 'focusWorkspace':
+				return this.focusWorkspace(this.windowId);
+			case 'focusShell':
+				return this.focusShell(this.windowId);
+			case 'setProjectsSidebarVisible':
+				return this.setProjectsSidebarVisible(
+					this.windowId,
+					args[1] === true
+				);
+			case 'setProjectSwitcherNavigationState':
+				return this.setProjectSwitcherNavigationState(
+					this.windowId,
+					args[1] === true,
+					args[2] === true
+				);
+			case 'runActionInShell':
+				return this.runActionInShell(
+					this.windowId,
+					args[1] as INativeRunActionInWindowRequest
+				);
+			case 'runActionInWorkspace':
+				return this.runActionInWorkspace(
+					this.windowId,
+					args[1] as INativeRunActionInWindowRequest
+				);
+			case 'runKeybindingInWorkspace':
+				return this.runKeybindingInWorkspace(
+					this.windowId,
+					args[1] as INativeRunKeybindingInWindowRequest
+				);
+			case 'triggerPasteInWorkspace':
+				return this.triggerPasteInWorkspace(this.windowId);
+			case 'reloadWorkspace':
+				return this.reloadWorkspace(this.windowId);
+			case 'toggleWorkspaceDevTools':
+				return this.toggleWorkspaceDevTools(this.windowId);
+			case 'layoutWorkspace':
+				return this.layoutWorkspace(this.windowId, args[1] as IRectangle);
+			case 'captureWorkspaceScreenshot':
+				return undefined;
+			case 'setWorkspaceOverlayOcclusion':
+				return this.setWorkspaceOverlayOcclusion(
+					this.windowId,
+					args[1] === true
+				);
+			case 'shutdownWindowWorkspaces':
+				return this.shutdownWindowWorkspaces(
+					this.windowId,
+					args[1] as ShutdownReason
+				);
+			default:
+				throw new Error(`Unsupported shell request: ${message.method}`);
+		}
+	}
+
+	private postShellResponse(
+		instance: IHostedIframeInstance,
+		requestId: string,
+		ok: boolean,
+		result?: unknown,
+		error?: string
 	): void {
 		instance.iframe.contentWindow?.postMessage({
-			type: HucodeOmniWebParentMessageType.RunCommand,
+			type: HucodeOmniWebParentMessageType.ShellResponse,
 			instanceId: instance.instanceId,
-			commandId,
-			args,
+			requestId,
+			ok,
+			result,
+			error,
 		}, mainWindow.location.origin);
 	}
 
@@ -616,14 +803,33 @@ export class WebHucodeShellService extends Disposable
 		if (!hasLoadedHostedWorkspace(this.instancesById.values())) {
 			this.projectsSidebarVisible = true;
 		}
+		const state = this.getState();
 		this._onDidChangeWindowState.fire({
 			windowId: this.windowId,
-			state: this.getState(),
+			state,
 		});
+		for (const instance of this.instancesById.values()) {
+			this.postState(instance, state);
+		}
+	}
+
+	private postState(
+		instance: IHostedIframeInstance,
+		state: IHucodeHostedWorkspaceState
+	): void {
+		instance.iframe.contentWindow?.postMessage({
+			type: HucodeOmniWebParentMessageType.State,
+			instanceId: instance.instanceId,
+			state,
+		}, mainWindow.location.origin);
 	}
 
 	private toPathKey(path: string): string {
 		return path.toLowerCase();
+	}
+
+	private toPendingRequestKey(instanceId: string, requestId: string): string {
+		return `${instanceId}:${requestId}`;
 	}
 }
 
@@ -639,7 +845,8 @@ function isHucodeOmniWebChildMessage(
 		type === HucodeOmniWebChildMessageType.Focus ||
 		type === HucodeOmniWebChildMessageType.UnloadReady ||
 		type === HucodeOmniWebChildMessageType.CommandResult ||
-		type === HucodeOmniWebChildMessageType.ShellCommand;
+		type === HucodeOmniWebChildMessageType.ShellCommand ||
+		type === HucodeOmniWebChildMessageType.ShellRequest;
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {
@@ -649,6 +856,27 @@ function emptyState(): IHucodeHostedWorkspaceState {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+}
+
+function getStringArg(args: readonly unknown[], index: number): string {
+	const value = args[index];
+	if (typeof value !== 'string') {
+		throw new Error(`Expected string argument at index ${index}`);
+	}
+
+	return value;
+}
+
+function getOptionalStringArg(
+	args: readonly unknown[],
+	index: number
+): string | undefined {
+	const value = args[index];
+	if (value === undefined || typeof value === 'string') {
+		return value;
+	}
+
+	throw new Error(`Expected optional string argument at index ${index}`);
 }
 
 registerSingleton(

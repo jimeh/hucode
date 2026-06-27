@@ -28,7 +28,6 @@ import './browser/parts/dialogs/dialog.web.contribution.js';
 //#region --- workbench (web main)
 
 import './browser/web.main.js';
-import './contrib/hucode/browser/hostedOmniWorkspace.web.contribution.js';
 
 //#endregion
 

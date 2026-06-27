@@ -9,6 +9,8 @@
 export const enum HucodeOmniWebParentMessageType {
 	BeforeUnload = 'hucode.omni.beforeUnload',
 	RunCommand = 'hucode.omni.runCommand',
+	State = 'hucode.omni.state',
+	ShellResponse = 'hucode.omni.shellResponse',
 }
 
 /**
@@ -20,6 +22,7 @@ export const enum HucodeOmniWebChildMessageType {
 	UnloadReady = 'hucode.omni.unloadReady',
 	CommandResult = 'hucode.omni.commandResult',
 	ShellCommand = 'hucode.omni.shellCommand',
+	ShellRequest = 'hucode.omni.shellRequest',
 }
 
 /**
@@ -28,6 +31,7 @@ export const enum HucodeOmniWebChildMessageType {
 export interface IHucodeOmniWebRunCommandMessage {
 	readonly type: HucodeOmniWebParentMessageType.RunCommand;
 	readonly instanceId: string;
+	readonly requestId?: string;
 	readonly commandId: string;
 	readonly args?: readonly unknown[];
 }
@@ -38,6 +42,27 @@ export interface IHucodeOmniWebRunCommandMessage {
 export interface IHucodeOmniWebBeforeUnloadMessage {
 	readonly type: HucodeOmniWebParentMessageType.BeforeUnload;
 	readonly instanceId: string;
+}
+
+/**
+ * Current hosted workspace state sent by the Omni shell to iframes.
+ */
+export interface IHucodeOmniWebStateMessage {
+	readonly type: HucodeOmniWebParentMessageType.State;
+	readonly instanceId: string;
+	readonly state: unknown;
+}
+
+/**
+ * Response sent by the Omni shell for a hosted workbench shell request.
+ */
+export interface IHucodeOmniWebShellResponseMessage {
+	readonly type: HucodeOmniWebParentMessageType.ShellResponse;
+	readonly instanceId: string;
+	readonly requestId: string;
+	readonly ok: boolean;
+	readonly result?: unknown;
+	readonly error?: string;
 }
 
 /**
@@ -71,7 +96,10 @@ export interface IHucodeOmniWebFocusMessage {
 export interface IHucodeOmniWebCommandResultMessage {
 	readonly type: HucodeOmniWebChildMessageType.CommandResult;
 	readonly instanceId: string;
+	readonly requestId?: string;
+	readonly commandId?: string;
 	readonly ok: boolean;
+	readonly error?: string;
 }
 
 /**
@@ -84,13 +112,27 @@ export interface IHucodeOmniWebShellCommandMessage {
 	readonly args?: readonly unknown[];
 }
 
+/**
+ * Shell service method requested by a hosted iframe workbench.
+ */
+export interface IHucodeOmniWebShellRequestMessage {
+	readonly type: HucodeOmniWebChildMessageType.ShellRequest;
+	readonly instanceId: string;
+	readonly requestId: string;
+	readonly method: string;
+	readonly args?: readonly unknown[];
+}
+
 export type HucodeOmniWebParentMessage =
 	| IHucodeOmniWebRunCommandMessage
-	| IHucodeOmniWebBeforeUnloadMessage;
+	| IHucodeOmniWebBeforeUnloadMessage
+	| IHucodeOmniWebStateMessage
+	| IHucodeOmniWebShellResponseMessage;
 
 export type HucodeOmniWebChildMessage =
 	| IHucodeOmniWebReadyMessage
 	| IHucodeOmniWebFocusMessage
 	| IHucodeOmniWebUnloadReadyMessage
 	| IHucodeOmniWebCommandResultMessage
-	| IHucodeOmniWebShellCommandMessage;
+	| IHucodeOmniWebShellCommandMessage
+	| IHucodeOmniWebShellRequestMessage;

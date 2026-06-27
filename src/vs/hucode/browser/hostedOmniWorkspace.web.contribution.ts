@@ -3,32 +3,36 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { mainWindow } from '../../../../base/browser/window.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
-import { isObject } from '../../../../base/common/types.js';
-import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { ICommandActionTitle } from '../../../../platform/action/common/action.js';
-import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { mainWindow } from '../../base/browser/window.js';
+import { Disposable } from '../../base/common/lifecycle.js';
+import { isObject } from '../../base/common/types.js';
+import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
+import { ICommandActionTitle } from '../../platform/action/common/action.js';
+import { ICommandService } from '../../platform/commands/common/commands.js';
+import { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	FOCUS_WORKSPACE_COMMAND_ID,
 	RELOAD_WORKSPACE_COMMAND_ID,
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-} from '../../../../platform/window/common/hucodeOmniCommandRouting.js';
-import { IsHostedOmniWorkspaceContext } from '../../../common/contextkeys.js';
-import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
-import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import { IsHostedOmniWorkspaceContext } from '../../workbench/common/contextkeys.js';
+import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../workbench/common/contributions.js';
+import { IWorkbenchEnvironmentService } from '../../workbench/services/environment/common/environmentService.js';
+import { ILifecycleService } from '../../workbench/services/lifecycle/common/lifecycle.js';
 import {
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
-} from '../../../../platform/window/common/hucodeOmniWebMessages.js';
+} from '../../platform/window/common/hucodeOmniWebMessages.js';
+import './hostedOmniWebShellService.js';
+import './projectManager/webProjectManagerService.js';
+import './projectSwitcher/switchProjectWorktree.contribution.js';
 
 interface HucodeHostedOmniWebMessage {
 	readonly type?: unknown;
 	readonly instanceId?: unknown;
+	readonly requestId?: unknown;
 	readonly commandId?: unknown;
 	readonly args?: unknown;
 }
@@ -116,6 +120,9 @@ class HostedOmniWebBridgeContribution extends Disposable
 			this.postToShell({
 				type: HucodeOmniWebChildMessageType.CommandResult,
 				instanceId,
+				requestId: typeof message.requestId === 'string'
+					? message.requestId
+					: undefined,
 				commandId: message.commandId,
 				ok: true,
 			});
@@ -123,6 +130,9 @@ class HostedOmniWebBridgeContribution extends Disposable
 			this.postToShell({
 				type: HucodeOmniWebChildMessageType.CommandResult,
 				instanceId,
+				requestId: typeof message.requestId === 'string'
+					? message.requestId
+					: undefined,
 				commandId: message.commandId,
 				ok: false,
 				error: error instanceof Error ? error.message : String(error),
