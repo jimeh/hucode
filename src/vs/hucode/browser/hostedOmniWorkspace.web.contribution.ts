@@ -15,7 +15,6 @@ import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	FOCUS_WORKSPACE_COMMAND_ID,
 	RELOAD_WORKSPACE_COMMAND_ID,
-	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IsHostedOmniWorkspaceContext } from '../../workbench/common/contextkeys.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../workbench/common/contributions.js';
@@ -27,7 +26,7 @@ import {
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import './hostedOmniWebShellService.js';
 import './projectManager/webProjectManagerService.js';
-import './projectSwitcher/switchProjectWorktree.contribution.js';
+import './hostedOmniWorkspace.contribution.js';
 
 interface HucodeHostedOmniWebMessage {
 	readonly type?: unknown;
@@ -164,10 +163,6 @@ class HostedOmniWebBridgeContribution extends Disposable
 		this._register(registerHostedOmniWebShellCommand(
 			CLOSE_WORKSPACE_COMMAND_ID,
 			'Omni-Window: Close Workbench'
-		));
-		this._register(registerHostedOmniWebShellCommand(
-			UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-			'Omni-Window: Unload Current Worktree'
 		));
 	}
 }
