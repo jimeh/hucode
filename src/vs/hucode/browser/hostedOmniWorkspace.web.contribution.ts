@@ -119,11 +119,16 @@ class HostedOmniWebBridgeContribution extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebParentMessageType.BeforeUnload:
-				await this.lifecycleService.shutdown();
-				this.postToShell({
-					type: HucodeOmniWebChildMessageType.UnloadReady,
-					instanceId,
-				});
+				try {
+					await this.lifecycleService.shutdown();
+				} catch (error) {
+					this.logService.error(error);
+				} finally {
+					this.postToShell({
+						type: HucodeOmniWebChildMessageType.UnloadReady,
+						instanceId,
+					});
+				}
 				return;
 			case HucodeOmniWebParentMessageType.RunCommand:
 				await this.runCommand(instanceId, message);

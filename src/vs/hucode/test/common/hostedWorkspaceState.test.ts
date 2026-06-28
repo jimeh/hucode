@@ -93,6 +93,7 @@ suite('HostedWorkspaceState', () => {
 		model.activateInstance(second);
 		assert.strictEqual(model.activeInstanceId, 'two');
 		assert.strictEqual(second.lastActiveAt, 20);
+		assert.strictEqual(second.state, 'active');
 
 		model.markInstanceReady(second);
 		assert.strictEqual(second.state, 'active');
@@ -122,6 +123,26 @@ suite('HostedWorkspaceState', () => {
 		model.removeInstance(second);
 		assert.strictEqual(model.activeInstanceId, undefined);
 		assert.strictEqual(model.getInstanceByPath('/repo/two'), undefined);
+	});
+
+	test('promotes and demotes ready instances during activation', () => {
+		const model = new HostedWorkspaceStateModel<IHostedWorkspaceStateEntry>();
+		const first = entry('one');
+		const second = entry('two');
+		const loading = entry('three', { state: 'loading' });
+
+		model.addInstance(first);
+		model.addInstance(second);
+		model.addInstance(loading);
+
+		model.activateInstance(first);
+		model.activateInstance(second);
+		assert.strictEqual(first.state, 'loaded');
+		assert.strictEqual(second.state, 'active');
+
+		model.activateInstance(loading);
+		assert.strictEqual(second.state, 'loaded');
+		assert.strictEqual(loading.state, 'loading');
 	});
 
 	test('selects most recent available workspace', () => {
@@ -216,6 +237,21 @@ suite('HostedWorkspaceState', () => {
 		} finally {
 			stateEmitter.dispose();
 		}
+	});
+
+	test('handles synchronous readiness events during subscription', async () => {
+		const candidate = entry('one', { state: 'loading' });
+		const ready = waitForHostedWorkspaceReady(
+			candidate,
+			listener => {
+				candidate.state = 'active';
+				listener(undefined);
+				return { dispose() { } };
+			},
+			1000
+		);
+
+		assert.strictEqual(await ready, true);
 	});
 
 	test('reports readiness timeout through shared helper', async () => {

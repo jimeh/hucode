@@ -412,6 +412,11 @@ export class WebHucodeShellService extends Disposable
 			return;
 		}
 
+		const instance = this.instancesById.get(event.data.instanceId);
+		if (!instance || event.source !== instance.iframe.contentWindow) {
+			return;
+		}
+
 		this.handleChildMessage(event.data);
 	};
 
@@ -521,14 +526,10 @@ export class WebHucodeShellService extends Disposable
 
 	private activateInstance(instance: IHostedIframeInstance): void {
 		this.hostedWorkspaces.activateInstance(instance);
-		instance.state = instance.state === 'loading' ? 'loading' : 'active';
 		for (const candidate of this.instancesById.values()) {
 			const visible = candidate.instanceId === instance.instanceId;
 			candidate.visible = visible;
 			candidate.focused = visible ? candidate.focused : false;
-			if (!visible && candidate.state === 'active') {
-				candidate.state = 'loaded';
-			}
 			candidate.iframe.classList.toggle('hidden', !visible);
 		}
 		this.emitState();
@@ -704,17 +705,17 @@ export class WebHucodeShellService extends Disposable
 			case 'closeWorkspace':
 				return this.closeWorkspace(
 					this.windowId,
-					getOptionalStringArg(args, 1) ?? instance.instanceId
+					instance.instanceId
 				);
 			case 'reopenWorkspaceInNormalWindow':
 				return this.reopenWorkspaceInNormalWindow(
 					this.windowId,
-					getStringArg(args, 1)
+					instance.instanceId
 				);
 			case 'notifyHostedWorkspaceReady':
 				return this.notifyHostedWorkspaceReady(
 					this.windowId,
-					getStringArg(args, 1)
+					instance.instanceId
 				);
 			case 'focusWorkspace':
 				return this.focusWorkspace(this.windowId);

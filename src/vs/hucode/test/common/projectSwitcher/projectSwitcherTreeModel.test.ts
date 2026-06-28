@@ -168,7 +168,7 @@ suite('ProjectSwitcherTreeModel', () => {
 
 	test('keeps worktree row identity stable when hosted state changes', () => {
 		const worktreePath = '/repos/hucode.worktrees/active';
-		const projects = [
+		const createProjects = () => [
 			createProject({
 				id: 'hucode',
 				worktrees: [
@@ -177,14 +177,14 @@ suite('ProjectSwitcherTreeModel', () => {
 			}),
 		];
 		const idle = buildProjectSwitcherTreeModel({
-			projects,
+			projects: createProjects(),
 			collapsedProjectIds: new Set(),
 			getPathLabel: path => path,
 			isOmniWindow: true,
 			hostedWorkspaceState: createHostedState(),
 		});
 		const loaded = buildProjectSwitcherTreeModel({
-			projects,
+			projects: createProjects(),
 			collapsedProjectIds: new Set(),
 			getPathLabel: path => path,
 			isOmniWindow: true,

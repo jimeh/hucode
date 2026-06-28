@@ -94,6 +94,101 @@ items remain open.
   - The browser project manager subscribes to those events, keeping Omni shells
     in sync when another request or shell changes project metadata.
 
+## Second Review Findings
+
+- [x] P1: Verify hosted iframe message source before dispatch.
+  - `WebHucodeShellService` currently accepts same-origin child messages by
+    `instanceId` alone. It should also require `event.source` to match the
+    owning iframe's `contentWindow`.
+
+- [x] P1: Scope hosted iframe self-requests to the sender instance.
+  - `closeWorkspace`, `reopenWorkspaceInNormalWindow`, and
+    `notifyHostedWorkspaceReady` should use the sender iframe instance id, not
+    an instance id supplied in request arguments.
+
+- [x] P1: Bound serve-web Project Manager JSON request bodies.
+  - `HucodeWebProjectManagerServer.readJson()` buffers request bodies without a
+    size limit.
+
+- [x] P2: Fetch initial projects before committing SSE response headers.
+  - `handleEvents()` writes event-stream headers before `getProjects()` can
+    fail, which prevents normal JSON error responses.
+
+- [x] P2: Always acknowledge hosted iframe unload requests.
+  - Hosted web workbenches should send `UnloadReady` even when
+    `lifecycleService.shutdown()` rejects.
+
+- [x] P2: Move active/loaded state transitions into shared hosted state.
+  - `HostedWorkspaceStateModel.activateInstance()` should promote/demote ready
+    instances so desktop and web adapters do not each own that core state
+    reconciliation.
+
+- [x] P2: Fix shared readiness wait cleanup for synchronous events.
+  - `waitForHostedWorkspaceReady()` should not close over listener/timeout
+    bindings before they are initialized.
+
+- [x] P2: Use platform-aware path identity for desktop hosted workspaces.
+  - Desktop `HostedWorkspaceStateModel` path keys should be case-insensitive on
+    non-Linux platforms.
+
+- [x] P2: Resolve relative custom worktree paths before creation.
+  - `GitWorktreeService.createWorktree()` should store and return the same
+    absolute path that Git creates.
+
+- [x] P2: Align web Omni titlebar visibility with the web layout.
+  - Web Omni hides the titlebar in the grid descriptor but `isVisible()` still
+    reports the titlebar as visible.
+
+- [x] P3: Reject nested project DELETE routes.
+  - `DELETE /_hucode/projects/<id>/anything` should not remove `<id>`.
+
+- [x] P3: Deep-clone nested persisted project state.
+  - `loadStoredProjectManagerState()` shallow-copies project records but leaves
+    nested persisted collections aliased.
+
+- [x] P3: Treat self-move requests as no-ops.
+  - `moveProject()` and `moveWorktree()` should return early when source and
+    target identify the same item.
+
+- [x] P3: Complete `OmniHostPart.dispose()` cleanup.
+  - Dispose should stop screenshot refresh and clear overlay/screenshot state
+    before unregistering the web host surface.
+
+- [x] P3: Catch detached wait-marker cleanup failures.
+  - Fire-and-forget wait-marker cleanup in `hostedOmniOpenFiles` should not
+    leak unhandled rejections.
+
+- [x] P3: Broaden Project Switcher row identity test snapshots.
+  - The row identity test should use distinct project/worktree object graphs
+    across refreshes.
+
+- [x] P3: Localize Project Manager client fallback errors.
+  - Browser Project Manager fallback request errors should use `nls.localize`.
+
+- [x] P3: Add focused `WebProjectManagerService` client tests.
+  - Cover request shape, response revival, and SSE event emission from the
+    browser client adapter.
+
+- [x] P3: Relax `readProjectEvent()` input type.
+  - The EventSource listener receives `Event`; parsing should narrow to a
+    message-like event before reading `data`.
+
+## Third Review Findings
+
+- [x] P2: Add `WebProjectManagerService` browser coverage to Hucode CI.
+  - The new browser test now runs in the targeted `scripts/test.sh` browser
+    pass.
+
+- [x] P2: Test web-only command-routing exceptions.
+  - `WebHucodeShellService` now has focused coverage for iframe focus handoff
+    with browser-limited keybinding/paste behavior, plus desktop-only screenshot
+    and devtools API results.
+
+- [x] P3: Remove the local desktop ready-state ternary.
+  - Desktop readiness handling now uses the shared
+    `getReadyHostedWorkspaceState()` helper before applying
+    `markInstanceReady()`.
+
 ## Verification
 
 - [x] Add or update focused tests for changed shared hosted-workspace behavior.

@@ -7,6 +7,7 @@ import { Emitter } from '../../../base/common/event.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
 import { mainWindow } from '../../../base/browser/window.js';
+import { localize } from '../../../nls.js';
 import { InstantiationType, registerSingleton } from
 	'../../../platform/instantiation/common/extensions.js';
 import {
@@ -257,7 +258,11 @@ export class WebProjectManagerService extends Disposable
 			const error = getErrorMessage(body);
 			throw new Error(
 				error ||
-				`Project manager request failed: ${response.status}`
+				localize(
+					'projectManagerRequestFailed',
+					'Project manager request failed: {0}',
+					response.status
+				)
 			);
 		}
 
@@ -308,9 +313,14 @@ function getErrorMessage(body: unknown): string | undefined {
 	return typeof error === 'string' ? error : undefined;
 }
 
-function readProjectEvent(event: MessageEvent): readonly ProjectRecord[] | undefined {
+function readProjectEvent(event: Event): readonly ProjectRecord[] | undefined {
+	const data = (event as { readonly data?: unknown }).data;
+	if (typeof data !== 'string') {
+		return undefined;
+	}
+
 	try {
-		const body = JSON.parse(event.data) as ProjectsResponse;
+		const body = JSON.parse(data) as ProjectsResponse;
 		if (!Array.isArray(body.projects)) {
 			return undefined;
 		}

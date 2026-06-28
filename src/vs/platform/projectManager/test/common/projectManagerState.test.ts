@@ -53,7 +53,16 @@ suite('ProjectManagerState', () => {
 	} satisfies WorktreeRecord);
 
 	test('loads compatible stored state as cloned records', () => {
-		const sourceProject = project();
+		const sourceProject = project({
+			pinnedWorktreePaths: ['/repo/feature'],
+			worktreeOrder: ['/repo/feature'],
+			worktreeLabels: [
+				{ path: '/repo/feature', label: 'Feature' },
+			],
+			worktreeVisits: [
+				{ path: '/repo/feature', lastVisitedAt: 10 },
+			],
+		});
 		const state: StoredProjectManagerState = {
 			version: PROJECT_MANAGER_STORAGE_VERSION,
 			projects: [sourceProject],
@@ -62,6 +71,30 @@ suite('ProjectManagerState', () => {
 		const projects = loadStoredProjectManagerState(state);
 		assert.deepStrictEqual(projects, [sourceProject]);
 		assert.notStrictEqual(projects[0], sourceProject);
+		assert.notStrictEqual(
+			projects[0].pinnedWorktreePaths,
+			sourceProject.pinnedWorktreePaths
+		);
+		assert.notStrictEqual(
+			projects[0].worktreeOrder,
+			sourceProject.worktreeOrder
+		);
+		assert.notStrictEqual(
+			projects[0].worktreeLabels,
+			sourceProject.worktreeLabels
+		);
+		assert.notStrictEqual(
+			projects[0].worktreeLabels?.[0],
+			sourceProject.worktreeLabels?.[0]
+		);
+		assert.notStrictEqual(
+			projects[0].worktreeVisits,
+			sourceProject.worktreeVisits
+		);
+		assert.notStrictEqual(
+			projects[0].worktreeVisits?.[0],
+			sourceProject.worktreeVisits?.[0]
+		);
 		assert.deepStrictEqual(
 			createStoredProjectManagerState(projects),
 			state

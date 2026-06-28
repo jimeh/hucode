@@ -72,7 +72,7 @@ export async function openHostedOmniFiles(
 					URI.revive(path.fileUri)
 				)),
 				services
-			);
+			).catch(error => services.logService.error(error));
 		} else {
 			await deleteWaitMarker(request, services.fileService);
 		}

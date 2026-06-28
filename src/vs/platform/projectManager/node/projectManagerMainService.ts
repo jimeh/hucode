@@ -357,6 +357,10 @@ export class ProjectManagerMainService extends Disposable
 	async moveProject(id: string, beforeProjectId?: string): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(id);
+		if (beforeProjectId === project.id) {
+			return;
+		}
+
 		const beforeProject = beforeProjectId
 			? this.requireProject(beforeProjectId)
 			: undefined;
@@ -483,6 +487,12 @@ export class ProjectManagerMainService extends Disposable
 		);
 		if (!source) {
 			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+		if (
+			beforeWorktreePath &&
+			this.pathsEqual(source.path, beforeWorktreePath)
+		) {
+			return;
 		}
 		if (source.isMain) {
 			throw new Error('The main worktree cannot be reordered.');

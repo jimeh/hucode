@@ -132,6 +132,32 @@ suite('HucodeWebProjectManagerServer', () => {
 		assert.deepStrictEqual(remove.body.projects, []);
 	});
 
+	test('rejects nested delete routes without removing the project', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const remove = await handle<{ readonly error: string }>(
+			server,
+			'DELETE',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/extra`
+		);
+		const projects = await handle<ProjectsResponseBody>(
+			server,
+			'GET',
+			HUCODE_WEB_PROJECTS_API_PATH
+		);
+
+		assert.deepStrictEqual(remove, {
+			statusCode: 404,
+			body: { error: 'Not found.' },
+		});
+		assert.deepStrictEqual(projects.body.projects, [add.body.project]);
+	});
+
 	test('streams project changes to event clients', async () => {
 		const server = createServer(serverDataPath, disposables);
 		const events = await handleEvents(server);
@@ -172,6 +198,21 @@ suite('HucodeWebProjectManagerServer', () => {
 		assert.deepStrictEqual(response, {
 			statusCode: 400,
 			body: { error: 'Invalid JSON request body.' },
+		});
+	});
+
+	test('returns bad request for oversized JSON bodies', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const response = await handle<{ readonly error: string }>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			'x'.repeat(1024 * 1024 + 1)
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'Request body exceeds 1048576 bytes.' },
 		});
 	});
 

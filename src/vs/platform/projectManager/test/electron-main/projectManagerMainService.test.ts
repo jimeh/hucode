@@ -515,6 +515,45 @@ suite('GitWorktreeService', () => {
 		]);
 	});
 
+	test('createWorktree resolves relative custom paths before adding', async () => {
+		const calls: { args: readonly string[]; cwd: string }[] = [];
+		const checkedPaths: string[] = [];
+		const createdDirs: string[] = [];
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (args, cwd) => {
+				calls.push({ args, cwd });
+				return { stdout: '', stderr: '' };
+			},
+			async path => {
+				checkedPaths.push(path);
+				return false;
+			},
+			async path => {
+				createdDirs.push(path);
+			},
+		);
+
+		const worktreePath = await service.createWorktree(
+			'/workspace/repo',
+			{ path: 'custom/feature', startPoint: 'origin/main' },
+			[]
+		);
+
+		assert.strictEqual(worktreePath, '/workspace/custom/feature');
+		assert.deepStrictEqual(checkedPaths, ['/workspace/custom/feature']);
+		assert.deepStrictEqual(createdDirs, ['/workspace/custom']);
+		assert.deepStrictEqual(calls, [{
+			args: [
+				'worktree',
+				'add',
+				'/workspace/custom/feature',
+				'origin/main',
+			],
+			cwd: '/workspace/repo',
+		}]);
+	});
+
 	test('isValidBranchName delegates to git check-ref-format', async () => {
 		const checkedNames: string[] = [];
 		const service = new GitWorktreeService(
@@ -1235,6 +1274,12 @@ suite('ProjectManagerMainService', () => {
 		const three = await service.addProject(URI.file('/three'));
 
 		await service.setPinned(one.id, true);
+		await service.moveProject(two.id, two.id);
+		assert.deepStrictEqual(
+			(await service.getProjects()).map(project => project.rootUri.fsPath),
+			['two', 'three', 'one'].map(path => `/${path}`)
+		);
+
 		await service.moveProject(three.id, two.id);
 
 		assert.deepStrictEqual(
@@ -1317,6 +1362,21 @@ suite('ProjectManagerMainService', () => {
 
 		const service = createService(stateService, gitWorktreeService);
 		const project = await service.addProject(URI.file('/repo'));
+
+		await service.moveWorktree(
+			project.id,
+			'/repo.worktrees/alpha',
+			'/repo.worktrees/alpha'
+		);
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(worktree => worktree.path),
+			[
+				'/repo',
+				'/repo.worktrees/alpha',
+				'/repo.worktrees/bravo',
+				'/repo.worktrees/charlie',
+			]
+		);
 
 		await service.moveWorktree(
 			project.id,

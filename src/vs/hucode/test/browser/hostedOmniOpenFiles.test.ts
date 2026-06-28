@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { timeout } from '../../../base/common/async.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
@@ -13,7 +14,7 @@ import { FileType, IFileService } from
 	'../../../platform/files/common/files.js';
 import { IInstantiationService } from
 	'../../../platform/instantiation/common/instantiation.js';
-import { NullLogService } from '../../../platform/log/common/log.js';
+import { ILogService, NullLogService } from '../../../platform/log/common/log.js';
 import { INativeOpenFileRequest } from
 	'../../../platform/window/common/window.js';
 import {
@@ -102,6 +103,49 @@ suite('HostedOmniOpenFiles', () => {
 			(opened[0][0] as IResourceEditorInput).resource.fsPath,
 			'/tmp/hucode-open-file.ts'
 		);
+	});
+
+	test('logs detached wait-marker cleanup failures', async () => {
+		const errors: unknown[] = [];
+		const request: INativeOpenFileRequest = {
+			filesToOpenOrCreate: [{
+				fileUri: URI.file('/tmp/hucode-open-file.ts'),
+				exists: true,
+				type: FileType.File,
+			}],
+			filesToWait: {
+				waitMarkerFileUri: URI.file('/tmp/wait-marker'),
+				paths: [{ fileUri: URI.file('/tmp/hucode-open-file.ts') }],
+			},
+		};
+
+		const ok = await openHostedOmniFiles(request, {
+			editorService: {
+				async openEditors() {
+					return [{}];
+				},
+			} as unknown as IEditorService,
+			fileService: {
+				async canHandleResource() {
+					return true;
+				},
+			} as unknown as IFileService,
+			instantiationService: {
+				async invokeFunction() {
+					throw new Error('wait failed');
+				},
+			} as unknown as IInstantiationService,
+			logService: {
+				error(error: unknown) {
+					errors.push(error);
+				},
+			} as unknown as ILogService,
+		});
+		await timeout(0);
+
+		assert.strictEqual(ok, true);
+		assert.strictEqual(errors.length, 1);
+		assert.match(String(errors[0]), /wait failed/);
 	});
 });
 

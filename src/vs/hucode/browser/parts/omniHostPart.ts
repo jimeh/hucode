@@ -148,6 +148,10 @@ export class OmniHostPart extends Part {
 	}
 
 	override dispose(): void {
+		this.stopScreenshotRefresh();
+		this.clearOverlayOcclusion();
+		this.clearScreenshot();
+		this.activeInstanceId = undefined;
 		if (this.hostSurfaceService.getSurface() === this.surface) {
 			this.hostSurfaceService.setSurface(undefined);
 		}

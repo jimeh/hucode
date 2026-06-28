@@ -326,6 +326,8 @@ jobs:
             --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
             --run \
+            src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
+            --run \
             src/vs/hucode/test/browser/webShellService.test.ts \
             --run \
             src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts \

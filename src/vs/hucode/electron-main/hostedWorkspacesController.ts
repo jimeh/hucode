@@ -10,6 +10,7 @@ import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
 import { FileAccess } from '../../base/common/network.js';
+import { isLinux } from '../../base/common/platform.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { IEnvironmentMainService } from
@@ -42,11 +43,11 @@ import {
 } from '../common/omniWindow.js';
 import {
 	createHostedWorkspaceRestoreEntries,
+	getReadyHostedWorkspaceState,
 	getMostRecentHostedWorkspace,
 	getRestoreActiveWorktreePath,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
-	isHostedWorkspacePendingReady,
 	waitForHostedWorkspaceReady,
 	sortRestoreEntries,
 } from '../common/hostedWorkspaceState.js';
@@ -190,7 +191,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.createInstanceId = options.createInstanceId ?? generateUuid;
 		this.now = options.now ?? Date.now;
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
-			path => path,
+			path => isLinux ? path : path.toLowerCase(),
 			this.now
 		);
 		this.traceRestoreStartedAt = this.now();
@@ -335,9 +336,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		const state = instance.instanceId === this.activeInstanceId
-			? 'active'
-			: 'loaded';
+		const state = getReadyHostedWorkspaceState(
+			instance,
+			this.activeInstanceId
+		);
 		if (instance.state === state) {
 			return;
 		}
@@ -981,11 +983,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			previousActive.instanceId !== instance.instanceId) {
 			this.setViewVisible(previousActive, false);
 			this.updateInstanceState(previousActive, {
-				state: previousActive.state === 'crashed'
-					? 'crashed'
-					: isHostedWorkspacePendingReady(previousActive)
-						? previousActive.state
-						: 'loaded',
 				focused: false,
 			});
 		}
@@ -993,11 +990,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.hostedWorkspaces.activateInstance(instance);
 		this.setViewVisible(instance, true);
 		this.updateInstanceState(instance, {
-			state: instance.state === 'crashed'
-				? 'crashed'
-				: isHostedWorkspacePendingReady(instance)
-					? instance.state
-					: 'active',
 			visible: true,
 			lastActiveAt: instance.lastActiveAt,
 		});

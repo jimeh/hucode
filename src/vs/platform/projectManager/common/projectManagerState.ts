@@ -22,7 +22,29 @@ export function loadStoredProjectManagerState(
 		return [];
 	}
 
-	return state.projects.map(project => ({ ...project }));
+	return state.projects.map(project => ({
+		...project,
+		...(project.worktreeOrder
+			? { worktreeOrder: [...project.worktreeOrder] }
+			: {}),
+		...(project.pinnedWorktreePaths
+			? { pinnedWorktreePaths: [...project.pinnedWorktreePaths] }
+			: {}),
+		...(project.worktreeLabels
+			? {
+				worktreeLabels: project.worktreeLabels.map(label => ({
+					...label,
+				})),
+			}
+			: {}),
+		...(project.worktreeVisits
+			? {
+				worktreeVisits: project.worktreeVisits.map(visit => ({
+					...visit,
+				})),
+			}
+			: {}),
+	}));
 }
 
 /**

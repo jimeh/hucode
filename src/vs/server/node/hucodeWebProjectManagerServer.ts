@@ -24,6 +24,7 @@ import {
 import { IStateService } from '../../platform/state/node/state.js';
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 /**
  * Returns whether a request path targets the Hucode serve-web Projects API.
@@ -211,9 +212,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				});
 			}
 
-			if (req.method === 'DELETE' && relativePath) {
-				await this.service.removeProject(decodePathSegment(relativePath));
+			if (req.method === 'DELETE' && isSinglePathSegment(relativePath)) {
+				await this.service.removeProject(decodeURIComponent(relativePath));
 				return this.writeProjects(res, 200, await this.service.getProjects());
+			}
+
+			if (req.method === 'DELETE') {
+				return this.writeJson(res, 404, { error: 'Not found.' });
 			}
 
 			if (req.method === 'POST') {
@@ -357,8 +362,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		req: HucodeWebProjectManagerRequest
 	): Promise<unknown> {
 		const chunks: Buffer[] = [];
+		let size = 0;
 		for await (const chunk of req) {
-			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			size += buffer.byteLength;
+			if (size > MAX_JSON_BODY_BYTES) {
+				throw new BadRequestError(
+					`Request body exceeds ${MAX_JSON_BODY_BYTES} bytes.`
+				);
+			}
+			chunks.push(buffer);
 		}
 		if (!chunks.length) {
 			return {};
@@ -398,6 +411,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		req: HucodeWebProjectManagerRequest,
 		res: HucodeWebProjectManagerResponse
 	): Promise<true> {
+		const projects = await this.service.getProjects();
+
 		res.writeHead(200, {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-store',
@@ -411,7 +426,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		});
 
 		res.write?.(': connected\n\n');
-		this.writeProjectsEvent(client, await this.service.getProjects());
+		this.writeProjectsEvent(client, projects);
 		return true;
 	}
 
@@ -464,6 +479,6 @@ function readProperty(body: unknown, key: string): unknown {
 		: undefined;
 }
 
-function decodePathSegment(path: string): string {
-	return decodeURIComponent(path.split('/')[0]);
+function isSinglePathSegment(path: string): boolean {
+	return !!path && !path.includes('/');
 }

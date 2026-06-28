@@ -980,7 +980,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	isVisible(part: Parts, targetWindow?: Window): boolean {
 		switch (part) {
 			case Parts.TITLEBAR_PART:
-				return true; // Always visible
+				return !this.isWebOmniShell;
 			case Parts.SIDEBAR_PART:
 				return this.partVisibility.sidebar;
 			case Parts.AUXILIARYBAR_PART:

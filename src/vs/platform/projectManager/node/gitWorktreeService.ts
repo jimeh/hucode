@@ -5,7 +5,13 @@
 
 import * as cp from 'child_process';
 import { promises as fs } from 'fs';
-import { basename, dirname, join } from '../../../base/common/path.js';
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	resolve,
+} from '../../../base/common/path.js';
 import { isEqual } from '../../../base/common/extpath.js';
 import { isLinux } from '../../../base/common/platform.js';
 import { ILogService } from '../../log/common/log.js';
@@ -167,7 +173,12 @@ export class GitWorktreeService {
 			`${basename(projectRoot)}.worktrees`,
 			branchSlug
 		);
-		const requestedPath = options.path?.trim() || defaultBasePath;
+		const customPath = options.path?.trim();
+		const requestedPath = customPath
+			? isAbsolute(customPath)
+				? customPath
+				: resolve(dirname(projectRoot), customPath)
+			: defaultBasePath;
 		const worktreePath = await this.ensureUniquePath(
 			requestedPath,
 			existingPaths

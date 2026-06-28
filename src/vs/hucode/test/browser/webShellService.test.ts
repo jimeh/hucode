@@ -6,7 +6,9 @@
 import assert from 'assert';
 import { getWindowId } from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
+import { timeout } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
+import { toDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import { ICommandService } from
@@ -24,8 +26,15 @@ import { WebHucodeShellService } from '../../browser/webShellService.js';
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createService(): WebHucodeShellService {
-		return disposables.add(new WebHucodeShellService(
+	function createService(): {
+		readonly service: WebHucodeShellService;
+		readonly surface: HTMLElement;
+	} {
+		const surface = document.createElement('div');
+		mainWindow.document.body.append(surface);
+		disposables.add(toDisposable(() => surface.remove()));
+
+		const service = disposables.add(new WebHucodeShellService(
 			{
 				options: {
 					hucodeOmniWorkbenchRoute: '/workbench',
@@ -38,49 +47,68 @@ suite('WebHucodeShellService', () => {
 			{
 				onDidChangeSurface: Event.None,
 				getSurface() {
-					return undefined;
+					return surface;
 				},
 				setSurface() { },
 			} as unknown as IHucodeWebOmniHostSurfaceService
 		));
+		return { service, surface };
 	}
 
-	function postMessage(instanceId: string, data: object): void {
+	function postMessage(
+		surface: HTMLElement,
+		instanceId: string,
+		data: object,
+		source?: MessageEventSource | null
+	): void {
+		const iframe = getIframe(surface, instanceId);
 		mainWindow.dispatchEvent(new MessageEvent('message', {
 			origin: mainWindow.location.origin,
+			source: source ?? iframe.contentWindow,
 			data: { instanceId, ...data },
 		}));
 	}
 
-	function markCrashed(instanceId: string): void {
-		postMessage(instanceId, {
+	function markCrashed(surface: HTMLElement, instanceId: string): void {
+		postMessage(surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.CommandResult,
 			requestId: 'load',
 			ok: false,
 		});
 	}
 
-	function markReady(instanceId: string): void {
-		postMessage(instanceId, {
+	function markReady(surface: HTMLElement, instanceId: string): void {
+		postMessage(surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
 		});
 	}
 
-	function markFocused(instanceId: string): void {
-		postMessage(instanceId, {
+	function markFocused(surface: HTMLElement, instanceId: string): void {
+		postMessage(surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Focus,
 			focused: true,
 		});
 	}
 
-	function markUnloadReady(instanceId: string): void {
-		postMessage(instanceId, {
+	function markUnloadReady(surface: HTMLElement, instanceId: string): void {
+		postMessage(surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.UnloadReady,
 		});
 	}
 
+	function getIframe(
+		surface: HTMLElement,
+		instanceId: string
+	): HTMLIFrameElement {
+		const iframe = surface.querySelector<HTMLIFrameElement>(
+			`[data-hucode-hosted-instance-id="${instanceId}"]`
+		);
+		assert.ok(iframe);
+		return iframe;
+	}
+
 	test('recreates a crashed iframe when reopening the same worktree', async () => {
-		const service = createService();
+		const { service, surface } = createService();
 		const windowId = getWindowId(mainWindow);
 
 		const firstState = await service.openWorkspace(
@@ -90,7 +118,7 @@ suite('WebHucodeShellService', () => {
 		);
 		const firstInstanceId = firstState.instances[0].instanceId;
 
-		markCrashed(firstInstanceId);
+		markCrashed(surface, firstInstanceId);
 
 		const crashedState = await service.getWindowState(windowId);
 		assert.strictEqual(crashedState.instances[0].state, 'crashed');
@@ -110,7 +138,7 @@ suite('WebHucodeShellService', () => {
 	});
 
 	test('does not surface or revive crashed iframe instances', async () => {
-		const service = createService();
+		const { service, surface } = createService();
 		const windowId = getWindowId(mainWindow);
 
 		const state = await service.openWorkspace(
@@ -120,7 +148,7 @@ suite('WebHucodeShellService', () => {
 		);
 		const instanceId = state.instances[0].instanceId;
 
-		markCrashed(instanceId);
+		markCrashed(surface, instanceId);
 
 		assert.strictEqual(
 			await service.findHostedWorkspaceByPath('/tmp/hucode-worktree'),
@@ -151,8 +179,8 @@ suite('WebHucodeShellService', () => {
 		assert.ok(activeInstanceId);
 
 		await service.notifyHostedWorkspaceReady(windowId, instanceId);
-		markReady(instanceId);
-		markFocused(instanceId);
+		markReady(surface, instanceId);
+		markFocused(surface, instanceId);
 
 		const nextState = await service.getWindowState(windowId);
 		const crashedInstance = nextState.instances.find(
@@ -164,7 +192,7 @@ suite('WebHucodeShellService', () => {
 	});
 
 	test('reopens hosted iframes as normal workbench URLs', async () => {
-		const service = createService();
+		const { service, surface } = createService();
 		const windowId = getWindowId(mainWindow);
 		const state = await service.openWorkspace(
 			windowId,
@@ -180,7 +208,7 @@ suite('WebHucodeShellService', () => {
 				return null;
 			}) as typeof mainWindow.open;
 
-			mainWindow.setTimeout(() => markUnloadReady(instanceId), 0);
+			mainWindow.setTimeout(() => markUnloadReady(surface, instanceId), 0);
 			assert.strictEqual(
 				await service.reopenWorkspaceInNormalWindow(windowId, instanceId),
 				true
@@ -198,5 +226,117 @@ suite('WebHucodeShellService', () => {
 			(await service.getWindowState(windowId)).instances.length,
 			0
 		);
+	});
+
+	test('ignores child messages from the wrong iframe source', async () => {
+		const { service, surface } = createService();
+		const windowId = getWindowId(mainWindow);
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+
+		postMessage(surface, instanceId, {
+			type: HucodeOmniWebChildMessageType.CommandResult,
+			requestId: 'load',
+			ok: false,
+		}, mainWindow);
+
+		assert.strictEqual(
+			(await service.getWindowState(windowId)).instances[0].state,
+			'loading'
+		);
+	});
+
+	test('scopes iframe self requests to the sender instance', async () => {
+		const { service, surface } = createService();
+		const windowId = getWindowId(mainWindow);
+		const firstState = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-one',
+			'project'
+		);
+		const firstInstanceId = firstState.instances[0].instanceId;
+		const secondState = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-two',
+			'project'
+		);
+		const secondInstanceId = secondState.activeInstanceId;
+		assert.ok(secondInstanceId);
+
+		mainWindow.setTimeout(
+			() => markUnloadReady(surface, firstInstanceId),
+			0
+		);
+		postMessage(surface, firstInstanceId, {
+			type: HucodeOmniWebChildMessageType.ShellRequest,
+			requestId: 'close-self',
+			method: 'closeWorkspace',
+			args: [windowId, secondInstanceId],
+		});
+		await timeout(0);
+
+		const state = await service.getWindowState(windowId);
+		assert.strictEqual(
+			state.instances.some(
+				instance => instance.instanceId === firstInstanceId
+			),
+			false
+		);
+		assert.strictEqual(
+			state.instances.some(
+				instance => instance.instanceId === secondInstanceId
+			),
+			true
+		);
+	});
+
+	test('uses browser-limited native keybinding and paste behavior', async () => {
+		const { service, surface } = createService();
+		const windowId = getWindowId(mainWindow);
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const iframe = getIframe(surface, state.instances[0].instanceId);
+		assert.ok(iframe.contentWindow);
+
+		let focusCalls = 0;
+		const originalFocus = iframe.contentWindow.focus;
+		try {
+			iframe.contentWindow.focus = () => {
+				focusCalls++;
+			};
+
+			assert.strictEqual(
+				await service.runKeybindingInWorkspace(windowId, {
+					userSettingsLabel: 'Ctrl+A',
+				}),
+				false
+			);
+			assert.strictEqual(
+				await service.triggerPasteInWorkspace(windowId),
+				false
+			);
+		} finally {
+			iframe.contentWindow.focus = originalFocus;
+		}
+
+		assert.strictEqual(focusCalls, 2);
+	});
+
+	test('does not expose desktop-only screenshot or devtools APIs', async () => {
+		const { service } = createService();
+		const windowId = getWindowId(mainWindow);
+
+		assert.strictEqual(
+			await service.captureWorkspaceScreenshot(windowId),
+			undefined
+		);
+		assert.strictEqual(await service.toggleWorkspaceDevTools(windowId), false);
 	});
 });

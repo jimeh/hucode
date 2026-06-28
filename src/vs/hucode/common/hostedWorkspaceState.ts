@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../../base/common/event.js';
+import { IDisposable } from '../../base/common/lifecycle.js';
 import { IOmniWorkspaceRestoreEntry } from
 	'../../platform/window/common/window.js';
 import {
@@ -73,8 +74,25 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 	 * Marks a hosted workspace as active and updates its recency.
 	 */
 	activateInstance(instance: T): void {
+		const previousActiveInstance = this.activeInstanceId
+			? this.instancesById.get(this.activeInstanceId)
+			: undefined;
 		this.activeInstanceId = instance.instanceId;
 		instance.lastActiveAt = this.now();
+		if (
+			isHostedWorkspaceAvailable(instance) &&
+			!isHostedWorkspacePendingReady(instance)
+		) {
+			instance.state = 'active';
+		}
+		if (
+			previousActiveInstance &&
+			previousActiveInstance.instanceId !== instance.instanceId &&
+			isHostedWorkspaceAvailable(previousActiveInstance) &&
+			!isHostedWorkspacePendingReady(previousActiveInstance)
+		) {
+			previousActiveInstance.state = 'loaded';
+		}
 	}
 
 	/**
@@ -220,20 +238,37 @@ export function waitForHostedWorkspaceReady(
 	}
 
 	return new Promise<boolean>(resolve => {
-		const listener = onDidChangeState(() => {
+		let complete = false;
+		const cleanup: {
+			listener?: IDisposable;
+			handle?: ReturnType<typeof setTimeout>;
+		} = {};
+		const finish = (ready: boolean): void => {
+			if (complete) {
+				return;
+			}
+
+			complete = true;
+			cleanup.listener?.dispose();
+			if (cleanup.handle !== undefined) {
+				clearTimeout(cleanup.handle);
+			}
+			resolve(ready);
+		};
+
+		cleanup.listener = onDidChangeState(() => {
 			if (isHostedWorkspacePendingReady(entry)) {
 				return;
 			}
 
-			listener.dispose();
-			clearTimeout(handle);
-			resolve(isHostedWorkspaceAvailable(entry) && !isUnavailable(entry));
+			finish(isHostedWorkspaceAvailable(entry) && !isUnavailable(entry));
 		});
+		if (complete) {
+			cleanup.listener.dispose();
+			return;
+		}
 
-		const handle = setTimeout(() => {
-			listener.dispose();
-			resolve(false);
-		}, timeoutMs);
+		cleanup.handle = setTimeout(() => finish(false), timeoutMs);
 	});
 }
 
