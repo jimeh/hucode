@@ -42,27 +42,57 @@ interface BranchNameResponse {
 	readonly valid: boolean;
 }
 
+export interface IWebProjectManagerServiceTransport {
+	readonly fetch: WebProjectManagerFetch;
+	readonly EventSource?: IWebProjectManagerEventSourceConstructor;
+}
+
+export type WebProjectManagerFetch = (
+	input: RequestInfo | URL,
+	init?: RequestInit
+) => Promise<Response>;
+
+export interface IWebProjectManagerEventSource {
+	addEventListener(type: string, listener: (event: Event) => void): void;
+	close(): void;
+}
+
+export interface IWebProjectManagerEventSourceConstructor {
+	new(
+		url: string | URL,
+		eventSourceInitDict?: EventSourceInit
+	): IWebProjectManagerEventSource;
+}
+
+function defaultWebProjectManagerTransport(): IWebProjectManagerServiceTransport {
+	return {
+		fetch: globalThis.fetch.bind(globalThis),
+		EventSource: typeof mainWindow.EventSource === 'function'
+			? mainWindow.EventSource
+			: undefined,
+	};
+}
+
 /**
  * Browser-side Project Manager client for the serve-web Omni shell.
  */
-export class WebProjectManagerService extends Disposable
+export class WebProjectManagerClient extends Disposable
 	implements IProjectManagerService {
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly projectsApi: string;
 	private readonly _onDidChangeProjects =
 		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
 
 	constructor(
-		@IBrowserWorkbenchEnvironmentService
-		environmentService: IBrowserWorkbenchEnvironmentService,
+		private readonly projectsApi: string,
+		private readonly transport: IWebProjectManagerServiceTransport =
+			defaultWebProjectManagerTransport(),
 	) {
 		super();
 
-		this.projectsApi = getHucodeOmniProjectsApi(environmentService.options);
-		this.registerProjectEvents();
+		this.registerProjectEvents(transport);
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
@@ -242,7 +272,7 @@ export class WebProjectManagerService extends Disposable
 		path: string,
 		options: { method: string; body?: unknown }
 	): Promise<T> {
-		const response = await fetch(this.toApiUrl(path), {
+		const response = await this.transport.fetch(this.toApiUrl(path), {
 			method: options.method,
 			credentials: 'include',
 			headers: options.body === undefined
@@ -274,12 +304,14 @@ export class WebProjectManagerService extends Disposable
 		return `${this.projectsApi}${suffix}`;
 	}
 
-	private registerProjectEvents(): void {
-		if (typeof mainWindow.EventSource !== 'function') {
+	private registerProjectEvents(
+		transport: IWebProjectManagerServiceTransport
+	): void {
+		if (typeof transport.EventSource !== 'function') {
 			return;
 		}
 
-		const events = new mainWindow.EventSource(
+		const events = new transport.EventSource(
 			this.toApiUrl('events'),
 			{ withCredentials: true }
 		);
@@ -290,6 +322,15 @@ export class WebProjectManagerService extends Disposable
 				this._onDidChangeProjects.fire(projects);
 			}
 		});
+	}
+}
+
+export class WebProjectManagerService extends WebProjectManagerClient {
+	constructor(
+		@IBrowserWorkbenchEnvironmentService
+		environmentService: IBrowserWorkbenchEnvironmentService,
+	) {
+		super(getHucodeOmniProjectsApi(environmentService.options));
 	}
 }
 

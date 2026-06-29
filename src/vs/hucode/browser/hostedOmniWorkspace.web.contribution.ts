@@ -89,7 +89,10 @@ class HostedOmniWebBridgeContribution extends Disposable
 			() => this.postFocus(instanceId, false)
 		));
 		this._register(addDisposableListener(mainWindow, 'message', event => {
-			if (event.origin !== mainWindow.location.origin) {
+			if (
+				event.origin !== mainWindow.location.origin ||
+				event.source !== mainWindow.parent
+			) {
 				return;
 			}
 			void this.handleMessage(instanceId, event.data);
@@ -121,13 +124,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 			case HucodeOmniWebParentMessageType.BeforeUnload:
 				try {
 					await this.lifecycleService.shutdown();
-				} catch (error) {
-					this.logService.error(error);
-				} finally {
 					this.postToShell({
 						type: HucodeOmniWebChildMessageType.UnloadReady,
 						instanceId,
 					});
+				} catch (error) {
+					this.logService.error(error);
 				}
 				return;
 			case HucodeOmniWebParentMessageType.RunCommand:

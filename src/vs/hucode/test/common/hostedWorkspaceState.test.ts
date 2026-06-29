@@ -145,6 +145,34 @@ suite('HostedWorkspaceState', () => {
 		assert.strictEqual(loading.state, 'loading');
 	});
 
+	test('keeps normalized path collisions indexed consistently', () => {
+		const model = new HostedWorkspaceStateModel<IHostedWorkspaceStateEntry>(
+			path => path.toLowerCase()
+		);
+		const first = entry('one', { worktreePath: '/Repo' });
+		const second = entry('two', { worktreePath: '/repo' });
+
+		model.addInstance(first);
+		model.activateInstance(first);
+		model.addInstance(second);
+
+		assert.deepStrictEqual({
+			activeInstanceId: model.activeInstanceId,
+			instances: [...model.instancesById.keys()],
+			pathInstance: model.getInstanceByPath('/REPO')?.instanceId,
+		}, {
+			activeInstanceId: undefined,
+			instances: ['two'],
+			pathInstance: 'two',
+		});
+
+		model.removeInstance(first);
+		assert.strictEqual(model.getInstanceByPath('/repo'), second);
+
+		model.removeInstance(second);
+		assert.strictEqual(model.getInstanceByPath('/repo'), undefined);
+	});
+
 	test('selects most recent available workspace', () => {
 		const entries = [
 			entry('one', { lastActiveAt: 10 }),

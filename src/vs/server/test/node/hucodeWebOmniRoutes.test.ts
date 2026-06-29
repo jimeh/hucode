@@ -10,10 +10,6 @@ import {
 	toHucodeWebRouteLocation,
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
-	getHucodeWebClientRouteAction,
-	getHucodeWebWorkbenchConfiguration,
-} from '../../node/hucodeWebClientServerIntegration.js';
-import {
 	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniWorkbenchBase,
@@ -118,47 +114,6 @@ suite('HucodeWebOmniRoutes', () => {
 	test('builds the Omni projects API route', () => {
 		assert.strictEqual(getHucodeWebOmniProjectsApi('/x'), '/x/_hucode/projects');
 	});
-
-	test('resolves server route actions', () => {
-		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
-			basePath: '/x',
-			query: {},
-			omniRoot: false,
-		}), {
-			type: 'workbench',
-			routePath: '/',
-		});
-		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni', {
-			basePath: '/x',
-			query: {},
-			omniRoot: false,
-		}), {
-			type: 'workbench',
-			routePath: '/omni',
-			hucodeOmniShell: true,
-		});
-		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni/', {
-			basePath: '/x',
-			query: { folder: '/tmp/project' },
-			omniRoot: false,
-		}), {
-			type: 'redirect',
-			location: '/x/omni?folder=%2Ftmp%2Fproject',
-		});
-	});
-
-	test('builds Hucode workbench configuration', () => {
-		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/x', {
-			hucodeOmniShell: true,
-			serverPathCaseSensitive: true,
-		}), {
-			hucodeOmniShell: true,
-			hucodeOmniWorkbenchRoute: '/x/workbench',
-			hucodeOmniProjectsApi: '/x/_hucode/projects',
-			hucodeServerPathCaseSensitive: true,
-		});
-	});
-
 });
 
 function parsePayload(payload: string | null): Map<string, string> {

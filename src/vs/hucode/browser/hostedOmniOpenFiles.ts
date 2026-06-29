@@ -25,13 +25,16 @@ import {
 import { IEditorService } from
 	'../../workbench/services/editor/common/editorService.js';
 
+type IHostedOmniInstantiationService =
+	Pick<IInstantiationService, 'invokeFunction'>;
+
 /**
  * Dependencies needed to open files forwarded into a hosted Omni workbench.
  */
 export interface IHostedOmniOpenFilesServices {
-	readonly editorService: IEditorService;
+	readonly editorService: Pick<IEditorService, 'openEditors'>;
 	readonly fileService: IFileService;
-	readonly instantiationService: IInstantiationService;
+	readonly instantiationService: IHostedOmniInstantiationService;
 	readonly logService: ILogService;
 }
 

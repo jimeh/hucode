@@ -7,7 +7,11 @@ import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
-import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
+import {
+	Disposable,
+	IDisposable,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { InstantiationType, registerSingleton } from
@@ -71,17 +75,65 @@ interface IHostedIframeInstance {
 	lastActiveAt?: number;
 }
 
+type WebHucodeShellTimer = ReturnType<typeof setTimeout>;
+type IWebHucodeShellCommandService = Pick<ICommandService, 'executeCommand'>;
+type IWebHucodeShellHostSurfaceService = Pick<
+	IHucodeWebOmniHostSurfaceService,
+	'onDidChangeSurface' | 'getSurface'
+>;
+
+export interface IWebHucodeShellOptions {
+	readonly workbenchRoute: string;
+	readonly serverPathCaseSensitive: boolean;
+}
+
+export interface IWebHucodeShellBrowserAdapter {
+	readonly windowId: number;
+	readonly origin: string;
+	createIframe(): HTMLIFrameElement;
+	addMessageListener(listener: (event: MessageEvent) => void): IDisposable;
+	setTimeout(callback: () => void, timeout: number): WebHucodeShellTimer;
+	clearTimeout(handle: WebHucodeShellTimer): void;
+	open(url: string): void;
+	focusIframe(iframe: HTMLIFrameElement): void;
+	focusIframeContent(iframe: HTMLIFrameElement): void;
+	reloadIframe(iframe: HTMLIFrameElement): void;
+}
+
+function defaultWebHucodeShellBrowserAdapter():
+	IWebHucodeShellBrowserAdapter {
+	return {
+		windowId: getWindowId(mainWindow),
+		origin: mainWindow.location.origin,
+		createIframe: () => document.createElement('iframe'),
+		addMessageListener: listener => {
+			mainWindow.addEventListener('message', listener);
+			return toDisposable(() => {
+				mainWindow.removeEventListener('message', listener);
+			});
+		},
+		setTimeout: (callback, timeout) => setTimeout(callback, timeout),
+		clearTimeout: handle => clearTimeout(handle),
+		open: url => {
+			mainWindow.open(url);
+		},
+		focusIframe: iframe => iframe.focus(),
+		focusIframeContent: iframe => iframe.contentWindow?.focus(),
+		reloadIframe: iframe => iframe.contentWindow?.location.reload(),
+	};
+}
+
 /**
  * Browser implementation of the Hucode Omni shell service.
  */
-export class WebHucodeShellService extends Disposable
+export class WebHucodeShellController extends Disposable
 	implements IHucodeShellService {
 
 	declare readonly _serviceBrand: undefined;
 	readonly supportsWorkspaceScreenshotOverlay = false;
 	private static readonly READY_TIMEOUT_MS = 30000;
 
-	private readonly windowId = getWindowId(mainWindow);
+	private readonly windowId: number;
 	private readonly workbenchRoute: string;
 	private readonly serverPathCaseSensitive: boolean;
 	private readonly hostedWorkspaces: HostedWorkspaceStateModel<
@@ -95,20 +147,17 @@ export class WebHucodeShellService extends Disposable
 	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
 
 	constructor(
-		@IBrowserWorkbenchEnvironmentService
-		environmentService: IBrowserWorkbenchEnvironmentService,
-		@ICommandService private readonly commandService: ICommandService,
-		@IHucodeWebOmniHostSurfaceService
-		private readonly hostSurfaceService: IHucodeWebOmniHostSurfaceService,
+		options: IWebHucodeShellOptions,
+		private readonly commandService: IWebHucodeShellCommandService,
+		private readonly hostSurfaceService: IWebHucodeShellHostSurfaceService,
+		private readonly browser: IWebHucodeShellBrowserAdapter =
+			defaultWebHucodeShellBrowserAdapter(),
 	) {
 		super();
 
-		this.workbenchRoute = getHucodeOmniWorkbenchRoute(
-			environmentService.options
-		);
-		this.serverPathCaseSensitive = getHucodeServerPathCaseSensitive(
-			environmentService.options
-		);
+		this.windowId = browser.windowId;
+		this.workbenchRoute = options.workbenchRoute;
+		this.serverPathCaseSensitive = options.serverPathCaseSensitive;
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => this.toPathKey(path)
 		);
@@ -117,10 +166,7 @@ export class WebHucodeShellService extends Disposable
 				this.attachIframes(surface);
 			}
 		}));
-		this._register(toDisposable(() => {
-			mainWindow.removeEventListener('message', this.onMessage);
-		}));
-		mainWindow.addEventListener('message', this.onMessage);
+		this._register(this.browser.addMessageListener(this.onMessage));
 	}
 
 	async getWindowState(
@@ -258,7 +304,7 @@ export class WebHucodeShellService extends Disposable
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
 			openNormalWindow: worktreePath => {
-				mainWindow.open(this.toNormalWorkbenchUrl(worktreePath));
+				this.browser.open(this.toNormalWorkbenchUrl(worktreePath));
 			},
 		}, instanceId);
 	}
@@ -339,12 +385,18 @@ export class WebHucodeShellService extends Disposable
 		_windowId: number,
 		_request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
-		this.getAvailableActiveInstance()?.iframe.contentWindow?.focus();
+		const instance = this.getAvailableActiveInstance();
+		if (instance) {
+			this.browser.focusIframeContent(instance.iframe);
+		}
 		return false;
 	}
 
 	async triggerPasteInWorkspace(_windowId: number): Promise<boolean> {
-		this.getAvailableActiveInstance()?.iframe.contentWindow?.focus();
+		const instance = this.getAvailableActiveInstance();
+		if (instance) {
+			this.browser.focusIframeContent(instance.iframe);
+		}
 		return false;
 	}
 
@@ -356,9 +408,9 @@ export class WebHucodeShellService extends Disposable
 
 		instance.state = 'loading';
 		void this.postCommand(instance, 'workbench.action.reloadWindow', []);
-		mainWindow.setTimeout(() => {
+		this.browser.setTimeout(() => {
 			if (instance.state === 'loading') {
-				instance.iframe.contentWindow?.location.reload();
+				this.browser.reloadIframe(instance.iframe);
 			}
 		}, 500);
 		this.emitState();
@@ -406,7 +458,7 @@ export class WebHucodeShellService extends Disposable
 
 	private readonly onMessage = (event: MessageEvent): void => {
 		if (
-			event.origin !== mainWindow.location.origin ||
+			event.origin !== this.browser.origin ||
 			!isHucodeOmniWebChildMessage(event.data)
 		) {
 			return;
@@ -506,7 +558,7 @@ export class WebHucodeShellService extends Disposable
 		projectId: string | undefined
 	): IHostedIframeInstance {
 		const instanceId = generateUuid();
-		const iframe = document.createElement('iframe');
+		const iframe = this.browser.createIframe();
 		iframe.className = 'hucode-omni-host-iframe hidden';
 		iframe.title = worktreePath;
 		iframe.dataset.hucodeHostedInstanceId = instanceId;
@@ -552,19 +604,19 @@ export class WebHucodeShellService extends Disposable
 
 	private requestUnload(instance: IHostedIframeInstance): Promise<void> {
 		return new Promise(resolve => {
-			const handle = mainWindow.setTimeout(() => {
+			const handle = this.browser.setTimeout(() => {
 				this.pendingUnload.delete(instance.instanceId);
 				resolve();
 			}, 1500);
 			this.pendingUnload.set(instance.instanceId, () => {
-				mainWindow.clearTimeout(handle);
+				this.browser.clearTimeout(handle);
 				this.pendingUnload.delete(instance.instanceId);
 				resolve();
 			});
 			instance.iframe.contentWindow?.postMessage({
 				type: HucodeOmniWebParentMessageType.BeforeUnload,
 				instanceId: instance.instanceId,
-			}, mainWindow.location.origin);
+			}, this.browser.origin);
 		});
 	}
 
@@ -595,7 +647,7 @@ export class WebHucodeShellService extends Disposable
 		return waitForHostedWorkspaceReady(
 			instance,
 			this.onDidChangeWindowState,
-			WebHucodeShellService.READY_TIMEOUT_MS
+			WebHucodeShellController.READY_TIMEOUT_MS
 		);
 	}
 
@@ -612,12 +664,12 @@ export class WebHucodeShellService extends Disposable
 
 		return new Promise(resolve => {
 			const key = this.toPendingRequestKey(instance.instanceId, requestId);
-			const handle = mainWindow.setTimeout(() => {
+			const handle = this.browser.setTimeout(() => {
 				this.pendingCommands.delete(key);
 				resolve(false);
 			}, 5000);
 			this.pendingCommands.set(key, ok => {
-				mainWindow.clearTimeout(handle);
+				this.browser.clearTimeout(handle);
 				resolve(ok);
 			});
 			targetWindow.postMessage({
@@ -626,7 +678,7 @@ export class WebHucodeShellService extends Disposable
 				requestId,
 				commandId,
 				args,
-			}, mainWindow.location.origin);
+			}, this.browser.origin);
 		});
 	}
 
@@ -786,12 +838,12 @@ export class WebHucodeShellService extends Disposable
 			ok,
 			result,
 			error,
-		}, mainWindow.location.origin);
+		}, this.browser.origin);
 	}
 
 	private focusIframe(instance: IHostedIframeInstance): void {
-		instance.iframe.focus();
-		instance.iframe.contentWindow?.focus();
+		this.browser.focusIframe(instance.iframe);
+		this.browser.focusIframeContent(instance.iframe);
 	}
 
 	private attachIframes(surface: HTMLElement): void {
@@ -824,7 +876,7 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	private toWorkbenchUrl(instanceId: string, worktreePath: string): string {
-		const workbenchUrl = new URL(this.workbenchRoute, mainWindow.location.origin);
+		const workbenchUrl = new URL(this.workbenchRoute, this.browser.origin);
 		workbenchUrl.searchParams.set('folder', worktreePath);
 		workbenchUrl.searchParams.set('payload', JSON.stringify([
 			['isHostedOmniWorkspace', 'true'],
@@ -834,7 +886,7 @@ export class WebHucodeShellService extends Disposable
 	}
 
 	private toNormalWorkbenchUrl(worktreePath: string): string {
-		const workbenchUrl = new URL(this.workbenchRoute, mainWindow.location.origin);
+		const workbenchUrl = new URL(this.workbenchRoute, this.browser.origin);
 		workbenchUrl.searchParams.set('folder', worktreePath);
 		return workbenchUrl.toString();
 	}
@@ -894,7 +946,7 @@ export class WebHucodeShellService extends Disposable
 			type: HucodeOmniWebParentMessageType.State,
 			instanceId: instance.instanceId,
 			state,
-		}, mainWindow.location.origin);
+		}, this.browser.origin);
 	}
 
 	private toPathKey(path: string): string {
@@ -961,6 +1013,25 @@ function getOptionalStringArg(
 	}
 
 	throw new Error(`Expected optional string argument at index ${index}`);
+}
+
+export class WebHucodeShellService extends WebHucodeShellController {
+	constructor(
+		@IBrowserWorkbenchEnvironmentService
+		environmentService: IBrowserWorkbenchEnvironmentService,
+		@ICommandService commandService: ICommandService,
+		@IHucodeWebOmniHostSurfaceService
+		hostSurfaceService: IHucodeWebOmniHostSurfaceService,
+	) {
+		super({
+			workbenchRoute: getHucodeOmniWorkbenchRoute(
+				environmentService.options
+			),
+			serverPathCaseSensitive: getHucodeServerPathCaseSensitive(
+				environmentService.options
+			),
+		}, commandService, hostSurfaceService);
+	}
 }
 
 registerSingleton(

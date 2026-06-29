@@ -27,25 +27,24 @@ suite('HucodeWebWorkbenchEntrypoint', () => {
 	});
 
 	test('ignores absent, unrelated, and invalid payloads', () => {
-		assert.strictEqual(
-			isHucodeHostedOmniWebPayload('http://localhost/workbench'),
-			false
-		);
-
 		const unrelated = new URL('http://localhost/workbench');
 		unrelated.searchParams.set('payload', JSON.stringify([
 			['isHostedOmniWorkspace', 'false'],
 		]));
-		assert.strictEqual(
-			isHucodeHostedOmniWebPayload(unrelated.toString()),
-			false
-		);
 
 		const invalid = new URL('http://localhost/workbench');
 		invalid.searchParams.set('payload', '{');
-		assert.strictEqual(
-			isHucodeHostedOmniWebPayload(invalid.toString()),
-			false
-		);
+
+		assert.deepStrictEqual([
+			['absent', isHucodeHostedOmniWebPayload(
+				'http://localhost/workbench'
+			)],
+			['unrelated', isHucodeHostedOmniWebPayload(unrelated.toString())],
+			['invalid', isHucodeHostedOmniWebPayload(invalid.toString())],
+		], [
+			['absent', false],
+			['unrelated', false],
+			['invalid', false],
+		]);
 	});
 });

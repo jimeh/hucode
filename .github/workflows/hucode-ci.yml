@@ -299,6 +299,8 @@ jobs:
             --run \
             src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
             --run \
+            src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \
+            --run \
             src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
             --run \
             src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts \

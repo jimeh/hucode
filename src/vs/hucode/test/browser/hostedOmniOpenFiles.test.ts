@@ -10,9 +10,9 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import { IResourceEditorInput } from
 	'../../../platform/editor/common/editor.js';
-import { FileType, IFileService } from
+import { FileType } from
 	'../../../platform/files/common/files.js';
-import { IInstantiationService } from
+import { ServicesAccessor } from
 	'../../../platform/instantiation/common/instantiation.js';
 import { ILogService, NullLogService } from '../../../platform/log/common/log.js';
 import { INativeOpenFileRequest } from
@@ -24,6 +24,8 @@ import {
 } from '../../../workbench/common/editor.js';
 import { IEditorService } from
 	'../../../workbench/services/editor/common/editorService.js';
+import { TestFileService } from
+	'../../../workbench/test/common/workbenchTestServices.js';
 import {
 	createHostedOmniOpenEditors,
 	openHostedOmniFiles,
@@ -72,7 +74,7 @@ suite('HostedOmniOpenFiles', () => {
 	});
 
 	test('opens normal file requests through editor service', async () => {
-		const opened: IUntypedEditorInput[][] = [];
+		const editorService = new FakeEditorService();
 		const request: INativeOpenFileRequest = {
 			filesToOpenOrCreate: [{
 				fileUri: URI.file('/tmp/hucode-open-file.ts'),
@@ -82,31 +84,22 @@ suite('HostedOmniOpenFiles', () => {
 		};
 
 		const ok = await openHostedOmniFiles(request, {
-			editorService: {
-				async openEditors(editors: IUntypedEditorInput[]) {
-					opened.push(editors);
-					return [{}];
-				},
-			} as unknown as IEditorService,
-			fileService: {
-				async canHandleResource() {
-					return true;
-				},
-			} as unknown as IFileService,
-			instantiationService: {} as IInstantiationService,
+			editorService,
+			fileService: new TestFileService(),
+			instantiationService: new FakeInstantiationService(),
 			logService: new NullLogService(),
 		});
 
 		assert.strictEqual(ok, true);
-		assert.strictEqual(opened.length, 1);
+		assert.strictEqual(editorService.opened.length, 1);
 		assert.strictEqual(
-			(opened[0][0] as IResourceEditorInput).resource.fsPath,
+			(editorService.opened[0][0] as IResourceEditorInput).resource.fsPath,
 			'/tmp/hucode-open-file.ts'
 		);
 	});
 
 	test('logs detached wait-marker cleanup failures', async () => {
-		const errors: unknown[] = [];
+		const logService = new RecordingLogService();
 		const request: INativeOpenFileRequest = {
 			filesToOpenOrCreate: [{
 				fileUri: URI.file('/tmp/hucode-open-file.ts'),
@@ -120,32 +113,18 @@ suite('HostedOmniOpenFiles', () => {
 		};
 
 		const ok = await openHostedOmniFiles(request, {
-			editorService: {
-				async openEditors() {
-					return [{}];
-				},
-			} as unknown as IEditorService,
-			fileService: {
-				async canHandleResource() {
-					return true;
-				},
-			} as unknown as IFileService,
-			instantiationService: {
-				async invokeFunction() {
-					throw new Error('wait failed');
-				},
-			} as unknown as IInstantiationService,
-			logService: {
-				error(error: unknown) {
-					errors.push(error);
-				},
-			} as unknown as ILogService,
+			editorService: new FakeEditorService(),
+			fileService: new TestFileService(),
+			instantiationService: new FakeInstantiationService(
+				new Error('wait failed')
+			),
+			logService,
 		});
 		await timeout(0);
 
 		assert.strictEqual(ok, true);
-		assert.strictEqual(errors.length, 1);
-		assert.match(String(errors[0]), /wait failed/);
+		assert.strictEqual(logService.errors.length, 1);
+		assert.match(String(logService.errors[0]), /wait failed/);
 	});
 });
 
@@ -153,4 +132,36 @@ function resources(...names: string[]): IResourceEditorInput[] {
 	return names.map(name => ({
 		resource: URI.file(`/tmp/${name}`),
 	}));
+}
+
+class FakeEditorService implements Pick<IEditorService, 'openEditors'> {
+	readonly opened: IUntypedEditorInput[][] = [];
+
+	async openEditors(editors: IUntypedEditorInput[]): Promise<readonly never[]> {
+		this.opened.push(editors);
+		return [{} as never];
+	}
+}
+
+class FakeInstantiationService {
+	constructor(private readonly error?: Error) { }
+
+	invokeFunction<R, TS extends any[] = []>(
+		_fn: (accessor: ServicesAccessor, ...args: TS) => R,
+		..._args: TS
+	): R {
+		if (this.error) {
+			throw this.error;
+		}
+
+		return undefined as R;
+	}
+}
+
+class RecordingLogService extends NullLogService implements ILogService {
+	readonly errors: unknown[] = [];
+
+	override error(error: unknown): void {
+		this.errors.push(error);
+	}
 }

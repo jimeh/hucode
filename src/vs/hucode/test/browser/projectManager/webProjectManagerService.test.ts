@@ -4,31 +4,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { mainWindow } from '../../../../base/browser/window.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
-import { IBrowserWorkbenchEnvironmentService } from
-	'../../../../workbench/services/environment/browser/environmentService.js';
-import { WebProjectManagerService } from
+import {
+	IWebProjectManagerEventSource,
+	WebProjectManagerClient,
+	WebProjectManagerFetch,
+} from
 	'../../../browser/projectManager/webProjectManagerService.js';
 
 suite('WebProjectManagerService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	let originalFetch: typeof globalThis.fetch;
-	let originalEventSource: typeof mainWindow.EventSource;
-
 	setup(() => {
-		originalFetch = globalThis.fetch;
-		originalEventSource = mainWindow.EventSource;
 		FakeEventSource.instances.length = 0;
-		mainWindow.EventSource = FakeEventSource as unknown as typeof EventSource;
-	});
-
-	teardown(() => {
-		globalThis.fetch = originalFetch;
-		mainWindow.EventSource = originalEventSource;
 	});
 
 	test('posts add-project requests and revives project responses', async () => {
@@ -36,14 +26,14 @@ suite('WebProjectManagerService', () => {
 			readonly input: RequestInfo | URL;
 			readonly init?: RequestInit;
 		}[] = [];
-		globalThis.fetch = (async (input, init) => {
+		const fakeFetch: WebProjectManagerFetch = async (input, init) => {
 			calls.push({ input, init });
 			return new Response(JSON.stringify({
 				project: rawProject('/repo'),
 				projects: [rawProject('/repo')],
 			}), { status: 201 });
-		}) as typeof fetch;
-		const service = disposables.add(createService());
+		};
+		const service = disposables.add(createService(fakeFetch));
 		const events: unknown[] = [];
 		disposables.add(service.onDidChangeProjects(projects =>
 			events.push(projects)
@@ -65,9 +55,9 @@ suite('WebProjectManagerService', () => {
 	});
 
 	test('uses localized fallback errors for failed requests', async () => {
-		globalThis.fetch = (async () =>
-			new Response('not json', { status: 500 })) as typeof fetch;
-		const service = disposables.add(createService());
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response('not json', { status: 500 });
+		const service = disposables.add(createService(fakeFetch));
 
 		await assert.rejects(
 			service.getProjects(),
@@ -76,9 +66,9 @@ suite('WebProjectManagerService', () => {
 	});
 
 	test('emits revived project updates from server-sent events', () => {
-		globalThis.fetch = (async () =>
-			new Response(JSON.stringify({ projects: [] }))) as typeof fetch;
-		const service = disposables.add(createService());
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response(JSON.stringify({ projects: [] }));
+		const service = disposables.add(createService(fakeFetch));
 		const events: (readonly { rootUri: URI }[])[] = [];
 		disposables.add(service.onDidChangeProjects(projects =>
 			events.push(projects as readonly { rootUri: URI }[])
@@ -100,9 +90,9 @@ suite('WebProjectManagerService', () => {
 	});
 
 	test('closes project events when disposed', () => {
-		globalThis.fetch = (async () =>
-			new Response(JSON.stringify({ projects: [] }))) as typeof fetch;
-		const service = disposables.add(createService());
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response(JSON.stringify({ projects: [] }));
+		const service = disposables.add(createService(fakeFetch));
 		const source = FakeEventSource.instances[0];
 
 		service.dispose();
@@ -110,10 +100,11 @@ suite('WebProjectManagerService', () => {
 		assert.strictEqual(source.closed, true);
 	});
 
-	function createService(): WebProjectManagerService {
-		return new WebProjectManagerService({
-			options: { hucodeOmniProjectsApi: '/api/projects' },
-		} as unknown as IBrowserWorkbenchEnvironmentService);
+	function createService(fetch: WebProjectManagerFetch): WebProjectManagerClient {
+		return new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch, EventSource: FakeEventSource }
+		);
 	}
 });
 
@@ -128,14 +119,14 @@ function rawProject(path: string): object {
 	};
 }
 
-class FakeEventSource {
+class FakeEventSource implements IWebProjectManagerEventSource {
 	static readonly instances: FakeEventSource[] = [];
 
 	closed = false;
 	private readonly listeners = new Map<string, ((event: Event) => void)[]>();
 
 	constructor(
-		readonly url: string,
+		readonly url: string | URL,
 		readonly eventSourceInitDict?: EventSourceInit
 	) {
 		FakeEventSource.instances.push(this);

@@ -540,18 +540,25 @@ suite('GitWorktreeService', () => {
 			[]
 		);
 
-		assert.strictEqual(worktreePath, '/workspace/custom/feature');
-		assert.deepStrictEqual(checkedPaths, ['/workspace/custom/feature']);
-		assert.deepStrictEqual(createdDirs, ['/workspace/custom']);
-		assert.deepStrictEqual(calls, [{
-			args: [
-				'worktree',
-				'add',
-				'/workspace/custom/feature',
-				'origin/main',
-			],
-			cwd: '/workspace/repo',
-		}]);
+		assert.deepStrictEqual({
+			worktreePath,
+			checkedPaths,
+			createdDirs,
+			calls,
+		}, {
+			worktreePath: '/workspace/custom/feature',
+			checkedPaths: ['/workspace/custom/feature'],
+			createdDirs: ['/workspace/custom'],
+			calls: [{
+				args: [
+					'worktree',
+					'add',
+					'/workspace/custom/feature',
+					'origin/main',
+				],
+				cwd: '/workspace/repo',
+			}],
+		});
 	});
 
 	test('isValidBranchName delegates to git check-ref-format', async () => {

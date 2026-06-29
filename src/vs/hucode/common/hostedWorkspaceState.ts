@@ -44,11 +44,20 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 	 * Adds a hosted workspace to the indexed state.
 	 */
 	addInstance(instance: T): void {
+		const pathKey = this.toPathKey(instance.worktreePath);
+		const existingInstanceId = this.instanceIdsByPath.get(pathKey);
+		if (
+			existingInstanceId &&
+			existingInstanceId !== instance.instanceId
+		) {
+			this.instancesById.delete(existingInstanceId);
+			if (this.activeInstanceId === existingInstanceId) {
+				this.activeInstanceId = undefined;
+			}
+		}
+
 		this.instancesById.set(instance.instanceId, instance);
-		this.instanceIdsByPath.set(
-			this.toPathKey(instance.worktreePath),
-			instance.instanceId
-		);
+		this.instanceIdsByPath.set(pathKey, instance.instanceId);
 	}
 
 	/**
@@ -56,7 +65,10 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 	 */
 	removeInstance(instance: T): void {
 		this.instancesById.delete(instance.instanceId);
-		this.instanceIdsByPath.delete(this.toPathKey(instance.worktreePath));
+		const pathKey = this.toPathKey(instance.worktreePath);
+		if (this.instanceIdsByPath.get(pathKey) === instance.instanceId) {
+			this.instanceIdsByPath.delete(pathKey);
+		}
 		if (this.activeInstanceId === instance.instanceId) {
 			this.activeInstanceId = undefined;
 		}
