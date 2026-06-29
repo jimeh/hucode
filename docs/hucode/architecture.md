@@ -10,6 +10,7 @@ normal VS Code desktop workbenches.
 The core user experience is:
 
 - one native Omni window
+- a serve-web Omni shell at `/omni`, optionally also at `/`
 - a left-side Projects surface
 - saved projects with nested git worktrees
 - fast switching between resident workspaces
@@ -35,11 +36,17 @@ onto `src/vs/sessions/browser/*`.
 
 ### Hosted Workspace Renderers
 
-Each loaded workspace runs in its own Electron `WebContentsView`. A hosted
-workspace loads the normal workbench HTML and boots the standard desktop
+Each loaded desktop workspace runs in its own Electron `WebContentsView`. A
+hosted workspace loads the normal workbench HTML and boots the standard desktop
 workbench bundle, not a special Omni-only bundle. Hosted-only services or
 contributions must be imported into the standard desktop path when they need to
 run inside embedded workspaces.
+
+Serve-web hosts workspaces in same-origin browser iframes instead of Electron
+views. The iframe URL targets the regular `/workbench` route so each hosted
+workspace still boots a normal web workbench. Browser overlays use normal DOM
+stacking above the iframe surface; the desktop screenshot-overlay fallback is
+not used on web.
 
 The shell treats each workspace as a hosted unit with:
 
@@ -50,6 +57,35 @@ The shell treats each workspace as a hosted unit with:
 - lifecycle state
 - unload and shutdown handshake state
 
+Desktop and web share `HostedWorkspaceStateModel` for path indexing, active
+selection, ready transitions, sidebar state, and public state projection. The
+desktop `ResidentHostedWorkspacesController` injects Electron view behavior;
+the web `WebHucodeShellController` injects iframe, timer, and browser-message
+behavior. Keep controller orchestration changes in sync across both adapters
+unless the difference is explicitly platform-specific.
+
+The shell service contract is shared as `IHucodeShellService`. Desktop exposes
+it through IPC to the main-process controller. Web implements the same contract
+in the renderer and communicates with hosted iframes through same-origin
+`postMessage` plus source/origin checks.
+
+### Serve-Web Routing
+
+`hucode serve-web` always exposes both the regular workbench and the Omni
+Projects shell:
+
+- `/` loads the regular workbench by default
+- `/workbench` always loads the regular workbench
+- `/omni` always loads the Omni Projects shell
+- `--omni` only changes `/` to load the Omni Projects shell
+- trailing `/omni/` and `/workbench/` requests redirect to the canonical path
+  while preserving query parameters
+
+Hucode route selection lives in `src/vs/server/node/hucodeWebOmniRoutes.ts` and
+`src/vs/server/node/hucodeWebClientServerIntegration.ts`. Keep
+`webClientServer.ts` as a thin integration point that delegates routing and
+Hucode workbench configuration into those companions.
+
 ### Main-Process Services
 
 The project manager and hosted workspace controller are main-process services.
@@ -58,9 +94,9 @@ renderers.
 
 Key services:
 
-- `src/vs/platform/projectManager/electron-main/projectManagerMainService.ts`
+- `src/vs/platform/projectManager/node/projectManagerMainService.ts`
   owns project records and worktree orchestration.
-- `src/vs/platform/projectManager/electron-main/gitWorktreeService.ts` wraps
+- `src/vs/platform/projectManager/node/gitWorktreeService.ts` wraps
   git worktree operations.
 - `src/vs/hucode/electron-main/shellMainService.ts` owns hosted workspace
   creation, restore, focus, shutdown, and command forwarding.
@@ -70,6 +106,12 @@ Key services:
 The `projectManager` and `hucodeShell` channels are registered from the main
 process so the Omni shell and hosted desktop workbenches can share these
 services.
+
+Serve-web reuses the project manager service from the shared `node` layer
+through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
+under the server user-data path and is exposed whenever serve-web is running so
+`/omni`, `/workbench`, and `/` with `--omni` can all reach the same Projects
+API. User settings/state remain the existing browser-side serve-web concern.
 
 ## Core Subsystems
 

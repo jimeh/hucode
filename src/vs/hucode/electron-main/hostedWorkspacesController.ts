@@ -36,6 +36,8 @@ import {
 } from '../../platform/window/common/window.js';
 import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
+import { getProjectManagerPathComparisonKey } from
+	'../../platform/projectManager/common/projectManagerState.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
 	IHucodeHostedWorkbenchInstance,
@@ -191,7 +193,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.createInstanceId = options.createInstanceId ?? generateUuid;
 		this.now = options.now ?? Date.now;
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
-			path => isLinux ? path : path.toLowerCase(),
+			path => getProjectManagerPathComparisonKey(path, isLinux),
 			this.now
 		);
 		this.traceRestoreStartedAt = this.now();

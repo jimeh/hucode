@@ -4,8 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as url from 'url';
-import { IHucodeWebWorkbenchConfiguration } from
+import type { IncomingHttpHeaders } from 'http';
+import type { IProductConfiguration } from
+	'../../base/common/product.js';
+import type { Mutable } from
+	'../../base/common/types.js';
+import type { IHucodeWebWorkbenchConfiguration } from
 	'../../platform/environment/common/hucodeWebConfiguration.js';
+import type { IProductService } from
+	'../../platform/product/common/productService.js';
 import {
 	getHucodeWebClientRoute,
 	HUCODE_WEB_OMNI_ROOT_ARG,
@@ -20,17 +27,32 @@ import {
 
 export { HUCODE_WEB_OMNI_ROOT_ARG, toHucodeWebRouteLocation };
 
+export type HucodeWebWorkbenchRoutePath =
+	| '/'
+	| typeof HUCODE_WEB_OMNI_PATH
+	| typeof HUCODE_WEB_WORKBENCH_PATH;
+
 export type HucodeWebClientRouteAction =
 	| {
 		readonly type: 'workbench';
-		readonly routePath:
-		| '/'
-		| typeof HUCODE_WEB_OMNI_PATH
-		| typeof HUCODE_WEB_WORKBENCH_PATH;
+		readonly routePath: HucodeWebWorkbenchRoutePath;
 		readonly hucodeOmniShell?: boolean;
 	}
 	| { readonly type: 'redirect'; readonly location: string }
 	| { readonly type: 'notFound' };
+
+/**
+ * Resolves the client-visible base path for Hucode serve-web routes.
+ */
+export function getHucodeWebClientBasePath(
+	headers: IncomingHttpHeaders,
+	defaultBasePath: string
+): string {
+	const forwardedPrefix = headers['x-forwarded-prefix'];
+	return (Array.isArray(forwardedPrefix)
+		? forwardedPrefix[0]
+		: forwardedPrefix) || defaultBasePath;
+}
 
 /**
  * Resolves Hucode-specific server-web routing into a server action.
@@ -82,5 +104,17 @@ export function getHucodeWebWorkbenchConfiguration(
 		hucodeOmniWorkbenchRoute: getHucodeWebOmniWorkbenchBase(basePath),
 		hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
 		hucodeServerPathCaseSensitive: options.serverPathCaseSensitive,
+	};
+}
+
+/**
+ * Builds Hucode-specific product configuration required by serve-web clients.
+ */
+export function getHucodeWebProductConfiguration(
+	productService: IProductService
+): Partial<Mutable<IProductConfiguration>> {
+	return {
+		quality: productService.quality,
+		commit: productService.commit,
 	};
 }

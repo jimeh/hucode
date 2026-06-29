@@ -295,11 +295,19 @@ jobs:
             --run \
             src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts \
             --run \
+            src/vs/hucode/test/common/hostedWorkspaceState.test.ts \
+            --run \
             src/vs/platform/browserView/test/common/browserViewLayout.test.ts \
             --run \
             src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
             --run \
+            src/vs/platform/projectManager/test/common/projectManagerState.test.ts \
+            --run \
             src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \
+            --run \
+            src/vs/server/test/node/hucodeWebOmniRoutes.test.ts \
+            --run \
+            src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts \
             --run \
             src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
             --run \

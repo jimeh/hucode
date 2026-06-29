@@ -73,6 +73,11 @@ export interface IWorkbenchOptions {
 	 * Extra classes to be added to the workbench container.
 	 */
 	extraClasses?: string[];
+
+	/**
+	 * Whether this workbench is running as the browser serve-web Omni shell.
+	 */
+	isWebOmniShell?: boolean;
 }
 
 //#endregion
@@ -274,8 +279,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	) {
 		super();
 
-		this.isWebOmniShell =
-			options?.extraClasses?.includes('hucode-omni-web-window') ?? false;
+		this.isWebOmniShell = options?.isWebOmniShell ?? false;
 
 		// Perf: measure workbench startup time
 		mark('code/willStartWorkbench');

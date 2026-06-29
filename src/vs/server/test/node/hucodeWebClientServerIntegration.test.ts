@@ -5,8 +5,12 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import type { IProductService } from
+	'../../../platform/product/common/productService.js';
 import {
+	getHucodeWebClientBasePath,
 	getHucodeWebClientRouteAction,
+	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
 } from '../../node/hucodeWebClientServerIntegration.js';
 
@@ -59,6 +63,32 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeOmniWorkbenchRoute: '/x/workbench',
 			hucodeOmniProjectsApi: '/x/_hucode/projects',
 			hucodeServerPathCaseSensitive: true,
+		});
+	});
+
+	test('resolves the client base path', () => {
+		assert.strictEqual(getHucodeWebClientBasePath({}, '/x'), '/x');
+		assert.strictEqual(
+			getHucodeWebClientBasePath({ 'x-forwarded-prefix': '/proxy' }, '/x'),
+			'/proxy'
+		);
+		assert.strictEqual(
+			getHucodeWebClientBasePath(
+				{ 'x-forwarded-prefix': ['/first', '/second'] },
+				'/x'
+			),
+			'/first'
+		);
+	});
+
+	test('builds Hucode product configuration', () => {
+		assert.deepStrictEqual(getHucodeWebProductConfiguration({
+			_serviceBrand: undefined,
+			quality: 'stable',
+			commit: 'abc123',
+		} as IProductService), {
+			quality: 'stable',
+			commit: 'abc123',
 		});
 	});
 });

@@ -31,7 +31,10 @@ import { IExtensionManifest } from '../../platform/extensions/common/extensions.
 import { ICSSDevelopmentService } from '../../platform/cssDev/node/cssDevService.js';
 import {
 	HUCODE_WEB_OMNI_ROOT_ARG,
+	type HucodeWebWorkbenchRoutePath,
+	getHucodeWebClientBasePath,
 	getHucodeWebClientRouteAction,
+	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
 	toHucodeWebRouteLocation,
 } from './hucodeWebClientServerIntegration.js';
@@ -176,13 +179,13 @@ export class WebClientServer extends Disposable {
 			}
 
 			const routeAction = getHucodeWebClientRouteAction(pathname, {
-				basePath: this._getClientBasePath(req),
+				basePath: getHucodeWebClientBasePath(req.headers, this._basePath),
 				query: parsedUrl.query,
 				omniRoot: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
 			});
 			switch (routeAction.type) {
 				case 'workbench':
-					return this._handleWorkbench(
+					return this._handleRoot(
 						req,
 						res,
 						parsedUrl,
@@ -220,55 +223,6 @@ export class WebClientServer extends Disposable {
 		}
 
 		return serveFile(filePath, this._environmentService.isBuilt ? CacheControl.NO_EXPIRY : CacheControl.ETAG, this._logService, req, res, headers);
-	}
-
-	private _getFirstHeader(req: http.IncomingMessage, headerName: string): string | undefined {
-		const val = req.headers[headerName];
-		return Array.isArray(val) ? val[0] : val;
-	}
-
-	private _getClientBasePath(req: http.IncomingMessage): string {
-		return this._getFirstHeader(req, 'x-forwarded-prefix') || this._basePath;
-	}
-
-	private _handleConnectionTokenRedirect(
-		req: http.IncomingMessage,
-		res: http.ServerResponse,
-		parsedUrl: url.UrlWithParsedQuery,
-		routePath: '/' | '/workbench' | '/omni'
-	): boolean {
-		const queryConnectionToken = parsedUrl.query[connectionTokenQueryName];
-		if (typeof queryConnectionToken !== 'string') {
-			return false;
-		}
-
-		// We got a connection token as a query parameter.
-		// We want to have a clean URL, so we strip it
-		const responseHeaders: Record<string, string> = Object.create(null);
-		responseHeaders['Set-Cookie'] = cookie.serialize(
-			connectionTokenCookieName,
-			queryConnectionToken,
-			{
-				sameSite: 'lax',
-				maxAge: 60 * 60 * 24 * 7 /* 1 week */
-			}
-		);
-
-		const newQuery = Object.create(null);
-		for (const key in parsedUrl.query) {
-			if (key !== connectionTokenQueryName) {
-				newQuery[key] = parsedUrl.query[key];
-			}
-		}
-		responseHeaders['Location'] = toHucodeWebRouteLocation(
-			this._getClientBasePath(req),
-			routePath,
-			newQuery
-		);
-
-		res.writeHead(302, responseHeaders);
-		res.end();
-		return true;
 	}
 
 	private _getResourceURLTemplateAuthority(uri: URI): string | undefined {
@@ -344,20 +298,53 @@ export class WebClientServer extends Disposable {
 	}
 
 	/**
-	 * Handle HTTP requests for workbench routes.
+	 * Handle HTTP requests that load the web workbench document.
 	 */
-	private async _handleWorkbench(
+	private async _handleRoot(
 		req: http.IncomingMessage,
 		res: http.ServerResponse,
 		parsedUrl: url.UrlWithParsedQuery,
-		routePath: '/' | '/workbench' | '/omni',
+		routePath: HucodeWebWorkbenchRoutePath = '/',
 		options: { readonly hucodeOmniShell?: boolean } = {}
 	): Promise<void> {
-		// Prefix routes with basePath for clients
-		const basePath = this._getClientBasePath(req);
 
-		if (this._handleConnectionTokenRedirect(req, res, parsedUrl, routePath)) {
-			return;
+		const getFirstHeader = (headerName: string) => {
+			const val = req.headers[headerName];
+			return Array.isArray(val) ? val[0] : val;
+		};
+
+		// Prefix routes with basePath for clients
+		const basePath = getFirstHeader('x-forwarded-prefix') || this._basePath;
+
+		const queryConnectionToken = parsedUrl.query[connectionTokenQueryName];
+		if (typeof queryConnectionToken === 'string') {
+			// We got a connection token as a query parameter.
+			// We want to have a clean URL, so we strip it
+			const responseHeaders: Record<string, string> = Object.create(null);
+			responseHeaders['Set-Cookie'] = cookie.serialize(
+				connectionTokenCookieName,
+				queryConnectionToken,
+				{
+					sameSite: 'lax',
+					maxAge: 60 * 60 * 24 * 7 /* 1 week */
+				}
+			);
+
+			const newQuery = Object.create(null);
+			for (const key in parsedUrl.query) {
+				if (key !== connectionTokenQueryName) {
+					newQuery[key] = parsedUrl.query[key];
+				}
+			}
+			const newLocation = toHucodeWebRouteLocation(
+				basePath,
+				routePath,
+				newQuery
+			);
+			responseHeaders['Location'] = newLocation;
+
+			res.writeHead(302, responseHeaders);
+			return void res.end();
 		}
 
 		const replacePort = (host: string, port: string) => {
@@ -373,12 +360,12 @@ export class WebClientServer extends Disposable {
 		let remoteAuthority = (
 			useTestResolver
 				? 'test+test'
-				: (this._getFirstHeader(req, 'x-original-host') || this._getFirstHeader(req, 'x-forwarded-host') || req.headers.host)
+				: (getFirstHeader('x-original-host') || getFirstHeader('x-forwarded-host') || req.headers.host)
 		);
 		if (!remoteAuthority) {
 			return serveError(req, res, 400, `Bad request.`);
 		}
-		const forwardedPort = this._getFirstHeader(req, 'x-forwarded-port');
+		const forwardedPort = getFirstHeader('x-forwarded-port');
 		if (forwardedPort) {
 			remoteAuthority = replacePort(remoteAuthority, forwardedPort);
 		}
@@ -396,7 +383,7 @@ export class WebClientServer extends Disposable {
 
 		if (this._logService.getLevel() === LogLevel.Trace) {
 			['x-original-host', 'x-forwarded-host', 'x-forwarded-port', 'host'].forEach(header => {
-				const value = this._getFirstHeader(req, header);
+				const value = getFirstHeader(header);
 				if (value) {
 					this._logService.trace(`[WebClientServer] ${header}: ${value}`);
 				}
@@ -420,8 +407,7 @@ export class WebClientServer extends Disposable {
 
 		const productConfiguration: Partial<Mutable<IProductConfiguration>> = {
 			embedderIdentifier: 'server-distro',
-			quality: this._productService.quality,
-			commit: this._productService.commit,
+			...getHucodeWebProductConfiguration(this._productService),
 			extensionsGallery: this._webExtensionResourceUrlTemplate && this._productService.extensionsGallery ? {
 				...this._productService.extensionsGallery,
 				resourceUrlTemplate: this._webExtensionResourceUrlTemplate.with({

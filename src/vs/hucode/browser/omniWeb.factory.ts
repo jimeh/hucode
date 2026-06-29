@@ -25,7 +25,10 @@ class HucodeOmniBrowserMain extends BrowserMain {
 	): IBrowserMainWorkbench {
 		return new Workbench(
 			domElement,
-			{ extraClasses: ['hucode-omni-window', 'hucode-omni-web-window'] },
+			{
+				extraClasses: ['hucode-omni-window', 'hucode-omni-web-window'],
+				isWebOmniShell: true,
+			},
 			serviceCollection,
 			logService
 		);
