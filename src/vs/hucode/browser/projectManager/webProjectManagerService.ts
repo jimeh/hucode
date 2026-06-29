@@ -66,7 +66,7 @@ export interface IWebProjectManagerEventSourceConstructor {
 
 function defaultWebProjectManagerTransport(): IWebProjectManagerServiceTransport {
 	return {
-		fetch: globalThis.fetch.bind(globalThis),
+		fetch: (input, init) => globalThis.fetch(input, init),
 		EventSource: typeof mainWindow.EventSource === 'function'
 			? mainWindow.EventSource
 			: undefined,

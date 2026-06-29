@@ -22,6 +22,15 @@ suite('HucodeWebClientServerIntegration', () => {
 			type: 'workbench',
 			routePath: '/',
 		});
+		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
+			basePath: '/x',
+			query: {},
+			omniRoot: true,
+		}), {
+			type: 'workbench',
+			routePath: '/',
+			hucodeOmniShell: true,
+		});
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni', {
 			basePath: '/x',
 			query: {},
