@@ -108,13 +108,19 @@ suite('HucodeWebClientServerIntegration', () => {
 	});
 
 	test('builds Hucode product configuration', () => {
+		const defaultChatAgent = {
+			extensionId: 'GitHub.copilot',
+			chatExtensionId: 'GitHub.copilot-chat',
+		};
 		assert.deepStrictEqual(getHucodeWebProductConfiguration({
 			_serviceBrand: undefined,
 			quality: 'stable',
 			commit: 'abc123',
-		} as IProductService), {
+			defaultChatAgent,
+		} as unknown as IProductService), {
 			quality: 'stable',
 			commit: 'abc123',
+			defaultChatAgent,
 			builtInExtensionsEnabledWithAutoUpdates: [],
 		});
 	});

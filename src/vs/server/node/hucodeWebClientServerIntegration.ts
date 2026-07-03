@@ -139,10 +139,11 @@ export function getHucodeWebviewEndpoint(basePath: string): string {
 /**
  * Builds Hucode-specific product configuration required by serve-web clients.
  *
- * Copilot chat cannot run in Hucode web sessions (the extension is not on
- * OpenVSX), so its built-in auto-update wiring is disabled. The
- * `defaultChatAgent` object itself must stay: upstream account and chat
- * entitlement services dereference it unconditionally during startup.
+ * The full `defaultChatAgent` is forwarded because Copilot chat runs as a
+ * remote built-in in Hucode serve-web and sign-in needs the real provider and
+ * entitlement endpoints; the browser's out-of-sources fallback product only
+ * carries a stub. Built-in auto-updates for it stay disabled since OpenVSX
+ * does not host the extension; updates ship with Hucode releases.
  */
 export function getHucodeWebProductConfiguration(
 	productService: IProductService
@@ -150,6 +151,7 @@ export function getHucodeWebProductConfiguration(
 	return {
 		quality: productService.quality,
 		commit: productService.commit,
+		defaultChatAgent: productService.defaultChatAgent,
 		builtInExtensionsEnabledWithAutoUpdates: [],
 	};
 }
