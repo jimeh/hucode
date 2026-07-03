@@ -51,20 +51,25 @@ suite('HucodeWebProjectManagerServer', () => {
 
 	let serverDataPath: string;
 	let projectPath: string;
+	let servers: HucodeWebProjectManagerServer[];
 
 	setup(async () => {
 		serverDataPath = await fs.mkdtemp(join(os.tmpdir(), 'hucode-projects-'));
 		projectPath = join(serverDataPath, 'example');
 		await createGitProject(projectPath);
 		projectPath = await fs.realpath(projectPath);
+		servers = [];
 	});
 
 	teardown(async () => {
+		// Project state writes are queued asynchronously; settle them before
+		// removing the temp dir or cleanup races the queued write.
+		await Promise.all(servers.map(server => server.flushState()));
 		await fs.rm(serverDataPath, { recursive: true, force: true });
 	});
 
 	test('persists projects under the server data dir', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
 			server,
 			'POST',
@@ -85,8 +90,10 @@ suite('HucodeWebProjectManagerServer', () => {
 			isMainWorktree: true,
 		});
 
+		await server.flushState();
+
 		const loaded = await handle<ProjectsResponseBody>(
-			createServer(serverDataPath, disposables),
+			createServer(serverDataPath, disposables, servers),
 			'GET',
 			HUCODE_WEB_PROJECTS_API_PATH
 		);
@@ -96,7 +103,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('deduplicates projects by path', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const first = await handle<ProjectResponseBody>(
 			server,
 			'POST',
@@ -115,7 +122,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('removes projects by id', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
 			server,
 			'POST',
@@ -133,7 +140,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('rejects nested delete routes without removing the project', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
 			server,
 			'POST',
@@ -159,7 +166,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('streams project changes to event clients', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const events = await handleEvents(server);
 
 		assert.strictEqual(events.statusCode, 200);
@@ -187,7 +194,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('returns bad request for malformed JSON', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const response = await handle<{ readonly error: string }>(
 			server,
 			'POST',
@@ -202,7 +209,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('returns bad request for oversized JSON bodies', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const response = await handle<{ readonly error: string }>(
 			server,
 			'POST',
@@ -217,7 +224,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('rejects cross-origin browser requests', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const crossOrigin = await handle<{ readonly error: string }>(
 			server,
 			'POST',
@@ -248,7 +255,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('accepts same-origin requests including forwarded hosts', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const sameOrigin = await handle<ProjectResponseBody>(
 			server,
 			'POST',
@@ -277,7 +284,7 @@ suite('HucodeWebProjectManagerServer', () => {
 	});
 
 	test('rejects mutations without a JSON content type', async () => {
-		const server = createServer(serverDataPath, disposables);
+		const server = createServer(serverDataPath, disposables, servers);
 		const response = await handle<{ readonly error: string }>(
 			server,
 			'POST',
@@ -336,12 +343,15 @@ suite('HucodeWebProjectManagerServer', () => {
 
 function createServer(
 	serverDataPath: string,
-	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>
+	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>,
+	servers: HucodeWebProjectManagerServer[]
 ): HucodeWebProjectManagerServer {
-	return disposables.add(new HucodeWebProjectManagerServer(
+	const server = disposables.add(new HucodeWebProjectManagerServer(
 		serverDataPath,
 		new NullLogService()
 	));
+	servers.push(server);
+	return server;
 }
 
 async function createGitProject(projectPath: string): Promise<void> {

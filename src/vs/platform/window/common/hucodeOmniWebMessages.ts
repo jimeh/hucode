@@ -3,74 +3,43 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { INativeOpenFileRequest } from './window.js';
+
 /**
- * Parent-to-iframe message names for hosted Omni web workbenches.
+ * Channel exposing the Omni web shell service to hosted iframe workbenches.
+ */
+export const HUCODE_OMNI_WEB_SHELL_CHANNEL = 'hucodeOmniWebShell';
+
+/**
+ * Channel exposing a hosted iframe workbench to the Omni web shell.
+ */
+export const HUCODE_OMNI_WEB_WORKBENCH_CHANNEL = 'hucodeOmniWebWorkbench';
+
+/**
+ * Parent-to-iframe window message names for hosted Omni web workbenches.
+ *
+ * These bootstrap the MessagePort IPC connection; all shell/workbench calls
+ * flow over the transferred port instead of window messages.
  */
 export const enum HucodeOmniWebParentMessageType {
-	BeforeUnload = 'hucode.omni.beforeUnload',
-	RunCommand = 'hucode.omni.runCommand',
-	State = 'hucode.omni.state',
-	ShellResponse = 'hucode.omni.shellResponse',
+	Port = 'hucode.omni.port',
 }
 
 /**
- * Iframe-to-parent message names for hosted Omni web workbenches.
+ * Iframe-to-parent window message names for hosted Omni web workbenches.
  */
 export const enum HucodeOmniWebChildMessageType {
 	Ready = 'hucode.omni.hostedWorkbenchReady',
 	Focus = 'hucode.omni.hostedWorkbenchFocus',
-	UnloadReady = 'hucode.omni.unloadReady',
-	CommandResult = 'hucode.omni.commandResult',
-	ShellCommand = 'hucode.omni.shellCommand',
-	ShellRequest = 'hucode.omni.shellRequest',
 }
 
 /**
- * Request sent by the Omni shell to run a command in an iframe workbench.
+ * Message transferring the shell IPC port into a hosted iframe workbench.
  */
-export interface IHucodeOmniWebRunCommandMessage {
-	readonly type: HucodeOmniWebParentMessageType.RunCommand;
+export interface IHucodeOmniWebPortMessage {
+	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
-	readonly requestId?: string;
-	readonly commandId: string;
-	readonly args?: readonly unknown[];
-}
-
-/**
- * Request sent by the Omni shell before unloading an iframe workbench.
- */
-export interface IHucodeOmniWebBeforeUnloadMessage {
-	readonly type: HucodeOmniWebParentMessageType.BeforeUnload;
-	readonly instanceId: string;
-}
-
-/**
- * Current hosted workspace state sent by the Omni shell to iframes.
- */
-export interface IHucodeOmniWebStateMessage {
-	readonly type: HucodeOmniWebParentMessageType.State;
-	readonly instanceId: string;
-	readonly state: unknown;
-}
-
-/**
- * Response sent by the Omni shell for a hosted workbench shell request.
- */
-export interface IHucodeOmniWebShellResponseMessage {
-	readonly type: HucodeOmniWebParentMessageType.ShellResponse;
-	readonly instanceId: string;
-	readonly requestId: string;
-	readonly ok: boolean;
-	readonly result?: unknown;
-	readonly error?: string;
-}
-
-/**
- * Message sent by iframe workbenches once unload handling has completed.
- */
-export interface IHucodeOmniWebUnloadReadyMessage {
-	readonly type: HucodeOmniWebChildMessageType.UnloadReady;
-	readonly instanceId: string;
+	readonly windowId: number;
 }
 
 /**
@@ -90,49 +59,28 @@ export interface IHucodeOmniWebFocusMessage {
 	readonly focused: boolean;
 }
 
-/**
- * Result sent after an iframe command request completes.
- */
-export interface IHucodeOmniWebCommandResultMessage {
-	readonly type: HucodeOmniWebChildMessageType.CommandResult;
-	readonly instanceId: string;
-	readonly requestId?: string;
-	readonly commandId?: string;
-	readonly ok: boolean;
-	readonly error?: string;
-}
-
-/**
- * Shell-owned command requested by a hosted iframe workbench.
- */
-export interface IHucodeOmniWebShellCommandMessage {
-	readonly type: HucodeOmniWebChildMessageType.ShellCommand;
-	readonly instanceId: string;
-	readonly commandId: string;
-	readonly args?: readonly unknown[];
-}
-
-/**
- * Shell service method requested by a hosted iframe workbench.
- */
-export interface IHucodeOmniWebShellRequestMessage {
-	readonly type: HucodeOmniWebChildMessageType.ShellRequest;
-	readonly instanceId: string;
-	readonly requestId: string;
-	readonly method: string;
-	readonly args?: readonly unknown[];
-}
-
-export type HucodeOmniWebParentMessage =
-	| IHucodeOmniWebRunCommandMessage
-	| IHucodeOmniWebBeforeUnloadMessage
-	| IHucodeOmniWebStateMessage
-	| IHucodeOmniWebShellResponseMessage;
+export type HucodeOmniWebParentMessage = IHucodeOmniWebPortMessage;
 
 export type HucodeOmniWebChildMessage =
 	| IHucodeOmniWebReadyMessage
-	| IHucodeOmniWebFocusMessage
-	| IHucodeOmniWebUnloadReadyMessage
-	| IHucodeOmniWebCommandResultMessage
-	| IHucodeOmniWebShellCommandMessage
-	| IHucodeOmniWebShellRequestMessage;
+	| IHucodeOmniWebFocusMessage;
+
+/**
+ * Hosted iframe workbench operations callable by the Omni web shell.
+ */
+export interface IHucodeOmniWebWorkbenchClient {
+	/**
+	 * Runs a workbench command inside the hosted workbench.
+	 */
+	runCommand(commandId: string, args: readonly unknown[]): Promise<boolean>;
+
+	/**
+	 * Opens a forwarded file-open request inside the hosted workbench.
+	 */
+	openFiles(request: INativeOpenFileRequest): Promise<boolean>;
+
+	/**
+	 * Runs the hosted workbench shutdown handshake before unload.
+	 */
+	prepareUnload(): Promise<void>;
+}

@@ -115,6 +115,7 @@ suite('HucodeWebClientServerIntegration', () => {
 		} as IProductService), {
 			quality: 'stable',
 			commit: 'abc123',
+			builtInExtensionsEnabledWithAutoUpdates: [],
 		});
 	});
 });

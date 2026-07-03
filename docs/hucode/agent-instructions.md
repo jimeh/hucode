@@ -575,6 +575,12 @@ VS Code code that Hucode customizes.
 
 ## Other Hucode Gotchas
 
+- Do not null out or remove `defaultChatAgent` from the product configuration
+  served to web clients. Upstream account and chat entitlement services
+  dereference it unconditionally during workbench startup, so removing it
+  breaks boot with a blank page and no logged error. To disable Copilot chat
+  surfaces on web, target narrower keys such as
+  `builtInExtensionsEnabledWithAutoUpdates`.
 - Hucode serve-web self-hosts webview bootstrap assets: the server injects a
   same-origin `webviewEndpoint`, the client entrypoint absolutizes it, and
   `src/vs/workbench/contrib/webview/browser/pre/index.html` carries a Hucode

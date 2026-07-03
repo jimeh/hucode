@@ -59,8 +59,12 @@ class HucodeProjectFileStateService implements IStateService {
 	private readonly storagePath: string;
 	private state: StoredProjectManagerState | undefined;
 	private loaded = false;
+	private lastWrite: Promise<void> = Promise.resolve();
 
-	constructor(private readonly serverDataPath: string) {
+	constructor(
+		private readonly serverDataPath: string,
+		private readonly logService: ILogService,
+	) {
 		this.storagePath = join(serverDataPath, 'hucode', 'projects.json');
 	}
 
@@ -107,7 +111,9 @@ class HucodeProjectFileStateService implements IStateService {
 		this.writeState();
 	}
 
-	async close(): Promise<void> { }
+	async close(): Promise<void> {
+		await this.lastWrite;
+	}
 
 	private ensureLoaded(): void {
 		if (this.loaded) {
@@ -131,25 +137,26 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 
 	private writeState(): void {
-		fs.mkdirSync(join(this.serverDataPath, 'hucode'), { recursive: true });
-		if (!this.state) {
-			try {
-				fs.unlinkSync(this.storagePath);
-			} catch (error) {
-				if (
-					!(error instanceof Error) ||
-					(error as NodeJS.ErrnoException).code !== 'ENOENT'
-				) {
-					throw error;
+		// IStateService writes are fire-and-forget; chain them so the HTTP
+		// request path never blocks on disk and writes stay ordered.
+		const state = this.state;
+		this.lastWrite = this.lastWrite
+			.then(async () => {
+				await fs.promises.mkdir(
+					join(this.serverDataPath, 'hucode'),
+					{ recursive: true },
+				);
+				if (!state) {
+					await fs.promises.rm(this.storagePath, { force: true });
+					return;
 				}
-			}
-			return;
-		}
 
-		fs.writeFileSync(
-			this.storagePath,
-			`${JSON.stringify(this.state, null, '\t')}\n`,
-		);
+				await fs.promises.writeFile(
+					this.storagePath,
+					`${JSON.stringify(state, null, '\t')}\n`,
+				);
+			})
+			.catch(error => this.logService.error(error));
 	}
 }
 
@@ -165,6 +172,7 @@ class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
  */
 export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly service: ProjectManagerMainService | undefined;
+	private readonly stateService: HucodeProjectFileStateService | undefined;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 
 	constructor(
@@ -178,8 +186,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return;
 		}
 
+		this.stateService =
+			new HucodeProjectFileStateService(serverDataPath, logService);
 		this.service = this._register(new ProjectManagerMainService(
-			new HucodeProjectFileStateService(serverDataPath),
+			this.stateService,
 			logService,
 			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher() },
 		));
@@ -265,6 +275,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
 		return this.service ? this.service.getProjects() : [];
+	}
+
+	/**
+	 * Waits for queued project state writes to reach disk.
+	 */
+	async flushState(): Promise<void> {
+		await this.stateService?.close();
 	}
 
 	override dispose(): void {

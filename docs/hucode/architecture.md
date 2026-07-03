@@ -67,8 +67,11 @@ unless the difference is explicitly platform-specific.
 
 The shell service contract is shared as `IHucodeShellService`. Desktop exposes
 it through IPC to the main-process controller. Web implements the same contract
-in the renderer and communicates with hosted iframes through same-origin
-`postMessage` plus source/origin checks.
+in the shell renderer and serves it to hosted iframes over per-instance
+`MessagePort` channels (`vs/base/parts/ipc` + `ProxyChannel`), so both call
+directions are statically typed against the shared interfaces. Same-origin
+window `postMessage` is only used for the bootstrap handshake: `Ready` and
+`Focus` from the iframe, and the `Port` transfer from the shell.
 
 ### Serve-Web Routing
 

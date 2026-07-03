@@ -170,6 +170,18 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 }
 
 /**
+ * Creates the hosted-workspace state used before any workspace exists.
+ */
+export function createEmptyHostedWorkspaceState(): IHucodeHostedWorkspaceState {
+	return {
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
+		instances: [],
+	};
+}
+
+/**
  * Builds the external hosted-workspace state with the active instance first.
  */
 export function createHostedWorkspaceState<T extends IHostedWorkspaceStateEntry>(
