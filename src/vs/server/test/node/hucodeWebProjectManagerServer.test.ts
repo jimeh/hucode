@@ -216,6 +216,108 @@ suite('HucodeWebProjectManagerServer', () => {
 		});
 	});
 
+	test('rejects cross-origin browser requests', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const crossOrigin = await handle<{ readonly error: string }>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath },
+			{
+				'content-type': 'application/json',
+				host: 'localhost:9888',
+				origin: 'https://evil.example',
+			}
+		);
+		const opaqueOrigin = await handle<{ readonly error: string }>(
+			server,
+			'DELETE',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/some-id`,
+			undefined,
+			{ host: 'localhost:9888', origin: 'null' }
+		);
+
+		assert.deepStrictEqual(crossOrigin, {
+			statusCode: 403,
+			body: { error: 'Cross-origin request rejected.' },
+		});
+		assert.deepStrictEqual(opaqueOrigin, {
+			statusCode: 403,
+			body: { error: 'Invalid request origin.' },
+		});
+	});
+
+	test('accepts same-origin requests including forwarded hosts', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const sameOrigin = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath },
+			{
+				'content-type': 'application/json',
+				host: 'localhost:9888',
+				origin: 'http://localhost:9888',
+			}
+		);
+		const forwarded = await handle<ProjectsResponseBody>(
+			server,
+			'GET',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			undefined,
+			{
+				host: 'internal:8000',
+				'x-forwarded-host': 'hucode.example, proxy.internal',
+				origin: 'https://hucode.example',
+			}
+		);
+
+		assert.strictEqual(sameOrigin.statusCode, 201);
+		assert.strictEqual(forwarded.statusCode, 200);
+	});
+
+	test('rejects mutations without a JSON content type', async () => {
+		const server = createServer(serverDataPath, disposables);
+		const response = await handle<{ readonly error: string }>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			JSON.stringify({ rootPath: projectPath }),
+			{ 'content-type': 'text/plain', host: 'localhost:9888' }
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 415,
+			body: { error: 'Content-Type must be application/json.' },
+		});
+	});
+
+	test('ignores API requests when Omni web is disabled', async () => {
+		const server = disposables.add(new HucodeWebProjectManagerServer(
+			serverDataPath,
+			new NullLogService(),
+			{ enabled: false }
+		));
+		const req = {
+			method: 'GET',
+			async *[Symbol.asyncIterator]() { },
+		};
+		const res = {
+			writeHead() {
+				throw new Error('not expected to respond');
+			},
+			end() {
+				throw new Error('not expected to respond');
+			},
+		};
+
+		assert.strictEqual(
+			await server.handle(req, res, HUCODE_WEB_PROJECTS_API_PATH),
+			false
+		);
+		assert.deepStrictEqual(await server.getProjects(), []);
+	});
+
 	test('matches project API paths', () => {
 		assert.strictEqual(
 			isHucodeWebProjectsApiPath(HUCODE_WEB_PROJECTS_API_PATH),
@@ -307,22 +409,26 @@ async function handle(
 	server: HucodeWebProjectManagerServer,
 	method: string,
 	pathname: string,
-	body?: unknown
+	body?: unknown,
+	headers?: Record<string, string>
 ): Promise<ProjectManagerResponse>;
 async function handle<TBody>(
 	server: HucodeWebProjectManagerServer,
 	method: string,
 	pathname: string,
-	body?: unknown
+	body?: unknown,
+	headers?: Record<string, string>
 ): Promise<ProjectManagerResponse<TBody>>;
 async function handle<TBody = unknown>(
 	server: HucodeWebProjectManagerServer,
 	method: string,
 	pathname: string,
-	body?: unknown
+	body?: unknown,
+	headers?: Record<string, string>
 ): Promise<ProjectManagerResponse<TBody>> {
 	const req = {
 		method,
+		headers: headers ?? { 'content-type': 'application/json' },
 		async *[Symbol.asyncIterator]() {
 			if (body !== undefined) {
 				yield Buffer.from(

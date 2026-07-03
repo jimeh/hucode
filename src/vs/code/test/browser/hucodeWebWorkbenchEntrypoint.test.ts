@@ -6,45 +6,30 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
-import { isHucodeHostedOmniWebPayload } from
+import { resolveHucodeWebWorkbenchCreate } from
 	'../../browser/workbench/hucodeWebWorkbenchEntrypoint.js';
 
 suite('HucodeWebWorkbenchEntrypoint', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('detects hosted Omni payloads', () => {
-		const payload = JSON.stringify([
-			['isHostedOmniWorkspace', 'true'],
-			['hostedInstanceId', 'instance-1'],
-		]);
-		const location = new URL('http://localhost/workbench');
-		location.searchParams.set('payload', payload);
-
-		assert.strictEqual(
-			isHucodeHostedOmniWebPayload(location.toString()),
-			true
-		);
-	});
-
-	test('ignores absent, unrelated, and invalid payloads', () => {
-		const unrelated = new URL('http://localhost/workbench');
-		unrelated.searchParams.set('payload', JSON.stringify([
-			['isHostedOmniWorkspace', 'false'],
-		]));
-
-		const invalid = new URL('http://localhost/workbench');
-		invalid.searchParams.set('payload', '{');
+	test('keeps the default workbench without Hucode markers', async () => {
+		const defaultCreate = () => {
+			throw new Error('not expected to run');
+		};
 
 		assert.deepStrictEqual([
-			['absent', isHucodeHostedOmniWebPayload(
-				'http://localhost/workbench'
-			)],
-			['unrelated', isHucodeHostedOmniWebPayload(unrelated.toString())],
-			['invalid', isHucodeHostedOmniWebPayload(invalid.toString())],
-		], [
-			['absent', false],
-			['unrelated', false],
-			['invalid', false],
-		]);
+			await resolveHucodeWebWorkbenchCreate(
+				{},
+				defaultCreate as never
+			),
+			await resolveHucodeWebWorkbenchCreate(
+				{ hucodeOmniShell: false } as never,
+				defaultCreate as never
+			),
+			await resolveHucodeWebWorkbenchCreate(
+				{ hucodeHostedOmniWorkbench: false } as never,
+				defaultCreate as never
+			),
+		], [defaultCreate, defaultCreate, defaultCreate]);
 	});
 });

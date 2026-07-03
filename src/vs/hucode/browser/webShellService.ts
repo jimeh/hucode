@@ -56,6 +56,7 @@ import {
 	IHucodeOmniWebShellRequestMessage,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import {
+	getHucodeOmniHostedWorkbenchRoute,
 	getHucodeOmniWorkbenchRoute,
 	getHucodeServerPathCaseSensitive,
 } from '../../platform/environment/common/hucodeWebConfiguration.js';
@@ -84,6 +85,7 @@ type IWebHucodeShellHostSurfaceService = Pick<
 
 export interface IWebHucodeShellOptions {
 	readonly workbenchRoute: string;
+	readonly hostedWorkbenchRoute: string;
 	readonly serverPathCaseSensitive: boolean;
 }
 
@@ -135,6 +137,7 @@ export class WebHucodeShellController extends Disposable
 
 	private readonly windowId: number;
 	private readonly workbenchRoute: string;
+	private readonly hostedWorkbenchRoute: string;
 	private readonly serverPathCaseSensitive: boolean;
 	private readonly hostedWorkspaces: HostedWorkspaceStateModel<
 		IHostedIframeInstance
@@ -157,6 +160,7 @@ export class WebHucodeShellController extends Disposable
 
 		this.windowId = browser.windowId;
 		this.workbenchRoute = options.workbenchRoute;
+		this.hostedWorkbenchRoute = options.hostedWorkbenchRoute;
 		this.serverPathCaseSensitive = options.serverPathCaseSensitive;
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => this.toPathKey(path)
@@ -876,7 +880,10 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private toWorkbenchUrl(instanceId: string, worktreePath: string): string {
-		const workbenchUrl = new URL(this.workbenchRoute, this.browser.origin);
+		const workbenchUrl = new URL(
+			this.hostedWorkbenchRoute,
+			this.browser.origin
+		);
 		workbenchUrl.searchParams.set('folder', worktreePath);
 		workbenchUrl.searchParams.set('payload', JSON.stringify([
 			['isHostedOmniWorkspace', 'true'],
@@ -1025,6 +1032,9 @@ export class WebHucodeShellService extends WebHucodeShellController {
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
+				environmentService.options
+			),
+			hostedWorkbenchRoute: getHucodeOmniHostedWorkbenchRoute(
 				environmentService.options
 			),
 			serverPathCaseSensitive: getHucodeServerPathCaseSensitive(

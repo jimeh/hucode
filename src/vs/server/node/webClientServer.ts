@@ -32,6 +32,7 @@ import { ICSSDevelopmentService } from '../../platform/cssDev/node/cssDevService
 import {
 	HUCODE_WEB_OMNI_ROOT_ARG,
 	type HucodeWebWorkbenchRoutePath,
+	type IHucodeWebWorkbenchRouteOptions,
 	getHucodeWebClientBasePath,
 	getHucodeWebClientRouteAction,
 	getHucodeWebProductConfiguration,
@@ -146,7 +147,8 @@ export class WebClientServer extends Disposable {
 		this._hucodeProjectManagerServer =
 			this._register(new HucodeWebProjectManagerServer(
 				this._environmentService.userDataPath,
-				this._logService
+				this._logService,
+				{ enabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG] }
 			));
 	}
 
@@ -181,7 +183,7 @@ export class WebClientServer extends Disposable {
 			const routeAction = getHucodeWebClientRouteAction(pathname, {
 				basePath: getHucodeWebClientBasePath(req.headers, this._basePath),
 				query: parsedUrl.query,
-				omniRoot: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
+				omniEnabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
 			});
 			switch (routeAction.type) {
 				case 'workbench':
@@ -190,7 +192,7 @@ export class WebClientServer extends Disposable {
 						res,
 						parsedUrl,
 						routeAction.routePath,
-						{ hucodeOmniShell: routeAction.hucodeOmniShell }
+						routeAction
 					);
 				case 'redirect':
 					res.writeHead(302, { Location: routeAction.location });
@@ -305,7 +307,7 @@ export class WebClientServer extends Disposable {
 		res: http.ServerResponse,
 		parsedUrl: url.UrlWithParsedQuery,
 		routePath: HucodeWebWorkbenchRoutePath = '/',
-		options: { readonly hucodeOmniShell?: boolean } = {}
+		options: IHucodeWebWorkbenchRouteOptions = {}
 	): Promise<void> {
 
 		const getFirstHeader = (headerName: string) => {
@@ -434,8 +436,7 @@ export class WebClientServer extends Disposable {
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
-			...getHucodeWebWorkbenchConfiguration(basePath, {
-				hucodeOmniShell: options.hucodeOmniShell,
+			...getHucodeWebWorkbenchConfiguration(basePath, options, {
 				serverPathCaseSensitive: isLinux,
 			}),
 			_wrapWebWorkerExtHostInIframe,

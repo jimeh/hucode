@@ -616,11 +616,7 @@ function readCookie(name: string): string | undefined {
 	const secretStorageCrypto = secretStorageKeyPath && ServerKeyedAESCrypto.supported()
 		? new ServerKeyedAESCrypto(secretStorageKeyPath) : new TransparentCrypto();
 
-	const createWorkbench = await resolveHucodeWebWorkbenchCreate(
-		config,
-		mainWindow.location.href,
-		create
-	);
+	const createWorkbench = await resolveHucodeWebWorkbenchCreate(config, create);
 
 	// Create workbench
 	createWorkbench(mainWindow.document.body, {

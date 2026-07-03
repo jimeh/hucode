@@ -301,6 +301,8 @@ jobs:
             --run \
             src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
             --run \
+            src/vs/platform/environment/test/common/hucodeWebConfiguration.test.ts \
+            --run \
             src/vs/platform/projectManager/test/common/projectManagerState.test.ts \
             --run \
             src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \
@@ -332,7 +334,7 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
-            src/vs/hucode/test/browser/hostedOmniOpenFiles.test.ts \
+            src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts \
             --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
             --run \

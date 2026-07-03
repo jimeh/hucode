@@ -33,6 +33,7 @@ suite('WebHucodeShellService', () => {
 		const service = disposables.add(new WebHucodeShellController(
 			{
 				workbenchRoute: '/workbench',
+				hostedWorkbenchRoute: '/omni/workbench',
 				serverPathCaseSensitive: true,
 			},
 			{
@@ -116,6 +117,33 @@ suite('WebHucodeShellService', () => {
 		assert.ok(iframe);
 		return iframe;
 	}
+
+	test('loads hosted iframes through the hosted workbench route', async () => {
+		const { service, surface, browser } = createService();
+
+		const state = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const iframe = getIframe(surface, state.instances[0].instanceId);
+		const src = new URL(iframe.src);
+		const payload = new Map<string, string>(
+			JSON.parse(src.searchParams.get('payload') ?? '[]')
+		);
+
+		assert.deepStrictEqual({
+			pathname: src.pathname,
+			folder: src.searchParams.get('folder'),
+			isHostedOmniWorkspace: payload.get('isHostedOmniWorkspace'),
+			hostedInstanceId: payload.get('hostedInstanceId'),
+		}, {
+			pathname: '/omni/workbench',
+			folder: '/tmp/hucode-worktree',
+			isHostedOmniWorkspace: 'true',
+			hostedInstanceId: state.instances[0].instanceId,
+		});
+	});
 
 	test('recreates a crashed iframe when reopening the same worktree', async () => {
 		const { service, surface, browser } = createService();

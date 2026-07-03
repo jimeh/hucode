@@ -13,7 +13,7 @@ import { IInstantiationService } from
 import { ILogService } from '../../platform/log/common/log.js';
 import { INativeOpenFileRequest } from
 	'../../platform/window/common/window.js';
-import { whenEditorClosed } from '../../workbench/browser/editor.js';
+import { whenEditorClosed } from './editor.js';
 import {
 	IResourceDiffEditorInput,
 	IResourceMergeEditorInput,
@@ -21,29 +21,34 @@ import {
 	IUntitledTextResourceEditorInput,
 	IUntypedEditorInput,
 	pathsToEditors,
-} from '../../workbench/common/editor.js';
+} from '../common/editor.js';
 import { IEditorService } from
-	'../../workbench/services/editor/common/editorService.js';
+	'../services/editor/common/editorService.js';
 
-type IHostedOmniInstantiationService =
+type IHucodeOpenFilesInstantiationService =
 	Pick<IInstantiationService, 'invokeFunction'>;
 
 /**
- * Dependencies needed to open files forwarded into a hosted Omni workbench.
+ * Dependencies needed to open a forwarded file-open request.
  */
-export interface IHostedOmniOpenFilesServices {
+export interface IHucodeOpenFilesRequestServices {
 	readonly editorService: Pick<IEditorService, 'openEditors'>;
 	readonly fileService: IFileService;
-	readonly instantiationService: IHostedOmniInstantiationService;
+	readonly instantiationService: IHucodeOpenFilesInstantiationService;
 	readonly logService: ILogService;
 }
 
 /**
- * Opens a native file-open request inside a hosted Omni web workbench.
+ * Opens a `vscode:openFiles` request in the running workbench.
+ *
+ * Shared by the desktop `NativeWindow` IPC handler and the hosted Omni web
+ * bridge so both platforms use the same diff/merge/wait-marker handling.
+ * Wait-marker tracking is started in the background; the returned promise
+ * only reflects whether editors were opened.
  */
-export async function openHostedOmniFiles(
+export async function openHucodeFilesRequest(
 	request: INativeOpenFileRequest,
-	services: IHostedOmniOpenFilesServices
+	services: IHucodeOpenFilesRequestServices
 ): Promise<boolean> {
 	const diffMode = !!(request.filesToDiff?.length === 2);
 	const mergeMode = !!(request.filesToMerge?.length === 4);
@@ -63,11 +68,19 @@ export async function openHostedOmniFiles(
 	}
 
 	const openedEditorPanes = await services.editorService.openEditors(
-		createHostedOmniOpenEditors(inputs, diffMode, mergeMode),
+		createHucodeOpenFileEditors(inputs, diffMode, mergeMode),
 		undefined,
 		{ validateTrust: true }
 	);
 	if (request.filesToWait) {
+
+		// In wait mode, listen to changes to the editors and wait until the
+		// files are closed that the user wants to wait for. When this happens
+		// we delete the wait marker file to signal to the outside that editing
+		// is done. However, it is possible that opening of the editors failed,
+		// as such we check for whether editor panes got opened and otherwise
+		// delete the marker right away.
+
 		if (openedEditorPanes.length) {
 			void trackClosedWaitFiles(
 				URI.revive(request.filesToWait.waitMarkerFileUri),
@@ -87,7 +100,7 @@ export async function openHostedOmniFiles(
 /**
  * Converts path-derived editor inputs into normal, diff, or merge open inputs.
  */
-export function createHostedOmniOpenEditors(
+export function createHucodeOpenFileEditors(
 	resources: Array<IResourceEditorInput | IUntitledTextResourceEditorInput>,
 	diffMode: boolean,
 	mergeMode: boolean
@@ -130,7 +143,7 @@ export function createHostedOmniOpenEditors(
 async function trackClosedWaitFiles(
 	waitMarkerFile: URI,
 	resourcesToWaitFor: URI[],
-	services: IHostedOmniOpenFilesServices
+	services: IHucodeOpenFilesRequestServices
 ): Promise<void> {
 	await services.instantiationService.invokeFunction(accessor =>
 		whenEditorClosed(accessor, resourcesToWaitFor)

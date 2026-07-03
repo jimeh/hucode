@@ -43,10 +43,11 @@ contributions must be imported into the standard desktop path when they need to
 run inside embedded workspaces.
 
 Serve-web hosts workspaces in same-origin browser iframes instead of Electron
-views. The iframe URL targets the regular `/workbench` route so each hosted
-workspace still boots a normal web workbench. Browser overlays use normal DOM
-stacking above the iframe surface; the desktop screenshot-overlay fallback is
-not used on web.
+views. The iframe URL targets the dedicated `/omni/workbench` route, which
+boots a normal web workbench plus the hosted Omni bridge modules; the regular
+`/workbench` route never loads them. Browser overlays use normal DOM stacking
+above the iframe surface; the desktop screenshot-overlay fallback is not used
+on web.
 
 The shell treats each workspace as a hosted unit with:
 
@@ -71,15 +72,16 @@ in the renderer and communicates with hosted iframes through same-origin
 
 ### Serve-Web Routing
 
-`hucode serve-web` always exposes both the regular workbench and the Omni
-Projects shell:
+All Hucode web routes and the Projects API are gated on the `--omni` flag
+(`--hucode-web-omni-root` on the inner server). Without it, serve-web keeps
+upstream behavior: the regular workbench at `/` and nothing else. With it:
 
-- `/` loads the regular workbench by default
-- `/workbench` always loads the regular workbench
-- `/omni` always loads the Omni Projects shell
-- `--omni` only changes `/` to load the Omni Projects shell
-- trailing `/omni/` and `/workbench/` requests redirect to the canonical path
-  while preserving query parameters
+- `/` loads the Omni Projects shell
+- `/omni` also loads the Omni Projects shell
+- `/workbench` loads the regular workbench
+- `/omni/workbench` loads the hosted workbench used by shell iframes
+- trailing-slash aliases of those routes redirect to the canonical path while
+  preserving query parameters
 
 Hucode route selection lives in `src/vs/server/node/hucodeWebOmniRoutes.ts` and
 `src/vs/server/node/hucodeWebClientServerIntegration.ts`. Keep
@@ -109,9 +111,11 @@ services.
 
 Serve-web reuses the project manager service from the shared `node` layer
 through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
-under the server user-data path and is exposed whenever serve-web is running so
-`/omni`, `/workbench`, and `/` with `--omni` can all reach the same Projects
-API. User settings/state remain the existing browser-side serve-web concern.
+under the server user-data path and is only active when serve-web runs with
+`--omni`. Browser requests must be same-origin (cross-origin `Origin` headers
+are rejected and POST bodies must be JSON) so the mutating API stays safe even
+with `--without-connection-token`. User settings/state remain the existing
+browser-side serve-web concern.
 
 ## Core Subsystems
 

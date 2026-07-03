@@ -7,7 +7,8 @@ import { mainWindow } from '../../base/browser/window.js';
 import { addDisposableListener } from '../../base/browser/dom.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isObject } from '../../base/common/types.js';
-import { Action2, registerAction2 } from '../../platform/actions/common/actions.js';
+import { Action2 } from '../../platform/actions/common/actions.js';
+import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { IFileService } from '../../platform/files/common/files.js';
@@ -36,7 +37,8 @@ import {
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
-import { openHostedOmniFiles } from './hostedOmniOpenFiles.js';
+import { openHucodeFilesRequest } from
+	'../../workbench/browser/hucodeOpenFilesRequest.js';
 import './hostedOmniWebShellService.js';
 import './projectManager/webProjectManagerService.js';
 import './hostedOmniWorkspace.contribution.js';
@@ -187,7 +189,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 			return false;
 		}
 
-		return openHostedOmniFiles(request, {
+		return openHucodeFilesRequest(request, {
 			editorService: this.editorService,
 			fileService: this.fileService,
 			instantiationService: this.instantiationService,
@@ -251,7 +253,7 @@ function registerHostedOmniWebShellCommand(
 	id: string,
 	title: ICommandActionTitle
 ) {
-	return registerAction2(class extends Action2 {
+	return registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
 				id,

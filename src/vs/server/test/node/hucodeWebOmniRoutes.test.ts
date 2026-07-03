@@ -10,52 +10,64 @@ import {
 	toHucodeWebRouteLocation,
 } from '../../node/hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniHostedWorkbenchBase,
 	getHucodeWebOmniProjectsApi,
-	getHucodeWebOmniWorkbenchSrc,
 	getHucodeWebOmniWorkbenchBase,
 } from '../../node/hucodeWebOmniShell.js';
 
 suite('HucodeWebOmniRoutes', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('keeps root workbench by default', () => {
+	test('keeps upstream behavior when Omni web is disabled', () => {
 		assert.deepStrictEqual(getHucodeWebClientRoute('/', false), {
 			type: 'workbench',
 			routePath: '/',
 		});
+		assert.deepStrictEqual(getHucodeWebClientRoute('/omni', false), {
+			type: 'notFound',
+		});
+		assert.deepStrictEqual(getHucodeWebClientRoute('/workbench', false), {
+			type: 'notFound',
+		});
+		assert.deepStrictEqual(
+			getHucodeWebClientRoute('/omni/workbench', false),
+			{ type: 'notFound' }
+		);
 	});
 
-	test('routes root to Omni only when requested', () => {
+	test('routes root to Omni when enabled', () => {
 		assert.deepStrictEqual(getHucodeWebClientRoute('/', true), {
 			type: 'omni',
 			routePath: '/',
 		});
 	});
 
-	test('always routes /omni to Omni', () => {
-		assert.deepStrictEqual(getHucodeWebClientRoute('/omni', false), {
-			type: 'omni',
-			routePath: '/omni',
-		});
+	test('routes /omni to Omni when enabled', () => {
 		assert.deepStrictEqual(getHucodeWebClientRoute('/omni', true), {
 			type: 'omni',
 			routePath: '/omni',
 		});
 	});
 
-	test('always routes /workbench to regular workbench', () => {
-		assert.deepStrictEqual(getHucodeWebClientRoute('/workbench', false), {
-			type: 'workbench',
-			routePath: '/workbench',
-		});
+	test('routes /workbench to the regular workbench when enabled', () => {
 		assert.deepStrictEqual(getHucodeWebClientRoute('/workbench', true), {
 			type: 'workbench',
 			routePath: '/workbench',
 		});
 	});
 
+	test('routes /omni/workbench to the hosted workbench when enabled', () => {
+		assert.deepStrictEqual(
+			getHucodeWebClientRoute('/omni/workbench', true),
+			{
+				type: 'hostedWorkbench',
+				routePath: '/omni/workbench',
+			}
+		);
+	});
+
 	test('redirects trailing slash aliases to canonical routes', () => {
-		assert.deepStrictEqual(getHucodeWebClientRoute('/omni/', false), {
+		assert.deepStrictEqual(getHucodeWebClientRoute('/omni/', true), {
 			type: 'redirect',
 			locationPath: '/omni',
 		});
@@ -63,6 +75,13 @@ suite('HucodeWebOmniRoutes', () => {
 			type: 'redirect',
 			locationPath: '/workbench',
 		});
+		assert.deepStrictEqual(
+			getHucodeWebClientRoute('/omni/workbench/', true),
+			{
+				type: 'redirect',
+				locationPath: '/omni/workbench',
+			}
+		);
 	});
 
 	test('preserves query parameters and base path in redirects', () => {
@@ -81,42 +100,18 @@ suite('HucodeWebOmniRoutes', () => {
 		);
 	});
 
-	test('builds the Omni hosted workbench iframe URL', () => {
-		const src = getHucodeWebOmniWorkbenchSrc('/x', {
-			folder: '/tmp/project',
-		});
-		const location = new URL(src, 'http://localhost');
-
-		assert.strictEqual(location.pathname, '/x/workbench');
-		assert.strictEqual(location.searchParams.get('folder'), '/tmp/project');
-
-		const payload = parsePayload(location.searchParams.get('payload'));
-		assert.strictEqual(payload.get('isHostedOmniWorkspace'), 'true');
-		assert.strictEqual(payload.get('hostedInstanceId'), 'initial');
-	});
-
-	test('adds an empty-window target for Omni hosted iframe URLs', () => {
-		const src = getHucodeWebOmniWorkbenchSrc('/', {}, 'empty-1');
-		const location = new URL(src, 'http://localhost');
-
-		assert.strictEqual(location.pathname, '/workbench');
-		assert.strictEqual(location.searchParams.get('ew'), 'true');
-
-		const payload = parsePayload(location.searchParams.get('payload'));
-		assert.strictEqual(payload.get('isHostedOmniWorkspace'), 'true');
-		assert.strictEqual(payload.get('hostedInstanceId'), 'empty-1');
-	});
-
-	test('builds the Omni hosted workbench base route', () => {
+	test('builds the regular workbench base route', () => {
 		assert.strictEqual(getHucodeWebOmniWorkbenchBase('/x'), '/x/workbench');
+	});
+
+	test('builds the hosted workbench base route', () => {
+		assert.strictEqual(
+			getHucodeWebOmniHostedWorkbenchBase('/x'),
+			'/x/omni/workbench'
+		);
 	});
 
 	test('builds the Omni projects API route', () => {
 		assert.strictEqual(getHucodeWebOmniProjectsApi('/x'), '/x/_hucode/projects');
 	});
 });
-
-function parsePayload(payload: string | null): Map<string, string> {
-	assert.ok(payload);
-	return new Map(JSON.parse(payload));
-}

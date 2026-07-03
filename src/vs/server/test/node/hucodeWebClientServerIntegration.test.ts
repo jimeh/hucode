@@ -21,33 +21,40 @@ suite('HucodeWebClientServerIntegration', () => {
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
 			basePath: '/x',
 			query: {},
-			omniRoot: false,
+			omniEnabled: false,
 		}), {
 			type: 'workbench',
 			routePath: '/',
-		});
-		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
-			basePath: '/x',
-			query: {},
-			omniRoot: true,
-		}), {
-			type: 'workbench',
-			routePath: '/',
-			hucodeOmniShell: true,
 		});
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni', {
 			basePath: '/x',
 			query: {},
-			omniRoot: false,
+			omniEnabled: false,
+		}), {
+			type: 'notFound',
+		});
+		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
+			basePath: '/x',
+			query: {},
+			omniEnabled: true,
 		}), {
 			type: 'workbench',
-			routePath: '/omni',
+			routePath: '/',
 			hucodeOmniShell: true,
+		});
+		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni/workbench', {
+			basePath: '/x',
+			query: {},
+			omniEnabled: true,
+		}), {
+			type: 'workbench',
+			routePath: '/omni/workbench',
+			hucodeHostedOmniWorkbench: true,
 		});
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni/', {
 			basePath: '/x',
 			query: { folder: '/tmp/project' },
-			omniRoot: false,
+			omniEnabled: true,
 		}), {
 			type: 'redirect',
 			location: '/x/omni?folder=%2Ftmp%2Fproject',
@@ -57,12 +64,27 @@ suite('HucodeWebClientServerIntegration', () => {
 	test('builds Hucode workbench configuration', () => {
 		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/x', {
 			hucodeOmniShell: true,
+		}, {
 			serverPathCaseSensitive: true,
 		}), {
 			hucodeOmniShell: true,
+			hucodeHostedOmniWorkbench: undefined,
 			hucodeOmniWorkbenchRoute: '/x/workbench',
+			hucodeOmniHostedWorkbenchRoute: '/x/omni/workbench',
 			hucodeOmniProjectsApi: '/x/_hucode/projects',
 			hucodeServerPathCaseSensitive: true,
+		});
+		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/', {
+			hucodeHostedOmniWorkbench: true,
+		}, {
+			serverPathCaseSensitive: false,
+		}), {
+			hucodeOmniShell: undefined,
+			hucodeHostedOmniWorkbench: true,
+			hucodeOmniWorkbenchRoute: '/workbench',
+			hucodeOmniHostedWorkbenchRoute: '/omni/workbench',
+			hucodeOmniProjectsApi: '/_hucode/projects',
+			hucodeServerPathCaseSensitive: false,
 		});
 	});
 

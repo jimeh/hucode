@@ -7,12 +7,11 @@ import { IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { localize2 } from '../../nls.js';
 import {
 	Action2,
-	registerAction2,
 	type IAction2Options,
 } from '../../platform/actions/common/actions.js';
-import { CommandsRegistry } from '../../platform/commands/common/commands.js';
 import type { ILocalizedString } from
 	'../../platform/action/common/action.js';
+import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
 import { createDecorator, ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { IsOmniWindowContext } from '../../workbench/common/contextkeys.js';
@@ -122,131 +121,129 @@ abstract class BaseOmniWindowAction extends Action2 {
 	}
 }
 
-if (!CommandsRegistry.getCommand(OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID)) {
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				FOCUS_PROJECT_PANE_COMMAND_ID,
-				localize2(
-					'omniWindowFocusProjectPane',
-					'Omni-Window: Focus Project Pane'
-				)
-			);
-		}
+registerOmniShellAction2(FOCUS_PROJECT_PANE_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			FOCUS_PROJECT_PANE_COMMAND_ID,
+			localize2(
+				'omniWindowFocusProjectPane',
+				'Omni-Window: Focus Project Pane'
+			)
+		);
+	}
 
-		override run(accessor: ServicesAccessor): void {
-			accessor.get(IHucodeOmniWindowUIService).focusProjectPane();
-		}
-	});
+	override run(accessor: ServicesAccessor): void {
+		accessor.get(IHucodeOmniWindowUIService).focusProjectPane();
+	}
+});
 
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
-				localize2(
-					'omniWindowOpenSelectedInOmniWindow',
-					'Omni-Window: Open Selected Worktree'
-				)
-			);
-		}
+registerOmniShellAction2(OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+			localize2(
+				'omniWindowOpenSelectedInOmniWindow',
+				'Omni-Window: Open Selected Worktree'
+			)
+		);
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(IHucodeOmniWindowUIService).openSelectedInOmni();
-		}
-	});
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).openSelectedInOmni();
+	}
+});
 
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
-				localize2(
-					'omniWindowOpenSelectedInNewWindow',
-					'Omni-Window: Open Selected Worktree In New Window'
-				)
-			);
-		}
+registerOmniShellAction2(OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+			localize2(
+				'omniWindowOpenSelectedInNewWindow',
+				'Omni-Window: Open Selected Worktree In New Window'
+			)
+		);
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(
-				IHucodeOmniWindowUIService
-			).openSelectedInStandalone();
-		}
-	});
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(
+			IHucodeOmniWindowUIService
+		).openSelectedInStandalone();
+	}
+});
 
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				FOCUS_WORKSPACE_COMMAND_ID,
-				localize2(
-					'omniWindowFocusWorkspace',
-					'Omni-Window: Focus Workspace'
-				)
-			);
-		}
+registerOmniShellAction2(FOCUS_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			FOCUS_WORKSPACE_COMMAND_ID,
+			localize2(
+				'omniWindowFocusWorkspace',
+				'Omni-Window: Focus Workspace'
+			)
+		);
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(IHucodeOmniWindowUIService).focusWorkspace();
-		}
-	});
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).focusWorkspace();
+	}
+});
 
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				RELOAD_WORKSPACE_COMMAND_ID,
-				localize2(
-					'omniWindowReloadWorkspace',
-					'Omni-Window: Reload Workspace'
+registerOmniShellAction2(RELOAD_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			RELOAD_WORKSPACE_COMMAND_ID,
+			localize2(
+				'omniWindowReloadWorkspace',
+				'Omni-Window: Reload Workspace'
+			),
+			{
+				weight: KeybindingWeight.WorkbenchContrib + 50,
+				when: ContextKeyExpr.and(
+					IsDevelopmentContext,
+					IsOmniWindowContext
 				),
-				{
-					weight: KeybindingWeight.WorkbenchContrib + 50,
-					when: ContextKeyExpr.and(
-						IsDevelopmentContext,
-						IsOmniWindowContext
-					),
-					primary: KeyMod.CtrlCmd | KeyCode.KeyR
-				}
-			);
-		}
+				primary: KeyMod.CtrlCmd | KeyCode.KeyR
+			}
+		);
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(IHucodeOmniWindowUIService).reloadWorkspace();
-		}
-	});
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).reloadWorkspace();
+	}
+});
 
-	registerAction2(class extends BaseOmniWindowAction {
-		constructor() {
-			super(
-				CLOSE_WORKSPACE_COMMAND_ID,
-				localize2(
-					'omniWindowCloseWorkspace',
-					'Omni-Window: Close Workspace'
-				)
-			);
-		}
+registerOmniShellAction2(CLOSE_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
+	constructor() {
+		super(
+			CLOSE_WORKSPACE_COMMAND_ID,
+			localize2(
+				'omniWindowCloseWorkspace',
+				'Omni-Window: Close Workspace'
+			)
+		);
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
-		}
-	});
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
+	}
+});
 
-	registerAction2(class extends Action2 {
-		constructor() {
-			super({
-				id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-				title: localize2(
-					'omniWindowUnloadCurrentWorktree',
-					'Omni-Window: Unload Current Worktree'
-				),
-				f1: true,
-				precondition: ContextKeyExpr.and(
-					IsOmniWindowContext,
-					HasLoadedWorkbenchContext
-				),
-			});
-		}
+registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			title: localize2(
+				'omniWindowUnloadCurrentWorktree',
+				'Omni-Window: Unload Current Worktree'
+			),
+			f1: true,
+			precondition: ContextKeyExpr.and(
+				IsOmniWindowContext,
+				HasLoadedWorkbenchContext
+			),
+		});
+	}
 
-		override run(accessor: ServicesAccessor): Promise<void> {
-			return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
-		}
-	});
-}
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
+	}
+});

@@ -17,10 +17,12 @@ import {
 	getHucodeWebClientRoute,
 	HUCODE_WEB_OMNI_ROOT_ARG,
 	HUCODE_WEB_OMNI_PATH,
+	HUCODE_WEB_OMNI_HOSTED_WORKBENCH_PATH,
 	HUCODE_WEB_WORKBENCH_PATH,
 	toHucodeWebRouteLocation,
 } from './hucodeWebOmniRoutes.js';
 import {
+	getHucodeWebOmniHostedWorkbenchBase,
 	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchBase,
 } from './hucodeWebOmniShell.js';
@@ -30,14 +32,22 @@ export { HUCODE_WEB_OMNI_ROOT_ARG, toHucodeWebRouteLocation };
 export type HucodeWebWorkbenchRoutePath =
 	| '/'
 	| typeof HUCODE_WEB_OMNI_PATH
-	| typeof HUCODE_WEB_WORKBENCH_PATH;
+	| typeof HUCODE_WEB_WORKBENCH_PATH
+	| typeof HUCODE_WEB_OMNI_HOSTED_WORKBENCH_PATH;
+
+/**
+ * Hucode-specific options for a served workbench document.
+ */
+export interface IHucodeWebWorkbenchRouteOptions {
+	readonly hucodeOmniShell?: boolean;
+	readonly hucodeHostedOmniWorkbench?: boolean;
+}
 
 export type HucodeWebClientRouteAction =
-	| {
+	| ({
 		readonly type: 'workbench';
 		readonly routePath: HucodeWebWorkbenchRoutePath;
-		readonly hucodeOmniShell?: boolean;
-	}
+	} & IHucodeWebWorkbenchRouteOptions)
 	| { readonly type: 'redirect'; readonly location: string }
 	| { readonly type: 'notFound' };
 
@@ -62,10 +72,10 @@ export function getHucodeWebClientRouteAction(
 	options: {
 		readonly basePath: string;
 		readonly query: url.UrlWithParsedQuery['query'];
-		readonly omniRoot: boolean;
+		readonly omniEnabled: boolean;
 	}
 ): HucodeWebClientRouteAction {
-	const route = getHucodeWebClientRoute(pathname, options.omniRoot);
+	const route = getHucodeWebClientRoute(pathname, options.omniEnabled);
 	switch (route.type) {
 		case 'workbench':
 			return { type: 'workbench', routePath: route.routePath };
@@ -74,6 +84,12 @@ export function getHucodeWebClientRouteAction(
 				type: 'workbench',
 				routePath: route.routePath,
 				hucodeOmniShell: true,
+			};
+		case 'hostedWorkbench':
+			return {
+				type: 'workbench',
+				routePath: route.routePath,
+				hucodeHostedOmniWorkbench: true,
 			};
 		case 'redirect':
 			return {
@@ -94,16 +110,17 @@ export function getHucodeWebClientRouteAction(
  */
 export function getHucodeWebWorkbenchConfiguration(
 	basePath: string,
-	options: {
-		readonly hucodeOmniShell?: boolean;
-		readonly serverPathCaseSensitive: boolean;
-	}
+	routeOptions: IHucodeWebWorkbenchRouteOptions,
+	env: { readonly serverPathCaseSensitive: boolean }
 ): IHucodeWebWorkbenchConfiguration {
 	return {
-		hucodeOmniShell: options.hucodeOmniShell,
+		hucodeOmniShell: routeOptions.hucodeOmniShell,
+		hucodeHostedOmniWorkbench: routeOptions.hucodeHostedOmniWorkbench,
 		hucodeOmniWorkbenchRoute: getHucodeWebOmniWorkbenchBase(basePath),
+		hucodeOmniHostedWorkbenchRoute:
+			getHucodeWebOmniHostedWorkbenchBase(basePath),
 		hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
-		hucodeServerPathCaseSensitive: options.serverPathCaseSensitive,
+		hucodeServerPathCaseSensitive: env.serverPathCaseSensitive,
 	};
 }
 

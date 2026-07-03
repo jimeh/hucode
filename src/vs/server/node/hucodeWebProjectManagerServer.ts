@@ -39,6 +39,7 @@ export function isHucodeWebProjectsApiPath(pathname: string): boolean {
 interface HucodeWebProjectManagerRequest
 	extends AsyncIterable<Buffer | string | Uint8Array> {
 	readonly method?: string;
+	readonly headers?: http.IncomingHttpHeaders;
 	on?(event: 'close', listener: () => void): unknown;
 }
 
@@ -163,11 +164,19 @@ class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
  * HTTP adapter for the serve-web Project Manager service.
  */
 export class HucodeWebProjectManagerServer extends Disposable {
-	private readonly service: ProjectManagerMainService;
+	private readonly service: ProjectManagerMainService | undefined;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 
-	constructor(serverDataPath: string, logService: ILogService) {
+	constructor(
+		serverDataPath: string,
+		logService: ILogService,
+		options: { readonly enabled: boolean } = { enabled: true },
+	) {
 		super();
+
+		if (!options.enabled) {
+			return;
+		}
 
 		this.service = this._register(new ProjectManagerMainService(
 			new HucodeProjectFileStateService(serverDataPath),
@@ -184,8 +193,22 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res: HucodeWebProjectManagerResponse,
 		pathname: string,
 	): Promise<boolean> {
-		if (!isHucodeWebProjectsApiPath(pathname)) {
+		const service = this.service;
+		if (!service || !isHucodeWebProjectsApiPath(pathname)) {
 			return false;
+		}
+
+		// The Projects API mutates local state and runs git commands, so
+		// browser requests must come from the serving origin even when the
+		// server runs without a connection token.
+		const originError = getCrossOriginRequestError(req.headers);
+		if (originError) {
+			return this.writeJson(res, 403, { error: originError });
+		}
+		if (req.method === 'POST' && !hasJsonContentType(req.headers)) {
+			return this.writeJson(res, 415, {
+				error: 'Content-Type must be application/json.',
+			});
 		}
 
 		try {
@@ -194,27 +217,27 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				.replace(/^\/+/, '');
 
 			if (req.method === 'GET' && relativePath === 'events') {
-				return this.handleEvents(req, res);
+				return this.handleEvents(service, req, res);
 			}
 
 			if (req.method === 'GET' && !relativePath) {
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			}
 
 			if (req.method === 'POST' && !relativePath) {
 				const body = await this.readJson(req);
-				const project = await this.service.addProject(
+				const project = await service.addProject(
 					URI.file(requireString(body, 'rootPath')),
 				);
 				return this.writeJson(res, 201, {
 					project,
-					projects: await this.service.getProjects(),
+					projects: await service.getProjects(),
 				});
 			}
 
 			if (req.method === 'DELETE' && isSinglePathSegment(relativePath)) {
-				await this.service.removeProject(decodeURIComponent(relativePath));
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				await service.removeProject(decodeURIComponent(relativePath));
+				return this.writeProjects(res, 200, await service.getProjects());
 			}
 
 			if (req.method === 'DELETE') {
@@ -222,7 +245,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			}
 
 			if (req.method === 'POST') {
-				return this.handlePost(res, relativePath, await this.readJson(req));
+				return this.handlePost(
+					service,
+					res,
+					relativePath,
+					await this.readJson(req)
+				);
 			}
 
 			return this.writeJson(res, 405, {
@@ -236,7 +264,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
-		return this.service.getProjects();
+		return this.service ? this.service.getProjects() : [];
 	}
 
 	override dispose(): void {
@@ -248,6 +276,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	private async handlePost(
+		service: ProjectManagerMainService,
 		res: HucodeWebProjectManagerResponse,
 		relativePath: string,
 		body: unknown,
@@ -258,7 +287,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const command = parts.join('/');
 
 		if (relativePath === 'refresh') {
-			return this.writeProjects(res, 200, await this.service.refresh());
+			return this.writeProjects(res, 200, await service.refresh());
 		}
 
 		if (!projectId) {
@@ -270,29 +299,29 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				return this.writeProjects(
 					res,
 					200,
-					await this.service.refresh(projectId),
+					await service.refresh(projectId),
 				);
 			case 'label':
-				await this.service.renameProject(
+				await service.renameProject(
 					projectId,
 					requireString(body, 'label'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'label/reset':
-				await this.service.resetProjectLabel(projectId);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				await service.resetProjectLabel(projectId);
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'pinned':
-				await this.service.setPinned(projectId, requireBoolean(body, 'pinned'));
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				await service.setPinned(projectId, requireBoolean(body, 'pinned'));
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'move':
-				await this.service.moveProject(
+				await service.moveProject(
 					projectId,
 					optionalString(body, 'beforeProjectId'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/refs':
 				return this.writeJson(res, 200, {
-					refs: await this.service.getWorktreeRefs(
+					refs: await service.getWorktreeRefs(
 						projectId,
 						optionalObject(body, 'options') as
 						| WorktreeRefQueryOptions
@@ -301,58 +330,58 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				});
 			case 'worktrees/branch-name':
 				return this.writeJson(res, 200, {
-					valid: await this.service.isValidBranchName(
+					valid: await service.isValidBranchName(
 						projectId,
 						requireString(body, 'branchName'),
 					),
 				});
 			case 'worktrees':
 				return this.writeJson(res, 201, {
-					worktree: await this.service.createWorktree(
+					worktree: await service.createWorktree(
 						projectId,
 						(optionalObject(body, 'options') ?? {}) as CreateWorktreeOptions,
 					),
-					projects: await this.service.getProjects(),
+					projects: await service.getProjects(),
 				});
 			case 'worktrees/remove':
-				await this.service.removeWorktree(
+				await service.removeWorktree(
 					projectId,
 					requireString(body, 'worktreePath'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/move':
-				await this.service.moveWorktree(
+				await service.moveWorktree(
 					projectId,
 					requireString(body, 'worktreePath'),
 					optionalString(body, 'beforeWorktreePath'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/label':
-				await this.service.renameWorktree(
+				await service.renameWorktree(
 					projectId,
 					requireString(body, 'worktreePath'),
 					requireString(body, 'label'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/label/reset':
-				await this.service.resetWorktreeLabel(
+				await service.resetWorktreeLabel(
 					projectId,
 					requireString(body, 'worktreePath'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/pinned':
-				await this.service.setWorktreePinned(
+				await service.setWorktreePinned(
 					projectId,
 					requireString(body, 'worktreePath'),
 					requireBoolean(body, 'pinned'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 			case 'worktrees/last-active':
-				await this.service.setLastActiveWorktree(
+				await service.setLastActiveWorktree(
 					projectId,
 					requireString(body, 'worktreePath'),
 				);
-				return this.writeProjects(res, 200, await this.service.getProjects());
+				return this.writeProjects(res, 200, await service.getProjects());
 		}
 
 		return this.writeJson(res, 404, { error: 'Not found.' });
@@ -408,10 +437,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	private async handleEvents(
+		service: ProjectManagerMainService,
 		req: HucodeWebProjectManagerRequest,
 		res: HucodeWebProjectManagerResponse
 	): Promise<true> {
-		const projects = await this.service.getProjects();
+		const projects = await service.getProjects();
 
 		res.writeHead(200, {
 			'Content-Type': 'text/event-stream',
@@ -481,4 +511,51 @@ function readProperty(body: unknown, key: string): unknown {
 
 function isSinglePathSegment(path: string): boolean {
 	return !!path && !path.includes('/');
+}
+
+function getCrossOriginRequestError(
+	headers: http.IncomingHttpHeaders | undefined
+): string | undefined {
+	const origin = headers?.origin;
+	if (!origin) {
+		// Same-origin GET/EventSource requests and non-browser clients do
+		// not send an Origin header; the connection token still applies.
+		return undefined;
+	}
+
+	let originHost: string;
+	try {
+		originHost = new URL(origin).host;
+	} catch {
+		return 'Invalid request origin.';
+	}
+
+	const requestHost = getRequestHost(headers);
+	if (
+		!requestHost ||
+		originHost.toLowerCase() !== requestHost.toLowerCase()
+	) {
+		return 'Cross-origin request rejected.';
+	}
+
+	return undefined;
+}
+
+function getRequestHost(
+	headers: http.IncomingHttpHeaders | undefined
+): string | undefined {
+	const forwardedHost = headers?.['x-forwarded-host'];
+	const firstForwardedHost = Array.isArray(forwardedHost)
+		? forwardedHost[0]
+		: forwardedHost;
+	const host = firstForwardedHost?.split(',')[0].trim() || headers?.host;
+	return host?.trim() || undefined;
+}
+
+function hasJsonContentType(
+	headers: http.IncomingHttpHeaders | undefined
+): boolean {
+	const contentType = headers?.['content-type'];
+	return typeof contentType === 'string' &&
+		contentType.split(';')[0].trim().toLowerCase() === 'application/json';
 }

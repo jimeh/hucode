@@ -21,23 +21,23 @@ import {
 	IResourceDiffEditorInput,
 	IResourceMergeEditorInput,
 	IUntypedEditorInput,
-} from '../../../workbench/common/editor.js';
+} from '../../common/editor.js';
 import { IEditorService } from
-	'../../../workbench/services/editor/common/editorService.js';
+	'../../services/editor/common/editorService.js';
 import { TestFileService } from
-	'../../../workbench/test/common/workbenchTestServices.js';
+	'../common/workbenchTestServices.js';
 import {
-	createHostedOmniOpenEditors,
-	openHostedOmniFiles,
-} from '../../browser/hostedOmniOpenFiles.js';
+	createHucodeOpenFileEditors,
+	openHucodeFilesRequest,
+} from '../../browser/hucodeOpenFilesRequest.js';
 
-suite('HostedOmniOpenFiles', () => {
+suite('HucodeOpenFilesRequest', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('creates diff editor inputs for two-file diff requests', () => {
 		const [original, modified] = resources('original.ts', 'modified.ts');
 
-		const editors = createHostedOmniOpenEditors(
+		const editors = createHucodeOpenFileEditors(
 			[original, modified],
 			true,
 			false
@@ -58,7 +58,7 @@ suite('HostedOmniOpenFiles', () => {
 			'result.ts'
 		);
 
-		const editors = createHostedOmniOpenEditors(
+		const editors = createHucodeOpenFileEditors(
 			[input1, input2, base, result],
 			false,
 			true
@@ -83,7 +83,7 @@ suite('HostedOmniOpenFiles', () => {
 			}],
 		};
 
-		const ok = await openHostedOmniFiles(request, {
+		const ok = await openHucodeFilesRequest(request, {
 			editorService,
 			fileService: new TestFileService(),
 			instantiationService: new FakeInstantiationService(),
@@ -112,7 +112,7 @@ suite('HostedOmniOpenFiles', () => {
 			},
 		};
 
-		const ok = await openHostedOmniFiles(request, {
+		const ok = await openHucodeFilesRequest(request, {
 			editorService: new FakeEditorService(),
 			fileService: new TestFileService(),
 			instantiationService: new FakeInstantiationService(
