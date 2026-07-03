@@ -303,6 +303,8 @@ jobs:
             --run \
             src/vs/platform/environment/test/common/hucodeWebConfiguration.test.ts \
             --run \
+            src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts \
+            --run \
             src/vs/platform/projectManager/test/common/projectManagerState.test.ts \
             --run \
             src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \

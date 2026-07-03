@@ -73,6 +73,8 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeOmniHostedWorkbenchRoute: '/x/omni/workbench',
 			hucodeOmniProjectsApi: '/x/_hucode/projects',
 			hucodeServerPathCaseSensitive: true,
+			webviewEndpoint:
+				'/x/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
 		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/', {
 			hucodeHostedOmniWorkbench: true,
@@ -85,6 +87,8 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeOmniHostedWorkbenchRoute: '/omni/workbench',
 			hucodeOmniProjectsApi: '/_hucode/projects',
 			hucodeServerPathCaseSensitive: false,
+			webviewEndpoint:
+				'/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
 	});
 

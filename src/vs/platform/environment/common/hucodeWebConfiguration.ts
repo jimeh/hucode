@@ -5,6 +5,10 @@
 
 /**
  * Hucode-specific configuration injected into server-web workbench pages.
+ *
+ * `webviewEndpoint` is the upstream workbench option of the same name: it
+ * points webviews at the server's own static route so self-hosted deployments
+ * never load webview bootstrap assets from the upstream public CDN.
  */
 export interface IHucodeWebWorkbenchConfiguration {
 	readonly hucodeOmniShell?: boolean;
@@ -13,6 +17,7 @@ export interface IHucodeWebWorkbenchConfiguration {
 	readonly hucodeOmniHostedWorkbenchRoute?: string;
 	readonly hucodeOmniProjectsApi?: string;
 	readonly hucodeServerPathCaseSensitive?: boolean;
+	readonly webviewEndpoint?: string;
 }
 
 /**

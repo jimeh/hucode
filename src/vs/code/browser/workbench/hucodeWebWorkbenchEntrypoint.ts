@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { mainWindow } from '../../../base/browser/window.js';
 import {
 	isHucodeHostedOmniWebConfiguration,
 	isHucodeOmniWebConfiguration,
@@ -19,9 +20,21 @@ type CreateWorkbench = typeof import(
  *
  * The server injects the Omni shell and hosted-workbench markers into the
  * workbench configuration per route, so regular workbench pages never load
- * the Hucode Omni modules.
+ * the Hucode Omni modules. Every entrypoint boots with Hucode-normalized
+ * workbench options.
  */
 export async function resolveHucodeWebWorkbenchCreate(
+	config: IWorkbenchConstructionOptions,
+	defaultCreate: CreateWorkbench
+): Promise<CreateWorkbench> {
+	const create = await resolveCreate(config, defaultCreate);
+	return (domElement, options) => create(
+		domElement,
+		toHucodeWebWorkbenchOptions(options, mainWindow.location.href)
+	);
+}
+
+async function resolveCreate(
 	config: IWorkbenchConstructionOptions,
 	defaultCreate: CreateWorkbench
 ): Promise<CreateWorkbench> {
@@ -34,4 +47,28 @@ export async function resolveHucodeWebWorkbenchCreate(
 	}
 
 	return defaultCreate;
+}
+
+/**
+ * Normalizes server-injected workbench options for a Hucode web page.
+ *
+ * The server sends `webviewEndpoint` as a server-relative path because it
+ * cannot reliably know its public scheme and host behind proxies, but the
+ * webview element derives its message-origin check from the endpoint URL, so
+ * a relative endpoint silently breaks the webview handshake. Resolve it
+ * against the page location before the workbench boots.
+ */
+export function toHucodeWebWorkbenchOptions(
+	options: IWorkbenchConstructionOptions,
+	locationHref: string
+): IWorkbenchConstructionOptions {
+	if (!options.webviewEndpoint || !options.webviewEndpoint.startsWith('/')) {
+		return options;
+	}
+
+	return {
+		...options,
+		webviewEndpoint:
+			new URL(options.webviewEndpoint, locationHref).toString(),
+	};
 }

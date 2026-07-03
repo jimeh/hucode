@@ -575,6 +575,15 @@ VS Code code that Hucode customizes.
 
 ## Other Hucode Gotchas
 
+- Hucode serve-web self-hosts webview bootstrap assets: the server injects a
+  same-origin `webviewEndpoint`, the client entrypoint absolutizes it, and
+  `src/vs/workbench/contrib/webview/browser/pre/index.html` carries a Hucode
+  patch accepting a same-origin parent. That page pins its inline module
+  script with a CSP sha256 hash; any edit to the script must recompute the
+  hash in the CSP meta or the module is silently blocked and all webviews
+  break. `src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts` guards both
+  the hash and the patch across upstream upgrades.
+
 - Keep high-volume `ILocalPtyService` stream events lazy when exposing the
   main-process `localPty` channel through `ProxyChannel.fromService`. Desktop
   workbenches consume terminal data through `PtyHostWindow`, and eager buffering

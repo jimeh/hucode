@@ -121,7 +121,19 @@ export function getHucodeWebWorkbenchConfiguration(
 			getHucodeWebOmniHostedWorkbenchBase(basePath),
 		hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
 		hucodeServerPathCaseSensitive: env.serverPathCaseSensitive,
+		webviewEndpoint: getHucodeWebviewEndpoint(basePath),
 	};
+}
+
+/**
+ * Builds the same-origin webview bootstrap endpoint served from /static.
+ */
+export function getHucodeWebviewEndpoint(basePath: string): string {
+	return toHucodeWebRouteLocation(
+		basePath,
+		'/static/out/vs/workbench/contrib/webview/browser/pre',
+		{}
+	);
 }
 
 /**
