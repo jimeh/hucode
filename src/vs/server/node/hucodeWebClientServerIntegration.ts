@@ -142,8 +142,14 @@ export function getHucodeWebviewEndpoint(basePath: string): string {
  * The full `defaultChatAgent` is forwarded because Copilot chat runs as a
  * remote built-in in Hucode serve-web and sign-in needs the real provider and
  * entitlement endpoints; the browser's out-of-sources fallback product only
- * carries a stub. Built-in auto-updates for it stay disabled since OpenVSX
- * does not host the extension; updates ship with Hucode releases.
+ * carries a stub.
+ *
+ * `builtInExtensionsEnabledWithAutoUpdates: []` opts every built-in extension
+ * out of the auto-update allow-list (the product default may enable some);
+ * Hucode ships built-in updates with releases instead. Note this does not stop
+ * the workbench's periodic gallery update check, which still queries OpenVSX
+ * for installed built-ins such as Copilot chat and logs a benign 404 for
+ * extensions OpenVSX does not host.
  */
 export function getHucodeWebProductConfiguration(
 	productService: Pick<
