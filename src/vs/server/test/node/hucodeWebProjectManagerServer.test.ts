@@ -304,8 +304,13 @@ suite('HucodeWebProjectManagerServer', () => {
 			}
 		);
 
-		assert.strictEqual(sameOrigin.statusCode, 201);
-		assert.strictEqual(forwarded.statusCode, 200);
+		assert.deepStrictEqual({
+			sameOrigin: sameOrigin.statusCode,
+			forwarded: forwarded.statusCode,
+		}, {
+			sameOrigin: 201,
+			forwarded: 200,
+		});
 	});
 
 	test('treats a default port on the forwarded host as same-origin', async () => {

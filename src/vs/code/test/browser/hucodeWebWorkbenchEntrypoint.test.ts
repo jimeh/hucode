@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Disposable, IDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
+import { IHucodeWebWorkbenchConfiguration } from
+	'../../../platform/environment/common/hucodeWebConfiguration.js';
 import type { IWorkbenchConstructionOptions } from
 	'../../../workbench/browser/web.api.js';
 import {
@@ -14,28 +16,31 @@ import {
 	toHucodeWebWorkbenchOptions,
 } from '../../browser/workbench/hucodeWebWorkbenchEntrypoint.js';
 
+type HucodeWebConstructionOptions =
+	IWorkbenchConstructionOptions & IHucodeWebWorkbenchConfiguration;
+
 suite('HucodeWebWorkbenchEntrypoint', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('boots the default workbench without Hucode markers', async () => {
 		const createdWith: IWorkbenchConstructionOptions[] = [];
 		const defaultCreate = (
-			_domElement: unknown,
+			_domElement: HTMLElement,
 			options: IWorkbenchConstructionOptions
-		) => {
+		): IDisposable => {
 			createdWith.push(options);
 			return Disposable.None;
 		};
 
-		const configs: IWorkbenchConstructionOptions[] = [
+		const configs: HucodeWebConstructionOptions[] = [
 			{},
-			{ hucodeOmniShell: false } as IWorkbenchConstructionOptions,
-			{ hucodeHostedOmniWorkbench: false } as IWorkbenchConstructionOptions,
+			{ hucodeOmniShell: false },
+			{ hucodeHostedOmniWorkbench: false },
 		];
 		for (const config of configs) {
 			const create = await resolveHucodeWebWorkbenchCreate(
 				config,
-				defaultCreate as never
+				defaultCreate
 			);
 			create(document.createElement('div'), config);
 		}
