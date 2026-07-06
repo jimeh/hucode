@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { raceTimeout } from '../../base/common/async.js';
 import { Event } from '../../base/common/event.js';
-import { IDisposable } from '../../base/common/lifecycle.js';
 import { IOmniWorkspaceRestoreEntry } from
 	'../../platform/window/common/window.js';
 import {
@@ -255,45 +255,31 @@ export function waitForHostedWorkspaceReady(
 	timeoutMs: number,
 	isUnavailable: (entry: IHostedWorkspaceStateEntry) => boolean = () => false
 ): Promise<boolean> {
+	const isReady = () =>
+		isHostedWorkspaceAvailable(entry) && !isUnavailable(entry);
 	if (!isHostedWorkspacePendingReady(entry)) {
-		return Promise.resolve(
-			isHostedWorkspaceAvailable(entry) && !isUnavailable(entry)
-		);
+		return Promise.resolve(isReady());
 	}
 
-	return new Promise<boolean>(resolve => {
-		let complete = false;
-		const cleanup: {
-			listener?: IDisposable;
-			handle?: ReturnType<typeof setTimeout>;
-		} = {};
-		const finish = (ready: boolean): void => {
-			if (complete) {
-				return;
-			}
+	// Resolve on the first state change that leaves the pending-ready state, or
+	// false on timeout. Event.toPromise().cancel() disposes the listener
+	// without rejecting, so the timeout branch cleans up without leaking.
+	const settled = Event.toPromise(Event.filter(
+		onDidChangeState,
+		() => !isHostedWorkspacePendingReady(entry)
+	));
+	// Subscribing may synchronously drive the entry ready (some event sources
+	// emit during subscription); resolve immediately rather than waiting.
+	if (!isHostedWorkspacePendingReady(entry)) {
+		settled.cancel();
+		return Promise.resolve(isReady());
+	}
 
-			complete = true;
-			cleanup.listener?.dispose();
-			if (cleanup.handle !== undefined) {
-				clearTimeout(cleanup.handle);
-			}
-			resolve(ready);
-		};
-
-		cleanup.listener = onDidChangeState(() => {
-			if (isHostedWorkspacePendingReady(entry)) {
-				return;
-			}
-
-			finish(isHostedWorkspaceAvailable(entry) && !isUnavailable(entry));
-		});
-		if (complete) {
-			cleanup.listener.dispose();
-			return;
-		}
-
-		cleanup.handle = setTimeout(() => finish(false), timeoutMs);
-	});
+	return raceTimeout(
+		settled.then(isReady),
+		timeoutMs,
+		() => settled.cancel()
+	).then(ready => ready ?? false);
 }
 
 /**
@@ -310,10 +296,9 @@ export function getMostRecentHostedWorkspace<
 		.filter(entry =>
 			entry.instanceId !== excludeInstanceId &&
 			!isUnavailable(entry) &&
-			entry.state !== 'crashed' &&
-			entry.state !== 'unloaded'
+			isHostedWorkspaceAvailable(entry)
 		)
-		.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0];
+		.sort(compareByLastActiveDescending)[0];
 }
 
 /**
@@ -324,7 +309,7 @@ export function getRestoreActiveWorktreePath(
 	configuredActiveWorktreePath: string | undefined
 ): string | undefined {
 	const mostRecentWorktreePath = [...entries]
-		.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0]
+		.sort(compareByLastActiveDescending)[0]
 		?.worktreePath;
 	const hasConfiguredActiveWorktreePath =
 		!!configuredActiveWorktreePath &&
@@ -347,17 +332,10 @@ export function sortRestoreEntries(
 	entries: readonly IOmniWorkspaceRestoreEntry[],
 	activeWorktreePath: string | undefined
 ): IOmniWorkspaceRestoreEntry[] {
-	return [...entries].sort((a, b) => {
-		if (a.worktreePath === activeWorktreePath) {
-			return -1;
-		}
-
-		if (b.worktreePath === activeWorktreePath) {
-			return 1;
-		}
-
-		return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
-	});
+	return sortActiveFirst(
+		entries,
+		entry => entry.worktreePath === activeWorktreePath
+	);
 }
 
 /**
@@ -370,9 +348,7 @@ export function createHostedWorkspaceRestoreEntries<
 	activeInstanceId: string | undefined
 ): IOmniWorkspaceRestoreEntry[] {
 	return Array.from(entries)
-		.filter(entry =>
-			entry.state !== 'crashed' && entry.state !== 'unloaded'
-		)
+		.filter(isHostedWorkspaceAvailable)
 		.map(entry => {
 			const state: IOmniWorkspaceRestoreEntry['state'] =
 				entry.instanceId === activeInstanceId ? 'active' : 'loaded';
@@ -384,7 +360,7 @@ export function createHostedWorkspaceRestoreEntries<
 				state,
 			};
 		})
-		.sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
+		.sort(compareByLastActiveDescending);
 }
 
 /**
@@ -408,15 +384,39 @@ function sortHostedWorkspaceEntries(
 	entries: IHucodeHostedWorkbenchInstance[],
 	activeInstanceId: string | undefined
 ): IHucodeHostedWorkbenchInstance[] {
-	return entries.sort((a, b) => {
-		if (a.instanceId === activeInstanceId) {
+	return sortActiveFirst(
+		entries,
+		entry => entry.instanceId === activeInstanceId
+	);
+}
+
+/**
+ * Compares two entries so the most recently active sorts first.
+ */
+function compareByLastActiveDescending(
+	a: { readonly lastActiveAt?: number },
+	b: { readonly lastActiveAt?: number }
+): number {
+	return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+}
+
+/**
+ * Sorts a copy of `entries` with the active entry first, then most recently
+ * active. Callers vary only in how the active entry is identified.
+ */
+function sortActiveFirst<T extends { readonly lastActiveAt?: number }>(
+	entries: readonly T[],
+	isActive: (entry: T) => boolean
+): T[] {
+	return [...entries].sort((a, b) => {
+		if (isActive(a)) {
 			return -1;
 		}
 
-		if (b.instanceId === activeInstanceId) {
+		if (isActive(b)) {
 			return 1;
 		}
 
-		return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+		return compareByLastActiveDescending(a, b);
 	});
 }
