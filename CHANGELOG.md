@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.38 - 2026-07-06
+
+### Features
+
+- add serve-web Omni shell route (#77)
+
 ## 0.0.37 - 2026-06-25
 
 ### Bug Fixes
