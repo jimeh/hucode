@@ -188,21 +188,13 @@ export function applyStoredWorktreePins(
 		)
 	);
 	return worktrees.map(worktree => {
-		const unpinnedWorktree: WorktreeRecord = {
-			path: worktree.path,
-			label: worktree.label,
-			...(worktree.customLabel !== undefined
-				? { customLabel: worktree.customLabel }
-				: {}),
-			...(worktree.branch !== undefined
-				? { branch: worktree.branch }
-				: {}),
-			isMain: worktree.isMain,
-			isDetached: worktree.isDetached,
-			...(worktree.lastVisitedAt !== undefined
-				? { lastVisitedAt: worktree.lastVisitedAt }
-				: {}),
-		};
+		// Re-derive pinned from stored state, so drop any incoming pinned flag
+		// while preserving the custom label.
+		const core = copyWorktreeCoreFields(worktree);
+		const unpinnedWorktree: WorktreeRecord =
+			worktree.customLabel !== undefined
+				? { ...core, customLabel: worktree.customLabel }
+				: core;
 		if (!pinnedPaths.has(
 			getProjectManagerPathComparisonKey(worktree.path, isCaseSensitive)
 		)) {
@@ -256,6 +248,38 @@ export function setStoredWorktreeVisited(
 }
 
 /**
+ * Filters a stored per-worktree list down to entries whose worktree still
+ * exists, collapsing to undefined once empty. An already-empty list is left
+ * untouched. Shared by the pruneStored* helpers, which differ only in how an
+ * item's path is read and which worktrees count as existing.
+ */
+function pruneStoredWorktreeList<T>(
+	list: readonly T[] | undefined,
+	getPath: (item: T) => string,
+	worktrees: readonly WorktreeRecord[],
+	isCaseSensitive: boolean,
+	includeWorktree: (worktree: WorktreeRecord) => boolean = () => true
+): readonly T[] | undefined {
+	if (!list?.length) {
+		return list;
+	}
+
+	const existingPaths = new Set(
+		worktrees
+			.filter(includeWorktree)
+			.map(entry =>
+				getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
+			)
+	);
+	const pruned = list.filter(item =>
+		existingPaths.has(
+			getProjectManagerPathComparisonKey(getPath(item), isCaseSensitive)
+		)
+	);
+	return pruned.length ? pruned : undefined;
+}
+
+/**
  * Drops persisted worktree ordering for worktrees that no longer exist.
  */
 export function pruneStoredWorktreeOrder(
@@ -263,25 +287,13 @@ export function pruneStoredWorktreeOrder(
 	worktrees: readonly WorktreeRecord[],
 	isCaseSensitive: boolean
 ): void {
-	if (!project.worktreeOrder?.length) {
-		return;
-	}
-
-	const existingPaths = new Set(
-		worktrees
-			.filter(entry => !entry.isMain)
-			.map(entry =>
-				getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-			)
+	project.worktreeOrder = pruneStoredWorktreeList(
+		project.worktreeOrder,
+		path => path,
+		worktrees,
+		isCaseSensitive,
+		entry => !entry.isMain
 	);
-	const worktreeOrder = project.worktreeOrder.filter(path =>
-		existingPaths.has(
-			getProjectManagerPathComparisonKey(path, isCaseSensitive)
-		)
-	);
-	project.worktreeOrder = worktreeOrder.length
-		? worktreeOrder
-		: undefined;
 }
 
 /**
@@ -292,23 +304,12 @@ export function pruneStoredPinnedWorktreePaths(
 	worktrees: readonly WorktreeRecord[],
 	isCaseSensitive: boolean
 ): void {
-	if (!project.pinnedWorktreePaths?.length) {
-		return;
-	}
-
-	const existingPaths = new Set(
-		worktrees.map(entry =>
-			getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-		)
+	project.pinnedWorktreePaths = pruneStoredWorktreeList(
+		project.pinnedWorktreePaths,
+		path => path,
+		worktrees,
+		isCaseSensitive
 	);
-	const pinnedWorktreePaths = project.pinnedWorktreePaths.filter(path =>
-		existingPaths.has(
-			getProjectManagerPathComparisonKey(path, isCaseSensitive)
-		)
-	);
-	project.pinnedWorktreePaths = pinnedWorktreePaths.length
-		? pinnedWorktreePaths
-		: undefined;
 }
 
 /**
@@ -319,23 +320,12 @@ export function pruneStoredWorktreeLabels(
 	worktrees: readonly WorktreeRecord[],
 	isCaseSensitive: boolean
 ): void {
-	if (!project.worktreeLabels?.length) {
-		return;
-	}
-
-	const existingPaths = new Set(
-		worktrees.map(entry =>
-			getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-		)
+	project.worktreeLabels = pruneStoredWorktreeList(
+		project.worktreeLabels,
+		entry => entry.path,
+		worktrees,
+		isCaseSensitive
 	);
-	const worktreeLabels = project.worktreeLabels.filter(entry =>
-		existingPaths.has(
-			getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-		)
-	);
-	project.worktreeLabels = worktreeLabels.length
-		? worktreeLabels
-		: undefined;
 }
 
 /**
@@ -346,26 +336,19 @@ export function pruneStoredWorktreeVisits(
 	worktrees: readonly WorktreeRecord[],
 	isCaseSensitive: boolean
 ): void {
-	if (!project.worktreeVisits?.length) {
-		return;
-	}
-
-	const existingPaths = new Set(
-		worktrees.map(entry =>
-			getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-		)
+	project.worktreeVisits = pruneStoredWorktreeList(
+		project.worktreeVisits,
+		entry => entry.path,
+		worktrees,
+		isCaseSensitive
 	);
-	const worktreeVisits = project.worktreeVisits.filter(entry =>
-		existingPaths.has(
-			getProjectManagerPathComparisonKey(entry.path, isCaseSensitive)
-		)
-	);
-	project.worktreeVisits = worktreeVisits.length
-		? worktreeVisits
-		: undefined;
 }
 
-function toBaseWorktreeRecord(worktree: WorktreeRecord): WorktreeRecord {
+/**
+ * Copies the worktree fields common to every rebuilt record, excluding the
+ * customLabel and pinned flags that individual callers re-derive.
+ */
+function copyWorktreeCoreFields(worktree: WorktreeRecord): WorktreeRecord {
 	return {
 		path: worktree.path,
 		label: worktree.label,
@@ -374,11 +357,19 @@ function toBaseWorktreeRecord(worktree: WorktreeRecord): WorktreeRecord {
 			: {}),
 		isMain: worktree.isMain,
 		isDetached: worktree.isDetached,
-		...(worktree.pinned !== undefined
-			? { pinned: worktree.pinned }
-			: {}),
 		...(worktree.lastVisitedAt !== undefined
 			? { lastVisitedAt: worktree.lastVisitedAt }
 			: {}),
 	};
+}
+
+/**
+ * Rebuilds a worktree record without its custom label, so callers re-deriving
+ * labels start from a clean base while keeping any pinned flag.
+ */
+function toBaseWorktreeRecord(worktree: WorktreeRecord): WorktreeRecord {
+	const core = copyWorktreeCoreFields(worktree);
+	return worktree.pinned !== undefined
+		? { ...core, pinned: worktree.pinned }
+		: core;
 }
