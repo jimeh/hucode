@@ -383,9 +383,9 @@ export class ProjectManagerMainService extends Disposable
 		if (id) {
 			await this.refreshProject(this.requireProject(id));
 		} else {
-			for (const project of this.storedProjects) {
-				await this.refreshProject(project);
-			}
+			await Promise.all(
+				this.storedProjects.map(project => this.refreshProject(project))
+			);
 		}
 
 		this.saveState();
@@ -558,6 +558,16 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord
 	): Promise<readonly WorktreeRecord[]> {
 		try {
+			// Resolve the git common dir (needed only for metadata watchers)
+			// concurrently with the worktree list; both are independent git
+			// subprocesses that read only the project root. The catch keeps a
+			// getGitCommonDir rejection from surfacing as an unhandled rejection
+			// if listWorktrees throws first; updateProjectWatchers re-awaits it.
+			const commonGitDirPromise = this.metadataWatcher
+				? this.gitWorktreeService.getGitCommonDir(project.rootPath)
+				: undefined;
+			commonGitDirPromise?.catch(() => undefined);
+
 			const labeledWorktrees = this.applyWorktreeLabels(
 				project,
 				await this.gitWorktreeService.listWorktrees(
@@ -587,7 +597,7 @@ export class ProjectManagerMainService extends Disposable
 				project.lastActiveWorktreePath = undefined;
 			}
 
-			await this.updateProjectWatchers(project);
+			await this.updateProjectWatchers(project, commonGitDirPromise);
 
 			return worktrees;
 		} catch (error) {
@@ -602,7 +612,8 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	private async updateProjectWatchers(
-		project: StoredProjectRecord
+		project: StoredProjectRecord,
+		commonGitDirPromise?: Promise<string>
 	): Promise<void> {
 		if (!this.metadataWatcher) {
 			return;
@@ -610,8 +621,9 @@ export class ProjectManagerMainService extends Disposable
 
 		const watchers = new DisposableStore();
 		try {
-			const commonGitDir = await this.gitWorktreeService.getGitCommonDir(
-				project.rootPath
+			const commonGitDir = await (
+				commonGitDirPromise ??
+				this.gitWorktreeService.getGitCommonDir(project.rootPath)
 			);
 			this.watchProjectMetadataPath(
 				watchers,
@@ -865,19 +877,17 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
-		let didChange = false;
-
-		for (const project of this.storedProjects) {
-			if (this.projectWorktrees.has(project.id)) {
-				continue;
-			}
-
-			await this.refreshProject(project);
-			didChange = true;
+		const missing = this.storedProjects.filter(
+			project => !this.projectWorktrees.has(project.id)
+		);
+		if (missing.length === 0) {
+			return;
 		}
 
-		if (didChange) {
-			this.saveState();
-		}
+		// Projects are independent (per-project-keyed state), so refresh them
+		// concurrently: the first getProjects() after start otherwise pays each
+		// project's git subprocesses in series.
+		await Promise.all(missing.map(project => this.refreshProject(project)));
+		this.saveState();
 	}
 }

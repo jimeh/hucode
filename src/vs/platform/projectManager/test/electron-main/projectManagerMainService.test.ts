@@ -79,6 +79,7 @@ class TestStateService implements IStateService {
 
 class TestGitWorktreeService {
 	readonly commonDirs = new Map<string, string>();
+	readonly commonDirErrors = new Set<string>();
 	readonly adminDirs = new Map<string, readonly string[]>();
 	readonly resolvedRoots = new Map<string, string>();
 	readonly worktrees = new Map<string, readonly WorktreeRecord[]>();
@@ -102,6 +103,9 @@ class TestGitWorktreeService {
 	}
 
 	async getGitCommonDir(projectRoot: string): Promise<string> {
+		if (this.commonDirErrors.has(projectRoot)) {
+			throw new Error(`No git common dir for ${projectRoot}.`);
+		}
 		return this.commonDirs.get(projectRoot) ?? `${projectRoot}/.git`;
 	}
 
@@ -893,6 +897,38 @@ suite('ProjectManagerMainService', () => {
 			lastActiveWorktreePath: '/repo',
 			worktrees: [createMainWorktree('/repo')],
 		}]);
+	});
+
+	test('keeps worktrees when the git common dir cannot be resolved', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+		// getGitCommonDir feeds only the metadata watchers; its failure must
+		// not blank the worktree list that listWorktrees already resolved.
+		gitWorktreeService.commonDirErrors.add('/repo');
+
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ metadataWatcher }
+		);
+		await service.addProject(URI.file('/repo'));
+
+		assert.deepStrictEqual({
+			worktrees: (await service.getProjects())[0].worktrees,
+			watchedPaths: metadataWatcher.watchedPaths,
+		}, {
+			worktrees: [
+				createMainWorktree('/repo'),
+				createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			],
+			watchedPaths: [],
+		});
 	});
 
 	test('auto-refreshes when watched git metadata changes', async () => {
