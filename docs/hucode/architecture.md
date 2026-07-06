@@ -10,6 +10,7 @@ normal VS Code desktop workbenches.
 The core user experience is:
 
 - one native Omni window
+- a serve-web Omni shell at `/omni`, optionally also at `/`
 - a left-side Projects surface
 - saved projects with nested git worktrees
 - fast switching between resident workspaces
@@ -35,11 +36,18 @@ onto `src/vs/sessions/browser/*`.
 
 ### Hosted Workspace Renderers
 
-Each loaded workspace runs in its own Electron `WebContentsView`. A hosted
-workspace loads the normal workbench HTML and boots the standard desktop
+Each loaded desktop workspace runs in its own Electron `WebContentsView`. A
+hosted workspace loads the normal workbench HTML and boots the standard desktop
 workbench bundle, not a special Omni-only bundle. Hosted-only services or
 contributions must be imported into the standard desktop path when they need to
 run inside embedded workspaces.
+
+Serve-web hosts workspaces in same-origin browser iframes instead of Electron
+views. The iframe URL targets the dedicated `/omni/workbench` route, which
+boots a normal web workbench plus the hosted Omni bridge modules; the regular
+`/workbench` route never loads them. Browser overlays use normal DOM stacking
+above the iframe surface; the desktop screenshot-overlay fallback is not used
+on web.
 
 The shell treats each workspace as a hosted unit with:
 
@@ -50,6 +58,39 @@ The shell treats each workspace as a hosted unit with:
 - lifecycle state
 - unload and shutdown handshake state
 
+Desktop and web share `HostedWorkspaceStateModel` for path indexing, active
+selection, ready transitions, sidebar state, and public state projection. The
+desktop `ResidentHostedWorkspacesController` injects Electron view behavior;
+the web `WebHucodeShellController` injects iframe, timer, and browser-message
+behavior. Keep controller orchestration changes in sync across both adapters
+unless the difference is explicitly platform-specific.
+
+The shell service contract is shared as `IHucodeShellService`. Desktop exposes
+it through IPC to the main-process controller. Web implements the same contract
+in the shell renderer and serves it to hosted iframes over per-instance
+`MessagePort` channels (`vs/base/parts/ipc` + `ProxyChannel`), so both call
+directions are statically typed against the shared interfaces. Same-origin
+window `postMessage` is only used for the bootstrap handshake: `Ready` and
+`Focus` from the iframe, and the `Port` transfer from the shell.
+
+### Serve-Web Routing
+
+All Hucode web routes and the Projects API are gated on the `--omni` flag
+(`--hucode-web-omni-root` on the inner server). Without it, serve-web keeps
+upstream behavior: the regular workbench at `/` and nothing else. With it:
+
+- `/` loads the Omni Projects shell
+- `/omni` also loads the Omni Projects shell
+- `/workbench` loads the regular workbench
+- `/omni/workbench` loads the hosted workbench used by shell iframes
+- trailing-slash aliases of those routes redirect to the canonical path while
+  preserving query parameters
+
+Hucode route selection lives in `src/vs/server/node/hucodeWebOmniRoutes.ts` and
+`src/vs/server/node/hucodeWebClientServerIntegration.ts`. Keep
+`webClientServer.ts` as a thin integration point that delegates routing and
+Hucode workbench configuration into those companions.
+
 ### Main-Process Services
 
 The project manager and hosted workspace controller are main-process services.
@@ -58,9 +99,9 @@ renderers.
 
 Key services:
 
-- `src/vs/platform/projectManager/electron-main/projectManagerMainService.ts`
+- `src/vs/platform/projectManager/node/projectManagerMainService.ts`
   owns project records and worktree orchestration.
-- `src/vs/platform/projectManager/electron-main/gitWorktreeService.ts` wraps
+- `src/vs/platform/projectManager/node/gitWorktreeService.ts` wraps
   git worktree operations.
 - `src/vs/hucode/electron-main/shellMainService.ts` owns hosted workspace
   creation, restore, focus, shutdown, and command forwarding.
@@ -70,6 +111,14 @@ Key services:
 The `projectManager` and `hucodeShell` channels are registered from the main
 process so the Omni shell and hosted desktop workbenches can share these
 services.
+
+Serve-web reuses the project manager service from the shared `node` layer
+through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
+under the server user-data path and is only active when serve-web runs with
+`--omni`. Browser requests must be same-origin (cross-origin `Origin` headers
+are rejected and POST bodies must be JSON) so the mutating API stays safe even
+with `--without-connection-token`. User settings/state remain the existing
+browser-side serve-web concern.
 
 ## Core Subsystems
 
@@ -186,6 +235,7 @@ Use the narrowest validation that covers the change:
 - product overlay changes: `npm run hucode:validate`
 - Hucode TypeScript changes: `npm run hucode:compile`
 - incremental UI work: `npm run hucode:watch` plus `npm run hucode:run`
+- serve-web UI work: `npm run hucode:watch` plus `npm run hucode:web`
 - project/worktree model changes: run the related `src/vs/hucode/test` or
   `src/vs/platform/projectManager/test` suites when practical
 

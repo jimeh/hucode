@@ -7,11 +7,11 @@ import { IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { localize2 } from '../../nls.js';
 import {
 	Action2,
-	registerAction2,
 	type IAction2Options,
 } from '../../platform/actions/common/actions.js';
 import type { ILocalizedString } from
 	'../../platform/action/common/action.js';
+import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
 import { createDecorator, ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { IsOmniWindowContext } from '../../workbench/common/contextkeys.js';
@@ -121,7 +121,7 @@ abstract class BaseOmniWindowAction extends Action2 {
 	}
 }
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(FOCUS_PROJECT_PANE_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			FOCUS_PROJECT_PANE_COMMAND_ID,
@@ -137,7 +137,7 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 });
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
@@ -153,7 +153,7 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 });
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
@@ -165,11 +165,13 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 
 	override run(accessor: ServicesAccessor): Promise<void> {
-		return accessor.get(IHucodeOmniWindowUIService).openSelectedInStandalone();
+		return accessor.get(
+			IHucodeOmniWindowUIService
+		).openSelectedInStandalone();
 	}
 });
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(FOCUS_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			FOCUS_WORKSPACE_COMMAND_ID,
@@ -185,7 +187,7 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 });
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(RELOAD_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			RELOAD_WORKSPACE_COMMAND_ID,
@@ -209,7 +211,7 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 });
 
-registerAction2(class extends BaseOmniWindowAction {
+registerOmniShellAction2(CLOSE_WORKSPACE_COMMAND_ID, class extends BaseOmniWindowAction {
 	constructor() {
 		super(
 			CLOSE_WORKSPACE_COMMAND_ID,
@@ -225,7 +227,7 @@ registerAction2(class extends BaseOmniWindowAction {
 	}
 });
 
-registerAction2(class extends Action2 {
+registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
 	constructor() {
 		super({
 			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,

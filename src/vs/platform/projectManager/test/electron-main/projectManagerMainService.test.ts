@@ -25,12 +25,12 @@ import {
 import {
 	GitCommandError,
 	GitWorktreeService
-} from '../../electron-main/gitWorktreeService.js';
+} from '../../node/gitWorktreeService.js';
 import {
 	ProjectManagerMainService,
 	type ProjectManagerMainServiceOptions,
 } from
-	'../../electron-main/projectManagerMainService.js';
+	'../../node/projectManagerMainService.js';
 
 class TestStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;
@@ -79,6 +79,7 @@ class TestStateService implements IStateService {
 
 class TestGitWorktreeService {
 	readonly commonDirs = new Map<string, string>();
+	readonly commonDirErrors = new Set<string>();
 	readonly adminDirs = new Map<string, readonly string[]>();
 	readonly resolvedRoots = new Map<string, string>();
 	readonly worktrees = new Map<string, readonly WorktreeRecord[]>();
@@ -102,6 +103,9 @@ class TestGitWorktreeService {
 	}
 
 	async getGitCommonDir(projectRoot: string): Promise<string> {
+		if (this.commonDirErrors.has(projectRoot)) {
+			throw new Error(`No git common dir for ${projectRoot}.`);
+		}
 		return this.commonDirs.get(projectRoot) ?? `${projectRoot}/.git`;
 	}
 
@@ -515,6 +519,52 @@ suite('GitWorktreeService', () => {
 		]);
 	});
 
+	test('createWorktree resolves relative custom paths before adding', async () => {
+		const calls: { args: readonly string[]; cwd: string }[] = [];
+		const checkedPaths: string[] = [];
+		const createdDirs: string[] = [];
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (args, cwd) => {
+				calls.push({ args, cwd });
+				return { stdout: '', stderr: '' };
+			},
+			async path => {
+				checkedPaths.push(path);
+				return false;
+			},
+			async path => {
+				createdDirs.push(path);
+			},
+		);
+
+		const worktreePath = await service.createWorktree(
+			'/workspace/repo',
+			{ path: 'custom/feature', startPoint: 'origin/main' },
+			[]
+		);
+
+		assert.deepStrictEqual({
+			worktreePath,
+			checkedPaths,
+			createdDirs,
+			calls,
+		}, {
+			worktreePath: '/workspace/custom/feature',
+			checkedPaths: ['/workspace/custom/feature'],
+			createdDirs: ['/workspace/custom'],
+			calls: [{
+				args: [
+					'worktree',
+					'add',
+					'/workspace/custom/feature',
+					'origin/main',
+				],
+				cwd: '/workspace/repo',
+			}],
+		});
+	});
+
 	test('isValidBranchName delegates to git check-ref-format', async () => {
 		const checkedNames: string[] = [];
 		const service = new GitWorktreeService(
@@ -847,6 +897,38 @@ suite('ProjectManagerMainService', () => {
 			lastActiveWorktreePath: '/repo',
 			worktrees: [createMainWorktree('/repo')],
 		}]);
+	});
+
+	test('keeps worktrees when the git common dir cannot be resolved', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+		]);
+		// getGitCommonDir feeds only the metadata watchers; its failure must
+		// not blank the worktree list that listWorktrees already resolved.
+		gitWorktreeService.commonDirErrors.add('/repo');
+
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ metadataWatcher }
+		);
+		await service.addProject(URI.file('/repo'));
+
+		assert.deepStrictEqual({
+			worktrees: (await service.getProjects())[0].worktrees,
+			watchedPaths: metadataWatcher.watchedPaths,
+		}, {
+			worktrees: [
+				createMainWorktree('/repo'),
+				createLinkedWorktree('/repo.worktrees/alpha', 'alpha'),
+			],
+			watchedPaths: [],
+		});
 	});
 
 	test('auto-refreshes when watched git metadata changes', async () => {
@@ -1235,6 +1317,12 @@ suite('ProjectManagerMainService', () => {
 		const three = await service.addProject(URI.file('/three'));
 
 		await service.setPinned(one.id, true);
+		await service.moveProject(two.id, two.id);
+		assert.deepStrictEqual(
+			(await service.getProjects()).map(project => project.rootUri.fsPath),
+			['two', 'three', 'one'].map(path => `/${path}`)
+		);
+
 		await service.moveProject(three.id, two.id);
 
 		assert.deepStrictEqual(
@@ -1320,6 +1408,21 @@ suite('ProjectManagerMainService', () => {
 
 		await service.moveWorktree(
 			project.id,
+			'/repo.worktrees/alpha',
+			'/repo.worktrees/alpha'
+		);
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(worktree => worktree.path),
+			[
+				'/repo',
+				'/repo.worktrees/alpha',
+				'/repo.worktrees/bravo',
+				'/repo.worktrees/charlie',
+			]
+		);
+
+		await service.moveWorktree(
+			project.id,
 			'/repo.worktrees/charlie',
 			'/repo.worktrees/bravo'
 		);
@@ -1341,6 +1444,12 @@ suite('ProjectManagerMainService', () => {
 
 		await assert.rejects(
 			service.moveWorktree(project.id, '/repo', '/repo.worktrees/bravo'),
+			/The main worktree cannot be reordered\./
+		);
+		// Reordering the main worktree onto itself must reject too, rather than
+		// being short-circuited to success by the equal-path early return.
+		await assert.rejects(
+			service.moveWorktree(project.id, '/repo', '/repo'),
 			/The main worktree cannot be reordered\./
 		);
 	});

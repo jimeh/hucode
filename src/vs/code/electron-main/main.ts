@@ -78,7 +78,7 @@ import { addUNCHostToAllowlist, getUNCHost } from '../../base/node/unc.js';
 import { ThemeMainService } from '../../platform/theme/electron-main/themeMainServiceImpl.js';
 import { LINUX_SYSTEM_POLICY_FILE_PATH } from '../../base/common/policy.js';
 import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
-import { ProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManagerMainService.js';
+import { ProjectManagerMainService } from '../../platform/projectManager/node/projectManagerMainService.js';
 
 /**
  * The main VS Code entry point.
