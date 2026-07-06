@@ -5,6 +5,7 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
+import { Queue } from '../../base/common/async.js';
 import {
 	Disposable,
 	DisposableStore,
@@ -64,7 +65,7 @@ class HucodeProjectFileStateService implements IStateService {
 	private readonly storagePath: string;
 	private state: StoredProjectManagerState | undefined;
 	private loaded = false;
-	private lastWrite: Promise<void> = Promise.resolve();
+	private readonly writeQueue = new Queue<void>();
 
 	constructor(
 		private readonly serverDataPath: string,
@@ -117,7 +118,7 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 
 	async close(): Promise<void> {
-		await this.lastWrite;
+		await this.writeQueue.whenIdle();
 	}
 
 	private ensureLoaded(): void {
@@ -166,26 +167,32 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 
 	private writeState(): void {
-		// IStateService writes are fire-and-forget; chain them so the HTTP
+		// IStateService writes are fire-and-forget; queue them so the HTTP
 		// request path never blocks on disk and writes stay ordered.
 		const state = this.state;
-		this.lastWrite = this.lastWrite
-			.then(async () => {
-				await fs.promises.mkdir(
-					join(this.serverDataPath, 'hucode'),
-					{ recursive: true },
-				);
-				if (!state) {
-					await fs.promises.rm(this.storagePath, { force: true });
-					return;
-				}
+		void this.writeQueue.queue(() => this.persistState(state));
+	}
 
-				await fs.promises.writeFile(
-					this.storagePath,
-					`${JSON.stringify(state, null, '\t')}\n`,
-				);
-			})
-			.catch(error => this.logService.error(error));
+	private async persistState(
+		state: StoredProjectManagerState | undefined
+	): Promise<void> {
+		try {
+			await fs.promises.mkdir(
+				join(this.serverDataPath, 'hucode'),
+				{ recursive: true },
+			);
+			if (!state) {
+				await fs.promises.rm(this.storagePath, { force: true });
+				return;
+			}
+
+			await fs.promises.writeFile(
+				this.storagePath,
+				`${JSON.stringify(state, null, '\t')}\n`,
+			);
+		} catch (error) {
+			this.logService.error(error);
+		}
 	}
 }
 
