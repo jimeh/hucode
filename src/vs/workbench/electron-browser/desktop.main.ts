@@ -157,11 +157,17 @@ export class DesktopMain extends Disposable {
 	}
 
 	private getExtraClasses(): string[] {
-		if (isMacintosh && isTahoeOrNewer(this.configuration.os.release)) {
-			return ['macos-tahoe'];
+		const extraClasses: string[] = [];
+
+		if (this.configuration.isOmniWindow) {
+			extraClasses.push('hucode-omni-window');
 		}
 
-		return [];
+		if (isMacintosh && isTahoeOrNewer(this.configuration.os.release)) {
+			extraClasses.push('macos-tahoe');
+		}
+
+		return extraClasses;
 	}
 
 	private registerListeners(workbench: Workbench, storageService: NativeWorkbenchStorageService): void {
@@ -234,7 +240,22 @@ export class DesktopMain extends Disposable {
 		serviceCollection.set(ISharedProcessService, sharedProcessService);
 
 		// Utility Process Worker
-		const utilityProcessWorkerWorkbenchService = new UtilityProcessWorkerWorkbenchService(this.configuration.windowId, logService, mainProcessService);
+		const utilityProcessWorkerWorkbenchService =
+			new UtilityProcessWorkerWorkbenchService(
+				this.configuration.isHostedOmniWorkspace &&
+					typeof this.configuration.hostedWebContentsId === 'number'
+					? {
+						kind: 'webContents',
+						webContentsId: this.configuration.hostedWebContentsId,
+						ownerWindowId: this.configuration.windowId
+					}
+					: {
+						kind: 'window',
+						windowId: this.configuration.windowId
+					},
+				logService,
+				mainProcessService
+			);
 		serviceCollection.set(IUtilityProcessWorkerWorkbenchService, utilityProcessWorkerWorkbenchService);
 
 		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

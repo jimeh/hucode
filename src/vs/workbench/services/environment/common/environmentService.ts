@@ -7,6 +7,9 @@ import { refineServiceDecorator } from '../../../../platform/instantiation/commo
 import { IPath } from '../../../../platform/window/common/window.js';
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
 import { URI } from '../../../../base/common/uri.js';
+import type {
+	HucodeExtensionEnablementPolicy,
+} from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 export const IWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IWorkbenchEnvironmentService>(IEnvironmentService);
 
@@ -29,6 +32,7 @@ export interface IWorkbenchEnvironmentService extends IEnvironmentService {
 
 	// --- Extensions
 	readonly extensionEnabledProposedApi?: string[];
+	readonly hucodeExtensionEnablementPolicy?: HucodeExtensionEnablementPolicy;
 
 	// --- Config
 	readonly remoteAuthority?: string;
@@ -36,6 +40,10 @@ export interface IWorkbenchEnvironmentService extends IEnvironmentService {
 	readonly skipWelcome: boolean;
 	readonly disableWorkspaceTrust: boolean;
 	readonly isSessionsWindow: boolean;
+	readonly isOmniWindow: boolean;
+	readonly isHostedOmniWorkspace?: boolean;
+	readonly hostedWebContentsId?: number;
+	readonly hostedInstanceId?: string;
 	readonly webviewExternalEndpoint: string;
 
 	// --- Development
