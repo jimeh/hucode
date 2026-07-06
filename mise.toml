@@ -1,0 +1,6 @@
+[settings]
+idiomatic_version_file_enable_tools = ["node"]
+
+[tools]
+npm = "11.1"
+pinact = "latest"
