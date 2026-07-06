@@ -35,6 +35,9 @@ import { IProductService } from '../../../../platform/product/common/productServ
 import { isWeb } from '../../../../base/common/platform.js';
 import { ChatEntitlementService, IChatEntitlementService } from '../../chat/common/chatEntitlementService.js';
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
+import {
+	hucodeIsExtensionDisabledByPolicy,
+} from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 const SOURCE = 'IWorkbenchExtensionEnablementService';
 
@@ -525,6 +528,15 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 		// Check if this is the better merge extension which was migrated to a built-in extension
 		if (areSameExtensions({ id: BetterMergeId.value }, extension.identifier)) {
 			return true;
+		}
+
+		const hucodePolicyDisabled = hucodeIsExtensionDisabledByPolicy(
+			extension,
+			this.environmentService.hucodeExtensionEnablementPolicy,
+			this.environmentService.remoteAuthority
+		);
+		if (hucodePolicyDisabled !== undefined) {
+			return hucodePolicyDisabled;
 		}
 
 		return false;
