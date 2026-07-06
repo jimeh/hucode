@@ -1,0 +1,355 @@
+name: Hucode CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "series-*"
+      - "release/*"
+  push:
+    branches:
+      - main
+      - "series-*"
+      - "release/*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+  VSCODE_QUALITY: stable
+
+jobs:
+  mixin-build-scripts:
+    name: Hucode Mixin & Build Scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Hucode mixin
+        run: npm run hucode:prepare
+
+      - name: Validate Hucode mixin
+        run: npm run hucode:validate
+
+      - name: Type check /build/ scripts
+        run: npm run typecheck
+        working-directory: build
+
+      - name: Test build scripts
+        run: npm run test-build-scripts
+
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run hygiene
+        run: npm run hygiene
+
+  copilot-vsix:
+    name: Copilot VSIX
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Build Copilot VSIX
+        uses: ./.github/actions/build-copilot-vsix
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          save-cache: ${{ github.event_name != 'pull_request' }}
+
+      - name: Verify Copilot VSIX
+        run: test -f extensions/copilot/copilot-chat.vsix
+
+  core-compile-checks:
+    name: Core Compile Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check core compile
+        run: node build/hucode/core-ci.ts check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check cyclic dependencies
+        run: node build/lib/checkCyclicDependencies.ts out-build
+
+  core-compile-bundle:
+    name: Core Compile (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: desktop
+            target: desktop
+          - name: server
+            target: server
+          - name: server-web
+            target: server-web
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare built-in extensions cache key
+        run: node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts >
+          .build/builtindepshash
+
+      - name: Restore built-in extensions cache
+        id: cache-builtin-extensions
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-${{ hashFiles('.build/builtindepshash') }}"
+
+      - name: Download built-in extensions
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare core bundle inputs
+        run: node build/hucode/core-ci.ts prepare-bundle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bundle core
+        run: node build/hucode/core-ci.ts bundle ${{ matrix.target }}
+
+  eslint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run ESLint
+        run: npm run eslint
+
+  architecture-checks:
+    name: Architecture Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check layers
+        run: npm run valid-layers-check
+
+      - name: Check class fields
+        run: npm run define-class-fields-check
+
+      - name: Check VS Code API typings
+        run: npm run vscode-dts-compile-check
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
+
+      - name: Prepare node_modules cache key
+        run: |
+          mkdir -p .build
+          NODE_ARCH=$(node -p process.arch)
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+            hucode-linux x64 "$NODE_ARCH" \
+            > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-hucode-linux-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.cache-node-modules.outputs.cache-hit == 'true'
+        run: tar -xzf .build/node_modules_cache/cache.tgz
+
+      - name: Install test tools
+        run: |
+          USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
+          if sysctl -n "$USERNS_KEY" >/dev/null 2>&1; then
+            sudo sysctl -w "$USERNS_KEY=0"
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            bubblewrap \
+            build-essential \
+            libgbm1 \
+            libgtk-3-0 \
+            libkrb5-dev \
+            libxkbfile-dev \
+            pkg-config \
+            socat \
+            xvfb
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: |
+          set -e
+
+          for i in {1..5}; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then
+              echo "Npm install failed too many times" >&2
+              exit 1
+            fi
+            echo "Npm install failed $i, trying again..."
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile Hucode
+        run: npm run hucode:compile
+
+      - name: Run Node unit tests
+        run: npm run test-node
+
+      - name: Run Hucode Node and common unit tests
+        run: |
+          npm run test-node -- \
+            --run \
+            src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts \
+            --run \
+            src/vs/hucode/test/common/projectSwitcher/projectSwitcherTreeModel.test.ts \
+            --run \
+            src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts \
+            --run \
+            src/vs/platform/browserView/test/common/browserViewLayout.test.ts \
+            --run \
+            src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
+            --run \
+            src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
+            --run \
+            src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts \
+            --run \
+            src/vs/platform/window/test/common/hucodeOmniCommandRouting.test.ts \
+            --run \
+            src/vs/platform/window/test/common/hucodeRendererReplyTarget.test.ts \
+            --run \
+            src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts \
+            --run \
+            src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts
+
+      - name: Prepare Electron sandbox
+        run: |
+          npm run electron
+          sudo chown root .build/electron/chrome-sandbox
+          sudo chmod 4755 .build/electron/chrome-sandbox
+          stat .build/electron/chrome-sandbox
+
+      - name: Run Hucode Electron unit tests
+        run: |
+          xvfb-run ./scripts/test.sh \
+            --run \
+            src/vs/hucode/test/browser/omniLayoutModel.test.ts \
+            --run \
+            src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
+            --run \
+            src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
+            --run \
+            src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
+            --run \
+            src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
+            --run \
+            src/vs/platform/windows/test/electron-main/hucodeWindowsStateHandler.test.ts \
+            --run \
+            src/vs/platform/windows/test/electron-main/windowsFinder.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniOpenPlan.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniStartup.test.ts \
+            --run \
+            src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts \
+            --run \
+            src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
+            --run \
+            src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts \
+            --run \
+            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
+        env:
+          VSCODE_SKIP_PRELAUNCH: 1
