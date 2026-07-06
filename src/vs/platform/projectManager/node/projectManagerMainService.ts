@@ -488,14 +488,14 @@ export class ProjectManagerMainService extends Disposable
 		if (!source) {
 			throw new Error(`Unknown worktree "${worktreePath}".`);
 		}
+		if (source.isMain) {
+			throw new Error('The main worktree cannot be reordered.');
+		}
 		if (
 			beforeWorktreePath &&
 			this.pathsEqual(source.path, beforeWorktreePath)
 		) {
 			return;
-		}
-		if (source.isMain) {
-			throw new Error('The main worktree cannot be reordered.');
 		}
 
 		const movableWorktrees = worktrees.filter(entry =>

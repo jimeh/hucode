@@ -1410,6 +1410,12 @@ suite('ProjectManagerMainService', () => {
 			service.moveWorktree(project.id, '/repo', '/repo.worktrees/bravo'),
 			/The main worktree cannot be reordered\./
 		);
+		// Reordering the main worktree onto itself must reject too, rather than
+		// being short-circuited to success by the equal-path early return.
+		await assert.rejects(
+			service.moveWorktree(project.id, '/repo', '/repo'),
+			/The main worktree cannot be reordered\./
+		);
 	});
 
 	test('persists project and worktree ordering across reloads', async () => {
