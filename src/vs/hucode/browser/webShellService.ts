@@ -95,12 +95,19 @@ type IWebHucodeShellHostSurfaceService = Pick<
 
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
 
+/**
+ * Server routing configuration the web shell needs to build workbench URLs.
+ */
 export interface IWebHucodeShellOptions {
 	readonly workbenchRoute: string;
 	readonly hostedWorkbenchRoute: string;
 	readonly serverPathCaseSensitive: boolean;
 }
 
+/**
+ * Browser and DOM seams used by the web shell, injectable so the controller
+ * can be unit-tested without a live window.
+ */
 export interface IWebHucodeShellBrowserAdapter {
 	readonly windowId: number;
 	readonly origin: string;
@@ -478,7 +485,8 @@ export class WebHucodeShellController extends Disposable
 		_windowId: number,
 		_bounds: IRectangle
 	): Promise<void> {
-		this.applyIframeLayout();
+		// Hosted iframes fill the host surface through CSS, so the shell has no
+		// per-bounds layout work to do in the web surface.
 	}
 
 	async captureWorkspaceScreenshot(
@@ -786,26 +794,12 @@ export class WebHucodeShellController extends Disposable
 				surface.append(instance.iframe);
 			}
 		}
-		this.applyIframeLayout();
 	}
 
 	private attachIframe(instance: IHostedIframeInstance): void {
 		const surface = this.hostSurfaceService.getSurface();
 		if (surface) {
 			surface.append(instance.iframe);
-			this.applyIframeLayout();
-		}
-	}
-
-	private applyIframeLayout(): void {
-		const surface = this.hostSurfaceService.getSurface();
-		if (!surface) {
-			return;
-		}
-
-		for (const instance of this.instancesById.values()) {
-			instance.iframe.style.width = '';
-			instance.iframe.style.height = '';
 		}
 	}
 
@@ -903,6 +897,10 @@ function emptyState(): IHucodeHostedWorkspaceState {
 	return createEmptyHostedWorkspaceState();
 }
 
+/**
+ * Dependency-injected web shell service that wires the shell controller to the
+ * serve-web environment configuration and host surface.
+ */
 export class WebHucodeShellService extends WebHucodeShellController {
 	constructor(
 		@IBrowserWorkbenchEnvironmentService

@@ -11,6 +11,10 @@ import {
 } from '../../base/browser/ui/grid/grid.js';
 import { Parts } from '../../workbench/services/layout/browser/layoutService.js';
 
+/**
+ * Inputs describing the Omni window size and which workbench parts are visible,
+ * used to build the serialized grid layout.
+ */
 export interface IOmniLayoutDescriptorOptions {
 	readonly width: number;
 	readonly height: number;
@@ -22,6 +26,10 @@ export interface IOmniLayoutDescriptorOptions {
 	readonly panelVisible: boolean;
 }
 
+/**
+ * Builds the serialized grid layout for the Omni window from the given size and
+ * part-visibility options.
+ */
 export function createOmniGridDescriptor(
 	options: IOmniLayoutDescriptorOptions
 ): ISerializedGrid {
