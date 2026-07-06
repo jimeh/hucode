@@ -77,6 +77,8 @@ import { FileUserDataProvider } from '../../platform/userData/common/fileUserDat
 import { addUNCHostToAllowlist, getUNCHost } from '../../base/node/unc.js';
 import { ThemeMainService } from '../../platform/theme/electron-main/themeMainServiceImpl.js';
 import { LINUX_SYSTEM_POLICY_FILE_PATH } from '../../base/common/policy.js';
+import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import { ProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManagerMainService.js';
 
 /**
  * The main VS Code entry point.
@@ -209,6 +211,14 @@ class CodeMain {
 		const userDataProfilesMainService = new UserDataProfilesMainService(stateService, uriIdentityService, environmentMainService, fileService, logService, productService);
 		services.set(IUserDataProfilesMainService, userDataProfilesMainService);
 
+		// Hucode Project Manager
+		services.set(
+			IProjectManagerMainService,
+			new ProjectManagerMainService(stateService, logService, {
+				fileService,
+			})
+		);
+
 		// Use FileUserDataProvider for user data to
 		// enable atomic read / write operations.
 		fileService.registerProvider(Schemas.vscodeUserData, new FileUserDataProvider(Schemas.file, diskFileSystemProvider, Schemas.vscodeUserData, userDataProfilesMainService, uriIdentityService, logService));
@@ -272,7 +282,9 @@ class CodeMain {
 		// Protocol (instantiated early and not using sync descriptor for security reasons)
 		services.set(IProtocolMainService, new ProtocolMainService(environmentMainService, userDataProfilesMainService, logService));
 
-		return [new InstantiationService(services, true), instanceEnvironment, environmentMainService, configurationService, stateService, bufferLogger, productService, userDataProfilesMainService];
+		const instantiationService = new InstantiationService(services, true);
+
+		return [instantiationService, instanceEnvironment, environmentMainService, configurationService, stateService, bufferLogger, productService, userDataProfilesMainService];
 	}
 
 	private patchEnvironment(environmentMainService: IEnvironmentMainService): IProcessEnvironment {
