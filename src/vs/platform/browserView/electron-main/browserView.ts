@@ -21,6 +21,7 @@ import { IAuxiliaryWindow } from '../../auxiliaryWindow/electron-main/auxiliaryW
 import { SCAN_CODE_STR_TO_EVENT_KEY_CODE } from '../../../base/common/keyCodes.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { logBrowserOpen } from '../common/browserViewTelemetry.js';
+import { BrowserViewNativeHost } from './browserViewNativeHost.js';
 
 enum NewPageLocation {
 	Foreground = 'foreground',
@@ -55,7 +56,7 @@ export class BrowserView extends Disposable {
 	readonly inspector: BrowserViewInspector;
 
 	private _ownerWindow: ICodeWindow;
-	private _currentWindow: ICodeWindow | IAuxiliaryWindow | undefined;
+	private readonly _nativeHost: BrowserViewNativeHost;
 	private _isDisposed = false;
 
 	private static readonly MAX_CONSOLE_LOG_ENTRIES = 1000;
@@ -147,6 +148,12 @@ export class BrowserView extends Disposable {
 		if (!this._ownerWindow) {
 			throw new Error(`Window with ID ${owner.mainWindowId} not found`);
 		}
+		this._view.setVisible(false);
+		this._nativeHost = new BrowserViewNativeHost(
+			this._view,
+			this._ownerWindow,
+			this.logService
+		);
 		this._register(this._ownerWindow.onDidClose(() => this.dispose()));
 		this._register(this._ownerWindow.onWillLoad((e) => {
 			if (e.reason === LoadReason.LOAD) {
@@ -155,9 +162,6 @@ export class BrowserView extends Disposable {
 				this.setVisible(false); // Hide when reloading.
 			}
 		}));
-
-		this._view.setVisible(false);
-		this._ownerWindow.win?.contentView.addChildView(this._view);
 
 		this._view.webContents.setWindowOpenHandler((details) => {
 			const location = (() => {
@@ -578,28 +582,18 @@ export class BrowserView extends Disposable {
 	/**
 	 * Update the layout bounds of this view
 	 */
-	layout(bounds: IBrowserViewBounds): void {
-		if (this._currentWindow?.win?.id !== bounds.windowId) {
-			const newWindow = this._windowById(bounds.windowId);
-			if (newWindow) {
-				this._currentWindow?.win?.contentView.removeChildView(this._view);
-				this._currentWindow = newWindow;
-				newWindow.win?.contentView.addChildView(this._view);
-			}
-		}
-
+	layout(bounds: IBrowserViewBounds, hostVisible: boolean = true): void {
 		this._view.setBorderRadius(Math.round(bounds.cornerRadius * bounds.zoomFactor));
 
 		if (bounds.emulation) {
 			this.emulator.applyScreenEmulation(bounds.width, bounds.height, bounds.emulation.scale, bounds.zoomFactor);
 		}
 
-		this._view.setBounds({
-			x: Math.round(bounds.x * bounds.zoomFactor),
-			y: Math.round(bounds.y * bounds.zoomFactor),
-			width: Math.round(bounds.width * bounds.zoomFactor),
-			height: Math.round(bounds.height * bounds.zoomFactor)
-		});
+		this._nativeHost.layout(
+			bounds,
+			hostVisible,
+			windowId => this._windowById(windowId)
+		);
 	}
 
 	setBrowserZoomIndex(zoomIndex: number): void {
@@ -612,17 +606,36 @@ export class BrowserView extends Disposable {
 	 * Set the visibility of this view
 	 */
 	setVisible(visible: boolean): void {
-		if (this._view.getVisible() === visible) {
-			return;
-		}
-
-		// If the view is focused, pass focus back to the window when hiding
-		if (!visible && this._view.webContents.isFocused()) {
-			this._currentWindow?.win?.webContents.focus();
-		}
-
-		this._view.setVisible(visible);
+		this._nativeHost.setVisible(visible);
 		this._onDidChangeVisibility.fire({ visible });
+	}
+
+	setHostedWebContentsVisible(
+		hostedWebContentsId: number,
+		visible: boolean
+	): void {
+		this._nativeHost.setHostedWebContentsVisible(
+			hostedWebContentsId,
+			visible,
+			windowId => this._windowById(windowId)
+		);
+	}
+
+	bringToFrontForHostedWebContents(hostedWebContentsId: number): void {
+		this._nativeHost.bringToFrontForHostedWebContents(
+			hostedWebContentsId,
+			windowId => this._windowById(windowId)
+		);
+	}
+
+	/**
+	 * Returns whether this view belongs to the given hosted Omni workbench.
+	 */
+	belongsToHostedWebContents(hostedWebContentsId: number): boolean {
+		return this._nativeHost.belongsToHostedWebContents(
+			this.owner,
+			hostedWebContentsId
+		);
 	}
 
 	/**
@@ -809,7 +822,7 @@ export class BrowserView extends Disposable {
 	 */
 	async focus(force?: boolean): Promise<void> {
 		// By default, only focus the view if its window is already focused.
-		if (!force && !this._currentWindow?.win?.isFocused()) {
+		if (!force && !this._nativeHost.isWindowFocused()) {
 			return;
 		}
 		this._view.webContents.focus();
@@ -885,11 +898,18 @@ export class BrowserView extends Disposable {
 	}
 
 	/**
+	 * Get this view's bounds relative to the top-level window content view.
+	 */
+	getWindowRelativeBounds(): Electron.Rectangle {
+		return this._nativeHost.getWindowRelativeBounds();
+	}
+
+	/**
 	 * Get the hosting Electron window for this view, if any.
 	 * This can be an auxiliary window, depending on where the view is currently hosted.
 	 */
 	getElectronWindow(): Electron.BrowserWindow | undefined {
-		return this._currentWindow?.win ?? undefined;
+		return this._nativeHost.getElectronWindow();
 	}
 
 	/**
@@ -898,7 +918,9 @@ export class BrowserView extends Disposable {
 	 * to. Returns `undefined` if no host window can be resolved (e.g. during teardown).
 	 */
 	private get _hostWindow(): Electron.BrowserWindow | undefined {
-		return this._currentWindow?.win ?? this._ownerWindow.win ?? undefined;
+		return this._nativeHost.getElectronWindow()
+			?? this._ownerWindow.win
+			?? undefined;
 	}
 
 	override dispose(): void {
@@ -910,11 +932,8 @@ export class BrowserView extends Disposable {
 		// Dispose debugger. This detaches debug sessions first.
 		this.debugger.dispose();
 
-		// Remove from parent window (guard against already-destroyed window)
-		const currentWin = this._currentWindow?.win;
-		if (currentWin && !currentWin.isDestroyed()) {
-			currentWin.contentView.removeChildView(this._view);
-		}
+		// Remove from parent view (guard against already-destroyed window)
+		this._nativeHost.removeFromParent();
 
 		// Fire close event BEFORE disposing emitters. This signals the view has been destroyed.
 		this._onDidClose.fire();
