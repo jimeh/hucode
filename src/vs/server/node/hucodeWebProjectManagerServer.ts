@@ -125,15 +125,39 @@ class HucodeProjectFileStateService implements IStateService {
 				fs.readFileSync(this.storagePath, 'utf8'),
 			) as StoredProjectManagerState;
 		} catch (error) {
+			this.state = undefined;
 			if (
 				!(error instanceof Error) ||
 				(error as NodeJS.ErrnoException).code !== 'ENOENT'
 			) {
-				throw error;
+				this.preserveUnreadableStateFile(error);
 			}
-			this.state = undefined;
 		}
 		this.loaded = true;
+	}
+
+	/**
+	 * An unreadable state file must not permanently fail every Projects API
+	 * request, so fall back to empty state and keep the file for inspection.
+	 */
+	private preserveUnreadableStateFile(error: unknown): void {
+		const preservePath = `${this.storagePath}.corrupt`;
+		this.logService.error(
+			'[Hucode Projects] Failed to load stored projects; ' +
+			`continuing with empty state (${this.storagePath})`,
+			error,
+		);
+		try {
+			fs.renameSync(this.storagePath, preservePath);
+			this.logService.info(
+				`[Hucode Projects] Preserved unreadable state as ${preservePath}`,
+			);
+		} catch (renameError) {
+			this.logService.error(
+				`[Hucode Projects] Could not preserve ${this.storagePath}`,
+				renameError,
+			);
+		}
 	}
 
 	private writeState(): void {

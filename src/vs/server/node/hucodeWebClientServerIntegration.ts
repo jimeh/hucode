@@ -146,7 +146,10 @@ export function getHucodeWebviewEndpoint(basePath: string): string {
  * does not host the extension; updates ship with Hucode releases.
  */
 export function getHucodeWebProductConfiguration(
-	productService: IProductService
+	productService: Pick<
+		IProductService,
+		'quality' | 'commit' | 'defaultChatAgent'
+	>
 ): Partial<Mutable<IProductConfiguration>> {
 	return {
 		quality: productService.quality,

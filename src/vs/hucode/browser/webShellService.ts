@@ -45,6 +45,7 @@ import {
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
 	isHostedWorkspaceAvailable,
+	isHostedWorkspacePendingReady,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
@@ -85,6 +86,7 @@ interface IHostedIframeInstance {
 }
 
 type WebHucodeShellTimer = ReturnType<typeof setTimeout>;
+type HostedUnloadResult = 'ready' | 'vetoed' | 'timeout';
 type IWebHucodeShellCommandService = Pick<ICommandService, 'executeCommand'>;
 type IWebHucodeShellHostSurfaceService = Pick<
 	IHucodeWebOmniHostSurfaceService,
@@ -324,8 +326,7 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		await this.requestUnload(instance);
-		this.removeInstance(instance);
+		await this.unloadAndRemoveInstance(instance);
 		return this.getState();
 	}
 
@@ -504,8 +505,7 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		for (const instance of [...this.instancesById.values()]) {
-			await this.requestUnload(instance);
-			this.removeInstance(instance);
+			await this.unloadAndRemoveInstance(instance);
 		}
 	}
 
@@ -659,16 +659,41 @@ export class WebHucodeShellController extends Disposable
 		this.emitState();
 	}
 
-	private async requestUnload(instance: IHostedIframeInstance): Promise<void> {
-		const workbench = instance.connection?.workbench;
-		if (!workbench) {
-			return;
+	private async unloadAndRemoveInstance(
+		instance: IHostedIframeInstance
+	): Promise<boolean> {
+		// Pending-ready workbenches close directly: a never-connected iframe
+		// cannot hold unsaved state and is not listening yet, and a reloading
+		// one is already running its own beforeunload handling, where a
+		// handshake would only hang until the unload timeout.
+		if (
+			isHostedWorkspaceAvailable(instance) &&
+			!isHostedWorkspacePendingReady(instance) &&
+			await this.requestUnload(instance) !== 'ready'
+		) {
+			return false;
 		}
 
-		await this.raceTimeout(
-			workbench.prepareUnload().then(() => undefined, () => undefined),
+		this.removeInstance(instance);
+		return true;
+	}
+
+	private async requestUnload(
+		instance: IHostedIframeInstance
+	): Promise<HostedUnloadResult> {
+		const workbench = instance.connection?.workbench;
+		if (!workbench) {
+			return 'ready';
+		}
+
+		const result = await this.raceTimeout(
+			workbench.prepareUnload().then(
+				ready => ready ? 'ready' as const : 'vetoed' as const,
+				() => 'vetoed' as const
+			),
 			WebHucodeShellController.UNLOAD_TIMEOUT_MS
 		);
+		return result === REQUEST_TIMEOUT ? 'timeout' : result;
 	}
 
 	private async openFilesInInstance(

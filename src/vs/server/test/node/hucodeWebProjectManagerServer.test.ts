@@ -208,6 +208,28 @@ suite('HucodeWebProjectManagerServer', () => {
 		});
 	});
 
+	test('recovers from a malformed projects.json state file', async () => {
+		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+		await fs.writeFile(storagePath, '{ not json');
+
+		const loaded = await handle<ProjectsResponseBody>(
+			createServer(serverDataPath, disposables, servers),
+			'GET',
+			HUCODE_WEB_PROJECTS_API_PATH
+		);
+
+		assert.deepStrictEqual({
+			statusCode: loaded.statusCode,
+			projects: loaded.body.projects,
+			preservedState: await fs.readFile(`${storagePath}.corrupt`, 'utf8'),
+		}, {
+			statusCode: 200,
+			projects: [],
+			preservedState: '{ not json',
+		});
+	});
+
 	test('returns bad request for oversized JSON bodies', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const response = await handle<{ readonly error: string }>(

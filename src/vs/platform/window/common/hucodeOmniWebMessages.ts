@@ -80,7 +80,9 @@ export interface IHucodeOmniWebWorkbenchClient {
 	openFiles(request: INativeOpenFileRequest): Promise<boolean>;
 
 	/**
-	 * Runs the hosted workbench shutdown handshake before unload.
+	 * Runs the hosted workbench shutdown handshake before unload. Resolves
+	 * false when shutdown failed or was vetoed, telling the shell to keep
+	 * the hosted workbench alive.
 	 */
-	prepareUnload(): Promise<void>;
+	prepareUnload(): Promise<boolean>;
 }

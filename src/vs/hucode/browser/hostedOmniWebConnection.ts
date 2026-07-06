@@ -5,15 +5,17 @@
 
 import { mainWindow } from '../../base/browser/window.js';
 import { DeferredPromise } from '../../base/common/async.js';
-import { Disposable, DisposableStore, toDisposable } from
+import { Disposable, DisposableStore, IDisposable, toDisposable } from
 	'../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/browser/ipc.mp.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from
 	'../../platform/instantiation/common/instantiation.js';
-import { InstantiationType, registerSingleton } from
+import { registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
+import { SyncDescriptor } from
+	'../../platform/instantiation/common/descriptors.js';
 import {
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
@@ -72,6 +74,41 @@ export interface IHucodeHostedOmniWebConnectionService {
 	notifyFocus(focused: boolean): void;
 }
 
+/**
+ * Browser window seams used by the hosted connection service, injectable so
+ * the parent-source trust checks are unit-testable.
+ */
+export interface IHostedOmniWebConnectionBrowserAdapter {
+	readonly origin: string;
+	hasParent(): boolean;
+	isParentSource(source: MessageEventSource | null): boolean;
+	postToParent(message: object): void;
+	addMessageListener(listener: (event: MessageEvent) => void): IDisposable;
+}
+
+function createMainWindowConnectionAdapter():
+	IHostedOmniWebConnectionBrowserAdapter {
+	return {
+		get origin() {
+			return mainWindow.location.origin;
+		},
+		hasParent: () => mainWindow.parent !== mainWindow,
+		isParentSource: source => source === mainWindow.parent,
+		postToParent: message =>
+			mainWindow.parent.postMessage(message, mainWindow.location.origin),
+		addMessageListener: listener => {
+			mainWindow.addEventListener('message', listener);
+			return toDisposable(() =>
+				mainWindow.removeEventListener('message', listener));
+		},
+	};
+}
+
+type IHostedOmniWebConnectionEnvironment = Pick<
+	IWorkbenchEnvironmentService,
+	'_serviceBrand' | 'isHostedOmniWorkspace' | 'hostedInstanceId'
+>;
+
 export class HucodeHostedOmniWebConnectionService extends Disposable
 	implements IHucodeHostedOmniWebConnectionService {
 
@@ -82,23 +119,24 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		new DeferredPromise<IHucodeHostedOmniWebConnection>();
 
 	constructor(
+		private readonly browser: IHostedOmniWebConnectionBrowserAdapter,
 		@IWorkbenchEnvironmentService
-		environmentService: IWorkbenchEnvironmentService,
+		environmentService: IHostedOmniWebConnectionEnvironment,
 	) {
 		super();
 
 		this.instanceId = environmentService.isHostedOmniWorkspace &&
-			mainWindow.parent !== mainWindow
+			this.browser.hasParent()
 			? environmentService.hostedInstanceId
 			: undefined;
 		if (!this.instanceId) {
 			return;
 		}
 
-		const onMessage = (event: MessageEvent) => {
+		this._register(this.browser.addMessageListener(event => {
 			if (
-				event.origin !== mainWindow.location.origin ||
-				event.source !== mainWindow.parent ||
+				event.origin !== this.browser.origin ||
+				!this.browser.isParentSource(event.source) ||
 				!isPortMessage(event.data, this.instanceId!) ||
 				!(event.ports[0] instanceof MessagePort)
 			) {
@@ -113,10 +151,6 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				ipcClient,
 				shellWindowId: event.data.windowId,
 			});
-		};
-		mainWindow.addEventListener('message', onMessage);
-		this._register(toDisposable(() => {
-			mainWindow.removeEventListener('message', onMessage);
 		}));
 	}
 
@@ -158,7 +192,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			return;
 		}
 
-		mainWindow.parent.postMessage(message, mainWindow.location.origin);
+		this.browser.postToParent(message);
 	}
 }
 
@@ -182,6 +216,9 @@ function isPortMessage(
 
 registerSingleton(
 	IHucodeHostedOmniWebConnectionService,
-	HucodeHostedOmniWebConnectionService,
-	InstantiationType.Delayed
+	new SyncDescriptor(
+		HucodeHostedOmniWebConnectionService,
+		[createMainWindowConnectionAdapter()],
+		true
+	)
 );

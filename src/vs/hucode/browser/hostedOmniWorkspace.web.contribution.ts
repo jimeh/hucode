@@ -123,11 +123,13 @@ class HostedOmniWebBridgeContribution extends Disposable
 		}
 	}
 
-	async prepareUnload(): Promise<void> {
+	async prepareUnload(): Promise<boolean> {
 		try {
 			await this.lifecycleService.shutdown();
+			return true;
 		} catch (error) {
 			this.logService.error(error);
+			return false;
 		}
 	}
 

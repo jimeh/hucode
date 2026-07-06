@@ -36,7 +36,9 @@ import {
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createService(): {
+	function createService(
+		browser: FakeBrowserAdapter = new FakeBrowserAdapter()
+	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
 		readonly browser: FakeBrowserAdapter;
@@ -45,7 +47,6 @@ suite('WebHucodeShellService', () => {
 		document.body.append(surface);
 		disposables.add(toDisposable(() => surface.remove()));
 
-		const browser = new FakeBrowserAdapter();
 		const service = disposables.add(new WebHucodeShellController(
 			{
 				workbenchRoute: '/workbench',
@@ -305,6 +306,74 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('keeps the hosted iframe when the workbench vetoes unload', async () => {
+		const { service, surface, browser } = createService();
+		const windowId = browser.windowId;
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = false;
+
+		const vetoedState = await service.closeWorkspace(windowId, instanceId);
+		assert.deepStrictEqual({
+			instanceIds: vetoedState.instances.map(
+				instance => instance.instanceId
+			),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+		}, {
+			instanceIds: [instanceId],
+			iframeConnected: true,
+		});
+
+		child.workbench.prepareUnloadResult = true;
+		const closedState = await service.closeWorkspace(windowId, instanceId);
+		assert.strictEqual(closedState.instances.length, 0);
+	});
+
+	test('keeps the hosted iframe when unload times out', async () => {
+		const browser = new ZeroDelayBrowserAdapter();
+		const { service, surface } = createService(browser);
+		const windowId = browser.windowId;
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = new Promise<boolean>(() => { });
+
+		const timedOutState = await service.closeWorkspace(windowId, instanceId);
+		assert.deepStrictEqual({
+			instanceIds: timedOutState.instances.map(
+				instance => instance.instanceId
+			),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+		}, {
+			instanceIds: [instanceId],
+			iframeConnected: true,
+		});
+	});
+
+	test('closes never-ready workbenches without an unload handshake', async () => {
+		const { service, browser } = createService();
+		const windowId = browser.windowId;
+		const state = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.instances[0].instanceId;
+		assert.strictEqual(state.instances[0].state, 'loading');
+
+		const closedState = await service.closeWorkspace(windowId, instanceId);
+		assert.strictEqual(closedState.instances.length, 0);
+	});
+
 	test('forwards workspace actions to the hosted workbench channel', async () => {
 		const { service, surface, browser } = createService();
 		const windowId = browser.windowId;
@@ -534,6 +603,7 @@ suite('WebHucodeShellService', () => {
 class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	runCommandResult = true;
 	openFilesResult = true;
+	prepareUnloadResult: boolean | Promise<boolean> = true;
 	prepareUnloadCalls = 0;
 	readonly commands: {
 		readonly commandId: string;
@@ -552,8 +622,9 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 		return this.openFilesResult;
 	}
 
-	async prepareUnload(): Promise<void> {
+	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
+		return this.prepareUnloadResult;
 	}
 }
 
@@ -633,5 +704,14 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		for (const listener of this.listeners) {
 			listener(event);
 		}
+	}
+}
+
+class ZeroDelayBrowserAdapter extends FakeBrowserAdapter {
+	override setTimeout(
+		callback: () => void,
+		_timeout: number
+	): ReturnType<typeof setTimeout> {
+		return setTimeout(callback, 0);
 	}
 }
