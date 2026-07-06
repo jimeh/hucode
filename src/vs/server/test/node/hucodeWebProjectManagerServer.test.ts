@@ -305,6 +305,24 @@ suite('HucodeWebProjectManagerServer', () => {
 		assert.strictEqual(forwarded.statusCode, 200);
 	});
 
+	test('treats a default port on the forwarded host as same-origin', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const response = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath },
+			{
+				'content-type': 'application/json',
+				host: 'internal:8000',
+				'x-forwarded-host': 'hucode.example:443',
+				origin: 'https://hucode.example',
+			}
+		);
+
+		assert.strictEqual(response.statusCode, 201);
+	});
+
 	test('rejects mutations without a JSON content type', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const response = await handle<{ readonly error: string }>(

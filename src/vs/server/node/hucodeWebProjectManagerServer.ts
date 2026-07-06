@@ -564,18 +564,32 @@ function getCrossOriginRequestError(
 		return undefined;
 	}
 
-	let originHost: string;
+	let originUrl: URL;
 	try {
-		originHost = new URL(origin).host;
+		originUrl = new URL(origin);
 	} catch {
 		return 'Invalid request origin.';
 	}
 
 	const requestHost = getRequestHost(headers);
-	if (
-		!requestHost ||
-		originHost.toLowerCase() !== requestHost.toLowerCase()
-	) {
+	if (!requestHost) {
+		return 'Cross-origin request rejected.';
+	}
+
+	// Normalize the request host through the origin's protocol so a default
+	// port on either side (e.g. an `x-forwarded-host` of `host:443` against an
+	// `Origin` of `https://host`) does not read as cross-origin. URL.host
+	// strips the default port for the scheme, giving both sides one form.
+	let normalizedRequestHost: string;
+	try {
+		normalizedRequestHost = new URL(
+			`${originUrl.protocol}//${requestHost}`
+		).host;
+	} catch {
+		return 'Cross-origin request rejected.';
+	}
+
+	if (originUrl.host.toLowerCase() !== normalizedRequestHost.toLowerCase()) {
 		return 'Cross-origin request rejected.';
 	}
 
