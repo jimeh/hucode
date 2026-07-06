@@ -5,9 +5,14 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
-import { Disposable, IDisposable, toDisposable } from
-	'../../base/common/lifecycle.js';
-import { join } from '../../base/common/path.js';
+import {
+	Disposable,
+	DisposableStore,
+	IDisposable,
+	MutableDisposable,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
+import { basename, dirname, join } from '../../base/common/path.js';
 import { URI } from '../../base/common/uri.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
@@ -184,11 +189,101 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 }
 
-class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
+export class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
 	watch(path: string, onDidChange: () => void): IDisposable {
-		const watcher = fs.watch(path, { persistent: false }, () => onDidChange());
-		return toDisposable(() => watcher.close());
+		const store = new DisposableStore();
+		this.watchPath(store, path, onDidChange);
+		return store;
 	}
+
+	/**
+	 * Watches `path`, tolerating a target that does not exist yet. Raw fs.watch
+	 * throws ENOENT for a missing path, so a project whose `.git/worktrees`
+	 * directory has not been created yet would be left permanently unwatched
+	 * and an externally created worktree would go undetected. The desktop
+	 * file-service watcher watches such paths before they exist; match that by
+	 * watching the nearest existing ancestor for the missing segment to appear,
+	 * then re-establishing a direct watch and notifying.
+	 */
+	private watchPath(
+		store: DisposableStore,
+		path: string,
+		onDidChange: () => void
+	): void {
+		if (store.isDisposed) {
+			return;
+		}
+
+		if (fs.existsSync(path)) {
+			try {
+				const watcher = fs.watch(
+					path,
+					{ persistent: false },
+					() => onDidChange()
+				);
+				store.add(toDisposable(() => watcher.close()));
+				return;
+			} catch (error) {
+				this.logService.warn(
+					`[Hucode Projects] Failed to watch ${path}: ${error}`
+				);
+			}
+		}
+
+		const ancestor = nearestExistingAncestor(path);
+		if (!ancestor) {
+			return;
+		}
+
+		const pending = new MutableDisposable();
+		store.add(pending);
+		try {
+			const watcher = fs.watch(
+				ancestor.dir,
+				{ persistent: false },
+				(_event, filename) => {
+					if (filename !== null && filename !== ancestor.nextSegment) {
+						return;
+					}
+					if (!fs.existsSync(join(ancestor.dir, ancestor.nextSegment))) {
+						return;
+					}
+
+					// The missing segment appeared: drop the ancestor watch,
+					// re-evaluate the full path, and report the change.
+					pending.clear();
+					this.watchPath(store, path, onDidChange);
+					onDidChange();
+				}
+			);
+			pending.value = toDisposable(() => watcher.close());
+		} catch (error) {
+			this.logService.warn(
+				`[Hucode Projects] Failed to watch ${ancestor.dir}: ${error}`
+			);
+		}
+	}
+
+	constructor(private readonly logService: ILogService) { }
+}
+
+/**
+ * Returns the nearest existing ancestor directory of `path` and the immediate
+ * child segment on the way to `path`, or undefined when no ancestor exists.
+ */
+function nearestExistingAncestor(
+	path: string
+): { readonly dir: string; readonly nextSegment: string } | undefined {
+	let current = path;
+	let parent = dirname(current);
+	while (parent !== current) {
+		if (fs.existsSync(parent)) {
+			return { dir: parent, nextSegment: basename(current) };
+		}
+		current = parent;
+		parent = dirname(current);
+	}
+	return undefined;
 }
 
 /**
@@ -215,7 +310,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.service = this._register(new ProjectManagerMainService(
 			this.stateService,
 			logService,
-			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher() },
+			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher(logService) },
 		));
 		this._register(this.service.onDidChangeProjects(projects => {
 			this.broadcastProjects(projects);

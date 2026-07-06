@@ -9,11 +9,14 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { promisify } from 'util';
+import { raceTimeout } from '../../../base/common/async.js';
+import { toDisposable } from '../../../base/common/lifecycle.js';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import {
 	HUCODE_WEB_PROJECTS_API_PATH,
+	HucodeNodeProjectMetadataWatcher,
 	HucodeWebProjectManagerServer,
 	isHucodeWebProjectsApiPath,
 } from '../../node/hucodeWebProjectManagerServer.js';
@@ -363,6 +366,28 @@ suite('HucodeWebProjectManagerServer', () => {
 			false
 		);
 		assert.deepStrictEqual(await server.getProjects(), []);
+	});
+
+	test('watches a metadata path created after the watch starts', async () => {
+		const root = await fs.mkdtemp(join(os.tmpdir(), 'hucode-watch-'));
+		disposables.add(toDisposable(() => {
+			void fs.rm(root, { recursive: true, force: true });
+		}));
+		const target = join(root, 'worktrees');
+
+		const watcher = new HucodeNodeProjectMetadataWatcher(new NullLogService());
+		let changed = false;
+		const done = new Promise<void>(resolve => {
+			disposables.add(watcher.watch(target, () => {
+				changed = true;
+				resolve();
+			}));
+		});
+
+		await fs.mkdir(target);
+		await raceTimeout(done, 3000);
+
+		assert.strictEqual(changed, true);
 	});
 
 	test('matches project API paths', () => {
