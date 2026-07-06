@@ -22,6 +22,10 @@ import product from '../../product.json' with { type: 'json' };
 // are valid, are in dep-lists.ts
 const FAIL_BUILD_FOR_NEW_DEPENDENCIES: boolean = true;
 
+const failBuildForNewDependencies = process.env.HUCODE_LINUX_PACKAGE_DEPS_WARN_ONLY === '1'
+	? false
+	: FAIL_BUILD_FOR_NEW_DEPENDENCIES;
+
 // Based on https://source.chromium.org/chromium/chromium/src/+/refs/tags/148.0.7778.97:chrome/installer/linux/BUILD.gn;l=64-80
 // and the Linux Archive build
 // Shared library dependencies that we already bundle.
@@ -89,7 +93,7 @@ export async function getDependencies(packageType: 'deb' | 'rpm', buildDir: stri
 		const failMessage = 'The dependencies list has changed.'
 			+ '\nOld:\n' + referenceGeneratedDeps.join('\n')
 			+ '\nNew:\n' + sortedDependencies.join('\n');
-		if (FAIL_BUILD_FOR_NEW_DEPENDENCIES) {
+		if (failBuildForNewDependencies) {
 			throw new Error(failMessage);
 		} else {
 			console.warn(failMessage);
