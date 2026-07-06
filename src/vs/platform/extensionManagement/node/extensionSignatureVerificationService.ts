@@ -8,8 +8,10 @@ import { isDefined } from '../../../base/common/types.js';
 import { TargetPlatform } from '../../extensions/common/extensions.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService, LogLevel } from '../../log/common/log.js';
+import { IProductService } from '../../product/common/productService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { ExtensionSignatureVerificationCode } from '../common/extensionManagement.js';
+import { HucodeOpenVsxExtensionSignatureVerifier, useHucodeOpenVsxSignatureVerifier } from './hucodeOpenVsxExtensionSignatureVerifier.js';
 
 export const IExtensionSignatureVerificationService = createDecorator<IExtensionSignatureVerificationService>('IExtensionSignatureVerificationService');
 
@@ -51,49 +53,68 @@ export interface ExtensionSignatureVerificationResult {
 export class ExtensionSignatureVerificationService implements IExtensionSignatureVerificationService {
 	declare readonly _serviceBrand: undefined;
 
-	private moduleLoadingPromise: Promise<typeof vsceSign> | undefined;
+	private vsceSignLoadingPromise: Promise<typeof vsceSign> | undefined;
+	private hucodeOpenVsxSignatureVerifier:
+		HucodeOpenVsxExtensionSignatureVerifier | undefined;
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
+		@IProductService private readonly productService: IProductService,
 	) { }
 
 	private vsceSign(): Promise<typeof vsceSign> {
-		if (!this.moduleLoadingPromise) {
-			this.moduleLoadingPromise = this.resolveVsceSign();
+		if (!this.vsceSignLoadingPromise) {
+			this.vsceSignLoadingPromise = this.resolveVsceSign();
 		}
 
-		return this.moduleLoadingPromise;
+		return this.vsceSignLoadingPromise;
 	}
 
-	private async resolveVsceSign(): Promise<typeof vsceSign> {
+	protected async resolveVsceSign(): Promise<typeof vsceSign> {
 		const mod = '@vscode/vsce-sign';
 		return import(mod);
 	}
 
 	public async verify(extensionId: string, version: string, vsixFilePath: string, signatureArchiveFilePath: string, clientTargetPlatform?: TargetPlatform): Promise<IExtensionSignatureVerificationResult | undefined> {
-		let module: typeof vsceSign;
+		const hucodeOpenVsxSignatureVerifier =
+			this.getHucodeOpenVsxSignatureVerifier();
+		const verifierName = hucodeOpenVsxSignatureVerifier?.name ?? 'vsce-sign';
+		const startTime = new Date().getTime();
 
 		try {
-			module = await this.vsceSign();
+			if (hucodeOpenVsxSignatureVerifier) {
+				await hucodeOpenVsxSignatureVerifier.load();
+			} else {
+				await this.vsceSign();
+			}
 		} catch (error) {
-			this.logService.error('Could not load vsce-sign module', getErrorMessage(error));
+			this.logService.error(`Could not load ${verifierName} module`, getErrorMessage(error));
 			this.logService.info(`Extension signature verification is not done: ${extensionId}`);
 			return undefined;
 		}
 
-		const startTime = new Date().getTime();
 		let result: ExtensionSignatureVerificationResult;
 
 		try {
-			this.logService.trace(`Verifying extension signature for ${extensionId}...`);
-			result = await module.verify(vsixFilePath, signatureArchiveFilePath, this.logService.getLevel() === LogLevel.Trace);
+			this.logService.trace(`Verifying extension signature for ${extensionId} with ${verifierName}...`);
+			if (hucodeOpenVsxSignatureVerifier) {
+				result = await hucodeOpenVsxSignatureVerifier.verify(
+					vsixFilePath,
+					signatureArchiveFilePath,
+					this.logService.getLevel() === LogLevel.Trace
+				);
+			} else {
+				result = await (await this.vsceSign()).verify(vsixFilePath, signatureArchiveFilePath, this.logService.getLevel() === LogLevel.Trace);
+			}
 		} catch (e) {
-			result = {
-				code: ExtensionSignatureVerificationCode.UnknownError,
-				didExecute: false,
-				output: getErrorMessage(e)
-			};
+			result = hucodeOpenVsxSignatureVerifier
+				? hucodeOpenVsxSignatureVerifier.toVerificationResult(e)
+				: {
+					code: ExtensionSignatureVerificationCode.UnknownError,
+					didExecute: false,
+					output: getErrorMessage(e)
+				};
 		}
 
 		const duration = new Date().getTime() - startTime;
@@ -132,5 +153,26 @@ export class ExtensionSignatureVerificationService implements IExtensionSignatur
 		});
 
 		return { code: result.code };
+	}
+
+	private getHucodeOpenVsxSignatureVerifier():
+		HucodeOpenVsxExtensionSignatureVerifier | undefined {
+		if (!useHucodeOpenVsxSignatureVerifier(
+			this.productService.extensionsGallery?.serviceUrl
+		)) {
+			return undefined;
+		}
+
+		if (!this.hucodeOpenVsxSignatureVerifier) {
+			this.hucodeOpenVsxSignatureVerifier =
+				this.createHucodeOpenVsxSignatureVerifier();
+		}
+
+		return this.hucodeOpenVsxSignatureVerifier;
+	}
+
+	protected createHucodeOpenVsxSignatureVerifier():
+		HucodeOpenVsxExtensionSignatureVerifier {
+		return new HucodeOpenVsxExtensionSignatureVerifier();
 	}
 }
