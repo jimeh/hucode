@@ -238,7 +238,22 @@ export class SessionsMain extends Disposable {
 		serviceCollection.set(ISharedProcessService, sharedProcessService);
 
 		// Utility Process Worker
-		const utilityProcessWorkerWorkbenchService = new UtilityProcessWorkerWorkbenchService(this.configuration.windowId, logService, mainProcessService);
+		const utilityProcessWorkerWorkbenchService =
+			new UtilityProcessWorkerWorkbenchService(
+				this.configuration.isHostedOmniWorkspace &&
+					typeof this.configuration.hostedWebContentsId === 'number'
+					? {
+						kind: 'webContents',
+						webContentsId: this.configuration.hostedWebContentsId,
+						ownerWindowId: this.configuration.windowId
+					}
+					: {
+						kind: 'window',
+						windowId: this.configuration.windowId
+					},
+				logService,
+				mainProcessService
+			);
 		serviceCollection.set(IUtilityProcessWorkerWorkbenchService, utilityProcessWorkerWorkbenchService);
 
 		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

@@ -222,6 +222,9 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get disableExtensions() { return this.payload?.get('disableExtensions') === 'true'; }
 
 	@memoize
+	get isOmniWindow(): boolean { return this.payload?.get('isOmniWindow') === 'true'; }
+
+	@memoize
 	get enableExtensions() { return this.options.enabledExtensions; }
 
 	@memoize

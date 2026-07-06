@@ -397,7 +397,30 @@
 	color: white;
 }
 
-/* Center-Adjacent Toolbar (e.g., update indicator) */
+/* Hucode Left Toolbar */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container {
+	display: none;
+	position: relative;
+	align-items: center;
+	gap: 8px;
+	height: 100%;
+	padding: 0 8px;
+	z-index: 2500;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container.has-actions {
+	display: flex;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container > .hucode-titlebar-left-action-toolbar,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container > .hucode-titlebar-left-action-toolbar *,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container > .hucode-titlebar-left-action-toolbar .action-item,
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .hucode-titlebar-left-action-toolbar-container > .hucode-titlebar-left-action-toolbar .action-label {
+	pointer-events: auto;
+	-webkit-app-region: no-drag;
+}
+
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .center-adjacent-toolbar-container {
 	z-index: 2500;
 	-webkit-app-region: no-drag;
