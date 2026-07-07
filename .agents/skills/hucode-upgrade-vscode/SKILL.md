@@ -121,6 +121,25 @@ shared files such as `platform.ts`, `native.ts`, `windowActions.ts`,
 `desktop.contribution.ts`, and service registration files as integration points,
 not as automatic single-topic commits.
 
+For a shared file owned by more than one topic, snapshot staging is more
+reliable than interactive hunk staging: at the owning topic, write the file's
+content from a historical commit that predates the later topic's changes, stage
+and commit it, then restore the final content to the worktree for the later
+topic to pick up:
+
+```sh
+git show <pre-later-topic-commit>:<path> > <path>
+git add <path>
+# ...commit the topic...
+git restore --source=series-<old-version> --worktree -- <path>
+```
+
+Beware of broad directory adds after a snapshot: a later topic's
+`git add <dir>` silently stages the restored final content of earlier-topic
+files inside that directory, folding the later topic's hunks into the wrong
+commit. After a broad add, check `git status` for snapshot files that should
+have stayed unstaged, and verify per-file attribution before committing.
+
 Squash intermediate debugging, file-move churn, generated-asset churn,
 historical Hucode version bumps, refactors caused by later tests, and
 conflict-resolution fallout. Hucode feature development history remains on the
@@ -196,6 +215,30 @@ while `node-gyp` is fetching Electron or Node headers with transient network
 errors such as `ECONNRESET`, retry before treating the failure as an upgrade
 blocker.
 
+`npm install` on the bare baseline can dirty `package-lock.json`,
+`remote/package-lock.json`, and `extensions/copilot/package-lock.json` with
+normalization churn. Discard that churn (`git checkout -- <lockfiles>`) before
+cherry-picking; otherwise it collides with the replayed build-tooling commit or
+leaks into conflict commits.
+
+Before cherry-picking, scout the conflict surface so resolutions can be
+planned instead of discovered:
+
+```sh
+# Files touched by both the Hucode stack and the upstream release delta.
+comm -12 \
+  <(git diff --name-only upstream-<old-version>..series-<old-version>-replay | sort) \
+  <(git diff --name-only upstream-<old-version>..upstream-<new-version> | sort)
+
+# Modify/delete conflicts: files we patch that upstream deleted.
+comm -12 \
+  <(git diff --name-only upstream-<old-version>..series-<old-version>-replay | sort) \
+  <(git diff --name-only --diff-filter=D upstream-<old-version>..upstream-<new-version> | sort)
+
+# Workflow files upstream added or deleted since the old baseline.
+git diff --name-status upstream-<old-version>..upstream-<new-version> -- .github/workflows
+```
+
 ## Replay Onto The New Series
 
 Cherry-pick the compact old replay stack:
@@ -215,6 +258,12 @@ upstream APIs over preserving old compatibility paths. When resolving:
   them unless the Hucode behavior explicitly requires a different contract.
 - When upstream renames or replaces a workflow, disable the current upstream
   workflow file instead of resurrecting an old deleted workflow name.
+- When upstream adds a new workflow, disable it as part of resolving the CI
+  topic commit (`git mv .github/workflows/<new>.yml .github/workflows.disabled/`).
+  When upstream deletes a workflow, drop the stale `.disabled` copy instead of
+  carrying it forward. Git's rename detection usually refreshes the surviving
+  `.disabled` copies with upstream's new content automatically; spot-check one
+  against `git show upstream-<new-version>:.github/workflows/<name>.yml`.
 - If a replay conflict reveals stale Hucode assumptions, fix the replayed patch
   in the new series and consider later backporting or documenting the lesson.
 - Do not use `--no-verify` for normal conflict commits. If a hook fails, fix
@@ -248,6 +297,33 @@ done < <(git diff --name-only --diff-filter=ACMRT -z upstream-<new-version>..ser
 No output is expected from that scan. Deleted files are excluded because they
 cannot contain unresolved markers in the final worktree.
 
+### Replay Completeness Check
+
+A cherry-pick sequence can silently drop a commit: if a pick fails for an
+environmental reason (for example a stale `index.lock` from a still-running
+hook), a subsequent `git cherry-pick --continue` can resume at the next todo
+entry without applying the failed one. Conflict-marker scans and compiles do
+not catch a cleanly missing commit, so verify completeness explicitly after
+the cherry-pick finishes:
+
+```sh
+# Commit count must match the replay stack (plus any documented extras).
+git log --oneline upstream-<new-version>..series-<new-version> | wc -l
+git log --oneline upstream-<old-version>..series-<old-version>-replay | wc -l
+
+# Every changed-file difference between the stacks must be explainable
+# (workflow adaptations, upstream-forced file moves, and nothing else).
+diff \
+  <(git diff --name-only upstream-<old-version>..series-<old-version>-replay | sort) \
+  <(git diff --name-only upstream-<new-version>..series-<new-version> | sort)
+```
+
+After the replay lands, run `npm install` again before build-package tests:
+the replayed build-tooling commit adds Hucode-only dependencies (for example
+`@commitlint/*`) that the baseline install did not know about, and the tests
+fail with `ERR_MODULE_NOT_FOUND` on a stale install. Discard any lockfile
+churn this second install produces as well.
+
 ## Validate The Upgraded Series
 
 Run at least:
@@ -269,9 +345,33 @@ cd build && node --test "{lib,next}/**/*.test.ts"
 
 This `node --test` glob form requires Node v21 or later.
 
-Run targeted tests for touched Hucode areas when available. A broader
-`npm run test-node` pass is valuable after platform, browser-view, IPC,
-extension-host, or utility-process changes.
+Run a full `npm run test-node` pass on upgrade branches; it takes under a
+minute and runs against the same esbuild-transpiled `out/` that Hucode CI
+uses, so local results predict the CI Unit Tests job. Run additional targeted
+tests for touched Hucode areas when available.
+
+### Triage Of Failing Tests
+
+Do not classify a failing test as a pre-existing or environment-only artifact
+without evidence. The compile pipeline itself can change between baselines
+(for example, 1.126.0 switched dev compiles from full tsc emit to esbuild
+transpile-only), so "the test and code are unchanged since the old baseline"
+does not imply "the failure existed on the old baseline". Confirm the previous
+series actually passed the same test under the same pipeline — old CI runs are
+the cheapest evidence — before writing a failure off.
+
+When an upstream-owned test fails on the new baseline, check whether upstream
+already fixed it after the release tag, and backport that fix instead of
+patching it independently:
+
+```sh
+gh api 'repos/microsoft/vscode/commits?path=<test-file>&since=<tag-date>' \
+  --jq '.[] | .sha[0:10] + " " + (.commit.message | split("\n")[0])'
+git cherry-pick -x <upstream-fix-sha>
+```
+
+Keep the backport as a standalone `(cherry picked from ...)` commit so the
+next upgrade can recognize and drop it once the fix arrives with the baseline.
 
 For Hucode mixin validation:
 
@@ -298,8 +398,25 @@ entrypoints, explicitly check for entrypoint drift:
 - Audit new common-workbench imports for required side-effect service
   registrations. Prefer registering the minimal required service in Omni over
   importing broad contributions that Omni intentionally omits.
-- Re-run the `Hucode Omni common entrypoint` build test after entrypoint or CSP
-  changes.
+- Re-run the `Hucode Omni common entrypoint` and `Hucode Omni desktop
+  entrypoints` build tests after entrypoint or CSP changes.
+
+The build tests enforce import contracts for the forked entrypoints:
+`omni.common.main.ts` tracks `workbench.common.main.ts`
+(`hucodeOmniCommonEntrypoint.test.ts`), and `omni.desktop.main.ts` plus the
+`omni.main.ts` bootstrap track `workbench.desktop.main.ts` and
+`desktop.main.ts` (`hucodeOmniDesktopEntrypoint.test.ts`). When upstream adds
+an import to one of those files, the matching test fails until the import is
+mirrored into the Omni counterpart at the same relative position or added to
+the test's documented-omissions map with a reason. Bootstrap imports usually
+mean new service wiring (for example the 1.126.0 remote file-system proxy
+registrations), so prefer mirroring over omitting; omitting is for
+contributions Omni deliberately does not ship. Drift the tests cannot see —
+changed constructor arguments or reordered wiring inside `DesktopMain` — is
+caught by the compiler when signatures change, so also skim
+`git diff upstream-<old-version>..upstream-<new-version> -- \
+src/vs/workbench/electron-browser/desktop.main.ts` for wiring changes worth
+mirroring by hand.
 
 After `npm run hucode:compile`, run a short Omni startup smoke with inherited
 extension-host environment cleared:
@@ -373,6 +490,11 @@ git status --short --branch
 git log --oneline upstream-<new-version>..series-<new-version>
 node -e "const p=require('./package.json'); const h=require('./build/hucode/mixin/stable/product.json'); console.log({ vscode:p.version, hucode:h.hucodeVersion })"
 ```
+
+After pushing, watch the first `Hucode CI` run on the series branch to
+completion (`gh run watch`). CI is not redundant with local validation:
+upstream can move CI-relevant behavior between baselines, and a green local
+run does not prove the workflow-level assumptions still hold.
 
 Report:
 
