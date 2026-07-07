@@ -66,6 +66,12 @@ as the required Hucode instruction set for work in this fork.
 - Do not run multiple `./scripts/test.sh` invocations concurrently. They share
   the same `.build/electron` app preparation path and can race while creating
   framework symlinks.
+- The esbuild `out/` transpile (used by dev compiles and CI unit tests since
+  VS Code 1.126.0) lowers classes with static fields to renamed const
+  bindings (e.g. `_ChatRequestTextPart`), so tests must not assert
+  `constructor.name`. Upstream fixed its ChatService tests in
+  microsoft/vscode@d416fdd194 (#322698), backported here; write new tests
+  against stable discriminators such as `kind` instead.
 - IDE-integrated shells can inherit extension-host variables such as
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
