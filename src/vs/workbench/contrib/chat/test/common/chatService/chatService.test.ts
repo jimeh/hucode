@@ -1198,13 +1198,13 @@ suite('ChatService', () => {
 
 		const model = testService.getSession(sessionResource) as ChatModel;
 		assert.deepStrictEqual(model.getRequests()[0].message.parts.map(part => ({
-			type: part.constructor.name,
+			kind: part.kind,
 			text: part instanceof ChatRequestSlashPromptPart ? part.name : undefined,
 		})), [
-			{ type: 'ChatRequestAgentPart', text: undefined },
-			{ type: 'ChatRequestTextPart', text: undefined },
-			{ type: 'ChatRequestSlashPromptPart', text: 'skill' },
-			{ type: 'ChatRequestTextPart', text: undefined },
+			{ kind: 'agent', text: undefined },
+			{ kind: 'text', text: undefined },
+			{ kind: 'prompt', text: 'skill' },
+			{ kind: 'text', text: undefined },
 		]);
 	});
 
@@ -1293,11 +1293,11 @@ suite('ChatService', () => {
 
 		const model = testService.getSession(sessionResource) as ChatModel;
 		assert.deepStrictEqual(model.getRequests()[0].message.parts.map(part => ({
-			type: part.constructor.name,
+			kind: part.kind,
 			text: part instanceof ChatRequestSlashPromptPart ? part.name : undefined,
 		})), [
-			{ type: 'ChatRequestSlashPromptPart', text: 'skill' },
-			{ type: 'ChatRequestTextPart', text: undefined },
+			{ kind: 'prompt', text: 'skill' },
+			{ kind: 'text', text: undefined },
 		]);
 	});
 
@@ -1336,11 +1336,11 @@ suite('ChatService', () => {
 		testDisposables.add(ref);
 
 		assert.deepStrictEqual(ref.object.getRequests()[0].message.parts.map(part => ({
-			type: part.constructor.name,
+			kind: part.kind,
 			text: part instanceof ChatRequestSlashPromptPart ? part.name : undefined,
 		})), [
-			{ type: 'ChatRequestSlashPromptPart', text: 'skill' },
-			{ type: 'ChatRequestTextPart', text: undefined },
+			{ kind: 'prompt', text: 'skill' },
+			{ kind: 'text', text: undefined },
 		]);
 	});
 
