@@ -1,6 +1,22 @@
 [settings]
 idiomatic_version_file_enable_tools = ["node"]
 
+lockfile = true
+minimum_release_age = "3d"
+minimum_release_age_excludes = ["github:jimeh/treeboot"]
+
+[settings.task]
+run_auto_install = true
+
 [tools]
+"github:jimeh/treeboot" = "latest"
 npm = "11.1"
 pinact = "latest"
+
+[tasks."setup"]
+description = "Install dependencies"
+run = "npm install"
+
+[tasks.treeboot]
+description = "Bootstrap the current worktree with treeboot"
+run = "treeboot"
