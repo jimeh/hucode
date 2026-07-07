@@ -85,6 +85,8 @@ export interface IAgentSdkProductConfig {
 
 export interface IProductConfiguration {
 	readonly version: string;
+	readonly hucodeVersion?: string;
+	readonly hucodeReleaseNotesUrlTemplate?: string;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;
