@@ -5,7 +5,7 @@
 	<meta charset="UTF-8">
 
 	<meta http-equiv="Content-Security-Policy"
-		content="default-src 'none'; script-src 'sha256-nXjtuhBilO++r8hfxl5VjEScSmdm07wDAk6jw228DgM=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
+		content="default-src 'none'; script-src 'sha256-vGU0IdHJqSltFWCkMWURhsidyY9gqM3UPOe+Fog9Nco=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
 
 	<!-- Disable pinch zooming -->
 	<meta name="viewport"
@@ -331,6 +331,15 @@
 				const parentOrigin = searchParams.get('parentOrigin');
 
 				const hostname = location.hostname;
+
+				// Hucode: self-hosted serve-web serves this page from the
+				// workbench origin itself instead of a hashed wildcard
+				// subdomain. In that case there is no cross-origin boundary to
+				// verify; the postMessage targetOrigin still pins delivery to
+				// the declared parent origin.
+				if (parentOrigin === location.origin) {
+					return start(parentOrigin);
+				}
 
 				if (!crypto.subtle) {
 					// cannot validate, not running in a secure context

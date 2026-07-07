@@ -11,16 +11,25 @@ import {
 } from '../../base/browser/ui/grid/grid.js';
 import { Parts } from '../../workbench/services/layout/browser/layoutService.js';
 
+/**
+ * Inputs describing the Omni window size and which workbench parts are visible,
+ * used to build the serialized grid layout.
+ */
 export interface IOmniLayoutDescriptorOptions {
 	readonly width: number;
 	readonly height: number;
 	readonly titleBarHeight: number;
+	readonly titleBarVisible?: boolean;
 	readonly sideBarVisible: boolean;
 	readonly auxiliaryBarVisible: boolean;
 	readonly omniHostVisible: boolean;
 	readonly panelVisible: boolean;
 }
 
+/**
+ * Builds the serialized grid layout for the Omni window from the given size and
+ * part-visibility options.
+ */
 export function createOmniGridDescriptor(
 	options: IOmniLayoutDescriptorOptions
 ): ISerializedGrid {
@@ -29,17 +38,18 @@ export function createOmniGridDescriptor(
 	const sideBarSize = 300;
 	const auxiliaryBarSize = 380;
 	const panelSize = 300;
+	const titleBarVisible = options.titleBarVisible ?? true;
 	const titleBarHeight = options.titleBarHeight;
 	const rightSectionWidth = Math.max(0, width - sideBarSize);
 	const omniHostWidth = Math.max(0, rightSectionWidth - auxiliaryBarSize);
-	const contentHeight = height - titleBarHeight;
+	const contentHeight = height - (titleBarVisible ? titleBarHeight : 0);
 	const topRightHeight = Math.max(0, contentHeight - panelSize);
 
 	const titleBarNode: ISerializedLeafNode = {
 		type: 'leaf',
 		data: { type: Parts.TITLEBAR_PART },
 		size: titleBarHeight,
-		visible: true,
+		visible: titleBarVisible,
 	};
 
 	const sideBarNode: ISerializedLeafNode = {
