@@ -10,8 +10,7 @@ if command -v mise >/dev/null 2>&1 && [ -f mise.toml ]; then
 	mise trust mise.toml
 fi
 
-mise x -- npm run hucode:seed-worktree-node-modules
-mise x -- npm install
+mise run treeboot
 '''
 
 [[actions]]
