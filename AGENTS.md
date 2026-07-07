@@ -30,6 +30,8 @@ as the required Hucode instruction set for work in this fork.
     media with Hucode product config.
   - `npm run hucode:watch`: run the incremental Hucode watch flow.
   - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
+  - `npm run hucode:web`: launch the local serve-web development server
+    through the Hucode wrapper.
 - For VS Code release upgrades, use the project-local
   `hucode-upgrade-vscode` skill and follow
   [Repo Strategy](docs/hucode/repo-strategy.md).
@@ -61,6 +63,9 @@ as the required Hucode instruction set for work in this fork.
 - Do not run `npm run test-node -- --run ...` concurrently with
   `npm run gulp compile-client`; the compile task cleans `out/`, which can make
   the test runner fail to resolve freshly built modules.
+- Do not run multiple `./scripts/test.sh` invocations concurrently. They share
+  the same `.build/electron` app preparation path and can race while creating
+  framework symlinks.
 - IDE-integrated shells can inherit extension-host variables such as
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`

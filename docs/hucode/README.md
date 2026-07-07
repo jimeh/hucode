@@ -38,6 +38,8 @@ Current local workflow:
 - `npm run hucode:watch`: run the normal watch flow with Hucode product config
   staged for the subprocess.
 - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
+- `npm run hucode:web`: launch the local serve-web development server through
+  the Hucode wrapper.
 - `npm run hucode:generate-icons`: regenerate Hucode macOS icon assets from
   `build/hucode/icons/darwin/`.
 - `npm run hucode:prepare-release -- --version <version>`: consume

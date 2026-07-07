@@ -10,7 +10,8 @@ import { equals } from '../../base/common/objects.js';
 import { EventType, EventHelper, addDisposableListener, ModifierKeyEmitter, hasWindow, getWindowById, getWindows, $ } from '../../base/browser/dom.js';
 import { Action, Separator, WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../base/common/actions.js';
 import { IFileService } from '../../platform/files/common/files.js';
-import { EditorResourceAccessor, IUntitledTextResourceEditorInput, SideBySideEditor, pathsToEditors, IResourceDiffEditorInput, IUntypedEditorInput, IEditorPane, isResourceEditorInput, IResourceMergeEditorInput } from '../common/editor.js';
+import { EditorResourceAccessor, SideBySideEditor } from '../common/editor.js';
+import { openHucodeFilesRequest } from '../browser/hucodeOpenFilesRequest.js';
 import { IEditorService } from '../services/editor/common/editorService.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
 import {
@@ -25,7 +26,6 @@ import { IWorkbenchThemeService } from '../services/themes/common/workbenchTheme
 import { ApplyZoomTarget, applyZoom } from '../../platform/window/electron-browser/window.js';
 import { setFullscreen, getZoomLevel, onDidChangeZoomLevel, getZoomFactor } from '../../base/browser/browser.js';
 import { ICommandService, CommandsRegistry } from '../../platform/commands/common/commands.js';
-import { IResourceEditorInput } from '../../platform/editor/common/editor.js';
 import { ipcRenderer, process } from '../../base/parts/sandbox/electron-browser/globals.js';
 import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
 import { IMenuService, MenuId, IMenu, MenuItemAction, MenuRegistry } from '../../platform/actions/common/actions.js';
@@ -1025,29 +1025,12 @@ export class NativeWindow extends BaseWindow {
 	}
 
 	private async onOpenFiles(request: INativeOpenFileRequest): Promise<void> {
-		const diffMode = !!(request.filesToDiff && (request.filesToDiff.length === 2));
-		const mergeMode = !!(request.filesToMerge && (request.filesToMerge.length === 4));
-
-		const inputs = coalesce(await pathsToEditors(mergeMode ? request.filesToMerge : diffMode ? request.filesToDiff : request.filesToOpenOrCreate, this.fileService, this.logService));
-		if (inputs.length) {
-			const openedEditorPanes = await this.openResources(inputs, diffMode, mergeMode);
-
-			if (request.filesToWait) {
-
-				// In wait mode, listen to changes to the editors and wait until the files
-				// are closed that the user wants to wait for. When this happens we delete
-				// the wait marker file to signal to the outside that editing is done.
-				// However, it is possible that opening of the editors failed, as such we
-				// check for whether editor panes got opened and otherwise delete the marker
-				// right away.
-
-				if (openedEditorPanes.length) {
-					return this.trackClosedWaitFiles(URI.revive(request.filesToWait.waitMarkerFileUri), coalesce(request.filesToWait.paths.map(path => URI.revive(path.fileUri))));
-				} else {
-					return this.fileService.del(URI.revive(request.filesToWait.waitMarkerFileUri));
-				}
-			}
-		}
+		await openHucodeFilesRequest(request, {
+			editorService: this.editorService,
+			fileService: this.fileService,
+			instantiationService: this.instantiationService,
+			logService: this.logService
+		});
 	}
 
 	private async trackClosedWaitFiles(waitMarkerFile: URI, resourcesToWaitFor: URI[]): Promise<void> {
@@ -1057,32 +1040,6 @@ export class NativeWindow extends BaseWindow {
 
 		// ...before deleting the wait marker file
 		await this.fileService.del(waitMarkerFile);
-	}
-
-	private async openResources(resources: Array<IResourceEditorInput | IUntitledTextResourceEditorInput>, diffMode: boolean, mergeMode: boolean): Promise<readonly IEditorPane[]> {
-		const editors: IUntypedEditorInput[] = [];
-
-		if (mergeMode && isResourceEditorInput(resources[0]) && isResourceEditorInput(resources[1]) && isResourceEditorInput(resources[2]) && isResourceEditorInput(resources[3])) {
-			const mergeEditor: IResourceMergeEditorInput = {
-				input1: { resource: resources[0].resource },
-				input2: { resource: resources[1].resource },
-				base: { resource: resources[2].resource },
-				result: { resource: resources[3].resource },
-				options: { pinned: true }
-			};
-			editors.push(mergeEditor);
-		} else if (diffMode && isResourceEditorInput(resources[0]) && isResourceEditorInput(resources[1])) {
-			const diffEditor: IResourceDiffEditorInput = {
-				original: { resource: resources[0].resource },
-				modified: { resource: resources[1].resource },
-				options: { pinned: true }
-			};
-			editors.push(diffEditor);
-		} else {
-			editors.push(...resources);
-		}
-
-		return this.editorService.openEditors(editors, undefined, { validateTrust: true });
 	}
 
 	//#region Window Zoom
