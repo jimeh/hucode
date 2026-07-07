@@ -40,6 +40,8 @@ import { IServerEnvironmentService, ServerParsedArgs } from './serverEnvironment
 import { IServerLifetimeService } from './serverLifetimeService.js';
 import { setupServerServices, SocketServer } from './serverServices.js';
 import { CacheControl, serveError, serveFile, WebClientServer } from './webClientServer.js';
+import { isHucodeWebProjectsApiPath } from './hucodeWebProjectManagerServer.js';
+import { HUCODE_WEB_OMNI_ROOT_ARG } from './hucodeWebOmniRoutes.js';
 const require = createRequire(import.meta.url);
 
 declare namespace vsda {
@@ -95,7 +97,7 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 		this._allReconnectionTokens = new Set<string>();
 		this._webClientServer = (
 			hasWebClient
-				? this._instantiationService.createInstance(WebClientServer, this._connectionToken, serverBasePath ?? '/', this._serverProductPath)
+				? this._register(this._instantiationService.createInstance(WebClientServer, this._connectionToken, serverBasePath ?? '/', this._serverProductPath))
 				: null
 		);
 		this._logService.info(`Extension host agent started.`);
@@ -103,11 +105,6 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 	}
 
 	public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-		// Only serve GET requests
-		if (req.method !== 'GET') {
-			return serveError(req, res, 405, `Unsupported method ${req.method}`);
-		}
-
 		if (!req.url) {
 			return serveError(req, res, 400, `Bad request.`);
 		}
@@ -126,6 +123,18 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 		// for now accept all paths, with or without server product path
 		if (pathname.startsWith(this._serverProductPath) && pathname.charCodeAt(this._serverProductPath.length) === CharCode.Slash) {
 			pathname = pathname.substring(this._serverProductPath.length);
+		}
+
+		// Only serve GET requests, except for the Hucode-owned web APIs, which
+		// exist only when Omni web mode is enabled. Without the flag the
+		// upstream method guard applies so non-Omni servers keep 405 behavior.
+		const hucodeWebOmniEnabled =
+			!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG];
+		if (
+			req.method !== 'GET' &&
+			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname))
+		) {
+			return serveError(req, res, 405, `Unsupported method ${req.method}`);
 		}
 
 		// Version

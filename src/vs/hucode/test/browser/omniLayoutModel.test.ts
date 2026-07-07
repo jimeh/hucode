@@ -99,6 +99,30 @@ suite('OmniLayoutModel', () => {
 		assert.ok(host.size > 0);
 	});
 
+	test('web layout can hide the shell titlebar without reserving height', () => {
+		const descriptor = createOmniGridDescriptor({
+			width: 1280,
+			height: 800,
+			titleBarVisible: false,
+			titleBarHeight: 0,
+			sideBarVisible: true,
+			auxiliaryBarVisible: false,
+			omniHostVisible: true,
+			panelVisible: false,
+		});
+
+		const root = descriptor.root as ISerializedNode;
+		const titleBar = getLeaf(root, Parts.TITLEBAR_PART);
+		const topRight = getBranchContainingLeaf(
+			root,
+			Parts.HUCODE_OMNI_HOST_PART
+		);
+
+		assert.strictEqual(titleBar.visible, false);
+		assert.strictEqual(titleBar.size, 0);
+		assert.strictEqual(topRight.size, 500);
+	});
+
 	test('small windows do not create negative host surface bounds', () => {
 		const descriptor = createOmniGridDescriptor({
 			width: 420,

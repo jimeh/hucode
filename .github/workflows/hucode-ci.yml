@@ -295,9 +295,23 @@ jobs:
             --run \
             src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts \
             --run \
+            src/vs/hucode/test/common/hostedWorkspaceState.test.ts \
+            --run \
             src/vs/platform/browserView/test/common/browserViewLayout.test.ts \
             --run \
             src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
+            --run \
+            src/vs/platform/environment/test/common/hucodeWebConfiguration.test.ts \
+            --run \
+            src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts \
+            --run \
+            src/vs/platform/projectManager/test/common/projectManagerState.test.ts \
+            --run \
+            src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \
+            --run \
+            src/vs/server/test/node/hucodeWebOmniRoutes.test.ts \
+            --run \
+            src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts \
             --run \
             src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
             --run \
@@ -322,7 +336,17 @@ jobs:
         run: |
           xvfb-run ./scripts/test.sh \
             --run \
+            src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts \
+            --run \
+            src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts \
+            --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
+            --run \
+            src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
+            --run \
+            src/vs/hucode/test/browser/webShellService.test.ts \
+            --run \
+            src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts \
             --run \
             src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
             --run \

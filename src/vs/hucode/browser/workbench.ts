@@ -5,6 +5,7 @@
 
 import '../../workbench/browser/style.js';
 import './media/style.css';
+import './webOmniHostSurfaceService.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { Emitter, Event, setGlobalLeakWarningThreshold } from '../../base/common/event.js';
 import { getActiveDocument, getActiveElement, getClientArea, getWindowId, getWindows, IDimension, isAncestorUsingFlowTo, size, Dimension, runWhenWindowIdle } from '../../base/browser/dom.js';
@@ -72,6 +73,11 @@ export interface IWorkbenchOptions {
 	 * Extra classes to be added to the workbench container.
 	 */
 	extraClasses?: string[];
+
+	/**
+	 * Whether this workbench is running as the browser serve-web Omni shell.
+	 */
+	isWebOmniShell?: boolean;
 }
 
 //#endregion
@@ -261,6 +267,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private paneCompositeService!: IPaneCompositePartService;
 	private viewDescriptorService!: IViewDescriptorService;
 	private omniHostPart!: OmniHostPart;
+	private readonly isWebOmniShell: boolean;
 
 	//#endregion
 
@@ -271,6 +278,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		private readonly logService: ILogService
 	) {
 		super();
+
+		this.isWebOmniShell = options?.isWebOmniShell ?? false;
 
 		// Perf: measure workbench startup time
 		mark('code/willStartWorkbench');
@@ -796,7 +805,10 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		return createOmniGridDescriptor({
 			width: this._mainContainerDimension.width,
 			height: this._mainContainerDimension.height,
-			titleBarHeight: this.titleBarPartView?.minimumHeight ?? 30,
+			titleBarVisible: !this.isWebOmniShell,
+			titleBarHeight: this.isWebOmniShell
+				? 0
+				: this.titleBarPartView?.minimumHeight ?? 30,
 			sideBarVisible: this.partVisibility.sidebar,
 			auxiliaryBarVisible: this.partVisibility.auxiliaryBar,
 			omniHostVisible: this.partVisibility.omniHost,
@@ -976,7 +988,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	isVisible(part: Parts, targetWindow?: Window): boolean {
 		switch (part) {
 			case Parts.TITLEBAR_PART:
-				return true; // Always visible
+				return !this.isWebOmniShell;
 			case Parts.SIDEBAR_PART:
 				return this.partVisibility.sidebar;
 			case Parts.AUXILIARYBAR_PART:

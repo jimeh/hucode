@@ -83,6 +83,11 @@ export const IHucodeShellService =
  */
 export interface IHucodeShellService {
 	readonly _serviceBrand: undefined;
+	/**
+	 * Whether the current host can use screenshot fallback rendering for shell
+	 * overlays above hosted workbenches.
+	 */
+	readonly supportsWorkspaceScreenshotOverlay: boolean;
 
 	readonly onDidChangeWindowState: Event<IHucodeShellWindowStateChange>;
 

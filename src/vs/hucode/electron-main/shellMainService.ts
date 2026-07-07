@@ -47,6 +47,7 @@ export class HucodeShellMainService extends Disposable
 	implements IHucodeShellMainService {
 
 	declare readonly _serviceBrand: undefined;
+	readonly supportsWorkspaceScreenshotOverlay = true;
 
 	private readonly _onDidChangeWindowState =
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
