@@ -26,6 +26,11 @@ import { IsWebContext } from '../../../../platform/contextkey/common/contextkeys
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { URI } from '../../../../base/common/uri.js';
+import {
+	getHucodeApplicationVersion,
+	getHucodeReleaseNotesMarkdownUrl,
+	hasHucodeReleaseNotes,
+} from '../../../../platform/product/common/hucodeProductVersion.js';
 
 const workbench = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 
@@ -40,7 +45,7 @@ workbench.registerWorkbenchContribution(PostUpdateWidgetContribution, LifecycleP
 
 export class ShowReleaseNotesAction extends Action2 {
 
-	static readonly AVAILABLE = !!product.releaseNotesUrl;
+	static readonly AVAILABLE = hasHucodeReleaseNotes(product);
 
 	constructor() {
 		super({
@@ -63,13 +68,15 @@ export class ShowReleaseNotesAction extends Action2 {
 		const instantiationService = accessor.get(IInstantiationService);
 		const productService = accessor.get(IProductService);
 		const openerService = accessor.get(IOpenerService);
-		const targetVersion = version ?? productService.version;
+		const targetVersion = version ?? getHucodeApplicationVersion(productService);
 
 		try {
 			await showReleaseNotesInEditor(instantiationService, targetVersion, false);
 		} catch (err) {
-			if (productService.releaseNotesUrl) {
-				await openerService.open(URI.parse(productService.releaseNotesUrl));
+			const fallbackUrl = productService.releaseNotesUrl
+				?? getHucodeReleaseNotesMarkdownUrl(productService, targetVersion);
+			if (fallbackUrl) {
+				await openerService.open(URI.parse(fallbackUrl));
 			} else {
 				throw new Error(localize('update.noReleaseNotesOnline', "This version of {0} does not have release notes online", productService.nameLong));
 			}
@@ -96,7 +103,7 @@ export class ShowCurrentReleaseNotesFromCurrentFileAction extends Action2 {
 		const productService = accessor.get(IProductService);
 
 		try {
-			await showReleaseNotesInEditor(instantiationService, productService.version, true);
+			await showReleaseNotesInEditor(instantiationService, getHucodeApplicationVersion(productService), true);
 		} catch (err) {
 			throw new Error(localize('releaseNotesFromFileNone', "Cannot open the current file as Release Notes"));
 		}
