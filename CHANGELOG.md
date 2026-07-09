@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.42 - 2026-07-09
+
+### Bug Fixes
+
+- backport upstream automation dialog performance fix (#78)
+
 ## 0.0.41 - 2026-07-08
 
 ### Features
