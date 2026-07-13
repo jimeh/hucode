@@ -186,6 +186,26 @@ suite('Hucode release build', () => {
 		);
 	});
 
+	test('rejects prebuilt CLI input during package-only phase', () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				releaseBuildScript,
+				'--phase',
+				'package',
+				'--prebuilt-cli',
+				path.join(tmpDir, 'hucode-tunnel')
+			],
+			{ encoding: 'utf8' }
+		);
+
+		assert.strictEqual(result.status, 1);
+		assert.match(
+			result.stderr,
+			/--prebuilt-cli cannot be used with --phase package/
+		);
+	});
+
 	test('rejects packaged Copilot without target ripgrep shim', async () => {
 		const buildOutput = path.join(tmpDir, 'VSCode-darwin-arm64');
 		await createPackagedCopilotExtension(buildOutput, 'darwin-x64');

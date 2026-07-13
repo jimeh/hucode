@@ -9,12 +9,23 @@ elif [ "$VSCODE_ARCH" == "armhf" ]; then
   TRIPLE="arm-rpi-linux-gnueabihf"
 fi
 
+OBJDUMP="${OBJDUMP:-$VSCODE_SYSROOT_DIR/$TRIPLE/$TRIPLE/bin/objdump}"
+
 # Get all files with .node extension from server folder
-files=$(find $SEARCH_PATH -name "*.node" -not -path "*prebuilds*" -not -path "*extensions/node_modules/@parcel/watcher*" -o -type f -executable -name "node")
+mapfile -t files < <(
+  find "$SEARCH_PATH" \
+    \( \
+      -type f \
+      -name "*.node" \
+      -not -path "*prebuilds*" \
+      -not -path "*extensions/node_modules/@parcel/watcher*" \
+    \) \
+    -o \( -type f -executable -name "node" \)
+)
 
-echo "Verifying requirements for files: $files"
+echo "Verifying requirements for files: ${files[*]}"
 
-for file in $files; do
+for file in "${files[@]}"; do
   glibc_version="$EXPECTED_GLIBC_VERSION"
   glibcxx_version="$EXPECTED_GLIBCXX_VERSION"
   while IFS= read -r line; do
@@ -31,7 +42,7 @@ for file in $files; do
         glibcxx_version=$version
       fi
     fi
-  done < <("$VSCODE_SYSROOT_DIR/$TRIPLE/$TRIPLE/bin/objdump" -T "$file")
+  done < <("$OBJDUMP" -T "$file")
 
   if [[ "$glibc_version" != "$EXPECTED_GLIBC_VERSION" ]]; then
     echo "Error: File $file has dependency on GLIBC > $EXPECTED_GLIBC_VERSION, found $glibc_version"

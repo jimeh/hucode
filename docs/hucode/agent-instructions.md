@@ -186,9 +186,9 @@ VS Code code that Hucode customizes.
   after upstream prepare tasks so package versions come from Hucode's
   `hucodeVersion`, not upstream VS Code's `package.json` version.
 - Standalone CLI release archives are packaged from the CLI already mixed into
-  the assembled desktop output, not from a second Cargo build. Archives contain
-  exactly one root executable named `hucode` or `hucode.exe`; Linux uses
-  `.tar.gz`, while macOS and Windows use ZIP.
+  the assembled desktop output, not from a second Cargo build during packaging.
+  Archives contain exactly one root executable named `hucode` or `hucode.exe`;
+  Linux uses `.tar.gz`, while macOS and Windows use ZIP.
 - Hucode macOS release builds must compile the Rust CLI against the downloaded
   `@vscode/openssl-prebuilt` macOS libraries. Do not let `hucode-tunnel` link
   Homebrew OpenSSL from `/opt/homebrew` or `/usr/local`; hardened runtime rejects
@@ -295,7 +295,11 @@ VS Code code that Hucode customizes.
   indexes.
 - VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
-  runners cannot execute the arm64 sysroot compiler binary.
+  runners cannot execute the arm64 sysroot compiler binary. Build the GNU
+  arm64 CLI in the dedicated x64-hosted cross-build job, verify that it requires
+  no newer than GLIBC 2.28, then pass it to the native app build through
+  `--prebuilt-cli`. Linux server-web archives must pass the matching GLIBC and
+  GLIBCXX runtime-requirements audit before upload.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or

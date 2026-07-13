@@ -194,11 +194,144 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux-arm64-cli:
+    name: Build Linux arm64 CLI
+    if: github.event_name != 'workflow_dispatch' || inputs.linux_arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup npm 11.1
+        run: npm install -g npm@11.1.0
+
+      - name: Prepare Hucode mixin
+        run: npm run hucode:prepare
+
+      - name: Download arm64 OpenSSL prebuilt
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl_root="$PWD/.build/hucode/openssl"
+          mkdir -p "$openssl_root"
+          tarball="$(npm pack @vscode/openssl-prebuilt@0.0.11 \
+            --pack-destination "$openssl_root")"
+          tar -xzf "$openssl_root/$tarball" \
+            --strip-components=1 \
+            --directory="$openssl_root"
+          openssl_arch_root="$openssl_root/out/arm64-linux"
+          if [ ! -d "$openssl_arch_root/lib" ] || \
+            [ ! -d "$openssl_arch_root/include" ]; then
+            echo "OpenSSL prebuilt not found: $openssl_arch_root" >&2
+            exit 1
+          fi
+          {
+            echo "OPENSSL_LIB_DIR=$openssl_arch_root/lib"
+            echo "OPENSSL_INCLUDE_DIR=$openssl_arch_root/include"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup set profile minimal
+          rustup toolchain install "$RUSTUP_TOOLCHAIN"
+          rustup default "$RUSTUP_TOOLCHAIN"
+          rustup target add aarch64-unknown-linux-gnu
+          rustc --version
+          cargo --version
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
+
+      - name: Download Linux arm64 sysroot
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export VSCODE_SYSROOT_DIR="$PWD/.build/sysroots"
+          export VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-10.5.0"
+          SYSROOT_ARCH=arm64 \
+            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+
+      - name: Build and verify Linux arm64 CLI
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sysroot_root="$PWD/.build/sysroots"
+          triple="aarch64-linux-gnu"
+          toolchain="$sysroot_root/$triple"
+          sysroot="$toolchain/$triple/sysroot"
+          gcc="$toolchain/bin/$triple-gcc"
+          objdump="$toolchain/$triple/bin/objdump"
+
+          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$gcc"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=--sysroot=$sysroot"
+          export CC_aarch64_unknown_linux_gnu="$gcc --sysroot=$sysroot"
+          export PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu="$sysroot/usr/lib/aarch64-linux-gnu/pkgconfig:$sysroot/usr/share/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu="$sysroot"
+          export VSCODE_CLI_COMMIT="$GITHUB_SHA"
+          export VSCODE_CLI_PRODUCT_JSON="$PWD/.build/distro/mixin/stable/product.json"
+
+          cargo build \
+            --release \
+            --target aarch64-unknown-linux-gnu \
+            --bin code \
+            --manifest-path cli/Cargo.toml
+
+          binary="$PWD/cli/target/aarch64-unknown-linux-gnu/release/code"
+          glibc_version="2.28"
+          while IFS= read -r line; do
+            if [[ "$line" == *"GLIBC_"* ]]; then
+              version="$(echo "$line" | awk '{print $5}' | tr -d '()')"
+              version="${version#*_}"
+              if [[ "$(printf '%s\n%s' "$version" "$glibc_version" | \
+                sort -V | tail -n1)" == "$version" ]]; then
+                glibc_version="$version"
+              fi
+            fi
+          done < <("$objdump" -T "$binary")
+          if [ "$glibc_version" != "2.28" ]; then
+            echo "CLI requires GLIBC $glibc_version; expected at most 2.28" >&2
+            exit 1
+          fi
+
+          output="$PWD/.build/hucode/cli/linux-arm64/hucode-tunnel"
+          mkdir -p "$(dirname "$output")"
+          cp "$binary" "$output"
+          chmod +x "$output"
+
+      - name: Upload Linux arm64 CLI
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-cli-build-linux-arm64
+          path: .build/hucode/cli/linux-arm64/hucode-tunnel
+          if-no-files-found: error
+          retention-days: 14
+
   app-build:
     name: Build app (${{ matrix.platform }}-${{ matrix.arch }})
+    if: >-
+      always() &&
+      needs.prepare-matrix.result == 'success' &&
+      needs.copilot-vsix.result == 'success' &&
+      (needs.linux-arm64-cli.result == 'success' ||
+        needs.linux-arm64-cli.result == 'skipped')
     needs:
       - prepare-matrix
       - copilot-vsix
+      - linux-arm64-cli
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
@@ -457,6 +590,13 @@ jobs:
           name: hucode-copilot-vsix
           path: .build/hucode/copilot
 
+      - name: Download Linux arm64 CLI
+        if: matrix.platform == 'linux' && matrix.arch == 'arm64'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-cli-build-linux-arm64
+          path: .build/hucode/cli/linux-arm64
+
       - name: Add Windows SDK tools to PATH
         if: matrix.platform == 'win32'
         shell: pwsh
@@ -493,6 +633,14 @@ jobs:
       - name: Build release app
         run: |
           set -euo pipefail
+          cli_args=()
+          if [ "${{ matrix.platform }}" = "linux" ] && \
+            [ "${{ matrix.arch }}" = "arm64" ]; then
+            cli_args+=(
+              --prebuilt-cli
+              ".build/hucode/cli/linux-arm64/hucode-tunnel"
+            )
+          fi
           if [ "${{ matrix.platform }}" = "win32" ]; then
             export CFLAGS="${{ matrix.cflags }}"
             export RUSTFLAGS="${{ matrix.rustflags }}"
@@ -502,7 +650,8 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --phase build \
             --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
-            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
+            "${cli_args[@]}"
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -589,6 +738,17 @@ jobs:
           else
             (cd .. && zip -Xry "$archive_path" "$server_name")
           fi
+
+      - name: Verify Linux server-web runtime requirements
+        if: matrix.platform == 'linux' && matrix.arch != 'armhf'
+        shell: bash
+        env:
+          EXPECTED_GLIBC_VERSION: "2.28"
+          EXPECTED_GLIBCXX_VERSION: "3.4.25"
+          OBJDUMP: objdump
+          SEARCH_PATH: ../vscode-server-${{ matrix.platform }}-${{ matrix.arch }}-web
+          VSCODE_ARCH: ${{ matrix.arch }}
+        run: build/azure-pipelines/linux/verify-glibc-requirements.sh
 
       - name: Prepare Windows AppX package
         if: matrix.platform == 'win32'

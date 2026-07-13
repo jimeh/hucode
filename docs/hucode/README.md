@@ -61,6 +61,10 @@ Current local workflow:
 - `node build/hucode/release-build.ts --copilot-vsix <path>`: inject a
   prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
   desktop app, matching the release workflow's smaller Copilot package shape.
+- `node build/hucode/release-build.ts --prebuilt-cli <path>`: mix a CLI built
+  for the selected target into the final app output. Release CI uses this for
+  the x64-hosted Linux arm64 cross-build so the standalone CLI retains
+  upstream's GLIBC 2.28 compatibility baseline.
 - `node build/hucode/release-build.ts --platform darwin --arch <arch> --sign`:
   sign the macOS app, then sign, notarize, staple, and validate DMG release
   assets. Signed Darwin ZIP archives are still supported for explicit local

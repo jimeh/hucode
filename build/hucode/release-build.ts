@@ -55,6 +55,7 @@ interface ReleaseOptions {
 	quality: string;
 	out: string;
 	copilotVsix: string | undefined;
+	prebuiltCli: string | undefined;
 	phase: ReleasePhase;
 	sign: boolean;
 	signingMode: SigningMode;
@@ -153,6 +154,7 @@ Supported values: archive, cli, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
+--prebuilt-cli <path>  Mix an existing target CLI into the app output.
 --phase <name>      Phase to run: all, build, package. Defaults to all.
 --phase build       Creates the final unsigned app output.
 --phase package     Consumes an existing app output and emits artifacts.
@@ -236,6 +238,7 @@ function parseArgs(args: string[]): ReleaseOptions {
 		quality: 'stable',
 		out: 'dist',
 		copilotVsix: undefined,
+		prebuiltCli: undefined,
 		phase: 'all',
 		sign: false,
 		signingMode: 'local',
@@ -267,6 +270,12 @@ function parseArgs(args: string[]): ReleaseOptions {
 				break;
 			case '--copilot-vsix':
 				options.copilotVsix = path.resolve(
+					repoRoot,
+					readValue(args, ++i, arg)
+				);
+				break;
+			case '--prebuilt-cli':
+				options.prebuiltCli = path.resolve(
 					repoRoot,
 					readValue(args, ++i, arg)
 				);
@@ -334,6 +343,10 @@ function parseArgs(args: string[]): ReleaseOptions {
 
 	if (options.phase === 'package' && options.copilotVsix) {
 		throw new Error('--copilot-vsix cannot be used with --phase package.');
+	}
+
+	if (options.phase === 'package' && options.prebuiltCli) {
+		throw new Error('--prebuilt-cli cannot be used with --phase package.');
 	}
 
 	if (options.phase === 'build' && options.sign) {
@@ -1801,31 +1814,40 @@ async function mixInCli(options: ReleaseOptions, buildOutput: string): Promise<v
 	}
 
 	const product = await readJson<ProductJson>(appProductPath);
-	const target = getCliTarget(options);
-	const commit = process.env.GITHUB_SHA
-		?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
-	await run('cargo', [
-		'build',
-		'--release',
-		'--target',
-		target,
-		'--bin',
-		'code'
-	], path.join(repoRoot, 'cli'), {
-		CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
-		VSCODE_CLI_COMMIT: commit,
-		VSCODE_CLI_PRODUCT_JSON: appProductPath,
-		...await getCliEnv(options)
-	});
+	let cliBinary = options.prebuiltCli;
+	if (cliBinary) {
+		const stats = await fs.stat(cliBinary).catch(() => undefined);
+		if (!stats?.isFile()) {
+			throw new Error(`Prebuilt Hucode CLI not found: ${cliBinary}`);
+		}
+		console.log(`Prebuilt Hucode CLI: ${cliBinary}`);
+	} else {
+		const target = getCliTarget(options);
+		const commit = process.env.GITHUB_SHA
+			?? await capture('git', ['rev-parse', 'HEAD'], repoRoot);
+		await run('cargo', [
+			'build',
+			'--release',
+			'--target',
+			target,
+			'--bin',
+			'code'
+		], path.join(repoRoot, 'cli'), {
+			CARGO_NET_GIT_FETCH_WITH_CLI: 'true',
+			VSCODE_CLI_COMMIT: commit,
+			VSCODE_CLI_PRODUCT_JSON: appProductPath,
+			...await getCliEnv(options)
+		});
 
-	const cliBinary = path.join(
-		repoRoot,
-		'cli',
-		'target',
-		target,
-		'release',
-		`code${options.platform === 'win32' ? '.exe' : ''}`
-	);
+		cliBinary = path.join(
+			repoRoot,
+			'cli',
+			'target',
+			target,
+			'release',
+			`code${options.platform === 'win32' ? '.exe' : ''}`
+		);
+	}
 	const destination = getAppCliDestination(options, buildOutput, product);
 	await fs.mkdir(path.dirname(destination), { recursive: true });
 	await fs.copyFile(cliBinary, destination);
