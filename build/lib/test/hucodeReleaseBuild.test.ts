@@ -9,17 +9,41 @@ import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import yauzl, { type Entry } from 'yauzl';
 import {
 	applyDebianPackageVersion,
 	applyRpmPackageVersion,
+	createStandaloneCliArchive,
 	darwinCliLinkIssues,
 	findBuiltInCopilotExtension,
 	orderReleaseArtifactsForPackaging,
+	standaloneCliArchiveName,
+	standaloneCliExecutableName,
 	validateAppCliArtifact,
 	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
 } from '../../hucode/release-build.ts';
+
+function zipEntryNames(zipPath: string): Promise<string[]> {
+	return new Promise((resolve, reject) => {
+		yauzl.open(zipPath, { lazyEntries: true }, (error, zipfile) => {
+			if (error || !zipfile) {
+				reject(error ?? new Error(`Failed to open ZIP: ${zipPath}`));
+				return;
+			}
+
+			const entries: string[] = [];
+			zipfile.on('entry', (entry: Entry) => {
+				entries.push(entry.fileName);
+				zipfile.readEntry();
+			});
+			zipfile.on('end', () => resolve(entries));
+			zipfile.on('error', reject);
+			zipfile.readEntry();
+		});
+	});
+}
 
 suite('Hucode release build', () => {
 
@@ -196,6 +220,55 @@ suite('Hucode release build', () => {
 				['archive', 'deb']
 			]
 		);
+	});
+
+	test('names standalone CLI archives for each release platform', () => {
+		assert.deepStrictEqual(
+			[
+				{ platform: 'darwin' as const, arch: 'x64' as const },
+				{ platform: 'linux' as const, arch: 'arm64' as const },
+				{ platform: 'win32' as const, arch: 'arm64' as const }
+			].map(standaloneCliArchiveName),
+			[
+				'hucode-cli-darwin-x64.zip',
+				'hucode-cli-linux-arm64.tar.gz',
+				'hucode-cli-win32-arm64.zip'
+			]
+		);
+	});
+
+	test('uses the public product name inside standalone CLI archives', () => {
+		assert.deepStrictEqual(
+			['darwin', 'linux', 'win32'].map(platform =>
+				standaloneCliExecutableName(
+					platform as 'darwin' | 'linux' | 'win32'
+				)
+			),
+			['hucode', 'hucode', 'hucode.exe']
+		);
+	});
+
+	test('packages standalone CLI archives with one root executable', async () => {
+		const source = path.join(tmpDir, 'hucode-tunnel');
+		await fs.writeFile(source, 'cli');
+		await fs.chmod(source, 0o755);
+
+		for (const platform of ['darwin', 'linux', 'win32'] as const) {
+			const archive = await createStandaloneCliArchive(
+				{ platform, arch: 'x64' },
+				source,
+				tmpDir
+			);
+			const executable = standaloneCliExecutableName(platform);
+			const entries = platform === 'linux'
+				? spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' })
+					.stdout.trim().split(/\r?\n/)
+				: await zipEntryNames(archive);
+			assert.deepStrictEqual(
+				entries,
+				[executable]
+			);
+		}
 	});
 
 	test('flags Homebrew OpenSSL runtime links in macOS CLI', () => {

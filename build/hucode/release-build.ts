@@ -22,6 +22,7 @@ type ReleaseArch = 'x64' | 'arm64' | 'armhf';
 type ReleasePhase = 'all' | 'build' | 'package';
 export type ReleaseArtifact =
 	| 'archive'
+	| 'cli'
 	| 'dmg'
 	| 'deb'
 	| 'rpm'
@@ -148,7 +149,7 @@ Builds a minified Hucode desktop package with the stable product mixin.
 Options:
 --archive            Also create hucode-<platform>-<arch>.zip.
 --artifacts <list>   Comma-separated artifacts to create.
-Supported values: archive, dmg, deb, rpm, user-setup, system-setup.
+Supported values: archive, cli, dmg, deb, rpm, user-setup, system-setup.
 --arch <arch>        Target architecture. Defaults to the host arch.
 --move-to-dist       Move the app output to <out>/hucode-<platform>-<arch>.
 --copilot-vsix <path>  Extract a Copilot VSIX instead of building it from source.
@@ -351,9 +352,9 @@ const supportedPhases = new Set<ReleasePhase>(['all', 'build', 'package']);
 const supportedSigningModes = new Set<SigningMode>(['local', 'ci']);
 
 const supportedArtifacts = new Map<ReleasePlatform, Set<ReleaseArtifact>>([
-	['darwin', new Set(['archive', 'dmg'])],
-	['linux', new Set(['archive', 'deb', 'rpm'])],
-	['win32', new Set(['archive', 'user-setup', 'system-setup'])]
+	['darwin', new Set(['archive', 'cli', 'dmg'])],
+	['linux', new Set(['archive', 'cli', 'deb', 'rpm'])],
+	['win32', new Set(['archive', 'cli', 'user-setup', 'system-setup'])]
 ]);
 
 const allSupportedArtifacts = new Set<ReleaseArtifact>(
@@ -907,6 +908,21 @@ async function createArchive(source: string, archivePath: string): Promise<void>
 	await run('zip', ['-Xry', archivePath, '.'], source);
 }
 
+async function createSingleFileZip(
+	source: string,
+	entryName: string,
+	archivePath: string
+): Promise<void> {
+	await fs.rm(archivePath, { force: true });
+	await fs.mkdir(path.dirname(archivePath), { recursive: true });
+
+	const { ZipFile } = await import('yazl');
+	const zipfile = new ZipFile();
+	zipfile.addFile(source, entryName);
+	zipfile.end();
+	await pipeline(zipfile.outputStream, createWriteStream(archivePath));
+}
+
 async function findFirst(
 	root: string,
 	predicate: (filePath: string) => boolean
@@ -939,6 +955,25 @@ function getCliTarget(options: ReleaseTargetOptions): string {
 	}
 
 	return target;
+}
+
+/**
+ * Returns the public archive name for a standalone Hucode CLI target.
+ */
+export function standaloneCliArchiveName(
+	options: ReleaseTargetOptions
+): string {
+	const extension = options.platform === 'linux' ? '.tar.gz' : '.zip';
+	return `hucode-cli-${options.platform}-${options.arch}${extension}`;
+}
+
+/**
+ * Returns the executable name stored at the root of a standalone CLI archive.
+ */
+export function standaloneCliExecutableName(
+	platform: ReleasePlatform
+): string {
+	return platform === 'win32' ? 'hucode.exe' : 'hucode';
 }
 
 /**
@@ -1824,6 +1859,86 @@ async function packageArchive(
 	console.log(`Hucode archive: ${archivePath}`);
 }
 
+/**
+ * Creates a one-file standalone Hucode CLI archive from an assembled binary.
+ */
+export async function createStandaloneCliArchive(
+	options: ReleaseTargetOptions,
+	source: string,
+	distRoot: string
+): Promise<string> {
+	const archiveName = standaloneCliArchiveName(options);
+	const archivePath = path.join(distRoot, archiveName);
+	const executableName = standaloneCliExecutableName(options.platform);
+	const stagingRoot = path.join(
+		distRoot,
+		'.tmp',
+		`hucode-cli-${options.platform}-${options.arch}`
+	);
+	const executablePath = path.join(stagingRoot, executableName);
+
+	await fs.rm(stagingRoot, { recursive: true, force: true });
+	await fs.mkdir(stagingRoot, { recursive: true });
+	try {
+		await fs.copyFile(source, executablePath);
+		if (options.platform !== 'win32') {
+			await fs.chmod(executablePath, 0o755);
+		}
+
+		if (options.platform === 'linux') {
+			await fs.rm(archivePath, { force: true });
+			await fs.mkdir(path.dirname(archivePath), { recursive: true });
+			await run('tar', [
+				'-czf',
+				archivePath,
+				'-C',
+				stagingRoot,
+				executableName
+			], repoRoot);
+		} else {
+			await createSingleFileZip(
+				executablePath,
+				executableName,
+				archivePath
+			);
+		}
+
+	} finally {
+		await fs.rm(stagingRoot, { recursive: true, force: true });
+	}
+
+	return archivePath;
+}
+
+async function packageCli(
+	options: ReleaseOptions,
+	buildOutput: string,
+	distRoot: string,
+	signing: DarwinSigning | undefined
+): Promise<void> {
+	const source = await validateAppCliArtifact(options, buildOutput);
+	if (options.platform === 'darwin' && signing) {
+		await run('codesign', [
+			'--verify',
+			'--strict',
+			'--verbose=2',
+			source
+		], repoRoot);
+	}
+
+	const archivePath = await createStandaloneCliArchive(
+		options,
+		source,
+		distRoot
+	);
+	if (options.platform === 'darwin' && signing) {
+		console.log(`Notarizing Hucode CLI: ${archivePath}`);
+		await notarizeArtifact(archivePath, signing);
+	}
+
+	console.log(`Hucode CLI archive: ${archivePath}`);
+}
+
 async function packageDmg(
 	options: ReleaseOptions,
 	buildOutput: string,
@@ -1976,6 +2091,14 @@ async function packageArtifact(
 				paths.buildOutput,
 				paths.distRoot,
 				paths.distName
+			);
+			return;
+		case 'cli':
+			await packageCli(
+				options,
+				paths.buildOutput,
+				paths.distRoot,
+				paths.signing
 			);
 			return;
 		case 'dmg':

@@ -185,14 +185,20 @@ VS Code code that Hucode customizes.
   the package metadata. The release wrapper patches generated DEB/RPM metadata
   after upstream prepare tasks so package versions come from Hucode's
   `hucodeVersion`, not upstream VS Code's `package.json` version.
+- Standalone CLI release archives are packaged from the CLI already mixed into
+  the assembled desktop output, not from a second Cargo build. Archives contain
+  exactly one root executable named `hucode` or `hucode.exe`; Linux uses
+  `.tar.gz`, while macOS and Windows use ZIP.
 - Hucode macOS release builds must compile the Rust CLI against the downloaded
   `@vscode/openssl-prebuilt` macOS libraries. Do not let `hucode-tunnel` link
   Homebrew OpenSSL from `/opt/homebrew` or `/usr/local`; hardened runtime rejects
   those unsigned external dylibs inside the signed app.
-- Hucode macOS release builds publish `hucode-server-darwin-<arch>-web.zip`
-  alongside the desktop DMG/ZIP assets. These archives are consumed by
-  `hucode serve-web` via the `hucode-updates` update service and are built in
-  the app-build job while the minified server-web inputs are available.
+- Hucode release builds publish platform-specific
+  `hucode-server-<platform>-<arch>-web.zip` archives for macOS, Linux, and
+  Windows x64/arm64. These archives are consumed by `hucode serve-web` via the
+  `hucode-updates` update service and are built in the app-build job while the
+  minified server-web inputs are available. Linux armhf has a CLI build but no
+  server-web archive because Node.js no longer supports arm32.
 - `hucode serve-web` starts the downloaded server through the Rust CLI's
   `tunnelServerQualities` product metadata. Keep that map aligned with
   `serverApplicationName`; otherwise the CLI can download a valid archive and
@@ -227,7 +233,8 @@ VS Code code that Hucode customizes.
   DMGs, create the DMG from the signed app before app notarization/stapling,
   sign the DMG, notarize the DMG, then staple and validate the DMG. For ZIP
   artifacts, notarize a temporary app ZIP, staple the app, then create the
-  public ZIP from the stapled app.
+  public ZIP from the stapled app. Package the standalone CLI from the signed
+  app payload and submit its ZIP separately for notarization.
 - Hucode's `darwin-x64` release app build uses the Intel macOS runner, but its
   package job should run on the standard arm64 `macos-15` runner. GitHub-hosted
   Intel macOS runners have repeatedly hung in `codesign --timestamp` while
@@ -251,9 +258,10 @@ VS Code code that Hucode customizes.
   are `APPLE_NOTARIZATION_ISSUER_ID`, `APPLE_NOTARIZATION_KEY_ID`, and
   `APPLE_TEAM_ID`.
 - Hucode release CI publishes GitHub Releases from tag builds and uses the
-  matching `CHANGELOG.md` version section as release notes. Release publishing
-  currently builds and uploads macOS DMG and ZIP artifacts for supported public
-  releases; Linux and Windows targets remain manual build targets until tested.
+  matching `CHANGELOG.md` version section as release notes. Public assets
+  include macOS desktop DMG/ZIP files plus standalone CLI and server-web
+  archives for macOS, Linux, and Windows x64/arm64. Linux and Windows desktop
+  packages remain workflow artifacts rather than public release assets.
 - Hucode stable builds use `https://updates.hucode.dev` as the built-in update
   feed. Keep `quality`, `updateUrl`, `downloadUrl`,
   `hucodeReleaseNotesUrlTemplate`, and `releaseNotesUrl` in the Hucode product
@@ -278,10 +286,12 @@ VS Code code that Hucode customizes.
 - The public `@vscode/openssl-prebuilt` package extracts libraries under
   `out/<arch>/`, so Linux and Windows release CI must export OpenSSL paths from
   that nested directory before building the Rust CLI. Windows uses the
-  `*-windows-static` prebuilt directories and sets `OPENSSL_STATIC=1`. Do not
-  add Ubuntu's `armhf` foreign architecture for the armhf release job; the
-  cross-compiler packages install without it, and Noble's default security apt
-  source does not serve armhf indexes.
+  `*-windows-static` prebuilt directories, sets `OPENSSL_STATIC=1`, and builds
+  the standalone CLI with a static CRT plus the matching x64/arm64 control-flow
+  guard flags from upstream's CLI pipeline. Do not add Ubuntu's `armhf` foreign
+  architecture for the armhf release job; the cross-compiler packages install
+  without it, and Noble's default security apt source does not serve armhf
+  indexes.
 - VS Code's downloaded Linux sysroot toolchains are x64-hosted. They are useful
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
   runners cannot execute the arm64 sysroot compiler binary.

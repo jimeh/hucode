@@ -87,7 +87,7 @@ jobs:
               rust_target: 'x86_64-apple-darwin',
               runner: 'macos-15-intel',
               package_runner: 'macos-15',
-              artifacts: 'dmg,archive'
+              artifacts: 'dmg,archive,cli'
             },
             {
               id: 'darwin-arm64',
@@ -97,7 +97,7 @@ jobs:
               openssl_arch: 'arm64-osx',
               rust_target: 'aarch64-apple-darwin',
               runner: 'macos-15',
-              artifacts: 'dmg,archive'
+              artifacts: 'dmg,archive,cli'
             },
             {
               id: 'linux-x64',
@@ -107,7 +107,7 @@ jobs:
               openssl_arch: 'x64-linux',
               rust_target: 'x86_64-unknown-linux-gnu',
               runner: 'ubuntu-latest',
-              artifacts: 'archive,deb,rpm'
+              artifacts: 'archive,cli,deb,rpm'
             },
             {
               id: 'linux-arm64',
@@ -117,7 +117,7 @@ jobs:
               openssl_arch: 'arm64-linux',
               rust_target: 'aarch64-unknown-linux-gnu',
               runner: 'ubuntu-24.04-arm',
-              artifacts: 'archive,deb,rpm'
+              artifacts: 'archive,cli,deb,rpm'
             },
             {
               id: 'linux-armhf',
@@ -136,8 +136,10 @@ jobs:
               npm_arch: 'x64',
               openssl_arch: 'x64-windows-static',
               rust_target: 'x86_64-pc-windows-msvc',
+              rustflags: '-Ctarget-feature=+crt-static -Clink-args=/guard:cf -Clink-args=/CETCOMPAT',
+              cflags: '/guard:cf /Qspectre',
               runner: 'windows-2022',
-              artifacts: 'archive,user-setup,system-setup'
+              artifacts: 'archive,cli,user-setup,system-setup'
             },
             {
               id: 'win32-arm64',
@@ -146,8 +148,10 @@ jobs:
               npm_arch: 'arm64',
               openssl_arch: 'arm64-windows-static',
               rust_target: 'aarch64-pc-windows-msvc',
+              rustflags: '-Ctarget-feature=+crt-static -Clink-args=/guard:cf -Clink-args=/CETCOMPAT:NO',
+              cflags: '/guard:cf /Qspectre',
               runner: 'windows-11-arm',
-              artifacts: 'archive,user-setup,system-setup'
+              artifacts: 'archive,cli,user-setup,system-setup'
             }
           ];
           const selectedTargets = new Map([
@@ -497,21 +501,54 @@ jobs:
             --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
         shell: bash
         env:
+          CFLAGS: ${{ matrix.cflags }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Smoke test standalone CLI
+        if: matrix.arch != 'armhf'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "darwin" ]; then
+            cli="../VSCode-darwin-${{ matrix.arch }}/Hucode.app/Contents/Resources/app/bin/hucode-tunnel"
+          else
+            suffix=""
+            if [ "${{ matrix.platform }}" = "win32" ]; then
+              suffix=".exe"
+            fi
+            cli="../VSCode-${{ matrix.platform }}-${{ matrix.arch }}/bin/hucode-tunnel${suffix}"
+          fi
+
+          smoke_root="$PWD/.build/hucode/cli-smoke"
+          executable="hucode"
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            executable="hucode.exe"
+          fi
+          rm -rf "$smoke_root"
+          mkdir -p "$smoke_root"
+          cp "$cli" "$smoke_root/$executable"
+          if [ "${{ matrix.platform }}" != "win32" ]; then
+            chmod +x "$smoke_root/$executable"
+          fi
+
+          "$smoke_root/$executable" --version
+          "$smoke_root/$executable" serve-web --help
 
       - name: Build server-web archive
-        if: matrix.platform == 'darwin'
+        if: matrix.arch != 'armhf'
         shell: bash
         run: |
           set -euo pipefail
           dist_root=".build/hucode/release/${{ steps.version.outputs.safe_version }}"
-          reh_name="vscode-reh-web-darwin-${{ matrix.arch }}"
-          server_name="vscode-server-darwin-${{ matrix.arch }}-web"
-          archive_name="hucode-server-darwin-${{ matrix.arch }}-web.zip"
+          reh_name="vscode-reh-web-${{ matrix.platform }}-${{ matrix.arch }}"
+          server_name="vscode-server-${{ matrix.platform }}-${{ matrix.arch }}-web"
+          archive_name="hucode-server-${{ matrix.platform }}-${{ matrix.arch }}-web.zip"
           archive_path="$PWD/$dist_root/$archive_name"
 
           node build/hucode/run-with-mixin.js --quality stable -- \
-            npm run gulp "vscode-reh-web-darwin-${{ matrix.arch }}-min-ci"
+            npm run gulp \
+              "vscode-reh-web-${{ matrix.platform }}-${{ matrix.arch }}-min-ci"
 
           rm -rf "../$server_name"
           mv "../$reh_name" "../$server_name"
@@ -535,8 +572,21 @@ jobs:
             }
           }
           NODE
+          entrypoint="../$server_name/bin/hucode-server"
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            entrypoint="${entrypoint}.cmd"
+          fi
+          if [ ! -f "$entrypoint" ]; then
+            echo "Server-web entrypoint not found: $entrypoint" >&2
+            exit 1
+          fi
           mkdir -p "$dist_root"
-          (cd .. && zip -Xry "$archive_path" "$server_name")
+          rm -f "$archive_path"
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            (cd .. && 7z.exe a -tzip "$archive_path" "$server_name")
+          else
+            (cd .. && zip -Xry "$archive_path" "$server_name")
+          fi
 
       - name: Prepare Windows AppX package
         if: matrix.platform == 'win32'
@@ -577,11 +627,11 @@ jobs:
           retention-days: 14
 
       - name: Upload server-web artifact
-        if: matrix.platform == 'darwin'
+        if: matrix.arch != 'armhf'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hucode-server-web-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-server-darwin-${{ matrix.arch }}-web.zip
+          path: .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-server-${{ matrix.platform }}-${{ matrix.arch }}-web.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -940,24 +990,36 @@ jobs:
           mapfile -t files < <(find release-artifacts -type f \
             ! -path '*/hucode-app-*/*' \
             ! -path '*/hucode-copilot-vsix/*' \
-            -path '*/hucode-*-darwin-*/*' \
-            \( -name '*.dmg' -o -name '*.zip' \))
+            \( -name 'hucode-darwin-*.dmg' \
+            -o -name 'hucode-darwin-*.zip' \
+            -o -name 'hucode-cli-*' \
+            -o -name 'hucode-server-*-web.zip' \))
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No macOS DMG or ZIP release assets found." >&2
+            echo "No public release assets found." >&2
             exit 1
           fi
           files+=(hucode-release-metadata.json)
           required_patterns=(
             '*/hucode-*-darwin-x64/hucode-darwin-x64.dmg'
             '*/hucode-*-darwin-x64/hucode-darwin-x64.zip'
+            '*/hucode-*-darwin-x64/hucode-cli-darwin-x64.zip'
             '*/hucode-server-web-*-darwin-x64/hucode-server-darwin-x64-web.zip'
             '*/hucode-*-darwin-arm64/hucode-darwin-arm64.dmg'
             '*/hucode-*-darwin-arm64/hucode-darwin-arm64.zip'
+            '*/hucode-*-darwin-arm64/hucode-cli-darwin-arm64.zip'
             '*/hucode-server-web-*-darwin-arm64/hucode-server-darwin-arm64-web.zip'
+            '*/hucode-*-linux-x64/hucode-cli-linux-x64.tar.gz'
+            '*/hucode-server-web-*-linux-x64/hucode-server-linux-x64-web.zip'
+            '*/hucode-*-linux-arm64/hucode-cli-linux-arm64.tar.gz'
+            '*/hucode-server-web-*-linux-arm64/hucode-server-linux-arm64-web.zip'
+            '*/hucode-*-win32-x64/hucode-cli-win32-x64.zip'
+            '*/hucode-server-web-*-win32-x64/hucode-server-win32-x64-web.zip'
+            '*/hucode-*-win32-arm64/hucode-cli-win32-arm64.zip'
+            '*/hucode-server-web-*-win32-arm64/hucode-server-win32-arm64-web.zip'
           )
           for pattern in "${required_patterns[@]}"; do
             if ! find release-artifacts -type f -path "$pattern" | grep -q .; then
-              echo "Missing required macOS release asset: $pattern" >&2
+              echo "Missing required release asset: $pattern" >&2
               exit 1
             fi
           done
