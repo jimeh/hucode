@@ -25,7 +25,12 @@ import {
 	validatePackagedCopilot,
 } from '../../hucode/release-build.ts';
 
-function zipEntryNames(zipPath: string): Promise<string[]> {
+interface ZipEntryDetails {
+	name: string;
+	mode: number;
+}
+
+function zipEntries(zipPath: string): Promise<ZipEntryDetails[]> {
 	return new Promise((resolve, reject) => {
 		yauzl.open(zipPath, { lazyEntries: true }, (error, zipfile) => {
 			if (error || !zipfile) {
@@ -33,9 +38,12 @@ function zipEntryNames(zipPath: string): Promise<string[]> {
 				return;
 			}
 
-			const entries: string[] = [];
+			const entries: ZipEntryDetails[] = [];
 			zipfile.on('entry', (entry: Entry) => {
-				entries.push(entry.fileName);
+				entries.push({
+					name: entry.fileName,
+					mode: entry.externalFileAttributes >>> 16
+				});
 				zipfile.readEntry();
 			});
 			zipfile.on('end', () => resolve(entries));
@@ -263,11 +271,27 @@ suite('Hucode release build', () => {
 			const entries = platform === 'linux'
 				? spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' })
 					.stdout.trim().split(/\r?\n/)
-				: await zipEntryNames(archive);
+				: (await zipEntries(archive)).map(entry => entry.name);
 			assert.deepStrictEqual(
 				entries,
 				[executable]
 			);
+
+			if (platform === 'darwin') {
+				const [entry] = await zipEntries(archive);
+				assert.notStrictEqual(entry.mode & 0o111, 0);
+			} else if (platform === 'linux') {
+				const extractRoot = path.join(tmpDir, `extract-${platform}`);
+				await fs.mkdir(extractRoot);
+				const result = spawnSync(
+					'tar',
+					['-xzf', archive, '-C', extractRoot],
+					{ encoding: 'utf8' }
+				);
+				assert.strictEqual(result.status, 0, result.stderr);
+				const stat = await fs.stat(path.join(extractRoot, executable));
+				assert.notStrictEqual(stat.mode & 0o111, 0);
+			}
 		}
 	});
 

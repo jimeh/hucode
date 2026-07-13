@@ -493,6 +493,10 @@ jobs:
       - name: Build release app
         run: |
           set -euo pipefail
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            export CFLAGS="${{ matrix.cflags }}"
+            export RUSTFLAGS="${{ matrix.rustflags }}"
+          fi
           node build/hucode/release-build.ts \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
@@ -501,9 +505,7 @@ jobs:
             --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
         shell: bash
         env:
-          CFLAGS: ${{ matrix.cflags }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Smoke test standalone CLI
         if: matrix.arch != 'armhf'

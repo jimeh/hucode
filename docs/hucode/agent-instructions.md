@@ -197,8 +197,9 @@ VS Code code that Hucode customizes.
   `hucode-server-<platform>-<arch>-web.zip` archives for macOS, Linux, and
   Windows x64/arm64. These archives are consumed by `hucode serve-web` via the
   `hucode-updates` update service and are built in the app-build job while the
-  minified server-web inputs are available. Linux armhf has a CLI build but no
-  server-web archive because Node.js no longer supports arm32.
+  minified server-web inputs are available. Linux armhf has an embedded CLI
+  build but no standalone CLI or server-web archive because Node.js no longer
+  supports arm32.
 - `hucode serve-web` starts the downloaded server through the Rust CLI's
   `tunnelServerQualities` product metadata. Keep that map aligned with
   `serverApplicationName`; otherwise the CLI can download a valid archive and
