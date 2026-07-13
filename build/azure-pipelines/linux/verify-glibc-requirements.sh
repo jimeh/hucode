@@ -50,5 +50,6 @@ for file in "${files[@]}"; do
   fi
   if [[ "$glibcxx_version" != "$EXPECTED_GLIBCXX_VERSION" ]]; then
     echo "Error: File $file has dependency on GLIBCXX > $EXPECTED_GLIBCXX_VERSION, found $glibcxx_version"
+    exit 1
   fi
 done

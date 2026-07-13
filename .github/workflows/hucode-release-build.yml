@@ -277,7 +277,7 @@ jobs:
 
           export CARGO_NET_GIT_FETCH_WITH_CLI=true
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$gcc"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=--sysroot=$sysroot"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=--sysroot=$sysroot -C link-arg=-L$sysroot/usr/lib/aarch64-linux-gnu"
           export CC_aarch64_unknown_linux_gnu="$gcc --sysroot=$sysroot"
           export PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu="$sysroot/usr/lib/aarch64-linux-gnu/pkgconfig:$sysroot/usr/share/pkgconfig"
           export PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu="$sysroot"
@@ -294,7 +294,7 @@ jobs:
           glibc_version="2.28"
           while IFS= read -r line; do
             if [[ "$line" == *"GLIBC_"* ]]; then
-              version="$(echo "$line" | awk '{print $5}' | tr -d '()')"
+              version="$(echo "$line" | awk '{if ($5 ~ /^[0-9a-fA-F]+$/) print $6; else print $5}' | tr -d '()')"
               version="${version#*_}"
               if [[ "$(printf '%s\n%s' "$version" "$glibc_version" | \
                 sort -V | tail -n1)" == "$version" ]]; then
