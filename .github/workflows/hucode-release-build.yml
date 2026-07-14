@@ -712,15 +712,15 @@ jobs:
             chmod +x "$smoke_root/$executable"
           fi
 
-          runner=()
+          set -- "$smoke_root/$executable"
           if [ "${{ matrix.platform }}" = "linux" ] && \
             [ "${{ matrix.arch }}" = "arm64" ]; then
             sysroot="$VSCODE_SYSROOT_DIR/aarch64-linux-gnu/aarch64-linux-gnu/sysroot"
-            runner=(qemu-aarch64 -L "$sysroot")
+            set -- qemu-aarch64 -L "$sysroot" "$@"
           fi
 
-          "${runner[@]}" "$smoke_root/$executable" --version
-          "${runner[@]}" "$smoke_root/$executable" serve-web --help
+          "$@" --version
+          "$@" serve-web --help
 
       - name: Build server-web archive
         if: matrix.arch != 'armhf'
@@ -1044,19 +1044,19 @@ jobs:
       - name: Package release artifacts
         run: |
           set -euo pipefail
-          sign_args=()
-          if [ "${{ matrix.platform }}" = "darwin" ] && \
-            [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
-            sign_args+=(--sign --signing-mode ci)
-          fi
-
-          node build/hucode/release-build.ts \
+          set -- \
+            node \
+            build/hucode/release-build.ts \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
             --phase package \
             --artifacts "${{ matrix.artifacts }}" \
-            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
-            "${sign_args[@]}"
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
+          if [ "${{ matrix.platform }}" = "darwin" ] && \
+            [ "$HUCODE_SIGN_RELEASE" = "true" ]; then
+            set -- "$@" --sign --signing-mode ci
+          fi
+          "$@"
         shell: bash
         env:
           APPLE_NOTARIZATION_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}

@@ -305,6 +305,9 @@ VS Code code that Hucode customizes.
   job, install the `build/` package dependencies. The Linux x64 setup invokes
   `build/linux/libcxx-fetcher.ts`, which imports packages such as `debug` from
   `build/node_modules` before the root `npm ci` can install them.
+- GitHub's macOS release runners execute `shell: bash` steps with Bash 3.2.
+  Under `set -u`, expanding an empty array raises an unbound-variable error, so
+  construct commands with optional arguments using `set --` and `"$@"`.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
