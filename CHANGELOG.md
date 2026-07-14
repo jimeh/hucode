@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.43 - 2026-07-14
+
+### Features
+
+- **release:** publish standalone Hucode CLI assets (#79)
+
 ## 0.0.42 - 2026-07-09
 
 ### Bug Fixes
