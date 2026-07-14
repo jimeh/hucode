@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 TRIPLE="x86_64-linux-gnu"
 if [ "$VSCODE_ARCH" == "arm64" ]; then
@@ -26,6 +26,13 @@ mapfile -t files < <(
 echo "Verifying requirements for files: ${files[*]}"
 
 for file in "${files[@]}"; do
+  description="$(file -b "$file")"
+  if [[ "$description" != ELF\ * ]]; then
+    echo "Skipping non-ELF runtime file: $file ($description)"
+    continue
+  fi
+
+  symbols="$("$OBJDUMP" -T "$file")"
   glibc_version="$EXPECTED_GLIBC_VERSION"
   glibcxx_version="$EXPECTED_GLIBCXX_VERSION"
   while IFS= read -r line; do
@@ -42,7 +49,7 @@ for file in "${files[@]}"; do
         glibcxx_version=$version
       fi
     fi
-  done < <("$OBJDUMP" -T "$file")
+  done <<< "$symbols"
 
   if [[ "$glibc_version" != "$EXPECTED_GLIBC_VERSION" ]]; then
     echo "Error: File $file has dependency on GLIBC > $EXPECTED_GLIBC_VERSION, found $glibc_version"
