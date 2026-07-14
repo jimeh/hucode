@@ -116,7 +116,7 @@ jobs:
               npm_arch: 'arm64',
               openssl_arch: 'arm64-linux',
               rust_target: 'aarch64-unknown-linux-gnu',
-              runner: 'ubuntu-24.04-arm',
+              runner: 'ubuntu-latest',
               artifacts: 'archive,cli,deb,rpm'
             },
             {
@@ -473,6 +473,7 @@ jobs:
             "${{ runner.os }}" \
             "${{ runner.arch }}" \
             "$(node -p process.arch)" \
+            "${{ matrix.platform == 'linux' && 'linux-sysroot-v1' || '' }}" \
             > .build/packagelockhash
 
       - name: Restore node_modules cache
@@ -491,10 +492,43 @@ jobs:
         shell: pwsh
         run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
 
+      - name: Download Linux sysroots
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sysroot_arch="${{ matrix.arch }}"
+          if [ "$sysroot_arch" = "x64" ]; then
+            sysroot_arch="amd64"
+          fi
+
+          export VSCODE_SYSROOT_DIR="$PWD/.build/sysroots/glibc-2.28-gcc-10.5.0"
+          export VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-10.5.0"
+          SYSROOT_ARCH="$sysroot_arch" \
+            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+
+          remote_sysroot_dir="$PWD/.build/sysroots/glibc-2.28-gcc-8.5.0"
+          SYSROOT_ARCH="$sysroot_arch" \
+            VSCODE_SYSROOT_DIR="$remote_sysroot_dir" \
+            VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-8.5.0" \
+            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+
+          {
+            echo "VSCODE_SYSROOT_DIR=$VSCODE_SYSROOT_DIR"
+            echo "VSCODE_SYSROOT_PREFIX=$VSCODE_SYSROOT_PREFIX"
+          } >> "$GITHUB_ENV"
+
       - name: Install dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
           set -e
+
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            source ./build/azure-pipelines/linux/setup-env.sh
+            node build/npm/preinstall.ts
+          fi
 
           for i in {1..5}; do
             npm ci && break
@@ -539,24 +573,6 @@ jobs:
         with:
           path: .build/node_modules_cache
           key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
-
-      - name: Download Linux sysroot
-        if: matrix.platform == 'linux' && matrix.arch != 'arm64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sysroot_arch="${{ matrix.arch }}"
-          if [ "$sysroot_arch" = "x64" ]; then
-            sysroot_arch="amd64"
-          fi
-          export VSCODE_SYSROOT_DIR="$PWD/.build/sysroots"
-          export VSCODE_SYSROOT_PREFIX="-glibc-2.28-gcc-10.5.0"
-          {
-            echo "VSCODE_SYSROOT_DIR=$VSCODE_SYSROOT_DIR"
-            echo "VSCODE_SYSROOT_PREFIX=$VSCODE_SYSROOT_PREFIX"
-          } >> "$GITHUB_ENV"
-          SYSROOT_ARCH="$sysroot_arch" \
-            node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
 
       - name: Prepare Hucode mixin
         run: npm run hucode:prepare
