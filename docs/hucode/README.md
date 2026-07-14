@@ -56,10 +56,15 @@ Current local workflow:
   and the Hucode Rust CLI.
 - `node build/hucode/release-build.ts --phase package --artifacts <list>`:
   package an existing final app output into release assets. The default phase is
-  `all`, which preserves the older build-and-package flow.
+  `all`, which preserves the older build-and-package flow. Include `cli` to
+  package the mixed-in Rust CLI as a one-file standalone archive.
 - `node build/hucode/release-build.ts --copilot-vsix <path>`: inject a
   prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
   desktop app, matching the release workflow's smaller Copilot package shape.
+- `node build/hucode/release-build.ts --prebuilt-cli <path>`: mix a CLI built
+  for the selected target into the final app output. Release CI uses this for
+  the x64-hosted Linux arm64 cross-build so the standalone CLI retains
+  upstream's GLIBC 2.28 compatibility baseline.
 - `node build/hucode/release-build.ts --platform darwin --arch <arch> --sign`:
   sign the macOS app, then sign, notarize, staple, and validate DMG release
   assets. Signed Darwin ZIP archives are still supported for explicit local
@@ -86,3 +91,9 @@ auto-update assets consumed by Electron's macOS updater. Builds produced before
 the Hucode product mixin included `updateUrl` cannot discover updates
 automatically, so the first updater-enabled release is the bootstrap for later
 auto-updates.
+
+GitHub Releases also publish standalone CLI and server-web archives for macOS,
+Linux, and Windows x64/arm64. The CLI resolves matching server-web archives
+through the platform-specific
+`/api/latest/server-<platform>-<arch>-web/stable` endpoints; Linux armhf does
+not support `serve-web` because there is no arm32 server build.
