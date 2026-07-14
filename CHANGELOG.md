@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.44 - 2026-07-14
+
+### Bug Fixes
+
+- **release:** restore macOS and Linux x64 builds (#80)
+
 ## 0.0.43 - 2026-07-14
 
 ### Features
