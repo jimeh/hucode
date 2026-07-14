@@ -523,6 +523,16 @@ jobs:
             echo "VSCODE_SYSROOT_PREFIX=$VSCODE_SYSROOT_PREFIX"
           } >> "$GITHUB_ENV"
 
+      - name: Install Linux x64 build dependencies
+        if: >-
+          steps.cache-node-modules.outputs.cache-hit != 'true' &&
+          matrix.platform == 'linux' &&
+          matrix.arch == 'x64'
+        working-directory: build
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
@@ -652,25 +662,25 @@ jobs:
       - name: Build release app
         run: |
           set -euo pipefail
-          cli_args=()
+          set -- \
+            node \
+            build/hucode/release-build.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --phase build \
+            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
+            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}"
           if [ "${{ matrix.platform }}" = "linux" ] && \
             [ "${{ matrix.arch }}" = "arm64" ]; then
-            cli_args+=(
-              --prebuilt-cli
+            set -- "$@" \
+              --prebuilt-cli \
               ".build/hucode/cli/linux-arm64/hucode-tunnel"
-            )
           fi
           if [ "${{ matrix.platform }}" = "win32" ]; then
             export CFLAGS="${{ matrix.cflags }}"
             export RUSTFLAGS="${{ matrix.rustflags }}"
           fi
-          node build/hucode/release-build.ts \
-            --platform "${{ matrix.platform }}" \
-            --arch "${{ matrix.arch }}" \
-            --phase build \
-            --copilot-vsix ".build/hucode/copilot/copilot-chat.vsix" \
-            --out ".build/hucode/release/${{ steps.version.outputs.safe_version }}" \
-            "${cli_args[@]}"
+          "$@"
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
