@@ -301,6 +301,13 @@ VS Code code that Hucode customizes.
   through `--prebuilt-cli`. That app build runs on `ubuntu-latest` and uses QEMU
   for CLI smoke tests. Linux server-web archives must pass the matching GLIBC
   and GLIBCXX runtime-requirements audit before upload.
+- Before sourcing `build/azure-pipelines/linux/setup-env.sh` in a clean release
+  job, install the `build/` package dependencies. The Linux x64 setup invokes
+  `build/linux/libcxx-fetcher.ts`, which imports packages such as `debug` from
+  `build/node_modules` before the root `npm ci` can install them.
+- GitHub's macOS release runners execute `shell: bash` steps with Bash 3.2.
+  Under `set -u`, expanding an empty array raises an unbound-variable error, so
+  construct commands with optional arguments using `set --` and `"$@"`.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or
