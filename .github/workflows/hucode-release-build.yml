@@ -1079,7 +1079,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub release
-    if: always() && github.event_name == 'push'
+    if: github.event_name == 'push' && needs.package.result == 'success'
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1164,16 +1164,6 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" \
-              --title "$TAG_NAME" \
-              --notes-file release-notes.md
-          else
-            gh release edit "$TAG_NAME" \
-              --title "$TAG_NAME" \
-              --notes-file release-notes.md
-          fi
-
           mapfile -t files < <(find release-artifacts -type f \
             ! -path '*/hucode-app-*/*' \
             ! -path '*/hucode-copilot-vsix/*' \
@@ -1210,6 +1200,16 @@ jobs:
               exit 1
             fi
           done
+
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release-notes.md
+          else
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release-notes.md
+          fi
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
   refresh-update-service:

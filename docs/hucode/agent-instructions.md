@@ -297,9 +297,10 @@ VS Code code that Hucode customizes.
   for x64 and armhf release builds on x64 runners, but native arm64 GitHub
   runners cannot execute the arm64 sysroot compiler binary. Build the GNU
   arm64 CLI in the dedicated x64-hosted cross-build job, verify that it requires
-  no newer than GLIBC 2.28, then pass it to the native app build through
-  `--prebuilt-cli`. Linux server-web archives must pass the matching GLIBC and
-  GLIBCXX runtime-requirements audit before upload.
+  no newer than GLIBC 2.28, then pass it to the x64-hosted arm64 app cross-build
+  through `--prebuilt-cli`. That app build runs on `ubuntu-latest` and uses QEMU
+  for CLI smoke tests. Linux server-web archives must pass the matching GLIBC
+  and GLIBCXX runtime-requirements audit before upload.
 - The initial Hucode CI baseline intentionally omits `tsec-compile-check`.
   Existing Omni import-map bootstrap code trips VS Code's Trusted Types tsec
   rules; re-enable this gate only after that code has been reviewed, fixed, or

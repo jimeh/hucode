@@ -12,16 +12,30 @@ fi
 OBJDUMP="${OBJDUMP:-$VSCODE_SYSROOT_DIR/$TRIPLE/$TRIPLE/bin/objdump}"
 
 # Get all files with .node extension from server folder
-mapfile -t files < <(
-  find "$SEARCH_PATH" \
+files_file="$(mktemp)"
+trap 'rm -f "$files_file"' EXIT
+if ! find "$SEARCH_PATH" \
+  \( \
     \( \
       -type f \
       -name "*.node" \
       -not -path "*prebuilds*" \
       -not -path "*extensions/node_modules/@parcel/watcher*" \
     \) \
-    -o \( -type f -executable -name "node" \)
-)
+    -o \( -type f -executable -name "node" \) \
+  \) \
+  -print0 > "$files_file"; then
+  echo "Error: Failed to discover runtime files in $SEARCH_PATH" >&2
+  exit 1
+fi
+mapfile -d '' -t files < "$files_file"
+rm -f "$files_file"
+trap - EXIT
+
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "Error: No runtime files found in $SEARCH_PATH" >&2
+  exit 1
+fi
 
 echo "Verifying requirements for files: ${files[*]}"
 

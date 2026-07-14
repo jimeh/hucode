@@ -921,6 +921,9 @@ async function createArchive(source: string, archivePath: string): Promise<void>
 	await run('zip', ['-Xry', archivePath, '.'], source);
 }
 
+/**
+ * Creates a ZIP containing one file under the requested archive entry name.
+ */
 async function createSingleFileZip(
 	source: string,
 	entryName: string,
@@ -1932,6 +1935,9 @@ export async function createStandaloneCliArchive(
 	return archivePath;
 }
 
+/**
+ * Packages and, when required, notarizes the standalone Hucode CLI.
+ */
 async function packageCli(
 	options: ReleaseOptions,
 	buildOutput: string,
