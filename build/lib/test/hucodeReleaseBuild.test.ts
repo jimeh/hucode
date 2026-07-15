@@ -9,17 +9,49 @@ import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import yauzl, { type Entry } from 'yauzl';
 import {
 	applyDebianPackageVersion,
 	applyRpmPackageVersion,
+	createStandaloneCliArchive,
 	darwinCliLinkIssues,
 	findBuiltInCopilotExtension,
 	orderReleaseArtifactsForPackaging,
+	standaloneCliArchiveName,
+	standaloneCliExecutableName,
 	validateAppCliArtifact,
 	validateAssembledAppOutput,
 	validateExtractedCopilotVsix,
 	validatePackagedCopilot,
 } from '../../hucode/release-build.ts';
+
+interface ZipEntryDetails {
+	name: string;
+	mode: number;
+}
+
+function zipEntries(zipPath: string): Promise<ZipEntryDetails[]> {
+	return new Promise((resolve, reject) => {
+		yauzl.open(zipPath, { lazyEntries: true }, (error, zipfile) => {
+			if (error || !zipfile) {
+				reject(error ?? new Error(`Failed to open ZIP: ${zipPath}`));
+				return;
+			}
+
+			const entries: ZipEntryDetails[] = [];
+			zipfile.on('entry', (entry: Entry) => {
+				entries.push({
+					name: entry.fileName,
+					mode: entry.externalFileAttributes >>> 16
+				});
+				zipfile.readEntry();
+			});
+			zipfile.on('end', () => resolve(entries));
+			zipfile.on('error', reject);
+			zipfile.readEntry();
+		});
+	});
+}
 
 suite('Hucode release build', () => {
 
@@ -154,6 +186,26 @@ suite('Hucode release build', () => {
 		);
 	});
 
+	test('rejects prebuilt CLI input during package-only phase', () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				releaseBuildScript,
+				'--phase',
+				'package',
+				'--prebuilt-cli',
+				path.join(tmpDir, 'hucode-tunnel')
+			],
+			{ encoding: 'utf8' }
+		);
+
+		assert.strictEqual(result.status, 1);
+		assert.match(
+			result.stderr,
+			/--prebuilt-cli cannot be used with --phase package/
+		);
+	});
+
 	test('rejects packaged Copilot without target ripgrep shim', async () => {
 		const buildOutput = path.join(tmpDir, 'VSCode-darwin-arm64');
 		await createPackagedCopilotExtension(buildOutput, 'darwin-x64');
@@ -196,6 +248,71 @@ suite('Hucode release build', () => {
 				['archive', 'deb']
 			]
 		);
+	});
+
+	test('names standalone CLI archives for each release platform', () => {
+		assert.deepStrictEqual(
+			[
+				{ platform: 'darwin' as const, arch: 'x64' as const },
+				{ platform: 'linux' as const, arch: 'arm64' as const },
+				{ platform: 'win32' as const, arch: 'arm64' as const }
+			].map(standaloneCliArchiveName),
+			[
+				'hucode-cli-darwin-x64.zip',
+				'hucode-cli-linux-arm64.tar.gz',
+				'hucode-cli-win32-arm64.zip'
+			]
+		);
+	});
+
+	test('uses the public product name inside standalone CLI archives', () => {
+		assert.deepStrictEqual(
+			['darwin', 'linux', 'win32'].map(platform =>
+				standaloneCliExecutableName(
+					platform as 'darwin' | 'linux' | 'win32'
+				)
+			),
+			['hucode', 'hucode', 'hucode.exe']
+		);
+	});
+
+	test('packages standalone CLI archives with one root executable', async () => {
+		const source = path.join(tmpDir, 'hucode-tunnel');
+		await fs.writeFile(source, 'cli');
+		await fs.chmod(source, 0o755);
+
+		for (const platform of ['darwin', 'linux', 'win32'] as const) {
+			const archive = await createStandaloneCliArchive(
+				{ platform, arch: 'x64' },
+				source,
+				tmpDir
+			);
+			const executable = standaloneCliExecutableName(platform);
+			const entries = platform === 'linux'
+				? spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' })
+					.stdout.trim().split(/\r?\n/)
+				: (await zipEntries(archive)).map(entry => entry.name);
+			assert.deepStrictEqual(
+				entries,
+				[executable]
+			);
+
+			if (platform === 'darwin') {
+				const [entry] = await zipEntries(archive);
+				assert.notStrictEqual(entry.mode & 0o111, 0);
+			} else if (platform === 'linux') {
+				const extractRoot = path.join(tmpDir, `extract-${platform}`);
+				await fs.mkdir(extractRoot);
+				const result = spawnSync(
+					'tar',
+					['-xzf', archive, '-C', extractRoot],
+					{ encoding: 'utf8' }
+				);
+				assert.strictEqual(result.status, 0, result.stderr);
+				const stat = await fs.stat(path.join(extractRoot, executable));
+				assert.notStrictEqual(stat.mode & 0o111, 0);
+			}
+		}
 	});
 
 	test('flags Homebrew OpenSSL runtime links in macOS CLI', () => {
