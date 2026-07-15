@@ -40,6 +40,19 @@ import { IStateService } from '../../state/node/state.js';
 import { IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfiguration, IOpenEmptyWindowOptions, IPath, IPathsToWaitFor, isFileToOpen, isFolderToOpen, isWorkspaceToOpen, IWindowOpenable, IWindowSettings } from '../../window/common/window.js';
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
+import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
+import { tryOpenFolderInHucodeHostedWorkspace } from '../../../hucode/electron-main/omniWorkspaceOpen.js';
+import {
+	createHucodeOmniWindowPath,
+	distinctHucodeOmniWindowPaths,
+	filterHucodePreserveRestorePaths,
+	getHucodeDefaultStartupWindowPath,
+	getHucodeOmniBrowserWindowOptions,
+	getHucodeOmniFileOpenPlan,
+	getHucodeOmniPathFromWindowState,
+	IHucodeOmniWindowPath,
+	isHucodeOmniPathToOpen
+} from '../../../hucode/electron-main/omniOpenPlan.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
@@ -83,6 +96,10 @@ interface IOpenBrowserWindowOptions {
 	readonly emptyWindowBackupInfo?: IEmptyWindowBackupInfo;
 	readonly forceProfile?: string;
 	readonly forceTempProfile?: boolean;
+	readonly isOmniWindow?: boolean;
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?:
+	INativeWindowConfiguration['omniResidentWorkspaces'];
 }
 
 interface IPathResolveOptions {
@@ -159,6 +176,11 @@ interface IPathToOpen<T = IEditorOptions> extends IPath<T> {
 	 * Optional label for the recent history
 	 */
 	label?: string;
+
+	readonly isOmniWindow?: boolean;
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?:
+	INativeWindowConfiguration['omniResidentWorkspaces'];
 }
 
 const EMPTY_WINDOW: IPathToOpen = Object.create(null);
@@ -292,21 +314,34 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		this.handleChatRequest(openConfig, [window]);
 	}
 
-	async openAgentsWindow(openConfig: IOpenConfiguration, folderUri?: URI, sessionResource?: URI): Promise<ICodeWindow[]> {
+	async openAgentsWindow(openConfig: IOpenConfiguration, folderUri?: URI, initialQuery?: string, sessionResource?: URI, preferredSessionType?: { providerId?: string; sessionTypeId: string }): Promise<ICodeWindow[]> {
 		this.logService.trace('windowsManager#openAgentsWindow');
 
 		// Open in a new browser window with the agent sessions workspace
 		const windows = await this.open(await this.ensureAgentsWindow(openConfig));
 
-		// Single IPC carrying the folder to pre-select and an optional existing-
-		// session resource to open. The handler in the agents window sequences
-		// them (folder → open session) so the session-open doesn't race the
-		// folder-resolve.
-		if ((folderUri || sessionResource) && windows.length > 0) {
-			windows[0].sendWhenReady('vscode:selectAgentsFolder', CancellationToken.None, folderUri?.toJSON(), sessionResource?.toJSON());
+		// Single IPC carrying folder selection, optional initial query,
+		// optional existing-session resource, and an optional preferred
+		// session type to pre-seed the session-type picker. The handler in
+		// the agents window sequences them (folder -> query or open session)
+		// so the session-open doesn't race the folder-resolve.
+		if ((folderUri || initialQuery || sessionResource || preferredSessionType) && windows.length > 0) {
+			windows[0].sendWhenReady('vscode:selectAgentsFolder', CancellationToken.None, folderUri?.toJSON(), initialQuery, sessionResource?.toJSON(), preferredSessionType);
 		}
 
 		return windows;
+	}
+
+	async openOmniWindow(openConfig: IOpenConfiguration): Promise<ICodeWindow[]> {
+		this.logService.trace('windowsManager#openOmniWindow');
+
+		return this.open({
+			...openConfig,
+			forceNewWindow: true,
+			forceOmniWindow: true,
+			forceEmpty: false,
+			noRecentEntry: true
+		});
 	}
 
 	private async ensureAgentsWindow(openConfig: IOpenConfiguration): Promise<IOpenConfiguration> {
@@ -352,6 +387,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const untitledWorkspacesToRestore: IWorkspacePathToOpen[] = [];
 
 		const emptyWindowsWithBackupsToRestore: IEmptyWindowBackupInfo[] = [];
+		const omniWindowsToRestore: IHucodeOmniWindowPath[] = [];
 
 		let filesToOpen: IFilesToOpen | undefined;
 		let maybeOpenEmptyWindow = false;
@@ -379,6 +415,8 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 					filesToOpen = { filesToOpenOrCreate: [], filesToDiff: [], filesToMerge: [], remoteAuthority: path.remoteAuthority };
 				}
 				filesToOpen.filesToOpenOrCreate.push(path);
+			} else if (isHucodeOmniPathToOpen(path)) {
+				omniWindowsToRestore.push(path);
 			} else if (path.backupPath) {
 				emptyWindowsWithBackupsToRestore.push({ backupFolder: basename(path.backupPath), remoteAuthority: path.remoteAuthority });
 			} else {
@@ -418,7 +456,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		}
 
 		// Open based on config
-		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
+		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
 
 		this.logService.trace(`windowsManager#open used window count ${usedWindows.length} (workspacesToOpen: ${workspacesToOpen.length}, foldersToOpen: ${foldersToOpen.length}, emptyToRestore: ${emptyWindowsWithBackupsToRestore.length}, maybeOpenEmptyWindow: ${maybeOpenEmptyWindow})`);
 
@@ -543,6 +581,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		workspacesToOpen: IWorkspacePathToOpen[],
 		foldersToOpen: ISingleFolderWorkspacePathToOpen[],
 		emptyToRestore: IEmptyWindowBackupInfo[],
+		omniWindowsToRestore: IHucodeOmniWindowPath[],
 		maybeOpenEmptyWindow: boolean,
 		filesToOpen: IFilesToOpen | undefined,
 		foldersToAdd: ISingleFolderWorkspacePathToOpen[],
@@ -576,63 +615,90 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		// Handle files to open/diff/merge or to create when we dont open a folder and we do not restore any
 		// folder/untitled from hot-exit by trying to open them in the window that fits best
-		const potentialNewWindowsCount = foldersToOpen.length + workspacesToOpen.length + emptyToRestore.length;
+		const potentialNewWindowsCount =
+			foldersToOpen.length +
+			workspacesToOpen.length +
+			emptyToRestore.length +
+			omniWindowsToRestore.length;
 		if (filesToOpen && potentialNewWindowsCount === 0) {
+			const hucodeFilesToOpen = filesToOpen;
 
 			// Find suitable window or folder path to open files in
 			const fileToCheck: IPath<IEditorOptions> | undefined = filesToOpen.filesToOpenOrCreate[0] || filesToOpen.filesToDiff[0] || filesToOpen.filesToMerge[3] /* [3] is the resulting merge file */;
 
-			// only look at the windows with correct authority
-			const windows = this.getWindows().filter(window => filesToOpen && isEqualAuthority(window.remoteAuthority, filesToOpen.remoteAuthority));
+			const hucodeOmniFileOpenPlan = await getHucodeOmniFileOpenPlan({
+				forceNewWindow: openConfig.forceNewWindow,
+				windows: this.getWindows(),
+				openInOmniWindow: () =>
+					this.instantiationService.invokeFunction(accessor =>
+						tryOpenFilesInHucodeOmniWindow(
+							accessor,
+							this.getWindows(),
+							hucodeFilesToOpen,
+							openConfig.userEnv?.['TERM_PROGRAM']
+						)
+					)
+			});
 
-			// figure out a good window to open the files in if any
-			// with a fallback to the last active window.
-			//
-			// in case `openFilesInNewWindow` is enforced, we skip
-			// this step.
-			let windowToUseForFiles: ICodeWindow | undefined = undefined;
-			if (fileToCheck?.fileUri && !openFilesInNewWindow) {
-				if (openConfig.context === OpenContext.DESKTOP || openConfig.context === OpenContext.CLI || openConfig.context === OpenContext.DOCK || openConfig.context === OpenContext.LINK) {
-					windowToUseForFiles = await findWindowOnFile(windows, fileToCheck.fileUri, async workspace => workspace.configPath.scheme === Schemas.file ? this.workspacesManagementMainService.resolveLocalWorkspace(workspace.configPath) : undefined);
+			if (hucodeOmniFileOpenPlan.omniWindow) {
+				addUsedWindow(hucodeOmniFileOpenPlan.omniWindow, true);
+			} else {
+
+				// only look at the windows with correct authority
+				const windows = hucodeOmniFileOpenPlan.fallbackWindows.filter(window =>
+					filesToOpen &&
+					isEqualAuthority(window.remoteAuthority, filesToOpen.remoteAuthority)
+				);
+
+				// figure out a good window to open the files in if any
+				// with a fallback to the last active window.
+				//
+				// in case `openFilesInNewWindow` is enforced, we skip
+				// this step.
+				let windowToUseForFiles: ICodeWindow | undefined = undefined;
+				if (fileToCheck?.fileUri && !openFilesInNewWindow) {
+					if (openConfig.context === OpenContext.DESKTOP || openConfig.context === OpenContext.CLI || openConfig.context === OpenContext.DOCK || openConfig.context === OpenContext.LINK) {
+						windowToUseForFiles = await findWindowOnFile(windows, fileToCheck.fileUri, async workspace => workspace.configPath.scheme === Schemas.file ? this.workspacesManagementMainService.resolveLocalWorkspace(workspace.configPath) : undefined);
+					}
+
+					if (!windowToUseForFiles) {
+						windowToUseForFiles = this.doGetLastActiveWindow(windows);
+					}
 				}
 
-				if (!windowToUseForFiles) {
-					windowToUseForFiles = this.doGetLastActiveWindow(windows);
+				// We found a window to open the files in
+				if (windowToUseForFiles) {
+
+					// Window is workspace
+					if (isWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
+						workspacesToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
+					}
+
+					// Window is single folder
+					else if (isSingleFolderWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
+						foldersToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
+					}
+
+					// Window is empty
+					else {
+						addUsedWindow(this.doOpenFilesInExistingWindow(openConfig, windowToUseForFiles, filesToOpen), true);
+					}
 				}
-			}
 
-			// We found a window to open the files in
-			if (windowToUseForFiles) {
-
-				// Window is workspace
-				if (isWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
-					workspacesToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
-				}
-
-				// Window is single folder
-				else if (isSingleFolderWorkspaceIdentifier(windowToUseForFiles.openedWorkspace)) {
-					foldersToOpen.push({ workspace: windowToUseForFiles.openedWorkspace, remoteAuthority: windowToUseForFiles.remoteAuthority });
-				}
-
-				// Window is empty
+				// Finally, if no window or folder is found, just open the files in an empty window
 				else {
-					addUsedWindow(this.doOpenFilesInExistingWindow(openConfig, windowToUseForFiles, filesToOpen), true);
+					addUsedWindow(await this.openInBrowserWindow({
+						userEnv: openConfig.userEnv,
+						cli: openConfig.cli,
+						initialStartup: openConfig.initialStartup,
+						filesToOpen,
+						forceNewWindow: true,
+						remoteAuthority: filesToOpen.remoteAuthority,
+						forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
+						forceProfile: openConfig.forceProfile,
+						forceTempProfile: openConfig.forceTempProfile
+					}), true);
 				}
-			}
-
-			// Finally, if no window or folder is found, just open the files in an empty window
-			else {
-				addUsedWindow(await this.openInBrowserWindow({
-					userEnv: openConfig.userEnv,
-					cli: openConfig.cli,
-					initialStartup: openConfig.initialStartup,
-					filesToOpen,
-					forceNewWindow: true,
-					remoteAuthority: filesToOpen.remoteAuthority,
-					forceNewTabbedWindow: openConfig.forceNewTabbedWindow,
-					forceProfile: openConfig.forceProfile,
-					forceTempProfile: openConfig.forceTempProfile
-				}), true);
 			}
 		}
 
@@ -684,10 +750,37 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}
 
+			const foldersOpenedInOmni = new ResourceSet([], uri => extUriBiasedIgnorePathCase.getComparisonKey(uri));
+			for (const folderToOpen of allFoldersToOpen) {
+				if (windowsOnFolderPath.some(window => isSingleFolderWorkspaceIdentifier(window.openedWorkspace) && extUriBiasedIgnorePathCase.isEqual(window.openedWorkspace.uri, folderToOpen.workspace.uri))) {
+					continue;
+				}
+
+				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, folderToOpen.remoteAuthority) ? filesToOpen : undefined;
+				const result = await this.instantiationService.invokeFunction(
+					accessor => tryOpenFolderInHucodeHostedWorkspace(
+						accessor,
+						this.getWindows(),
+						folderToOpen.workspace.uri,
+						filesToOpenInWindow,
+						openConfig.userEnv?.['TERM_PROGRAM']
+					)
+				);
+				if (result) {
+					addUsedWindow(result.window, result.openedFiles);
+					foldersOpenedInOmni.add(folderToOpen.workspace.uri);
+					openFolderInNewWindow = true; // any other folders to open must open in new window then
+				}
+			}
+
 			// Open remaining ones
 			for (const folderToOpen of allFoldersToOpen) {
 				if (windowsOnFolderPath.some(window => isSingleFolderWorkspaceIdentifier(window.openedWorkspace) && extUriBiasedIgnorePathCase.isEqual(window.openedWorkspace.uri, folderToOpen.workspace.uri))) {
 					continue; // ignore folders that are already open
+				}
+
+				if (foldersOpenedInOmni.has(folderToOpen.workspace.uri)) {
+					continue; // ignore folders that are already open in Omni
 				}
 
 				const remoteAuthority = folderToOpen.remoteAuthority;
@@ -710,6 +803,15 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				addUsedWindow(await this.doOpenEmpty(openConfig, true, remoteAuthority, filesToOpenInWindow, emptyWindowBackupInfo), !!filesToOpenInWindow);
 
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
+			}
+		}
+
+		const allOmniWindowsToRestore =
+			distinctHucodeOmniWindowPaths(omniWindowsToRestore);
+		if (allOmniWindowsToRestore.length > 0) {
+			for (const omniWindowToRestore of allOmniWindowsToRestore) {
+				addUsedWindow(await this.doOpenOmni(openConfig, true, omniWindowToRestore));
+				openFolderInNewWindow = true;
 			}
 		}
 
@@ -799,6 +901,22 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		});
 	}
 
+	private doOpenOmni(
+		openConfig: IOpenConfiguration,
+		forceNewWindow: boolean,
+		omniWindow: IHucodeOmniWindowPath
+	): Promise<ICodeWindow> {
+		this.logService.trace('windowsManager#doOpenOmni', omniWindow);
+
+		return this.openInBrowserWindow(
+			getHucodeOmniBrowserWindowOptions(
+				openConfig,
+				omniWindow,
+				forceNewWindow
+			)
+		);
+	}
+
 	private doOpenFolderOrWorkspace(openConfig: IOpenConfiguration, folderOrWorkspace: IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen, forceNewWindow: boolean, filesToOpen: IFilesToOpen | undefined, windowToUse?: ICodeWindow): Promise<ICodeWindow> {
 		this.logService.trace('windowsManager#doOpenFolderOrWorkspace', { folderOrWorkspace, filesToOpen });
 
@@ -835,6 +953,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		}
 
 		// Check for force empty
+		else if (openConfig.forceOmniWindow) {
+			pathsToOpen = [createHucodeOmniWindowPath()];
+		}
+
+		// Check for force empty
 		else if (openConfig.forceEmpty) {
 			pathsToOpen = [EMPTY_WINDOW];
 		}
@@ -853,7 +976,17 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		else {
 			pathsToOpen = await this.doGetPathsFromLastSession();
 			if (pathsToOpen.length === 0) {
-				pathsToOpen.push(EMPTY_WINDOW); // add an empty window if we did not have windows to restore
+				const hasRestorableWindows =
+					this.workspacesManagementMainService
+						.getUntitledWorkspaces().length > 0 ||
+					this.backupMainService.getEmptyWindowBackups().length > 0;
+				pathsToOpen.push(
+					getHucodeDefaultStartupWindowPath({
+						initialStartup: openConfig.initialStartup,
+						hasRestorableWindows
+					})
+					?? EMPTY_WINDOW
+				);
 			}
 
 			isRestoringPaths = true;
@@ -891,7 +1024,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// focus treatment.
 		if (openConfig.initialStartup && !isRestoringPaths && this.configurationService.getValue<IWindowSettings | undefined>('window')?.restoreWindows === 'preserve') {
 			const lastSessionPaths = await this.doGetPathsFromLastSession();
-			pathsToOpen.unshift(...lastSessionPaths.filter(path => isWorkspacePathToOpen(path) || isSingleFolderWorkspacePathToOpen(path) || path.backupPath));
+			pathsToOpen.unshift(...filterHucodePreserveRestorePaths(
+				lastSessionPaths,
+				isWorkspacePathToOpen,
+				isSingleFolderWorkspacePathToOpen
+			));
 		}
 
 		return pathsToOpen;
@@ -1032,6 +1169,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				}
 
 				const pathsToOpen = await Promise.all(lastSessionWindows.map(async lastSessionWindow => {
+					const hucodeOmniPath =
+						getHucodeOmniPathFromWindowState(lastSessionWindow);
+					if (hucodeOmniPath) {
+						return hucodeOmniPath;
+					}
 
 					// Workspaces
 					if (lastSessionWindow.workspace) {
@@ -1597,6 +1739,10 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			cssModules: this.cssDevelopmentService.isEnabled ? await this.cssDevelopmentService.getCssModules() : undefined,
 
 			isSessionsWindow: isWorkspaceIdentifier(options.workspace) && isEqual(options.workspace.configPath, this.environmentMainService.agentSessionsWorkspace),
+			isOmniWindow: options.isOmniWindow,
+			omniActiveWorktreePath: options.omniActiveWorktreePath,
+			omniResidentWorkspaces: options.omniResidentWorkspaces,
+			'skip-sessions-welcome': options.isOmniWindow || undefined,
 		};
 
 		// New window

@@ -86,12 +86,12 @@ export interface IStorageMain extends IDisposable {
 	 * Store a string value under the given key to storage. The value will
 	 * be converted to a string.
 	 */
-	set(key: string, value: string | boolean | number | undefined | null): void;
+	set(key: string, value: string | boolean | number | undefined | null): Promise<void>;
 
 	/**
 	 * Delete an element stored under the provided key from storage.
 	 */
-	delete(key: string): void;
+	delete(key: string): Promise<void>;
 
 	/**
 	 * Whether the storage is using in-memory persistence or not.
