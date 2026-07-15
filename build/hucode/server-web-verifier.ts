@@ -72,6 +72,7 @@ export async function verifyServerWebSignatureVerifier(
 			cwd: serverRoot,
 			encoding: 'utf8',
 			env: runtimeEnvironment(),
+			killSignal: 'SIGKILL',
 			timeout: runtimeImportTimeoutMs
 		}
 	);
