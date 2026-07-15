@@ -77,7 +77,7 @@ suite('Hucode server-web signature verifier', () => {
 
 	test('times out a hung verifier import', async () => {
 		await createVerifierPackage(
-			"process.on('SIGTERM', () => {}); "
+			'process.on(\'SIGTERM\', () => {}); '
 				+ 'setInterval(() => {}, 1_000); '
 				+ 'await new Promise(() => {}); '
 				+ 'export async function verify() {}'
