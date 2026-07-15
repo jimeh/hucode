@@ -191,20 +191,13 @@ export function encodeWorktreeHandle(
  *
  * @param projectId Project manager record identifier.
  * @param worktreePath Absolute worktree path.
- * @param hostedWorkbenchInstanceId Hosted instance id when the worktree is
- * loaded in Omni.
- * @returns A row id that changes when the worktree loads into a hosted
- * workbench instance.
+ * @returns A stable row id for the logical project worktree.
  */
 export function getWorktreeItemId(
 	projectId: string,
-	worktreePath: string,
-	hostedWorkbenchInstanceId?: string
+	worktreePath: string
 ): string {
-	const handle = encodeWorktreeHandle(projectId, worktreePath);
-	return hostedWorkbenchInstanceId
-		? `${handle}:loaded:${hostedWorkbenchInstanceId}`
-		: `${handle}:idle`;
+	return encodeWorktreeHandle(projectId, worktreePath);
 }
 
 /**
@@ -452,11 +445,7 @@ function toWorktreeElement(
 			? localize('detachedWorktree', 'Detached')
 			: undefined);
 	const item: ProjectSwitcherWorktreeItem = {
-		id: getWorktreeItemId(
-			project.id,
-			worktree.path,
-			hostedWorkbenchInstance?.instanceId
-		),
+		id: getWorktreeItemId(project.id, worktree.path),
 		handle: encodeWorktreeHandle(project.id, worktree.path),
 		kind: 'worktree',
 		projectId: project.id,
@@ -495,11 +484,7 @@ function toMissingWorktreeElement(
 	const isActive = typeof options.activeWorktreePath === 'string' &&
 		pathsEqual(options.activeWorktreePath, hostedWorkbenchInstance.worktreePath);
 	const item: ProjectSwitcherWorktreeItem = {
-		id: getWorktreeItemId(
-			project.id,
-			hostedWorkbenchInstance.worktreePath,
-			hostedWorkbenchInstance.instanceId
-		),
+		id: getWorktreeItemId(project.id, hostedWorkbenchInstance.worktreePath),
 		handle: encodeWorktreeHandle(
 			project.id,
 			hostedWorkbenchInstance.worktreePath
