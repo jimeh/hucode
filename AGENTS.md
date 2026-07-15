@@ -48,6 +48,11 @@ as the required Hucode instruction set for work in this fork.
   run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
   for the edited files. Do not bypass or ignore hygiene failures; fix them or
   report the blocker.
+- Build-script changelog tests create temporary Git commits and inherit global
+  `commit.gpgSign`. On hosts with signing enabled, run the suite with
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`
+  `GIT_CONFIG_VALUE_0=false npm run test-build-scripts` so test commits do not
+  require an interactive pinentry.
 - `windowsMainService.getPathsToOpen()` selects the default fallback window
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account

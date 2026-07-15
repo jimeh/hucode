@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { generateServerIcons } from './generate-server-icons.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -72,6 +73,7 @@ async function buildDarwinIconAssets(tmpRoot) {
 		path.join(compiled, 'Hucode.icns'),
 		path.join(outputRoot, 'code.icns')
 	);
+	await generateServerIcons(path.join(compiled, 'Hucode.icns'));
 }
 
 async function main() {
