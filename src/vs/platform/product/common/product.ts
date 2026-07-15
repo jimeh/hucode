@@ -81,6 +81,17 @@ else {
 					enterprise: {
 						id: 'github-enterprise',
 						name: 'GitHub Enterprise',
+					},
+					// Chat setup renders a button per provider and reads
+					// these entries unconditionally; omitting them breaks
+					// the setup dialog when running web out of sources.
+					google: {
+						id: 'google',
+						name: 'Google',
+					},
+					apple: {
+						id: 'apple',
+						name: 'Apple',
 					}
 				},
 				providerScopes: []

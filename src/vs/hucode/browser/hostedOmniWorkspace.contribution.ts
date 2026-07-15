@@ -16,6 +16,7 @@ import {
 import { ThemeIcon } from '../../base/common/themables.js';
 import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
+import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { HucodeMenuId } from
 	'../../platform/actions/common/hucodeMenuIds.js';
 import { Categories } from
@@ -307,7 +308,7 @@ function registerHostedProjectSidebarCommand(
 	id: string,
 	title: ReturnType<typeof localize2>
 ): void {
-	registerAction2(class extends Action2 {
+	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
 				id,
@@ -346,7 +347,7 @@ registerHostedProjectSidebarCommand(
 	localize2('collapseAllProjects', 'Collapse All')
 );
 
-registerAction2(class extends Action2 {
+registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
 	constructor() {
 		super({
 			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
@@ -417,7 +418,7 @@ function registerHostedProjectNavigationAction(
 	enabledContext: ContextKeyExpression,
 	order: number
 ): void {
-	registerAction2(class extends Action2 {
+	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
 				id,

@@ -220,6 +220,9 @@ pub struct ServeWebArgs {
 	/// Specifies the directory that server data is kept in.
 	#[clap(long)]
 	pub server_data_dir: Option<String>,
+	/// Enable the Hucode Omni Projects shell and serve it at the root URL.
+	#[clap(long)]
+	pub omni: bool,
 	/// The workspace folder to open when no input is specified in the browser URL.
 	#[clap(long)]
 	pub default_folder: Option<String>,

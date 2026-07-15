@@ -39,6 +39,8 @@ VS Code code that Hucode customizes.
   `build/hucode/mixin/stable/product.json` `hucodeVersion`.
 - `npm run hucode:run` prepares the Hucode mixin overlay and launches existing
   compiled output.
+- `npm run hucode:web` prepares the Hucode mixin overlay and launches the
+  local serve-web development server from existing compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
   `npm run hucode:compile` before launch for a full one-shot rebuild.
 - `npm run hucode:compile` must build the client, built-in extension outputs,
@@ -94,6 +96,9 @@ VS Code code that Hucode customizes.
 - When splitting an upstream patch, keep high-level integration tests in the
   upstream subsystem focused on verifier/adapter selection and routing, and move
   detailed Hucode behavior tests with the extracted Hucode helper.
+- `npm run test-node -- --run <file>` accepts one test file per invocation.
+  Run focused Node tests separately; extra positional paths are passed through
+  to Mocha and can load from `src/` instead of compiled `out/`.
 
 ## CI Workflow
 
@@ -569,6 +574,21 @@ VS Code code that Hucode customizes.
   so upstream extension scanner and enablement service edits stay thin.
 
 ## Other Hucode Gotchas
+
+- Do not null out or remove `defaultChatAgent` from the product configuration
+  served to web clients. Upstream account and chat entitlement services
+  dereference it unconditionally during workbench startup, so removing it
+  breaks boot with a blank page and no logged error. To disable Copilot chat
+  surfaces on web, target narrower keys such as
+  `builtInExtensionsEnabledWithAutoUpdates`.
+- Hucode serve-web self-hosts webview bootstrap assets: the server injects a
+  same-origin `webviewEndpoint`, the client entrypoint absolutizes it, and
+  `src/vs/workbench/contrib/webview/browser/pre/index.html` carries a Hucode
+  patch accepting a same-origin parent. That page pins its inline module
+  script with a CSP sha256 hash; any edit to the script must recompute the
+  hash in the CSP meta or the module is silently blocked and all webviews
+  break. `src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts` guards both
+  the hash and the patch across upstream upgrades.
 
 - Keep high-volume `ILocalPtyService` stream events lazy when exposing the
   main-process `localPty` channel through `ProxyChannel.fromService`. Desktop
