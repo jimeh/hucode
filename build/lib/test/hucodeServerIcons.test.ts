@@ -31,7 +31,11 @@ const pngSignature = Buffer.from([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 ]);
 
-function assertIcoRenditions(contents: Buffer, expectedSizes: number[]): void {
+function assertIcoRenditions(
+	contents: Buffer,
+	expectedRenditions: Map<number, Buffer>,
+	expectedSizes: number[]
+): void {
 	assert.strictEqual(contents.readUInt16LE(0), 0);
 	assert.strictEqual(contents.readUInt16LE(2), 1);
 	assert.strictEqual(contents.readUInt16LE(4), expectedSizes.length);
@@ -42,12 +46,18 @@ function assertIcoRenditions(contents: Buffer, expectedSizes: number[]): void {
 		const encodedSize = expectedSize === 256 ? 0 : expectedSize;
 		assert.strictEqual(contents.readUInt8(entryOffset), encodedSize);
 		assert.strictEqual(contents.readUInt8(entryOffset + 1), encodedSize);
+		assert.strictEqual(contents.readUInt8(entryOffset + 2), 0);
+		assert.strictEqual(contents.readUInt8(entryOffset + 3), 0);
 		assert.strictEqual(contents.readUInt16LE(entryOffset + 4), 1);
 		assert.strictEqual(contents.readUInt16LE(entryOffset + 6), 32);
 
 		const imageLength = contents.readUInt32LE(entryOffset + 8);
 		const imageOffset = contents.readUInt32LE(entryOffset + 12);
+		const expectedImage = expectedRenditions.get(expectedSize);
+		assert.ok(expectedImage);
+		assert.strictEqual(imageLength, expectedImage.length);
 		assert.strictEqual(imageOffset, expectedImageOffset);
+		assert.ok(imageOffset + imageLength <= contents.length);
 		assert.ok(
 			contents
 				.subarray(imageOffset, imageOffset + pngSignature.length)
@@ -55,6 +65,10 @@ function assertIcoRenditions(contents: Buffer, expectedSizes: number[]): void {
 		);
 		assert.strictEqual(contents.readUInt32BE(imageOffset + 16), expectedSize);
 		assert.strictEqual(contents.readUInt32BE(imageOffset + 20), expectedSize);
+		assert.deepStrictEqual(
+			contents.subarray(imageOffset, imageOffset + imageLength),
+			expectedImage
+		);
 		expectedImageOffset += imageLength;
 	}
 
@@ -76,7 +90,7 @@ suite('Hucode server icons', () => {
 			path.join(mixinRoot, 'server', 'favicon.ico')
 		);
 		assert.deepStrictEqual(favicon, createIco(renditions));
-		assertIcoRenditions(favicon, [32, 64, 128, 256]);
+		assertIcoRenditions(favicon, renditions, [32, 64, 128, 256]);
 		assert.deepStrictEqual(
 			await fs.readFile(path.join(mixinRoot, 'server', 'code-192.png')),
 			renditions.get(1024)
