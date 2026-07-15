@@ -878,6 +878,46 @@ jobs:
         with:
           path: release-artifacts
 
+      - name: Write release metadata
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const packageJson = JSON.parse(
+            fs.readFileSync('package.json', 'utf8')
+          );
+          const product = JSON.parse(
+            fs.readFileSync('build/hucode/mixin/stable/product.json', 'utf8')
+          );
+          const hucodeVersion = product.hucodeVersion;
+          const tagVersion = process.env.TAG_NAME?.replace(/^v/, '');
+          if (!hucodeVersion || hucodeVersion !== tagVersion) {
+            throw new Error(
+              `Release tag ${process.env.TAG_NAME} does not match ` +
+              `hucodeVersion ${hucodeVersion ?? '<missing>'}.`
+            );
+          }
+
+          const metadata = {
+            schemaVersion: 1,
+            hucodeVersion,
+            vscodeVersion: packageJson.version,
+            commit: process.env.COMMIT_SHA,
+            quality: product.quality ?? 'stable'
+          };
+
+          fs.writeFileSync(
+            'hucode-release-metadata.json',
+            `${JSON.stringify(metadata, null, 2)}\n`
+          );
+          NODE
+
       - name: Upload release assets
         if: needs.package.result != 'cancelled'
         shell: bash
@@ -906,6 +946,7 @@ jobs:
             echo "No macOS DMG or ZIP release assets found." >&2
             exit 1
           fi
+          files+=(hucode-release-metadata.json)
           required_patterns=(
             '*/hucode-*-darwin-x64/hucode-darwin-x64.dmg'
             '*/hucode-*-darwin-x64/hucode-darwin-x64.zip'
