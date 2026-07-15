@@ -15,6 +15,8 @@ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IMeteredConnectionService } from '../../../../platform/meteredConnection/common/meteredConnection.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { AvailableForDownload, Disabled, DisablementReason, Downloaded, Downloading, Idle, IUpdate, Overwriting, Ready, Restarting, State, StateType, Updating } from '../../../../platform/update/common/update.js';
+import { getHucodeUpdateDisplayVersion } from '../../../../platform/update/common/hucodeUpdateVersion.js';
+import { getHucodeApplicationVersion } from '../../../../platform/product/common/hucodeProductVersion.js';
 import { ShowCurrentReleaseNotesActionId } from '../common/update.js';
 import { computeDownloadSpeed, computeDownloadTimeRemaining, computeProgressPercent, formatBytes, formatDate, formatTimeRemaining, tryParseDate } from '../common/updateUtils.js';
 import './media/updateTooltip.css';
@@ -137,7 +139,7 @@ export class UpdateTooltip extends Disposable {
 	}
 
 	private updateCurrentVersion() {
-		const productVersion = this.productService.version;
+		const productVersion = getHucodeApplicationVersion(this.productService);
 		if (productVersion) {
 			const currentCommitId = this.productService.commit?.substring(0, 7);
 			this.currentVersionNode.textContent = currentCommitId
@@ -377,13 +379,13 @@ export class UpdateTooltip extends Disposable {
 		this.titleNode.textContent = title;
 
 		// Latest version
-		const version = update?.productVersion;
+		const version = getHucodeUpdateDisplayVersion(update);
 		if (version) {
-			const updateCommitId = update.version?.substring(0, 7);
+			const updateCommitId = update?.version?.substring(0, 7);
 			this.latestVersionNode.textContent = updateCommitId
 				? localize('updateTooltip.latestVersionLabelWithCommit', "Latest Version: {0} ({1})", version, updateCommitId)
 				: localize('updateTooltip.latestVersionLabel', "Latest Version: {0}", version);
-			this.latestVersionCopyValue.value = updateCommitId ? `${version} (${update.version})` : version;
+			this.latestVersionCopyValue.value = updateCommitId ? `${version} (${update?.version})` : version;
 			this.latestVersionNode.parentElement!.style.display = '';
 		} else {
 			this.latestVersionNode.parentElement!.style.display = 'none';
@@ -399,7 +401,7 @@ export class UpdateTooltip extends Disposable {
 		}
 
 		// Release notes button
-		this.releaseNotesVersion = version ?? this.productService.version;
+		this.releaseNotesVersion = version ?? getHucodeApplicationVersion(this.productService);
 		this.releaseNotesButton.style.display = this.releaseNotesVersion ? '' : 'none';
 		this.releaseNotesButton.style.marginRight = this.releaseNotesVersion ? 'auto' : '';
 		this.buttonBar.style.display = this.releaseNotesVersion ? '' : 'none';

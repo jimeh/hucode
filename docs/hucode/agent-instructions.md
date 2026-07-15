@@ -20,6 +20,12 @@ VS Code code that Hucode customizes.
   `actool`'s generated compatibility ICNS.
 - Hucode's app release version lives in the overlay as `hucodeVersion`. Keep
   upstream `version` for VS Code compatibility and extension checks.
+- Hucode update responses use `productVersion` for the underlying VS Code
+  compatibility version and `hucodeVersion` for the app release version. macOS
+  Squirrel update events can drop extra update JSON fields and report the feed
+  `name` as `productVersion`, so keep Hucode-specific update display/merge
+  behavior in
+  `src/vs/platform/update/common/hucodeUpdateVersion.ts`.
 - Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
   archives are not valid Microsoft `vsce-sign` signatures; release builds need
   `node-ovsx-sign` available in production dependencies to verify them.
