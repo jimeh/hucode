@@ -767,6 +767,12 @@ jobs:
             echo "Server-web entrypoint not found: $entrypoint" >&2
             exit 1
           fi
+          verifier_args=("../$server_name")
+          if [ "${{ matrix.platform }}" = "linux" ] && \
+            [ "${{ matrix.arch }}" = "x64" ]; then
+            verifier_args+=(--verify-runtime-import)
+          fi
+          node build/hucode/server-web-verifier.ts "${verifier_args[@]}"
           mkdir -p "$dist_root"
           rm -f "$archive_path"
           if [ "${{ matrix.platform }}" = "win32" ]; then
