@@ -75,6 +75,24 @@ suite('Hucode server-web signature verifier', () => {
 		);
 	});
 
+	test('times out a hung verifier import', async () => {
+		await createVerifierPackage(
+			'setInterval(() => {}, 1_000); '
+				+ 'await new Promise(() => {}); '
+				+ 'export async function verify() {}'
+		);
+
+		await assert.rejects(
+			verifyServerWebSignatureVerifier(
+				serverRoot,
+				true,
+				process.execPath,
+				500
+			),
+			/ETIMEDOUT/
+		);
+	});
+
 	async function createVerifierPackage(source: string): Promise<void> {
 		const packageRoot = path.join(
 			serverRoot,

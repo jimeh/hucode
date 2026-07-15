@@ -43,7 +43,8 @@ function runtimeEnvironment(): NodeJS.ProcessEnv {
 export async function verifyServerWebSignatureVerifier(
 	serverRoot: string,
 	verifyRuntimeImport = false,
-	nodeExecutable = path.join(serverRoot, 'node')
+	nodeExecutable = path.join(serverRoot, 'node'),
+	runtimeImportTimeoutMs = 30_000
 ): Promise<void> {
 	const packageJsonPath = path.join(
 		serverRoot,
@@ -70,7 +71,8 @@ export async function verifyServerWebSignatureVerifier(
 		{
 			cwd: serverRoot,
 			encoding: 'utf8',
-			env: runtimeEnvironment()
+			env: runtimeEnvironment(),
+			timeout: runtimeImportTimeoutMs
 		}
 	);
 
