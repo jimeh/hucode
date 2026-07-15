@@ -1483,14 +1483,20 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private async updateCurrentWorktreeSelection(): Promise<void> {
-		if (!this.tree) {
+		const tree = this.tree;
+		if (!tree) {
 			return;
 		}
 
+		// Shell state changes can rebuild the tree while a previous selection
+		// update is still in flight, replacing every item instance. Only apply
+		// selection when this update still owns the rendered items, and only
+		// with instances the tree currently knows.
+		const renderedItems = this.itemsById;
 		const currentWorktree = this.getCurrentWorktreeItem();
 		if (!currentWorktree) {
-			this.tree.setSelection([]);
-			this.tree.setFocus([]);
+			tree.setSelection([]);
+			tree.setFocus([]);
 			return;
 		}
 
@@ -1500,14 +1506,25 @@ export class ProjectSwitcherWidget extends Disposable {
 				currentWorktree.section
 			)
 		);
-		if (isProjectItem(projectItem)) {
-			this.tree.expand(projectItem);
+		if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
+			tree.expand(projectItem);
 			this.setProjectCollapsed(projectItem, false);
 		}
 
-		await this.tree.reveal(currentWorktree);
-		this.tree.setSelection([currentWorktree]);
-		this.tree.setFocus([currentWorktree]);
+		if (!tree.hasElement(currentWorktree)) {
+			return;
+		}
+
+		await tree.reveal(currentWorktree);
+		if (
+			this.itemsById !== renderedItems ||
+			!tree.hasElement(currentWorktree)
+		) {
+			return;
+		}
+
+		tree.setSelection([currentWorktree]);
+		tree.setFocus([currentWorktree]);
 		this.viewItemContext?.set(currentWorktree.contextValue);
 	}
 
