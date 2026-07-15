@@ -70,7 +70,15 @@ suite('Hucode mixin', () => {
 				'manifest.json'
 			)
 		);
-		assert.strictEqual(webManifest.name, 'Hucode');
-		assert.strictEqual(webManifest.short_name, 'Hucode');
+		assert.deepStrictEqual(
+			{
+				name: webManifest.name,
+				short_name: webManifest.short_name
+			},
+			{
+				name: 'Hucode',
+				short_name: 'Hucode'
+			}
+		);
 	});
 });
