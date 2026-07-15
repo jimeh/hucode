@@ -62,6 +62,19 @@ suite('Hucode server-web signature verifier', () => {
 		);
 	});
 
+	test('rejects a verifier without the verify export', async () => {
+		await createVerifierPackage('export const sign = async () => {};');
+
+		await assert.rejects(
+			verifyServerWebSignatureVerifier(
+				serverRoot,
+				true,
+				process.execPath
+			),
+			/does not export verify/
+		);
+	});
+
 	async function createVerifierPackage(source: string): Promise<void> {
 		const packageRoot = path.join(
 			serverRoot,
