@@ -10,6 +10,35 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
+const linuxResources = [
+	'resources/linux/code.appdata.xml',
+	'resources/linux/code.desktop',
+	'resources/linux/code-url-handler.desktop',
+	'resources/linux/code.png',
+	'resources/linux/debian/control.template',
+	'resources/linux/debian/postinst.template',
+	'resources/linux/debian/postrm.template',
+	'resources/linux/debian/prerm.template',
+	'resources/linux/debian/templates.template',
+	'resources/linux/rpm/code.spec.template',
+	'resources/linux/rpm/code.xpm'
+];
+const packageSourcePatterns = [
+	/packages\.microsoft\.com/i,
+	/microsoft\.gpg/i,
+	/add-microsoft-repo/i,
+	/apt-config/i,
+	/trusted\.gpg/i,
+	/sources\.list/i,
+	/\/etc\/apt/i,
+	/\/etc\/yum\.repos\.d/i,
+	/baseurl\s*=/i
+];
+const upstreamIdentityPatterns = [
+	/Visual Studio Code/i,
+	/code\.visualstudio\.com/i,
+	/vscode-linux@microsoft\.com/i
+];
 
 function parseQuality(args) {
 	const qualityIndex = args.indexOf('--quality');
@@ -33,6 +62,89 @@ async function assertFileExists(filePath) {
 	const stats = await fs.stat(filePath);
 	assert.ok(stats.isFile(), `${filePath} is not a file.`);
 	assert.ok(stats.size > 0, `${filePath} is empty.`);
+}
+
+async function readTextFile(root, relativePath) {
+	return fs.readFile(path.join(root, relativePath), 'utf8');
+}
+
+function assertPatternsAbsent(contents, patterns, label) {
+	for (const pattern of patterns) {
+		assert.ok(!pattern.test(contents), `${label} contains ${pattern}.`);
+	}
+}
+
+async function validateLinuxResources(generatedRoot) {
+	for (const relativePath of linuxResources) {
+		await assertFileExists(path.join(generatedRoot, relativePath));
+	}
+
+	const appdata = await readTextFile(
+		generatedRoot,
+		'resources/linux/code.appdata.xml'
+	);
+	const desktop = await readTextFile(
+		generatedRoot,
+		'resources/linux/code.desktop'
+	);
+	const urlHandler = await readTextFile(
+		generatedRoot,
+		'resources/linux/code-url-handler.desktop'
+	);
+	const control = await readTextFile(
+		generatedRoot,
+		'resources/linux/debian/control.template'
+	);
+	const rpmSpec = await readTextFile(
+		generatedRoot,
+		'resources/linux/rpm/code.spec.template'
+	);
+
+	assert.match(appdata, /https:\/\/github\.com\/jimeh\/hucode/);
+	assert.match(appdata, /<id>dev\.hucode\.app<\/id>/);
+	assert.match(appdata, /Hucode provides a focused desktop environment/);
+	assert.match(desktop, /^Keywords=hucode;/m);
+	assert.match(desktop, /^Icon=@@ICON@@$/m);
+	assert.match(urlHandler, /^MimeType=x-scheme-handler\/@@URLPROTOCOL@@;$/m);
+	assert.match(control, /^Maintainer: Hucode Project <contact@jimeh\.me>$/m);
+	assert.match(control, /^Homepage: https:\/\/github\.com\/jimeh\/hucode$/m);
+	assert.match(rpmSpec, /^Vendor:\s+Hucode Project$/m);
+	assert.match(rpmSpec, /^Packager: Hucode Project <contact@jimeh\.me>$/m);
+	assert.match(rpmSpec, /^URL:\s+https:\/\/github\.com\/jimeh\/hucode$/m);
+
+	const textResources = linuxResources.filter(
+		path => !path.endsWith('.png') && !path.endsWith('.xpm')
+	);
+	for (const relativePath of textResources) {
+		const contents = await readTextFile(generatedRoot, relativePath);
+		assertPatternsAbsent(contents, upstreamIdentityPatterns, relativePath);
+	}
+
+	const packageScripts = [
+		'resources/linux/debian/postinst.template',
+		'resources/linux/debian/postrm.template',
+		'resources/linux/debian/prerm.template',
+		'resources/linux/debian/templates.template',
+		'resources/linux/rpm/code.spec.template'
+	];
+	for (const relativePath of packageScripts) {
+		const contents = await readTextFile(generatedRoot, relativePath);
+		assertPatternsAbsent(contents, packageSourcePatterns, relativePath);
+	}
+
+	const png = await fs.readFile(
+		path.join(generatedRoot, 'resources/linux/code.png')
+	);
+	assert.strictEqual(png.toString('hex', 0, 8), '89504e470d0a1a0a');
+	assert.strictEqual(png.readUInt32BE(16), 1024);
+	assert.strictEqual(png.readUInt32BE(20), 1024);
+
+	const xpm = await readTextFile(
+		generatedRoot,
+		'resources/linux/rpm/code.xpm'
+	);
+	assert.match(xpm, /^\/\* XPM \*\//);
+	assert.match(xpm, /"1024 1024 17 1"/);
 }
 
 /**
@@ -147,6 +259,7 @@ export async function validateMixin(quality = 'stable') {
 	await assertFileExists(
 		path.join(generatedRoot, 'resources', 'server', 'code-512.png')
 	);
+	await validateLinuxResources(generatedRoot);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
