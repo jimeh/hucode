@@ -260,9 +260,11 @@ VS Code code that Hucode customizes.
   `APPLE_TEAM_ID`.
 - Hucode release CI publishes GitHub Releases from tag builds and uses the
   matching `CHANGELOG.md` version section as release notes. Public assets
-  include macOS desktop DMG/ZIP files plus standalone CLI and server-web
-  archives for macOS, Linux, and Windows x64/arm64. Linux and Windows desktop
-  packages remain workflow artifacts rather than public release assets.
+  include macOS desktop DMG/ZIP files, Linux x64/arm64 desktop ZIP/DEB/RPM
+  files, and standalone CLI and server-web archives for macOS, Linux, and
+  Windows x64/arm64. Linux armhf and Windows desktop packages remain workflow
+  artifacts rather than public release assets. Keep the required asset contract
+  and checksums in `build/hucode/release-assets.ts`.
 - Hucode stable builds use `https://updates.hucode.dev` as the built-in update
   feed. Keep `quality`, `updateUrl`, `downloadUrl`,
   `hucodeReleaseNotesUrlTemplate`, and `releaseNotesUrl` in the Hucode product
@@ -271,6 +273,9 @@ VS Code code that Hucode customizes.
 - Hucode macOS DMGs are manual install assets. ZIPs are the Squirrel.Mac
   auto-update assets returned by the update service. Builds released before the
   product mixin includes `updateUrl` cannot discover updates automatically.
+- Hucode Linux desktop updates are notification-only. The update action must
+  open the latest GitHub Release for manual package selection and must not infer
+  the installed package format or install an update automatically.
 - After publishing GitHub Release assets, release CI must trigger
   `jimeh/hucode-updates` with repository dispatch event
   `hucode-release-published` so update metadata is refreshed for older commits.

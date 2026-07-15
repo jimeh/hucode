@@ -1936,6 +1936,23 @@ export async function createStandaloneCliArchive(
 }
 
 /**
+ * Returns the stable public filename for a Linux desktop package.
+ */
+export function linuxDesktopPackageName(
+	options: ReleaseTargetOptions,
+	format: 'deb' | 'rpm'
+): string {
+	if (options.platform !== 'linux') {
+		throw new Error(
+			`Linux desktop package names require a Linux target, got ` +
+				`'${options.platform}-${options.arch}'.`
+		);
+	}
+
+	return `hucode-linux-${options.arch}.${format}`;
+}
+
+/**
  * Packages and, when required, notarizes the standalone Hucode CLI.
  */
 async function packageCli(
@@ -2037,7 +2054,10 @@ async function packageDeb(options: ReleaseOptions, distRoot: string): Promise<vo
 		throw new Error('DEB package was not created.');
 	}
 
-	const destination = path.join(distRoot, path.basename(source));
+	const destination = path.join(
+		distRoot,
+		linuxDesktopPackageName(options, 'deb')
+	);
 	await moveFile(source, destination);
 	console.log(`Hucode DEB: ${destination}`);
 }
@@ -2068,7 +2088,10 @@ async function packageRpm(options: ReleaseOptions, distRoot: string): Promise<vo
 		throw new Error('RPM package was not created.');
 	}
 
-	const destination = path.join(distRoot, path.basename(source));
+	const destination = path.join(
+		distRoot,
+		linuxDesktopPackageName(options, 'rpm')
+	);
 	await moveFile(source, destination);
 	console.log(`Hucode RPM: ${destination}`);
 }
