@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.45 - 2026-07-15
+
+### Bug Fixes
+
+- package OpenVSX signature verifier in serve-web archives (#82)
+
 ## 0.0.44 - 2026-07-14
 
 ### Bug Fixes
