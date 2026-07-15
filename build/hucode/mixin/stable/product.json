@@ -1,0 +1,71 @@
+{
+	"nameShort": "Hucode",
+	"nameLong": "Hucode",
+	"hucodeVersion": "0.0.38",
+	"hucodeReleaseNotesUrlTemplate": "https://updates.hucode.dev/release-notes/{version}.md",
+	"quality": "stable",
+	"updateUrl": "https://updates.hucode.dev",
+	"downloadUrl": "https://github.com/jimeh/hucode/releases/latest",
+	"releaseNotesUrl": "https://github.com/jimeh/hucode/releases/latest",
+	"applicationName": "hucode",
+	"dataFolderName": ".hucode",
+	"sharedDataFolderName": ".hucode-shared",
+	"win32MutexName": "hucode",
+	"licenseUrl": "https://github.com/jimeh/hucode/blob/main/LICENSE.txt",
+	"serverLicenseUrl": "https://github.com/jimeh/hucode/blob/main/LICENSE.txt",
+	"serverApplicationName": "hucode-server",
+	"serverDataFolderName": ".hucode-server",
+	"tunnelApplicationName": "hucode-tunnel",
+	"tunnelServerQualities": {
+		"stable": {
+			"serverApplicationName": "hucode-server"
+		}
+	},
+	"win32DirName": "Hucode",
+	"win32NameVersion": "Hucode",
+	"win32RegValueName": "Hucode",
+	"win32x64AppId": "{{CCB9B4F8-0D88-4DDC-8B04-C993F45E753B}",
+	"win32arm64AppId": "{{7CEC1FDC-1B62-4094-BA83-06F5936362C2}",
+	"win32x64UserAppId": "{{8FD40B04-856D-475B-98BE-9D3862D5087C}",
+	"win32arm64UserAppId": "{{DF1226AF-95B1-408F-8B3B-4F21FAB9AD9D}",
+	"win32AppUserModelId": "dev.hucode.app",
+	"win32ShellNameShort": "Hu&code",
+	"win32ContextMenu": {
+		"x64": {
+			"clsid": "CBF04039-9B72-42B3-A8D4-1032F5AD4F98"
+		},
+		"arm64": {
+			"clsid": "0CC1A8D8-97FC-4B66-BD42-DAEE39E4EDE8"
+		}
+	},
+	"win32TunnelServiceMutex": "hucode-tunnelservice",
+	"win32TunnelMutex": "hucode-tunnel",
+	"darwinBundleIdentifier": "dev.hucode.app",
+	"darwinDmgTitle": "Hucode",
+	"darwinAssetsCar": "resources/darwin/Assets.car",
+	"darwinProfileUUID": "48E87162-98D3-4215-B9B9-83798637DFE3",
+	"darwinProfilePayloadUUID": "5BE5D001-89C4-4F24-AD75-D608C4EA9EC6",
+	"linuxIconName": "hucode",
+	"reportIssueUrl": "https://github.com/jimeh/hucode/issues/new",
+	"requestFeatureUrl": "https://github.com/jimeh/hucode/issues",
+	"reportMarketplaceIssueUrl": "https://github.com/eclipse/openvsx/issues",
+	"sendASmile": {
+		"reportIssueUrl": "https://github.com/jimeh/hucode/issues/new",
+		"requestFeatureUrl": "https://github.com/jimeh/hucode/issues"
+	},
+	"urlProtocol": "hucode",
+	"embedderIdentifier": "dev.hucode.app",
+	"extensionsGallery": {
+		"serviceUrl": "https://open-vsx.org/vscode/gallery",
+		"itemUrl": "https://open-vsx.org/vscode/item",
+		"resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}",
+		"extensionUrlTemplate": "https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest",
+		"controlUrl": "",
+		"recommendationsUrl": "",
+		"nlsBaseUrl": "",
+		"publisherUrl": ""
+	},
+	"linkProtectionTrustedDomains": [
+		"https://open-vsx.org"
+	]
+}
