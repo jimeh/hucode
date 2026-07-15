@@ -55,6 +55,9 @@ export async function validateMixin(quality = 'stable') {
 		path.join(repoRoot, 'build', 'hucode', 'mixin', quality, 'product.json')
 	);
 	const generatedRoot = path.dirname(generatedPath);
+	const generatedWebManifest = await readJson(
+		path.join(generatedRoot, 'resources', 'server', 'manifest.json')
+	);
 
 	assert.strictEqual(generated.nameShort, 'Hucode');
 	assert.strictEqual(generated.nameLong, 'Hucode');
@@ -116,6 +119,8 @@ export async function validateMixin(quality = 'stable') {
 	assert.strictEqual(rootProduct.serverApplicationName, 'code-server-oss');
 	assert.strictEqual(rootProduct.tunnelApplicationName, 'code-tunnel-oss');
 	assert.strictEqual(rootProduct.urlProtocol, 'code-oss');
+	assert.strictEqual(generatedWebManifest.name, 'Hucode');
+	assert.strictEqual(generatedWebManifest.short_name, 'Hucode');
 	await assertFileExists(
 		path.join(generatedRoot, 'resources', 'darwin', 'code.icns')
 	);
@@ -132,6 +137,15 @@ export async function validateMixin(quality = 'stable') {
 			'media',
 			'code-icon.svg'
 		)
+	);
+	await assertFileExists(
+		path.join(generatedRoot, 'resources', 'server', 'favicon.ico')
+	);
+	await assertFileExists(
+		path.join(generatedRoot, 'resources', 'server', 'code-192.png')
+	);
+	await assertFileExists(
+		path.join(generatedRoot, 'resources', 'server', 'code-512.png')
 	);
 }
 
