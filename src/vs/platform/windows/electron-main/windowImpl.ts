@@ -644,6 +644,8 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
 
 	get isExtensionTestHost(): boolean { return !!(this._config?.extensionTestsPath); }
 
+	get isOmniWindow(): boolean { return !!(this._config?.isOmniWindow); }
+
 	get isExtensionDevelopmentTestFromCli(): boolean { return this.isExtensionDevelopmentHost && this.isExtensionTestHost && !this._config?.debugId; }
 
 	//#endregion
@@ -1210,6 +1212,8 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
 		let windowUrl: string;
 		if (process.env.VSCODE_DEV && process.env.VSCODE_DEV_SERVER_URL) {
 			windowUrl = process.env.VSCODE_DEV_SERVER_URL; // support URL override for development
+		} else if (configuration.isOmniWindow) {
+			windowUrl = FileAccess.asBrowserUri(`vs/hucode/electron-browser/omni${this.environmentMainService.isBuilt ? '' : '-dev'}.html`).toString(true);
 		} else if (configuration.isSessionsWindow) {
 			windowUrl = FileAccess.asBrowserUri(`vs/sessions/electron-browser/sessions${this.environmentMainService.isBuilt ? '' : '-dev'}.html`).toString(true);
 		} else {

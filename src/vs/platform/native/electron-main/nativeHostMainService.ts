@@ -315,12 +315,12 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 		}, options);
 	}
 
-	async openAgentsWindow(windowId: number | undefined, options?: { folderUri?: UriComponents; sessionResource?: UriComponents }): Promise<void> {
+	async openAgentsWindow(windowId: number | undefined, options?: { folderUri?: UriComponents; initialQuery?: string; sessionResource?: UriComponents; preferredSessionType?: { providerId?: string; sessionTypeId: string } }): Promise<void> {
 		const windows = await this.windowsMainService.openAgentsWindow({
 			context: OpenContext.API,
 			contextWindowId: windowId,
 			cli: this.environmentMainService.args,
-		}, options?.folderUri ? URI.revive(options.folderUri) : undefined, options?.sessionResource ? URI.revive(options.sessionResource) : undefined);
+		}, options?.folderUri ? URI.revive(options.folderUri) : undefined, options?.initialQuery, options?.sessionResource ? URI.revive(options.sessionResource) : undefined, options?.preferredSessionType);
 		if (windows.length > 0) {
 			windows[0].focus();
 		}
@@ -331,6 +331,14 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 			return { failed: [] };
 		}
 		return this.globalKeybindingsMainService.updateKeybindings(windowId, keybindings);
+	}
+
+	async openOmniWindow(windowId: number | undefined): Promise<void> {
+		await this.windowsMainService.openOmniWindow({
+			context: OpenContext.API,
+			contextWindowId: windowId,
+			cli: this.environmentMainService.args
+		});
 	}
 
 	async isFullScreen(windowId: number | undefined, options?: INativeHostOptions): Promise<boolean> {
