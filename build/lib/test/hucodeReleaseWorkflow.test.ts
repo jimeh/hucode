@@ -75,6 +75,13 @@ suite('Hucode release workflow contract', () => {
 		);
 	});
 
+	test('removes node_modules archives before release work', () => {
+		const cleanups = workflow.match(
+			/- name: Remove node_modules archive\n        if: matrix\.platform != 'win32'\n        run: rm -rf \.build\/node_modules_cache \.build\/node_modules_list\.txt/g
+		);
+		assert.strictEqual(cleanups?.length, 2);
+	});
+
 	test('retries transient package smoke response parse failures', () => {
 		assert.match(smokeScript, /if ! omni_count=.*jq/s);
 		assert.match(smokeScript, /if ! identity_count=.*jq/s);
