@@ -93,6 +93,10 @@ suite('Hucode release workflow contract', () => {
 			assert.ok(extractIndex >= 0);
 			assert.ok(saveIndex > extractIndex);
 			assert.ok(removeIndex > saveIndex);
+			assert.match(
+				job,
+				/- name: Remove node_modules archive\n        if: matrix\.platform != 'win32'\n        run: rm -rf \.build\/node_modules_cache \.build\/node_modules_list\.txt/
+			);
 			assert.strictEqual(job.indexOf('- name: Remove node_modules archive', removeIndex + 1), -1);
 		}
 	});
