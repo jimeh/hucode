@@ -1,0 +1,18 @@
+[Desktop Entry]
+Name=@@NAME_LONG@@
+Comment=A code editor built for working with coding agents.
+GenericName=Text Editor
+Exec=@@EXEC@@ %F
+Icon=@@ICON@@
+Type=Application
+StartupNotify=false
+StartupWMClass=@@NAME_SHORT@@
+Categories=TextEditor;Development;IDE;
+MimeType=application/x-@@NAME@@-workspace;
+Actions=new-empty-window;
+Keywords=hucode;code;editor;agent;
+
+[Desktop Action new-empty-window]
+Name=New Empty Window
+Exec=@@EXEC@@ --new-window %F
+Icon=@@ICON@@
