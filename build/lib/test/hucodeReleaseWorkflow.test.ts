@@ -76,10 +76,25 @@ suite('Hucode release workflow contract', () => {
 	});
 
 	test('removes node_modules archives before release work', () => {
-		const cleanups = workflow.match(
-			/- name: Remove node_modules archive\n        if: matrix\.platform != 'win32'\n        run: rm -rf \.build\/node_modules_cache \.build\/node_modules_list\.txt/g
-		);
-		assert.strictEqual(cleanups?.length, 2);
+		const jobs = [
+			workflow.slice(
+				workflow.indexOf('  app-build:'),
+				workflow.indexOf('  package:')
+			),
+			workflow.slice(
+				workflow.indexOf('  package:'),
+				workflow.indexOf('  linux-package-smoke:')
+			)
+		];
+		for (const job of jobs) {
+			const extractIndex = job.lastIndexOf('- name: Extract node_modules cache');
+			const saveIndex = job.indexOf('- name: Save node_modules cache');
+			const removeIndex = job.indexOf('- name: Remove node_modules archive');
+			assert.ok(extractIndex >= 0);
+			assert.ok(saveIndex > extractIndex);
+			assert.ok(removeIndex > saveIndex);
+			assert.strictEqual(job.indexOf('- name: Remove node_modules archive', removeIndex + 1), -1);
+		}
 	});
 
 	test('retries transient package smoke response parse failures', () => {
