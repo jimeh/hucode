@@ -15,3 +15,11 @@ export function assertNoPackageSourceManagement(
 	contents: string,
 	label: string
 ): void;
+
+/**
+ * Asserts that product metadata does not contain upstream identity.
+ */
+export function assertNoUpstreamIdentity(
+	contents: string,
+	label: string
+): void;

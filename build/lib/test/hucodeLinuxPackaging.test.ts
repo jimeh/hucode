@@ -4,12 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import { suite, test } from 'node:test';
+import os from 'os';
 import path from 'path';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { deriveLinuxIconAssets } from '../../hucode/generate-linux-icons.ts';
-import { assertNoPackageSourceManagement } from '../../hucode/validate-mixin.js';
+import {
+	assertNoPackageSourceManagement,
+	assertNoUpstreamIdentity
+} from '../../hucode/validate-mixin.js';
+
+const execFileAsync = promisify(execFile);
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -44,10 +52,19 @@ const packageScriptPaths = [
 const vettedUpstreamLinuxPackageResources = new Set([
 	'resources/linux/code-workspace.xml'
 ]);
-const forbiddenUpstreamIdentity = [
+const linuxIdentityResourcePaths = [
+	'resources/linux/code.appdata.xml',
+	'resources/linux/code.desktop',
+	'resources/linux/code-url-handler.desktop',
+	'resources/linux/debian/control.template',
+	'resources/linux/rpm/code.spec.template'
+];
+const forbiddenUpstreamIdentityFixtures = [
 	'Visual Studio Code',
 	'code.visualstudio.com',
-	'vscode-linux@microsoft.com'
+	'vscode-linux@microsoft.com',
+	'Microsoft',
+	'Microsoft Corporation'
 ];
 const packageSourceManagementFixtures = [
 	['RPM key import', 'rpm --import https://packages.example/key.asc'],
@@ -73,8 +90,79 @@ const packageSourceManagementFixtures = [
 	['RPM repository URL', 'baseurl=https://packages.example/rpm']
 ] as const;
 
+/**
+ * Reads a resource path relative to the stable mixin root.
+ *
+ * @returns The resource contents as a buffer.
+ */
 async function readMixinResource(relativePath: string): Promise<Buffer> {
 	return fs.readFile(path.join(mixinRoot, relativePath));
+}
+
+/** Writes an executable shell stub that exits with the requested status. */
+async function writeCommandStub(
+	filePath: string,
+	exitCode = 0
+): Promise<void> {
+	await fs.writeFile(filePath, `#!/bin/sh\nexit ${exitCode}\n`, {
+		mode: 0o755
+	});
+}
+
+/**
+ * Creates isolated, rendered Debian maintainer scripts and command stubs.
+ */
+async function createDebianScriptHarness() {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hucode-debian-'));
+	const commandPath = path.join(root, 'usr', 'bin', 'hucode');
+	const commandTarget = path.join(
+		root,
+		'usr',
+		'share',
+		'hucode',
+		'bin',
+		'hucode'
+	);
+	const stubRoot = path.join(root, 'stubs');
+	const scriptRoot = path.join(root, 'scripts');
+	await fs.mkdir(path.dirname(commandPath), { recursive: true });
+	await fs.mkdir(path.dirname(commandTarget), { recursive: true });
+	await fs.mkdir(stubRoot);
+	await fs.mkdir(scriptRoot);
+	await fs.writeFile(commandTarget, '#!/bin/sh\n', { mode: 0o755 });
+
+	for (const command of [
+		'update-alternatives',
+		'update-desktop-database',
+		'update-mime-database'
+	]) {
+		await writeCommandStub(path.join(stubRoot, command));
+	}
+
+	for (const name of ['postinst', 'postrm']) {
+		const template = (
+			await readMixinResource(`resources/linux/debian/${name}.template`)
+		).toString('utf8');
+		const rendered = template
+			.replaceAll('/usr/bin/@@NAME@@', commandPath)
+			.replaceAll('/usr/share/@@NAME@@/bin/@@NAME@@', commandTarget)
+			.replaceAll('@@NAME@@', 'hucode');
+		await fs.writeFile(path.join(scriptRoot, name), rendered, {
+			mode: 0o755
+		});
+	}
+
+	return {
+		root,
+		commandPath,
+		commandTarget,
+		stubRoot,
+		run: (name: 'postinst' | 'postrm') => execFileAsync(
+			'bash',
+			[path.join(scriptRoot, name)],
+			{ env: { ...process.env, PATH: `${stubRoot}:/usr/bin:/bin` } }
+		)
+	};
 }
 
 suite('Hucode Linux packaging', () => {
@@ -107,8 +195,9 @@ suite('Hucode Linux packaging', () => {
 		assert.notStrictEqual(snapStart, -1);
 		const debRpmBuild = packageBuild.slice(0, snapStart);
 		const referencedResources = new Set(
-			[...debRpmBuild.matchAll(/['"](resources\/linux\/[^'"]+)['"]/g)]
-				.map(match => match[1])
+			[...debRpmBuild.matchAll(
+				/['"](?<relativePath>resources\/linux\/[^'"]+)['"]/g
+			)].map(match => match.groups!.relativePath)
 		);
 		for (const relativePath of referencedResources) {
 			assert.ok(
@@ -130,12 +219,8 @@ suite('Hucode Linux packaging', () => {
 	});
 
 	test('contains Hucode identity without package source management', async () => {
-		const textPaths = linuxResourcePaths.filter(
-			relativePath => !relativePath.endsWith('.png') &&
-				!relativePath.endsWith('.xpm')
-		);
 		const contents = (
-			await Promise.all(textPaths.map(readMixinResource))
+			await Promise.all(linuxIdentityResourcePaths.map(readMixinResource))
 		).map(buffer => buffer.toString('utf8')).join('\n');
 
 		assert.match(contents, /Maintainer: Hucode Project/);
@@ -143,20 +228,22 @@ suite('Hucode Linux packaging', () => {
 		assert.match(contents, /https:\/\/github\.com\/jimeh\/hucode/);
 		assert.match(contents, /Hucode provides a focused desktop environment/);
 
-		for (const forbidden of forbiddenUpstreamIdentity) {
-			assert.ok(
-				!contents.toLowerCase().includes(forbidden.toLowerCase()),
-				'Linux package resources contain upstream product identity.'
-			);
-		}
+		assertNoUpstreamIdentity(contents, 'Linux package identity resources');
 
 		for (const relativePath of packageScriptPaths) {
 			const script = (
 				await readMixinResource(relativePath)
 			).toString('utf8');
-			assert.doesNotThrow(() => {
-				assertNoPackageSourceManagement(script, relativePath);
-			});
+			assertNoPackageSourceManagement(script, relativePath);
+		}
+	});
+
+	test('rejects upstream product identity', () => {
+		for (const fixture of forbiddenUpstreamIdentityFixtures) {
+			assert.throws(
+				() => assertNoUpstreamIdentity(fixture, 'fixture'),
+				{ name: 'AssertionError' }
+			);
 		}
 	});
 
@@ -166,6 +253,62 @@ suite('Hucode Linux packaging', () => {
 				() => assertNoPackageSourceManagement(fixture, label),
 				{ name: 'AssertionError' }
 			);
+		}
+	});
+
+	test('protects the Debian command link and propagates failures', async () => {
+		const harness = await createDebianScriptHarness();
+		const unrelatedTarget = path.join(harness.root, 'unrelated');
+		try {
+			await fs.writeFile(harness.commandPath, 'administrator managed\n');
+			await assert.rejects(harness.run('postinst'));
+			assert.strictEqual(
+				await fs.readFile(harness.commandPath, 'utf8'),
+				'administrator managed\n'
+			);
+
+			await fs.rm(harness.commandPath);
+			await fs.writeFile(unrelatedTarget, 'unrelated\n');
+			await fs.symlink(unrelatedTarget, harness.commandPath);
+			await assert.rejects(harness.run('postinst'));
+			assert.strictEqual(
+				await fs.readlink(harness.commandPath),
+				unrelatedTarget
+			);
+
+			await fs.rm(harness.commandPath);
+			await harness.run('postinst');
+			await harness.run('postinst');
+			assert.strictEqual(
+				await fs.readlink(harness.commandPath),
+				harness.commandTarget
+			);
+			await harness.run('postrm');
+			await assert.rejects(fs.lstat(harness.commandPath), {
+				code: 'ENOENT'
+			});
+
+			await fs.symlink(unrelatedTarget, harness.commandPath);
+			await harness.run('postrm');
+			assert.strictEqual(
+				await fs.readlink(harness.commandPath),
+				unrelatedTarget
+			);
+			await fs.rm(harness.commandPath);
+
+			await writeCommandStub(path.join(harness.stubRoot, 'ln'), 23);
+			await assert.rejects(harness.run('postinst'));
+			await fs.rm(path.join(harness.stubRoot, 'ln'));
+
+			await fs.symlink(harness.commandTarget, harness.commandPath);
+			await writeCommandStub(path.join(harness.stubRoot, 'rm'), 23);
+			await assert.rejects(harness.run('postrm'));
+			assert.strictEqual(
+				await fs.readlink(harness.commandPath),
+				harness.commandTarget
+			);
+		} finally {
+			await fs.rm(harness.root, { recursive: true, force: true });
 		}
 	});
 

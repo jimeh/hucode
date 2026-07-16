@@ -26,6 +26,13 @@ const linuxResources = [
 const intentionallyEmptyLinuxResources = new Set([
 	'resources/linux/debian/templates.template'
 ]);
+const linuxIdentityResources = [
+	'resources/linux/code.appdata.xml',
+	'resources/linux/code.desktop',
+	'resources/linux/code-url-handler.desktop',
+	'resources/linux/debian/control.template',
+	'resources/linux/rpm/code.spec.template'
+];
 const packageSourcePatterns = [
 	/packages\.microsoft\.com/i,
 	/microsoft\.gpg/i,
@@ -52,7 +59,8 @@ const packageSourcePatterns = [
 const upstreamIdentityPatterns = [
 	/Visual Studio Code/i,
 	/code\.visualstudio\.com/i,
-	/vscode-linux@microsoft\.com/i
+	/vscode-linux@microsoft\.com/i,
+	/\bMicrosoft(?: Corporation)?\b/i
 ];
 
 function parseQuality(args) {
@@ -99,6 +107,16 @@ export function assertNoPackageSourceManagement(contents, label) {
 	assertPatternsAbsent(contents, packageSourcePatterns, label);
 }
 
+/**
+ * Asserts that product metadata does not contain upstream identity.
+ *
+ * @param {string} contents
+ * @param {string} label
+ */
+export function assertNoUpstreamIdentity(contents, label) {
+	assertPatternsAbsent(contents, upstreamIdentityPatterns, label);
+}
+
 async function validateLinuxResources(generatedRoot) {
 	for (const relativePath of linuxResources) {
 		await assertFileExists(
@@ -140,12 +158,9 @@ async function validateLinuxResources(generatedRoot) {
 	assert.match(rpmSpec, /^Packager: Hucode Project <contact@jimeh\.me>$/m);
 	assert.match(rpmSpec, /^URL:\s+https:\/\/github\.com\/jimeh\/hucode$/m);
 
-	const textResources = linuxResources.filter(
-		path => !path.endsWith('.png') && !path.endsWith('.xpm')
-	);
-	for (const relativePath of textResources) {
+	for (const relativePath of linuxIdentityResources) {
 		const contents = await readTextFile(generatedRoot, relativePath);
-		assertPatternsAbsent(contents, upstreamIdentityPatterns, relativePath);
+		assertNoUpstreamIdentity(contents, relativePath);
 	}
 
 	const packageScripts = [

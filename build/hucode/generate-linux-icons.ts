@@ -28,12 +28,20 @@ const xpmSymbols =
 	' .+@#$%&*=-;:>,<1234567890abcdefghijklmnopqrstuvwxyz' +
 	'ABCDEFGHIJKLMNOPQRSTUVWXYZ!^_`|~[]{}()?/';
 
+/** Decoded non-interlaced, 8-bit RGBA PNG pixels. */
 interface DecodedPng {
 	readonly width: number;
 	readonly height: number;
 	readonly data: Buffer;
 }
 
+/**
+ * Extracts an encoded payload from a typed entry in an ICNS container.
+ *
+ * @param icns Complete ICNS container bytes.
+ * @param entryType Four-character ICNS entry type.
+ * @returns The encoded entry payload without its ICNS header.
+ */
 function extractIcnsEntry(icns: Buffer, entryType: string): Buffer {
 	assert.strictEqual(icns.toString('ascii', 0, 4), 'icns');
 	assert.strictEqual(icns.readUInt32BE(4), icns.length);
@@ -53,6 +61,12 @@ function extractIcnsEntry(icns: Buffer, entryType: string): Buffer {
 	throw new Error(`ICNS entry '${entryType}' was not found.`);
 }
 
+/**
+ * Decodes a non-interlaced, 8-bit RGBA PNG.
+ *
+ * @param png Encoded PNG bytes.
+ * @returns Image dimensions and row-major RGBA pixels.
+ */
 function parsePng(png: Buffer): DecodedPng {
 	assert.ok(png.subarray(0, 8).equals(pngSignature));
 
@@ -92,6 +106,14 @@ function parsePng(png: Buffer): DecodedPng {
 	};
 }
 
+/**
+ * Reconstructs RGBA scanlines from PNG filter bytes.
+ *
+ * @param filtered Inflated PNG scanlines including per-row filter bytes.
+ * @param width Image width in pixels.
+ * @param height Image height in pixels.
+ * @returns Row-major RGBA pixels.
+ */
 function unfilterRgba(
 	filtered: Buffer,
 	width: number,
@@ -131,6 +153,14 @@ function unfilterRgba(
 	return rgba;
 }
 
+/**
+ * Selects the PNG Paeth predictor nearest to the computed estimate.
+ *
+ * @param left Pixel component to the left.
+ * @param above Pixel component above.
+ * @param upperLeft Pixel component diagonally above and left.
+ * @returns The selected neighboring component.
+ */
 function paeth(left: number, above: number, upperLeft: number): number {
 	const estimate = left + above - upperLeft;
 	const leftDistance = Math.abs(estimate - left);
@@ -146,6 +176,12 @@ function paeth(left: number, above: number, upperLeft: number): number {
 	return upperLeft;
 }
 
+/**
+ * Encodes RGBA pixels as a deterministic grayscale XPM with transparency.
+ *
+ * @param image Decoded source PNG.
+ * @returns XPM source text preserving the source dimensions.
+ */
 function createXpm({ width, height, data }: DecodedPng): string {
 	const levels = 16;
 	const colors = ['None'];
