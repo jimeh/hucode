@@ -20,6 +20,7 @@
     "hucode:web": "npm run hucode:prepare && ./scripts/hucode-web.sh",
     "hucode:generate-icons": "node build/hucode/generate-darwin-icon.js",
     "hucode:generate-server-icons": "node build/hucode/generate-server-icons.ts",
+    "hucode:generate-linux-icons": "node build/hucode/generate-linux-icons.ts",
     "hucode:seed-worktree-node-modules": "node build/hucode/seed-worktree-node-modules.js",
     "hucode:changelog": "node build/hucode/changelog.ts",
     "hucode:prepare-release": "node build/hucode/changelog.ts prepare-release",
