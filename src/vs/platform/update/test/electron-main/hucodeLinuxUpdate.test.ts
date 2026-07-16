@@ -24,10 +24,13 @@ suite('Hucode Linux update action', () => {
 	});
 
 	test('falls back to the update URL for products without a download page', () => {
-		assert.deepStrictEqual(
+		assert.deepStrictEqual([
 			getHucodeLinuxUpdateAction(undefined, 'https://example.invalid/update'),
+			getHucodeLinuxUpdateAction(' ', 'https://example.invalid/update')
+		], [
+			{ kind: 'openExternal', url: 'https://example.invalid/update' },
 			{ kind: 'openExternal', url: 'https://example.invalid/update' }
-		);
+		]);
 	});
 
 	test('does nothing when no manual update destination is available', () => {

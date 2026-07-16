@@ -18,6 +18,18 @@ const workflowPath = path.resolve(
 	'hucode-release-build.yml'
 );
 const workflow = readFileSync(workflowPath, 'utf8');
+const prepareMatrixJob = workflow.slice(
+	workflow.indexOf('  prepare-matrix:'),
+	workflow.indexOf('  copilot-vsix:')
+);
+const linuxSmokeMatrixBuilder = prepareMatrixJob.slice(
+	prepareMatrixJob.indexOf('const linuxSmokeInclude'),
+	prepareMatrixJob.indexOf('const output =')
+);
+const linuxPackageSmokeJob = workflow.slice(
+	workflow.indexOf('  linux-package-smoke:'),
+	workflow.indexOf('  publish-release:')
+);
 const smokeScript = readFileSync(path.resolve(
 	import.meta.dirname,
 	'..',
@@ -39,16 +51,21 @@ suite('Hucode release workflow contract', () => {
 	});
 
 	test('smokes clean DEB and RPM installs for public architectures', () => {
-		assert.match(
-			workflow,
-			/\.filter\(item => item\.platform === 'linux' && item\.arch !== 'armhf'\)/
-		);
-		assert.match(
-			workflow,
-			/\.flatMap\(item => \['deb', 'rpm'\]\.map\(format => \(\{/
-		);
-		assert.match(workflow, /linux_smoke_matrix:/);
-		assert.match(workflow, /build\/hucode\/linux-package-smoke\.sh/);
+		assert.deepStrictEqual({
+			publicArchitecturesOnly:
+				/\.filter\(item => item\.platform === 'linux' && item\.arch !== 'armhf'\)/
+					.test(linuxSmokeMatrixBuilder),
+			formats:
+				/\.flatMap\(item => \['deb', 'rpm'\]\.map\(format => \(\{/
+					.test(linuxSmokeMatrixBuilder),
+			matrixOutput: /linux_smoke_matrix:/.test(prepareMatrixJob),
+			smokeScript: /build\/hucode\/linux-package-smoke\.sh/.test(linuxPackageSmokeJob)
+		}, {
+			publicArchitecturesOnly: true,
+			formats: true,
+			matrixOutput: true,
+			smokeScript: true
+		});
 	});
 
 	test('runs packaged Linux smoke tests for manual workflow builds', () => {
@@ -61,18 +78,36 @@ suite('Hucode release workflow contract', () => {
 	});
 
 	test('runs arm64 package smoke natively', () => {
-		const job = workflow.slice(
-			workflow.indexOf('  linux-package-smoke:'),
-			workflow.indexOf('  publish-release:')
-		);
-		assert.match(workflow, /\? 'ubuntu-24\.04-arm'/);
-		assert.match(workflow, /: 'ubuntu-latest'/);
-		assert.match(job, /runs-on: \$\{\{ matrix\.runner \}\}/);
-		assert.doesNotMatch(job, /setup-qemu-action/);
+		assert.match(linuxSmokeMatrixBuilder, /\? 'ubuntu-24\.04-arm'/);
+		assert.match(linuxSmokeMatrixBuilder, /: 'ubuntu-latest'/);
+		assert.match(linuxPackageSmokeJob, /runs-on: \$\{\{ matrix\.runner \}\}/);
+		assert.doesNotMatch(linuxPackageSmokeJob, /setup-qemu-action/);
 		assert.match(
 			workflow,
 			/copilot-vsix:[\s\S]*?runs-on: ubuntu-latest[\s\S]*?linux-package-smoke:/
 		);
+	});
+
+	test('serializes release mutation without cancelling an active run', () => {
+		const concurrency = workflow.slice(
+			workflow.indexOf('concurrency:'),
+			workflow.indexOf('permissions:')
+		);
+		const publishJob = workflow.slice(
+			workflow.indexOf('  publish-release:'),
+			workflow.indexOf('  refresh-update-service:')
+		);
+		assert.deepStrictEqual({
+			refScoped: /group: .*\$\{\{ github\.ref \}\}/.test(concurrency),
+			queuesReruns: /cancel-in-progress: false/.test(concurrency),
+			rechecksDraftState: /release_is_draft=.*gh release view/s.test(publishJob),
+			refusesPublishedRelease: /already published; refusing to mutate it/.test(publishJob)
+		}, {
+			refScoped: true,
+			queuesReruns: true,
+			rechecksDraftState: true,
+			refusesPublishedRelease: true
+		});
 	});
 
 	test('removes node_modules archives before release work', () => {

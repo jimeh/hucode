@@ -49,7 +49,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.darwin_x64 }}-${{ inputs.darwin_arm64 }}-${{ inputs.linux_x64 }}-${{ inputs.linux_arm64 }}-${{ inputs.linux_armhf }}-${{ inputs.win32_x64 }}-${{ inputs.win32_arm64 }}-${{ inputs.sign }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read

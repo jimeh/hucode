@@ -47,10 +47,6 @@ suite('Hucode public release assets', () => {
 		}
 	}
 
-	function escapeRegExp(value: string): string {
-		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	}
-
 	test('references source assets and writes deterministic checksums', async () => {
 		await writeRequiredAssets();
 		await fs.writeFile(path.join(artifactsRoot, 'private-report.json'), 'no');
@@ -61,35 +57,49 @@ suite('Hucode public release assets', () => {
 			checksumsPath,
 			manifestPath
 		);
-		const outputNames = manifest.assets.map(asset => asset.name);
+		const normalizeManifest = (value: typeof manifest) => ({
+			...value,
+			assets: value.assets.map(asset => ({
+				...asset,
+				path: asset.path === metadataPath
+					? '<metadata>'
+					: asset.path === checksumsPath
+						? '<checksums>'
+						: path.relative(artifactsRoot, asset.path).replaceAll(path.sep, '/')
+			}))
+		});
+		const expectedAssets: Array<{ name: string; path: string }> = [
+			...requiredPublicReleaseAssetNames
+		]
+			.sort()
+			.map(name => ({
+				name,
+				path: name === path.basename(metadataPath)
+					? '<metadata>'
+					: `artifact-${requiredPublicReleaseAssetNames.indexOf(name)}/${name}`
+			}));
+		expectedAssets.push({ name: 'SHA256SUMS', path: '<checksums>' });
+		const persistedManifest = JSON.parse(
+			await fs.readFile(manifestPath, 'utf8')
+		) as typeof manifest;
+		const checksums = (await fs.readFile(checksumsPath, 'utf8'))
+			.trimEnd()
+			.split('\n')
+			.map(line => line.replace(/^[a-f0-9]{64}/, '<sha256>'));
 
-		assert.deepStrictEqual(
-			outputNames,
-			[
-				...[...requiredPublicReleaseAssetNames].sort(),
-				'SHA256SUMS'
-			]
-		);
-		for (const asset of manifest.assets.slice(0, -1)) {
-			if (asset.name === path.basename(metadataPath)) {
-				assert.strictEqual(asset.path, metadataPath);
-			} else {
-				assert.ok(asset.path.startsWith(`${artifactsRoot}${path.sep}`));
-			}
-		}
-		assert.strictEqual(manifest.assets.at(-1)?.path, checksumsPath);
-		assert.deepStrictEqual(
-			JSON.parse(await fs.readFile(manifestPath, 'utf8')),
-			manifest
-		);
-		const checksums = await fs.readFile(
-			checksumsPath,
-			'utf8'
-		);
-		for (const name of requiredPublicReleaseAssetNames) {
-			assert.match(checksums, new RegExp(`  ${escapeRegExp(name)}$`, 'm'));
-		}
-		assert.doesNotMatch(checksums, /private-report/);
+		assert.deepStrictEqual({
+			manifest: normalizeManifest(manifest),
+			persistedManifest: normalizeManifest(persistedManifest),
+			checksums,
+			privateReportIncluded: checksums.some(line => line.includes('private-report'))
+		}, {
+			manifest: { schemaVersion: 1, assets: expectedAssets },
+			persistedManifest: { schemaVersion: 1, assets: expectedAssets },
+			checksums: [...requiredPublicReleaseAssetNames]
+				.sort()
+				.map(name => `<sha256>  ${name}`),
+			privateReportIncluded: false
+		});
 	});
 
 	test('rejects a release missing a supported Linux package', async () => {
@@ -143,12 +153,12 @@ suite('Hucode public release assets', () => {
 				'unexpected.zip'
 			]),
 			error => {
-				assert.match(
+				assert.deepStrictEqual(
 					String(error),
-					/missing: hucode-darwin-x64\.dmg/
+					'Error: Remote release asset validation failed ' +
+						'(missing: hucode-darwin-x64.dmg; unexpected: unexpected.zip; ' +
+						'duplicates: SHA256SUMS).'
 				);
-				assert.match(String(error), /unexpected: unexpected\.zip/);
-				assert.match(String(error), /duplicates: SHA256SUMS/);
 				return true;
 			}
 		);
