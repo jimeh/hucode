@@ -17,6 +17,7 @@ import {
 } from
 	'../../electron-browser/actions/hucodeOmniWindowAction.js';
 
+/** Runtime context values used to exercise the production action predicate. */
 interface IActionRuntimeContext {
 	readonly isSessionsWindow?: boolean;
 	readonly isOmniWindow?: boolean;
@@ -86,6 +87,7 @@ suite('HucodeOmniWindowAction', () => {
 	});
 });
 
+/** Evaluates the production context expression against explicit test values. */
 function evaluateProductionContext(context: IActionRuntimeContext): boolean {
 	return NewHucodeOmniWindowContext.evaluate({
 		getValue<T extends ContextKeyValue>(key: string): T | undefined {

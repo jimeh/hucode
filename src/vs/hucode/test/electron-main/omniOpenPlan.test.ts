@@ -145,6 +145,10 @@ suite('HucodeOmniOpenPlan', () => {
 			noRecentEntry: false
 		};
 		const requests: object[] = [];
+		const restoredWindows: Array<{
+			focusCount: number;
+			focus(): void;
+		}> = [];
 		const openedWindows: Array<{
 			readonly id: number;
 			focusCount: number;
@@ -152,6 +156,12 @@ suite('HucodeOmniOpenPlan', () => {
 		}> = [];
 		const open = async (configuration: object) => {
 			requests.push(configuration);
+			const restoredWindow = {
+				focusCount: 0,
+				focus() {
+					this.focusCount++;
+				}
+			};
 			const window = {
 				id: openedWindows.length + 1,
 				focusCount: 0,
@@ -159,8 +169,9 @@ suite('HucodeOmniOpenPlan', () => {
 					this.focusCount++;
 				}
 			};
+			restoredWindows.push(restoredWindow);
 			openedWindows.push(window);
-			return [window];
+			return [restoredWindow, window];
 		};
 
 		const first = await openNewHucodeOmniWindow(input, open);
@@ -169,8 +180,11 @@ suite('HucodeOmniOpenPlan', () => {
 		assert.deepStrictEqual(
 			{
 				distinctRequests: requests[0] !== requests[1],
-				distinctWindows: first[0] !== second[0],
-				returnedWindowIds: [first[0].id, second[0].id],
+				distinctWindows: first[1] !== second[1],
+				returnedWindowIds: [first[1].id, second[1].id],
+				restoredFocusCounts: restoredWindows.map(
+					window => window.focusCount
+				),
 				focusCounts: openedWindows.map(window => window.focusCount),
 				requests
 			},
@@ -178,6 +192,7 @@ suite('HucodeOmniOpenPlan', () => {
 				distinctRequests: true,
 				distinctWindows: true,
 				returnedWindowIds: [1, 2],
+				restoredFocusCounts: [0, 0],
 				focusCounts: [1, 1],
 				requests: [
 					{

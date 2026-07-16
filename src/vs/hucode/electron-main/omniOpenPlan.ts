@@ -119,7 +119,7 @@ export async function openNewHucodeOmniWindow<
 	const windows = await open(
 		getHucodeNewOmniWindowOpenConfiguration(openConfig)
 	);
-	windows[0]?.focus();
+	windows.at(-1)?.focus();
 	return windows;
 }
 

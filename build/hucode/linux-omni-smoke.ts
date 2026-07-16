@@ -12,7 +12,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const defaultTimeoutMs = 45_000;
+const maximumLaunchAttempts = 3;
 const maximumLogLength = 64 * 1024;
+const stabilizationDelayMs = 1_500;
 
 /**
  * Parsed command-line options for the packaged Linux Omni startup smoke test.
@@ -115,6 +117,30 @@ export function summarizeLinuxOmniRenderers(
 }
 
 /**
+ * Allocates a fair portion of the remaining timeout to one CDP bind attempt.
+ */
+export function getLinuxOmniLaunchAttemptDeadline(
+	deadline: number,
+	now: number,
+	attemptsRemaining: number
+): number {
+	return Math.min(
+		deadline,
+		now + Math.max(1, Math.floor((deadline - now) / attemptsRemaining))
+	);
+}
+
+/**
+ * Bounds renderer stabilization by the caller's remaining timeout.
+ */
+export function getLinuxOmniStabilizationDelay(
+	deadline: number,
+	now: number
+): number {
+	return Math.min(stabilizationDelayMs, Math.max(0, deadline - now));
+}
+
+/**
  * Runs the clean-profile startup assertion against a packaged Linux build.
  */
 export async function runLinuxOmniSmoke(
@@ -135,34 +161,68 @@ export async function runLinuxOmniSmoke(
 		fs.mkdir(extensionsDir, { recursive: true }),
 	]);
 
-	const port = await getAvailablePort();
-	const child = spawn(
-		executablePath,
-		buildLinuxOmniSmokeArguments(userDataDir, extensionsDir, port),
-		{
-			detached: true,
-			env: withoutInheritedElectronEnvironment(process.env),
-			stdio: ['ignore', 'pipe', 'pipe'],
-		}
-	);
+	let child: ChildProcess | undefined;
 	let browser: Browser | undefined;
-	let spawnError: Error | undefined;
 	let output = '';
 	const appendOutput = (chunk: Buffer): void => {
 		output = (output + chunk.toString()).slice(-maximumLogLength);
 	};
-	child.stdout?.on('data', appendOutput);
-	child.stderr?.on('data', appendOutput);
-	child.once('error', error => spawnError = error);
 
 	try {
 		const deadline = Date.now() + options.timeoutMs;
-		const getSpawnError = () => spawnError;
-		browser = await connectToCdp(port, child, deadline, getSpawnError);
+		let getSpawnError: () => Error | undefined = () => undefined;
+		let connectionError: Error | undefined;
+		for (
+			let attempt = 1;
+			attempt <= maximumLaunchAttempts && Date.now() < deadline;
+			attempt++
+		) {
+			const port = await getAvailablePort();
+			child = spawn(
+				executablePath,
+				buildLinuxOmniSmokeArguments(userDataDir, extensionsDir, port),
+				{
+					detached: true,
+					env: withoutInheritedElectronEnvironment(process.env),
+					stdio: ['ignore', 'pipe', 'pipe'],
+				}
+			);
+			let spawnError: Error | undefined;
+			getSpawnError = () => spawnError;
+			child.stdout?.on('data', appendOutput);
+			child.stderr?.on('data', appendOutput);
+			child.once('error', error => spawnError = error);
+
+			const attemptDeadline = getLinuxOmniLaunchAttemptDeadline(
+				deadline,
+				Date.now(),
+				maximumLaunchAttempts - attempt + 1
+			);
+			try {
+				browser = await connectToCdp(
+					port,
+					child,
+					attemptDeadline,
+					getSpawnError
+				);
+				break;
+			} catch (error) {
+				connectionError = error instanceof Error
+					? error
+					: new Error(String(error));
+				await terminateProcessGroup(child);
+				child = undefined;
+			}
+		}
+
+		if (!browser || !child) {
+			throw connectionError ?? new Error('Timed out launching Hucode');
+		}
+
 		await waitForOmniRenderer(browser, child, deadline, getSpawnError);
 
 		// A late fallback is the regression this smoke test is intended to catch.
-		await delay(1_500);
+		await delay(getLinuxOmniStabilizationDelay(deadline, Date.now()));
 		const summary = summarizeLinuxOmniRenderers(getRendererUrls(browser));
 		if (
 			summary.applicationRendererCount !== 1 ||
@@ -182,7 +242,9 @@ export async function runLinuxOmniSmoke(
 		);
 	} finally {
 		await browser?.close().catch(() => undefined);
-		await terminateProcessGroup(child);
+		if (child) {
+			await terminateProcessGroup(child);
+		}
 		await fs.rm(temporaryRoot, { recursive: true, force: true });
 	}
 }

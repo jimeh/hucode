@@ -7,6 +7,8 @@ import assert from 'assert';
 import { suite, test } from 'node:test';
 import {
 	buildLinuxOmniSmokeArguments,
+	getLinuxOmniLaunchAttemptDeadline,
+	getLinuxOmniStabilizationDelay,
 	parseLinuxOmniSmokeOptions,
 	summarizeLinuxOmniRenderers,
 } from '../../hucode/linux-omni-smoke.ts';
@@ -85,5 +87,22 @@ suite('Hucode Linux Omni smoke', () => {
 				omniRendererCount: 1,
 			}
 		);
+	});
+
+	test('shares the remaining timeout across CDP launch attempts', () => {
+		assert.strictEqual(
+			getLinuxOmniLaunchAttemptDeadline(46_000, 1_000, 3),
+			16_000
+		);
+		assert.strictEqual(
+			getLinuxOmniLaunchAttemptDeadline(46_000, 31_000, 1),
+			46_000
+		);
+	});
+
+	test('bounds renderer stabilization by the remaining timeout', () => {
+		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 1_000), 1_500);
+		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 9_750), 250);
+		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 10_001), 0);
 	});
 });
