@@ -49,7 +49,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.darwin_x64 }}-${{ inputs.darwin_arm64 }}-${{ inputs.linux_x64 }}-${{ inputs.linux_arm64 }}-${{ inputs.linux_armhf }}-${{ inputs.win32_x64 }}-${{ inputs.win32_arm64 }}-${{ inputs.sign }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -64,6 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      linux_smoke_matrix: ${{ steps.matrix.outputs.linux_smoke_matrix }}
     steps:
       - name: Select targets
         id: matrix
@@ -167,7 +168,21 @@ jobs:
           if (!include.length) {
             throw new Error('At least one build target must be selected.');
           }
-          const output = `matrix=${JSON.stringify({ include })}\n`;
+          const linuxSmokeInclude = include
+            .filter(item => item.platform === 'linux' && item.arch !== 'armhf')
+            .flatMap(item => ['deb', 'rpm'].map(format => ({
+              arch: item.arch,
+              docker_arch: item.arch === 'x64' ? 'amd64' : 'arm64',
+              format,
+              runner: item.arch === 'arm64'
+                ? 'ubuntu-24.04-arm'
+                : 'ubuntu-latest'
+            })));
+          const output = [
+            `matrix=${JSON.stringify({ include })}`,
+            `linux_smoke_matrix=${JSON.stringify({ include: linuxSmokeInclude })}`,
+            ''
+          ].join('\n');
           require('fs').appendFileSync(process.env.GITHUB_OUTPUT, output);
           NODE
 
@@ -586,6 +601,10 @@ jobs:
         with:
           path: .build/node_modules_cache
           key: "node_modules-hucode-release-build-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Remove node_modules archive
+        if: matrix.platform != 'win32'
+        run: rm -rf .build/node_modules_cache .build/node_modules_list.txt
 
       - name: Prepare Hucode mixin
         run: npm run hucode:prepare
@@ -1032,6 +1051,10 @@ jobs:
           path: .build/node_modules_cache
           key: "node_modules-hucode-release-package-${{ hashFiles('.build/packagelockhash') }}"
 
+      - name: Remove node_modules archive
+        if: matrix.platform != 'win32'
+        run: rm -rf .build/node_modules_cache .build/node_modules_list.txt
+
       - name: Download release app artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1046,6 +1069,7 @@ jobs:
           archive=".build/hucode/app/${app_name}.tar"
           rm -rf "../$app_name"
           tar -xf "$archive" -C ..
+          rm -rf .build/hucode/app
 
       - name: Package release artifacts
         run: |
@@ -1093,10 +1117,100 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload public release assets
+        if: matrix.platform != 'linux' || matrix.arch != 'armhf'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hucode-public-${{ steps.version.outputs.safe_version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-darwin-*.dmg
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-darwin-*.zip
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-linux-*.zip
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-linux-*.deb
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-linux-*.rpm
+            .build/hucode/release/${{ steps.version.outputs.safe_version }}/hucode-cli-*
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-package-smoke:
+    name: Smoke Linux package (${{ matrix.arch }} ${{ matrix.format }})
+    if: >-
+      needs.package.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' ||
+        inputs.linux_x64 || inputs.linux_arm64)
+    needs:
+      - prepare-matrix
+      - package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.linux_smoke_matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          echo "safe_version=$safe_version" >> "$GITHUB_OUTPUT"
+
+      - name: Download packaged Linux artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hucode-${{ steps.version.outputs.safe_version }}-linux-${{ matrix.arch }}
+          path: .build/hucode/package-smoke
+
+      - name: Install and launch DEB
+        if: matrix.format == 'deb'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="/workspace/.build/hucode/package-smoke/hucode-linux-${{ matrix.arch }}.deb"
+          docker run --rm \
+            --platform "linux/${{ matrix.docker_arch }}" \
+            --volume "$PWD:/workspace:ro" \
+            ubuntu:24.04 \
+            bash -euxo pipefail -c '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                curl dbus-x11 jq procps xauth xvfb "$1"
+              /workspace/build/hucode/linux-package-smoke.sh
+            ' -- "$package"
+
+      - name: Install and launch RPM
+        if: matrix.format == 'rpm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="/workspace/.build/hucode/package-smoke/hucode-linux-${{ matrix.arch }}.rpm"
+          docker run --rm \
+            --platform "linux/${{ matrix.docker_arch }}" \
+            --volume "$PWD:/workspace:ro" \
+            fedora:42 \
+            bash -euxo pipefail -c '
+              dnf install -y \
+                curl dbus-daemon jq procps-ng xorg-x11-server-Xvfb xorg-x11-xauth \
+                "$1"
+              /workspace/build/hucode/linux-package-smoke.sh
+            ' -- "$package"
+
   publish-release:
     name: Publish GitHub release
-    if: github.event_name == 'push' && needs.package.result == 'success'
-    needs: package
+    if: >-
+      github.event_name == 'push' &&
+      needs.package.result == 'success' &&
+      needs.linux-package-smoke.result == 'success'
+    needs:
+      - package
+      - linux-package-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -1125,11 +1239,31 @@ jobs:
             --version "$version" \
             --out release-notes.md
 
-      - name: Download workflow artifacts
+      - name: Determine build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --match 'v*.*.*' --always --dirty)"
+          version="${describe#v}"
+          safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
+          echo "safe_version=$safe_version" >> "$GITHUB_OUTPUT"
+
+      - name: Download packaged public release assets
         if: needs.package.result != 'cancelled'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          pattern: hucode-public-${{ steps.version.outputs.safe_version }}-*
           path: release-artifacts
+          merge-multiple: true
+
+      - name: Download server-web release assets
+        if: needs.package.result != 'cancelled'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hucode-server-web-${{ steps.version.outputs.safe_version }}-*
+          path: release-artifacts
+          merge-multiple: true
 
       - name: Write release metadata
         if: needs.package.result != 'cancelled'
@@ -1171,7 +1305,18 @@ jobs:
           );
           NODE
 
-      - name: Upload release assets
+      - name: Prepare release assets
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node build/hucode/release-assets.ts prepare \
+            --artifacts release-artifacts \
+            --metadata hucode-release-metadata.json \
+            --checksums SHA256SUMS \
+            --manifest release-assets.json
+
+      - name: Create or update draft release
         if: needs.package.result != 'cancelled'
         shell: bash
         env:
@@ -1180,53 +1325,62 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mapfile -t files < <(find release-artifacts -type f \
-            ! -path '*/hucode-app-*/*' \
-            ! -path '*/hucode-copilot-vsix/*' \
-            \( -name 'hucode-darwin-*.dmg' \
-            -o -name 'hucode-darwin-*.zip' \
-            -o -name 'hucode-cli-*' \
-            -o -name 'hucode-server-*-web.zip' \))
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No public release assets found." >&2
-            exit 1
-          fi
-          files+=(hucode-release-metadata.json)
-          required_patterns=(
-            '*/hucode-*-darwin-x64/hucode-darwin-x64.dmg'
-            '*/hucode-*-darwin-x64/hucode-darwin-x64.zip'
-            '*/hucode-*-darwin-x64/hucode-cli-darwin-x64.zip'
-            '*/hucode-server-web-*-darwin-x64/hucode-server-darwin-x64-web.zip'
-            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.dmg'
-            '*/hucode-*-darwin-arm64/hucode-darwin-arm64.zip'
-            '*/hucode-*-darwin-arm64/hucode-cli-darwin-arm64.zip'
-            '*/hucode-server-web-*-darwin-arm64/hucode-server-darwin-arm64-web.zip'
-            '*/hucode-*-linux-x64/hucode-cli-linux-x64.tar.gz'
-            '*/hucode-server-web-*-linux-x64/hucode-server-linux-x64-web.zip'
-            '*/hucode-*-linux-arm64/hucode-cli-linux-arm64.tar.gz'
-            '*/hucode-server-web-*-linux-arm64/hucode-server-linux-arm64-web.zip'
-            '*/hucode-*-win32-x64/hucode-cli-win32-x64.zip'
-            '*/hucode-server-web-*-win32-x64/hucode-server-win32-x64-web.zip'
-            '*/hucode-*-win32-arm64/hucode-cli-win32-arm64.zip'
-            '*/hucode-server-web-*-win32-arm64/hucode-server-win32-arm64-web.zip'
-          )
-          for pattern in "${required_patterns[@]}"; do
-            if ! find release-artifacts -type f -path "$pattern" | grep -q .; then
-              echo "Missing required release asset: $pattern" >&2
+          if release_is_draft="$(
+            gh release view "$TAG_NAME" --json isDraft --jq .isDraft 2>/dev/null
+          )"; then
+            if [ "$release_is_draft" != "true" ]; then
+              echo "Release $TAG_NAME is already published; refusing to mutate it." >&2
               exit 1
             fi
-          done
-
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" \
+            gh release edit "$TAG_NAME" \
+              --draft \
               --title "$TAG_NAME" \
               --notes-file release-notes.md
           else
-            gh release edit "$TAG_NAME" \
+            gh release create "$TAG_NAME" \
+              --draft \
+              --verify-tag \
               --title "$TAG_NAME" \
               --notes-file release-notes.md
           fi
+
+      - name: Upload draft release assets
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node build/hucode/release-assets.ts print-paths \
+            --manifest release-assets.json > release-asset-paths
+          mapfile -d '' -t files < release-asset-paths
           gh release upload "$TAG_NAME" "${files[@]}" --clobber
+
+      - name: Verify remote release assets
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG_NAME" \
+            --json assets \
+            --jq '[.assets[].name]' > remote-release-assets.json
+          node build/hucode/release-assets.ts verify \
+            --assets-json remote-release-assets.json
+
+      - name: Publish verified release
+        if: needs.package.result != 'cancelled'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false
 
   refresh-update-service:
     name: Refresh update service
