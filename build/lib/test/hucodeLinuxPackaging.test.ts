@@ -51,11 +51,16 @@ const forbiddenUpstreamIdentity = [
 ];
 const packageSourceManagementFixtures = [
 	['RPM key import', 'rpm --import https://packages.example/key.asc'],
+	['RPM keys import', 'rpmkeys --import https://packages.example/key.asc'],
 	['GPG dearmor', 'gpg --batch --dearmor < key.asc > key.gpg'],
 	['armored key', '-----BEGIN PGP PUBLIC KEY BLOCK-----'],
 	[
 		'DNF repository',
 		'dnf config-manager --add-repo https://packages.example/repo'
+	],
+	[
+		'DNF repofile',
+		'dnf config-manager addrepo --from-repofile=https://packages.example/repo.repo'
 	],
 	[
 		'YUM repository',
