@@ -16,6 +16,7 @@ import {
 	createStandaloneCliArchive,
 	darwinCliLinkIssues,
 	findBuiltInCopilotExtension,
+	linuxDesktopPackageName,
 	orderReleaseArtifactsForPackaging,
 	standaloneCliArchiveName,
 	standaloneCliExecutableName,
@@ -262,6 +263,32 @@ suite('Hucode release build', () => {
 				'hucode-cli-linux-arm64.tar.gz',
 				'hucode-cli-win32-arm64.zip'
 			]
+		);
+	});
+
+	test('names public Linux desktop packages consistently', () => {
+		assert.deepStrictEqual(
+			[
+				{ arch: 'x64' as const, format: 'deb' as const },
+				{ arch: 'arm64' as const, format: 'rpm' as const }
+			].map(({ arch, format }) => linuxDesktopPackageName(
+				{ platform: 'linux', arch },
+				format
+			)),
+			[
+				'hucode-linux-x64.deb',
+				'hucode-linux-arm64.rpm'
+			]
+		);
+	});
+
+	test('rejects Linux desktop package names for other platforms', () => {
+		assert.throws(
+			() => linuxDesktopPackageName(
+				{ platform: 'darwin', arch: 'arm64' },
+				'deb'
+			),
+			/Linux desktop package names require a Linux target/
 		);
 	});
 
