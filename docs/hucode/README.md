@@ -14,6 +14,8 @@ Start here:
 - [Release Build Size Analysis](./release-build-size-analysis.md): investigation
   notes on Hucode macOS app size, source maps, node_modules pruning, and
   upstream Copilot VSIX packaging.
+- [Linux Installation And Updates](./linux-installation.md): choose a public
+  Linux package and perform manual upgrades.
 - [Roadmap](./roadmap.md): completed, active, and later work.
 - [Upgrade Skill](../../.agents/skills/hucode-upgrade-vscode/SKILL.md):
   operational workflow for upgrading the underlying VS Code release.
@@ -90,14 +92,18 @@ feed. The feed serves VS Code updater responses at
 `/api/update/<platform>/stable/<commit>`, where macOS x64 uses `darwin` and
 macOS arm64 uses `darwin-arm64`.
 
-Release DMGs are manual install assets. Release ZIPs are the Squirrel.Mac
-auto-update assets consumed by Electron's macOS updater. Builds produced before
-the Hucode product mixin included `updateUrl` cannot discover updates
-automatically, so the first updater-enabled release is the bootstrap for later
-auto-updates.
+Release DMGs are manual install assets. macOS release ZIPs are the Squirrel.Mac
+auto-update assets consumed by Electron's macOS updater. Linux x64 and arm64
+builds report available updates in the built-in update UI, but selecting the
+update action opens the latest GitHub Release for a manual ZIP, DEB, or RPM
+upgrade. Hucode does not change Linux package sources or infer the installed
+package format. Builds produced before the Hucode product mixin included
+`updateUrl` cannot discover updates automatically, so the first updater-enabled
+release is the bootstrap for later updates.
 
-GitHub Releases also publish standalone CLI and server-web archives for macOS,
-Linux, and Windows x64/arm64. The CLI resolves matching server-web archives
-through the platform-specific
+GitHub Releases publish Linux desktop ZIP, DEB, and RPM packages for x64 and
+arm64, plus standalone CLI and server-web archives for macOS, Linux, and
+Windows x64/arm64. The CLI resolves matching server-web archives through the
+platform-specific
 `/api/latest/server-<platform>-<arch>-web/stable` endpoints; Linux armhf does
 not support `serve-web` because there is no arm32 server build.
