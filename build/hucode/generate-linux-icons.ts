@@ -190,20 +190,31 @@ function createXpm({ width, height, data }: DecodedPng): string {
 }
 
 /**
- * Generates Linux PNG and XPM icons from the tracked Hucode app icon.
+ * Derives Linux PNG and XPM payloads from the tracked Hucode app icon.
  */
-export async function generateLinuxIcons() {
-	const icns = await fs.readFile(sourceIcns);
+export function deriveLinuxIconAssets(
+	icns: Buffer
+): { png: Buffer; xpm: string } {
 	const png = extractIcnsEntry(icns, 'ic10');
 	const decoded = parsePng(png);
 
 	assert.strictEqual(decoded.width, 1024);
 	assert.strictEqual(decoded.height, 1024);
+	return { png, xpm: createXpm(decoded) };
+}
+
+/**
+ * Generates Linux PNG and XPM icons from the tracked Hucode app icon.
+ */
+export async function generateLinuxIcons() {
+	const icns = await fs.readFile(sourceIcns);
+	const { png, xpm } = deriveLinuxIconAssets(icns);
+
 	await fs.mkdir(path.join(outputRoot, 'rpm'), { recursive: true });
 	await fs.writeFile(path.join(outputRoot, 'code.png'), png);
 	await fs.writeFile(
 		path.join(outputRoot, 'rpm', 'code.xpm'),
-		createXpm(decoded),
+		xpm,
 		'utf8'
 	);
 }

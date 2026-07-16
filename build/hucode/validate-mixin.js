@@ -23,16 +23,31 @@ const linuxResources = [
 	'resources/linux/rpm/code.spec.template',
 	'resources/linux/rpm/code.xpm'
 ];
+const intentionallyEmptyLinuxResources = new Set([
+	'resources/linux/debian/templates.template'
+]);
 const packageSourcePatterns = [
 	/packages\.microsoft\.com/i,
 	/microsoft\.gpg/i,
 	/add-microsoft-repo/i,
 	/apt-config/i,
+	/\b(?:add-apt-repository|apt-add-repository|apt-key)\b/i,
+	/\brpm\b[^\r\n;&|]*\s--import\b/i,
+	/\bgpg(?:2)?\b[^\r\n;&|]*\s--dearmor\b/i,
+	/-----BEGIN PGP PUBLIC KEY BLOCK-----/i,
+	/\bdnf\b[^\r\n;&|]*\bconfig-manager\b[^\r\n;&|]*--add-repo\b/i,
+	/\byum-config-manager\b[^\r\n;&|]*--add-repo\b/i,
+	/\bzypper\b[^\r\n;&|]*(?:\baddrepo\b|\bar\s+\S+)/i,
 	/trusted\.gpg/i,
-	/sources\.list/i,
-	/\/etc\/apt/i,
-	/\/etc\/yum\.repos\.d/i,
-	/baseurl\s*=/i
+	/\/etc\/apt\/(?:sources\.list(?:\.d)?|keyrings)(?:\/|\b)/i,
+	/\/usr\/share\/keyrings(?:\/|\b)/i,
+	/\/etc\/yum\.repos\.d(?:\/|\b)/i,
+	/\/etc\/pki\/rpm-gpg(?:\/|\b)/i,
+	/\/etc\/zypp\/(?:repos\.d|keys)(?:\/|\b)/i,
+	/^\s*Signed-By\s*:/im,
+	/^\s*baseurl\s*=/im,
+	/^\s*(?:deb|deb-src)\s+(?:\[[^\]]*\]\s+)?(?:https?|file):/im,
+	/^\s*URIs:\s*(?:https?|file):/im
 ];
 const upstreamIdentityPatterns = [
 	/Visual Studio Code/i,
@@ -58,10 +73,10 @@ async function readJson(filePath) {
 	return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
-async function assertFileExists(filePath) {
+async function assertFileExists(filePath, allowEmpty = false) {
 	const stats = await fs.stat(filePath);
 	assert.ok(stats.isFile(), `${filePath} is not a file.`);
-	assert.ok(stats.size > 0, `${filePath} is empty.`);
+	assert.ok(allowEmpty || stats.size > 0, `${filePath} is empty.`);
 }
 
 async function readTextFile(root, relativePath) {
@@ -74,9 +89,22 @@ function assertPatternsAbsent(contents, patterns, label) {
 	}
 }
 
+/**
+ * Asserts that a package script does not manage package sources or keys.
+ *
+ * @param {string} contents
+ * @param {string} label
+ */
+export function assertNoPackageSourceManagement(contents, label) {
+	assertPatternsAbsent(contents, packageSourcePatterns, label);
+}
+
 async function validateLinuxResources(generatedRoot) {
 	for (const relativePath of linuxResources) {
-		await assertFileExists(path.join(generatedRoot, relativePath));
+		await assertFileExists(
+			path.join(generatedRoot, relativePath),
+			intentionallyEmptyLinuxResources.has(relativePath)
+		);
 	}
 
 	const appdata = await readTextFile(
@@ -129,7 +157,7 @@ async function validateLinuxResources(generatedRoot) {
 	];
 	for (const relativePath of packageScripts) {
 		const contents = await readTextFile(generatedRoot, relativePath);
-		assertPatternsAbsent(contents, packageSourcePatterns, relativePath);
+		assertNoPackageSourceManagement(contents, relativePath);
 	}
 
 	const png = await fs.readFile(
