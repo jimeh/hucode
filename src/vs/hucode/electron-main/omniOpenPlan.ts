@@ -30,6 +30,16 @@ export interface IHucodeOmniOpenConfiguration {
 }
 
 /**
+ * Open configuration guarantees for an explicit new Omni-window request.
+ */
+export interface IHucodeNewOmniWindowOpenConfiguration {
+	readonly forceNewWindow: true;
+	readonly forceOmniWindow: true;
+	readonly forceEmpty: false;
+	readonly noRecentEntry: true;
+}
+
+/**
  * Browser-window options that identify an Omni shell window.
  */
 export interface IHucodeOmniBrowserWindowOptions
@@ -69,6 +79,21 @@ export function createHucodeOmniWindowPath(
 	return {
 		isOmniWindow: true,
 		...options,
+	};
+}
+
+/**
+ * Applies the main-process guarantees for an explicit new Omni-window request.
+ */
+export function getHucodeNewOmniWindowOpenConfiguration<
+	TConfig extends object
+>(openConfig: TConfig): TConfig & IHucodeNewOmniWindowOpenConfiguration {
+	return {
+		...openConfig,
+		forceNewWindow: true,
+		forceOmniWindow: true,
+		forceEmpty: false,
+		noRecentEntry: true,
 	};
 }
 
