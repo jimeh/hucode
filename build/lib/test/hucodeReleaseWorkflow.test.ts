@@ -136,6 +136,28 @@ suite('Hucode release workflow contract', () => {
 		}
 	});
 
+	test('removes the downloaded app archive before packaging', () => {
+		const packageJob = workflow.slice(
+			workflow.indexOf('  package:'),
+			workflow.indexOf('  linux-package-smoke:')
+		);
+		const restoreStep = packageJob.slice(
+			packageJob.indexOf('- name: Restore release app'),
+			packageJob.indexOf('- name: Package release artifacts')
+		);
+		assert.deepStrictEqual({
+			extractsApp: /tar -xf "\$archive" -C \.\./.test(restoreStep),
+			removesDownloadedArchive: /rm -rf \.build\/hucode\/app/.test(restoreStep),
+			cleanupPrecedesPackaging:
+				packageJob.indexOf('rm -rf .build/hucode/app') <
+				packageJob.indexOf('- name: Package release artifacts')
+		}, {
+			extractsApp: true,
+			removesDownloadedArchive: true,
+			cleanupPrecedesPackaging: true
+		});
+	});
+
 	test('retries transient package smoke response parse failures', () => {
 		assert.match(smokeScript, /if ! omni_count=.*jq/s);
 		assert.match(smokeScript, /if ! identity_count=.*jq/s);

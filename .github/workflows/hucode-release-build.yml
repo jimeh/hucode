@@ -1069,6 +1069,7 @@ jobs:
           archive=".build/hucode/app/${app_name}.tar"
           rm -rf "../$app_name"
           tar -xf "$archive" -C ..
+          rm -rf .build/hucode/app
 
       - name: Package release artifacts
         run: |
