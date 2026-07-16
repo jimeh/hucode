@@ -14,7 +14,8 @@ import {
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
 	getHucodeRegularFileOpenWindows,
-	isHucodeOmniPathToOpen
+	isHucodeOmniPathToOpen,
+	openNewHucodeOmniWindow
 } from '../../electron-main/omniOpenPlan.js';
 
 suite('HucodeOmniOpenPlan', () => {
@@ -131,6 +132,86 @@ suite('HucodeOmniOpenPlan', () => {
 				isOmniWindow: true,
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined
+			}
+		);
+	});
+
+	test('opens and focuses a distinct Omni window for every request', async () => {
+		const input = {
+			context: 'api',
+			forceNewWindow: false,
+			forceOmniWindow: false,
+			forceEmpty: true,
+			noRecentEntry: false
+		};
+		const requests: object[] = [];
+		const restoredWindows: Array<{
+			readonly id: number;
+			focusCount: number;
+			focus(): void;
+		}> = [];
+		const openedWindows: Array<{
+			readonly id: number;
+			focusCount: number;
+			focus(): void;
+		}> = [];
+		const open = async (configuration: object) => {
+			requests.push(configuration);
+			const restoredWindow = {
+				id: -(restoredWindows.length + 1),
+				focusCount: 0,
+				focus() {
+					this.focusCount++;
+				}
+			};
+			const window = {
+				id: openedWindows.length + 1,
+				focusCount: 0,
+				focus() {
+					this.focusCount++;
+				}
+			};
+			restoredWindows.push(restoredWindow);
+			openedWindows.push(window);
+			return [restoredWindow, window];
+		};
+
+		const first = await openNewHucodeOmniWindow(input, open);
+		const second = await openNewHucodeOmniWindow(input, open);
+
+		assert.deepStrictEqual(
+			{
+				distinctRequests: requests[0] !== requests[1],
+				distinctWindows: first[1] !== second[1],
+				returnedWindowIds: [first[1].id, second[1].id],
+				restoredFocusCounts: restoredWindows.map(
+					window => window.focusCount
+				),
+				focusCounts: openedWindows.map(window => window.focusCount),
+				requests
+			},
+			{
+				distinctRequests: true,
+				distinctWindows: true,
+				returnedWindowIds: [1, 2],
+				restoredFocusCounts: [0, 0],
+				focusCounts: [1, 1],
+				requests: [
+					{
+						context: 'api',
+						forceNewWindow: true,
+						forceOmniWindow: true,
+						forceEmpty: false,
+						noRecentEntry: true
+					},
+					{
+						context: 'api',
+						forceNewWindow: true,
+						forceOmniWindow: true,
+						forceEmpty: false,
+						noRecentEntry: true
+					}
+				]
 			}
 		);
 	});

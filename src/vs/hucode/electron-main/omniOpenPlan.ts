@@ -30,6 +30,23 @@ export interface IHucodeOmniOpenConfiguration {
 }
 
 /**
+ * Open configuration guarantees for an explicit new Omni-window request.
+ */
+export interface IHucodeNewOmniWindowOpenConfiguration {
+	readonly forceNewWindow: true;
+	readonly forceOmniWindow: true;
+	readonly forceEmpty: false;
+	readonly noRecentEntry: true;
+}
+
+/**
+ * Window subset needed to focus a newly opened Hucode Omni window.
+ */
+export interface IHucodeFocusableOmniWindow {
+	focus(): void;
+}
+
+/**
  * Browser-window options that identify an Omni shell window.
  */
 export interface IHucodeOmniBrowserWindowOptions
@@ -70,6 +87,40 @@ export function createHucodeOmniWindowPath(
 		isOmniWindow: true,
 		...options,
 	};
+}
+
+/**
+ * Applies the main-process guarantees for an explicit new Omni-window request.
+ */
+export function getHucodeNewOmniWindowOpenConfiguration<
+	TConfig extends object
+>(openConfig: TConfig): TConfig & IHucodeNewOmniWindowOpenConfiguration {
+	return {
+		...openConfig,
+		forceNewWindow: true,
+		forceOmniWindow: true,
+		forceEmpty: false,
+		noRecentEntry: true,
+	};
+}
+
+/**
+ * Opens and focuses one explicit new Hucode Omni window.
+ */
+export async function openNewHucodeOmniWindow<
+	TConfig extends object,
+	TWindow extends IHucodeFocusableOmniWindow
+>(
+	openConfig: TConfig,
+	open: (
+		configuration: TConfig & IHucodeNewOmniWindowOpenConfiguration
+	) => Promise<TWindow[]>
+): Promise<TWindow[]> {
+	const windows = await open(
+		getHucodeNewOmniWindowOpenConfiguration(openConfig)
+	);
+	windows.at(-1)?.focus();
+	return windows;
 }
 
 /**
