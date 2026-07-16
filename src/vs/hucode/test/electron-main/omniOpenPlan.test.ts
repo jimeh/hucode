@@ -14,7 +14,8 @@ import {
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
 	getHucodeRegularFileOpenWindows,
-	isHucodeOmniPathToOpen
+	isHucodeOmniPathToOpen,
+	openNewHucodeOmniWindow
 } from '../../electron-main/omniOpenPlan.js';
 
 suite('HucodeOmniOpenPlan', () => {
@@ -131,6 +132,69 @@ suite('HucodeOmniOpenPlan', () => {
 				isOmniWindow: true,
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined
+			}
+		);
+	});
+
+	test('opens and focuses a distinct Omni window for every request', async () => {
+		const input = {
+			context: 'api',
+			forceNewWindow: false,
+			forceOmniWindow: false,
+			forceEmpty: true,
+			noRecentEntry: false
+		};
+		const requests: object[] = [];
+		const openedWindows: Array<{
+			readonly id: number;
+			focusCount: number;
+			focus(): void;
+		}> = [];
+		const open = async (configuration: object) => {
+			requests.push(configuration);
+			const window = {
+				id: openedWindows.length + 1,
+				focusCount: 0,
+				focus() {
+					this.focusCount++;
+				}
+			};
+			openedWindows.push(window);
+			return [window];
+		};
+
+		const first = await openNewHucodeOmniWindow(input, open);
+		const second = await openNewHucodeOmniWindow(input, open);
+
+		assert.deepStrictEqual(
+			{
+				distinctRequests: requests[0] !== requests[1],
+				distinctWindows: first[0] !== second[0],
+				returnedWindowIds: [first[0].id, second[0].id],
+				focusCounts: openedWindows.map(window => window.focusCount),
+				requests
+			},
+			{
+				distinctRequests: true,
+				distinctWindows: true,
+				returnedWindowIds: [1, 2],
+				focusCounts: [1, 1],
+				requests: [
+					{
+						context: 'api',
+						forceNewWindow: true,
+						forceOmniWindow: true,
+						forceEmpty: false,
+						noRecentEntry: true
+					},
+					{
+						context: 'api',
+						forceNewWindow: true,
+						forceOmniWindow: true,
+						forceEmpty: false,
+						noRecentEntry: true
+					}
+				]
 			}
 		);
 	});

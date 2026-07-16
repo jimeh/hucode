@@ -51,7 +51,8 @@ import {
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
 	IHucodeOmniWindowPath,
-	isHucodeOmniPathToOpen
+	isHucodeOmniPathToOpen,
+	openNewHucodeOmniWindow
 } from '../../../hucode/electron-main/omniOpenPlan.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
@@ -335,13 +336,10 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	async openOmniWindow(openConfig: IOpenConfiguration): Promise<ICodeWindow[]> {
 		this.logService.trace('windowsManager#openOmniWindow');
 
-		return this.open({
-			...openConfig,
-			forceNewWindow: true,
-			forceOmniWindow: true,
-			forceEmpty: false,
-			noRecentEntry: true
-		});
+		return openNewHucodeOmniWindow(
+			openConfig,
+			configuration => this.open(configuration)
+		);
 	}
 
 	private async ensureAgentsWindow(openConfig: IOpenConfiguration): Promise<IOpenConfiguration> {
