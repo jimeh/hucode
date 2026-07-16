@@ -317,6 +317,8 @@ jobs:
             --run \
             src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts \
             --run \
+            src/vs/platform/update/test/electron-main/hucodeLinuxUpdate.test.ts \
+            --run \
             src/vs/platform/window/test/common/hucodeOmniCommandRouting.test.ts \
             --run \
             src/vs/platform/window/test/common/hucodeRendererReplyTarget.test.ts \
