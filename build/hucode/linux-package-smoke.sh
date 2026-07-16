@@ -23,15 +23,21 @@ dbus-run-session -- xvfb-run -a hucode \
 
 for _ in $(seq 1 120); do
 	if targets="$(curl -fsS "http://127.0.0.1:$debug_port/json/list")"; then
-		omni_count="$(jq '[.[] | select(
+		if ! omni_count="$(jq '[.[] | select(
 			.type == "page" and
 			(.url | contains("/vs/hucode/electron-browser/omni.html"))
-		)] | length' <<<"$targets")"
-		identity_count="$(jq '[.[] | select(
+		)] | length' <<<"$targets" 2>/dev/null)"; then
+			sleep 1
+			continue
+		fi
+		if ! identity_count="$(jq '[.[] | select(
 			.type == "page" and
 			(.url | contains("/vs/hucode/electron-browser/omni.html")) and
 			(.title | contains("Hucode"))
-		)] | length' <<<"$targets")"
+		)] | length' <<<"$targets" 2>/dev/null)"; then
+			sleep 1
+			continue
+		fi
 		if [ "$omni_count" -eq 1 ] && [ "$identity_count" -eq 1 ]; then
 			echo "Packaged Hucode launched one Omni window with Hucode identity."
 			exit 0
