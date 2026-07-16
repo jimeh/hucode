@@ -146,6 +146,7 @@ suite('HucodeOmniOpenPlan', () => {
 		};
 		const requests: object[] = [];
 		const restoredWindows: Array<{
+			readonly id: number;
 			focusCount: number;
 			focus(): void;
 		}> = [];
@@ -157,6 +158,7 @@ suite('HucodeOmniOpenPlan', () => {
 		const open = async (configuration: object) => {
 			requests.push(configuration);
 			const restoredWindow = {
+				id: -(restoredWindows.length + 1),
 				focusCount: 0,
 				focus() {
 					this.focusCount++;
