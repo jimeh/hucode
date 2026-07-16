@@ -16,9 +16,10 @@ VS Code code that Hucode customizes.
 - Hucode macOS app icons are sourced from `build/hucode/icons/darwin/` and
   generated into the stable mixin overlay. Keep `resources/darwin/code.icns`
   upstream OSS; run `npm run hucode:generate-icons` to refresh Hucode
-  `code.icns`, `Assets.car`, and serve-web icons. The legacy-inset `code.icns`
-  comes from `actool`'s generated compatibility ICNS. On non-macOS hosts, run
-  `npm run hucode:generate-server-icons` to refresh serve-web icons from the
+  `code.icns`, `Assets.car`, serve-web icons, and Linux PNG/XPM assets. The
+  legacy-inset `code.icns` comes from `actool`'s generated compatibility ICNS.
+  On non-macOS hosts, use `npm run hucode:generate-server-icons` or
+  `npm run hucode:generate-linux-icons` to refresh derived assets from the
   tracked Hucode `code.icns`.
 - Hucode's app release version lives in the overlay as `hucodeVersion`. Keep
   upstream `version` for VS Code compatibility and extension checks.
