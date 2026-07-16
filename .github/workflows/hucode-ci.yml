@@ -338,6 +338,8 @@ jobs:
             --run \
             src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts \
             --run \
+            src/vs/workbench/test/electron-browser/hucodeOmniWindowAction.test.ts \
+            --run \
             src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts \
             --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
