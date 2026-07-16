@@ -18,7 +18,7 @@ VS Code code that Hucode customizes.
   upstream OSS; run `npm run hucode:generate-icons` to refresh Hucode
   `code.icns`, `Assets.car`, serve-web icons, and Linux PNG/XPM assets. The
   legacy-inset `code.icns` comes from `actool`'s generated compatibility ICNS.
-  On non-macOS hosts, use `npm run hucode:generate-server-icons` or
+  On non-macOS hosts, use `npm run hucode:generate-server-icons` and
   `npm run hucode:generate-linux-icons` to refresh derived assets from the
   tracked Hucode `code.icns`.
 - Hucode's app release version lives in the overlay as `hucodeVersion`. Keep
@@ -46,6 +46,9 @@ VS Code code that Hucode customizes.
   local serve-web development server from existing compiled output.
 - Run `npm run hucode:watch` for incremental rebuilds while developing, or
   `npm run hucode:compile` before launch for a full one-shot rebuild.
+- Do not run `npm run hucode:prepare` or `npm run hucode:validate` concurrently
+  with `npm run test-build-scripts`. The mixin tests share
+  `.build/distro/mixin/stable/` and can expose partially written output.
 - `npm run hucode:compile` must build the client, built-in extension outputs,
   and extension media. Using only `transpile-client` cleans `out/` but leaves
   files like `extensions/git-base/out/extension.js` and `codicon.ttf` missing.

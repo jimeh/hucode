@@ -80,8 +80,36 @@ const packageSourceManagementFixtures = [
 		'dnf config-manager addrepo --from-repofile=https://packages.example/repo.repo'
 	],
 	[
+		'DNF repository enable',
+		'dnf config-manager --set-enabled packages-example'
+	],
+	[
+		'DNF repository option',
+		'dnf config-manager setopt packages-example.enabled=1'
+	],
+	[
 		'YUM repository',
 		'yum-config-manager --add-repo https://packages.example/repo'
+	],
+	[
+		'YUM repository disable',
+		'yum-config-manager --disable packages-example'
+	],
+	[
+		'YUM repository option',
+		'yum-config-manager --save --setopt=packages-example.enabled=0'
+	],
+	[
+		'ZYpp repository modification',
+		'zypper modifyrepo --disable packages-example'
+	],
+	[
+		'ZYpp repository removal',
+		'zypper removerepo packages-example'
+	],
+	[
+		'ZYpp repository rename',
+		'zypper nr packages-example packages-renamed'
 	],
 	['APT source path', 'echo repo > /etc/apt/sources.list.d/example.list'],
 	['YUM source path', 'echo repo > /etc/yum.repos.d/example.repo'],
