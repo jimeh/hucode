@@ -99,17 +99,17 @@ export function buildLinuxOmniSmokeArguments(
 export function summarizeLinuxOmniRenderers(
 	rendererUrls: readonly string[]
 ): ILinuxOmniRendererSummary {
-	const applicationRendererUrls = rendererUrls.filter(url =>
-		url.startsWith('vscode-file://vscode-app/')
+	const relevantRendererUrls = rendererUrls.filter(url =>
+		!/^(?:chrome-)?devtools:\/\//.test(url)
 	);
-	const omniRendererUrls = applicationRendererUrls.filter(url =>
+	const omniRendererUrls = relevantRendererUrls.filter(url =>
 		/\/vs\/hucode\/electron-browser\/omni(?:-dev)?\.html(?:[?#]|$)/
 			.test(url)
 	);
 
 	return {
 		rendererUrls: [...rendererUrls],
-		applicationRendererCount: applicationRendererUrls.length,
+		applicationRendererCount: relevantRendererUrls.length,
 		omniRendererCount: omniRendererUrls.length,
 	};
 }
@@ -243,7 +243,10 @@ async function connectToCdp(
 		ensureChildIsRunning(child, getSpawnError());
 		try {
 			return await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
-				timeout: Math.min(1_000, deadline - Date.now())
+				timeout: Math.max(
+					1,
+					Math.min(1_000, deadline - Date.now())
+				)
 			});
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));

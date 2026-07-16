@@ -4,17 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { isLinux, isMacintosh } from
+	'../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
+import { ContextKeyValue } from
+	'../../../platform/contextkey/common/contextkey.js';
 import {
 	createNewHucodeOmniWindowContext,
 	isNewHucodeOmniWindowAvailable,
+	NewHucodeOmniWindowContext,
 } from
 	'../../electron-browser/actions/hucodeOmniWindowAction.js';
 
-interface IActionContext {
-	readonly platform: 'linux' | 'mac' | 'windows';
-	readonly isWeb?: boolean;
+interface IActionRuntimeContext {
 	readonly isSessionsWindow?: boolean;
 	readonly isOmniWindow?: boolean;
 	readonly isHostedOmniWorkspace?: boolean;
@@ -23,34 +26,41 @@ interface IActionContext {
 suite('HucodeOmniWindowAction', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('is available in supported desktop workbench contexts', () => {
-		const contexts: IActionContext[] = [
-			{ platform: 'mac' },
-			{ platform: 'linux' },
-			{ platform: 'mac', isOmniWindow: true },
-			{ platform: 'linux', isOmniWindow: true },
-			{ platform: 'mac', isHostedOmniWorkspace: true },
-			{ platform: 'linux', isHostedOmniWorkspace: true },
-		];
-
+	test('supports only macOS and Linux desktop platforms', () => {
 		assert.deepStrictEqual(
-			contexts.map(isNewHucodeOmniWindowAvailable),
-			[true, true, true, true, true, true]
+			[
+				{ platform: 'mac' as const },
+				{ platform: 'linux' as const },
+				{ platform: 'windows' as const },
+				{ platform: 'linux' as const, isWeb: true },
+			].map(isNewHucodeOmniWindowAvailable),
+			[true, true, false, false]
 		);
 	});
 
-	test('is unavailable on Windows, web, and in Sessions windows', () => {
-		const contexts: IActionContext[] = [
-			{ platform: 'windows' },
-			{ platform: 'linux', isWeb: true },
-			{ platform: 'mac', isWeb: true },
-			{ platform: 'linux', isSessionsWindow: true },
-			{ platform: 'mac', isSessionsWindow: true },
+	test('evaluates regular, Omni, hosted, and Sessions contexts', () => {
+		const contexts: IActionRuntimeContext[] = [
+			{},
+			{ isOmniWindow: true },
+			{ isHostedOmniWorkspace: true },
+			{ isOmniWindow: true, isHostedOmniWorkspace: true },
+			{ isSessionsWindow: true },
+			{ isOmniWindow: true, isSessionsWindow: true },
+			{ isHostedOmniWorkspace: true, isSessionsWindow: true },
 		];
+		const supportedDesktop = isMacintosh || isLinux;
 
 		assert.deepStrictEqual(
-			contexts.map(isNewHucodeOmniWindowAvailable),
-			[false, false, false, false, false]
+			contexts.map(evaluateProductionContext),
+			[
+				supportedDesktop,
+				supportedDesktop,
+				supportedDesktop,
+				supportedDesktop,
+				false,
+				false,
+				false,
+			]
 		);
 	});
 
@@ -75,3 +85,11 @@ suite('HucodeOmniWindowAction', () => {
 		);
 	});
 });
+
+function evaluateProductionContext(context: IActionRuntimeContext): boolean {
+	return NewHucodeOmniWindowContext.evaluate({
+		getValue<T extends ContextKeyValue>(key: string): T | undefined {
+			return context[key as keyof IActionRuntimeContext] as T | undefined;
+		}
+	});
+}
