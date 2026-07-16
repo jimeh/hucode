@@ -29,10 +29,10 @@ import { KeybindingWeight } from '../../../platform/keybinding/common/keybinding
 import { isMacintosh } from '../../../base/common/platform.js';
 import { getActiveWindow } from '../../../base/browser/dom.js';
 import { IOpenedAuxiliaryWindow, IOpenedMainWindow, isOpenedAuxiliaryWindow } from '../../../platform/window/common/window.js';
-import { IsAuxiliaryWindowContext, IsAuxiliaryWindowFocusedContext, IsOmniWindowContext, IsSessionsWindowContext, IsWindowAlwaysOnTopContext } from '../../common/contextkeys.js';
+import { IsAuxiliaryWindowContext, IsAuxiliaryWindowFocusedContext, IsWindowAlwaysOnTopContext } from '../../common/contextkeys.js';
 import { isAuxiliaryWindow, mainWindow } from '../../../base/browser/window.js';
 import { ContextKeyExpr } from '../../../platform/contextkey/common/contextkey.js';
-import { IsMacNativeContext } from '../../../platform/contextkey/common/contextkeys.js';
+import { NewHucodeOmniWindowContext } from './hucodeOmniWindowAction.js';
 
 export class CloseWindowAction extends Action2 {
 
@@ -106,19 +106,12 @@ export class NewOmniWindowAction extends Action2 {
 				),
 			},
 			f1: true,
-			precondition: ContextKeyExpr.and(
-				IsSessionsWindowContext.negate(),
-				IsOmniWindowContext.negate(),
-				IsMacNativeContext
-			),
+			precondition: NewHucodeOmniWindowContext,
 			menu: {
 				id: MenuId.MenubarFileMenu,
 				group: '1_new',
 				order: 5,
-				when: ContextKeyExpr.and(
-					IsSessionsWindowContext.negate(),
-					IsMacNativeContext
-				)
+				when: NewHucodeOmniWindowContext
 			}
 		});
 	}

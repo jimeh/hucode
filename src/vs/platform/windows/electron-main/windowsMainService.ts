@@ -47,6 +47,7 @@ import {
 	distinctHucodeOmniWindowPaths,
 	filterHucodePreserveRestorePaths,
 	getHucodeDefaultStartupWindowPath,
+	getHucodeNewOmniWindowOpenConfiguration,
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
@@ -335,13 +336,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	async openOmniWindow(openConfig: IOpenConfiguration): Promise<ICodeWindow[]> {
 		this.logService.trace('windowsManager#openOmniWindow');
 
-		return this.open({
-			...openConfig,
-			forceNewWindow: true,
-			forceOmniWindow: true,
-			forceEmpty: false,
-			noRecentEntry: true
-		});
+		const windows = await this.open(
+			getHucodeNewOmniWindowOpenConfiguration(openConfig)
+		);
+		windows[0]?.focus();
+		return windows;
 	}
 
 	private async ensureAgentsWindow(openConfig: IOpenConfiguration): Promise<IOpenConfiguration> {

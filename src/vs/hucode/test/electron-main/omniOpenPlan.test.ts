@@ -10,6 +10,7 @@ import {
 	distinctHucodeOmniWindowPaths,
 	filterHucodePreserveRestorePaths,
 	getHucodeDefaultStartupWindowPath,
+	getHucodeNewOmniWindowOpenConfiguration,
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
@@ -133,6 +134,36 @@ suite('HucodeOmniOpenPlan', () => {
 				omniResidentWorkspaces: undefined
 			}
 		);
+	});
+
+	test('forces a distinct no-recents Omni window for every request', () => {
+		const input = {
+			context: 'api',
+			forceNewWindow: false,
+			forceOmniWindow: false,
+			forceEmpty: true,
+			noRecentEntry: false
+		};
+		const first = getHucodeNewOmniWindowOpenConfiguration(input);
+		const second = getHucodeNewOmniWindowOpenConfiguration(input);
+
+		assert.notStrictEqual(first, second);
+		assert.deepStrictEqual([first, second], [
+			{
+				context: 'api',
+				forceNewWindow: true,
+				forceOmniWindow: true,
+				forceEmpty: false,
+				noRecentEntry: true
+			},
+			{
+				context: 'api',
+				forceNewWindow: true,
+				forceOmniWindow: true,
+				forceEmpty: false,
+				noRecentEntry: true
+			}
+		]);
 	});
 
 	test('plans Omni file routing before regular window fallback', async () => {
