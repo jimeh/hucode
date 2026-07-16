@@ -10,20 +10,24 @@ import os from 'os';
 import path from 'path';
 import {
 	preparePublicReleaseAssets,
-	requiredPublicReleaseAssetNames
+	requiredPublicReleaseAssetNames,
+	requiredPublishedReleaseAssetNames,
+	validatePublishedReleaseAssetNames
 } from '../../hucode/release-assets.ts';
 
 suite('Hucode public release assets', () => {
 	let tmpDir: string;
 	let artifactsRoot: string;
 	let metadataPath: string;
-	let outputRoot: string;
+	let checksumsPath: string;
+	let manifestPath: string;
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hucode-assets-'));
 		artifactsRoot = path.join(tmpDir, 'artifacts');
 		metadataPath = path.join(tmpDir, 'hucode-release-metadata.json');
-		outputRoot = path.join(tmpDir, 'output');
+		checksumsPath = path.join(tmpDir, 'SHA256SUMS');
+		manifestPath = path.join(tmpDir, 'release-assets.json');
 		await fs.mkdir(artifactsRoot);
 		await fs.writeFile(metadataPath, 'metadata');
 	});
@@ -43,16 +47,21 @@ suite('Hucode public release assets', () => {
 		}
 	}
 
-	test('flattens required assets and writes deterministic checksums', async () => {
+	function escapeRegExp(value: string): string {
+		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	test('references source assets and writes deterministic checksums', async () => {
 		await writeRequiredAssets();
 		await fs.writeFile(path.join(artifactsRoot, 'private-report.json'), 'no');
 
-		const outputFiles = await preparePublicReleaseAssets(
+		const manifest = await preparePublicReleaseAssets(
 			artifactsRoot,
 			metadataPath,
-			outputRoot
+			checksumsPath,
+			manifestPath
 		);
-		const outputNames = outputFiles.map(filePath => path.basename(filePath));
+		const outputNames = manifest.assets.map(asset => asset.name);
 
 		assert.deepStrictEqual(
 			outputNames,
@@ -61,12 +70,24 @@ suite('Hucode public release assets', () => {
 				'SHA256SUMS'
 			]
 		);
+		for (const asset of manifest.assets.slice(0, -1)) {
+			if (asset.name === path.basename(metadataPath)) {
+				assert.strictEqual(asset.path, metadataPath);
+			} else {
+				assert.ok(asset.path.startsWith(`${artifactsRoot}${path.sep}`));
+			}
+		}
+		assert.strictEqual(manifest.assets.at(-1)?.path, checksumsPath);
+		assert.deepStrictEqual(
+			JSON.parse(await fs.readFile(manifestPath, 'utf8')),
+			manifest
+		);
 		const checksums = await fs.readFile(
-			path.join(outputRoot, 'SHA256SUMS'),
+			checksumsPath,
 			'utf8'
 		);
 		for (const name of requiredPublicReleaseAssetNames) {
-			assert.match(checksums, new RegExp(`  ${name.replace('.', '\\.')}$`, 'm'));
+			assert.match(checksums, new RegExp(`  ${escapeRegExp(name)}$`, 'm'));
 		}
 		assert.doesNotMatch(checksums, /private-report/);
 	});
@@ -81,7 +102,8 @@ suite('Hucode public release assets', () => {
 			preparePublicReleaseAssets(
 				artifactsRoot,
 				metadataPath,
-				outputRoot
+				checksumsPath,
+				manifestPath
 			),
 			/Missing required public release assets: hucode-linux-x64\.deb/
 		);
@@ -100,9 +122,35 @@ suite('Hucode public release assets', () => {
 			preparePublicReleaseAssets(
 				artifactsRoot,
 				metadataPath,
-				outputRoot
+				checksumsPath,
+				manifestPath
 			),
 			/Duplicate public release asset 'hucode-linux-arm64\.rpm'/
+		);
+	});
+
+	test('accepts exactly the required remote release assets', () => {
+		assert.doesNotThrow(() => validatePublishedReleaseAssetNames(
+			requiredPublishedReleaseAssetNames
+		));
+	});
+
+	test('rejects missing, unexpected, and duplicate remote assets', () => {
+		assert.throws(
+			() => validatePublishedReleaseAssetNames([
+				...requiredPublishedReleaseAssetNames.slice(1),
+				'SHA256SUMS',
+				'unexpected.zip'
+			]),
+			error => {
+				assert.match(
+					String(error),
+					/missing: hucode-darwin-x64\.dmg/
+				);
+				assert.match(String(error), /unexpected: unexpected\.zip/);
+				assert.match(String(error), /duplicates: SHA256SUMS/);
+				return true;
+			}
 		);
 	});
 });

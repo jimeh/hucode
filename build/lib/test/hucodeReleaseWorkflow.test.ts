@@ -18,23 +18,37 @@ const workflowPath = path.resolve(
 	'hucode-release-build.yml'
 );
 const workflow = readFileSync(workflowPath, 'utf8');
+const smokeScript = readFileSync(path.resolve(
+	import.meta.dirname,
+	'..',
+	'..',
+	'hucode',
+	'linux-package-smoke.sh'
+), 'utf8');
 
 suite('Hucode release workflow contract', () => {
 	test('publishes only after packaged Linux smoke tests pass', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  publish-release:'),
+			workflow.indexOf('  refresh-update-service:')
+		);
 		assert.match(workflow, /^  linux-package-smoke:$/m);
-		assert.match(workflow, /needs\.linux-package-smoke\.result == 'success'/);
-		assert.match(workflow, /needs:\n      - package\n      - linux-package-smoke/);
+		assert.match(job, /github\.event_name == 'push'/);
+		assert.match(job, /needs\.linux-package-smoke\.result == 'success'/);
+		assert.match(job, /needs:\n      - package\n      - linux-package-smoke/);
 	});
 
 	test('smokes clean DEB and RPM installs for public architectures', () => {
-		for (const value of [
-			".filter(item => item.platform === 'linux' && item.arch !== 'armhf')",
-			".flatMap(item => ['deb', 'rpm'].map(format => ({",
-			'linux_smoke_matrix:',
-			'build/hucode/linux-package-smoke.sh'
-		]) {
-			assert.ok(workflow.includes(value), `Missing workflow contract: ${value}`);
-		}
+		assert.match(
+			workflow,
+			/\.filter\(item => item\.platform === 'linux' && item\.arch !== 'armhf'\)/
+		);
+		assert.match(
+			workflow,
+			/\.flatMap\(item => \['deb', 'rpm'\]\.map\(format => \(\{/
+		);
+		assert.match(workflow, /linux_smoke_matrix:/);
+		assert.match(workflow, /build\/hucode\/linux-package-smoke\.sh/);
 	});
 
 	test('runs packaged Linux smoke tests for manual workflow builds', () => {
@@ -46,14 +60,81 @@ suite('Hucode release workflow contract', () => {
 		assert.match(job, /inputs\.linux_x64 \|\| inputs\.linux_arm64/);
 	});
 
-	test('prepares validated public assets and checksums before upload', () => {
+	test('runs arm64 package smoke natively', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  linux-package-smoke:'),
+			workflow.indexOf('  publish-release:')
+		);
+		assert.match(workflow, /\? 'ubuntu-24\.04-arm'/);
+		assert.match(workflow, /: 'ubuntu-latest'/);
+		assert.match(job, /runs-on: \$\{\{ matrix\.runner \}\}/);
+		assert.doesNotMatch(job, /setup-qemu-action/);
 		assert.match(
 			workflow,
-			/node build\/hucode\/release-assets\.ts[\s\S]*--artifacts release-artifacts[\s\S]*--out release-assets/
+			/copilot-vsix:[\s\S]*?runs-on: ubuntu-latest[\s\S]*?linux-package-smoke:/
+		);
+	});
+
+	test('retries transient package smoke response parse failures', () => {
+		assert.match(smokeScript, /if ! omni_count=.*jq/s);
+		assert.match(smokeScript, /if ! identity_count=.*jq/s);
+		assert.match(smokeScript, /continue/);
+		assert.match(
+			smokeScript,
+			/cat "\$log_file" >&2\nexit 1/
+		);
+	});
+
+	test('downloads only public-containing producer artifacts', () => {
+		const job = workflow.slice(workflow.indexOf('  publish-release:'));
+		assert.match(
+			workflow,
+			/name: hucode-public-\$\{\{ steps\.version\.outputs\.safe_version \}\}-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}/
+		);
+		assert.match(
+			job,
+			/pattern: hucode-public-\$\{\{ steps\.version\.outputs\.safe_version \}\}-\*/
+		);
+		assert.match(
+			job,
+			/pattern: hucode-server-web-\$\{\{ steps\.version\.outputs\.safe_version \}\}-\*/
+		);
+		assert.match(workflow, /matrix\.arch != 'armhf'/);
+		assert.doesNotMatch(job, /name: hucode-app-/);
+	});
+
+	test('prepares source assets and checksums without copying payloads', () => {
+		assert.match(
+			workflow,
+			/node build\/hucode\/release-assets\.ts prepare[\s\S]*--artifacts release-artifacts[\s\S]*--checksums SHA256SUMS[\s\S]*--manifest release-assets\.json/
 		);
 		assert.match(
 			workflow,
-			/gh release upload "\$TAG_NAME" release-assets\/\* --clobber/
+			/node build\/hucode\/release-assets\.ts print-paths/
 		);
+	});
+
+	test('publishes only after draft upload and remote verification', () => {
+		const job = workflow.slice(workflow.indexOf('  publish-release:'));
+		const steps = [
+			'- name: Prepare release assets',
+			'- name: Create or update draft release',
+			'- name: Upload draft release assets',
+			'- name: Verify remote release assets',
+			'- name: Publish verified release'
+		];
+		let previousIndex = -1;
+		for (const step of steps) {
+			const index = job.indexOf(step);
+			assert.ok(index > previousIndex, `Release step out of order: ${step}`);
+			previousIndex = index;
+		}
+		assert.match(job, /gh release create "\$TAG_NAME"[\s\S]*--draft/);
+		assert.match(job, /release_is_draft.*--json isDraft --jq \.isDraft/s);
+		assert.match(job, /already published; refusing to mutate it/);
+		assert.match(job, /gh release upload "\$TAG_NAME" "\$\{files\[@\]\}" --clobber/);
+		assert.match(job, /gh release view "\$TAG_NAME"[\s\S]*--json assets/);
+		assert.match(job, /release-assets\.ts verify/);
+		assert.match(job, /gh release edit "\$TAG_NAME" --draft=false/);
 	});
 });

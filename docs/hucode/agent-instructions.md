@@ -265,6 +265,11 @@ VS Code code that Hucode customizes.
   Windows x64/arm64. Linux armhf and Windows desktop packages remain workflow
   artifacts rather than public release assets. Keep the required asset contract
   and checksums in `build/hucode/release-assets.ts`.
+- Release publication consumes dedicated public-package and server-web
+  artifacts, not every workflow artifact or a duplicate payload staging tree.
+  Hash source files with bounded streaming, keep the release in draft state
+  while uploading, and publish only after the remote asset names exactly match
+  the required contract.
 - Hucode stable builds use `https://updates.hucode.dev` as the built-in update
   feed. Keep `quality`, `updateUrl`, `downloadUrl`,
   `hucodeReleaseNotesUrlTemplate`, and `releaseNotesUrl` in the Hucode product

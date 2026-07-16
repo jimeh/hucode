@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createHash } from 'crypto';
-import { promises as fs } from 'fs';
+import { createReadStream, promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -37,32 +37,59 @@ export const requiredPublicReleaseAssetNames = [
 	'hucode-release-metadata.json'
 ] as const;
 
+/** Names expected on the published GitHub Release. */
+export const requiredPublishedReleaseAssetNames = [
+	...requiredPublicReleaseAssetNames,
+	CHECKSUMS_NAME
+] as const;
+
 const requiredPublicReleaseAssets = new Set<string>(
 	requiredPublicReleaseAssetNames
 );
 
+/** One source file uploaded to the public GitHub Release. */
+export interface IPublicReleaseAsset {
+	readonly name: string;
+	readonly path: string;
+}
+
+/** On-disk handoff from asset validation to the upload step. */
+export interface IPublicReleaseAssetManifest {
+	readonly schemaVersion: 1;
+	readonly assets: readonly IPublicReleaseAsset[];
+}
+
 async function listFiles(root: string): Promise<string[]> {
 	const entries = await fs.readdir(root, { withFileTypes: true });
-	const files = await Promise.all(entries.map(async entry => {
+	const files: string[] = [];
+	for (const entry of entries) {
 		const entryPath = path.join(root, entry.name);
-		return entry.isDirectory() ? listFiles(entryPath) : [entryPath];
-	}));
-	return files.flat();
+		if (entry.isDirectory()) {
+			files.push(...await listFiles(entryPath));
+		} else {
+			files.push(entryPath);
+		}
+	}
+	return files;
 }
 
 async function sha256(filePath: string): Promise<string> {
-	const contents = await fs.readFile(filePath);
-	return createHash('sha256').update(contents).digest('hex');
+	const hash = createHash('sha256');
+	for await (const chunk of createReadStream(filePath)) {
+		hash.update(chunk);
+	}
+	return hash.digest('hex');
 }
 
 /**
- * Validates, flattens, and checksums the assets for a public GitHub Release.
+ * Validates and checksums source assets without duplicating their payloads.
  */
 export async function preparePublicReleaseAssets(
 	artifactsRoot: string,
 	metadataPath: string,
-	outputRoot: string
-): Promise<string[]> {
+	checksumsPath: string,
+	manifestPath: string
+): Promise<IPublicReleaseAssetManifest> {
 	const sourceFiles = [...await listFiles(artifactsRoot), metadataPath]
 		.filter(filePath => requiredPublicReleaseAssets.has(path.basename(filePath)));
 	const byName = new Map<string, string>();
@@ -85,23 +112,51 @@ export async function preparePublicReleaseAssets(
 		);
 	}
 
-	await fs.rm(outputRoot, { recursive: true, force: true });
-	await fs.mkdir(outputRoot, { recursive: true });
-	const outputFiles: string[] = [];
+	const assets: IPublicReleaseAsset[] = [];
+	const checksums: string[] = [];
 	for (const name of [...requiredPublicReleaseAssetNames].sort()) {
-		const outputPath = path.join(outputRoot, name);
-		await fs.copyFile(byName.get(name)!, outputPath);
-		outputFiles.push(outputPath);
+		const sourcePath = path.resolve(byName.get(name)!);
+		assets.push({ name, path: sourcePath });
+		checksums.push(`${await sha256(sourcePath)}  ${name}`);
 	}
 
-	const checksums = await Promise.all(outputFiles.map(async filePath =>
-		`${await sha256(filePath)}  ${path.basename(filePath)}`
-	));
-	const checksumsPath = path.join(outputRoot, CHECKSUMS_NAME);
-	await fs.writeFile(checksumsPath, `${checksums.join('\n')}\n`);
-	outputFiles.push(checksumsPath);
+	const resolvedChecksumsPath = path.resolve(checksumsPath);
+	await fs.writeFile(resolvedChecksumsPath, `${checksums.join('\n')}\n`);
+	assets.push({ name: CHECKSUMS_NAME, path: resolvedChecksumsPath });
 
-	return outputFiles;
+	const manifest: IPublicReleaseAssetManifest = {
+		schemaVersion: 1,
+		assets
+	};
+	await fs.writeFile(
+		manifestPath,
+		`${JSON.stringify(manifest, null, 2)}\n`
+	);
+	return manifest;
+}
+
+/**
+ * Verifies that a remote release exposes exactly the required public assets.
+ */
+export function validatePublishedReleaseAssetNames(
+	actualNames: readonly string[]
+): void {
+	const expected = new Set<string>(requiredPublishedReleaseAssetNames);
+	const actual = new Set<string>(actualNames);
+	const missing = requiredPublishedReleaseAssetNames.filter(name => !actual.has(name));
+	const unexpected = [...actual].filter(name => !expected.has(name)).sort();
+	const duplicates = [...actual].filter(name =>
+		actualNames.filter(actualName => actualName === name).length > 1
+	).sort();
+
+	if (missing.length || unexpected.length || duplicates.length) {
+		const issues = [
+			missing.length ? `missing: ${missing.join(', ')}` : undefined,
+			unexpected.length ? `unexpected: ${unexpected.join(', ')}` : undefined,
+			duplicates.length ? `duplicates: ${duplicates.join(', ')}` : undefined
+		].filter((issue): issue is string => !!issue);
+		throw new Error(`Remote release asset validation failed (${issues.join('; ')}).`);
+	}
 }
 
 function readOption(args: string[], option: string): string {
@@ -112,13 +167,45 @@ function readOption(args: string[], option: string): string {
 	return args[index + 1];
 }
 
+async function readManifest(manifestPath: string): Promise<IPublicReleaseAssetManifest> {
+	return JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+}
+
 async function main(): Promise<void> {
-	const args = process.argv.slice(2);
-	await preparePublicReleaseAssets(
-		path.resolve(readOption(args, '--artifacts')),
-		path.resolve(readOption(args, '--metadata')),
-		path.resolve(readOption(args, '--out'))
-	);
+	const [command, ...args] = process.argv.slice(2);
+	switch (command) {
+		case 'prepare':
+			await preparePublicReleaseAssets(
+				path.resolve(readOption(args, '--artifacts')),
+				path.resolve(readOption(args, '--metadata')),
+				path.resolve(readOption(args, '--checksums')),
+				path.resolve(readOption(args, '--manifest'))
+			);
+			return;
+		case 'print-paths': {
+			const manifest = await readManifest(
+				path.resolve(readOption(args, '--manifest'))
+			);
+			for (const asset of manifest.assets) {
+				process.stdout.write(`${asset.path}\0`);
+			}
+			return;
+		}
+		case 'verify': {
+			const actualNames = JSON.parse(await fs.readFile(
+				path.resolve(readOption(args, '--assets-json')),
+				'utf8'
+			));
+			if (!Array.isArray(actualNames) ||
+				actualNames.some(name => typeof name !== 'string')) {
+				throw new Error('Remote release assets JSON must be an array of names.');
+			}
+			validatePublishedReleaseAssetNames(actualNames);
+			return;
+		}
+		default:
+			throw new Error(`Unknown command '${command ?? ''}'.`);
+	}
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
