@@ -47,6 +47,7 @@ suite('Hucode Linux Omni smoke', () => {
 		assert.deepStrictEqual(
 			summarizeLinuxOmniRenderers([
 				'devtools://devtools/bundled/inspector.html',
+				'chrome-devtools://devtools/bundled/inspector.html',
 				'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
 				'vscode-file://vscode-app/vs/code/electron-browser/' +
 					'workbench/workbench.html',
@@ -54,11 +55,33 @@ suite('Hucode Linux Omni smoke', () => {
 			{
 				rendererUrls: [
 					'devtools://devtools/bundled/inspector.html',
+					'chrome-devtools://devtools/bundled/inspector.html',
 					'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
 					'vscode-file://vscode-app/vs/code/electron-browser/' +
 						'workbench/workbench.html',
 				],
 				applicationRendererCount: 2,
+				omniRendererCount: 1,
+			}
+		);
+	});
+
+	test('counts blank and error pages as fallback renderers', () => {
+		assert.deepStrictEqual(
+			summarizeLinuxOmniRenderers([
+				'devtools://devtools/bundled/inspector.html',
+				'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+				'about:blank',
+				'chrome-error://chromewebdata/',
+			]),
+			{
+				rendererUrls: [
+					'devtools://devtools/bundled/inspector.html',
+					'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+					'about:blank',
+					'chrome-error://chromewebdata/',
+				],
+				applicationRendererCount: 3,
 				omniRendererCount: 1,
 			}
 		);

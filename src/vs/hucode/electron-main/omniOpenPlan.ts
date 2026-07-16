@@ -40,6 +40,13 @@ export interface IHucodeNewOmniWindowOpenConfiguration {
 }
 
 /**
+ * Window subset needed to focus a newly opened Hucode Omni window.
+ */
+export interface IHucodeFocusableOmniWindow {
+	focus(): void;
+}
+
+/**
  * Browser-window options that identify an Omni shell window.
  */
 export interface IHucodeOmniBrowserWindowOptions
@@ -95,6 +102,25 @@ export function getHucodeNewOmniWindowOpenConfiguration<
 		forceEmpty: false,
 		noRecentEntry: true,
 	};
+}
+
+/**
+ * Opens and focuses one explicit new Hucode Omni window.
+ */
+export async function openNewHucodeOmniWindow<
+	TConfig extends object,
+	TWindow extends IHucodeFocusableOmniWindow
+>(
+	openConfig: TConfig,
+	open: (
+		configuration: TConfig & IHucodeNewOmniWindowOpenConfiguration
+	) => Promise<TWindow[]>
+): Promise<TWindow[]> {
+	const windows = await open(
+		getHucodeNewOmniWindowOpenConfiguration(openConfig)
+	);
+	windows[0]?.focus();
+	return windows;
 }
 
 /**
