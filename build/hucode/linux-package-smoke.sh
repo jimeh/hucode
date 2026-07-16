@@ -6,10 +6,22 @@ user_data_dir="$(mktemp -d)"
 extensions_dir="$(mktemp -d)"
 log_file="$(mktemp)"
 debug_port=19287
+launcher_pid=""
 
 cleanup() {
-	pkill -f -- "--user-data-dir=$user_data_dir" 2>/dev/null || true
-	rm -rf "$user_data_dir" "$extensions_dir" "$log_file"
+	pkill -TERM -f -- "--user-data-dir=$user_data_dir" 2>/dev/null || true
+	if [ -n "$launcher_pid" ]; then
+		for _ in $(seq 1 50); do
+			if ! kill -0 "$launcher_pid" 2>/dev/null; then
+				break
+			fi
+			sleep 0.1
+		done
+		pkill -KILL -f -- "--user-data-dir=$user_data_dir" 2>/dev/null || true
+		kill "$launcher_pid" 2>/dev/null || true
+		wait "$launcher_pid" 2>/dev/null || true
+	fi
+	rm -rf "$user_data_dir" "$extensions_dir" "$log_file" || true
 }
 trap cleanup EXIT
 
@@ -20,6 +32,7 @@ dbus-run-session -- xvfb-run -a hucode \
 	--remote-debugging-port="$debug_port" \
 	--user-data-dir="$user_data_dir" \
 	--wait >"$log_file" 2>&1 &
+launcher_pid="$!"
 
 for _ in $(seq 1 120); do
 	if targets="$(curl -fsS "http://127.0.0.1:$debug_port/json/list")"; then

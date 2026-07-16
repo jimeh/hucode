@@ -168,6 +168,29 @@ suite('Hucode release workflow contract', () => {
 		);
 	});
 
+	test('waits for the packaged app before removing its profile', () => {
+		const cleanup = smokeScript.slice(
+			smokeScript.indexOf('cleanup() {'),
+			smokeScript.indexOf('trap cleanup EXIT')
+		);
+		const terminateIndex = cleanup.indexOf('pkill -TERM');
+		const waitIndex = cleanup.indexOf('wait "$launcher_pid"');
+		const removeIndex = cleanup.indexOf('rm -rf "$user_data_dir"');
+		assert.deepStrictEqual({
+			capturesLauncher: /&\nlauncher_pid="\$!"/.test(smokeScript),
+			terminatesBeforeWait: terminateIndex >= 0 && terminateIndex < waitIndex,
+			waitsBeforeRemove: waitIndex >= 0 && waitIndex < removeIndex,
+			boundsGracePeriod: /for _ in \$\(seq 1 50\)/.test(cleanup),
+			cleanupCannotMaskResult: /rm -rf .* \|\| true/.test(cleanup)
+		}, {
+			capturesLauncher: true,
+			terminatesBeforeWait: true,
+			waitsBeforeRemove: true,
+			boundsGracePeriod: true,
+			cleanupCannotMaskResult: true
+		});
+	});
+
 	test('downloads only public-containing producer artifacts', () => {
 		const job = workflow.slice(workflow.indexOf('  publish-release:'));
 		assert.match(
