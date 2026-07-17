@@ -27,8 +27,8 @@ chat history.
 
 ## Current status
 
-- Overall status: **Implemented and locally validated**
-- Implementation status: **Complete; awaiting PR review and CI**
+- Overall status: **Implemented, locally validated, and under final review**
+- Implementation status: **Complete; awaiting final review and latest-sha CI**
 - Last updated: **2026-07-17**
 - Current owner: **Hucode maintainers**
 
@@ -940,9 +940,9 @@ Goal: close behavior gaps and produce reviewable evidence.
 - [x] Add a matching `.changes` fragment before opening a feature PR.
 - [x] Run focused common, browser, Electron-main, and host tests.
 - [x] Run type checking, layer validation, Hucode compile, and precommit.
-- [ ] Manually validate desktop behavior with a fresh profile.
-- [ ] Manually validate serve-web behavior and refresh restore.
-- [ ] Capture screenshots or a short recording for visual review.
+- [x] Manually validate desktop behavior with a fresh profile.
+- [x] Manually validate serve-web behavior and refresh restore.
+- [x] Capture screenshots or a short recording for visual review.
 - [x] Record exact validation results in this document.
 
 Exit criteria:
@@ -1089,13 +1089,13 @@ Add coverage for:
 
 ### Desktop
 
-- [ ] Launch a clean Omni window with no projects or workbenches.
-- [ ] Verify Workbenches appears above Projects and both plus actions are
+- [x] Launch a clean Omni window with no projects or workbenches.
+- [x] Verify Workbenches appears above Projects and both plus actions are
       visible.
-- [ ] Collapse and expand both sections and verify their view state is kept.
+- [x] Collapse and expand both sections and verify their view state is kept.
 - [ ] Add a Git project and confirm current project behavior is unchanged.
-- [ ] Add a non-Git directory as a workbench.
-- [ ] Verify basename and `~/...` secondary path.
+- [x] Add a non-Git directory as a workbench.
+- [x] Verify basename and `~/...` secondary path.
 - [ ] Add a Git repository that is not a saved project and confirm it remains a
       Workbench.
 - [ ] Switch between multiple project worktrees and arbitrary workbenches.
@@ -1113,18 +1113,18 @@ Add coverage for:
       arbitrary targets.
 - [ ] Invoke navigation from a hosted workbench and verify it forwards to the
       owning Omni shell.
-- [ ] Reorder multiple workbenches by drag-and-drop and verify activation does
+- [x] Reorder multiple workbenches by drag-and-drop and verify activation does
       not reorder them.
 - [ ] Verify in-session back/forward navigation.
-- [ ] Unload an arbitrary workbench and confirm the process/view is gone while
+- [x] Unload an arbitrary workbench and confirm the process/view is gone while
       its row remains.
-- [ ] Click the unloaded row and confirm it reloads.
-- [ ] Unload it again, press X, and confirm only the sidebar record disappears.
+- [x] Click the unloaded row and confirm it reloads.
+- [x] Unload it again, press X, and confirm only the sidebar record disappears.
 - [ ] Attempt unload with dirty state and verify a veto retains loaded state.
 - [ ] Dismiss a loaded dirty workbench and verify a veto retains the record.
-- [ ] Restart Hucode with the default policy and verify the last selected
+- [x] Restart Hucode with the default policy and verify the last selected
       workbench loads while other previously loaded workbenches appear dormant.
-- [ ] Activate a dormant workbench and verify it loads on demand.
+- [x] Activate a dormant workbench and verify it loads on demand.
 - [ ] Leave a dormant project worktree unactivated across another restart and
       verify it remains a dormant restore candidate.
 - [ ] Verify `all` and `none` startup restore policies.
@@ -1146,11 +1146,11 @@ Add coverage for:
 - [ ] Repeat add, switch, unload, reopen, and dismiss flows.
 - [ ] Repeat full picker, loaded quick switcher, last-active, and next/previous
       navigation across project and arbitrary targets.
-- [ ] Refresh the Omni shell and verify catalog persistence.
-- [ ] Verify the default policy restores only the last selected iframe and
+- [x] Refresh the Omni shell and verify catalog persistence.
+- [x] Verify the default policy restores only the last selected iframe and
       presents other desired-loaded workbenches as dormant.
 - [ ] Verify `all` and `none` restore policies match desktop behavior.
-- [ ] Activate a dormant row and verify its iframe is created on demand.
+- [x] Activate a dormant row and verify its iframe is created on demand.
 - [ ] Verify desired-unloaded workbenches remain rows without iframes.
 - [ ] Verify manual order survives page refresh.
 - [ ] Verify browser-host Open Folder routing enters the Omni catalog.
@@ -1385,11 +1385,11 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-17 | Type and layer checks | `npm run typecheck-client`; `npm run valid-layers-check` | Pass |
 | 2026-07-17 | Build | `npm run hucode:prepare`; `npm run hucode:validate`; `npm run hucode:compile` | Pass |
 | 2026-07-17 | Common tests | Focused retained catalog, hosted state, tree model, switch model, and Omni open plan | 50 tests pass |
-| 2026-07-17 | Browser tests | Browser routing and serve-web shell controller | 25 tests pass |
-| 2026-07-17 | Desktop tests | Hosted controller, desktop routing, and window-state persistence | 46 tests pass |
+| 2026-07-17 | Browser tests | Browser routing and serve-web shell controller | 39 tests pass in Chromium; 25 web-shell tests pass after final focus-race fix |
+| 2026-07-17 | Desktop tests | Hosted controller, desktop routing, and window-state persistence | 49 tests pass |
 | 2026-07-17 | Collapse persistence regression | Focused tree-model suite plus two consecutive desktop restarts | 13 tests pass; collapsed Workbenches state remains persisted and rendered after restart |
 | 2026-07-17 | Desktop manual visual review | Fresh isolated desktop profile under Xvfb, driven through CDP | Pass: add two folders, two-line rows, drag reorder, unload-retain, reopen, dismiss, active/dormant restore, quick picker, previous navigation, and collapse persistence |
-| 2026-07-17 | Serve-web manual visual review | Not separately performed | Automated web-shell controller coverage validates persistence, restore policies, ownership reconciliation, unload/dismiss vetoes, and timeout behavior; browser-level visual QA remains a follow-up |
+| 2026-07-17 | Serve-web manual visual review | Fresh browser profiles against local `hucode:web`, driven with `agent-browser` | Pass after fixing delayed hidden-iframe focus: second add activates, refresh produces active/dormant states, dormant activation works, quick picker includes both targets, and collapsed Workbenches state survives refresh; screenshots retained under `.build/manual-qa/omni-workbenches-web/` |
 | 2026-07-17 | Review-round type check | `npm run typecheck-client` | Pass |
 
 ## Completion criteria
