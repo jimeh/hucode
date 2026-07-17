@@ -2,6 +2,18 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.47 - 2026-07-17
+
+### Features
+
+- **linux:** provide Omni window parity (#90)
+- **release:** publish and advertise Linux desktop builds (#88)
+
+### Bug Fixes
+
+- brand serve-web with Hucode icons (#84)
+- **linux:** make desktop packages safe and correctly branded (#89)
+
 ## 0.0.46 - 2026-07-15
 
 ### Features
