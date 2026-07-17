@@ -643,6 +643,106 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(persistence.saveCalls, beforeDismissSaves + 1);
 	});
 
+	test('preserves retained state when unload and dismiss are vetoed', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-veto').toJSON()
+		);
+		const instanceId = opened.activeInstanceId;
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(instanceId);
+		assert.ok(workbenchId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = false;
+
+		const unloaded = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+		const dismissed = await service.dismissRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+
+		assert.deepStrictEqual({
+			unloadedDesiredState:
+				unloaded.retainedWorkbenches?.[0].desiredState,
+			dismissedDesiredState:
+				dismissed.retainedWorkbenches?.[0].desiredState,
+			instanceIds: dismissed.instances.map(instance => instance.instanceId),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+			prepareUnloadCalls: child.workbench.prepareUnloadCalls,
+		}, {
+			unloadedDesiredState: 'loaded',
+			dismissedDesiredState: 'loaded',
+			instanceIds: [instanceId],
+			iframeConnected: true,
+			prepareUnloadCalls: 2,
+		});
+	});
+
+	test('preserves retained state when unload times out', async () => {
+		const browser = new ZeroDelayBrowserAdapter();
+		const { service, surface } = createService(browser);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-timeout').toJSON()
+		);
+		const instanceId = opened.activeInstanceId;
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(instanceId);
+		assert.ok(workbenchId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = new Promise<boolean>(() => { });
+
+		const state = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+
+		assert.deepStrictEqual({
+			desiredState: state.retainedWorkbenches?.[0].desiredState,
+			instanceIds: state.instances.map(instance => instance.instanceId),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+		}, {
+			desiredState: 'loaded',
+			instanceIds: [instanceId],
+			iframeConnected: true,
+		});
+	});
+
+	test('persists retained workbench reorder', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-one').toJSON()
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-two').toJSON()
+		);
+		const ids = opened.retainedWorkbenches?.map(record => record.id);
+		assert.ok(ids);
+
+		await service.reorderRetainedWorkbenches(
+			browser.windowId,
+			[ids[1], ids[0]]
+		);
+
+		assert.deepStrictEqual(
+			persistence.state?.retainedWorkbenches.map(record => [
+				record.id,
+				record.order,
+			]),
+			[[ids[1], 0], [ids[0], 1]]
+		);
+	});
+
 	test('generic close persists one coherent retained unload state', async () => {
 		const persistence = new FakePersistence();
 		const { service, browser } = createService(
@@ -700,6 +800,70 @@ suite('WebHucodeShellService', () => {
 			[['/tmp/one', 'loading'], ['/tmp/two', 'dormant']]
 		);
 		assert.strictEqual(surface.querySelectorAll('iframe').length, 1);
+	});
+
+	test('persists one complete snapshot after restoring all workbenches',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'one',
+					worktreePath: '/tmp/one',
+					lastActiveAt: 20,
+				}, {
+					projectId: 'two',
+					worktreePath: '/tmp/two',
+					lastActiveAt: 10,
+				}],
+				activeWorktreePath: '/tmp/one',
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'all'
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				state.instances.map(instance => instance.worktreePath),
+				['/tmp/one', '/tmp/two']
+			);
+			assert.strictEqual(persistence.saveCalls, 1);
+			assert.deepStrictEqual(
+				persistence.state?.residentWorkspaces.map(
+					entry => entry.worktreePath
+				),
+				['/tmp/one', '/tmp/two']
+			);
+		}
+	);
+
+	test('ignores retained reconciliation for another window', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'retained',
+				folderUri: URI.file('/tmp/promoted').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [],
+		});
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'none'
+		);
+
+		const state = await service.reconcileRetainedWorkbenches(
+			browser.windowId + 1,
+			[{
+				projectId: 'project',
+				folderUri: URI.file('/tmp/promoted').toJSON(),
+			}]
+		);
+
+		assert.strictEqual(state.retainedWorkbenches?.length, 1);
+		assert.strictEqual(state.instances[0].projectId, undefined);
 	});
 
 	test('drops malformed resident persistence entries during startup', async () => {

@@ -62,6 +62,7 @@ export interface IOmniRetainedWorkbench {
 	readonly id: string;
 	readonly folderUri: UriComponents;
 	readonly desiredState: 'loaded' | 'unloaded';
+	readonly folderStatus?: 'missing';
 	readonly order: number;
 	readonly lastActiveAt?: number;
 }

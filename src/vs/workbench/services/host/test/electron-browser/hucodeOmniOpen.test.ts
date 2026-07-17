@@ -249,7 +249,7 @@ suite('HucodeOmniOpen', () => {
 		assert.deepStrictEqual(shell.focusWorkspaceCalls, []);
 		assert.deepStrictEqual(
 			projectManager.setLastActiveWorktreeCalls,
-			[]
+			[{ projectId: 'project', worktreePath: '/repo' }]
 		);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
@@ -257,7 +257,9 @@ suite('HucodeOmniOpen', () => {
 	test('focuses an existing hosted workbench before opening a duplicate',
 		async () => {
 			const nativeHost = createNativeHostService();
-			const projectManager = createProjectManagerService([]);
+			const projectManager = createProjectManagerService([
+				project('project', [worktree('/outside')])
+			]);
 			const shell = createShellService();
 			shell.hostedWorkspacePaths.add('/outside');
 
@@ -275,6 +277,10 @@ suite('HucodeOmniOpen', () => {
 			);
 			assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, []);
 			assert.deepStrictEqual(shell.openWorkspaceCalls, []);
+			assert.deepStrictEqual(
+				projectManager.setLastActiveWorktreeCalls,
+				[{ projectId: 'project', worktreePath: '/outside' }]
+			);
 		});
 
 	test('opens known folders in Omni when normal-window lookup fails', async () => {

@@ -49,6 +49,7 @@ import {
 	HostedWorkspaceStateModel,
 	isHostedWorkspaceAvailable,
 	isHostedWorkspacePendingReady,
+	isHostedWorkspaceRestorable,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
@@ -343,7 +344,10 @@ export class WebHucodeShellController extends Disposable
 	async findHostedWorkspaceByPath(
 		worktreePath: string
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
-		const instance = this.getAvailableInstanceByPath(worktreePath);
+		const candidate = this.getInstanceByPath(worktreePath);
+		const instance = candidate && isHostedWorkspaceRestorable(candidate)
+			? candidate
+			: undefined;
 		return instance
 			? {
 				windowId: this.windowId,
@@ -358,11 +362,22 @@ export class WebHucodeShellController extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<boolean> {
-		const instance = this.getAvailableInstanceByPath(worktreePath);
-		if (!instance) {
+		let instance = this.getInstanceByPath(worktreePath);
+		if (!instance || !isHostedWorkspaceRestorable(instance)) {
 			return false;
 		}
 
+		if (instance.state === 'dormant') {
+			await this.openWorkspace(
+				this.windowId,
+				worktreePath,
+				projectId ?? instance.projectId
+			);
+			instance = this.getAvailableInstanceByPath(worktreePath);
+			if (!instance) {
+				return false;
+			}
+		}
 		instance.projectId = projectId ?? instance.projectId;
 		this.activateInstance(instance);
 		this.focusIframe(instance);
@@ -526,6 +541,9 @@ export class WebHucodeShellController extends Disposable
 			readonly folderUri: UriComponents;
 		}[]
 	): Promise<IHucodeHostedWorkspaceState> {
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
 		for (const projectFolder of projectFolders) {
 			const instance = this.getInstanceByPath(
 				URI.revive(projectFolder.folderUri).fsPath
@@ -534,11 +552,9 @@ export class WebHucodeShellController extends Disposable
 				instance.projectId = projectFolder.projectId;
 			}
 		}
-		if (windowId === this.windowId &&
-			this.retainedWorkbenches.reconcileProjectPaths(
-				projectFolders.map(folder => URI.revive(folder.folderUri))
-			)
-		) {
+		if (this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => URI.revive(folder.folderUri))
+		)) {
 			this.emitState();
 		}
 		return this.getState();
@@ -939,6 +955,7 @@ export class WebHucodeShellController extends Disposable
 			});
 		}
 
+		let activeInstance: IHostedIframeInstance | undefined;
 		for (const [index, candidate] of plan.eager.entries()) {
 			const instance = this.createInstance(
 				candidate.worktreePath,
@@ -949,8 +966,11 @@ export class WebHucodeShellController extends Disposable
 			this.hostedWorkspaces.addInstance(instance);
 			this.attachIframe(instance);
 			if (index === 0) {
-				this.activateInstance(instance);
+				activeInstance = instance;
 			}
+		}
+		if (activeInstance) {
+			this.activateInstance(activeInstance);
 		}
 	}
 

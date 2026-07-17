@@ -131,6 +131,12 @@ suite('ProjectSwitcherTreeModel', () => {
 				folderUri: URI.file(promotedPath).toJSON(),
 				desiredState: 'loaded',
 				order: 2,
+			}, {
+				id: 'missing',
+				folderUri: URI.file('/scratch/missing').toJSON(),
+				desiredState: 'unloaded',
+				folderStatus: 'missing',
+				order: 3,
 			}],
 		};
 		const model = buildProjectSwitcherTreeModel({
@@ -158,6 +164,10 @@ suite('ProjectSwitcherTreeModel', () => {
 			label: 'second',
 			description: 'label:/scratch/second',
 			state: 'unloaded',
+		}, {
+			label: 'missing',
+			description: 'label:/scratch/missing',
+			state: 'missing',
 		}]);
 	});
 

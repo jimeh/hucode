@@ -101,7 +101,11 @@ import {
 	openProjectSwitcherTarget,
 	type IProjectSwitcherSelectionTarget,
 } from './switchProjectWorktree.contribution.js';
-import { sortProjectSwitcherNavigationHistory } from
+import { openSelectionInStandaloneWindow } from '../omniSelectionOpen.js';
+import {
+	canonicalizeProjectSwitcherTarget,
+	sortProjectSwitcherNavigationHistory,
+} from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
 	applyOmniSectionCollapseChange,
@@ -127,6 +131,11 @@ import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
 } from '../../common/retainedWorkbench.js';
+import {
+	IProjectSwitcherViewState,
+	parseProjectSwitcherViewState,
+	PROJECT_SWITCHER_VIEW_STATE_VERSION,
+} from '../../common/projectSwitcher/projectSwitcherViewState.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -151,18 +160,11 @@ const DISMISS_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.dismissWorkbench';
 const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
-const PROJECT_SWITCHER_VIEW_STATE_VERSION = 2;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
 
 let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
-
-interface ProjectSwitcherViewState {
-	version?: number;
-	collapsedProjectIds?: string[];
-	collapsedOmniSections?: string[];
-}
 
 function parseWorkbenchHandle(handle: string | undefined): string | undefined {
 	return handle?.startsWith('workbench:')
@@ -270,6 +272,8 @@ class ProjectSwitcherAccessibilityProvider
 						return localize('workbenchStateDormant', 'Dormant');
 					case 'crashed':
 						return localize('workbenchStateCrashed', 'Crashed');
+					case 'missing':
+						return localize('workbenchStateMissing', 'Folder missing');
 					default:
 						return localize('workbenchStateUnloaded', 'Unloaded');
 				}
@@ -1198,7 +1202,12 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private async navigateWorktreeHistory(delta: -1 | 1): Promise<void> {
 		const nextIndex = this.worktreeNavigationIndex + delta;
-		const target = this.worktreeNavigationHistory[nextIndex];
+		const historyTarget = this.worktreeNavigationHistory[nextIndex];
+		const target = historyTarget && canonicalizeProjectSwitcherTarget(
+			historyTarget,
+			this.projects,
+			pathsEqual
+		);
 		if (!target) {
 			return;
 		}
@@ -1528,8 +1537,20 @@ export class ProjectSwitcherWidget extends Disposable {
 						'openRetainedWorkbenchNewWindow',
 						'Open in New Window'
 					),
-					run: () => this.commandService.executeCommand(
-						OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID
+					run: () => openSelectionInStandaloneWindow(
+						{ worktreePath: item.worktreePath },
+						this.hostService,
+						this.shellService,
+						this.projectManagerService,
+						this.notificationService,
+						localize(
+							'openRetainedWorkbenchSelectionMissing',
+							'Select a workbench first.'
+						),
+						{
+							windowId: this.windowId,
+							id: item.retainedWorkbenchId,
+						}
 					),
 				}),
 				...(isLive ? [toAction({
@@ -1880,6 +1901,13 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.seedNavigationHistory(projects, activeTarget);
 			return;
 		}
+		this.worktreeNavigationHistory = this.worktreeNavigationHistory.map(
+			target => canonicalizeProjectSwitcherTarget(
+				target,
+				projects,
+				pathsEqual
+			)
+		);
 
 		const currentTarget =
 			this.worktreeNavigationHistory[this.worktreeNavigationIndex];
@@ -1921,6 +1949,14 @@ export class ProjectSwitcherWidget extends Disposable {
 			.map(record => ({
 				worktreePath: URI.revive(record.folderUri).fsPath,
 				lastVisitedAt: record.lastActiveAt ?? 0,
+			}))
+			.map(target => ({
+				...canonicalizeProjectSwitcherTarget(
+					target,
+					projects,
+					pathsEqual
+				),
+				lastVisitedAt: target.lastVisitedAt,
 			}))
 			.filter(target => !selectionTargetsEqual(target, activeTarget));
 
@@ -1982,7 +2018,7 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	saveState(): void {
 		this.captureTreeExpansionState();
-		const state: ProjectSwitcherViewState = {
+		const state: IProjectSwitcherViewState = {
 			version: PROJECT_SWITCHER_VIEW_STATE_VERSION,
 			collapsedProjectIds: [...this.collapsedProjectIds].sort(),
 			collapsedOmniSections: [...this.collapsedOmniSections].sort(),
@@ -1996,36 +2032,31 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private loadViewState(): void {
-		const rawState = this.storageService.get(
+		let rawState = this.storageService.get(
 			PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
 			this.viewStateStorageScope
 		);
-		if (!rawState) {
+		let migratedScope = false;
+		if (!rawState && this.environmentService.isOmniWindow) {
+			rawState = this.storageService.get(
+				PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
+				StorageScope.PROFILE
+			);
+			migratedScope = !!rawState;
+		}
+		const parsed = parseProjectSwitcherViewState(rawState);
+		if (!parsed) {
 			this.collapsedProjectIds.clear();
 			this.collapsedOmniSections.clear();
 			return;
 		}
-
-		let state: ProjectSwitcherViewState;
-		try {
-			state = JSON.parse(rawState) as ProjectSwitcherViewState;
-		} catch {
-			this.collapsedProjectIds.clear();
-			this.collapsedOmniSections.clear();
-			return;
+		this.collapsedProjectIds = new Set(parsed.state.collapsedProjectIds);
+		this.collapsedOmniSections = new Set(
+			parsed.state.collapsedOmniSections
+		);
+		if (migratedScope || parsed.migrated) {
+			this.saveState();
 		}
-
-		if (state.version !== PROJECT_SWITCHER_VIEW_STATE_VERSION ||
-			!Array.isArray(state.collapsedProjectIds) ||
-			!Array.isArray(state.collapsedOmniSections)
-		) {
-			this.collapsedProjectIds.clear();
-			this.collapsedOmniSections.clear();
-			return;
-		}
-
-		this.collapsedProjectIds = new Set(state.collapsedProjectIds);
-		this.collapsedOmniSections = new Set(state.collapsedOmniSections);
 	}
 
 	private captureTreeExpansionState(): void {
@@ -2159,6 +2190,9 @@ registerAction2(class extends Action2 {
 			return;
 		}
 		const shellService = accessor.get(IHucodeShellService);
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const hostService = accessor.get(IHostService);
 		const state = await shellService.getWindowState(
 			dom.getWindowId(mainWindow)
 		);
@@ -2166,11 +2200,13 @@ registerAction2(class extends Action2 {
 			candidate.id === workbenchId
 		);
 		if (record) {
-			await shellService.retainAndOpenWorkbench(
-				dom.getWindowId(mainWindow),
-				record.folderUri
+			await openProjectSwitcherTarget(
+				{ worktreePath: URI.revive(record.folderUri).fsPath },
+				projectManagerService,
+				environmentService,
+				shellService,
+				hostService
 			);
-			await shellService.focusWorkspace(dom.getWindowId(mainWindow));
 		}
 	}
 });

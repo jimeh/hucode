@@ -516,8 +516,9 @@ function toRetainedWorkbenchElement(
 	const instance = options.hostedWorkspaceState.instances.find(candidate =>
 		pathsEqual(candidate.worktreePath, worktreePath)
 	);
-	const state = instance?.state ??
-		(record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
+	const state = instance?.state ?? (record.folderStatus === 'missing'
+		? 'missing'
+		: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
 	const handle = `workbench:${record.id}`;
 	const item: ProjectSwitcherWorkbenchItem = {
 		id: handle,
@@ -539,8 +540,9 @@ function toRetainedWorkbenchElement(
 			? ThemeIcon.modify(Codicon.loading, 'spin')
 			: state === 'dormant' ? Codicon.debugPause
 				: state === 'unloaded' ? Codicon.circleOutline
-					: state === 'crashed' ? Codicon.warning
-						: Codicon.window,
+					: state === 'missing' ? Codicon.warning
+						: state === 'crashed' ? Codicon.warning
+							: Codicon.window,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };

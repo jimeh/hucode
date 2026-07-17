@@ -71,6 +71,13 @@ export async function tryOpenHucodeOmniWindow(
 			openable.folderUri.fsPath
 		);
 		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
+		if (target) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService,
+				target.projectId,
+				target.worktreePath
+			);
+		}
 		if (await focusHostedWorkspaceByPathBestEffort(
 			shellService,
 			worktreePath,
@@ -83,13 +90,6 @@ export async function tryOpenHucodeOmniWindow(
 			worktreePath
 		)) {
 			return true;
-		}
-		if (target) {
-			await setLastActiveWorktreeBestEffort(
-				projectManagerService,
-				target.projectId,
-				target.worktreePath
-			);
 		}
 		await shellService.openWorkspace(
 			nativeHostService.windowId,

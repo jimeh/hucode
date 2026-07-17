@@ -64,7 +64,11 @@ export async function openSelectionInStandaloneWindow(
 	shellService: IHucodeShellService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService,
-	noSelectionMessage: string
+	noSelectionMessage: string,
+	retainedWorkbench?: {
+		readonly windowId: number;
+		readonly id: string;
+	}
 ): Promise<void> {
 	if (!selection) {
 		notificationService.info(noSelectionMessage);
@@ -76,6 +80,18 @@ export async function openSelectionInStandaloneWindow(
 		selection.projectId,
 		selection.worktreePath
 	);
+	if (retainedWorkbench) {
+		const state = await shellService.unloadRetainedWorkbench(
+			retainedWorkbench.windowId,
+			retainedWorkbench.id
+		);
+		const retained = state.retainedWorkbenches?.find(record =>
+			record.id === retainedWorkbench.id
+		);
+		if (retained?.desiredState !== 'unloaded') {
+			return;
+		}
+	}
 
 	const owner = await shellService.findHostedWorkspaceByPath(
 		selection.worktreePath

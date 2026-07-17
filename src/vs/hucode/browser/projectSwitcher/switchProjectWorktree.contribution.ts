@@ -48,6 +48,7 @@ import {
 	IsOmniWindowContext,
 } from '../../../workbench/common/contextkeys.js';
 import {
+	combineProjectSwitcherTargets,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -247,12 +248,23 @@ function getRetainedWorkbenchPicks(
 
 async function getOmniHostedWorkspaceState(
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellService,
+	projects: readonly ProjectRecord[]
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
-	return environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-		? shellService.getWindowState(dom.getWindowId(mainWindow))
-		: undefined;
+	if (!environmentService.isOmniWindow &&
+		!environmentService.isHostedOmniWorkspace
+	) {
+		return undefined;
+	}
+	const windowId = dom.getWindowId(mainWindow);
+	await shellService.reconcileRetainedWorkbenches(
+		windowId,
+		projects.flatMap(project => project.worktrees.map(worktree => ({
+			projectId: project.id,
+			folderUri: URI.file(worktree.path).toJSON(),
+		})))
+	);
+	return shellService.getWindowState(windowId);
 }
 
 function getCombinedSwitchWorkbenchPicks(
@@ -275,10 +287,11 @@ function getCombinedSwitchWorkbenchPicks(
 			? { ...pick, isDormant: true }
 			: pick;
 	});
-	return [
-		...getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
-		...projectPicks,
-	].sort(compareSwitchWorktreePicks);
+	return combineProjectSwitcherTargets(
+		getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
+		projectPicks,
+		pathsEqual
+	).sort(compareSwitchWorktreePicks);
 }
 
 function compareSwitchWorktreePicks(
@@ -476,16 +489,18 @@ async function switchAdjacentProjectWorktree(
 		const projects = await projectManagerService.getProjects();
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
-			shellService
+			shellService,
+			projects
 		);
-		const visualTargets = [
-			...(omniState?.retainedWorkbenches ?? [])
+		const visualTargets = combineProjectSwitcherTargets(
+			(omniState?.retainedWorkbenches ?? [])
 				.toSorted((a, b) => a.order - b.order)
 				.map(record => ({
 					worktreePath: URI.revive(record.folderUri).fsPath,
 				})),
-			...getVisualProjectWorktreeTargets(projects),
-		];
+			getVisualProjectWorktreeTargets(projects),
+			pathsEqual
+		);
 		const targets = loadedOnly
 			? getLoadedProjectWorktreeTargets(
 				visualTargets,
@@ -562,7 +577,8 @@ async function switchLastActiveProjectWorktree(
 		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
-			shellService
+			shellService,
+			projects
 		);
 		const picks = getCombinedSwitchWorkbenchPicks(
 			projects,
@@ -637,7 +653,8 @@ async function quickSwitchLoadedProjectWorktree(
 		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
-			shellService
+			shellService,
+			projects
 		);
 		const picks = getLoadedSwitchWorktreePicks(getCombinedSwitchWorkbenchPicks(
 			projects,
@@ -759,7 +776,8 @@ registerAction2(class extends Action2 {
 			);
 			const omniState = await getOmniHostedWorkspaceState(
 				environmentService,
-				shellService
+				shellService,
+				projects
 			);
 			const picks = getCombinedSwitchWorkbenchPicks(
 				projects,

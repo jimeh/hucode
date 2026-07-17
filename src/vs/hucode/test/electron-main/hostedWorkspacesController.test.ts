@@ -308,6 +308,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
 		readonly readyTimeoutMs?: number;
+		readonly restorePolicy?: 'active' | 'all' | 'none';
 		readonly windowId?: number;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
@@ -365,6 +366,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			id => untrustedWebContentsIds.push(id),
 			state => stateChanges.push(state),
 			{
+				restorePolicy: options.restorePolicy,
 				beforeUnloadTimeoutMs: 100,
 				willUnloadTimeoutMs: 100,
 				readyTimeoutMs: options.readyTimeoutMs ?? 100,
@@ -462,6 +464,119 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.strictEqual(viewFactory.views.length, 1);
 		});
 
+	test('controller applies all and none policy before main-side restore',
+		async () => {
+			const alpha = createWorktree('policy-alpha');
+			const beta = createWorktree('policy-beta');
+			const restoreEntries = [{
+				projectId: 'alpha',
+				worktreePath: alpha,
+				state: 'active' as const,
+			}, {
+				projectId: 'beta',
+				worktreePath: beta,
+				state: 'loaded' as const,
+			}];
+			const all = createController({
+				restoreEntries,
+				activeWorktreePath: alpha,
+				restorePolicy: 'all',
+			});
+			const none = createController({
+				restoreEntries,
+				activeWorktreePath: alpha,
+				restorePolicy: 'none',
+				windowId: 2,
+			});
+
+			await all.controller.ensureRestored();
+			await none.controller.ensureRestored();
+
+			assert.deepStrictEqual(
+				all.controller.getState().instances.map(instance => instance.state),
+				['loading', 'loading']
+			);
+			assert.strictEqual(all.viewFactory.views.length, 2);
+			assert.deepStrictEqual(
+				none.controller.getState().instances.map(instance => instance.state),
+				['dormant', 'dormant']
+			);
+			assert.strictEqual(none.viewFactory.views.length, 0);
+		});
+
+	test('adopts legacy project-less resident entries into the catalog',
+		async () => {
+			const scratch = createWorktree('legacy-scratch');
+			const { controller } = createController({
+				restoreEntries: [{
+					worktreePath: scratch,
+					state: 'active',
+				}],
+				activeWorktreePath: scratch,
+			});
+
+			await controller.ensureRestored();
+
+			assert.deepStrictEqual(
+				controller.getState().retainedWorkbenches?.map(record => ({
+					path: URI.revive(record.folderUri).fsPath,
+					desiredState: record.desiredState,
+				})),
+				[{ path: scratch, desiredState: 'loaded' }]
+			);
+		});
+
+	test('persists retained workbench reorder in window state', async () => {
+		const first = createWorktree('reorder-first');
+		const second = createWorktree('reorder-second');
+		const { controller, window } = createController();
+		await controller.retainAndOpenWorkbench(URI.file(first));
+		await controller.retainAndOpenWorkbench(URI.file(second));
+		const ids = controller.getState().retainedWorkbenches?.map(record =>
+			record.id
+		) ?? [];
+
+		controller.reorderRetainedWorkbenches([...ids].reverse());
+
+		assert.deepStrictEqual(
+			window.config?.omniRetainedWorkbenches?.map(record => [
+				record.id,
+				record.order,
+			]),
+			[[ids[1], 0], [ids[0], 1]]
+		);
+	});
+
+	test('reconciles project promotion after restoring resident state', async () => {
+		const alpha = createWorktree('alpha');
+		const folderUri = URI.file(alpha);
+		const { controller, window } = createController({
+			restoreEntries: [{
+				worktreePath: alpha,
+				state: 'active',
+				lastActiveAt: 100,
+			}],
+			activeWorktreePath: alpha,
+			retainedWorkbenches: [{
+				id: 'retained-alpha',
+				folderUri: folderUri.toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+		});
+
+		await controller.reconcileRetainedWorkbenches([{
+			projectId: 'project-alpha',
+			folderUri,
+		}]);
+
+		assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
+		assert.strictEqual(controller.getState().instances.length, 1);
+		assert.strictEqual(controller.getState().instances[0].projectId,
+			'project-alpha');
+		assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
+	});
+
 	test('missing retained restore is kept unloaded without a retry loop',
 		async () => {
 			const missing = join(tempRoot, 'missing');
@@ -481,6 +596,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.strictEqual(
 				controller.getState().retainedWorkbenches?.[0].desiredState,
 				'unloaded'
+			);
+			assert.strictEqual(
+				controller.getState().retainedWorkbenches?.[0].folderStatus,
+				'missing'
 			);
 		});
 
@@ -690,6 +809,36 @@ suite('ResidentHostedWorkspacesController', () => {
 				state: 'active',
 			},
 		]);
+	});
+
+	test('failed retained attach emits coherent persistent cleanup', async () => {
+		const scratch = createWorktree('failed-retained');
+		const loadError = new Error('load failed');
+		const { controller, stateChanges, window } = createController({
+			loadUrlErrors: [loadError],
+		});
+		await controller.ensureRestored();
+		stateChanges.length = 0;
+
+		await assert.rejects(
+			() => controller.retainAndOpenWorkbench(URI.file(scratch)),
+			/load failed/
+		);
+
+		assert.strictEqual(stateChanges.length, 2);
+		assert.deepStrictEqual(stateChanges.at(-1), controller.getState());
+		assert.deepStrictEqual(controller.getState().instances, []);
+		assert.deepStrictEqual(
+			controller.getState().retainedWorkbenches?.map(record => ({
+				desiredState: record.desiredState,
+				folderStatus: record.folderStatus,
+			})),
+			[{ desiredState: 'unloaded', folderStatus: undefined }]
+		);
+		assert.deepStrictEqual(
+			window.config?.omniRetainedWorkbenches,
+			controller.getState().retainedWorkbenches
+		);
 	});
 
 	test('closing workspace owns its config object URL once', async () => {

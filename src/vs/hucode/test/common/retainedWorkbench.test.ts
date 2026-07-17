@@ -25,6 +25,7 @@ suite('RetainedWorkbench', () => {
 		);
 
 		const first = catalog.retain(URI.file('/Repos/One'), 'loaded', 42);
+		catalog.update(first.id, { folderStatus: 'missing' });
 		const duplicate = catalog.retain(
 			URI.file('/repos/one'),
 			'unloaded'
@@ -33,6 +34,7 @@ suite('RetainedWorkbench', () => {
 
 		assert.strictEqual(duplicate.id, first.id);
 		assert.strictEqual(duplicate.desiredState, 'unloaded');
+		assert.strictEqual(duplicate.folderStatus, undefined);
 		assert.strictEqual(duplicate.lastActiveAt, 42);
 		assert.deepStrictEqual(
 			catalog.all.map(record => [record.id, record.order]),
@@ -73,6 +75,7 @@ suite('RetainedWorkbench', () => {
 				id: 'valid',
 				folderUri: URI.file('/repos/one').toJSON(),
 				desiredState: 'loaded',
+				folderStatus: 'missing',
 				order: 7,
 			},
 			{
@@ -87,11 +90,22 @@ suite('RetainedWorkbench', () => {
 				desiredState: 'loaded',
 				order: 1,
 			},
+			{
+				id: 'invalid-status',
+				folderUri: URI.file('/repos/three').toJSON(),
+				desiredState: 'unloaded',
+				folderStatus: 'unknown' as 'missing',
+				order: 2,
+			},
 		]);
 
 		assert.deepStrictEqual(
-			records.map(record => ({ id: record.id, order: record.order })),
-			[{ id: 'valid', order: 0 }]
+			records.map(record => ({
+				id: record.id,
+				folderStatus: record.folderStatus,
+				order: record.order,
+			})),
+			[{ id: 'valid', folderStatus: 'missing', order: 0 }]
 		);
 	});
 

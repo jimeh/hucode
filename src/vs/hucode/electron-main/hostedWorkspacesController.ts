@@ -85,6 +85,7 @@ export interface IHostedWorkspaceIpcMain {
 }
 
 export interface IResidentHostedWorkspacesControllerOptions {
+	readonly restorePolicy?: HucodeHostedWorkbenchRestorePolicy;
 	readonly beforeUnloadTimeoutMs?: number;
 	readonly willUnloadTimeoutMs?: number;
 	readonly readyTimeoutMs?: number;
@@ -146,7 +147,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		IHostedWorkbenchInstance
 	>;
 	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
-	private restorePolicy: HucodeHostedWorkbenchRestorePolicy = 'active';
+	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
@@ -188,6 +189,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		super();
 		this.traceRestoreToStdout =
 			process.env['HUCODE_OMNI_RESTORE_TRACE'] === '1';
+		this.restorePolicy = options.restorePolicy ?? 'active';
 		this.beforeUnloadTimeoutMs =
 			options.beforeUnloadTimeoutMs ??
 			ResidentHostedWorkspacesController.BEFORE_UNLOAD_TIMEOUT_MS;
@@ -845,6 +847,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	async retainAndOpenWorkbench(folderUri: URI): Promise<void> {
+		await this.ensureRestored();
 		this.retainedWorkbenches.retain(
 			folderUri,
 			'loaded',
@@ -920,10 +923,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	reconcileRetainedWorkbenches(projectFolders: readonly {
+	async reconcileRetainedWorkbenches(projectFolders: readonly {
 		readonly projectId: string;
 		readonly folderUri: URI;
-	}[]): void {
+	}[]): Promise<void> {
+		await this.ensureRestored();
 		for (const projectFolder of projectFolders) {
 			const instance = this.hostedWorkspaces.getInstanceByPath(
 				projectFolder.folderUri.fsPath
@@ -1036,15 +1040,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
-			this.markRetainedWorkbenchCrashed(instance.worktreePath);
-			await this.destroyInstance(instance, true, false);
-			if (instance.instanceId === this.activeInstanceId) {
-				this.activeInstanceId =
-					previousActiveInstanceId !== instance.instanceId
-						? previousActiveInstanceId
-						: undefined;
+			await this.deferStateEmission(async () => {
+				this.markRetainedWorkbenchCrashed(instance.worktreePath);
+				await this.destroyInstance(instance, true, false);
+				if (instance.instanceId === this.activeInstanceId) {
+					this.activeInstanceId =
+						previousActiveInstanceId !== instance.instanceId
+							? previousActiveInstanceId
+							: undefined;
+				}
 				this.emitState();
-			}
+			});
 			throw error;
 		}
 	}
@@ -1169,7 +1175,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (retained) {
 			this.retainedWorkbenches.update(retained.id, {
 				desiredState: 'unloaded',
+				folderStatus: this.getRetainedWorkbenchFolderStatus(worktreePath),
 			});
+		}
+	}
+
+	private getRetainedWorkbenchFolderStatus(
+		worktreePath: string
+	): 'missing' | undefined {
+		try {
+			return statSync(worktreePath).isDirectory() ? undefined : 'missing';
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return code === 'ENOENT' || code === 'ENOTDIR'
+				? 'missing'
+				: undefined;
 		}
 	}
 
@@ -1233,6 +1253,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (retained) {
 			this.retainedWorkbenches.update(retained.id, {
 				desiredState: 'loaded',
+				folderStatus: undefined,
 				lastActiveAt: instance.lastActiveAt,
 			});
 		}

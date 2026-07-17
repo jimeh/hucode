@@ -78,6 +78,7 @@ export class RetainedWorkbenchCatalog {
 		if (existing) {
 			return this.update(existing.id, {
 				desiredState,
+				folderStatus: undefined,
 				...(lastActiveAt === undefined ? {} : { lastActiveAt }),
 			}) ?? existing;
 		}
@@ -93,12 +94,12 @@ export class RetainedWorkbenchCatalog {
 		return record;
 	}
 
-	/** Updates desired state or recency without changing manual order. */
+	/** Updates desired state, folder status, or recency without changing order. */
 	update(
 		id: string,
 		update: Partial<Pick<
 			IHucodeRetainedWorkbench,
-			'desiredState' | 'lastActiveAt'
+			'desiredState' | 'folderStatus' | 'lastActiveAt'
 		>>,
 	): IHucodeRetainedWorkbench | undefined {
 		const index = this.records.findIndex(record => record.id === id);
@@ -243,6 +244,8 @@ function isRetainedWorkbench(
 			(value.desiredState === 'loaded' ||
 				value.desiredState === 'unloaded') &&
 			Number.isFinite(value.order) && value.order >= 0 &&
+			(value.folderStatus === undefined ||
+				value.folderStatus === 'missing') &&
 			(value.lastActiveAt === undefined ||
 				Number.isFinite(value.lastActiveAt));
 	} catch {

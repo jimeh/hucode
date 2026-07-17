@@ -1374,6 +1374,7 @@ Add dated entries as implementation progresses.
 | 2026-07-17 | 5 | Routed arbitrary folders into Omni | Desktop and browser host paths preserve special and explicit new-window modes |
 | 2026-07-17 | 6 | Added focused coverage and documentation | CI includes new common and browser routing suites; architecture and agent invariants updated |
 | 2026-07-17 | QA hardening | Preserved top-level section collapse across startup selection | Tree synchronization events are ignored and active-target reveal does not expand an intentionally collapsed section |
+| 2026-07-17 | Review hardening | Closed lifecycle, ownership, restore, and promotion gaps | Failed desktop loads now publish coherent state; restore policy is configured before main-side restore; retained standalone opens release hosted ownership; navigation canonicalizes promoted folders; missing desktop folders surface a warning state; persistence migrations and cross-window guards have focused coverage |
 
 ## Validation log
 
@@ -1387,7 +1388,9 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-17 | Browser tests | Browser routing and serve-web shell controller | 25 tests pass |
 | 2026-07-17 | Desktop tests | Hosted controller, desktop routing, and window-state persistence | 46 tests pass |
 | 2026-07-17 | Collapse persistence regression | Focused tree-model suite plus two consecutive desktop restarts | 13 tests pass; collapsed Workbenches state remains persisted and rendered after restart |
-| 2026-07-17 | Manual visual review | Fresh isolated desktop profile under Xvfb, driven through CDP | Pass: add two folders, two-line rows, drag reorder, unload-retain, reopen, dismiss, active/dormant restore, quick picker, previous navigation, and collapse persistence |
+| 2026-07-17 | Desktop manual visual review | Fresh isolated desktop profile under Xvfb, driven through CDP | Pass: add two folders, two-line rows, drag reorder, unload-retain, reopen, dismiss, active/dormant restore, quick picker, previous navigation, and collapse persistence |
+| 2026-07-17 | Serve-web manual visual review | Not separately performed | Automated web-shell controller coverage validates persistence, restore policies, ownership reconciliation, unload/dismiss vetoes, and timeout behavior; browser-level visual QA remains a follow-up |
+| 2026-07-17 | Review-round type check | `npm run typecheck-client` | Pass |
 
 ## Completion criteria
 

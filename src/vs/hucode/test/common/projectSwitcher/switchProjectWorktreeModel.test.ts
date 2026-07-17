@@ -10,6 +10,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../../platform/projectManager/common/projectManager.js';
 import {
+	canonicalizeProjectSwitcherTarget,
+	combineProjectSwitcherTargets,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -262,6 +264,46 @@ suite('SwitchProjectWorktreeModel', () => {
 			)?.worktreePath,
 			'/tmp/one'
 		);
+	});
+
+	test('combines workbenches before projects without promoted duplicates', () => {
+		const pathsEqual = (pathA: string, pathB: string) => pathA === pathB;
+
+		assert.deepStrictEqual(combineProjectSwitcherTargets([{
+			worktreePath: '/tmp/scratch',
+		}, {
+			worktreePath: '/tmp/promoted',
+		}], [{
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}], pathsEqual), [{
+			worktreePath: '/tmp/scratch',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}]);
+	});
+
+	test('canonicalizes promoted path-only targets to project ownership', () => {
+		const project = createProject({
+			id: 'project',
+			worktrees: [createWorktree('promoted')],
+		});
+
+		assert.deepStrictEqual(canonicalizeProjectSwitcherTarget(
+			{ worktreePath: '/tmp/promoted' },
+			[project],
+			(pathA, pathB) => pathA === pathB
+		), {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		});
 	});
 
 	test('globally orders mixed project and arbitrary history', () => {

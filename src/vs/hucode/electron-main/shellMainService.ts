@@ -11,6 +11,8 @@ import { isLinux } from '../../base/common/platform.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
 	'../../platform/environment/electron-main/environmentMainService.js';
+import { IConfigurationService } from
+	'../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
@@ -39,9 +41,12 @@ import { IBrowserViewMainService } from
 import { ResidentHostedWorkspacesController } from './hostedWorkspacesController.js';
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'./omniWorkspaceReopen.js';
-import { isHostedWorkspaceAvailable } from
+import { isHostedWorkspaceRestorable } from
 	'../common/hostedWorkspaceState.js';
-import { HucodeHostedWorkbenchRestorePolicy } from
+import {
+	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HucodeHostedWorkbenchRestorePolicy,
+} from
 	'../common/retainedWorkbench.js';
 
 /**
@@ -77,6 +82,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly logService: ILogService,
 		@IBrowserViewMainService
 		private readonly browserViewMainService: IBrowserViewMainService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -112,7 +119,7 @@ export class HucodeShellMainService extends Disposable
 			const controller = this.getOrCreateController(window.id);
 			await controller.ensureRestored();
 			const instance = controller.getState().instances.find(candidate =>
-				isHostedWorkspaceAvailable(candidate) &&
+				isHostedWorkspaceRestorable(candidate) &&
 				isEqual(candidate.worktreePath, worktreePath, !isLinux)
 			);
 			if (instance) {
@@ -220,7 +227,7 @@ export class HucodeShellMainService extends Disposable
 		}[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		controller.reconcileRetainedWorkbenches(
+		await controller.reconcileRetainedWorkbenches(
 			projectFolders.map(folder => ({
 				projectId: folder.projectId,
 				folderUri: URI.revive(folder.folderUri),
@@ -457,7 +464,13 @@ export class HucodeShellMainService extends Disposable
 					-1
 				),
 				(state: IHucodeHostedWorkspaceState) =>
-					this._onDidChangeWindowState.fire({ windowId, state })
+					this._onDidChangeWindowState.fire({ windowId, state }),
+				{
+					restorePolicy: this.configurationService.getValue<
+						HucodeHostedWorkbenchRestorePolicy
+					>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ??
+						'active',
+				}
 			)
 		);
 		this.controllers.set(windowId, controller);

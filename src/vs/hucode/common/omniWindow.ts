@@ -34,6 +34,7 @@ export type HucodeHostedWorkbenchLifecycleState =
 	| 'loaded'
 	| 'dormant'
 	| 'unloaded'
+	| 'missing'
 	| 'crashed';
 
 /**

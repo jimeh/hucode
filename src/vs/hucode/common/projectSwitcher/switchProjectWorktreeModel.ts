@@ -174,6 +174,43 @@ export function getLoadedProjectWorktreeTargets(
 	);
 }
 
+/**
+ * Combines retained and project targets while keeping project ownership
+ * authoritative for paths that have been promoted.
+ */
+export function combineProjectSwitcherTargets<
+	T extends IProjectSwitcherSelectionTarget
+>(
+	retainedTargets: readonly T[],
+	projectTargets: readonly T[],
+	pathsEqual: (pathA: string, pathB: string) => boolean
+): T[] {
+	return [
+		...retainedTargets.filter(retained => !projectTargets.some(project =>
+			pathsEqual(retained.worktreePath, project.worktreePath)
+		)),
+		...projectTargets,
+	];
+}
+
+/** Resolves a path-only target to its current project-owned identity. */
+export function canonicalizeProjectSwitcherTarget(
+	target: IProjectSwitcherSelectionTarget,
+	projects: readonly ProjectRecord[],
+	pathsEqual: (pathA: string, pathB: string) => boolean
+): IProjectSwitcherSelectionTarget {
+	for (const project of projects) {
+		const worktree = project.worktrees.find(candidate =>
+			pathsEqual(candidate.path, target.worktreePath)
+		);
+		if (worktree) {
+			return { projectId: project.id, worktreePath: worktree.path };
+		}
+	}
+
+	return target;
+}
+
 export function getAdjacentProjectWorktreeTarget(
 	targets: readonly IProjectSwitcherSelectionTarget[],
 	activeWorktreePath: string | undefined,

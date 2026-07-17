@@ -15,8 +15,12 @@ import { IWorkbenchEnvironmentService } from
 import { IHucodeShellService } from '../../common/omniWindow.js';
 import { focusWorkspaceBestEffort } from
 	'../../common/omniWindowFocus.js';
-import { IProjectSwitcherSelectionTarget } from
+import {
+	canonicalizeProjectSwitcherTarget,
+	IProjectSwitcherSelectionTarget,
+} from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
+import { pathsEqual } from './projectSwitcherCommon.js';
 
 /**
  * Opens a project switcher target in the current workbench context.
@@ -29,10 +33,20 @@ export async function openProjectSwitcherTargetInWindow(
 	shellService: IHucodeShellService,
 	hostService: IHostService
 ): Promise<void> {
+	let canonicalTarget = target;
+	try {
+		canonicalTarget = canonicalizeProjectSwitcherTarget(
+			target,
+			await projectManagerService.getProjects(),
+			pathsEqual
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 	await setLastActiveWorktreeBestEffort(
 		projectManagerService,
-		target.projectId,
-		target.worktreePath
+		canonicalTarget.projectId,
+		canonicalTarget.worktreePath
 	);
 
 	if (
@@ -41,22 +55,22 @@ export async function openProjectSwitcherTargetInWindow(
 	) {
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
-			target.worktreePath
+			canonicalTarget.worktreePath
 		)) {
 			return;
 		}
 
 		await shellService.openWorkspace(
 			windowId,
-			target.worktreePath,
-			target.projectId
+			canonicalTarget.worktreePath,
+			canonicalTarget.projectId
 		);
 		await focusWorkspaceBestEffort(shellService, windowId);
 		return;
 	}
 
 	await hostService.openWindow(
-		[{ folderUri: URI.file(target.worktreePath) }],
+		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],
 		{ forceReuseWindow: true }
 	);
 }

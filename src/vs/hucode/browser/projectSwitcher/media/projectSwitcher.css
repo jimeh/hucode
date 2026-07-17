@@ -137,6 +137,11 @@
 	color: var(--vscode-list-warningForeground);
 }
 
+.hucode-project-switcher-workbench-missing
+	.hucode-project-switcher-icon {
+	color: var(--vscode-list-warningForeground);
+}
+
 .hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
 	.hucode-project-switcher-worktree-unloaded {
 	opacity: 1;
