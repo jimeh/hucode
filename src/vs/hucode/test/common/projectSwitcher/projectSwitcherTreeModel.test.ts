@@ -15,8 +15,13 @@ import {
 import { IHucodeHostedWorkspaceState } from
 	'../../../common/omniWindow.js';
 import {
+	applyOmniSectionCollapseChange,
 	buildProjectSwitcherTreeModel,
 	encodeWorktreeHandle,
+	isItemInCollapsedOmniSection,
+	isOmniSectionItem,
+	isProjectItem,
+	isRetainedWorkbenchItem,
 	isWorktreeItem,
 	MAIN_WORKTREE_CONTEXT_VALUE,
 	MISSING_WORKTREE_CONTEXT_VALUE,
@@ -27,7 +32,7 @@ import {
 suite('ProjectSwitcherTreeModel', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('returns no roots for the empty project state', () => {
+	test('returns Workbenches above Projects in an empty Omni window', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [],
 			collapsedProjectIds: new Set(),
@@ -36,8 +41,124 @@ suite('ProjectSwitcherTreeModel', () => {
 			hostedWorkspaceState: createHostedState(),
 		});
 
-		assert.deepStrictEqual(model.roots, []);
-		assert.strictEqual(model.itemsById.size, 0);
+		assert.deepStrictEqual(
+			model.roots.map(root => root.element.label),
+			['Workbenches', 'Projects']
+		);
+		assert.ok(model.roots.every(root =>
+			isOmniSectionItem(root.element) && root.collapsible
+		));
+	});
+
+	test('ignores transient section collapse changes during tree sync', () => {
+		const collapsedSections = new Set(['section:workbenches']);
+
+		assert.strictEqual(applyOmniSectionCollapseChange(
+			collapsedSections,
+			'section:workbenches',
+			false,
+			true
+		), false);
+		assert.deepStrictEqual([...collapsedSections], [
+			'section:workbenches'
+		]);
+		assert.strictEqual(applyOmniSectionCollapseChange(
+			collapsedSections,
+			'section:workbenches',
+			false,
+			false
+		), true);
+		assert.deepStrictEqual([...collapsedSections], []);
+	});
+
+	test('keeps targets hidden by intentionally collapsed Omni sections', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'project',
+				worktrees: [createWorktree('/repos/project', {
+					isMain: true
+				})],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				retainedWorkbenches: [{
+					id: 'scratch',
+					folderUri: URI.file('/scratch').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+			},
+		});
+		const items = flatten(model.roots).map(element => element.element);
+		const workbench = items.find(isRetainedWorkbenchItem);
+		const worktree = items.find(isWorktreeItem);
+		assert.ok(workbench);
+		assert.ok(worktree);
+
+		assert.strictEqual(isItemInCollapsedOmniSection(
+			workbench,
+			new Set(['section:workbenches'])
+		), true);
+		assert.strictEqual(isItemInCollapsedOmniSection(
+			worktree,
+			new Set(['section:projects'])
+		), true);
+		assert.strictEqual(isItemInCollapsedOmniSection(
+			workbench,
+			new Set()
+		), false);
+	});
+
+	test('shows retained workbenches in manual order and hides promotions', () => {
+		const promotedPath = '/repos/project';
+		const state: IHucodeHostedWorkspaceState = {
+			...createHostedState(),
+			retainedWorkbenches: [{
+				id: 'second',
+				folderUri: URI.file('/scratch/second').toJSON(),
+				desiredState: 'unloaded',
+				order: 1,
+			}, {
+				id: 'first',
+				folderUri: URI.file('/scratch/first').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}, {
+				id: 'promoted',
+				folderUri: URI.file(promotedPath).toJSON(),
+				desiredState: 'loaded',
+				order: 2,
+			}],
+		};
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'project',
+				worktrees: [createWorktree(promotedPath, { isMain: true })],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			hostedWorkspaceState: state,
+		});
+
+		const workbenches = model.roots[0].children?.map(child => child.element)
+			.filter(isRetainedWorkbenchItem) ?? [];
+		assert.deepStrictEqual(workbenches.map(item => ({
+			label: item.label,
+			description: item.description,
+			state: item.hostedWorkbenchState,
+		})), [{
+			label: 'first',
+			description: 'label:/scratch/first',
+			state: 'dormant',
+		}, {
+			label: 'second',
+			description: 'label:/scratch/second',
+			state: 'unloaded',
+		}]);
 	});
 
 	test('orders pinned projects and pinned worktrees in visible sections', () => {
@@ -71,7 +192,9 @@ suite('ProjectSwitcherTreeModel', () => {
 		});
 
 		assert.deepStrictEqual(
-			flatten(model.roots).map(item => item.element.label),
+			flatten(model.roots)
+				.filter(item => !isOmniSectionItem(item.element))
+				.map(item => item.element.label),
 			[
 				'Pinned',
 				'alpha',
@@ -238,7 +361,10 @@ suite('ProjectSwitcherTreeModel', () => {
 			hostedWorkspaceState: createHostedState(),
 		});
 
-		const project = model.roots[0].element;
+		const project = flatten(model.roots)
+			.map(element => element.element)
+			.find(isProjectItem);
+		assert.ok(project);
 		const worktree = getWorktree(model.roots, '/repos/hucode');
 
 		assert.strictEqual(project.label, 'Hucode Fork');
@@ -383,7 +509,10 @@ suite('ProjectSwitcherTreeModel', () => {
 			}),
 		});
 
-		const project = model.roots[0].element;
+		const project = flatten(model.roots)
+			.map(element => element.element)
+			.find(isProjectItem);
+		assert.ok(project);
 		const worktree = getWorktree(
 			model.roots,
 			'/repos/missing-root.worktrees/feature'

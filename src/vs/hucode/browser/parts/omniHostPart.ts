@@ -22,6 +22,12 @@ import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
 import { IContextKey, IContextKeyService } from
 	'../../../platform/contextkey/common/contextkey.js';
+import { IConfigurationService } from
+	'../../../platform/configuration/common/configuration.js';
+import {
+	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HucodeHostedWorkbenchRestorePolicy,
+} from '../../common/retainedWorkbench.js';
 import { focusWorkspaceBestEffort } from
 	'../../common/omniWindowFocus.js';
 import {
@@ -77,6 +83,8 @@ export class OmniHostPart extends Part {
 		@IStorageService storageService: IStorageService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 		@IContextKeyService contextKeyService: IContextKeyService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
 		@IHucodeWebOmniHostSurfaceService
@@ -139,7 +147,7 @@ export class OmniHostPart extends Part {
 			$('.hucode-omni-host-empty', undefined,
 				localize(
 					'omniEmptyState',
-					'Select a worktree in the Projects sidebar to load it into this window'
+					'Select a workbench or project worktree from the sidebar to load it into this window'
 				))
 		);
 
@@ -177,6 +185,12 @@ export class OmniHostPart extends Part {
 	}
 
 	private async initialize(): Promise<void> {
+		await this.shellService.setHostedWorkbenchRestorePolicy(
+			this.windowId,
+			this.configurationService.getValue<
+				HucodeHostedWorkbenchRestorePolicy
+			>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
+		);
 		this.state = await this.shellService.getWindowState(this.windowId);
 		this.renderState();
 		this.scheduleHostedWorkspaceLayout();

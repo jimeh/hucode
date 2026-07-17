@@ -53,6 +53,10 @@ export const PINNED_SEPARATOR_HANDLE = 'separator:pinned';
  * Stable handle for the unpinned section separator.
  */
 export const UNPINNED_SEPARATOR_HANDLE = 'separator:unpinned';
+export const WORKBENCHES_SECTION_HANDLE = 'section:workbenches';
+export const PROJECTS_SECTION_HANDLE = 'section:projects';
+export const WORKBENCH_CONTEXT_VALUE = 'hucode-retained-workbench';
+export const OMNI_SECTION_CONTEXT_VALUE = 'hucode-omni-section';
 
 /**
  * Visual section a project or worktree row is rendered in.
@@ -74,7 +78,7 @@ export const UNPINNED_SECTION: ProjectSwitcherSection = 'unpinned';
 export interface ProjectSwitcherBaseItem {
 	readonly id: string;
 	readonly handle: string;
-	readonly kind: 'project' | 'worktree' | 'separator';
+	readonly kind: 'project' | 'worktree' | 'separator' | 'section' | 'workbench';
 	readonly label: string;
 	readonly description?: string;
 	readonly tooltip?: string;
@@ -120,13 +124,33 @@ export interface ProjectSwitcherSeparatorItem extends ProjectSwitcherBaseItem {
 	readonly kind: 'separator';
 }
 
+/** Top-level Workbenches or Projects section row. */
+export interface ProjectSwitcherSectionItem extends ProjectSwitcherBaseItem {
+	readonly kind: 'section';
+	readonly sectionKind: 'workbenches' | 'projects';
+}
+
+/** Arbitrary folder workbench row. */
+export interface ProjectSwitcherWorkbenchItem extends ProjectSwitcherBaseItem {
+	readonly kind: 'workbench';
+	readonly retainedWorkbenchId: string;
+	readonly worktreePath: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly hostedWorkbenchInstanceId?: string;
+	readonly hostedWorkbenchState: HucodeHostedWorkbenchLifecycleState;
+	readonly isActive: boolean;
+	readonly order: number;
+}
+
 /**
  * Union of all rows that can appear in the Project Switcher tree.
  */
 export type ProjectSwitcherItem =
 	| ProjectSwitcherProjectItem
 	| ProjectSwitcherWorktreeItem
-	| ProjectSwitcherSeparatorItem;
+	| ProjectSwitcherSeparatorItem
+	| ProjectSwitcherSectionItem
+	| ProjectSwitcherWorkbenchItem;
 
 /**
  * Object-tree element used to populate the Project Switcher tree widget.
@@ -147,6 +171,51 @@ export interface ProjectSwitcherTreeModel {
 }
 
 /**
+ * Applies a user-authored Omni section collapse change to persisted view state.
+ * Tree model synchronization events are ignored because they can describe a
+ * transient expansion state while roots are being replaced.
+ *
+ * @returns Whether persisted state changed.
+ */
+export function applyOmniSectionCollapseChange(
+	collapsedSections: Set<string>,
+	handle: string,
+	collapsed: boolean,
+	isSynchronizingTree: boolean
+): boolean {
+	if (isSynchronizingTree) {
+		return false;
+	}
+
+	const wasCollapsed = collapsedSections.has(handle);
+	if (collapsed) {
+		collapsedSections.add(handle);
+	} else {
+		collapsedSections.delete(handle);
+	}
+
+	return wasCollapsed !== collapsed;
+}
+
+/**
+ * Returns whether an Omni workbench target is intentionally hidden by its
+ * collapsed top-level section.
+ */
+export function isItemInCollapsedOmniSection(
+	item: ProjectSwitcherItem,
+	collapsedSections: ReadonlySet<string>
+): boolean {
+	if (item.kind === 'workbench') {
+		return collapsedSections.has(WORKBENCHES_SECTION_HANDLE);
+	}
+	if (item.kind === 'worktree') {
+		return collapsedSections.has(PROJECTS_SECTION_HANDLE);
+	}
+
+	return false;
+}
+
+/**
  * Input state needed to build a Project Switcher tree model.
  */
 export interface IProjectSwitcherTreeModelOptions {
@@ -156,6 +225,7 @@ export interface IProjectSwitcherTreeModelOptions {
 	readonly isOmniWindow: boolean;
 	readonly activeWorktreePath?: string;
 	readonly hostedWorkspaceState: IHucodeHostedWorkspaceState;
+	readonly collapsedOmniSections?: ReadonlySet<string>;
 }
 
 /**
@@ -248,6 +318,20 @@ export function isSeparatorItem(
 	return item?.kind === 'separator';
 }
 
+/** Type guard for top-level Omni section rows. */
+export function isOmniSectionItem(
+	item: ProjectSwitcherItem | undefined
+): item is ProjectSwitcherSectionItem {
+	return item?.kind === 'section';
+}
+
+/** Type guard for arbitrary workbench rows. */
+export function isRetainedWorkbenchItem(
+	item: ProjectSwitcherItem | undefined
+): item is ProjectSwitcherWorkbenchItem {
+	return item?.kind === 'workbench';
+}
+
 /**
  * Compares two file-system paths using platform-aware casing rules.
  *
@@ -280,8 +364,8 @@ export function getWorktreeDisplayLabel(worktree: WorktreeRecord): string {
  * @returns Whether both targets point at the same project and worktree path.
  */
 export function selectionTargetsEqual(
-	a: { readonly projectId: string; readonly worktreePath: string } | undefined,
-	b: { readonly projectId: string; readonly worktreePath: string } | undefined
+	a: { readonly projectId?: string; readonly worktreePath: string } | undefined,
+	b: { readonly projectId?: string; readonly worktreePath: string } | undefined
 ): boolean {
 	return a?.projectId === b?.projectId &&
 		typeof a?.worktreePath === 'string' &&
@@ -370,7 +454,96 @@ export function buildProjectSwitcherTreeModel(
 
 	roots.push(...unpinnedProjectElements);
 
-	return { roots, itemsById };
+	if (!options.isOmniWindow) {
+		return { roots, itemsById };
+	}
+
+	const projectPaths = options.projects.flatMap(project =>
+		project.worktrees.map(worktree => worktree.path)
+	);
+	const workbenchChildren = (options.hostedWorkspaceState
+		.retainedWorkbenches ?? [])
+		.filter(record => !projectPaths.some(path =>
+			pathsEqual(path, URI.revive(record.folderUri).fsPath)
+		))
+		.toSorted((a, b) => a.order - b.order)
+		.map(record => toRetainedWorkbenchElement(record, options, itemsById));
+	const workbenchesSection: ProjectSwitcherSectionItem = {
+		id: WORKBENCHES_SECTION_HANDLE,
+		handle: WORKBENCHES_SECTION_HANDLE,
+		kind: 'section',
+		sectionKind: 'workbenches',
+		label: localize('workbenchesSection', 'Workbenches'),
+		contextValue: OMNI_SECTION_CONTEXT_VALUE,
+	};
+	const projectsSection: ProjectSwitcherSectionItem = {
+		id: PROJECTS_SECTION_HANDLE,
+		handle: PROJECTS_SECTION_HANDLE,
+		kind: 'section',
+		sectionKind: 'projects',
+		label: localize('projectsSection', 'Projects'),
+		contextValue: OMNI_SECTION_CONTEXT_VALUE,
+	};
+	itemsById.set(workbenchesSection.handle, workbenchesSection);
+	itemsById.set(projectsSection.handle, projectsSection);
+	return {
+		roots: [{
+			element: workbenchesSection,
+			collapsible: true,
+			collapsed: options.collapsedOmniSections?.has(
+				WORKBENCHES_SECTION_HANDLE
+			),
+			children: workbenchChildren,
+		}, {
+			element: projectsSection,
+			collapsible: true,
+			collapsed: options.collapsedOmniSections?.has(
+				PROJECTS_SECTION_HANDLE
+			),
+			children: roots,
+		}],
+		itemsById,
+	};
+}
+
+function toRetainedWorkbenchElement(
+	record: NonNullable<IHucodeHostedWorkspaceState['retainedWorkbenches']>[number],
+	options: IProjectSwitcherTreeModelOptions,
+	itemsById: Map<string, ProjectSwitcherItem>
+): ProjectSwitcherTreeElement {
+	const uri = URI.revive(record.folderUri);
+	const worktreePath = uri.fsPath;
+	const instance = options.hostedWorkspaceState.instances.find(candidate =>
+		pathsEqual(candidate.worktreePath, worktreePath)
+	);
+	const state = instance?.state ??
+		(record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
+	const handle = `workbench:${record.id}`;
+	const item: ProjectSwitcherWorkbenchItem = {
+		id: handle,
+		handle,
+		kind: 'workbench',
+		retainedWorkbenchId: record.id,
+		worktreePath,
+		desiredState: record.desiredState,
+		hostedWorkbenchInstanceId: instance?.instanceId,
+		hostedWorkbenchState: state,
+		isActive: instance?.instanceId ===
+			options.hostedWorkspaceState.activeInstanceId,
+		order: record.order,
+		label: basename(worktreePath),
+		description: options.getPathLabel(worktreePath),
+		tooltip: options.getPathLabel(worktreePath),
+		contextValue: WORKBENCH_CONTEXT_VALUE,
+		themeIcon: state === 'restore-pending' || state === 'loading'
+			? ThemeIcon.modify(Codicon.loading, 'spin')
+			: state === 'dormant' ? Codicon.debugPause
+				: state === 'unloaded' ? Codicon.circleOutline
+					: state === 'crashed' ? Codicon.warning
+						: Codicon.window,
+	};
+	itemsById.set(item.handle, item);
+	return { element: item };
 }
 
 function toProjectElement(

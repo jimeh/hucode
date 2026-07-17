@@ -20,6 +20,10 @@ import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
 
 export interface IHucodeOmniOpenShellService {
+	focusHostedWorkspaceByPath(
+		worktreePath: string,
+		projectId?: string
+	): Promise<boolean>;
 	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
 		windowId: number,
@@ -66,32 +70,40 @@ export async function tryOpenHucodeOmniWindow(
 			projectManagerService,
 			openable.folderUri.fsPath
 		);
+		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
+		if (await focusHostedWorkspaceByPathBestEffort(
+			shellService,
+			worktreePath,
+			target?.projectId
+		)) {
+			return true;
+		}
+		if (await focusNormalWindowByPathBestEffort(
+			shellService,
+			worktreePath
+		)) {
+			return true;
+		}
 		if (target) {
-			if (await focusNormalWindowByPathBestEffort(
-				shellService,
-				target.worktreePath
-			)) {
-				return true;
-			}
 			await setLastActiveWorktreeBestEffort(
 				projectManagerService,
 				target.projectId,
 				target.worktreePath
 			);
-			await shellService.openWorkspace(
-				nativeHostService.windowId,
-				target.worktreePath,
-				target.projectId
-			);
-			await focusWorkspaceBestEffort(
-				shellService,
-				nativeHostService.windowId
-			);
-			return true;
 		}
+		await shellService.openWorkspace(
+			nativeHostService.windowId,
+			worktreePath,
+			target?.projectId
+		);
+		await focusWorkspaceBestEffort(
+			shellService,
+			nativeHostService.windowId
+		);
+		return true;
 	}
 
-	if (isFolderToOpen(openable) || isWorkspaceToOpen(openable)) {
+	if (isWorkspaceToOpen(openable)) {
 		await nativeHostService.openWindow(
 			toOpen,
 			toOmniFallbackOpenOptions(options)
@@ -100,6 +112,22 @@ export async function tryOpenHucodeOmniWindow(
 	}
 
 	return false;
+}
+
+async function focusHostedWorkspaceByPathBestEffort(
+	shellService: IHucodeOmniOpenShellService,
+	worktreePath: string,
+	projectId?: string
+): Promise<boolean> {
+	try {
+		return await shellService.focusHostedWorkspaceByPath(
+			worktreePath,
+			projectId
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+		return false;
+	}
 }
 
 async function getProjectWorktreeTarget(

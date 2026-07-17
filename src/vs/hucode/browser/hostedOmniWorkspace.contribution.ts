@@ -80,6 +80,10 @@ import {
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
+import { HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING } from
+	'../common/retainedWorkbench.js';
+import { isHostedWorkspaceAvailable } from
+	'../common/hostedWorkspaceState.js';
 
 Registry.as<IConfigurationRegistry>(
 	ConfigurationExtensions.Configuration
@@ -89,6 +93,16 @@ Registry.as<IConfigurationRegistry>(
 	title: localize('hucodeConfigurationTitle', "Hucode"),
 	type: 'object',
 	properties: {
+		[HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING]: {
+			type: 'string',
+			enum: ['active', 'all', 'none'],
+			default: 'active',
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.restoreHostedWorkbenches',
+				"Controls which previously loaded Omni workbenches are restored immediately. Other loaded workbenches remain dormant until activated."
+			),
+		},
 		[PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING]: {
 			type: 'boolean',
 			default: true,
@@ -173,8 +187,8 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			state: Awaited<ReturnType<IHucodeShellService['getWindowState']>>
 		) => {
 			projectsSidebarHidden.set(!state.projectsSidebarVisible);
-			hasLoadedWorkbench.set(state.instances.some(instance =>
-				instance.state !== 'crashed' && instance.state !== 'unloaded'
+			hasLoadedWorkbench.set(state.instances.some(
+				isHostedWorkspaceAvailable
 			));
 			projectSwitcherCanGoBack.set(state.projectSwitcherCanGoBack);
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);

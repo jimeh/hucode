@@ -8,6 +8,7 @@ import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable } from '../../base/common/lifecycle.js';
+import { UriComponents } from '../../base/common/uri.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
@@ -32,6 +33,8 @@ import { createEmptyHostedWorkspaceState } from
 	'../common/hostedWorkspaceState.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
+import { HucodeHostedWorkbenchRestorePolicy } from
+	'../common/retainedWorkbench.js';
 
 interface IConnectedShell {
 	readonly shell: IHucodeShellService;
@@ -136,6 +139,57 @@ export class HostedOmniWebShellService extends Disposable
 	): Promise<IHucodeHostedWorkspaceState> {
 		return this.withShell(() => this.state, (shell, windowId) =>
 			shell.openWorkspace(windowId, worktreePath, projectId));
+	}
+
+	retainAndOpenWorkbench(
+		_windowId: number,
+		folderUri: UriComponents
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.retainAndOpenWorkbench(windowId, folderUri));
+	}
+
+	unloadRetainedWorkbench(
+		_windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.unloadRetainedWorkbench(windowId, workbenchId));
+	}
+
+	dismissRetainedWorkbench(
+		_windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.dismissRetainedWorkbench(windowId, workbenchId));
+	}
+
+	reorderRetainedWorkbenches(
+		_windowId: number,
+		orderedWorkbenchIds: readonly string[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.reorderRetainedWorkbenches(windowId, orderedWorkbenchIds));
+	}
+
+	reconcileRetainedWorkbenches(
+		_windowId: number,
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: UriComponents;
+		}[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.reconcileRetainedWorkbenches(windowId, projectFolders));
+	}
+
+	setHostedWorkbenchRestorePolicy(
+		_windowId: number,
+		policy: HucodeHostedWorkbenchRestorePolicy
+	): Promise<void> {
+		return this.withShell(() => undefined, (shell, windowId) =>
+			shell.setHostedWorkbenchRestorePolicy(windowId, policy));
 	}
 
 	openFilesInWorkspace(

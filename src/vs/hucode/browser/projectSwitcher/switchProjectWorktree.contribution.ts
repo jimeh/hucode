@@ -59,7 +59,12 @@ import {
 	SwitchWorktreeSearchField,
 	withSwitchWorktreeSeparators,
 } from '../../common/projectSwitcher/switchProjectWorktreeModel.js';
-import { IHucodeShellService } from '../../common/omniWindow.js';
+import {
+	IHucodeHostedWorkspaceState,
+	IHucodeShellService,
+} from '../../common/omniWindow.js';
+import { isHostedWorkspaceAvailable } from
+	'../../common/hostedWorkspaceState.js';
 import { Menus } from '../menus.js';
 import {
 	ProjectsSidebarHiddenContext,
@@ -195,13 +200,94 @@ function getSwitchWorktreePicks(
 	return picks.sort(compareSwitchWorktreePicks);
 }
 
+function getRetainedWorkbenchPicks(
+	state: IHucodeHostedWorkspaceState | undefined,
+	activeWorktreePath: string | undefined,
+	labelService: ILabelService
+): SwitchWorktreeQuickPick[] {
+	if (!state) {
+		return [];
+	}
+	return (state.retainedWorkbenches ?? [])
+		.toSorted((a, b) => a.order - b.order)
+		.map(record => {
+			const uri = URI.revive(record.folderUri);
+			const path = uri.fsPath;
+			const instance = state.instances.find(candidate =>
+				pathsEqual(candidate.worktreePath, path)
+			);
+			const isLoaded = !!instance && isHostedWorkspaceAvailable(instance);
+			const isDormant = record.desiredState === 'loaded' && !isLoaded;
+			const label = basename(path);
+			const description = labelService.getUriLabel(uri);
+			return {
+				worktreePath: path,
+				isCurrent: activeWorktreePath !== undefined &&
+					pathsEqual(activeWorktreePath, path),
+				isLoaded,
+				isDormant,
+				lastVisitedAt: instance?.lastActiveAt ?? record.lastActiveAt,
+				projectOrder: -1,
+				worktreeOrder: record.order,
+				label,
+				iconClass: ThemeIcon.asClassName(
+					isDormant ? Codicon.debugPause : Codicon.window
+				),
+				description,
+				detail: path,
+				tooltip: path,
+				searchFields: [
+					{ target: 'label' as const, text: label },
+					{ target: 'description' as const, text: description },
+					{ target: 'detail' as const, text: path },
+				],
+			};
+		});
+}
+
+async function getOmniHostedWorkspaceState(
+	environmentService: IWorkbenchEnvironmentService,
+	shellService: IHucodeShellService
+): Promise<IHucodeHostedWorkspaceState | undefined> {
+	return environmentService.isOmniWindow ||
+		environmentService.isHostedOmniWorkspace
+		? shellService.getWindowState(dom.getWindowId(mainWindow))
+		: undefined;
+}
+
+function getCombinedSwitchWorkbenchPicks(
+	projects: readonly ProjectRecord[],
+	state: IHucodeHostedWorkspaceState | undefined,
+	activeWorktreePath: string | undefined,
+	loadedWorktrees: readonly ILoadedWorkbenchWorktree[],
+	labelService: ILabelService
+): SwitchWorktreeQuickPick[] {
+	const projectPicks = getSwitchWorktreePicks(
+		projects,
+		activeWorktreePath,
+		loadedWorktrees,
+		labelService
+	).map(pick => {
+		const instance = state?.instances.find(candidate =>
+			pathsEqual(candidate.worktreePath, pick.worktreePath)
+		);
+		return instance?.state === 'dormant'
+			? { ...pick, isDormant: true }
+			: pick;
+	});
+	return [
+		...getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
+		...projectPicks,
+	].sort(compareSwitchWorktreePicks);
+}
+
 function compareSwitchWorktreePicks(
 	a: SwitchWorktreeQuickPick,
 	b: SwitchWorktreeQuickPick
 ): number {
 	return Number(b.isCurrent) - Number(a.isCurrent) ||
 		Number(b.isLoaded) - Number(a.isLoaded) ||
-		(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0) ||
+		Number(!!b.isDormant) - Number(!!a.isDormant) ||
 		a.projectOrder - b.projectOrder ||
 		a.worktreeOrder - b.worktreeOrder ||
 		a.label.localeCompare(b.label) ||
@@ -255,10 +341,7 @@ async function getLoadedWorkbenchWorktrees(
 			dom.getWindowId(mainWindow)
 		);
 		return state.instances
-			.filter(instance =>
-				instance.state !== 'crashed' &&
-				instance.state !== 'unloaded'
-			)
+			.filter(isHostedWorkspaceAvailable)
 			.map(instance => ({
 				path: instance.worktreePath,
 				lastActiveAt: instance.lastActiveAt,
@@ -306,7 +389,7 @@ function pickSwitchWorktree(
 		}));
 	quickPick.placeholder = localize(
 		'switchWorktreePlaceholder',
-		'Select a project worktree'
+		'Select a workbench'
 	);
 	quickPick.matchOnLabel = false;
 	quickPick.matchOnDescription = false;
@@ -391,7 +474,18 @@ async function switchAdjacentProjectWorktree(
 		}
 
 		const projects = await projectManagerService.getProjects();
-		const visualTargets = getVisualProjectWorktreeTargets(projects);
+		const omniState = await getOmniHostedWorkspaceState(
+			environmentService,
+			shellService
+		);
+		const visualTargets = [
+			...(omniState?.retainedWorkbenches ?? [])
+				.toSorted((a, b) => a.order - b.order)
+				.map(record => ({
+					worktreePath: URI.revive(record.folderUri).fsPath,
+				})),
+			...getVisualProjectWorktreeTargets(projects),
+		];
 		const targets = loadedOnly
 			? getLoadedProjectWorktreeTargets(
 				visualTargets,
@@ -466,13 +560,22 @@ async function switchLastActiveProjectWorktree(
 			workspaceContextService,
 			shellService
 		);
-		const picks = getSwitchWorktreePicks(
+		const omniState = await getOmniHostedWorkspaceState(
+			environmentService,
+			shellService
+		);
+		const picks = getCombinedSwitchWorkbenchPicks(
 			projects,
+			omniState,
 			activeWorktreePath,
 			loadedWorktrees,
 			labelService
 		);
-		const pick = getDefaultSwitchWorktreeActivePick(picks);
+		const pick = [...picks]
+			.filter(candidate => !candidate.isCurrent)
+			.sort((a, b) =>
+				(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)
+			)[0];
 		if (
 			!pick ||
 			(activeWorktreePath !== undefined &&
@@ -532,8 +635,13 @@ async function quickSwitchLoadedProjectWorktree(
 			workspaceContextService,
 			shellService
 		);
-		const picks = getLoadedSwitchWorktreePicks(getSwitchWorktreePicks(
+		const omniState = await getOmniHostedWorkspaceState(
+			environmentService,
+			shellService
+		);
+		const picks = getLoadedSwitchWorktreePicks(getCombinedSwitchWorkbenchPicks(
 			projects,
+			omniState,
 			activeWorktreePath,
 			loadedWorktrees,
 			labelService
@@ -581,7 +689,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchProjectWorktree',
-				'Switch to Project Worktree...'
+				'Switch Workbench...'
 			),
 			icon: Codicon.search,
 			menu: [
@@ -649,8 +757,13 @@ registerAction2(class extends Action2 {
 				workspaceContextService,
 				shellService
 			);
-			const picks = getSwitchWorktreePicks(
+			const omniState = await getOmniHostedWorkspaceState(
+				environmentService,
+				shellService
+			);
+			const picks = getCombinedSwitchWorkbenchPicks(
 				projects,
+				omniState,
 				activeWorktreePath,
 				loadedWorktrees,
 				labelService
@@ -658,7 +771,7 @@ registerAction2(class extends Action2 {
 			if (!picks.length) {
 				notificationService.info(localize(
 					'switchWorktreeNoProjects',
-					'No project worktrees are available.'
+					'No workbenches are available.'
 				));
 				return;
 			}
@@ -690,7 +803,7 @@ registerAction2(class extends Action2 {
 			id: QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'quickSwitchLoadedProjectWorktree',
-				'Quick Switch Loaded Project Worktree'
+				'Quick Switch Loaded Workbench'
 			),
 			icon: Codicon.history,
 			keybinding: {
@@ -717,7 +830,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_LAST_ACTIVE_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchLastActiveProjectWorktree',
-				'Switch to Last Active Project Worktree'
+				'Switch to Last Active Workbench'
 			),
 			icon: Codicon.history,
 			keybinding: {
@@ -781,7 +894,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_PREVIOUS_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchPreviousProjectWorktree',
-				'Switch to Previous Project Worktree'
+				'Switch to Previous Workbench'
 			),
 			icon: Codicon.arrowUp,
 			keybinding: {
@@ -813,7 +926,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_PREVIOUS_LOADED_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchPreviousLoadedProjectWorktree',
-				'Switch to Previous Loaded Project Worktree'
+				'Switch to Previous Loaded Workbench'
 			),
 			icon: Codicon.arrowUp,
 			keybinding: {
@@ -845,7 +958,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_NEXT_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchNextProjectWorktree',
-				'Switch to Next Project Worktree'
+				'Switch to Next Workbench'
 			),
 			icon: Codicon.arrowDown,
 			keybinding: {
@@ -877,7 +990,7 @@ registerAction2(class extends Action2 {
 			id: SWITCH_NEXT_LOADED_WORKTREE_COMMAND_ID,
 			title: localize2(
 				'switchNextLoadedProjectWorktree',
-				'Switch to Next Loaded Project Worktree'
+				'Switch to Next Loaded Workbench'
 			),
 			icon: Codicon.arrowDown,
 			keybinding: {

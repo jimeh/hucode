@@ -14,10 +14,13 @@ import {
 	toDisposable,
 } from '../../base/common/lifecycle.js';
 import { generateUuid } from '../../base/common/uuid.js';
+import { URI, UriComponents } from '../../base/common/uri.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/browser/ipc.mp.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
+import { IConfigurationService } from
+	'../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import {
@@ -67,6 +70,15 @@ import { getProjectManagerPathComparisonKey } from
 	'../../platform/projectManager/common/projectManagerState.js';
 import { IHucodeWebOmniHostSurfaceService } from
 	'./webOmniHostSurfaceService.js';
+import {
+	createHostedWorkbenchRestorePlan,
+	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HucodeHostedWorkbenchRestorePolicy,
+	IHucodeRetainedWorkbench,
+	RetainedWorkbenchCatalog,
+} from '../common/retainedWorkbench.js';
+import { IStorageService, StorageScope, StorageTarget } from
+	'../../platform/storage/common/storage.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -76,13 +88,99 @@ interface IHostedIframeConnection {
 interface IHostedIframeInstance {
 	instanceId: string;
 	projectId?: string;
+	retainedWorkbenchId?: string;
 	worktreePath: string;
 	state: HucodeHostedWorkbenchLifecycleState;
-	iframe: HTMLIFrameElement;
+	iframe?: HTMLIFrameElement;
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
 	connection?: IHostedIframeConnection;
+}
+
+/** Persisted serve-web catalog and hosted-workbench restore snapshot. */
+export interface IWebHucodeShellPersistedState {
+	readonly retainedWorkbenches: readonly IHucodeRetainedWorkbench[];
+	readonly residentWorkspaces: readonly {
+		readonly projectId?: string;
+		readonly worktreePath: string;
+		readonly lastActiveAt?: number;
+	}[];
+	readonly activeWorktreePath?: string;
+}
+
+/** Persistence seam for serve-web Omni catalog and restore state. */
+export interface IWebHucodeShellPersistenceAdapter {
+	load(): IWebHucodeShellPersistedState | undefined;
+	save(state: IWebHucodeShellPersistedState): void;
+}
+
+/** Drops malformed serve-web persistence entries before restore scheduling. */
+export function sanitizeWebHucodeShellPersistedState(
+	value: unknown
+): IWebHucodeShellPersistedState | undefined {
+	if (!value || typeof value !== 'object') {
+		return undefined;
+	}
+	const candidate = value as Partial<IWebHucodeShellPersistedState>;
+	if (!Array.isArray(candidate.retainedWorkbenches) ||
+		!Array.isArray(candidate.residentWorkspaces)
+	) {
+		return undefined;
+	}
+	return {
+		retainedWorkbenches: candidate.retainedWorkbenches,
+		residentWorkspaces: candidate.residentWorkspaces.filter(entry =>
+			!!entry && typeof entry === 'object' &&
+			typeof entry.worktreePath === 'string' &&
+			entry.worktreePath.length > 0 &&
+			(entry.projectId === undefined ||
+				typeof entry.projectId === 'string') &&
+			(entry.lastActiveAt === undefined ||
+				Number.isFinite(entry.lastActiveAt))
+		),
+		activeWorktreePath: typeof candidate.activeWorktreePath === 'string'
+			? candidate.activeWorktreePath
+			: undefined,
+	};
+}
+
+const emptyWebPersistence: IWebHucodeShellPersistenceAdapter = {
+	load: () => undefined,
+	save: () => { },
+};
+
+const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
+	'hucode.omni.webRetainedWorkbenches';
+
+class StorageServiceWebHucodeShellPersistence
+	implements IWebHucodeShellPersistenceAdapter {
+
+	constructor(private readonly storageService: IStorageService) { }
+
+	load(): IWebHucodeShellPersistedState | undefined {
+		const raw = this.storageService.get(
+			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
+			StorageScope.PROFILE
+		);
+		if (!raw) {
+			return undefined;
+		}
+		try {
+			return sanitizeWebHucodeShellPersistedState(JSON.parse(raw));
+		} catch {
+			return undefined;
+		}
+	}
+
+	save(state: IWebHucodeShellPersistedState): void {
+		this.storageService.store(
+			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
+			JSON.stringify(state),
+			StorageScope.PROFILE,
+			StorageTarget.MACHINE
+		);
+	}
 }
 
 type WebHucodeShellTimer = ReturnType<typeof setTimeout>;
@@ -182,6 +280,11 @@ export class WebHucodeShellController extends Disposable
 	private readonly hostedWorkspaces: HostedWorkspaceStateModel<
 		IHostedIframeInstance
 	>;
+	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
+	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
+	private shuttingDown = false;
+	private stateEmissionDeferrals = 0;
+	private stateEmissionPending = false;
 
 	private readonly pendingConnectionDisposals = new Set<DisposableStore>();
 
@@ -195,6 +298,9 @@ export class WebHucodeShellController extends Disposable
 		private readonly hostSurfaceService: IWebHucodeShellHostSurfaceService,
 		private readonly browser: IWebHucodeShellBrowserAdapter =
 			defaultWebHucodeShellBrowserAdapter(),
+		private readonly persistence: IWebHucodeShellPersistenceAdapter =
+			emptyWebPersistence,
+		restorePolicy: HucodeHostedWorkbenchRestorePolicy = 'active',
 	) {
 		super();
 
@@ -205,6 +311,16 @@ export class WebHucodeShellController extends Disposable
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => this.toPathKey(path)
 		);
+		this.restorePolicy = restorePolicy;
+		const persisted = sanitizeWebHucodeShellPersistedState(
+			this.persistence.load()
+		);
+		this.retainedWorkbenches = new RetainedWorkbenchCatalog(
+			persisted?.retainedWorkbenches,
+			uri => this.toPathKey(uri.fsPath),
+			generateUuid
+		);
+		this.restorePersistedWorkbenches(persisted);
 		this._register(this.hostSurfaceService.onDidChangeSurface(surface => {
 			if (surface) {
 				this.attachIframes(surface);
@@ -265,23 +381,176 @@ export class WebHucodeShellController extends Disposable
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
+		let retained = this.retainedWorkbenches.getByUri(
+			URI.file(worktreePath)
+		);
+		if (projectId && retained) {
+			this.retainedWorkbenches.dismiss(retained.id);
+			retained = undefined;
+		} else if (!projectId) {
+			retained = this.retainedWorkbenches.retain(
+				URI.file(worktreePath),
+				'loaded',
+				Date.now()
+			);
+		}
 
 		const existing = this.getInstanceByPath(worktreePath);
 		if (existing) {
 			if (isHostedWorkspaceAvailable(existing)) {
 				existing.projectId = projectId ?? existing.projectId;
+				existing.retainedWorkbenchId = retained?.id;
 				this.activateInstance(existing);
 				return this.getState();
 			}
 
-			this.removeInstance(existing);
+			if (existing.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(existing);
+			} else {
+				this.removeInstance(existing);
+			}
 		}
 
-		const instance = this.createInstance(worktreePath, projectId);
+		const instance = this.createInstance(
+			worktreePath,
+			projectId,
+			retained?.id
+		);
 		this.hostedWorkspaces.addInstance(instance);
 		this.attachIframe(instance);
 		this.activateInstance(instance);
 		return this.getState();
+	}
+
+	async retainAndOpenWorkbench(
+		windowId: number,
+		folderUri: UriComponents
+	): Promise<IHucodeHostedWorkspaceState> {
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		const uri = URI.revive(folderUri);
+		this.retainedWorkbenches.retain(uri, 'loaded', Date.now());
+		return this.openWorkspace(windowId, uri.fsPath);
+	}
+
+	async unloadRetainedWorkbench(
+		windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		const record = this.retainedWorkbenches.getById(workbenchId);
+		if (!record) {
+			return this.getState();
+		}
+		await this.deferStateEmission(async () => {
+			const instance = this.getInstanceByPath(
+				URI.revive(record.folderUri).fsPath
+			);
+			if (instance && instance.state !== 'dormant' &&
+				!await this.unloadAndRemoveInstance(instance)
+			) {
+				return;
+			}
+			if (instance?.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(instance);
+			}
+			this.retainedWorkbenches.update(workbenchId, {
+				desiredState: 'unloaded',
+			});
+			this.emitState();
+		});
+		return this.getState();
+	}
+
+	async dismissRetainedWorkbench(
+		windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		const record = this.retainedWorkbenches.getById(workbenchId);
+		if (!record) {
+			return this.getState();
+		}
+		await this.deferStateEmission(async () => {
+			const instance = this.getInstanceByPath(
+				URI.revive(record.folderUri).fsPath
+			);
+			if (instance && instance.state !== 'dormant' &&
+				!await this.unloadAndRemoveInstance(instance)
+			) {
+				return;
+			}
+			if (instance?.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(instance);
+			}
+			this.retainedWorkbenches.dismiss(workbenchId);
+			this.emitState();
+		});
+		return this.getState();
+	}
+
+	private async deferStateEmission<T>(operation: () => Promise<T>): Promise<T> {
+		this.stateEmissionDeferrals++;
+		try {
+			return await operation();
+		} finally {
+			this.stateEmissionDeferrals--;
+			if (this.stateEmissionDeferrals === 0 && this.stateEmissionPending) {
+				this.stateEmissionPending = false;
+				this.emitState();
+			}
+		}
+	}
+
+	async reorderRetainedWorkbenches(
+		windowId: number,
+		orderedWorkbenchIds: readonly string[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		if (windowId === this.windowId &&
+			this.retainedWorkbenches.reorder(orderedWorkbenchIds)
+		) {
+			this.emitState();
+		}
+		return this.getState();
+	}
+
+	async reconcileRetainedWorkbenches(
+		windowId: number,
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: UriComponents;
+		}[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		for (const projectFolder of projectFolders) {
+			const instance = this.getInstanceByPath(
+				URI.revive(projectFolder.folderUri).fsPath
+			);
+			if (instance) {
+				instance.projectId = projectFolder.projectId;
+			}
+		}
+		if (windowId === this.windowId &&
+			this.retainedWorkbenches.reconcileProjectPaths(
+				projectFolders.map(folder => URI.revive(folder.folderUri))
+			)
+		) {
+			this.emitState();
+		}
+		return this.getState();
+	}
+
+	async setHostedWorkbenchRestorePolicy(
+		windowId: number,
+		policy: HucodeHostedWorkbenchRestorePolicy
+	): Promise<void> {
+		if (windowId === this.windowId) {
+			this.restorePolicy = policy;
+		}
 	}
 
 	async openFilesInWorkspace(
@@ -333,7 +602,21 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		await this.unloadAndRemoveInstance(instance);
+		const retained = this.retainedWorkbenches.getByUri(
+			URI.file(instance.worktreePath)
+		);
+		if (!retained) {
+			await this.unloadAndRemoveInstance(instance);
+			return this.getState();
+		}
+		await this.deferStateEmission(async () => {
+			if (await this.unloadAndRemoveInstance(instance)) {
+				this.retainedWorkbenches.update(retained.id, {
+					desiredState: 'unloaded',
+				});
+				this.emitState();
+			}
+		});
 		return this.getState();
 	}
 
@@ -443,7 +726,7 @@ export class WebHucodeShellController extends Disposable
 		_request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
 		const instance = this.getAvailableActiveInstance();
-		if (instance) {
+		if (instance?.iframe) {
 			this.browser.focusIframeContent(instance.iframe);
 		}
 		return false;
@@ -451,7 +734,7 @@ export class WebHucodeShellController extends Disposable
 
 	async triggerPasteInWorkspace(_windowId: number): Promise<boolean> {
 		const instance = this.getAvailableActiveInstance();
-		if (instance) {
+		if (instance?.iframe) {
 			this.browser.focusIframeContent(instance.iframe);
 		}
 		return false;
@@ -470,7 +753,7 @@ export class WebHucodeShellController extends Disposable
 			[]
 		);
 		this.browser.setTimeout(() => {
-			if (instance.state === 'loading') {
+			if (instance.state === 'loading' && instance.iframe) {
 				this.browser.reloadIframe(instance.iframe);
 			}
 		}, 500);
@@ -512,6 +795,8 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
+		// Teardown must not rewrite the resident set used for the next startup.
+		this.shuttingDown = true;
 		for (const instance of [...this.instancesById.values()]) {
 			await this.unloadAndRemoveInstance(instance);
 		}
@@ -526,7 +811,9 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		const instance = this.instancesById.get(event.data.instanceId);
-		if (!instance || event.source !== instance.iframe.contentWindow) {
+		if (!instance?.iframe ||
+			event.source !== instance.iframe.contentWindow
+		) {
 			return;
 		}
 
@@ -584,6 +871,9 @@ export class WebHucodeShellController extends Disposable
 			),
 			disposables,
 		};
+		if (!instance.iframe) {
+			return;
+		}
 		this.browser.postPortMessage(instance.iframe, {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
@@ -617,9 +907,57 @@ export class WebHucodeShellController extends Disposable
 		this.pendingConnectionDisposals.clear();
 	}
 
+	private restorePersistedWorkbenches(
+		persisted: IWebHucodeShellPersistedState | undefined
+	): void {
+		if (!persisted) {
+			return;
+		}
+		const retainedCandidates = this.retainedWorkbenches.all
+			.filter(record => record.desiredState === 'loaded')
+			.map(record => ({
+				worktreePath: URI.revive(record.folderUri).fsPath,
+				retainedWorkbenchId: record.id,
+				lastActiveAt: record.lastActiveAt,
+			}));
+		const plan = createHostedWorkbenchRestorePlan([
+			...retainedCandidates,
+			...persisted.residentWorkspaces.filter(entry => !!entry.projectId),
+		], persisted.activeWorktreePath, this.restorePolicy, (a, b) =>
+			this.toPathKey(a) === this.toPathKey(b));
+
+		for (const candidate of plan.dormant) {
+			this.hostedWorkspaces.addInstance({
+				instanceId: generateUuid(),
+				projectId: candidate.projectId,
+				retainedWorkbenchId: candidate.retainedWorkbenchId,
+				worktreePath: candidate.worktreePath,
+				state: 'dormant',
+				visible: false,
+				focused: false,
+				lastActiveAt: candidate.lastActiveAt,
+			});
+		}
+
+		for (const [index, candidate] of plan.eager.entries()) {
+			const instance = this.createInstance(
+				candidate.worktreePath,
+				candidate.projectId,
+				candidate.retainedWorkbenchId
+			);
+			instance.lastActiveAt = candidate.lastActiveAt;
+			this.hostedWorkspaces.addInstance(instance);
+			this.attachIframe(instance);
+			if (index === 0) {
+				this.activateInstance(instance);
+			}
+		}
+	}
+
 	private createInstance(
 		worktreePath: string,
-		projectId: string | undefined
+		projectId: string | undefined,
+		retainedWorkbenchId?: string
 	): IHostedIframeInstance {
 		const instanceId = generateUuid();
 		const iframe = this.browser.createIframe();
@@ -631,6 +969,7 @@ export class WebHucodeShellController extends Disposable
 		return {
 			instanceId,
 			projectId,
+			retainedWorkbenchId,
 			worktreePath,
 			state: 'loading',
 			iframe,
@@ -642,11 +981,20 @@ export class WebHucodeShellController extends Disposable
 
 	private activateInstance(instance: IHostedIframeInstance): void {
 		this.hostedWorkspaces.activateInstance(instance);
+		const retained = this.retainedWorkbenches.getByUri(
+			URI.file(instance.worktreePath)
+		);
+		if (retained) {
+			this.retainedWorkbenches.update(retained.id, {
+				desiredState: 'loaded',
+				lastActiveAt: instance.lastActiveAt,
+			});
+		}
 		for (const candidate of this.instancesById.values()) {
 			const visible = candidate.instanceId === instance.instanceId;
 			candidate.visible = visible;
 			candidate.focused = visible ? candidate.focused : false;
-			candidate.iframe.classList.toggle('hidden', !visible);
+			candidate.iframe?.classList.toggle('hidden', !visible);
 		}
 		this.emitState();
 	}
@@ -655,7 +1003,7 @@ export class WebHucodeShellController extends Disposable
 		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
 		this.disposeConnection(instance);
-		instance.iframe.remove();
+		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
 		if (wasActive) {
 			const next = getMostRecentHostedWorkspace(this.instancesById.values());
@@ -761,6 +1109,12 @@ export class WebHucodeShellController extends Disposable
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {
 				instance.state = 'crashed';
+				if (instance.retainedWorkbenchId) {
+					this.retainedWorkbenches.update(
+						instance.retainedWorkbenchId,
+						{ desiredState: 'unloaded' }
+					);
+				}
 			}
 			this.emitState();
 		}
@@ -784,13 +1138,16 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private focusIframe(instance: IHostedIframeInstance): void {
+		if (!instance.iframe) {
+			return;
+		}
 		this.browser.focusIframe(instance.iframe);
 		this.browser.focusIframeContent(instance.iframe);
 	}
 
 	private attachIframes(surface: HTMLElement): void {
 		for (const instance of this.instancesById.values()) {
-			if (instance.iframe.parentElement !== surface) {
+			if (instance.iframe && instance.iframe.parentElement !== surface) {
 				surface.append(instance.iframe);
 			}
 		}
@@ -798,7 +1155,7 @@ export class WebHucodeShellController extends Disposable
 
 	private attachIframe(instance: IHostedIframeInstance): void {
 		const surface = this.hostSurfaceService.getSurface();
-		if (surface) {
+		if (surface && instance.iframe) {
 			surface.append(instance.iframe);
 		}
 	}
@@ -851,14 +1208,36 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private getState(): IHucodeHostedWorkspaceState {
-		return this.hostedWorkspaces.toState();
+		return {
+			...this.hostedWorkspaces.toState(),
+			retainedWorkbenches: this.retainedWorkbenches.all,
+		};
 	}
 
 	private emitState(): void {
+		if (this.stateEmissionDeferrals > 0) {
+			this.stateEmissionPending = true;
+			return;
+		}
 		this.hostedWorkspaces.setProjectsSidebarVisible(
 			this.hostedWorkspaces.projectsSidebarVisible,
 			hasLoadedHostedWorkspace(this.instancesById.values())
 		);
+		if (!this.shuttingDown) {
+			this.persistence.save({
+				retainedWorkbenches: this.retainedWorkbenches.all,
+				residentWorkspaces: Array.from(this.instancesById.values())
+					.filter(instance => !!instance.projectId &&
+						instance.state !== 'unloaded' &&
+						instance.state !== 'crashed')
+					.map(instance => ({
+						projectId: instance.projectId,
+						worktreePath: instance.worktreePath,
+						lastActiveAt: instance.lastActiveAt,
+					})),
+				activeWorktreePath: this.getActiveInstance()?.worktreePath,
+			});
+		}
 		this._onDidChangeWindowState.fire({
 			windowId: this.windowId,
 			state: this.getState(),
@@ -908,6 +1287,8 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@ICommandService commandService: ICommandService,
 		@IHucodeWebOmniHostSurfaceService
 		hostSurfaceService: IHucodeWebOmniHostSurfaceService,
+		@IConfigurationService configurationService: IConfigurationService,
+		@IStorageService storageService: IStorageService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -919,7 +1300,11 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			serverPathCaseSensitive: getHucodeServerPathCaseSensitive(
 				environmentService.options
 			),
-		}, commandService, hostSurfaceService);
+		}, commandService, hostSurfaceService, undefined,
+			new StorageServiceWebHucodeShellPersistence(storageService),
+			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
+				HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING
+			) ?? 'active');
 	}
 }
 

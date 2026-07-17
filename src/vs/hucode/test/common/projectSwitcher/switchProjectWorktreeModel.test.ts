@@ -16,6 +16,7 @@ import {
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
+	sortProjectSwitcherNavigationHistory,
 	SwitchWorktreeQuickPick,
 	withSwitchWorktreeSeparators,
 } from '../../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -90,18 +91,20 @@ suite('SwitchProjectWorktreeModel', () => {
 		);
 	});
 
-	test('groups current, loaded, and not loaded picks', () => {
+	test('groups current, loaded, dormant, and not loaded picks', () => {
 		const current = createPick({
 			projectId: 'current',
 			isCurrent: true,
 			isLoaded: true,
 		});
 		const loaded = createPick({ projectId: 'loaded', isLoaded: true });
+		const dormant = createPick({ projectId: 'dormant', isDormant: true });
 		const notLoaded = createPick({ projectId: 'not-loaded' });
 
 		const items = withSwitchWorktreeSeparators([
 			current,
 			loaded,
+			dormant,
 			notLoaded,
 		]);
 
@@ -115,6 +118,8 @@ suite('SwitchProjectWorktreeModel', () => {
 				'current',
 				'Loaded',
 				'loaded',
+				'Dormant',
+				'dormant',
 				'Not Loaded',
 				'not-loaded',
 			]
@@ -258,6 +263,30 @@ suite('SwitchProjectWorktreeModel', () => {
 			'/tmp/one'
 		);
 	});
+
+	test('globally orders mixed project and arbitrary history', () => {
+		assert.deepStrictEqual(sortProjectSwitcherNavigationHistory([{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+			lastVisitedAt: 30,
+		}, {
+			worktreePath: '/tmp/scratch-old',
+			lastVisitedAt: 10,
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+			lastVisitedAt: 20,
+		}]), [{
+			projectId: undefined,
+			worktreePath: '/tmp/scratch-old',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}]);
+	});
 });
 
 function createPick(options: {
@@ -268,6 +297,7 @@ function createPick(options: {
 	readonly detail?: string;
 	readonly isCurrent?: boolean;
 	readonly isLoaded?: boolean;
+	readonly isDormant?: boolean;
 }): SwitchWorktreeQuickPick {
 	const label = options.label ?? `$(folder) ${options.projectId}`;
 	const description = options.description ?? 'local';
@@ -280,6 +310,7 @@ function createPick(options: {
 		detail: options.detail ?? `${branch} - /tmp/${options.projectId}`,
 		isCurrent: options.isCurrent ?? false,
 		isLoaded: options.isLoaded ?? false,
+		isDormant: options.isDormant,
 		projectOrder: 0,
 		worktreeOrder: 0,
 		searchFields: [

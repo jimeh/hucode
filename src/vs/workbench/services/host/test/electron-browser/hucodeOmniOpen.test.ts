@@ -89,12 +89,20 @@ suite('HucodeOmniOpen', () => {
 			projectId?: string;
 		}[] = [];
 		const focusWorkspaceCalls: number[] = [];
+		const focusHostedWorkspaceByPathCalls: string[] = [];
 		const focusNormalWindowByPathCalls: string[] = [];
+		const hostedWorkspacePaths = new Set<string>();
 		const normalWindowPaths = new Set<string>();
 		let focusNormalWindowByPathError: Error | undefined;
 
 		return {
 			service: {
+				async focusHostedWorkspaceByPath(
+					worktreePath: string
+				): Promise<boolean> {
+					focusHostedWorkspaceByPathCalls.push(worktreePath);
+					return hostedWorkspacePaths.has(worktreePath);
+				},
 				async focusNormalWindowByPath(
 					worktreePath: string
 				): Promise<boolean> {
@@ -123,7 +131,9 @@ suite('HucodeOmniOpen', () => {
 			} satisfies IHucodeOmniOpenShellService,
 			openWorkspaceCalls,
 			focusWorkspaceCalls,
+			focusHostedWorkspaceByPathCalls,
 			focusNormalWindowByPathCalls,
+			hostedWorkspacePaths,
 			normalWindowPaths,
 			setFocusNormalWindowByPathError(error: Error): void {
 				focusNormalWindowByPathError = error;
@@ -244,6 +254,29 @@ suite('HucodeOmniOpen', () => {
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 
+	test('focuses an existing hosted workbench before opening a duplicate',
+		async () => {
+			const nativeHost = createNativeHostService();
+			const projectManager = createProjectManagerService([]);
+			const shell = createShellService();
+			shell.hostedWorkspacePaths.add('/outside');
+
+			assert.strictEqual(await tryOpenHucodeOmniWindow(
+				[{ folderUri: URI.file('/outside') }],
+				undefined,
+				nativeHost.service,
+				environment({ isOmniWindow: true }),
+				shell.service,
+				projectManager.service
+			), true);
+			assert.deepStrictEqual(
+				shell.focusHostedWorkspaceByPathCalls,
+				['/outside']
+			);
+			assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, []);
+			assert.deepStrictEqual(shell.openWorkspaceCalls, []);
+		});
+
 	test('opens known folders in Omni when normal-window lookup fails', async () => {
 		const nativeHost = createNativeHostService();
 		const projectManager = createProjectManagerService([
@@ -274,7 +307,7 @@ suite('HucodeOmniOpen', () => {
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 
-	test('falls back to a new window for unknown folders', async () => {
+	test('opens unknown folders as retained Omni workbenches', async () => {
 		const nativeHost = createNativeHostService();
 		const projectManager = createProjectManagerService([]);
 		const shell = createShellService();
@@ -291,11 +324,15 @@ suite('HucodeOmniOpen', () => {
 			),
 			true
 		);
-		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
-		assert.deepStrictEqual(nativeHost.openWindowCalls, [{
-			toOpen,
-			options: { forceNewWindow: true }
+		assert.deepStrictEqual(shell.openWorkspaceCalls, [{
+			windowId: nativeHost.service.windowId,
+			worktreePath: '/outside',
+			projectId: undefined,
 		}]);
+		assert.deepStrictEqual(shell.focusWorkspaceCalls, [
+			nativeHost.service.windowId,
+		]);
+		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 
 	test('falls back to a new window for workspace files', async () => {

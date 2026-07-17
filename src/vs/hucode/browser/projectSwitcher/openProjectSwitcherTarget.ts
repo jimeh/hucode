@@ -78,9 +78,12 @@ async function focusNormalWindowByPathBestEffort(
  */
 export async function setLastActiveWorktreeBestEffort(
 	projectManagerService: IProjectManagerService,
-	projectId: string,
+	projectId: string | undefined,
 	worktreePath: string
 ): Promise<void> {
+	if (!projectId) {
+		return;
+	}
 	try {
 		await projectManagerService.setLastActiveWorktree(
 			projectId,

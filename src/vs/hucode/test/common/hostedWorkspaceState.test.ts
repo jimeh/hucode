@@ -17,6 +17,7 @@ import {
 	HostedWorkspaceStateModel,
 	isHostedWorkspaceAvailable,
 	isHostedWorkspacePendingReady,
+	isHostedWorkspaceRestorable,
 	sortRestoreEntries,
 	waitForHostedWorkspaceReady,
 	type IHostedWorkspaceStateEntry,
@@ -56,8 +57,21 @@ suite('HostedWorkspaceState', () => {
 			entry('loading', { state: 'loading' }),
 		]), true);
 		assert.strictEqual(hasLoadedHostedWorkspace([
+			entry('dormant', { state: 'dormant' }),
+		]), false);
+		assert.strictEqual(hasLoadedHostedWorkspace([
 			entry('loaded'),
 		], candidate => candidate.instanceId === 'loaded'), false);
+	});
+
+	test('distinguishes dormant restore state from live availability', () => {
+		const dormant = entry('dormant', { state: 'dormant' });
+
+		assert.strictEqual(isHostedWorkspaceAvailable(dormant), false);
+		assert.strictEqual(isHostedWorkspaceRestorable(dormant), true);
+		assert.strictEqual(isHostedWorkspaceRestorable(
+			entry('unloaded', { state: 'unloaded' })
+		), false);
 	});
 
 	test('uses active selection for ready state', () => {

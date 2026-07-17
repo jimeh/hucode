@@ -302,6 +302,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	function createController(options: {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
+		readonly retainedWorkbenches?: INativeWindowConfiguration['omniRetainedWorkbenches'];
 		readonly activeWorktreePath?: string;
 		readonly ids?: string[];
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
@@ -348,6 +349,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				isOmniWindow: true,
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
+				omniRetainedWorkbenches: options.retainedWorkbenches,
 			} as unknown as INativeWindowConfiguration,
 		} as ICodeWindow;
 		const controller = disposables.add(new ResidentHostedWorkspacesController(
@@ -388,6 +390,100 @@ suite('ResidentHostedWorkspacesController', () => {
 		};
 	}
 
+	test('unload retains arbitrary workbench until explicit dismissal', async () => {
+		const scratch = createWorktree('scratch');
+		const { controller, stateChanges } = createController();
+
+		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		const workbenchId = controller.getState().retainedWorkbenches?.[0].id;
+		assert.ok(workbenchId);
+
+		const beforeUnloadChanges = stateChanges.length;
+		await controller.unloadRetainedWorkbench(workbenchId);
+		assert.deepStrictEqual({
+			instances: controller.getState().instances.length,
+			desiredState: controller.getState()
+				.retainedWorkbenches?.[0].desiredState,
+		}, {
+			instances: 0,
+			desiredState: 'unloaded',
+		});
+		assert.strictEqual(stateChanges.length, beforeUnloadChanges + 1);
+
+		const beforeDismissChanges = stateChanges.length;
+		await controller.dismissRetainedWorkbench(workbenchId);
+		assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
+		assert.strictEqual(stateChanges.length, beforeDismissChanges + 1);
+	});
+
+	test('generic close emits one coherent retained unload state', async () => {
+		const scratch = createWorktree('scratch-close');
+		const { controller, stateChanges } = createController();
+		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		const beforeCloseChanges = stateChanges.length;
+
+		await controller.closeWorkspace();
+
+		assert.strictEqual(stateChanges.length, beforeCloseChanges + 1);
+		assert.strictEqual(
+			controller.getState().retainedWorkbenches?.[0].desiredState,
+			'unloaded'
+		);
+	});
+
+	test('active restore policy leaves other desired workbenches dormant',
+		async () => {
+			const active = createWorktree('active');
+			const inactive = createWorktree('inactive');
+			const { controller, viewFactory } = createController({
+				activeWorktreePath: active,
+				retainedWorkbenches: [{
+					id: 'active',
+					folderUri: URI.file(active).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}, {
+					id: 'inactive',
+					folderUri: URI.file(inactive).toJSON(),
+					desiredState: 'loaded',
+					order: 1,
+				}],
+			});
+
+			await controller.ensureRestored();
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => [
+					instance.worktreePath,
+					instance.state,
+				]),
+				[[active, 'loading'], [inactive, 'dormant']]
+			);
+			assert.strictEqual(viewFactory.views.length, 1);
+		});
+
+	test('missing retained restore is kept unloaded without a retry loop',
+		async () => {
+			const missing = join(tempRoot, 'missing');
+			const { controller } = createController({
+				activeWorktreePath: missing,
+				retainedWorkbenches: [{
+					id: 'missing',
+					folderUri: URI.file(missing).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+			});
+
+			await controller.ensureRestored();
+
+			assert.strictEqual(controller.getState().instances.length, 0);
+			assert.strictEqual(
+				controller.getState().retainedWorkbenches?.[0].desiredState,
+				'unloaded'
+			);
+		});
+
 	test('restore without resident workspaces emits an empty shell state', async () => {
 		const { controller, stateChanges } = createController();
 
@@ -399,6 +495,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			projectSwitcherCanGoBack: false,
 			projectSwitcherCanGoForward: false,
 			instances: [],
+			retainedWorkbenches: [],
 		});
 		assert.strictEqual(stateChanges.length, 1);
 	});
@@ -434,7 +531,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		await controller.ensureRestored();
 
-		assert.strictEqual(viewFactory.views.length, 2);
+		assert.strictEqual(viewFactory.views.length, 1);
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
 			projectId: instance.projectId,
 			worktreePath: instance.worktreePath,
@@ -450,12 +547,11 @@ suite('ResidentHostedWorkspacesController', () => {
 			{
 				projectId: 'project-alpha',
 				worktreePath: alpha,
-				state: 'loading',
+				state: 'dormant',
 				visible: false,
 			},
 		]);
 
-		controller.notifyHostedWorkspaceReady('instance-1');
 		controller.notifyHostedWorkspaceReady('instance-2');
 
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
@@ -463,7 +559,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			state: instance.state,
 		})), [
 			{ worktreePath: bravo, state: 'active' },
-			{ worktreePath: alpha, state: 'loaded' },
+			{ worktreePath: alpha, state: 'dormant' },
 		]);
 		assert.ok(stateChanges.length >= 4);
 	});
@@ -491,7 +587,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			});
 
 		await controller.ensureRestored();
-		controller.notifyHostedWorkspaceReady('instance-2');
+		controller.notifyHostedWorkspaceReady('instance-1');
 
 		assert.strictEqual(viewFactory.views.length, 2);
 		assert.deepStrictEqual(

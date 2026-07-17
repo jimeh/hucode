@@ -99,6 +99,35 @@
 	opacity: 0.55;
 }
 
+.hucode-project-switcher-worktree-dormant,
+.hucode-project-switcher-workbench-dormant {
+	opacity: 0.72;
+}
+
+.hucode-project-switcher-workbench-unloaded {
+	opacity: 0.5;
+}
+
+.hucode-project-switcher-workbench-crashed
+	.hucode-project-switcher-icon {
+	color: var(--vscode-list-warningForeground);
+}
+
+.hucode-project-switcher-workbench .hucode-project-switcher-text {
+	flex-direction: column;
+	align-items: stretch;
+	justify-content: center;
+	gap: 1px;
+	line-height: 17px;
+}
+
+.hucode-project-switcher-workbench .hucode-project-switcher-label,
+.hucode-project-switcher-workbench .hucode-project-switcher-description {
+	display: block;
+	flex: 0 1 auto;
+	width: 100%;
+}
+
 .hucode-project-switcher-worktree-loading {
 	opacity: 0.82;
 }
@@ -185,4 +214,21 @@
 	content: '';
 	flex: 1;
 	border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+}
+
+.hucode-project-switcher-section {
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 11px;
+}
+
+.hucode-project-switcher-section-actions,
+.hucode-project-switcher-section-actions
+	.hucode-project-switcher-action-button {
+	display: flex !important;
+	flex-basis: auto;
+	overflow: visible;
+	opacity: 1;
+	pointer-events: auto;
 }

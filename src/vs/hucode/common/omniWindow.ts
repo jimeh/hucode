@@ -12,7 +12,12 @@ import {
 	IRectangle,
 } from '../../platform/window/common/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
+import { UriComponents } from '../../base/common/uri.js';
 import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecycle.js';
+import {
+	HucodeHostedWorkbenchRestorePolicy,
+	IHucodeRetainedWorkbench,
+} from './retainedWorkbench.js';
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
@@ -55,6 +60,7 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectSwitcherCanGoBack: boolean;
 	readonly projectSwitcherCanGoForward: boolean;
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
+	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
 }
 
 /**
@@ -105,6 +111,39 @@ export interface IHucodeShellService {
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/** Retains, loads, and activates an arbitrary folder workbench. */
+	retainAndOpenWorkbench(
+		windowId: number,
+		folderUri: UriComponents,
+	): Promise<IHucodeHostedWorkspaceState>;
+	/** Unloads an arbitrary workbench while preserving its retained record. */
+	unloadRetainedWorkbench(
+		windowId: number,
+		workbenchId: string,
+	): Promise<IHucodeHostedWorkspaceState>;
+	/** Safely unloads and removes an arbitrary workbench record. */
+	dismissRetainedWorkbench(
+		windowId: number,
+		workbenchId: string,
+	): Promise<IHucodeHostedWorkspaceState>;
+	/** Persists the complete manual order of arbitrary workbench records. */
+	reorderRetainedWorkbenches(
+		windowId: number,
+		orderedWorkbenchIds: readonly string[],
+	): Promise<IHucodeHostedWorkspaceState>;
+	/** Removes arbitrary records that are now authoritative project worktrees. */
+	reconcileRetainedWorkbenches(
+		windowId: number,
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: UriComponents;
+		}[],
+	): Promise<IHucodeHostedWorkspaceState>;
+	/** Configures which desired-loaded workbenches are eager on startup. */
+	setHostedWorkbenchRestorePolicy(
+		windowId: number,
+		policy: HucodeHostedWorkbenchRestorePolicy,
+	): Promise<void>;
 	/**
 	 * Opens files inside a hosted workspace, creating or activating the
 	 * workspace first when necessary.

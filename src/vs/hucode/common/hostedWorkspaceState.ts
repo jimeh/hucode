@@ -243,7 +243,17 @@ export function isHostedWorkspacePendingReady(
 export function isHostedWorkspaceAvailable(
 	entry: IHostedWorkspaceStateEntry
 ): boolean {
-	return entry.state !== 'crashed' && entry.state !== 'unloaded';
+	return entry.state === 'restore-pending' ||
+		entry.state === 'loading' ||
+		entry.state === 'active' ||
+		entry.state === 'loaded';
+}
+
+/** Returns whether an entry should remain in the next restore snapshot. */
+export function isHostedWorkspaceRestorable(
+	entry: IHostedWorkspaceStateEntry
+): boolean {
+	return isHostedWorkspaceAvailable(entry) || entry.state === 'dormant';
 }
 
 /**
@@ -348,7 +358,7 @@ export function createHostedWorkspaceRestoreEntries<
 	activeInstanceId: string | undefined
 ): IOmniWorkspaceRestoreEntry[] {
 	return Array.from(entries)
-		.filter(isHostedWorkspaceAvailable)
+		.filter(isHostedWorkspaceRestorable)
 		.map(entry => {
 			const state: IOmniWorkspaceRestoreEntry['state'] =
 				entry.instanceId === activeInstanceId ? 'active' : 'loaded';

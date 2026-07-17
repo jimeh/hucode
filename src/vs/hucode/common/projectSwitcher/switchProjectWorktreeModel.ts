@@ -18,8 +18,23 @@ import { ProjectRecord, WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
 
 export interface IProjectSwitcherSelectionTarget {
-	readonly projectId: string;
+	readonly projectId?: string;
 	readonly worktreePath: string;
+}
+
+/** Timestamped project or arbitrary-workbench navigation target. */
+export interface IProjectSwitcherNavigationHistoryEntry
+	extends IProjectSwitcherSelectionTarget {
+	readonly lastVisitedAt: number;
+}
+
+/** Globally orders mixed project and arbitrary-workbench history entries. */
+export function sortProjectSwitcherNavigationHistory(
+	entries: readonly IProjectSwitcherNavigationHistoryEntry[]
+): IProjectSwitcherSelectionTarget[] {
+	return [...entries]
+		.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt)
+		.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }));
 }
 
 export type SwitchWorktreeSearchField = {
@@ -31,6 +46,7 @@ export type SwitchWorktreeQuickPick = IQuickPickItem &
 	IProjectSwitcherSelectionTarget & {
 		readonly isCurrent: boolean;
 		readonly isLoaded: boolean;
+		readonly isDormant?: boolean;
 		readonly lastVisitedAt?: number;
 		readonly projectOrder: number;
 		readonly worktreeOrder: number;
@@ -62,7 +78,10 @@ export function withSwitchWorktreeSeparators(
 ): ReadonlyArray<SwitchWorktreeQuickPick | IQuickPickSeparator> {
 	const currentPicks = picks.filter(pick => pick.isCurrent);
 	const loadedPicks = picks.filter(pick => pick.isLoaded && !pick.isCurrent);
-	const notLoadedPicks = picks.filter(pick => !pick.isLoaded);
+	const dormantPicks = picks.filter(pick => pick.isDormant && !pick.isCurrent);
+	const notLoadedPicks = picks.filter(pick =>
+		!pick.isLoaded && !pick.isDormant
+	);
 	const items: Array<SwitchWorktreeQuickPick | IQuickPickSeparator> = [];
 
 	if (currentPicks.length) {
@@ -79,6 +98,14 @@ export function withSwitchWorktreeSeparators(
 			label: localize('loadedWorktrees', 'Loaded'),
 		});
 		items.push(...loadedPicks);
+	}
+
+	if (dormantPicks.length) {
+		items.push({
+			type: 'separator',
+			label: localize('dormantWorkbenches', 'Dormant'),
+		});
+		items.push(...dormantPicks);
 	}
 
 	if (notLoadedPicks.length) {
