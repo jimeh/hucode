@@ -853,8 +853,8 @@ export class WebHucodeShellController extends Disposable
 				);
 				break;
 			case HucodeOmniWebChildMessageType.Focus:
-				instance.focused = message.focused;
-				if (message.focused) {
+				instance.focused = message.focused && instance.visible;
+				if (instance.focused) {
 					this.activateInstance(instance);
 				} else {
 					this.emitState();

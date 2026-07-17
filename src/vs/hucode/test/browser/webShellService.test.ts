@@ -572,6 +572,37 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('ignores delayed focus from a hidden workbench', async () => {
+		const { service, surface, browser } = createService();
+		const windowId = browser.windowId;
+		const first = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-one',
+			'project-one'
+		);
+		const firstInstanceId = first.instances[0].instanceId;
+		markReady(browser, surface, firstInstanceId);
+
+		const second = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-two',
+			'project-two'
+		);
+		const secondInstanceId = second.activeInstanceId;
+		assert.ok(secondInstanceId);
+
+		markFocused(browser, surface, firstInstanceId);
+
+		const state = await service.getWindowState(windowId);
+		assert.strictEqual(state.activeInstanceId, secondInstanceId);
+		assert.strictEqual(
+			state.instances.find(instance =>
+				instance.instanceId === firstInstanceId
+			)?.focused,
+			false
+		);
+	});
+
 	test('uses browser-limited native keybinding and paste behavior', async () => {
 		const { service, browser } = createService();
 		const windowId = browser.windowId;
