@@ -661,17 +661,16 @@ class ProjectSwitcherRenderer
 			item.hostedWorkbenchState === 'loading' ||
 			item.hostedWorkbenchState === 'active' ||
 			item.hostedWorkbenchState === 'loaded';
-		const canUnload = isLive || item.hostedWorkbenchState === 'dormant';
 		this.setAction(
 			templateData,
 			templateData.trailingAction,
-			canUnload
+			isLive
 				? localize('unloadRetainedWorkbenchButton', 'Unload Workbench')
 				: localize('dismissWorkbenchButton', 'Dismiss Workbench'),
-			canUnload ? Codicon.chromeMinimize : Codicon.close,
+			isLive ? Codicon.chromeMinimize : Codicon.close,
 			() => {
 				void this.commandService.executeCommand(
-					canUnload
+					isLive
 						? UNLOAD_WORKBENCH_COMMAND_ID
 						: DISMISS_WORKBENCH_COMMAND_ID,
 					toHandleArg(item)
@@ -2249,16 +2248,10 @@ registerAction2(class extends Action2 {
 			if (environmentService.isOmniWindow) {
 				await shellService.reconcileRetainedWorkbenches(
 					dom.getWindowId(mainWindow),
-					[
-						{
-							projectId: project.id,
-							folderUri: folder[0].toJSON(),
-						},
-						...project.worktrees.map(worktree => ({
-							projectId: project.id,
-							folderUri: URI.file(worktree.path).toJSON(),
-						})),
-					]
+					project.worktrees.map(worktree => ({
+						projectId: project.id,
+						folderUri: URI.file(worktree.path).toJSON(),
+					}))
 				);
 			}
 		} catch (error) {

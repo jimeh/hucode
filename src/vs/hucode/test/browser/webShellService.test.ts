@@ -996,13 +996,11 @@ suite('WebHucodeShellService', () => {
 
 			const alpha = service.openWorkspace(
 				browser.windowId,
-				'/tmp/alpha',
-				'project-alpha'
+				'/tmp/alpha'
 			);
 			const bravo = service.openWorkspace(
 				browser.windowId,
-				'/tmp/bravo',
-				'project-bravo'
+				'/tmp/bravo'
 			);
 			bravoStat.complete(true);
 			await bravo;
@@ -1019,6 +1017,12 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(
 				state.instances.find(instance =>
 					instance.worktreePath === '/tmp/alpha'
+				)?.lastActiveAt,
+				undefined
+			);
+			assert.strictEqual(
+				state.retainedWorkbenches?.find(record =>
+					URI.revive(record.folderUri).fsPath === '/tmp/alpha'
 				)?.lastActiveAt,
 				undefined
 			);
@@ -1243,7 +1247,7 @@ suite('WebHucodeShellService', () => {
 			}],
 			activeWorktreePath: '/tmp/project',
 		});
-		const { service, browser } = createService(
+		const { service, surface, browser } = createService(
 			new FakeBrowserAdapter(),
 			persistence,
 			'active',
@@ -1253,6 +1257,20 @@ suite('WebHucodeShellService', () => {
 		const state = await service.getWindowState(browser.windowId);
 
 		assert.strictEqual(state.instances[0].projectId, 'project');
+		const instanceId = state.instances[0].instanceId;
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.runCommandResult = false;
+		await service.reloadWorkspace(browser.windowId);
+		const crashed = await waitForInstanceState(
+			service,
+			browser.windowId,
+			instanceId,
+			'crashed'
+		);
+		assert.strictEqual(
+			crashed.retainedWorkbenches?.[0].desiredState,
+			'unloaded'
+		);
 	});
 
 	test('rejects an explicit missing folder before iframe creation', async () => {

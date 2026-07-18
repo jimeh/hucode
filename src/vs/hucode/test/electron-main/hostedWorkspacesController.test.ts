@@ -803,7 +803,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			loadUrlPromises: [slowLoad.p, fastLoad.p],
 		});
 
-		const openAlpha = controller.openWorkspace(alpha, 'project-alpha');
+		const openAlpha = controller.openWorkspace(alpha);
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 1;
 			attempt++
@@ -811,7 +811,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await Promise.resolve();
 		}
 		assert.strictEqual(viewFactory.views.length, 1);
-		const openBravo = controller.openWorkspace(bravo, 'project-bravo');
+		const openBravo = controller.openWorkspace(bravo);
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 2;
 			attempt++
@@ -827,6 +827,9 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		assert.deepStrictEqual({
 			activeInstanceId: controller.getState().activeInstanceId,
+			alphaLastActiveAt: controller.getState().retainedWorkbenches
+				?.find(record => URI.revive(record.folderUri).fsPath === alpha)
+				?.lastActiveAt,
 			instances: controller.getState().instances
 				.map(instance => ({
 					instanceId: instance.instanceId,
@@ -834,10 +837,11 @@ suite('ResidentHostedWorkspacesController', () => {
 				}))
 				.toSorted((a, b) => a.instanceId.localeCompare(b.instanceId)),
 		}, {
-			activeInstanceId: 'instance-2',
+			activeInstanceId: 'instance-4',
+			alphaLastActiveAt: undefined,
 			instances: [
-				{ instanceId: 'instance-1', visible: false },
-				{ instanceId: 'instance-2', visible: true },
+				{ instanceId: 'instance-2', visible: false },
+				{ instanceId: 'instance-4', visible: true },
 			],
 		});
 	});
@@ -1300,6 +1304,45 @@ suite('ResidentHostedWorkspacesController', () => {
 			closeCalls: [],
 		});
 	});
+
+	test('reloads a loading workspace reactivated during will-unload',
+		async () => {
+			const alpha = createWorktree('alpha-loading-reactivated-after-will');
+			const bravo = createWorktree('bravo-loading-reactivated-after-will');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			const willUnload = new DeferredPromise<{ replyChannel: string }>();
+			viewFactory.views[0].rawWebContents.send = function (
+				channel: string,
+				request: unknown
+			): void {
+				this.sent.push({ channel, request });
+				if (channel === 'vscode:onBeforeUnload') {
+					const { okChannel } = request as { okChannel: string };
+					setTimeout(() => ipcMain.emitReply(okChannel), 0);
+				}
+				if (channel === 'vscode:onWillUnload') {
+					willUnload.complete(request as { replyChannel: string });
+				}
+			};
+
+			const closing = controller.closeWorkspace('instance-1');
+			const willUnloadRequest = await willUnload.p;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			ipcMain.emitReply(willUnloadRequest.replyChannel);
+			await closing;
+
+			assert.strictEqual(
+				viewFactory.views[0].rawWebContents.reloadCalls.length,
+				1
+			);
+		}
+	);
 
 	test('overlapping closes destroy a workspace once', async () => {
 		const alpha = createWorktree('alpha-overlapping-close');

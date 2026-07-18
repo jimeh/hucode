@@ -122,6 +122,7 @@ interface IHostedWorkbenchInstance {
 	focused: boolean;
 	lastActiveAt?: number;
 	lifecycleGeneration: number;
+	interruptedUnloadReloadGeneration?: number;
 	disposed: boolean;
 }
 
@@ -842,8 +843,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		} else if (!projectId) {
 			this.retainedWorkbenches.retain(
 				URI.file(worktreePath),
-				'loaded',
-				this.now()
+				'loaded'
 			);
 		}
 
@@ -1498,7 +1498,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	): void {
 		if (
 			instance.disposed ||
-			instance.state === 'loading' ||
+			instance.interruptedUnloadReloadGeneration ===
+			instance.lifecycleGeneration ||
 			this.hostedWorkspaces.getInstanceByPath(instance.worktreePath) !==
 			instance
 		) {
@@ -1514,6 +1515,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			'[HucodeShellMainService] Reloading hosted workspace reactivated ' +
 			`during will-unload for ${instance.worktreePath}.`
 		);
+		instance.interruptedUnloadReloadGeneration =
+			instance.lifecycleGeneration;
 		instance.state = 'loading';
 		webContents.reload();
 		this.emitState();

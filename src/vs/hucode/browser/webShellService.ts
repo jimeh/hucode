@@ -462,8 +462,7 @@ export class WebHucodeShellController extends Disposable
 		} else if (!projectId) {
 			retained = this.retainedWorkbenches.retain(
 				URI.file(worktreePath),
-				'loaded',
-				Date.now()
+				'loaded'
 			);
 		}
 
@@ -1315,9 +1314,12 @@ export class WebHucodeShellController extends Disposable
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {
 				instance.state = 'crashed';
-				if (instance.retainedWorkbenchId) {
+				const retained = this.retainedWorkbenches.getByUri(
+					URI.file(instance.worktreePath)
+				);
+				if (retained) {
 					this.retainedWorkbenches.update(
-						instance.retainedWorkbenchId,
+						retained.id,
 						{ desiredState: 'unloaded' }
 					);
 				}
