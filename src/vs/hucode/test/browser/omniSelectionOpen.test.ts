@@ -61,6 +61,7 @@ suite('OmniSelectionOpen', () => {
 			readonly focusNormalResult?: boolean | Error;
 			readonly hostedOwner?: boolean;
 			readonly closeRemovesHostedOwner?: boolean;
+			readonly retainedDismissed?: boolean;
 			readonly retainedUnloadSucceeds?: boolean;
 		} = {}
 	): IHucodeShellService {
@@ -123,7 +124,7 @@ suite('OmniSelectionOpen', () => {
 					projectSwitcherCanGoBack: false,
 					projectSwitcherCanGoForward: false,
 					instances: [],
-					retainedWorkbenches: [{
+					retainedWorkbenches: options.retainedDismissed ? [] : [{
 						id: workbenchId,
 						folderUri: URI.file('/repo').toJSON(),
 						desiredState: options.retainedUnloadSucceeds === false
@@ -315,6 +316,33 @@ suite('OmniSelectionOpen', () => {
 
 		assert.deepStrictEqual(calls, ['unloadRetained:4:retained']);
 	});
+
+	test('opens standalone when retained workbench was already dismissed',
+		async () => {
+			const calls: string[] = [];
+
+			await openSelectionInStandaloneWindow(
+				{ worktreePath: '/repo' },
+				host(calls),
+				shell(calls, { retainedDismissed: true }),
+				projectManager(calls),
+				notifications([]),
+				'Select first',
+				{ windowId: 4, id: 'retained' }
+			);
+
+			assert.deepStrictEqual(calls, [
+				'unloadRetained:4:retained',
+				'findHosted:/repo',
+				'focusNormal:/repo',
+				'hostOpen',
+				JSON.stringify({
+					toOpen: [{ folderUri: URI.file('/repo') }],
+					options: { forceNewWindow: true },
+				}),
+			]);
+		}
+	);
 
 	test('opens standalone window when worktree is not already open',
 		async () => {

@@ -131,10 +131,9 @@ export function getWebHucodeShellFolderResource(
 	remoteAuthority: string | undefined
 ): URI {
 	return remoteAuthority
-		? URI.from({
+		? URI.file(worktreePath).with({
 			scheme: Schemas.vscodeRemote,
 			authority: remoteAuthority,
-			path: worktreePath,
 		})
 		: URI.file(worktreePath);
 }
@@ -464,6 +463,7 @@ export class WebHucodeShellController extends Disposable
 			);
 		}
 
+		const retainedWorkbenchId = retained?.id;
 		const existing = this.getInstanceByPath(worktreePath);
 		if (existing && isHostedWorkspaceAvailable(existing)) {
 			existing.projectId = projectId ?? existing.projectId;
@@ -477,10 +477,32 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		if (!await this.folderAccess.exists(worktreePath)) {
+		const folderExists = await this.folderAccess.exists(worktreePath);
+		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
+		const currentInstance = this.getInstanceByPath(worktreePath);
+		if (currentInstance && isHostedWorkspaceAvailable(currentInstance)) {
+			currentInstance.projectId = projectId ?? currentInstance.projectId;
+			currentInstance.retainedWorkbenchId = retained?.id;
+			if (retained?.folderStatus === 'missing') {
+				this.retainedWorkbenches.update(retained.id, {
+					folderStatus: undefined,
+				});
+			}
+			this.activateInstance(currentInstance);
+			return this.getState();
+		}
+		if (!projectId && (
+			!retained ||
+			retained.id !== retainedWorkbenchId ||
+			retained.desiredState !== 'loaded'
+		)) {
+			return this.getState();
+		}
+
+		if (!folderExists) {
 			await this.deferStateEmission(async () => {
-				if (existing) {
-					this.removeInstance(existing);
+				if (currentInstance) {
+					this.removeInstance(currentInstance);
 				}
 				if (retained) {
 					this.retainedWorkbenches.update(retained.id, {
@@ -497,11 +519,11 @@ export class WebHucodeShellController extends Disposable
 			});
 		}
 
-		if (existing) {
-			if (existing.state === 'dormant') {
-				this.hostedWorkspaces.removeInstance(existing);
+		if (currentInstance) {
+			if (currentInstance.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(currentInstance);
 			} else {
-				this.removeInstance(existing);
+				this.removeInstance(currentInstance);
 			}
 		}
 
@@ -524,9 +546,7 @@ export class WebHucodeShellController extends Disposable
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
-		const uri = URI.revive(folderUri);
-		this.retainedWorkbenches.retain(uri, 'loaded', Date.now());
-		return this.openWorkspace(windowId, uri.fsPath);
+		return this.openWorkspace(windowId, URI.revive(folderUri).fsPath);
 	}
 
 	async unloadRetainedWorkbench(

@@ -319,6 +319,7 @@ function getCombinedSwitchWorkbenchPicks(
 		return {
 			...pick,
 			...(instance?.state === 'dormant' ? { isDormant: true } : {}),
+			lastVisitedAt: instance?.lastActiveAt ?? pick.lastVisitedAt,
 			...(icon ? { iconClass: ThemeIcon.asClassName(icon) } : {}),
 		};
 	});

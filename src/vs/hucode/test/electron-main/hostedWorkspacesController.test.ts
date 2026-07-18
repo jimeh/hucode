@@ -7,6 +7,7 @@ import assert from 'assert';
 import { EventEmitter } from 'events';
 import { mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
+import { DeferredPromise } from '../../../base/common/async.js';
 import { join } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
@@ -21,6 +22,7 @@ import {
 	IHostedWorkbenchView,
 	IHostedWorkbenchViewFactory,
 	IHostedWorkspaceIpcMain,
+	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
 
@@ -37,6 +39,7 @@ class TestWebContents extends EventEmitter {
 	readonly devToolsCalls: number[] = [];
 	readonly invalidateCalls: number[] = [];
 	loadUrlError: Error | undefined = undefined;
+	loadUrlPromise: Promise<void> | undefined;
 
 	constructor(
 		id: number,
@@ -79,6 +82,7 @@ class TestWebContents extends EventEmitter {
 
 	async loadURL(url: string): Promise<void> {
 		this.loadedUrls.push(url);
+		await this.loadUrlPromise;
 		if (this.loadUrlError) {
 			throw this.loadUrlError;
 		}
@@ -185,7 +189,8 @@ class TestHostedWorkbenchViewFactory implements IHostedWorkbenchViewFactory {
 
 	constructor(
 		private readonly ipcMain: TestHostedWorkspaceIpcMain,
-		private readonly loadUrlErrors: Error[] = []
+		private readonly loadUrlErrors: Error[] = [],
+		private readonly loadUrlPromises: Promise<void>[] = []
 	) { }
 
 	createView(): IHostedWorkbenchView {
@@ -193,6 +198,7 @@ class TestHostedWorkbenchViewFactory implements IHostedWorkbenchViewFactory {
 			new TestWebContents(this.nextWebContentsId++, this.ipcMain)
 		);
 		view.rawWebContents.loadUrlError = this.loadUrlErrors.shift();
+		view.rawWebContents.loadUrlPromise = this.loadUrlPromises.shift();
 		this.views.push(view);
 		return view as unknown as IHostedWorkbenchView;
 	}
@@ -307,6 +313,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ids?: string[];
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
+		readonly loadUrlPromises?: Promise<void>[];
 		readonly readyTimeoutMs?: number;
 		readonly restorePolicy?: 'active' | 'all' | 'none';
 		readonly windowId?: number;
@@ -315,7 +322,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
 		const viewFactory = new TestHostedWorkbenchViewFactory(
 			ipcMain,
-			[...(options.loadUrlErrors ?? [])]
+			[...(options.loadUrlErrors ?? [])],
+			[...(options.loadUrlPromises ?? [])]
 		);
 		const browserViewMainService = new TestBrowserViewMainService();
 		const trustedProcessIds: number[] = [];
@@ -709,14 +717,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		await controller.ensureRestored();
 		controller.notifyHostedWorkspaceReady('instance-1');
 
-		assert.strictEqual(viewFactory.views.length, 2);
+		assert.strictEqual(viewFactory.views.length, 1);
 		assert.deepStrictEqual(
 			browserViewMainService.destroyedHostedWebContentsIds,
-			[1]
+			[]
 		);
-		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.closeCalls, [
-			{ waitForBeforeUnload: false },
-		]);
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
 			webContentsId: instance.webContentsId,
 			worktreePath: instance.worktreePath,
@@ -724,16 +729,16 @@ suite('ResidentHostedWorkspacesController', () => {
 			visible: instance.visible,
 		})), [
 			{
-				webContentsId: 2,
+				webContentsId: 1,
 				worktreePath: alpha,
 				state: 'active',
 				visible: true,
 			},
 		]);
 		assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-3), [
-			{ id: 2, visible: false },
-			{ id: 2, visible: true },
-			{ id: 2, visible: true },
+			{ id: 1, visible: false },
+			{ id: 1, visible: true },
+			{ id: 1, visible: true },
 		]);
 		assert.strictEqual(window.config?.omniActiveWorktreePath, alpha);
 		assert.deepStrictEqual(window.config?.omniResidentWorkspaces, [{
@@ -742,6 +747,97 @@ suite('ResidentHostedWorkspacesController', () => {
 			lastActiveAt: 1000,
 			state: 'active',
 		}]);
+	});
+
+	test('latest overlapping workspace open keeps activation', async () => {
+		const alpha = createWorktree('slow-alpha');
+		const bravo = createWorktree('fast-bravo');
+		const slowLoad = new DeferredPromise<void>();
+		const fastLoad = new DeferredPromise<void>();
+		const { controller, viewFactory } = createController({
+			loadUrlPromises: [slowLoad.p, fastLoad.p],
+		});
+
+		const openAlpha = controller.openWorkspace(alpha, 'project-alpha');
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 1;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(viewFactory.views.length, 1);
+		const openBravo = controller.openWorkspace(bravo, 'project-bravo');
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 2;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(viewFactory.views.length, 2);
+
+		fastLoad.complete();
+		await openBravo;
+		slowLoad.complete();
+		await openAlpha;
+
+		assert.deepStrictEqual({
+			activeInstanceId: controller.getState().activeInstanceId,
+			instances: controller.getState().instances
+				.map(instance => ({
+					instanceId: instance.instanceId,
+					visible: instance.visible,
+				}))
+				.toSorted((a, b) => a.instanceId.localeCompare(b.instanceId)),
+		}, {
+			activeInstanceId: 'instance-2',
+			instances: [
+				{ instanceId: 'instance-1', visible: false },
+				{ instanceId: 'instance-2', visible: true },
+			],
+		});
+	});
+
+	test('retains missing folders without creating hosted views', async () => {
+		const missing = join(tempRoot, 'missing');
+		const { controller, protocolMainService, viewFactory } =
+			createController();
+
+		await controller.retainAndOpenWorkbench(URI.file(missing));
+
+		assert.deepStrictEqual({
+			instances: controller.getState().instances,
+			retained: controller.getState().retainedWorkbenches?.map(record => ({
+				desiredState: record.desiredState,
+				folderStatus: record.folderStatus,
+			})),
+			views: viewFactory.views.length,
+			objectUrls: protocolMainService.objectUrls.length,
+		}, {
+			instances: [],
+			retained: [{
+				desiredState: 'loaded',
+				folderStatus: 'missing',
+			}],
+			views: 0,
+			objectUrls: 0,
+		});
+	});
+
+	test('classifies inaccessible hosted folders as unavailable', () => {
+		for (const code of ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM']) {
+			assert.strictEqual(
+				isHostedWorkspaceFolderUnavailableError(
+					Object.assign(new Error(code), { code })
+				),
+				true
+			);
+		}
+		assert.strictEqual(
+			isHostedWorkspaceFolderUnavailableError(
+				Object.assign(new Error('EIO'), { code: 'EIO' })
+			),
+			false
+		);
 	});
 
 	test('opening an existing workspace reuses the resident view', async () => {

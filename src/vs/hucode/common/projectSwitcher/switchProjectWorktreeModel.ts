@@ -72,8 +72,12 @@ export function compareSwitchWorktreePicks(
 	b: SwitchWorktreeQuickPick,
 	sectionOrder?: readonly ProjectSwitcherOmniSection[]
 ): number {
-	const sectionRank = (pick: SwitchWorktreeQuickPick) =>
-		sectionOrder?.indexOf(pick.projectId ? 'projects' : 'workbenches') ?? 0;
+	const sectionRank = (pick: SwitchWorktreeQuickPick) => {
+		const rank = sectionOrder?.indexOf(
+			pick.projectId ? 'projects' : 'workbenches'
+		);
+		return rank === undefined || rank < 0 ? Number.MAX_SAFE_INTEGER : rank;
+	};
 	return Number(b.isCurrent) - Number(a.isCurrent) ||
 		Number(b.isLoaded) - Number(a.isLoaded) ||
 		Number(!!b.isDormant) - Number(!!a.isDormant) ||
@@ -113,7 +117,7 @@ export function withSwitchWorktreeSeparators(
 	const loadedPicks = picks.filter(pick => pick.isLoaded && !pick.isCurrent);
 	const dormantPicks = picks.filter(pick => pick.isDormant && !pick.isCurrent);
 	const notLoadedPicks = picks.filter(pick =>
-		!pick.isLoaded && !pick.isDormant
+		!pick.isLoaded && !pick.isDormant && !pick.isCurrent
 	);
 	const items: Array<SwitchWorktreeQuickPick | IQuickPickSeparator> = [];
 

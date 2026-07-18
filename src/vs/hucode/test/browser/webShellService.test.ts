@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { raceTimeout } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
 import { URI } from '../../../base/common/uri.js';
 import {
@@ -67,6 +67,20 @@ suite('WebHucodeShellService', () => {
 				getWebHucodeShellFolderResource('/tmp/local', undefined).scheme,
 				'file'
 			);
+			const windowsPath = 'C:\\Users\\test\\project';
+			const windowsResource = getWebHucodeShellFolderResource(
+				windowsPath,
+				'server-authority'
+			);
+			assert.deepStrictEqual({
+				scheme: windowsResource.scheme,
+				authority: windowsResource.authority,
+				path: windowsResource.path,
+			}, {
+				scheme: 'vscode-remote',
+				authority: 'server-authority',
+				path: URI.file(windowsPath).path,
+			});
 			assert.strictEqual(await createWebHucodeShellFolderAccess(
 				'server-authority',
 				async () => ({ isDirectory: false })
@@ -912,6 +926,115 @@ suite('WebHucodeShellService', () => {
 				folderStatus: 'missing',
 				iframes: 0,
 				saves: 1,
+			});
+		}
+	);
+
+	test('coalesces concurrent workbench opens after folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const first = service.openWorkspace(
+				browser.windowId,
+				'/tmp/concurrent'
+			);
+			const second = service.openWorkspace(
+				browser.windowId,
+				'/tmp/concurrent'
+			);
+			await Promise.resolve();
+
+			folderStat.complete(true);
+			await Promise.all([first, second]);
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instances: state.instances.length,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: 1,
+				iframes: 1,
+			});
+		}
+	);
+
+	test('does not resurrect a workbench dismissed during folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const opening = service.openWorkspace(
+				browser.windowId,
+				'/tmp/dismissed'
+			);
+			await Promise.resolve();
+			const pending = await service.getWindowState(browser.windowId);
+			const workbenchId = pending.retainedWorkbenches?.[0].id;
+			assert.ok(workbenchId);
+
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			folderStat.complete(true);
+			await opening;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances,
+				retained: state.retainedWorkbenches,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [],
+				retained: [],
+				iframes: 0,
+			});
+		}
+	);
+
+	test('does not resurrect a workbench unloaded during folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const opening = service.openWorkspace(
+				browser.windowId,
+				'/tmp/unloaded'
+			);
+			await Promise.resolve();
+			const pending = await service.getWindowState(browser.windowId);
+			const workbenchId = pending.retainedWorkbenches?.[0].id;
+			assert.ok(workbenchId);
+
+			await service.unloadRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			folderStat.complete(true);
+			await opening;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [],
+				desiredState: 'unloaded',
+				iframes: 0,
 			});
 		}
 	);

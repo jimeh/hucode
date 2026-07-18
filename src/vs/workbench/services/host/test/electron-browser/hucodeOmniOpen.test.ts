@@ -341,6 +341,33 @@ suite('HucodeOmniOpen', () => {
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 
+	test('leaves remote folders for native window handling', async () => {
+		const nativeHost = createNativeHostService();
+		const projectManager = createProjectManagerService([]);
+		const shell = createShellService();
+
+		assert.strictEqual(
+			await tryOpenHucodeOmniWindow(
+				[{
+					folderUri: URI.parse(
+						'vscode-remote://ssh-remote+host/repo'
+					),
+				}],
+				undefined,
+				nativeHost.service,
+				environment({ isOmniWindow: true }),
+				shell.service,
+				projectManager.service
+			),
+			false
+		);
+		assert.deepStrictEqual(shell.focusHostedWorkspaceByPathCalls, []);
+		assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, []);
+		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
+		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+		assert.deepStrictEqual(projectManager.setLastActiveWorktreeCalls, []);
+	});
+
 	test('falls back to a new window for workspace files', async () => {
 		const nativeHost = createNativeHostService();
 		const projectManager = createProjectManagerService([]);

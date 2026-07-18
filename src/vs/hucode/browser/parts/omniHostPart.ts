@@ -35,6 +35,8 @@ import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { isHostedWorkspaceAvailable } from
+	'../../common/hostedWorkspaceState.js';
 import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
 import { IHucodeWebOmniHostSurfaceService } from
 	'../webOmniHostSurfaceService.js';
@@ -315,7 +317,7 @@ export class OmniHostPart extends Part {
 	private isLoadedWorkbench(
 		instance: IHucodeHostedWorkbenchInstance
 	): boolean {
-		return instance.state !== 'crashed' && instance.state !== 'unloaded';
+		return isHostedWorkspaceAvailable(instance);
 	}
 
 	private getActiveInstance(): IHucodeHostedWorkbenchInstance | undefined {

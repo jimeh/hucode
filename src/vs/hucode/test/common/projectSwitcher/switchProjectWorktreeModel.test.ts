@@ -98,7 +98,6 @@ suite('SwitchProjectWorktreeModel', () => {
 		const current = createPick({
 			projectId: 'current',
 			isCurrent: true,
-			isLoaded: true,
 		});
 		const loaded = createPick({ projectId: 'loaded', isLoaded: true });
 		const dormant = createPick({ projectId: 'dormant', isDormant: true });
@@ -389,6 +388,16 @@ suite('SwitchProjectWorktreeModel', () => {
 				a,
 				b,
 				['projects', 'workbenches']
+			))
+			.map(pick => pick.worktreePath), [
+			'/tmp/project',
+			'/tmp/scratch',
+		]);
+		assert.deepStrictEqual([workbench, project]
+			.toSorted((a, b) => compareSwitchWorktreePicks(
+				a,
+				b,
+				['projects']
 			))
 			.map(pick => pick.worktreePath), [
 			'/tmp/project',

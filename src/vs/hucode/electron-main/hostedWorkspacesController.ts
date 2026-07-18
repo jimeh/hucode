@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import electron from 'electron';
-import { statSync } from 'fs';
+import { Stats, statSync } from 'fs';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
@@ -97,6 +97,17 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly ipcMain?: IHostedWorkspaceIpcMain;
 }
 
+/** Returns whether a file-system error makes a hosted folder unavailable. */
+export function isHostedWorkspaceFolderUnavailableError(
+	error: unknown
+): boolean {
+	const code = error && typeof error === 'object'
+		? (error as NodeJS.ErrnoException).code
+		: undefined;
+	return code === 'ENOENT' || code === 'ENOTDIR' ||
+		code === 'EACCES' || code === 'EPERM';
+}
+
 interface IHostedWorkbenchInstance {
 	instanceId: string;
 	projectId?: string;
@@ -155,6 +166,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private restored = false;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
+	private activationIntentGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
 	private overlayOccluded = false;
@@ -694,12 +706,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				(b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)
 			)) {
 				try {
-					await this.createOrRestoreInstance(
+					const instance = await this.createOrRestoreInstance(
 						entry.worktreePath,
 						entry.projectId,
 						true
 					);
-					break;
+					if (instance) {
+						break;
+					}
 				} catch (error) {
 					this.logService.warn(
 						'[HucodeShellMainService] Failed to restore fallback ' +
@@ -814,6 +828,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		projectId?: string
 	): Promise<void> {
 		await this.ensureRestored();
+		const activationIntent = ++this.activationIntentGeneration;
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
@@ -845,16 +860,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 		}
 
-		await this.createOrRestoreInstance(worktreePath, projectId, true);
+		await this.createOrRestoreInstance(
+			worktreePath,
+			projectId,
+			true,
+			activationIntent
+		);
 	}
 
 	async retainAndOpenWorkbench(folderUri: URI): Promise<void> {
-		await this.ensureRestored();
-		this.retainedWorkbenches.retain(
-			folderUri,
-			'loaded',
-			this.now()
-		);
 		await this.openWorkspace(folderUri.fsPath);
 	}
 
@@ -992,10 +1006,44 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private async createOrRestoreInstance(
 		worktreePath: string,
 		projectId: string | undefined,
-		makeActive: boolean
-	): Promise<IHostedWorkbenchInstance> {
+		makeActive: boolean,
+		activationIntent?: number
+	): Promise<IHostedWorkbenchInstance | undefined> {
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
+			worktreePath
+		);
+		if (!workspaceFolderStat) {
+			if (pendingInstance) {
+				if (pendingInstance.view || pendingInstance.attached) {
+					await this.destroyInstance(pendingInstance, true, false);
+				} else {
+					this.hostedWorkspaces.removeInstance(pendingInstance);
+				}
+			}
+			const retained = this.retainedWorkbenches.getByUri(
+				URI.file(worktreePath)
+			);
+			if (retained) {
+				this.retainedWorkbenches.update(retained.id, {
+					...(activationIntent === undefined
+						? { desiredState: 'unloaded' as const }
+						: {}),
+					folderStatus: 'missing',
+				});
+			}
+			this.emitState();
+			return undefined;
+		}
+		const retained = this.retainedWorkbenches.getByUri(
+			URI.file(worktreePath)
+		);
+		if (retained?.folderStatus === 'missing') {
+			this.retainedWorkbenches.update(retained.id, {
+				folderStatus: undefined,
+			});
+		}
 		const previousActiveInstanceId = this.activeInstanceId;
 		const instance: IHostedWorkbenchInstance =
 			pendingInstance?.state === 'restore-pending' ||
@@ -1029,14 +1077,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 
 		try {
-			await this.attachInstance(instance, makeActive);
+			await this.attachInstance(instance, makeActive, workspaceFolderStat);
 			this.traceRestore(
 				`instance:attached makeActive=${makeActive} state=${instance.state}`,
 				instance
 			);
-			if (makeActive) {
+			if (makeActive && (
+				activationIntent === undefined ||
+				activationIntent === this.activationIntentGeneration
+			)) {
 				this.activateInstance(instance);
 			} else {
+				if (instance.instanceId !== this.activeInstanceId) {
+					instance.visible = false;
+					instance.focused = false;
+					this.reconcileViewVisibility('attach:inactive');
+				}
 				this.emitState();
 			}
 
@@ -1059,7 +1115,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	private async attachInstance(
 		instance: IHostedWorkbenchInstance,
-		makeActive: boolean
+		makeActive: boolean,
+		workspaceFolderStat: Stats
 	): Promise<void> {
 		this.traceRestore(`attach:start makeActive=${makeActive}`, instance);
 		const configObjectUrl = this.protocolMainService
@@ -1077,7 +1134,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		configObjectUrl.update(
 			this.createHostedConfiguration(
 				instance,
-				webContentsId
+				webContentsId,
+				workspaceFolderStat
 			)
 		);
 
@@ -1188,16 +1246,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		try {
 			return statSync(worktreePath).isDirectory() ? undefined : 'missing';
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			return code === 'ENOENT' || code === 'ENOTDIR'
+			return isHostedWorkspaceFolderUnavailableError(error)
 				? 'missing'
 				: undefined;
 		}
 	}
 
+	private getHostedWorkspaceFolderStat(
+		worktreePath: string
+	): Stats | undefined {
+		try {
+			const stat = statSync(worktreePath);
+			return stat.isDirectory() ? stat : undefined;
+		} catch (error) {
+			if (isHostedWorkspaceFolderUnavailableError(error)) {
+				return undefined;
+			}
+			throw error;
+		}
+	}
+
 	private createHostedConfiguration(
 		instance: IHostedWorkbenchInstance,
-		hostedWebContentsId: number
+		hostedWebContentsId: number,
+		workspaceFolderStat: Stats
 	): INativeWindowConfiguration {
 		const baseConfig = this.window.config;
 		if (!baseConfig) {
@@ -1206,7 +1278,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		const workspace = getSingleFolderWorkspaceIdentifier(
 			URI.file(instance.worktreePath),
-			statSync(instance.worktreePath)
+			workspaceFolderStat
 		);
 		if (!workspace) {
 			throw new Error(

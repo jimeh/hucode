@@ -88,7 +88,7 @@ export async function openSelectionInStandaloneWindow(
 		const retained = state.retainedWorkbenches?.find(record =>
 			record.id === retainedWorkbench.id
 		);
-		if (retained?.desiredState !== 'unloaded') {
+		if (retained && retained.desiredState !== 'unloaded') {
 			return;
 		}
 	}

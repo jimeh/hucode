@@ -557,18 +557,17 @@ class ProjectSwitcherRenderer
 				item.hostedWorkbenchState === 'loading' ||
 				item.hostedWorkbenchState === 'active' ||
 				item.hostedWorkbenchState === 'loaded';
+			if (item.missingGitWorktree) {
+				templateData.container.classList.add(
+					'hucode-project-switcher-worktree-missing'
+				);
+			}
 			if (isLiveHostedWorkbench) {
 				templateData.container.classList.add(
 					isHostedWorkbenchInProgress(item.hostedWorkbenchState)
 						? 'hucode-project-switcher-worktree-loading'
 						: 'hucode-project-switcher-worktree-loaded'
 				);
-				if (item.missingGitWorktree) {
-					templateData.container.classList.add(
-						'hucode-project-switcher-worktree-missing'
-					);
-				}
-
 				const label = localize('unloadWorkbenchButton', 'Unload');
 				this.setAction(
 					templateData,
@@ -588,7 +587,7 @@ class ProjectSwitcherRenderer
 						? 'hucode-project-switcher-worktree-dormant'
 						: 'hucode-project-switcher-worktree-unloaded'
 				);
-				if (!item.isMain) {
+				if (!item.isMain && !item.missingGitWorktree) {
 					const label = localize(
 						'removeWorktreeButton',
 						'Remove Worktree'
@@ -960,7 +959,9 @@ class ProjectSwitcherDragAndDrop
 		target: ProjectSwitcherItem | undefined,
 		targetSector: ListViewTargetSector | undefined
 	): Promise<void> {
-		if (!target || !isRetainedWorkbenchItem(target)) {
+		if (!target || !isRetainedWorkbenchItem(target) ||
+			target.retainedWorkbenchId === source.retainedWorkbenchId
+		) {
 			return;
 		}
 		const state = await this.shellService.getWindowState(
@@ -971,6 +972,9 @@ class ProjectSwitcherDragAndDrop
 			.map(record => record.id)
 			.filter(id => id !== source.retainedWorkbenchId);
 		const targetIndex = orderedIds.indexOf(target.retainedWorkbenchId);
+		if (targetIndex < 0) {
+			return;
+		}
 		orderedIds.splice(
 			targetIndex + (isBeforeDropPosition(targetSector) ? 0 : 1),
 			0,
@@ -1354,6 +1358,9 @@ export class ProjectSwitcherWidget extends Disposable {
 					folderUri: URI.file(worktree.path).toJSON(),
 				})))
 			);
+		}
+		if (this.projects !== projects) {
+			return;
 		}
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);

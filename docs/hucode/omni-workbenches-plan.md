@@ -1423,6 +1423,7 @@ Add dated entries as implementation progresses.
 | 2026-07-17 | Review hardening | Closed lifecycle, ownership, restore, and promotion gaps | Failed desktop loads now publish coherent state; restore policy is configured before main-side restore; retained standalone opens release hosted ownership; navigation canonicalizes promoted folders; missing desktop folders surface a warning state; persistence migrations and cross-window guards have focused coverage |
 | 2026-07-17 | Follow-up refinement | Added configurable row density, draggable section order, project lifecycle icons, Hucode Settings TOC, stable header actions, and serve-web missing-folder preflight | Focused compile, 48 common tests, 28 browser tests, and precommit pass |
 | 2026-07-18 | Review/CI hardening | Corrected serve-web remote folder preflight and stale dormant cleanup; preserved standalone picker MRU ordering; deduplicated promoted navigation history; completed focused CI registration and fixture updates | Focused type, compile, layer, common, browser, and Electron suites pass locally; final orchestrator review and CI remain pending |
+| 2026-07-18 | Final review hardening | Guarded async web and desktop activation races, moved desktop missing-folder checks before view creation, preserved remote native routing, and tightened picker, DnD, rendering, and stale-state behavior | Typecheck, full compile, layers, 16 common tests, 98 focused Electron tests, and hygiene pass in the feature worktree |
 
 ## Validation log
 
@@ -1448,6 +1449,7 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-18 | Review/CI hardening browser tests | Focused `WebHucodeShellService` and `OmniSelectionOpen` Electron invocations | 31 and 11 tests pass |
 | 2026-07-18 | Review/CI hardening desktop tests | Focused `ResidentHostedWorkspacesController` Electron invocation | 41 tests pass |
 | 2026-07-18 | Review/CI hardening hygiene | `npm run -s precommit -- <edited paths>`; `git diff --check` | Pass |
+| 2026-07-18 | Final review validation | `typecheck-client`; `compile-client`; `valid-layers-check`; focused common and Electron suites; changed-file precommit; `git diff --check` | Pass: 16 common and 98 Electron tests; local Electron run used `ELECTRON_DISABLE_SANDBOX=1` because the downloaded helper could not be root-owned without interactive sudo |
 
 ## Completion criteria
 

@@ -5,6 +5,7 @@
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { isEqual } from '../../../../base/common/extpath.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { isLinux } from '../../../../base/common/platform.js';
 import { INativeHostService } from
 	'../../../../platform/native/common/native.js';
@@ -66,6 +67,9 @@ export async function tryOpenHucodeOmniWindow(
 
 	const openable = toOpen[0];
 	if (isFolderToOpen(openable)) {
+		if (openable.folderUri.scheme !== Schemas.file) {
+			return false;
+		}
 		const target = await getProjectWorktreeTarget(
 			projectManagerService,
 			openable.folderUri.fsPath
