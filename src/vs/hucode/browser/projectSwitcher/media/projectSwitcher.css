@@ -243,7 +243,6 @@
 	margin-right: 6px;
 }
 
-.hucode-project-switcher-section-actions
-	.hucode-project-switcher-action-button[hidden] {
+.hucode-project-switcher-action-button[hidden] {
 	display: none !important;
 }

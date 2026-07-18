@@ -252,6 +252,25 @@ function toHandleArg(item: ProjectSwitcherItem): TreeViewItemHandleArg {
 	};
 }
 
+async function runRetainedWorkbenchQuickInput<T>(
+	quickInputService: IQuickInputService,
+	shellService: IHucodeShellService,
+	callback: () => Promise<T>
+): Promise<T> {
+	const windowId = dom.getWindowId(mainWindow);
+	await shellService.focusShell(windowId);
+	await shellService.setWorkspaceOverlayOcclusion(windowId, true);
+
+	try {
+		const result = callback();
+		mainWindow.requestAnimationFrame(() => quickInputService.focus());
+		mainWindow.setTimeout(() => quickInputService.focus(), 0);
+		return await result;
+	} finally {
+		await shellService.setWorkspaceOverlayOcclusion(windowId, false);
+	}
+}
+
 class ProjectSwitcherAccessibilityProvider
 	implements IListAccessibilityProvider<ProjectSwitcherItem> {
 
@@ -2342,19 +2361,25 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await shellService.focusShell(windowId);
-			const label = await quickInputService.input({
-				prompt: localize('renameWorkbenchPrompt', 'Workbench label'),
-				value: record.label ?? basename(
-					URI.revive(record.folderUri).fsPath
-				),
-				validateInput: async value => value.trim()
-					? undefined
-					: localize(
-						'renameWorkbenchValidate',
-						'Workbench label is required.'
+			const label = await runRetainedWorkbenchQuickInput(
+				quickInputService,
+				shellService,
+				() => quickInputService.input({
+					prompt: localize(
+						'renameWorkbenchPrompt',
+						'Workbench label'
 					),
-			});
+					value: record.label ?? basename(
+						URI.revive(record.folderUri).fsPath
+					),
+					validateInput: async value => value.trim()
+						? undefined
+						: localize(
+							'renameWorkbenchValidate',
+							'Workbench label is required.'
+						),
+				})
+			);
 			if (!label) {
 				return;
 			}

@@ -259,7 +259,6 @@ function getRetainedWorkbenchPicks(
 									: Codicon.window
 				),
 				description,
-				detail: description,
 				tooltip: path,
 				searchFields: [
 					{ target: 'label' as const, text: label },
