@@ -63,10 +63,14 @@ import { Menus } from '../menus.js';
 import { IHostService } from '../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
+import { IsOmniWindowContext } from
+	'../../../workbench/common/contextkeys.js';
 import { IWorkspaceContextService, WorkbenchState } from
 	'../../../platform/workspace/common/workspace.js';
 import { ICommandService } from
 	'../../../platform/commands/common/commands.js';
+import { IConfigurationService } from
+	'../../../platform/configuration/common/configuration.js';
 import {
 	IProjectManagerService,
 	ProjectRecord,
@@ -95,23 +99,50 @@ import {
 } from './projectSwitcherCommon.js';
 import {
 	openProjectSwitcherTarget,
+	setLastActiveWorktreeBestEffort,
 	type IProjectSwitcherSelectionTarget,
 } from './switchProjectWorktree.contribution.js';
+import { openSelectionInStandaloneWindow } from '../omniSelectionOpen.js';
 import {
+	canonicalizeProjectSwitcherTarget,
+	sortProjectSwitcherNavigationHistory,
+} from
+	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
+import {
+	applyOmniSectionCollapseChange,
 	buildProjectSwitcherTreeModel,
 	encodeProjectHandle,
 	isHostedWorkbenchInProgress,
+	isItemInCollapsedOmniSection,
 	isProjectItem,
+	isOmniSectionItem,
+	isRetainedWorkbenchItem,
 	isSeparatorItem,
 	isWorktreeItem,
 	PINNED_SECTION,
 	ProjectSwitcherItem,
 	ProjectSwitcherProjectItem,
 	ProjectSwitcherTreeElement,
+	ProjectSwitcherWorkbenchItem,
 	ProjectSwitcherWorktreeItem,
 	selectionTargetsEqual,
 	UNPINNED_SECTION,
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
+import {
+	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
+	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
+	HucodeHostedWorkbenchRestorePolicy,
+	HucodeOmniItemLayout,
+} from '../../common/retainedWorkbench.js';
+import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	IProjectSwitcherViewState,
+	parseProjectSwitcherViewState,
+	ProjectSwitcherOmniSection,
+	PROJECT_SWITCHER_VIEW_STATE_VERSION,
+	reorderProjectSwitcherOmniSections,
+} from '../../common/projectSwitcher/projectSwitcherViewState.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -128,20 +159,24 @@ const UNPIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unpinWorktree';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
+const ADD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.addWorkbench';
+const OPEN_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.openWorkbench';
+const UNLOAD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.unloadWorkbench';
+const DISMISS_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.dismissWorkbench';
 
 const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
-const PROJECT_SWITCHER_VIEW_STATE_VERSION = 1;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
 
 let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
 
-interface ProjectSwitcherViewState {
-	version?: number;
-	collapsedProjectIds?: string[];
+function parseWorkbenchHandle(handle: string | undefined): string | undefined {
+	return handle?.startsWith('workbench:')
+		? handle.slice('workbench:'.length)
+		: undefined;
 }
 
 function getTreeItemHandle(
@@ -213,15 +248,49 @@ class ProjectSwitcherAccessibilityProvider
 	implements IListAccessibilityProvider<ProjectSwitcherItem> {
 
 	getWidgetAriaLabel(): string {
-		return localize('projectSwitcherAriaLabel', 'Projects');
+		return localize(
+			'projectSwitcherAriaLabel',
+			'Workbenches and Projects'
+		);
 	}
 
 	getAriaLabel(item: ProjectSwitcherItem): string | null {
+		if (isOmniSectionItem(item)) {
+			return localize('omniSectionAriaLabel', '{0} section', item.label);
+		}
 		if (isSeparatorItem(item)) {
 			return localize(
 				'projectGroupAriaLabel',
 				'{0} projects',
 				item.label
+			);
+		}
+		if (isRetainedWorkbenchItem(item)) {
+			const stateLabel = (() => {
+				switch (item.hostedWorkbenchState) {
+					case 'restore-pending':
+					case 'loading':
+						return localize('workbenchStateLoading', 'Loading');
+					case 'active':
+						return localize('workbenchStateActive', 'Active');
+					case 'loaded':
+						return localize('workbenchStateLoaded', 'Loaded');
+					case 'dormant':
+						return localize('workbenchStateDormant', 'Dormant');
+					case 'crashed':
+						return localize('workbenchStateCrashed', 'Crashed');
+					case 'missing':
+						return localize('workbenchStateMissing', 'Folder missing');
+					default:
+						return localize('workbenchStateUnloaded', 'Unloaded');
+				}
+			})();
+			return localize(
+				'workbenchAriaLabel',
+				'{0}, {1}, {2}',
+				item.label,
+				item.description ?? item.worktreePath,
+				stateLabel
 			);
 		}
 
@@ -233,9 +302,16 @@ class ProjectSwitcherAccessibilityProvider
 
 class ProjectSwitcherDelegate
 	implements IListVirtualDelegate<ProjectSwitcherItem> {
+	constructor(
+		private readonly getItemLayout: (
+			item: ProjectSwitcherItem
+		) => HucodeOmniItemLayout
+	) { }
 
-	getHeight(_item: ProjectSwitcherItem): number {
-		return PROJECT_SWITCHER_ITEM_HEIGHT;
+	getHeight(item: ProjectSwitcherItem): number {
+		return this.getItemLayout(item) === 'twoLine'
+			? PROJECT_SWITCHER_ITEM_HEIGHT * 2
+			: PROJECT_SWITCHER_ITEM_HEIGHT;
 	}
 
 	getTemplateId(): string {
@@ -267,6 +343,9 @@ class ProjectSwitcherRenderer
 	readonly templateId = ProjectSwitcherRenderer.ID;
 
 	constructor(
+		private readonly getItemLayout: (
+			item: ProjectSwitcherItem
+		) => HucodeOmniItemLayout,
 		@ICommandService
 		private readonly commandService: ICommandService,
 	) {
@@ -347,6 +426,11 @@ class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		if (this.getItemLayout(item) === 'twoLine') {
+			templateData.container.classList.add(
+				'hucode-project-switcher-two-line'
+			);
+		}
 		templateData.label.textContent = item.label;
 		templateData.description.textContent = item.description ?? '';
 		templateData.description.style.display = item.description ? '' : 'none';
@@ -355,6 +439,12 @@ class ProjectSwitcherRenderer
 		templateData.actions.style.display = 'none';
 		this.resetAction(templateData.leadingAction);
 		this.resetAction(templateData.trailingAction);
+		templateData.icon.style.display = '';
+		if (item.themeIcon) {
+			templateData.icon.classList.add(
+				...ThemeIcon.asClassNameArray(item.themeIcon)
+			);
+		}
 
 		if (isSeparatorItem(item)) {
 			templateData.container.classList.add(
@@ -362,6 +452,37 @@ class ProjectSwitcherRenderer
 			);
 			templateData.icon.style.display = 'none';
 			templateData.description.style.display = 'none';
+			return;
+		}
+
+		if (isOmniSectionItem(item)) {
+			templateData.container.classList.add(
+				'hucode-project-switcher-section'
+			);
+			templateData.icon.style.display = 'none';
+			this.setAction(
+				templateData,
+				templateData.trailingAction,
+				item.sectionKind === 'workbenches'
+					? localize('addWorkbenchButton', 'Add Workbench')
+					: localize('addProjectButton', 'Add Project'),
+				Codicon.add,
+				() => {
+					void this.commandService.executeCommand(
+						item.sectionKind === 'workbenches'
+							? ADD_WORKBENCH_COMMAND_ID
+							: ADD_PROJECT_COMMAND_ID
+					);
+				}
+			);
+			templateData.actions.classList.add(
+				'hucode-project-switcher-section-actions'
+			);
+			return;
+		}
+
+		if (isRetainedWorkbenchItem(item)) {
+			this.renderWorkbenchItem(item, templateData, row);
 			return;
 		}
 
@@ -432,18 +553,22 @@ class ProjectSwitcherRenderer
 				);
 			}
 
-			if (item.hostedWorkbenchInstanceId) {
+			const isLiveHostedWorkbench =
+				item.hostedWorkbenchState === 'restore-pending' ||
+				item.hostedWorkbenchState === 'loading' ||
+				item.hostedWorkbenchState === 'active' ||
+				item.hostedWorkbenchState === 'loaded';
+			if (item.missingGitWorktree) {
+				templateData.container.classList.add(
+					'hucode-project-switcher-worktree-missing'
+				);
+			}
+			if (isLiveHostedWorkbench) {
 				templateData.container.classList.add(
 					isHostedWorkbenchInProgress(item.hostedWorkbenchState)
 						? 'hucode-project-switcher-worktree-loading'
 						: 'hucode-project-switcher-worktree-loaded'
 				);
-				if (item.missingGitWorktree) {
-					templateData.container.classList.add(
-						'hucode-project-switcher-worktree-missing'
-					);
-				}
-
 				const label = localize('unloadWorkbenchButton', 'Unload');
 				this.setAction(
 					templateData,
@@ -459,9 +584,11 @@ class ProjectSwitcherRenderer
 				);
 			} else {
 				templateData.container.classList.add(
-					'hucode-project-switcher-worktree-unloaded'
+					item.hostedWorkbenchState === 'dormant'
+						? 'hucode-project-switcher-worktree-dormant'
+						: 'hucode-project-switcher-worktree-unloaded'
 				);
-				if (!item.isMain) {
+				if (!item.isMain && !item.missingGitWorktree) {
 					const label = localize(
 						'removeWorktreeButton',
 						'Remove Worktree'
@@ -484,12 +611,6 @@ class ProjectSwitcherRenderer
 			templateData.container.removeAttribute('aria-current');
 		}
 
-		templateData.icon.style.display = '';
-		if (item.themeIcon) {
-			templateData.icon.classList.add(
-				...ThemeIcon.asClassNameArray(item.themeIcon)
-			);
-		}
 	}
 
 	private resetAction(action: ProjectSwitcherActionTemplate): void {
@@ -520,16 +641,59 @@ class ProjectSwitcherRenderer
 			dispose();
 		}
 	}
+
+	private renderWorkbenchItem(
+		item: ProjectSwitcherWorkbenchItem,
+		templateData: ProjectSwitcherTemplate,
+		row: Element | null
+	): void {
+		templateData.container.classList.add(
+			'hucode-project-switcher-workbench'
+		);
+		if (item.isActive) {
+			row?.classList.add('hucode-project-switcher-active-row');
+			row?.setAttribute('aria-current', 'true');
+		}
+		templateData.container.classList.add(
+			`hucode-project-switcher-workbench-${item.hostedWorkbenchState}`
+		);
+		const isLive = item.hostedWorkbenchState === 'restore-pending' ||
+			item.hostedWorkbenchState === 'loading' ||
+			item.hostedWorkbenchState === 'active' ||
+			item.hostedWorkbenchState === 'loaded';
+		this.setAction(
+			templateData,
+			templateData.trailingAction,
+			isLive
+				? localize('unloadRetainedWorkbenchButton', 'Unload Workbench')
+				: localize('dismissWorkbenchButton', 'Dismiss Workbench'),
+			isLive ? Codicon.chromeMinimize : Codicon.close,
+			() => {
+				void this.commandService.executeCommand(
+					isLive
+						? UNLOAD_WORKBENCH_COMMAND_ID
+						: DISMISS_WORKBENCH_COMMAND_ID,
+					toHandleArg(item)
+				);
+			}
+		);
+	}
 }
 
 class ProjectSwitcherDragAndDrop
 	implements ITreeDragAndDrop<ProjectSwitcherItem> {
 
 	constructor(
+		private readonly reorderOmniSections: (
+			source: ProjectSwitcherOmniSection,
+			target: ProjectSwitcherOmniSection
+		) => void,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@INotificationService
 		private readonly notificationService: INotificationService,
+		@IHucodeShellService
+		private readonly shellService: IHucodeShellService,
 	) {
 	}
 
@@ -539,6 +703,12 @@ class ProjectSwitcherDragAndDrop
 		}
 		if (isWorktreeItem(item)) {
 			return item.worktreePath;
+		}
+		if (isRetainedWorkbenchItem(item)) {
+			return item.worktreePath;
+		}
+		if (isOmniSectionItem(item)) {
+			return `hucode-omni-section:///${item.sectionKind}`;
 		}
 
 		return null;
@@ -565,6 +735,17 @@ class ProjectSwitcherDragAndDrop
 		if (!source || isSeparatorItem(source)) {
 			return false;
 		}
+		if (isOmniSectionItem(source)) {
+			if (!target || !isOmniSectionItem(target) ||
+				target.sectionKind === source.sectionKind
+			) {
+				return false;
+			}
+			return this.createReaction(
+				targetIndex,
+				getDropPosition(targetSector)
+			);
+		}
 
 		if (isProjectItem(source)) {
 			return this.getProjectDragReaction(
@@ -572,6 +753,17 @@ class ProjectSwitcherDragAndDrop
 				target,
 				targetIndex,
 				targetSector
+			);
+		}
+		if (isRetainedWorkbenchItem(source)) {
+			if (!target || !isRetainedWorkbenchItem(target) ||
+				target.retainedWorkbenchId === source.retainedWorkbenchId
+			) {
+				return false;
+			}
+			return this.createReaction(
+				targetIndex,
+				getDropPosition(targetSector)
 			);
 		}
 
@@ -598,10 +790,27 @@ class ProjectSwitcherDragAndDrop
 		if (!source || isSeparatorItem(source)) {
 			return;
 		}
+		if (isOmniSectionItem(source)) {
+			if (target && isOmniSectionItem(target)) {
+				this.reorderOmniSections(
+					source.sectionKind,
+					target.sectionKind
+				);
+			}
+			return;
+		}
 
 		try {
 			if (isProjectItem(source)) {
 				await this.dropProject(source, target, targetSector);
+				return;
+			}
+			if (isRetainedWorkbenchItem(source)) {
+				await this.dropRetainedWorkbench(
+					source,
+					target,
+					targetSector
+				);
 				return;
 			}
 
@@ -745,6 +954,38 @@ class ProjectSwitcherDragAndDrop
 			beforeWorktreePath
 		);
 	}
+
+	private async dropRetainedWorkbench(
+		source: ProjectSwitcherWorkbenchItem,
+		target: ProjectSwitcherItem | undefined,
+		targetSector: ListViewTargetSector | undefined
+	): Promise<void> {
+		if (!target || !isRetainedWorkbenchItem(target) ||
+			target.retainedWorkbenchId === source.retainedWorkbenchId
+		) {
+			return;
+		}
+		const state = await this.shellService.getWindowState(
+			dom.getWindowId(mainWindow)
+		);
+		const orderedIds = (state.retainedWorkbenches ?? [])
+			.toSorted((a, b) => a.order - b.order)
+			.map(record => record.id)
+			.filter(id => id !== source.retainedWorkbenchId);
+		const targetIndex = orderedIds.indexOf(target.retainedWorkbenchId);
+		if (targetIndex < 0) {
+			return;
+		}
+		orderedIds.splice(
+			targetIndex + (isBeforeDropPosition(targetSector) ? 0 : 1),
+			0,
+			source.retainedWorkbenchId
+		);
+		await this.shellService.reorderRetainedWorkbenches(
+			dom.getWindowId(mainWindow),
+			orderedIds
+		);
+	}
 }
 
 export class ProjectSwitcherWidget extends Disposable {
@@ -761,6 +1002,11 @@ export class ProjectSwitcherWidget extends Disposable {
 	private width = 0;
 	private lastProjectsRefreshAt = 0;
 	private collapsedProjectIds = new Set<string>();
+	private collapsedOmniSections = new Set<string>();
+	private omniSectionOrder = [
+		...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	];
+	private isSynchronizingTree = false;
 	private worktreeNavigationHistory: IProjectSwitcherSelectionTarget[] = [];
 	private worktreeNavigationIndex = -1;
 	private isNavigatingWorktreeHistory = false;
@@ -799,6 +1045,8 @@ export class ProjectSwitcherWidget extends Disposable {
 		private readonly hostService: IHostService,
 		@ILabelService
 		private readonly labelService: ILabelService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
 	) {
 		super();
 		currentProjectSwitcherWidget = this;
@@ -845,6 +1093,17 @@ export class ProjectSwitcherWidget extends Disposable {
 
 				this.updateOmniHostedWorkspaceState(change.state);
 			}));
+			this._register(this.configurationService.onDidChangeConfiguration(
+				event => {
+					if (event.affectsConfiguration(
+						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
+					) || event.affectsConfiguration(
+						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+					)) {
+						this.renderProjects(this.projects);
+					}
+				}
+			));
 		}
 	}
 
@@ -852,8 +1111,48 @@ export class ProjectSwitcherWidget extends Disposable {
 		return dom.getWindowId(mainWindow);
 	}
 
+	private get viewStateStorageScope(): StorageScope {
+		return this.environmentService.isOmniWindow
+			? StorageScope.WORKSPACE
+			: StorageScope.PROFILE;
+	}
+
 	private getPathLabel(path: string): string {
 		return this.labelService.getUriLabel(URI.file(path));
+	}
+
+	private getItemLayout(item: ProjectSwitcherItem): HucodeOmniItemLayout {
+		if (!this.environmentService.isOmniWindow) {
+			return 'compact';
+		}
+		if (isRetainedWorkbenchItem(item)) {
+			return this.configurationService.getValue<HucodeOmniItemLayout>(
+				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
+			) ?? 'twoLine';
+		}
+		if (isWorktreeItem(item)) {
+			return this.configurationService.getValue<HucodeOmniItemLayout>(
+				HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+			) ?? 'compact';
+		}
+		return 'compact';
+	}
+
+	private reorderOmniSections(
+		source: ProjectSwitcherOmniSection,
+		target: ProjectSwitcherOmniSection
+	): void {
+		this.omniSectionOrder = reorderProjectSwitcherOmniSections(
+			this.omniSectionOrder,
+			source,
+			target
+		);
+		void this.shellService.setProjectSwitcherSectionOrder(
+			this.windowId,
+			this.omniSectionOrder
+		);
+		this.saveState();
+		this.renderProjects(this.projects);
 	}
 
 	render(container: HTMLElement): void {
@@ -888,8 +1187,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			WorkbenchObjectTree<ProjectSwitcherItem, void>,
 			PROJECT_SWITCHER_VIEW_ID,
 			this.treeContainer,
-			new ProjectSwitcherDelegate(),
-			[this.instantiationService.createInstance(ProjectSwitcherRenderer)],
+			new ProjectSwitcherDelegate(item => this.getItemLayout(item)),
+			[this.instantiationService.createInstance(
+				ProjectSwitcherRenderer,
+				(item: ProjectSwitcherItem) => this.getItemLayout(item)
+			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
 				identityProvider: { getId: item => item.id },
@@ -899,7 +1201,11 @@ export class ProjectSwitcherWidget extends Disposable {
 				expandOnlyOnTwistieClick: true,
 				multipleSelectionSupport: false,
 				dnd: this.instantiationService.createInstance(
-					ProjectSwitcherDragAndDrop
+					ProjectSwitcherDragAndDrop,
+					(
+						source: ProjectSwitcherOmniSection,
+						target: ProjectSwitcherOmniSection
+					) => this.reorderOmniSections(source, target)
 				),
 				overrideStyles: {
 					listBackground: asCssVariable(sessionsSidebarBackground),
@@ -919,6 +1225,17 @@ export class ProjectSwitcherWidget extends Disposable {
 		}));
 		this._register(this.tree.onDidChangeCollapseState(event => {
 			const item = event.node.element ?? undefined;
+			if (isOmniSectionItem(item)) {
+				if (applyOmniSectionCollapseChange(
+					this.collapsedOmniSections,
+					item.handle,
+					event.node.collapsed,
+					this.isSynchronizingTree
+				)) {
+					this.saveState();
+				}
+				return;
+			}
 			if (!isProjectItem(item)) {
 				return;
 			}
@@ -956,6 +1273,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			};
 		}
 
+		if (isRetainedWorkbenchItem(item)) {
+			return { worktreePath: item.worktreePath };
+		}
+
 		if (isProjectItem(item)) {
 			if (this.environmentService.isOmniWindow) {
 				return undefined;
@@ -987,7 +1308,12 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private async navigateWorktreeHistory(delta: -1 | 1): Promise<void> {
 		const nextIndex = this.worktreeNavigationIndex + delta;
-		const target = this.worktreeNavigationHistory[nextIndex];
+		const historyTarget = this.worktreeNavigationHistory[nextIndex];
+		const target = historyTarget && canonicalizeProjectSwitcherTarget(
+			historyTarget,
+			this.projects,
+			pathsEqual
+		);
 		if (!target) {
 			return;
 		}
@@ -1025,6 +1351,18 @@ export class ProjectSwitcherWidget extends Disposable {
 	): Promise<void> {
 		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
+		if (this.environmentService.isOmniWindow) {
+			await this.shellService.reconcileRetainedWorkbenches(
+				this.windowId,
+				projects.flatMap(project => project.worktrees.map(worktree => ({
+					projectId: project.id,
+					folderUri: URI.file(worktree.path).toJSON(),
+				})))
+			);
+		}
+		if (this.projects !== projects) {
+			return;
+		}
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
 		await this.updateCurrentWorktreeSelection();
@@ -1056,8 +1394,13 @@ export class ProjectSwitcherWidget extends Disposable {
 		const { roots, itemsById } = this.buildRoots(projects);
 		this.hasProjects = roots.length > 0;
 		this.itemsById = itemsById;
-		this.tree?.setChildren(null, roots);
-		this.tree?.rerender();
+		this.isSynchronizingTree = true;
+		try {
+			this.tree?.setChildren(null, roots);
+			this.tree?.rerender();
+		} finally {
+			this.isSynchronizingTree = false;
+		}
 		this.updateEmptyState();
 		this.layout(this.width, this.height);
 	}
@@ -1082,6 +1425,8 @@ export class ProjectSwitcherWidget extends Disposable {
 			isOmniWindow: this.environmentService.isOmniWindow,
 			activeWorktreePath: this.getActiveWorktreePath(),
 			hostedWorkspaceState: this.omniHostedWorkspaceState,
+			collapsedOmniSections: this.collapsedOmniSections,
+			omniSectionOrder: this.omniSectionOrder,
 		});
 	}
 
@@ -1116,6 +1461,10 @@ export class ProjectSwitcherWidget extends Disposable {
 		item: ProjectSwitcherItem | undefined
 	): Promise<void> {
 		if (this.environmentService.isOmniWindow) {
+			if (isOmniSectionItem(item)) {
+				this.toggleOmniSectionCollapsed(item);
+				return;
+			}
 			if (isProjectItem(item)) {
 				this.toggleProjectCollapsed(item);
 				return;
@@ -1145,6 +1494,16 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private async initializeOmniHostedWorkspaceState(): Promise<void> {
 		try {
+			await this.shellService.setProjectSwitcherSectionOrder(
+				this.windowId,
+				this.omniSectionOrder
+			);
+			await this.shellService.setHostedWorkbenchRestorePolicy(
+				this.windowId,
+				this.configurationService.getValue<
+					HucodeHostedWorkbenchRestorePolicy
+				>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
+			);
 			this.updateOmniHostedWorkspaceState(
 				await this.shellService.getWindowState(
 					this.windowId
@@ -1222,6 +1581,19 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.setProjectCollapsed(item, true);
 	}
 
+	private toggleOmniSectionCollapsed(
+		item: Extract<ProjectSwitcherItem, { kind: 'section' }>
+	): void {
+		if (!this.tree) {
+			return;
+		}
+		if (this.tree.isCollapsed(item)) {
+			this.tree.expand(item);
+		} else {
+			this.tree.collapse(item);
+		}
+	}
+
 	private onContextMenu(
 		event: ITreeContextMenuEvent<ProjectSwitcherItem | null>
 	): void {
@@ -1255,6 +1627,72 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private getContextActions(item: ProjectSwitcherItem): IAction[] {
+		if (isRetainedWorkbenchItem(item)) {
+			const handle = toHandleArg(item);
+			const isLive = item.hostedWorkbenchState === 'restore-pending' ||
+				item.hostedWorkbenchState === 'loading' ||
+				item.hostedWorkbenchState === 'active' ||
+				item.hostedWorkbenchState === 'loaded';
+			return [
+				toAction({
+					id: OPEN_WORKBENCH_COMMAND_ID,
+					label: localize(
+						'openOrActivateRetainedWorkbench',
+						'Open or Activate Workbench'
+					),
+					run: () => this.commandService.executeCommand(
+						OPEN_WORKBENCH_COMMAND_ID,
+						handle
+					),
+				}),
+				toAction({
+					id: OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+					label: localize(
+						'openRetainedWorkbenchNewWindow',
+						'Open in New Window'
+					),
+					run: () => openSelectionInStandaloneWindow(
+						{ worktreePath: item.worktreePath },
+						this.hostService,
+						this.shellService,
+						this.projectManagerService,
+						this.notificationService,
+						localize(
+							'openRetainedWorkbenchSelectionMissing',
+							'Select a workbench first.'
+						),
+						{
+							windowId: this.windowId,
+							id: item.retainedWorkbenchId,
+						}
+					),
+				}),
+				...(isLive || item.hostedWorkbenchState === 'dormant' ? [toAction({
+					id: UNLOAD_WORKBENCH_COMMAND_ID,
+					label: localize(
+						'unloadRetainedWorkbench',
+						'Unload Workbench'
+					),
+					run: () => this.commandService.executeCommand(
+						UNLOAD_WORKBENCH_COMMAND_ID,
+						handle
+					),
+				})] : []),
+				new Separator(),
+				toAction({
+					id: DISMISS_WORKBENCH_COMMAND_ID,
+					label: localize(
+						'dismissRetainedWorkbench',
+						'Dismiss Workbench'
+					),
+					run: () => this.commandService.executeCommand(
+						DISMISS_WORKBENCH_COMMAND_ID,
+						handle
+					),
+				}),
+			];
+		}
+
 		if (isProjectItem(item)) {
 			const projectHandle = toHandleArg(item);
 			return [
@@ -1500,22 +1938,35 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		const projectItem = this.itemsById.get(
-			encodeProjectHandle(
-				currentWorktree.projectId,
-				currentWorktree.section
-			)
-		);
-		if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
-			tree.expand(projectItem);
-			this.setProjectCollapsed(projectItem, false);
+		const isHiddenByCollapsedOmniSection =
+			this.environmentService.isOmniWindow &&
+			isItemInCollapsedOmniSection(
+				currentWorktree,
+				this.collapsedOmniSections
+			);
+
+		if (isWorktreeItem(currentWorktree) &&
+			!isHiddenByCollapsedOmniSection
+		) {
+			const projectItem = this.itemsById.get(
+				encodeProjectHandle(
+					currentWorktree.projectId,
+					currentWorktree.section
+				)
+			);
+			if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
+				tree.expand(projectItem);
+				this.setProjectCollapsed(projectItem, false);
+			}
 		}
 
 		if (!tree.hasElement(currentWorktree)) {
 			return;
 		}
 
-		await tree.reveal(currentWorktree);
+		if (!isHiddenByCollapsedOmniSection) {
+			await tree.reveal(currentWorktree);
+		}
 		if (
 			this.itemsById !== renderedItems ||
 			!tree.hasElement(currentWorktree)
@@ -1528,7 +1979,10 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.viewItemContext?.set(currentWorktree.contextValue);
 	}
 
-	private getCurrentWorktreeItem(): ProjectSwitcherWorktreeItem | undefined {
+	private getCurrentWorktreeItem():
+		| ProjectSwitcherWorktreeItem
+		| ProjectSwitcherWorkbenchItem
+		| undefined {
 		const activeWorktreePath = this.getActiveWorktreePath();
 		if (!activeWorktreePath) {
 			return undefined;
@@ -1536,7 +1990,7 @@ export class ProjectSwitcherWidget extends Disposable {
 
 		for (const item of this.itemsById.values()) {
 			if (
-				isWorktreeItem(item) &&
+				(isWorktreeItem(item) || isRetainedWorkbenchItem(item)) &&
 				pathsEqual(item.worktreePath, activeWorktreePath)
 			) {
 				return item;
@@ -1561,6 +2015,13 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.seedNavigationHistory(projects, activeTarget);
 			return;
 		}
+		this.worktreeNavigationHistory = this.worktreeNavigationHistory.map(
+			target => canonicalizeProjectSwitcherTarget(
+				target,
+				projects,
+				pathsEqual
+			)
+		);
 
 		const currentTarget =
 			this.worktreeNavigationHistory[this.worktreeNavigationIndex];
@@ -1595,12 +2056,29 @@ export class ProjectSwitcherWidget extends Disposable {
 					lastVisitedAt: worktree.lastVisitedAt ?? 0,
 				}))
 			)
-			.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt)
-			.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }))
+			.filter(target => !selectionTargetsEqual(target, activeTarget));
+		const retainedTargets = (this.omniHostedWorkspaceState
+			.retainedWorkbenches ?? [])
+			.filter(record => record.lastActiveAt !== undefined)
+			.map(record => ({
+				worktreePath: URI.revive(record.folderUri).fsPath,
+				lastVisitedAt: record.lastActiveAt ?? 0,
+			}))
+			.map(target => ({
+				...canonicalizeProjectSwitcherTarget(
+					target,
+					projects,
+					pathsEqual
+				),
+				lastVisitedAt: target.lastVisitedAt,
+			}))
 			.filter(target => !selectionTargetsEqual(target, activeTarget));
 
 		this.worktreeNavigationHistory = [
-			...visitedTargets,
+			...sortProjectSwitcherNavigationHistory([
+				...visitedTargets,
+				...retainedTargets,
+			], selectionTargetsEqual),
 			activeTarget,
 		].slice(-PROJECT_SWITCHER_HISTORY_LIMIT);
 		this.worktreeNavigationIndex =
@@ -1623,6 +2101,11 @@ export class ProjectSwitcherWidget extends Disposable {
 					projectId: item.projectId,
 					worktreePath: activeWorktreePath,
 				};
+			}
+			if (isRetainedWorkbenchItem(item) &&
+				pathsEqual(item.worktreePath, activeWorktreePath)
+			) {
+				return { worktreePath: activeWorktreePath };
 			}
 		}
 
@@ -1649,44 +2132,50 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	saveState(): void {
 		this.captureTreeExpansionState();
-		const state: ProjectSwitcherViewState = {
+		const state: IProjectSwitcherViewState = {
 			version: PROJECT_SWITCHER_VIEW_STATE_VERSION,
 			collapsedProjectIds: [...this.collapsedProjectIds].sort(),
+			collapsedOmniSections: [...this.collapsedOmniSections].sort(),
+			omniSectionOrder: [...this.omniSectionOrder],
 		};
 		this.storageService.store(
 			PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
 			JSON.stringify(state),
-			StorageScope.PROFILE,
+			this.viewStateStorageScope,
 			StorageTarget.MACHINE
 		);
 	}
 
 	private loadViewState(): void {
-		const rawState = this.storageService.get(
+		let rawState = this.storageService.get(
 			PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
-			StorageScope.PROFILE
+			this.viewStateStorageScope
 		);
-		if (!rawState) {
+		let migratedScope = false;
+		if (!rawState && this.environmentService.isOmniWindow) {
+			rawState = this.storageService.get(
+				PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
+				StorageScope.PROFILE
+			);
+			migratedScope = !!rawState;
+		}
+		const parsed = parseProjectSwitcherViewState(rawState);
+		if (!parsed) {
 			this.collapsedProjectIds.clear();
+			this.collapsedOmniSections.clear();
+			this.omniSectionOrder = [
+				...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+			];
 			return;
 		}
-
-		let state: ProjectSwitcherViewState;
-		try {
-			state = JSON.parse(rawState) as ProjectSwitcherViewState;
-		} catch {
-			this.collapsedProjectIds.clear();
-			return;
+		this.collapsedProjectIds = new Set(parsed.state.collapsedProjectIds);
+		this.collapsedOmniSections = new Set(
+			parsed.state.collapsedOmniSections
+		);
+		this.omniSectionOrder = [...parsed.state.omniSectionOrder];
+		if (migratedScope || parsed.migrated) {
+			this.saveState();
 		}
-
-		if (state.version !== PROJECT_SWITCHER_VIEW_STATE_VERSION ||
-			!Array.isArray(state.collapsedProjectIds)
-		) {
-			this.collapsedProjectIds.clear();
-			return;
-		}
-
-		this.collapsedProjectIds = new Set(state.collapsedProjectIds);
 	}
 
 	private captureTreeExpansionState(): void {
@@ -1695,6 +2184,9 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 
 		for (const item of this.itemsById.values()) {
+			if (isOmniSectionItem(item)) {
+				continue;
+			}
 			if (!isProjectItem(item)) {
 				continue;
 			}
@@ -1727,6 +2219,7 @@ registerAction2(class extends Action2 {
 			menu: {
 				id: Menus.SidebarTitle,
 				group: 'navigation',
+				when: IsOmniWindowContext.toNegated(),
 			},
 			f1: true,
 		});
@@ -1735,6 +2228,8 @@ registerAction2(class extends Action2 {
 	async run(accessor: ServicesAccessor): Promise<void> {
 		const fileDialogService = accessor.get(IFileDialogService);
 		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 		const notificationService = accessor.get(INotificationService);
 
 		try {
@@ -1749,10 +2244,157 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await projectManagerService.addProject(folder[0]);
+			const project = await projectManagerService.addProject(folder[0]);
+			if (environmentService.isOmniWindow) {
+				await shellService.reconcileRetainedWorkbenches(
+					dom.getWindowId(mainWindow),
+					project.worktrees.map(worktree => ({
+						projectId: project.id,
+						folderUri: URI.file(worktree.path).toJSON(),
+					}))
+				);
+			}
 		} catch (error) {
 			notificationService.error(String(error));
 		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: ADD_WORKBENCH_COMMAND_ID,
+			title: localize2('addWorkbench', 'Add Workbench'),
+			icon: Codicon.add,
+			precondition: IsOmniWindowContext,
+			f1: true,
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const fileDialogService = accessor.get(IFileDialogService);
+		const shellService = accessor.get(IHucodeShellService);
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const notificationService = accessor.get(INotificationService);
+		try {
+			const folder = await fileDialogService.showOpenDialog({
+				canSelectFiles: false,
+				canSelectFolders: true,
+				canSelectMany: false,
+				openLabel: localize('addWorkbenchOpenLabel', 'Add Workbench'),
+				title: localize('addWorkbenchTitle', 'Open Folder as Workbench'),
+			});
+			if (!folder?.length) {
+				return;
+			}
+			const uri = folder[0];
+			const target = canonicalizeProjectSwitcherTarget(
+				{ worktreePath: uri.fsPath },
+				await projectManagerService.getProjects(),
+				pathsEqual
+			);
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService,
+				target.projectId,
+				target.worktreePath
+			);
+			if (await shellService.focusHostedWorkspaceByPath(
+				target.worktreePath,
+				target.projectId
+			) || await shellService.focusNormalWindowByPath(target.worktreePath)
+			) {
+				return;
+			}
+			const windowId = dom.getWindowId(mainWindow);
+			if (target.projectId) {
+				await shellService.openWorkspace(
+					windowId,
+					target.worktreePath,
+					target.projectId
+				);
+			} else {
+				await shellService.retainAndOpenWorkbench(windowId, uri.toJSON());
+			}
+			await shellService.focusWorkspace(windowId);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: OPEN_WORKBENCH_COMMAND_ID,
+			title: localize2('openRetainedWorkbench', 'Open Workbench'),
+		});
+	}
+
+	async run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<void> {
+		const workbenchId = parseWorkbenchHandle(handle.$treeItemHandle);
+		if (!workbenchId) {
+			return;
+		}
+		const shellService = accessor.get(IHucodeShellService);
+		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const hostService = accessor.get(IHostService);
+		const state = await shellService.getWindowState(
+			dom.getWindowId(mainWindow)
+		);
+		const record = state.retainedWorkbenches?.find(candidate =>
+			candidate.id === workbenchId
+		);
+		if (record) {
+			await openProjectSwitcherTarget(
+				{ worktreePath: URI.revive(record.folderUri).fsPath },
+				projectManagerService,
+				environmentService,
+				shellService,
+				hostService
+			);
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_WORKBENCH_COMMAND_ID,
+			title: localize2('unloadRetainedWorkbench', 'Unload Workbench'),
+		});
+	}
+
+	run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<unknown> {
+		const id = parseWorkbenchHandle(handle.$treeItemHandle);
+		return id
+			? accessor.get(IHucodeShellService).unloadRetainedWorkbench(
+				dom.getWindowId(mainWindow),
+				id
+			)
+			: Promise.resolve();
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: DISMISS_WORKBENCH_COMMAND_ID,
+			title: localize2('dismissRetainedWorkbench', 'Dismiss Workbench'),
+		});
+	}
+
+	run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<unknown> {
+		const id = parseWorkbenchHandle(handle.$treeItemHandle);
+		return id
+			? accessor.get(IHucodeShellService).dismissRetainedWorkbench(
+				dom.getWindowId(mainWindow),
+				id
+			)
+			: Promise.resolve();
 	}
 });
 
@@ -1766,7 +2408,7 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: GO_BACK_WORKTREE_COMMAND_ID,
-			title: localize2('goBackWorktree', 'Go Back Project Worktree'),
+			title: localize2('goBackWorktree', 'Go Back Workbench'),
 			icon: Codicon.arrowLeft,
 			precondition: ProjectSwitcherCanGoBackContext,
 			menu: {
@@ -1787,7 +2429,7 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: GO_FORWARD_WORKTREE_COMMAND_ID,
-			title: localize2('goForwardWorktree', 'Go Forward Project Worktree'),
+			title: localize2('goForwardWorktree', 'Go Forward Workbench'),
 			icon: Codicon.arrowRight,
 			precondition: ProjectSwitcherCanGoForwardContext,
 			menu: {

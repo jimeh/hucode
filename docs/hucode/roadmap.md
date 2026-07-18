@@ -38,6 +38,12 @@ Done:
 
 - persistent project registry
 - main-process git worktree service
+- combined Workbenches and Projects UI with retained arbitrary folders
+- per-window retained-workbench persistence, unload/dismiss lifecycle, and
+  drag-and-drop ordering
+- desktop and serve-web startup policy with active/all/none eager restore
+- combined quick picker, MRU, and previous/next workbench navigation
+- arbitrary folder-open routing into Omni on desktop and serve-web
 - Projects UI with projects and nested worktrees
 - add, remove, rename, refresh, pin, switch, and unload flows
 - shell-owned Projects part for Omni windows

@@ -16,10 +16,38 @@ import {
 } from '../../../platform/quickinput/common/quickInput.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
+import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	ProjectSwitcherOmniSection,
+} from './projectSwitcherViewState.js';
 
 export interface IProjectSwitcherSelectionTarget {
-	readonly projectId: string;
+	readonly projectId?: string;
 	readonly worktreePath: string;
+}
+
+/** Timestamped project or arbitrary-workbench navigation target. */
+export interface IProjectSwitcherNavigationHistoryEntry
+	extends IProjectSwitcherSelectionTarget {
+	readonly lastVisitedAt: number;
+}
+
+/** Globally orders history and keeps the most recent equivalent target. */
+export function sortProjectSwitcherNavigationHistory(
+	entries: readonly IProjectSwitcherNavigationHistoryEntry[],
+	targetsEqual: (
+		a: IProjectSwitcherSelectionTarget,
+		b: IProjectSwitcherSelectionTarget
+	) => boolean = (a, b) => a.projectId === b.projectId &&
+		a.worktreePath === b.worktreePath
+): IProjectSwitcherSelectionTarget[] {
+	const sorted = [...entries]
+		.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt);
+	return sorted
+		.filter((entry, index) => !sorted.slice(index + 1).some(candidate =>
+			targetsEqual(entry, candidate)
+		))
+		.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }));
 }
 
 export type SwitchWorktreeSearchField = {
@@ -31,11 +59,50 @@ export type SwitchWorktreeQuickPick = IQuickPickItem &
 	IProjectSwitcherSelectionTarget & {
 		readonly isCurrent: boolean;
 		readonly isLoaded: boolean;
+		readonly isDormant?: boolean;
 		readonly lastVisitedAt?: number;
 		readonly projectOrder: number;
 		readonly worktreeOrder: number;
 		readonly searchFields: readonly SwitchWorktreeSearchField[];
 	};
+
+/** Returns the most recently visited non-current workbench, if any. */
+export function getLastActiveSwitchWorkbenchPick(
+	picks: readonly SwitchWorktreeQuickPick[]
+): SwitchWorktreeQuickPick | undefined {
+	return [...picks]
+		.filter(candidate =>
+			!candidate.isCurrent &&
+			candidate.lastVisitedAt !== undefined
+		)
+		.sort((a, b) =>
+			(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)
+		)[0];
+}
+
+/** Orders quick-pick rows by MRU or by the Omni sidebar section order. */
+export function compareSwitchWorktreePicks(
+	a: SwitchWorktreeQuickPick,
+	b: SwitchWorktreeQuickPick,
+	sectionOrder?: readonly ProjectSwitcherOmniSection[]
+): number {
+	const sectionRank = (pick: SwitchWorktreeQuickPick) => {
+		const rank = sectionOrder?.indexOf(
+			pick.projectId ? 'projects' : 'workbenches'
+		);
+		return rank === undefined || rank < 0 ? Number.MAX_SAFE_INTEGER : rank;
+	};
+	return Number(b.isCurrent) - Number(a.isCurrent) ||
+		Number(b.isLoaded) - Number(a.isLoaded) ||
+		Number(!!b.isDormant) - Number(!!a.isDormant) ||
+		(sectionOrder
+			? sectionRank(a) - sectionRank(b)
+			: (b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)) ||
+		a.projectOrder - b.projectOrder ||
+		a.worktreeOrder - b.worktreeOrder ||
+		a.label.localeCompare(b.label) ||
+		a.worktreePath.localeCompare(b.worktreePath);
+}
 
 export function filterSwitchWorktreePicks(
 	picks: readonly SwitchWorktreeQuickPick[],
@@ -62,7 +129,10 @@ export function withSwitchWorktreeSeparators(
 ): ReadonlyArray<SwitchWorktreeQuickPick | IQuickPickSeparator> {
 	const currentPicks = picks.filter(pick => pick.isCurrent);
 	const loadedPicks = picks.filter(pick => pick.isLoaded && !pick.isCurrent);
-	const notLoadedPicks = picks.filter(pick => !pick.isLoaded);
+	const dormantPicks = picks.filter(pick => pick.isDormant && !pick.isCurrent);
+	const notLoadedPicks = picks.filter(pick =>
+		!pick.isLoaded && !pick.isDormant && !pick.isCurrent
+	);
 	const items: Array<SwitchWorktreeQuickPick | IQuickPickSeparator> = [];
 
 	if (currentPicks.length) {
@@ -79,6 +149,14 @@ export function withSwitchWorktreeSeparators(
 			label: localize('loadedWorktrees', 'Loaded'),
 		});
 		items.push(...loadedPicks);
+	}
+
+	if (dormantPicks.length) {
+		items.push({
+			type: 'separator',
+			label: localize('dormantWorkbenches', 'Dormant'),
+		});
+		items.push(...dormantPicks);
 	}
 
 	if (notLoadedPicks.length) {
@@ -145,6 +223,47 @@ export function getLoadedProjectWorktreeTargets(
 			pathsEqual(target.worktreePath, loadedWorktreePath)
 		)
 	);
+}
+
+/**
+ * Combines retained and project targets while keeping project ownership
+ * authoritative for paths that have been promoted.
+ */
+export function combineProjectSwitcherTargets<
+	T extends IProjectSwitcherSelectionTarget
+>(
+	retainedTargets: readonly T[],
+	projectTargets: readonly T[],
+	pathsEqual: (pathA: string, pathB: string) => boolean,
+	sectionOrder: readonly ProjectSwitcherOmniSection[] =
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
+): T[] {
+	const retained = retainedTargets.filter(candidate =>
+		!projectTargets.some(project =>
+			pathsEqual(candidate.worktreePath, project.worktreePath)
+		)
+	);
+	return sectionOrder[0] === 'projects'
+		? [...projectTargets, ...retained]
+		: [...retained, ...projectTargets];
+}
+
+/** Resolves a path-only target to its current project-owned identity. */
+export function canonicalizeProjectSwitcherTarget(
+	target: IProjectSwitcherSelectionTarget,
+	projects: readonly ProjectRecord[],
+	pathsEqual: (pathA: string, pathB: string) => boolean
+): IProjectSwitcherSelectionTarget {
+	for (const project of projects) {
+		const worktree = project.worktrees.find(candidate =>
+			pathsEqual(candidate.path, target.worktreePath)
+		);
+		if (worktree) {
+			return { projectId: project.id, worktreePath: worktree.path };
+		}
+	}
+
+	return target;
 }
 
 export function getAdjacentProjectWorktreeTarget(

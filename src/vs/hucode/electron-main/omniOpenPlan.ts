@@ -15,6 +15,8 @@ export interface IHucodeOmniWindowPath {
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
+	readonly omniRetainedWorkbenches?:
+	INativeWindowConfiguration['omniRetainedWorkbenches'];
 }
 
 /**
@@ -56,6 +58,8 @@ export interface IHucodeOmniBrowserWindowOptions
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
+	readonly omniRetainedWorkbenches?:
+	INativeWindowConfiguration['omniRetainedWorkbenches'];
 }
 
 /**
@@ -66,6 +70,8 @@ export interface IHucodeOmniWindowState {
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
+	readonly omniRetainedWorkbenches?:
+	INativeWindowConfiguration['omniRetainedWorkbenches'];
 }
 
 /**
@@ -153,6 +159,7 @@ export function getHucodeOmniPathFromWindowState(
 	return createHucodeOmniWindowPath({
 		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
 		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
+		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
 	});
 }
 
@@ -213,6 +220,7 @@ export function getHucodeOmniBrowserWindowOptions(
 		isOmniWindow: true,
 		omniActiveWorktreePath: omniWindow.omniActiveWorktreePath,
 		omniResidentWorkspaces: omniWindow.omniResidentWorkspaces,
+		omniRetainedWorkbenches: omniWindow.omniRetainedWorkbenches,
 	};
 }
 
@@ -259,5 +267,6 @@ function getHucodeOmniWindowRestoreKey(
 	return JSON.stringify({
 		active: omniWindow.omniActiveWorktreePath,
 		resident: omniWindow.omniResidentWorkspaces ?? [],
+		retained: omniWindow.omniRetainedWorkbenches ?? [],
 	});
 }

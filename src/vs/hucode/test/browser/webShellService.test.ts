@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { raceTimeout } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
+import { URI } from '../../../base/common/uri.js';
 import {
 	DisposableStore,
 	IDisposable,
@@ -16,6 +17,10 @@ import { Client as MessagePortClient } from
 import { ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
+import {
+	FileOperationError,
+	FileOperationResult,
+} from '../../../platform/files/common/files.js';
 import {
 	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
@@ -29,15 +34,85 @@ import {
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
 import {
+	createWebHucodeShellFolderAccess,
+	getWebHucodeShellFolderResource,
 	IWebHucodeShellBrowserAdapter,
+	IWebHucodeShellFolderAccess,
+	IWebHucodeShellPersistedState,
+	IWebHucodeShellPersistenceAdapter,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
 
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
+	test('stats server folders through the remote file-system resource',
+		async () => {
+			const resources: URI[] = [];
+			const access = createWebHucodeShellFolderAccess(
+				'server-authority',
+				async resource => {
+					resources.push(resource);
+					return { isDirectory: true };
+				}
+			);
+
+			assert.strictEqual(await access.exists('/srv/project'), true);
+			assert.deepStrictEqual({
+				scheme: resources[0].scheme,
+				authority: resources[0].authority,
+				path: resources[0].path,
+			}, {
+				scheme: 'vscode-remote',
+				authority: 'server-authority',
+				path: '/srv/project',
+			});
+			assert.strictEqual(
+				getWebHucodeShellFolderResource('/tmp/local', undefined).scheme,
+				'file'
+			);
+			const windowsPath = 'C:\\Users\\test\\project';
+			const windowsResource = getWebHucodeShellFolderResource(
+				windowsPath,
+				'server-authority'
+			);
+			assert.deepStrictEqual({
+				scheme: windowsResource.scheme,
+				authority: windowsResource.authority,
+				path: windowsResource.path,
+			}, {
+				scheme: 'vscode-remote',
+				authority: 'server-authority',
+				path: URI.file(windowsPath).path,
+			});
+			assert.strictEqual(await createWebHucodeShellFolderAccess(
+				'server-authority',
+				async () => ({ isDirectory: false })
+			).exists('/srv/file'), false);
+			assert.strictEqual(await createWebHucodeShellFolderAccess(
+				'server-authority',
+				async () => {
+					throw new FileOperationError(
+						'missing',
+						FileOperationResult.FILE_NOT_FOUND
+					);
+				}
+			).exists('/srv/missing'), false);
+			await assert.rejects(
+				createWebHucodeShellFolderAccess(
+					'server-authority',
+					async () => { throw new Error('provider unavailable'); }
+				).exists('/srv/transient'),
+				/provider unavailable/
+			);
+		}
+	);
+
 	function createService(
-		browser: FakeBrowserAdapter = new FakeBrowserAdapter()
+		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
+		persistence?: IWebHucodeShellPersistenceAdapter,
+		restorePolicy: 'active' | 'all' | 'none' = 'active',
+		folderAccess?: IWebHucodeShellFolderAccess
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -62,7 +137,10 @@ suite('WebHucodeShellService', () => {
 					return surface;
 				},
 			},
-			browser
+			browser,
+			persistence,
+			restorePolicy,
+			folderAccess
 		));
 		return { service, surface, browser };
 	}
@@ -565,6 +643,37 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('ignores delayed focus from a hidden workbench', async () => {
+		const { service, surface, browser } = createService();
+		const windowId = browser.windowId;
+		const first = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-one',
+			'project-one'
+		);
+		const firstInstanceId = first.instances[0].instanceId;
+		markReady(browser, surface, firstInstanceId);
+
+		const second = await service.openWorkspace(
+			windowId,
+			'/tmp/hucode-worktree-two',
+			'project-two'
+		);
+		const secondInstanceId = second.activeInstanceId;
+		assert.ok(secondInstanceId);
+
+		markFocused(browser, surface, firstInstanceId);
+
+		const state = await service.getWindowState(windowId);
+		assert.strictEqual(state.activeInstanceId, secondInstanceId);
+		assert.strictEqual(
+			state.instances.find(instance =>
+				instance.instanceId === firstInstanceId
+			)?.focused,
+			false
+		);
+	});
+
 	test('uses browser-limited native keybinding and paste behavior', async () => {
 		const { service, browser } = createService();
 		const windowId = browser.windowId;
@@ -598,7 +707,850 @@ suite('WebHucodeShellService', () => {
 		);
 		assert.strictEqual(await service.toggleWorkspaceDevTools(windowId), false);
 	});
+
+	test('unloads retained workbenches without dismissing them', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch').toJSON()
+		);
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(workbenchId);
+
+		const beforeUnloadSaves = persistence.saveCalls;
+		const unloaded = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+		assert.deepStrictEqual({
+			instances: unloaded.instances.length,
+			desiredState: unloaded.retainedWorkbenches?.[0].desiredState,
+		}, {
+			instances: 0,
+			desiredState: 'unloaded',
+		});
+		assert.strictEqual(persistence.saveCalls, beforeUnloadSaves + 1);
+
+		const beforeDismissSaves = persistence.saveCalls;
+		const dismissed = await service.dismissRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+		assert.deepStrictEqual(dismissed.retainedWorkbenches, []);
+		assert.deepStrictEqual(persistence.state?.retainedWorkbenches, []);
+		assert.strictEqual(persistence.saveCalls, beforeDismissSaves + 1);
+	});
+
+	test('preserves retained state when unload and dismiss are vetoed', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-veto').toJSON()
+		);
+		const instanceId = opened.activeInstanceId;
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(instanceId);
+		assert.ok(workbenchId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = false;
+
+		const unloaded = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+		const dismissed = await service.dismissRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+
+		assert.deepStrictEqual({
+			unloadedDesiredState:
+				unloaded.retainedWorkbenches?.[0].desiredState,
+			dismissedDesiredState:
+				dismissed.retainedWorkbenches?.[0].desiredState,
+			instanceIds: dismissed.instances.map(instance => instance.instanceId),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+			prepareUnloadCalls: child.workbench.prepareUnloadCalls,
+		}, {
+			unloadedDesiredState: 'loaded',
+			dismissedDesiredState: 'loaded',
+			instanceIds: [instanceId],
+			iframeConnected: true,
+			prepareUnloadCalls: 2,
+		});
+	});
+
+	test('preserves retained state when unload times out', async () => {
+		const browser = new ZeroDelayBrowserAdapter();
+		const { service, surface } = createService(browser);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-timeout').toJSON()
+		);
+		const instanceId = opened.activeInstanceId;
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(instanceId);
+		assert.ok(workbenchId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = new Promise<boolean>(() => { });
+
+		const state = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			workbenchId
+		);
+
+		assert.deepStrictEqual({
+			desiredState: state.retainedWorkbenches?.[0].desiredState,
+			instanceIds: state.instances.map(instance => instance.instanceId),
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+		}, {
+			desiredState: 'loaded',
+			instanceIds: [instanceId],
+			iframeConnected: true,
+		});
+	});
+
+	test('persists retained workbench reorder', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-one').toJSON()
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-two').toJSON()
+		);
+		const ids = opened.retainedWorkbenches?.map(record => record.id);
+		assert.ok(ids);
+
+		await service.reorderRetainedWorkbenches(
+			browser.windowId,
+			[ids[1], ids[0]]
+		);
+
+		assert.deepStrictEqual(
+			persistence.state?.retainedWorkbenches.map(record => [
+				record.id,
+				record.order,
+			]),
+			[[ids[1], 0], [ids[0], 1]]
+		);
+	});
+
+	test('generic close persists one coherent retained unload state', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-close').toJSON()
+		);
+		const beforeCloseSaves = persistence.saveCalls;
+
+		const closed = await service.closeWorkspace(
+			browser.windowId,
+			opened.activeInstanceId
+		);
+
+		assert.strictEqual(persistence.saveCalls, beforeCloseSaves + 1);
+		assert.strictEqual(
+			closed.retainedWorkbenches?.[0].desiredState,
+			'unloaded'
+		);
+	});
+
+	test('restores the active retained workbench and keeps others dormant', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'one',
+				folderUri: URI.file('/tmp/one').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+				lastActiveAt: 10,
+			}, {
+				id: 'two',
+				folderUri: URI.file('/tmp/two').toJSON(),
+				desiredState: 'loaded',
+				order: 1,
+				lastActiveAt: 20,
+			}],
+			residentWorkspaces: [],
+			activeWorktreePath: '/tmp/one',
+		});
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active'
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.deepStrictEqual(
+			state.instances.map(instance => [
+				instance.worktreePath,
+				instance.state,
+			]),
+			[['/tmp/one', 'loading'], ['/tmp/two', 'dormant']]
+		);
+		assert.strictEqual(surface.querySelectorAll('iframe').length, 1);
+
+		const unloaded = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			'two'
+		);
+		assert.strictEqual(
+			unloaded.instances.some(instance =>
+				instance.worktreePath === '/tmp/two'
+			),
+			false
+		);
+		assert.strictEqual(
+			unloaded.retainedWorkbenches?.find(record => record.id === 'two')
+				?.desiredState,
+			'unloaded'
+		);
+	});
+
+	test('removes a dormant workbench when its folder becomes missing',
+		async () => {
+			let folderExists = true;
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'dormant',
+					folderUri: URI.file('/tmp/dormant').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+				residentWorkspaces: [],
+			});
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none',
+				{ exists: async () => folderExists }
+			);
+			const restored = await service.getWindowState(browser.windowId);
+			assert.strictEqual(restored.instances[0].state, 'dormant');
+			const beforeOpenSaves = persistence.saveCalls;
+
+			folderExists = false;
+			const missing = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/dormant'
+			);
+
+			assert.deepStrictEqual({
+				instances: missing.instances,
+				folderStatus: missing.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+				saves: persistence.saveCalls - beforeOpenSaves,
+			}, {
+				instances: [],
+				folderStatus: 'missing',
+				iframes: 0,
+				saves: 1,
+			});
+		}
+	);
+
+	test('coalesces concurrent workbench opens after folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const first = service.openWorkspace(
+				browser.windowId,
+				'/tmp/concurrent'
+			);
+			const second = service.openWorkspace(
+				browser.windowId,
+				'/tmp/concurrent'
+			);
+			await Promise.resolve();
+
+			folderStat.complete(true);
+			await Promise.all([first, second]);
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instances: state.instances.length,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: 1,
+				iframes: 1,
+			});
+		}
+	);
+
+	test('latest workspace open wins across different folder preflights',
+		async () => {
+			const alphaStat = new DeferredPromise<boolean>();
+			const bravoStat = new DeferredPromise<boolean>();
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					exists: path => path.endsWith('alpha')
+						? alphaStat.p
+						: bravoStat.p,
+				}
+			);
+
+			const alpha = service.openWorkspace(
+				browser.windowId,
+				'/tmp/alpha'
+			);
+			const bravo = service.openWorkspace(
+				browser.windowId,
+				'/tmp/bravo'
+			);
+			bravoStat.complete(true);
+			await bravo;
+			alphaStat.complete(true);
+			await alpha;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				'/tmp/bravo'
+			);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.worktreePath === '/tmp/alpha'
+				)?.lastActiveAt,
+				undefined
+			);
+			assert.strictEqual(
+				state.retainedWorkbenches?.find(record =>
+					URI.revive(record.folderUri).fsPath === '/tmp/alpha'
+				)?.lastActiveAt,
+				undefined
+			);
+		});
+
+	test('project ownership wins an overlapping arbitrary preflight',
+		async () => {
+			const projectStat = new DeferredPromise<boolean>();
+			const arbitraryStat = new DeferredPromise<boolean>();
+			let statCalls = 0;
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					exists: async () => ++statCalls === 1
+						? projectStat.p
+						: arbitraryStat.p,
+				}
+			);
+
+			const projectOpen = service.openWorkspace(
+				browser.windowId,
+				'/tmp/promoted',
+				'project'
+			);
+			await Promise.resolve();
+			const arbitraryOpen = service.openWorkspace(
+				browser.windowId,
+				'/tmp/promoted'
+			);
+			projectStat.complete(true);
+			await projectOpen;
+			arbitraryStat.complete(true);
+			const state = await arbitraryOpen;
+
+			assert.deepStrictEqual({
+				instances: state.instances.map(instance => ({
+					projectId: instance.projectId,
+					worktreePath: instance.worktreePath,
+				})),
+				retainedWorkbenches: state.retainedWorkbenches,
+			}, {
+				instances: [{
+					projectId: 'project',
+					worktreePath: '/tmp/promoted',
+				}],
+				retainedWorkbenches: [],
+			});
+		}
+	);
+
+	test('does not unload a workbench reactivated during its handshake',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/reactivated').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectChild(browser, surface, instanceId);
+			const unloadReady = new DeferredPromise<boolean>();
+			child.workbench.prepareUnloadResult = unloadReady.p;
+
+			const unloading = service.unloadRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			await Promise.resolve();
+			await service.openWorkspace(browser.windowId, '/tmp/reactivated');
+			unloadReady.complete(true);
+			await unloading;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instanceIds: state.instances.map(instance => instance.instanceId),
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				iframeConnected: getIframe(surface, instanceId).isConnected,
+			}, {
+				instanceIds: [instanceId],
+				desiredState: 'loaded',
+				iframeConnected: true,
+			});
+		});
+
+	test('does not resurrect a workbench dismissed during folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const opening = service.openWorkspace(
+				browser.windowId,
+				'/tmp/dismissed'
+			);
+			await Promise.resolve();
+			const pending = await service.getWindowState(browser.windowId);
+			const workbenchId = pending.retainedWorkbenches?.[0].id;
+			assert.ok(workbenchId);
+
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			folderStat.complete(true);
+			await opening;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances,
+				retained: state.retainedWorkbenches,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [],
+				retained: [],
+				iframes: 0,
+			});
+		}
+	);
+
+	test('does not resurrect a workbench unloaded during folder preflight',
+		async () => {
+			const folderStat = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: () => folderStat.p }
+			);
+			const opening = service.openWorkspace(
+				browser.windowId,
+				'/tmp/unloaded'
+			);
+			await Promise.resolve();
+			const pending = await service.getWindowState(browser.windowId);
+			const workbenchId = pending.retainedWorkbenches?.[0].id;
+			assert.ok(workbenchId);
+
+			await service.unloadRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			folderStat.complete(true);
+			await opening;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [],
+				desiredState: 'unloaded',
+				iframes: 0,
+			});
+		}
+	);
+
+	test('retains missing folders without creating restored iframes', async () => {
+		let existsCalls = 0;
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'missing',
+				folderUri: URI.file('/tmp/missing').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [],
+			activeWorktreePath: '/tmp/missing',
+		});
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{
+				exists: async () => {
+					existsCalls++;
+					return false;
+				}
+			}
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.deepStrictEqual({
+			instances: state.instances,
+			desiredState: state.retainedWorkbenches?.[0].desiredState,
+			folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			iframes: surface.querySelectorAll('iframe').length,
+		}, {
+			instances: [],
+			desiredState: 'unloaded',
+			folderStatus: 'missing',
+			iframes: 0,
+		});
+
+		const restored = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{
+				exists: async () => {
+					existsCalls++;
+					return false;
+				}
+			}
+		);
+		await restored.service.getWindowState(restored.browser.windowId);
+		assert.strictEqual(existsCalls, 1);
+	});
+
+	test('falls back to an available workbench when active restore is missing',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'missing',
+					folderUri: URI.file('/tmp/missing').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}, {
+					id: 'available',
+					folderUri: URI.file('/tmp/available').toJSON(),
+					desiredState: 'loaded',
+					order: 1,
+					lastActiveAt: 20,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/missing',
+			});
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{ exists: async path => path === '/tmp/available' }
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances.map(instance => [
+					instance.worktreePath,
+					instance.state,
+				]),
+				missingStatus: state.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [['/tmp/available', 'loading']],
+				missingStatus: 'missing',
+				iframes: 1,
+			});
+		}
+	);
+
+	test('project restore metadata wins retained path overlap', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'retained-project',
+				folderUri: URI.file('/tmp/project').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [{
+				projectId: 'project',
+				worktreePath: '/tmp/project',
+			}],
+			activeWorktreePath: '/tmp/project',
+		});
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{ exists: async () => true }
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+
+		assert.strictEqual(state.instances[0].projectId, 'project');
+		const instanceId = state.instances[0].instanceId;
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.runCommandResult = false;
+		await service.reloadWorkspace(browser.windowId);
+		const crashed = await waitForInstanceState(
+			service,
+			browser.windowId,
+			instanceId,
+			'crashed'
+		);
+		assert.strictEqual(
+			crashed.retainedWorkbenches?.[0].desiredState,
+			'unloaded'
+		);
+	});
+
+	test('rejects an explicit missing folder before iframe creation', async () => {
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			undefined,
+			'active',
+			{ exists: async () => false }
+		);
+
+		const state = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/missing').toJSON()
+		);
+		assert.deepStrictEqual({
+			instances: state.instances,
+			folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			iframes: surface.querySelectorAll('iframe').length,
+		}, {
+			instances: [],
+			folderStatus: 'missing',
+			iframes: 0,
+		});
+	});
+
+	test('preserves retained restore intent after a transient stat failure',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'scratch',
+					folderUri: URI.file('/tmp/scratch').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/scratch',
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{ exists: async () => { throw new Error('offline'); } }
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instances: state.instances,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			}, {
+				instances: [],
+				desiredState: 'loaded',
+				folderStatus: undefined,
+			});
+		}
+	);
+
+	test('reuses an available workbench without repeating folder preflight',
+		async () => {
+			let folderExists = true;
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: async () => folderExists }
+			);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/loading').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+
+			folderExists = false;
+			const reused = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/loading'
+			);
+
+			assert.deepStrictEqual({
+				instanceIds: reused.instances.map(instance => instance.instanceId),
+				folderStatus: reused.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instanceIds: [instanceId],
+				folderStatus: undefined,
+				iframes: 1,
+			});
+		}
+	);
+
+	test('persists one complete snapshot after restoring all workbenches',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'one',
+					worktreePath: '/tmp/one',
+					lastActiveAt: 20,
+				}, {
+					projectId: 'two',
+					worktreePath: '/tmp/two',
+					lastActiveAt: 10,
+				}],
+				activeWorktreePath: '/tmp/one',
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'all'
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				state.instances.map(instance => instance.worktreePath),
+				['/tmp/one', '/tmp/two']
+			);
+			assert.strictEqual(persistence.saveCalls, 1);
+			assert.deepStrictEqual(
+				persistence.state?.residentWorkspaces.map(
+					entry => entry.worktreePath
+				),
+				['/tmp/one', '/tmp/two']
+			);
+		}
+	);
+
+	test('ignores retained reconciliation for another window', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'retained',
+				folderUri: URI.file('/tmp/promoted').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [],
+		});
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'none'
+		);
+
+		const state = await service.reconcileRetainedWorkbenches(
+			browser.windowId + 1,
+			[{
+				projectId: 'project',
+				folderUri: URI.file('/tmp/promoted').toJSON(),
+			}]
+		);
+
+		assert.strictEqual(state.retainedWorkbenches?.length, 1);
+		assert.strictEqual(state.instances[0].projectId, undefined);
+	});
+
+	test('drops malformed resident persistence entries during startup', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'invalid',
+			} as unknown as IWebHucodeShellPersistedState[
+			'residentWorkspaces'
+			][number], {
+				projectId: 'valid',
+				worktreePath: '/tmp/valid',
+			}],
+			activeWorktreePath: 42 as unknown as string,
+		});
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'none'
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.deepStrictEqual(
+			state.instances.map(instance => instance.worktreePath),
+			['/tmp/valid']
+		);
+		assert.strictEqual(state.instances[0].state, 'dormant');
+	});
+
+	test('page shutdown preserves the desired restore snapshot', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch').toJSON()
+		);
+		const beforeShutdown = structuredClone(persistence.state);
+
+		await service.shutdownWindowWorkspaces(browser.windowId, 1);
+
+		assert.deepStrictEqual(
+			structuredClone(persistence.load()),
+			beforeShutdown
+		);
+	});
 });
+
+class FakePersistence implements IWebHucodeShellPersistenceAdapter {
+	saveCalls = 0;
+	constructor(public state?: IWebHucodeShellPersistedState) { }
+
+	load(): IWebHucodeShellPersistedState | undefined {
+		return this.state;
+	}
+
+	save(state: IWebHucodeShellPersistedState): void {
+		this.saveCalls++;
+		this.state = structuredClone(state);
+	}
+}
 
 class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	runCommandResult = true;

@@ -8,7 +8,7 @@ import { errorHandler } from '../../../../base/common/errors.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
-import { IProjectManagerService } from
+import { IProjectManagerService, ProjectRecord } from
 	'../../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
 	'../../../../workbench/services/host/browser/host.js';
@@ -29,8 +29,14 @@ suite('OpenProjectSwitcherTarget', () => {
 		worktreePath: '/repo',
 	};
 
-	function projectManager(calls: string[]): IProjectManagerService {
+	function projectManager(
+		calls: string[],
+		projects: readonly ProjectRecord[] = [createProject()]
+	): IProjectManagerService {
 		return {
+			async getProjects() {
+				return projects;
+			},
 			async setLastActiveWorktree(projectId: string, worktreePath: string) {
 				calls.push(`setLastActive:${projectId}:${worktreePath}`);
 			}
@@ -137,6 +143,26 @@ suite('OpenProjectSwitcherTarget', () => {
 		}
 	);
 
+	test('adopts a promoted path-only target as a project worktree', async () => {
+		const calls: string[] = [];
+
+		await openProjectSwitcherTargetInWindow(
+			{ worktreePath: '/repo' },
+			7,
+			projectManager(calls),
+			environment({ isOmniWindow: true }),
+			shell(calls, false),
+			host(calls)
+		);
+
+		assert.deepStrictEqual(calls, [
+			'setLastActive:project:/repo',
+			'focusNormal:/repo',
+			'openWorkspace:7:/repo:project',
+			'focusWorkspace:7',
+		]);
+	});
+
 	test('falls back to hosted workspace when normal focus lookup fails',
 		async () => {
 			const calls: string[] = [];
@@ -190,3 +216,19 @@ suite('OpenProjectSwitcherTarget', () => {
 		assert.deepStrictEqual(openOptions, { forceReuseWindow: true });
 	});
 });
+
+function createProject(): ProjectRecord {
+	return {
+		id: 'project',
+		label: 'Project',
+		rootUri: URI.file('/repo'),
+		pinned: false,
+		order: 0,
+		worktrees: [{
+			path: '/repo',
+			label: 'repo',
+			isMain: true,
+			isDetached: false,
+		}],
+	};
+}

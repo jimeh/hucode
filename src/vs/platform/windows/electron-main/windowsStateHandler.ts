@@ -14,6 +14,7 @@ import { ILogService } from '../../log/common/log.js';
 import { IStateService } from '../../state/node/state.js';
 import {
 	INativeWindowConfiguration,
+	IOmniRetainedWorkbench,
 	IOmniWorkspaceRestoreEntry,
 	IWindowSettings,
 } from '../../window/common/window.js';
@@ -30,6 +31,7 @@ export interface IWindowState {
 	windowKind?: 'workbench' | 'omni';
 	omniActiveWorktreePath?: string;
 	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
 	uiState: IWindowUIState;
 }
 
@@ -57,6 +59,7 @@ interface ISerializedWindowState {
 	readonly windowKind?: 'workbench' | 'omni';
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	readonly omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
 	readonly uiState: IWindowUIState;
 }
 
@@ -276,6 +279,7 @@ export class WindowsStateHandler extends Disposable {
 			windowKind: window.isOmniWindow ? 'omni' : 'workbench',
 			omniActiveWorktreePath: window.config?.omniActiveWorktreePath,
 			omniResidentWorkspaces: window.config?.omniResidentWorkspaces,
+			omniRetainedWorkbenches: window.config?.omniRetainedWorkbenches,
 			uiState: window.serializeWindowState()
 		};
 	}
@@ -483,6 +487,11 @@ function restoreWindowState(windowState: ISerializedWindowState): IWindowState {
 			windowState.omniResidentWorkspaces;
 	}
 
+	if (Array.isArray(windowState.omniRetainedWorkbenches)) {
+		result.omniRetainedWorkbenches =
+			windowState.omniRetainedWorkbenches;
+	}
+
 	if (windowState.folder) {
 		result.folderUri = URI.parse(windowState.folder);
 	}
@@ -511,6 +520,7 @@ function serializeWindowState(windowState: IWindowState): ISerializedWindowState
 		windowKind: windowState.windowKind,
 		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
 		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
+		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
 		uiState: windowState.uiState
 	};
 }
