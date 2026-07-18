@@ -6,6 +6,7 @@
 import { getWindowId } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { createDecorator } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
@@ -59,7 +60,17 @@ export async function tryOpenHucodeOmniBrowserWindow(
 		return false;
 	}
 
-	const path = toOpen[0].folderUri.fsPath;
+	const folderUri = toOpen[0].folderUri;
+	if (
+		folderUri.scheme !== Schemas.file &&
+		(folderUri.scheme !== Schemas.vscodeRemote ||
+			!environmentService.remoteAuthority ||
+			folderUri.authority !== environmentService.remoteAuthority)
+	) {
+		return false;
+	}
+
+	const path = folderUri.fsPath;
 	let worktreePath = path;
 	let projectId: string | undefined;
 	const pathKey = getProjectManagerPathComparisonKey(

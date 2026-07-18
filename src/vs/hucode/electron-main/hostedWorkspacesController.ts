@@ -121,6 +121,7 @@ interface IHostedWorkbenchInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	lifecycleGeneration: number;
 	disposed: boolean;
 }
 
@@ -164,9 +165,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
+	private shuttingDown = false;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
+	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
 	private overlayOccluded = false;
@@ -321,7 +324,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private updateWindowRestoreState(): void {
-		if (!this.window.config) {
+		if (this.shuttingDown || !this.window.config) {
 			return;
 		}
 
@@ -765,6 +768,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				visible: false,
 				focused: false,
 				lastActiveAt: entry.lastActiveAt,
+				lifecycleGeneration: 0,
 				disposed: false,
 			});
 		}
@@ -811,6 +815,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				lastActiveAt: entry.worktreePath === activeWorktreePath
 					? this.now()
 					: entry.lastActiveAt,
+				lifecycleGeneration: 0,
 				disposed: false,
 			};
 			this.hostedWorkspaces.addInstance(instance);
@@ -1059,6 +1064,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					visible: false,
 					focused: false,
 					lastActiveAt: makeActive ? this.now() : undefined,
+					lifecycleGeneration: 0,
 					disposed: false,
 				};
 
@@ -1307,6 +1313,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private activateInstance(instance: IHostedWorkbenchInstance): void {
+		instance.lifecycleGeneration = ++this.lifecycleGeneration;
 		this.traceRestore(
 			`activate:start previousActive=${this.activeInstanceId ?? '<none>'}`,
 			instance
@@ -1380,23 +1387,25 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private async closeInstance(
 		target: IHostedWorkbenchInstance
 	): Promise<boolean> {
-		const wasActive = target.instanceId === this.activeInstanceId;
-		let nextActive: IHostedWorkbenchInstance | undefined;
-		if (wasActive) {
-			nextActive = getMostRecentHostedWorkspace(
-				this.instancesById.values(),
-				target.instanceId,
-				instance => instance.disposed
-			);
-		}
-
-		const closed = await this.destroyInstance(target, true);
+		const lifecycleGeneration = target.lifecycleGeneration;
+		const closed = await this.destroyInstance(
+			target,
+			true,
+			true,
+			UnloadReason.CLOSE,
+			false,
+			lifecycleGeneration
+		);
 		if (!closed) {
 			return false;
 		}
 
-		if (wasActive) {
-			this.activeInstanceId = undefined;
+		if (!this.getActiveInstance()) {
+			const nextActive = getMostRecentHostedWorkspace(
+				this.instancesById.values(),
+				undefined,
+				instance => instance.disposed
+			);
 			if (nextActive) {
 				this.activateInstance(nextActive);
 			} else {
@@ -1413,15 +1422,26 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		removeFromMaps: boolean,
 		graceful: boolean = true,
 		reason: UnloadReason = UnloadReason.CLOSE,
-		ignoreUnloadVeto: boolean = false
+		ignoreUnloadVeto: boolean = false,
+		expectedLifecycleGeneration?: number
 	): Promise<boolean> {
 		if (graceful) {
-			const veto = await this.unloadInRenderer(
+			const unloadResult = await this.unloadInRenderer(
 				instance,
 				reason,
-				ignoreUnloadVeto
+				ignoreUnloadVeto,
+				() => expectedLifecycleGeneration !== undefined && (
+					instance.lifecycleGeneration !== expectedLifecycleGeneration ||
+					instance.disposed ||
+					this.hostedWorkspaces.getInstanceByPath(
+						instance.worktreePath
+					) !== instance
+				)
 			);
-			if (veto) {
+			if (unloadResult === 'superseded') {
+				return false;
+			}
+			if (unloadResult === 'vetoed') {
 				if (!ignoreUnloadVeto) {
 					this.logService.trace(
 						'[HucodeShellMainService] Hosted workspace unload ' +
@@ -1470,6 +1490,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		if (this.shuttingDown) {
+			return;
+		}
+
+		this.updateWindowRestoreState();
+		this.shuttingDown = true;
 		const instances = Array.from(this.instancesById.values());
 		for (const instance of instances) {
 			if (instance.disposed) {
@@ -1483,11 +1509,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private async unloadInRenderer(
 		instance: IHostedWorkbenchInstance,
 		reason: UnloadReason,
-		ignoreBeforeUnloadVeto: boolean = false
-	): Promise<boolean> {
+		ignoreBeforeUnloadVeto: boolean = false,
+		isSuperseded: () => boolean = () => false
+	): Promise<'ready' | 'vetoed' | 'superseded'> {
 		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
-			return false;
+			return isSuperseded() ? 'superseded' : 'ready';
 		}
 
 		const beforeUnloadVeto = await this.onBeforeUnloadInRenderer(
@@ -1503,11 +1530,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					reason
 				);
 			}
-			return true;
+			return 'vetoed';
+		}
+		if (isSuperseded()) {
+			return 'superseded';
 		}
 
 		await this.onWillUnloadInRenderer(webContents, instance, reason);
-		return false;
+		return 'ready';
 	}
 
 	private onBeforeUnloadInRenderer(

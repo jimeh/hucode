@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
@@ -129,4 +130,48 @@ suite('HucodeOmniBrowserOpen', () => {
 
 			assert.strictEqual(handled, false);
 		});
+
+	test('leaves virtual-provider folders to upstream browser handling',
+		async () => {
+			const handled = await tryOpenHucodeOmniBrowserWindow(
+				[{ folderUri: URI.from({ scheme: 'memfs', path: '/scratch' }) }],
+				undefined,
+				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
+				{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
+				{} as IProjectManagerService
+			);
+
+			assert.strictEqual(handled, false);
+		});
+
+	test('routes folders for the current remote authority', async () => {
+		let openedPath: string | undefined;
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[{
+				folderUri: URI.from({
+					scheme: Schemas.vscodeRemote,
+					authority: 'ssh-remote+host',
+					path: '/scratch',
+				}),
+			}],
+			undefined,
+			{
+				isOmniWindow: true,
+				remoteAuthority: 'ssh-remote+host',
+			} as IBrowserWorkbenchEnvironmentService,
+			{
+				_serviceBrand: undefined,
+				async focusHostedWorkspaceByPath() { return false; },
+				async focusNormalWindowByPath() { return false; },
+				async openWorkspace(_windowId, path) { openedPath = path; },
+				async focusWorkspace() { },
+			},
+			{
+				async getProjects() { return []; },
+			} as unknown as IProjectManagerService
+		);
+
+		assert.strictEqual(handled, true);
+		assert.strictEqual(openedPath, '/scratch');
+	});
 });

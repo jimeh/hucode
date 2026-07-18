@@ -100,6 +100,7 @@ interface IHostedIframeInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
 }
 
@@ -333,6 +334,8 @@ export class WebHucodeShellController extends Disposable
 	private shuttingDown = false;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
+	private activationIntentGeneration = 0;
+	private lifecycleGeneration = 0;
 
 	private readonly pendingConnectionDisposals = new Set<DisposableStore>();
 
@@ -449,6 +452,7 @@ export class WebHucodeShellController extends Disposable
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
+		const activationIntent = ++this.activationIntentGeneration;
 		let retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
@@ -488,7 +492,9 @@ export class WebHucodeShellController extends Disposable
 					folderStatus: undefined,
 				});
 			}
-			this.activateInstance(currentInstance);
+			if (activationIntent === this.activationIntentGeneration) {
+				this.activateInstance(currentInstance);
+			}
 			return this.getState();
 		}
 		if (!projectId && (
@@ -534,7 +540,11 @@ export class WebHucodeShellController extends Disposable
 		);
 		this.hostedWorkspaces.addInstance(instance);
 		this.attachIframe(instance);
-		this.activateInstance(instance);
+		if (activationIntent === this.activationIntentGeneration) {
+			this.activateInstance(instance);
+		} else {
+			this.emitState();
+		}
 		return this.getState();
 	}
 
@@ -1086,6 +1096,7 @@ export class WebHucodeShellController extends Disposable
 				visible: false,
 				focused: false,
 				lastActiveAt: candidate.lastActiveAt,
+				lifecycleGeneration: 0,
 			});
 		}
 
@@ -1162,10 +1173,12 @@ export class WebHucodeShellController extends Disposable
 			visible: false,
 			focused: false,
 			lastActiveAt: Date.now(),
+			lifecycleGeneration: 0,
 		};
 	}
 
 	private activateInstance(instance: IHostedIframeInstance): void {
+		instance.lifecycleGeneration = ++this.lifecycleGeneration;
 		this.hostedWorkspaces.activateInstance(instance);
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(instance.worktreePath)
@@ -1204,6 +1217,7 @@ export class WebHucodeShellController extends Disposable
 	private async unloadAndRemoveInstance(
 		instance: IHostedIframeInstance
 	): Promise<boolean> {
+		const lifecycleGeneration = instance.lifecycleGeneration;
 		// Pending-ready workbenches close directly: a never-connected iframe
 		// cannot hold unsaved state and is not listening yet, and a reloading
 		// one is already running its own beforeunload handling, where a
@@ -1212,6 +1226,12 @@ export class WebHucodeShellController extends Disposable
 			isHostedWorkspaceAvailable(instance) &&
 			!isHostedWorkspacePendingReady(instance) &&
 			await this.requestUnload(instance) !== 'ready'
+		) {
+			return false;
+		}
+		if (
+			instance.lifecycleGeneration !== lifecycleGeneration ||
+			this.getInstanceByPath(instance.worktreePath) !== instance
 		) {
 			return false;
 		}

@@ -99,6 +99,7 @@ import {
 } from './projectSwitcherCommon.js';
 import {
 	openProjectSwitcherTarget,
+	setLastActiveWorktreeBestEffort,
 	type IProjectSwitcherSelectionTarget,
 } from './switchProjectWorktree.contribution.js';
 import { openSelectionInStandaloneWindow } from '../omniSelectionOpen.js';
@@ -2262,6 +2263,7 @@ registerAction2(class extends Action2 {
 	async run(accessor: ServicesAccessor): Promise<void> {
 		const fileDialogService = accessor.get(IFileDialogService);
 		const shellService = accessor.get(IHucodeShellService);
+		const projectManagerService = accessor.get(IProjectManagerService);
 		const notificationService = accessor.get(INotificationService);
 		try {
 			const folder = await fileDialogService.showOpenDialog({
@@ -2275,16 +2277,34 @@ registerAction2(class extends Action2 {
 				return;
 			}
 			const uri = folder[0];
-			if (await shellService.focusHostedWorkspaceByPath(uri.fsPath) ||
-				await shellService.focusNormalWindowByPath(uri.fsPath)
+			const target = canonicalizeProjectSwitcherTarget(
+				{ worktreePath: uri.fsPath },
+				await projectManagerService.getProjects(),
+				pathsEqual
+			);
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService,
+				target.projectId,
+				target.worktreePath
+			);
+			if (await shellService.focusHostedWorkspaceByPath(
+				target.worktreePath,
+				target.projectId
+			) || await shellService.focusNormalWindowByPath(target.worktreePath)
 			) {
 				return;
 			}
-			await shellService.retainAndOpenWorkbench(
-				dom.getWindowId(mainWindow),
-				uri.toJSON()
-			);
-			await shellService.focusWorkspace(dom.getWindowId(mainWindow));
+			const windowId = dom.getWindowId(mainWindow);
+			if (target.projectId) {
+				await shellService.openWorkspace(
+					windowId,
+					target.worktreePath,
+					target.projectId
+				);
+			} else {
+				await shellService.retainAndOpenWorkbench(windowId, uri.toJSON());
+			}
+			await shellService.focusWorkspace(windowId);
 		} catch (error) {
 			notificationService.error(String(error));
 		}

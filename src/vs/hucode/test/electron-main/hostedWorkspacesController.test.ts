@@ -40,6 +40,7 @@ class TestWebContents extends EventEmitter {
 	readonly invalidateCalls: number[] = [];
 	loadUrlError: Error | undefined = undefined;
 	loadUrlPromise: Promise<void> | undefined;
+	autoBeforeUnloadReply = true;
 
 	constructor(
 		id: number,
@@ -90,7 +91,7 @@ class TestWebContents extends EventEmitter {
 
 	send(channel: string, request: unknown): void {
 		this.sent.push({ channel, request });
-		if (channel === 'vscode:onBeforeUnload') {
+		if (channel === 'vscode:onBeforeUnload' && this.autoBeforeUnloadReply) {
 			const { okChannel } = request as { okChannel: string };
 			setTimeout(() => this.ipcMain.emitReply(okChannel), 0);
 		}
@@ -164,6 +165,7 @@ class TestHostedWorkbenchView {
 	readonly visibleCalls: boolean[] = [];
 	readonly boundsCalls: IRectangle[] = [];
 	readonly backgroundColors: string[] = [];
+	blurWhenHidden = false;
 
 	constructor(webContents: TestWebContents) {
 		this.rawWebContents = webContents;
@@ -180,6 +182,10 @@ class TestHostedWorkbenchView {
 
 	setVisible(visible: boolean): void {
 		this.visibleCalls.push(visible);
+		if (!visible && this.blurWhenHidden &&
+			this.rawWebContents.isFocused()) {
+			this.rawWebContents.blur();
+		}
 	}
 }
 
@@ -797,6 +803,31 @@ suite('ResidentHostedWorkspacesController', () => {
 		});
 	});
 
+	test('coalesces overlapping opens for the same workspace', async () => {
+		const alpha = createWorktree('same-alpha');
+		const load = new DeferredPromise<void>();
+		const { controller, viewFactory } = createController({
+			loadUrlPromises: [load.p],
+		});
+
+		const first = controller.openWorkspace(alpha, 'project-alpha');
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 1;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		await controller.openWorkspace(alpha, 'project-alpha');
+
+		assert.strictEqual(viewFactory.views.length, 1);
+		load.complete();
+		await first;
+		assert.deepStrictEqual(
+			controller.getState().instances.map(instance => instance.instanceId),
+			['instance-1']
+		);
+	});
+
 	test('retains missing folders without creating hosted views', async () => {
 		const missing = join(tempRoot, 'missing');
 		const { controller, protocolMainService, viewFactory } =
@@ -1148,6 +1179,74 @@ suite('ResidentHostedWorkspacesController', () => {
 		]);
 	});
 
+	test('does not close a workspace reactivated during unload', async () => {
+		const alpha = createWorktree('alpha-reactivated');
+		const bravo = createWorktree('bravo-reactivated');
+		const { controller, ipcMain, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		viewFactory.views[0].rawWebContents.autoBeforeUnloadReply = false;
+
+		const closing = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const beforeUnload = viewFactory.views[0].rawWebContents.sent[0]
+			.request as { okChannel: string };
+		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		ipcMain.emitReply(beforeUnload.okChannel);
+		await closing;
+
+		assert.deepStrictEqual({
+			activeInstanceId: controller.getState().activeInstanceId,
+			instanceIds: controller.getState().instances.map(
+				instance => instance.instanceId
+			).toSorted(),
+			sent: viewFactory.views[0].rawWebContents.sent.map(item => item.channel),
+			closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
+		}, {
+			activeInstanceId: 'instance-1',
+			instanceIds: ['instance-1', 'instance-2'],
+			sent: ['vscode:onBeforeUnload'],
+			closeCalls: [],
+		});
+	});
+
+	test('closing an old active workspace preserves newer activation', async () => {
+		const alpha = createWorktree('alpha-newer-activation');
+		const bravo = createWorktree('bravo-newer-activation');
+		const { controller, ipcMain, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		viewFactory.views[0].rawWebContents.autoBeforeUnloadReply = false;
+
+		const closing = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const beforeUnload = viewFactory.views[0].rawWebContents.sent[0]
+			.request as { okChannel: string };
+		await controller.openWorkspace(bravo, 'project-bravo');
+		ipcMain.emitReply(beforeUnload.okChannel);
+		await closing;
+
+		assert.deepStrictEqual({
+			activeInstanceId: controller.getState().activeInstanceId,
+			instances: controller.getState().instances.map(instance => ({
+				instanceId: instance.instanceId,
+				state: instance.state,
+			})),
+		}, {
+			activeInstanceId: 'instance-2',
+			instances: [{ instanceId: 'instance-2', state: 'active' }],
+		});
+	});
+
 	test('switching workspaces hides inactive BrowserViews and raises active',
 		async () => {
 			const alpha = createWorktree('alpha');
@@ -1457,6 +1556,32 @@ suite('ResidentHostedWorkspacesController', () => {
 			]
 		);
 		assert.strictEqual(controller.getState().instances[0].state, 'unloaded');
+	});
+
+	test('shutdown preserves the resident workspace restore snapshot', async () => {
+		const alpha = createWorktree('alpha');
+		const scratch = createWorktree('scratch');
+		const { controller, viewFactory, window } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		controller.notifyHostedWorkspaceReady('instance-2');
+		viewFactory.views[1].blurWhenHidden = true;
+		viewFactory.views[1].rawWebContents.focus();
+
+		const restoreSnapshot = structuredClone(
+			window.config?.omniResidentWorkspaces
+		);
+		assert.strictEqual(restoreSnapshot?.[0].state, 'loaded');
+
+		await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+
+		assert.deepStrictEqual(
+			window.config?.omniResidentWorkspaces,
+			restoreSnapshot
+		);
+		assert.strictEqual(window.config?.omniActiveWorktreePath, scratch);
 	});
 
 	test('render process gone marks workspace crashed and clears trust', async () => {

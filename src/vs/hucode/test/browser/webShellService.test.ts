@@ -963,6 +963,81 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('latest workspace open wins across different folder preflights',
+		async () => {
+			const alphaStat = new DeferredPromise<boolean>();
+			const bravoStat = new DeferredPromise<boolean>();
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					exists: path => path.endsWith('alpha')
+						? alphaStat.p
+						: bravoStat.p,
+				}
+			);
+
+			const alpha = service.openWorkspace(
+				browser.windowId,
+				'/tmp/alpha',
+				'project-alpha'
+			);
+			const bravo = service.openWorkspace(
+				browser.windowId,
+				'/tmp/bravo',
+				'project-bravo'
+			);
+			bravoStat.complete(true);
+			await bravo;
+			alphaStat.complete(true);
+			await alpha;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				'/tmp/bravo'
+			);
+		});
+
+	test('does not unload a workbench reactivated during its handshake',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/reactivated').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectChild(browser, surface, instanceId);
+			const unloadReady = new DeferredPromise<boolean>();
+			child.workbench.prepareUnloadResult = unloadReady.p;
+
+			const unloading = service.unloadRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			await Promise.resolve();
+			await service.openWorkspace(browser.windowId, '/tmp/reactivated');
+			unloadReady.complete(true);
+			await unloading;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instanceIds: state.instances.map(instance => instance.instanceId),
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				iframeConnected: getIframe(surface, instanceId).isConnected,
+			}, {
+				instanceIds: [instanceId],
+				desiredState: 'loaded',
+				iframeConnected: true,
+			});
+		});
+
 	test('does not resurrect a workbench dismissed during folder preflight',
 		async () => {
 			const folderStat = new DeferredPromise<boolean>();

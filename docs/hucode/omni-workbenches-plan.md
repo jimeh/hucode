@@ -27,7 +27,7 @@ chat history.
 
 ## Current status
 
-- Overall status: **Follow-up refinements implemented and locally validated**
+- Overall status: **Final hardening implemented and locally validated**
 - Implementation status: **Complete; awaiting orchestrator review and CI**
 - Last updated: **2026-07-18**
 - Current owner: **Hucode maintainers**
@@ -1424,6 +1424,7 @@ Add dated entries as implementation progresses.
 | 2026-07-17 | Follow-up refinement | Added configurable row density, draggable section order, project lifecycle icons, Hucode Settings TOC, stable header actions, and serve-web missing-folder preflight | Focused compile, 48 common tests, 28 browser tests, and precommit pass |
 | 2026-07-18 | Review/CI hardening | Corrected serve-web remote folder preflight and stale dormant cleanup; preserved standalone picker MRU ordering; deduplicated promoted navigation history; completed focused CI registration and fixture updates | Focused type, compile, layer, common, browser, and Electron suites pass locally; final orchestrator review and CI remain pending |
 | 2026-07-18 | Final review hardening | Guarded async web and desktop activation races, moved desktop missing-folder checks before view creation, preserved remote native routing, and tightened picker, DnD, rendering, and stale-state behavior | Typecheck, full compile, layers, 16 common tests, 98 focused Electron tests, and hygiene pass in the feature worktree |
+| 2026-07-18 | Relaunch hardening | Preserved the pre-shutdown resident project snapshot during hosted-view teardown; coalesced same-folder opens; protected unloads from reactivation; canonicalized Workbenches-plus project targets; excluded virtual folders from Omni browser routing | 118 focused Electron/browser tests pass; a two-restart desktop QA run restored the arbitrary workbench active and rendered the previously loaded project worktree with the pause icon |
 
 ## Validation log
 
@@ -1450,6 +1451,7 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-18 | Review/CI hardening desktop tests | Focused `ResidentHostedWorkspacesController` Electron invocation | 41 tests pass |
 | 2026-07-18 | Review/CI hardening hygiene | `npm run -s precommit -- <edited paths>`; `git diff --check` | Pass |
 | 2026-07-18 | Final review validation | `typecheck-client`; `compile-client`; `valid-layers-check`; focused common and Electron suites; changed-file precommit; `git diff --check` | Pass: 16 common and 98 Electron tests; local Electron run used `ELECTRON_DISABLE_SANDBOX=1` because the downloaded helper could not be root-owned without interactive sudo |
+| 2026-07-18 | Relaunch regression validation | `typecheck-client`; `compile-client`; `valid-layers-check`; `hucode:validate`; changed-file precommit; focused lifecycle, routing, and selection suites | Pass: 118 Electron/browser tests; desktop restart persisted the inactive project as loaded and rendered `codicon-debug-pause` while restoring the arbitrary workbench active |
 
 ## Completion criteria
 
