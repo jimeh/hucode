@@ -28,8 +28,8 @@ chat history.
 ## Current status
 
 - Overall status: **Implementation complete; extended manual acceptance open**
-- Implementation status: **CodeRabbit follow-up implemented; awaiting re-review
-  and final CI**
+- Implementation status: **Complete; CodeRabbit approved and release gates
+  green**
 - Last updated: **2026-07-18**
 - Current owner: **Hucode maintainers**
 
@@ -1431,7 +1431,7 @@ Add dated entries as implementation progresses.
 | 2026-07-18 | Final review hardening | Guarded async web and desktop activation races, moved desktop missing-folder checks before view creation, preserved remote native routing, and tightened picker, DnD, rendering, and stale-state behavior | Typecheck, full compile, layers, 16 common tests, 98 focused Electron tests, and hygiene pass in the feature worktree |
 | 2026-07-18 | Relaunch hardening | Preserved the pre-shutdown resident project snapshot during hosted-view teardown; coalesced same-folder opens; protected unloads from reactivation; canonicalized Workbenches-plus project targets; excluded virtual folders from Omni browser routing | 118 focused Electron/browser tests pass; a two-restart desktop QA run restored the arbitrary workbench active and rendered the previously loaded project worktree with the pause icon |
 | 2026-07-18 | Exact-head review fixes | Reloaded desktop workbenches reactivated after will-unload, including pre-ready instances; made overlapping closes single-owner; kept recency activation-driven across desktop and web; transitioned missing or failed web restores to explicit unloaded state; guarded inactive retained rows; preferred project metadata on restore overlap; and limited promotion reconciliation to authoritative project worktrees | Both review phases are covered by focused regressions; final exact-head re-review and CI remain pending |
-| 2026-07-18 | CodeRabbit follow-up | Preserved restore intent across transient web stat failures; rechecked project ownership after asynchronous preflight; bypassed Omni routing for profile, temporary-profile, chat-session, and extension-development opens; repaired malformed retained ordering; restricted Last Active to visited targets; and hardened persistence and routing tests | All eight actionable review threads and three test-maintainability nitpicks are addressed locally; CodeRabbit re-review and exact-head CI remain pending |
+| 2026-07-18 | CodeRabbit follow-up | Preserved restore intent across transient web stat failures; rechecked project ownership after asynchronous preflight; bypassed Omni routing for profile, temporary-profile, chat-session, and extension-development opens; repaired malformed retained ordering; restricted Last Active to visited targets; and hardened persistence and routing tests | CodeRabbit approved `e74d4a5d2c0` with no new actionable comments; all eight original threads are resolved and all three test-maintainability nitpicks are addressed |
 
 ## Validation log
 
@@ -1461,6 +1461,7 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-18 | Relaunch regression validation | `typecheck-client`; `compile-client`; `valid-layers-check`; `hucode:validate`; changed-file precommit; focused lifecycle, routing, and selection suites | Pass: 118 Electron/browser tests; desktop restart persisted the inactive project as loaded and rendered `codicon-debug-pause` while restoring the arbitrary workbench active |
 | 2026-07-18 | Exact-head review regression validation | `typecheck-client`; `compile-client`; focused lifecycle, routing, selection, and tree-model suites | Pass: 127 Electron/browser and 14 tree-model tests; post-will-unload reactivation, overlapping close, stale recency, missing/failing restore suppression, dormant explicit unload, inactive retained rows, project-preferred overlap, and upstream browser-routing branches are covered |
 | 2026-07-18 | CodeRabbit follow-up validation | `typecheck-client`; `compile-client`; `valid-layers-check`; `hucode:validate`; focused common and Electron/browser suites | Pass: 56 common and 129 Electron/browser tests; transient stat preservation, overlapping ownership, special open modes, malformed ordering, and visited-target MRU selection are covered |
+| 2026-07-18 | Review-fix PR gates | GitHub Actions and CodeRabbit on `e74d4a5d2c0` | Pass: all 12 checks green, CodeRabbit approved with no new actionable comments, and all review threads resolved |
 
 ## Completion criteria
 
