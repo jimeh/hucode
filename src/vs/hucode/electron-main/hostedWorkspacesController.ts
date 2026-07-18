@@ -660,7 +660,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				projectId: entry.projectId,
 				lastActiveAt: entry.lastActiveAt,
 			}));
-		const candidates = [...retainedCandidates, ...projectCandidates];
+		const candidates = [...projectCandidates, ...retainedCandidates];
 		if (!candidates.length) {
 			this.traceRestore('restore:start entries=0');
 			this.restored = true;
@@ -1438,6 +1438,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					) !== instance
 				)
 			);
+			if (unloadResult === 'superseded-after-will-unload') {
+				this.reloadInstanceAfterInterruptedUnload(instance);
+				return false;
+			}
 			if (unloadResult === 'superseded') {
 				return false;
 			}
@@ -1489,6 +1493,32 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return true;
 	}
 
+	private reloadInstanceAfterInterruptedUnload(
+		instance: IHostedWorkbenchInstance
+	): void {
+		if (
+			instance.disposed ||
+			instance.state === 'loading' ||
+			this.hostedWorkspaces.getInstanceByPath(instance.worktreePath) !==
+			instance
+		) {
+			return;
+		}
+
+		const webContents = this.getLiveWebContents(instance);
+		if (!webContents) {
+			return;
+		}
+
+		this.logService.trace(
+			'[HucodeShellMainService] Reloading hosted workspace reactivated ' +
+			`during will-unload for ${instance.worktreePath}.`
+		);
+		instance.state = 'loading';
+		webContents.reload();
+		this.emitState();
+	}
+
 	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
 		if (this.shuttingDown) {
 			return;
@@ -1511,7 +1541,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		reason: UnloadReason,
 		ignoreBeforeUnloadVeto: boolean = false,
 		isSuperseded: () => boolean = () => false
-	): Promise<'ready' | 'vetoed' | 'superseded'> {
+	): Promise<
+		'ready' | 'vetoed' | 'superseded' |
+		'superseded-after-will-unload'
+	> {
 		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return isSuperseded() ? 'superseded' : 'ready';
@@ -1537,6 +1570,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		await this.onWillUnloadInRenderer(webContents, instance, reason);
+		if (isSuperseded()) {
+			return 'superseded-after-will-unload';
+		}
 		return 'ready';
 	}
 

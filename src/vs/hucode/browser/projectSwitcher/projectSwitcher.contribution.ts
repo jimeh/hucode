@@ -661,16 +661,17 @@ class ProjectSwitcherRenderer
 			item.hostedWorkbenchState === 'loading' ||
 			item.hostedWorkbenchState === 'active' ||
 			item.hostedWorkbenchState === 'loaded';
+		const canUnload = isLive || item.hostedWorkbenchState === 'dormant';
 		this.setAction(
 			templateData,
 			templateData.trailingAction,
-			isLive
+			canUnload
 				? localize('unloadRetainedWorkbenchButton', 'Unload Workbench')
 				: localize('dismissWorkbenchButton', 'Dismiss Workbench'),
-			isLive ? Codicon.chromeMinimize : Codicon.close,
+			canUnload ? Codicon.chromeMinimize : Codicon.close,
 			() => {
 				void this.commandService.executeCommand(
-					isLive
+					canUnload
 						? UNLOAD_WORKBENCH_COMMAND_ID
 						: DISMISS_WORKBENCH_COMMAND_ID,
 					toHandleArg(item)
@@ -1667,7 +1668,7 @@ export class ProjectSwitcherWidget extends Disposable {
 						}
 					),
 				}),
-				...(isLive ? [toAction({
+				...(isLive || item.hostedWorkbenchState === 'dormant' ? [toAction({
 					id: UNLOAD_WORKBENCH_COMMAND_ID,
 					label: localize(
 						'unloadRetainedWorkbench',
@@ -2228,6 +2229,8 @@ registerAction2(class extends Action2 {
 	async run(accessor: ServicesAccessor): Promise<void> {
 		const fileDialogService = accessor.get(IFileDialogService);
 		const projectManagerService = accessor.get(IProjectManagerService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 		const notificationService = accessor.get(INotificationService);
 
 		try {
@@ -2242,7 +2245,22 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await projectManagerService.addProject(folder[0]);
+			const project = await projectManagerService.addProject(folder[0]);
+			if (environmentService.isOmniWindow) {
+				await shellService.reconcileRetainedWorkbenches(
+					dom.getWindowId(mainWindow),
+					[
+						{
+							projectId: project.id,
+							folderUri: folder[0].toJSON(),
+						},
+						...project.worktrees.map(worktree => ({
+							projectId: project.id,
+							folderUri: URI.file(worktree.path).toJSON(),
+						})),
+					]
+				);
+			}
 		} catch (error) {
 			notificationService.error(String(error));
 		}

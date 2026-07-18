@@ -172,18 +172,22 @@ suite('ProjectSwitcherTreeModel', () => {
 			label: item.label,
 			description: item.description,
 			state: item.hostedWorkbenchState,
+			isActive: item.isActive,
 		})), [{
 			label: 'first',
 			description: 'label:/scratch/first',
 			state: 'dormant',
+			isActive: false,
 		}, {
 			label: 'second',
 			description: 'label:/scratch/second',
 			state: 'unloaded',
+			isActive: false,
 		}, {
 			label: 'missing',
 			description: 'label:/scratch/missing',
 			state: 'missing',
+			isActive: false,
 		}]);
 	});
 

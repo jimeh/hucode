@@ -1076,8 +1076,8 @@ export class WebHucodeShellController extends Disposable
 				lastActiveAt: record.lastActiveAt,
 			}));
 		const availableCandidates = await this.filterAvailableRestoreCandidates([
-			...retainedCandidates,
 			...persisted.residentWorkspaces.filter(entry => !!entry.projectId),
+			...retainedCandidates,
 		]);
 		const plan = createHostedWorkbenchRestorePlan(
 			availableCandidates,
@@ -1144,6 +1144,7 @@ export class WebHucodeShellController extends Disposable
 			}
 			if (candidate.retainedWorkbenchId) {
 				this.retainedWorkbenches.update(candidate.retainedWorkbenchId, {
+					desiredState: 'unloaded',
 					folderStatus: 'missing',
 				});
 			}
@@ -1172,7 +1173,6 @@ export class WebHucodeShellController extends Disposable
 			iframe,
 			visible: false,
 			focused: false,
-			lastActiveAt: Date.now(),
 			lifecycleGeneration: 0,
 		};
 	}

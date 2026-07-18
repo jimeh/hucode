@@ -476,6 +476,20 @@ suite('ResidentHostedWorkspacesController', () => {
 				[[active, 'loading'], [inactive, 'dormant']]
 			);
 			assert.strictEqual(viewFactory.views.length, 1);
+
+			await controller.unloadRetainedWorkbench('inactive');
+			assert.strictEqual(
+				controller.getState().instances.some(instance =>
+					instance.worktreePath === inactive
+				),
+				false
+			);
+			assert.strictEqual(
+				controller.getState().retainedWorkbenches?.find(record =>
+					record.id === 'inactive'
+				)?.desiredState,
+				'unloaded'
+			);
 		});
 
 	test('controller applies all and none policy before main-side restore',
@@ -696,6 +710,31 @@ suite('ResidentHostedWorkspacesController', () => {
 			{ worktreePath: alpha, state: 'dormant' },
 		]);
 		assert.ok(stateChanges.length >= 4);
+	});
+
+	test('project restore metadata wins retained path overlap', async () => {
+		const alpha = createWorktree('project-retained-overlap');
+		const { controller } = createController({
+			activeWorktreePath: alpha,
+			restoreEntries: [{
+				projectId: 'project-alpha',
+				worktreePath: alpha,
+				state: 'active',
+			}],
+			retainedWorkbenches: [{
+				id: 'retained-alpha',
+				folderUri: URI.file(alpha).toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+		});
+
+		await controller.ensureRestored();
+
+		assert.strictEqual(
+			controller.getState().instances[0].projectId,
+			'project-alpha'
+		);
 	});
 
 	test('restore skips missing active workspace and promotes MRU', async () => {
@@ -1213,6 +1252,72 @@ suite('ResidentHostedWorkspacesController', () => {
 			sent: ['vscode:onBeforeUnload'],
 			closeCalls: [],
 		});
+	});
+
+	test('reloads a workspace reactivated during will-unload', async () => {
+		const alpha = createWorktree('alpha-reactivated-after-will');
+		const bravo = createWorktree('bravo-reactivated-after-will');
+		const { controller, ipcMain, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const willUnload = new DeferredPromise<{ replyChannel: string }>();
+		viewFactory.views[0].rawWebContents.send = function (
+			channel: string,
+			request: unknown
+		): void {
+			this.sent.push({ channel, request });
+			if (channel === 'vscode:onBeforeUnload') {
+				const { okChannel } = request as { okChannel: string };
+				setTimeout(() => ipcMain.emitReply(okChannel), 0);
+			}
+			if (channel === 'vscode:onWillUnload') {
+				willUnload.complete(request as { replyChannel: string });
+			}
+		};
+
+		const closing = controller.closeWorkspace('instance-1');
+		const willUnloadRequest = await willUnload.p;
+		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		ipcMain.emitReply(willUnloadRequest.replyChannel);
+		await closing;
+
+		assert.deepStrictEqual({
+			activeInstanceId: controller.getState().activeInstanceId,
+			state: controller.getState().instances.find(instance =>
+				instance.instanceId === 'instance-1'
+			)?.state,
+			reloadCalls: viewFactory.views[0].rawWebContents.reloadCalls.length,
+			closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
+		}, {
+			activeInstanceId: 'instance-1',
+			state: 'loading',
+			reloadCalls: 1,
+			closeCalls: [],
+		});
+	});
+
+	test('overlapping closes destroy a workspace once', async () => {
+		const alpha = createWorktree('alpha-overlapping-close');
+		const { controller, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+
+		await Promise.all([
+			controller.closeWorkspace('instance-1'),
+			controller.closeWorkspace('instance-1'),
+		]);
+
+		assert.strictEqual(controller.getState().instances.length, 0);
+		assert.strictEqual(
+			viewFactory.views[0].rawWebContents.closeCalls.length,
+			1
+		);
 	});
 
 	test('closing an old active workspace preserves newer activation', async () => {

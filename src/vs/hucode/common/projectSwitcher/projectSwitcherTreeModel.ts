@@ -541,7 +541,7 @@ function toRetainedWorkbenchElement(
 		desiredState: record.desiredState,
 		hostedWorkbenchInstanceId: instance?.instanceId,
 		hostedWorkbenchState: state,
-		isActive: instance?.instanceId ===
+		isActive: !!instance && instance.instanceId ===
 			options.hostedWorkspaceState.activeInstanceId,
 		order: record.order,
 		label: basename(worktreePath),

@@ -52,9 +52,12 @@ export async function tryOpenHucodeOmniBrowserWindow(
 ): Promise<boolean> {
 	if ((!environmentService.isOmniWindow &&
 		!environmentService.isHostedOmniWorkspace) ||
+		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow || options?.addMode || options?.removeMode ||
 		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||
-		options?.waitMarkerFileURI || toOpen.length !== 1 ||
+		options?.waitMarkerFileURI || options?.forceProfile ||
+		options?.forceTempProfile || options?.chatSessionToOpen ||
+		toOpen.length !== 1 ||
 		!isFolderToOpen(toOpen[0])
 	) {
 		return false;

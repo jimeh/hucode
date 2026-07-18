@@ -131,6 +131,19 @@ suite('HucodeOmniBrowserOpen', () => {
 			assert.strictEqual(handled, false);
 		});
 
+	test('leaves profile-carrying requests to upstream browser handling',
+		async () => {
+			const handled = await tryOpenHucodeOmniBrowserWindow(
+				[{ folderUri: URI.file('/scratch') }],
+				{ forceProfile: 'Development' },
+				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
+				{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
+				{} as IProjectManagerService
+			);
+
+			assert.strictEqual(handled, false);
+		});
+
 	test('leaves virtual-provider folders to upstream browser handling',
 		async () => {
 			const handled = await tryOpenHucodeOmniBrowserWindow(
@@ -143,6 +156,66 @@ suite('HucodeOmniBrowserOpen', () => {
 
 			assert.strictEqual(handled, false);
 		});
+
+	test('leaves multi-folder requests to upstream browser handling', async () => {
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[
+				{ folderUri: URI.file('/first') },
+				{ folderUri: URI.file('/second') },
+			],
+			undefined,
+			{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
+			{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
+			{} as IProjectManagerService
+		);
+
+		assert.strictEqual(handled, false);
+	});
+
+	test('leaves folders from another remote authority to upstream', async () => {
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[{
+				folderUri: URI.from({
+					scheme: Schemas.vscodeRemote,
+					authority: 'ssh-remote+other',
+					path: '/scratch',
+				}),
+			}],
+			undefined,
+			{
+				isOmniWindow: true,
+				remoteAuthority: 'ssh-remote+host',
+			} as IBrowserWorkbenchEnvironmentService,
+			{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
+			{} as IProjectManagerService
+		);
+
+		assert.strictEqual(handled, false);
+	});
+
+	test('routes folder opens from a hosted Omni workbench', async () => {
+		let opened = false;
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[{ folderUri: URI.file('/scratch') }],
+			undefined,
+			{
+				isHostedOmniWorkspace: true,
+			} as IBrowserWorkbenchEnvironmentService,
+			{
+				_serviceBrand: undefined,
+				async focusHostedWorkspaceByPath() { return false; },
+				async focusNormalWindowByPath() { return false; },
+				async openWorkspace() { opened = true; },
+				async focusWorkspace() { },
+			},
+			{
+				async getProjects() { return []; },
+			} as unknown as IProjectManagerService
+		);
+
+		assert.strictEqual(handled, true);
+		assert.strictEqual(opened, true);
+	});
 
 	test('routes folders for the current remote authority', async () => {
 		let openedPath: string | undefined;

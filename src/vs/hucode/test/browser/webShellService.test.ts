@@ -886,6 +886,22 @@ suite('WebHucodeShellService', () => {
 			[['/tmp/one', 'loading'], ['/tmp/two', 'dormant']]
 		);
 		assert.strictEqual(surface.querySelectorAll('iframe').length, 1);
+
+		const unloaded = await service.unloadRetainedWorkbench(
+			browser.windowId,
+			'two'
+		);
+		assert.strictEqual(
+			unloaded.instances.some(instance =>
+				instance.worktreePath === '/tmp/two'
+			),
+			false
+		);
+		assert.strictEqual(
+			unloaded.retainedWorkbenches?.find(record => record.id === 'two')
+				?.desiredState,
+			'unloaded'
+		);
 	});
 
 	test('removes a dormant workbench when its folder becomes missing',
@@ -999,6 +1015,12 @@ suite('WebHucodeShellService', () => {
 					instance.instanceId === state.activeInstanceId
 				)?.worktreePath,
 				'/tmp/bravo'
+			);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.worktreePath === '/tmp/alpha'
+				)?.lastActiveAt,
+				undefined
 			);
 		});
 
@@ -1115,6 +1137,7 @@ suite('WebHucodeShellService', () => {
 	);
 
 	test('retains missing folders without creating restored iframes', async () => {
+		let existsCalls = 0;
 		const persistence = new FakePersistence({
 			retainedWorkbenches: [{
 				id: 'missing',
@@ -1129,19 +1152,40 @@ suite('WebHucodeShellService', () => {
 			new FakeBrowserAdapter(),
 			persistence,
 			'active',
-			{ exists: async () => false }
+			{
+				exists: async () => {
+					existsCalls++;
+					return false;
+				}
+			}
 		);
 
 		const state = await service.getWindowState(browser.windowId);
 		assert.deepStrictEqual({
 			instances: state.instances,
+			desiredState: state.retainedWorkbenches?.[0].desiredState,
 			folderStatus: state.retainedWorkbenches?.[0].folderStatus,
 			iframes: surface.querySelectorAll('iframe').length,
 		}, {
 			instances: [],
+			desiredState: 'unloaded',
 			folderStatus: 'missing',
 			iframes: 0,
 		});
+
+		const restored = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{
+				exists: async () => {
+					existsCalls++;
+					return false;
+				}
+			}
+		);
+		await restored.service.getWindowState(restored.browser.windowId);
+		assert.strictEqual(existsCalls, 1);
 	});
 
 	test('falls back to an available workbench when active restore is missing',
@@ -1184,6 +1228,32 @@ suite('WebHucodeShellService', () => {
 			});
 		}
 	);
+
+	test('project restore metadata wins retained path overlap', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'retained-project',
+				folderUri: URI.file('/tmp/project').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [{
+				projectId: 'project',
+				worktreePath: '/tmp/project',
+			}],
+			activeWorktreePath: '/tmp/project',
+		});
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{ exists: async () => true }
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+
+		assert.strictEqual(state.instances[0].projectId, 'project');
+	});
 
 	test('rejects an explicit missing folder before iframe creation', async () => {
 		const { service, surface, browser } = createService(
