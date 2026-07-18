@@ -259,9 +259,8 @@ async function runRetainedWorkbenchQuickInput<T>(
 ): Promise<T> {
 	const windowId = dom.getWindowId(mainWindow);
 	await shellService.focusShell(windowId);
-	await shellService.setWorkspaceOverlayOcclusion(windowId, true);
-
 	try {
+		await shellService.setWorkspaceOverlayOcclusion(windowId, true);
 		const result = callback();
 		mainWindow.requestAnimationFrame(() => quickInputService.focus());
 		mainWindow.setTimeout(() => quickInputService.focus(), 0);

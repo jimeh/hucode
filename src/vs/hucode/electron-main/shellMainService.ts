@@ -221,6 +221,10 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
+	/**
+	 * Updates or resets a retained workbench label and returns the resulting
+	 * Omni workspace state.
+	 */
 	async setRetainedWorkbenchLabel(
 		windowId: number,
 		workbenchId: string,

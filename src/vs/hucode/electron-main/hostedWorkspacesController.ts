@@ -944,6 +944,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
+	/**
+	 * Updates or resets a retained workbench label, emitting state when the
+	 * catalog changes.
+	 */
 	setRetainedWorkbenchLabel(
 		workbenchId: string,
 		label: string | undefined,
