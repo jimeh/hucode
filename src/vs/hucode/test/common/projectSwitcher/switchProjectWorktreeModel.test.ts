@@ -16,6 +16,7 @@ import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
+	getLastActiveSwitchWorkbenchPick,
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
@@ -378,31 +379,56 @@ suite('SwitchProjectWorktreeModel', () => {
 			lastVisitedAt: 30,
 		};
 
-		assert.deepStrictEqual(
-			[project, workbench].toSorted(compareSwitchWorktreePicks)
+		assert.deepStrictEqual({
+			mru: [project, workbench]
+				.toSorted(compareSwitchWorktreePicks)
 				.map(pick => pick.worktreePath),
-			['/tmp/scratch', '/tmp/project']
-		);
-		assert.deepStrictEqual([project, workbench]
-			.toSorted((a, b) => compareSwitchWorktreePicks(
-				a,
-				b,
-				['projects', 'workbenches']
-			))
-			.map(pick => pick.worktreePath), [
-			'/tmp/project',
-			'/tmp/scratch',
-		]);
-		assert.deepStrictEqual([workbench, project]
-			.toSorted((a, b) => compareSwitchWorktreePicks(
-				a,
-				b,
-				['projects']
-			))
-			.map(pick => pick.worktreePath), [
-			'/tmp/project',
-			'/tmp/scratch',
-		]);
+			sectionOrder: [project, workbench]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['projects', 'workbenches']
+				))
+				.map(pick => pick.worktreePath),
+			partialSectionOrder: [workbench, project]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['projects']
+				))
+				.map(pick => pick.worktreePath),
+		}, {
+			mru: ['/tmp/scratch', '/tmp/project'],
+			sectionOrder: ['/tmp/project', '/tmp/scratch'],
+			partialSectionOrder: ['/tmp/project', '/tmp/scratch'],
+		});
+	});
+
+	test('last active excludes current and never-visited workbenches', () => {
+		const current = {
+			...createPick({ projectId: 'current', isCurrent: true }),
+			lastVisitedAt: 30,
+		};
+		const visited = {
+			...createPick({ projectId: 'visited' }),
+			lastVisitedAt: 20,
+		};
+		const neverVisited = createPick({ projectId: 'never' });
+
+		assert.deepStrictEqual({
+			selected: getLastActiveSwitchWorkbenchPick([
+				current,
+				visited,
+				neverVisited,
+			])?.worktreePath,
+			empty: getLastActiveSwitchWorkbenchPick([
+				current,
+				neverVisited,
+			]),
+		}, {
+			selected: '/tmp/visited',
+			empty: undefined,
+		});
 	});
 });
 

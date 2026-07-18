@@ -67,11 +67,17 @@ suite('HostedWorkspaceState', () => {
 	test('distinguishes dormant restore state from live availability', () => {
 		const dormant = entry('dormant', { state: 'dormant' });
 
-		assert.strictEqual(isHostedWorkspaceAvailable(dormant), false);
-		assert.strictEqual(isHostedWorkspaceRestorable(dormant), true);
-		assert.strictEqual(isHostedWorkspaceRestorable(
-			entry('unloaded', { state: 'unloaded' })
-		), false);
+		assert.deepStrictEqual({
+			dormantAvailable: isHostedWorkspaceAvailable(dormant),
+			dormantRestorable: isHostedWorkspaceRestorable(dormant),
+			unloadedRestorable: isHostedWorkspaceRestorable(
+				entry('unloaded', { state: 'unloaded' })
+			),
+		}, {
+			dormantAvailable: false,
+			dormantRestorable: true,
+			unloadedRestorable: false,
+		});
 	});
 
 	test('uses active selection for ready state', () => {
@@ -120,17 +126,25 @@ suite('HostedWorkspaceState', () => {
 			false
 		);
 		assert.strictEqual(model.projectSwitcherCanGoBack, true);
-		assert.strictEqual(model.setProjectSwitcherSectionOrder(
+		const sectionOrderChanged = model.setProjectSwitcherSectionOrder(
 			['projects', 'workbenches']
-		), true);
-		assert.strictEqual(model.setProjectSwitcherSectionOrder([]), false);
-		assert.strictEqual(model.setProjectSwitcherSectionOrder(
+		);
+		const emptySectionOrderChanged =
+			model.setProjectSwitcherSectionOrder([]);
+		const duplicateSectionOrderChanged = model.setProjectSwitcherSectionOrder(
 			['projects', 'projects']
-		), false);
-		assert.deepStrictEqual(model.projectSwitcherSectionOrder, [
-			'projects',
-			'workbenches',
-		]);
+		);
+		assert.deepStrictEqual({
+			sectionOrderChanged,
+			emptySectionOrderChanged,
+			duplicateSectionOrderChanged,
+			sectionOrder: model.projectSwitcherSectionOrder,
+		}, {
+			sectionOrderChanged: true,
+			emptySectionOrderChanged: false,
+			duplicateSectionOrderChanged: false,
+			sectionOrder: ['projects', 'workbenches'],
+		});
 
 		assert.strictEqual(model.setProjectsSidebarVisible(false, false), false);
 		assert.strictEqual(model.projectsSidebarVisible, true);

@@ -22,7 +22,11 @@ import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { IConfigurationService } from
 	'../../platform/configuration/common/configuration.js';
-import { IFileService } from '../../platform/files/common/files.js';
+import {
+	FileOperationResult,
+	IFileService,
+	toFileOperationResult,
+} from '../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import {
@@ -152,8 +156,12 @@ export function createWebHucodeShellFolderAccess(
 					remoteAuthority
 				);
 				return (await stat(resource)).isDirectory;
-			} catch {
-				return false;
+			} catch (error) {
+				if (toFileOperationResult(error) ===
+					FileOperationResult.FILE_NOT_FOUND) {
+					return false;
+				}
+				throw error;
 			}
 		},
 	};
@@ -453,13 +461,15 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 		const activationIntent = ++this.activationIntentGeneration;
+		const existing = this.getInstanceByPath(worktreePath);
+		let effectiveProjectId = projectId ?? existing?.projectId;
 		let retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
-		if (projectId && retained) {
+		if (effectiveProjectId && retained) {
 			this.retainedWorkbenches.dismiss(retained.id);
 			retained = undefined;
-		} else if (!projectId) {
+		} else if (!effectiveProjectId) {
 			retained = this.retainedWorkbenches.retain(
 				URI.file(worktreePath),
 				'loaded'
@@ -467,9 +477,8 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		const retainedWorkbenchId = retained?.id;
-		const existing = this.getInstanceByPath(worktreePath);
 		if (existing && isHostedWorkspaceAvailable(existing)) {
-			existing.projectId = projectId ?? existing.projectId;
+			existing.projectId = effectiveProjectId;
 			existing.retainedWorkbenchId = retained?.id;
 			if (retained?.folderStatus === 'missing') {
 				this.retainedWorkbenches.update(retained.id, {
@@ -483,8 +492,13 @@ export class WebHucodeShellController extends Disposable
 		const folderExists = await this.folderAccess.exists(worktreePath);
 		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
 		const currentInstance = this.getInstanceByPath(worktreePath);
+		effectiveProjectId = projectId ?? currentInstance?.projectId;
+		if (effectiveProjectId && retained) {
+			this.retainedWorkbenches.dismiss(retained.id);
+			retained = undefined;
+		}
 		if (currentInstance && isHostedWorkspaceAvailable(currentInstance)) {
-			currentInstance.projectId = projectId ?? currentInstance.projectId;
+			currentInstance.projectId = effectiveProjectId;
 			currentInstance.retainedWorkbenchId = retained?.id;
 			if (retained?.folderStatus === 'missing') {
 				this.retainedWorkbenches.update(retained.id, {
@@ -496,7 +510,7 @@ export class WebHucodeShellController extends Disposable
 			}
 			return this.getState();
 		}
-		if (!projectId && (
+		if (!effectiveProjectId && (
 			!retained ||
 			retained.id !== retainedWorkbenchId ||
 			retained.desiredState !== 'loaded'
@@ -534,7 +548,7 @@ export class WebHucodeShellController extends Disposable
 
 		const instance = this.createInstance(
 			worktreePath,
-			projectId,
+			effectiveProjectId,
 			retained?.id
 		);
 		this.hostedWorkspaces.addInstance(instance);
@@ -1131,7 +1145,13 @@ export class WebHucodeShellController extends Disposable
 	): Promise<typeof candidates> {
 		const available = [];
 		for (const candidate of candidates) {
-			if (await this.folderAccess.exists(candidate.worktreePath)) {
+			let exists: boolean;
+			try {
+				exists = await this.folderAccess.exists(candidate.worktreePath);
+			} catch {
+				continue;
+			}
+			if (exists) {
 				if (candidate.retainedWorkbenchId) {
 					this.retainedWorkbenches.update(
 						candidate.retainedWorkbenchId,

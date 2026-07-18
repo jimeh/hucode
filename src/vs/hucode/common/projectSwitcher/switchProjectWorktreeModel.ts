@@ -66,6 +66,20 @@ export type SwitchWorktreeQuickPick = IQuickPickItem &
 		readonly searchFields: readonly SwitchWorktreeSearchField[];
 	};
 
+/** Returns the most recently visited non-current workbench, if any. */
+export function getLastActiveSwitchWorkbenchPick(
+	picks: readonly SwitchWorktreeQuickPick[]
+): SwitchWorktreeQuickPick | undefined {
+	return [...picks]
+		.filter(candidate =>
+			!candidate.isCurrent &&
+			candidate.lastVisitedAt !== undefined
+		)
+		.sort((a, b) =>
+			(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)
+		)[0];
+}
+
 /** Orders quick-pick rows by MRU or by the Omni sidebar section order. */
 export function compareSwitchWorktreePicks(
 	a: SwitchWorktreeQuickPick,

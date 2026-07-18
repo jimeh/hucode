@@ -41,6 +41,7 @@ class TestWebContents extends EventEmitter {
 	loadUrlError: Error | undefined = undefined;
 	loadUrlPromise: Promise<void> | undefined;
 	autoBeforeUnloadReply = true;
+	sendHook: ((channel: string, request: unknown) => boolean) | undefined;
 
 	constructor(
 		id: number,
@@ -91,6 +92,9 @@ class TestWebContents extends EventEmitter {
 
 	send(channel: string, request: unknown): void {
 		this.sent.push({ channel, request });
+		if (this.sendHook?.(channel, request)) {
+			return;
+		}
 		if (channel === 'vscode:onBeforeUnload' && this.autoBeforeUnloadReply) {
 			const { okChannel } = request as { okChannel: string };
 			setTimeout(() => this.ipcMain.emitReply(okChannel), 0);
@@ -1269,11 +1273,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		controller.notifyHostedWorkspaceReady('instance-2');
 		await controller.openWorkspace(alpha, 'project-alpha');
 		const willUnload = new DeferredPromise<{ replyChannel: string }>();
-		viewFactory.views[0].rawWebContents.send = function (
-			channel: string,
-			request: unknown
-		): void {
-			this.sent.push({ channel, request });
+		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 			if (channel === 'vscode:onBeforeUnload') {
 				const { okChannel } = request as { okChannel: string };
 				setTimeout(() => ipcMain.emitReply(okChannel), 0);
@@ -1281,6 +1281,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			if (channel === 'vscode:onWillUnload') {
 				willUnload.complete(request as { replyChannel: string });
 			}
+			return true;
 		};
 
 		const closing = controller.closeWorkspace('instance-1');
@@ -1316,11 +1317,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			controller.notifyHostedWorkspaceReady('instance-2');
 			await controller.openWorkspace(alpha, 'project-alpha');
 			const willUnload = new DeferredPromise<{ replyChannel: string }>();
-			viewFactory.views[0].rawWebContents.send = function (
-				channel: string,
-				request: unknown
-			): void {
-				this.sent.push({ channel, request });
+			viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 				if (channel === 'vscode:onBeforeUnload') {
 					const { okChannel } = request as { okChannel: string };
 					setTimeout(() => ipcMain.emitReply(okChannel), 0);
@@ -1328,6 +1325,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				if (channel === 'vscode:onWillUnload') {
 					willUnload.complete(request as { replyChannel: string });
 				}
+				return true;
 			};
 
 			const closing = controller.closeWorkspace('instance-1');
@@ -1676,11 +1674,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		viewFactory.views[0].rawWebContents.send = function (
-			channel: string,
-			request: unknown
-		): void {
-			this.sent.push({ channel, request });
+		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 			if (channel === 'vscode:onBeforeUnload') {
 				const { cancelChannel } = request as { cancelChannel: string };
 				setTimeout(() => ipcMain.emitReply(cancelChannel), 0);
@@ -1689,6 +1683,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				const { replyChannel } = request as { replyChannel: string };
 				setTimeout(() => ipcMain.emitReply(replyChannel), 0);
 			}
+			return true;
 		};
 
 		await controller.closeWorkspace();

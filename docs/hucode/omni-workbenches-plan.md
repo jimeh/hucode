@@ -27,8 +27,9 @@ chat history.
 
 ## Current status
 
-- Overall status: **Final hardening implemented and locally validated**
-- Implementation status: **Complete; awaiting orchestrator review and CI**
+- Overall status: **Implementation complete; extended manual acceptance open**
+- Implementation status: **CodeRabbit follow-up implemented; awaiting re-review
+  and final CI**
 - Last updated: **2026-07-18**
 - Current owner: **Hucode maintainers**
 
@@ -40,7 +41,7 @@ chat history.
 | 3. Add serve-web persistence and lifecycle parity | Complete | Profile storage and iframe restore policy |
 | 4. Build the combined sidebar model and UI | Complete | Sections, ordering, actions, and navigation |
 | 5. Route arbitrary folder opens into Omni | Complete | Desktop and browser host routing |
-| 6. Complete tests, documentation, and runtime validation | Complete | Automated suites and fresh-profile desktop QA pass |
+| 6. Complete tests, documentation, and runtime validation | Complete for release gates | Automated suites and targeted desktop/serve-web QA pass; the extended manual checklist below remains open |
 | 7. Refine density, ordering, state icons, and missing paths | Complete | Focused compile, tests, and hygiene pass |
 
 ## Goal
@@ -1126,7 +1127,11 @@ Add coverage for:
 - dormant projection and repeated refresh/restart behavior;
 - old project-less resident entry adoption.
 
-## Manual acceptance checklist
+## Extended manual acceptance checklist
+
+This checklist records broad exploratory release QA beyond the automated and
+targeted runtime gates used for this implementation. Unchecked items remain
+outstanding and must not be read as completed validation.
 
 ### Desktop
 
@@ -1426,6 +1431,7 @@ Add dated entries as implementation progresses.
 | 2026-07-18 | Final review hardening | Guarded async web and desktop activation races, moved desktop missing-folder checks before view creation, preserved remote native routing, and tightened picker, DnD, rendering, and stale-state behavior | Typecheck, full compile, layers, 16 common tests, 98 focused Electron tests, and hygiene pass in the feature worktree |
 | 2026-07-18 | Relaunch hardening | Preserved the pre-shutdown resident project snapshot during hosted-view teardown; coalesced same-folder opens; protected unloads from reactivation; canonicalized Workbenches-plus project targets; excluded virtual folders from Omni browser routing | 118 focused Electron/browser tests pass; a two-restart desktop QA run restored the arbitrary workbench active and rendered the previously loaded project worktree with the pause icon |
 | 2026-07-18 | Exact-head review fixes | Reloaded desktop workbenches reactivated after will-unload, including pre-ready instances; made overlapping closes single-owner; kept recency activation-driven across desktop and web; transitioned missing or failed web restores to explicit unloaded state; guarded inactive retained rows; preferred project metadata on restore overlap; and limited promotion reconciliation to authoritative project worktrees | Both review phases are covered by focused regressions; final exact-head re-review and CI remain pending |
+| 2026-07-18 | CodeRabbit follow-up | Preserved restore intent across transient web stat failures; rechecked project ownership after asynchronous preflight; bypassed Omni routing for profile, temporary-profile, chat-session, and extension-development opens; repaired malformed retained ordering; restricted Last Active to visited targets; and hardened persistence and routing tests | All eight actionable review threads and three test-maintainability nitpicks are addressed locally; CodeRabbit re-review and exact-head CI remain pending |
 
 ## Validation log
 
@@ -1454,6 +1460,7 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-18 | Final review validation | `typecheck-client`; `compile-client`; `valid-layers-check`; focused common and Electron suites; changed-file precommit; `git diff --check` | Pass: 16 common and 98 Electron tests; local Electron run used `ELECTRON_DISABLE_SANDBOX=1` because the downloaded helper could not be root-owned without interactive sudo |
 | 2026-07-18 | Relaunch regression validation | `typecheck-client`; `compile-client`; `valid-layers-check`; `hucode:validate`; changed-file precommit; focused lifecycle, routing, and selection suites | Pass: 118 Electron/browser tests; desktop restart persisted the inactive project as loaded and rendered `codicon-debug-pause` while restoring the arbitrary workbench active |
 | 2026-07-18 | Exact-head review regression validation | `typecheck-client`; `compile-client`; focused lifecycle, routing, selection, and tree-model suites | Pass: 127 Electron/browser and 14 tree-model tests; post-will-unload reactivation, overlapping close, stale recency, missing/failing restore suppression, dormant explicit unload, inactive retained rows, project-preferred overlap, and upstream browser-routing branches are covered |
+| 2026-07-18 | CodeRabbit follow-up validation | `typecheck-client`; `compile-client`; `valid-layers-check`; `hucode:validate`; focused common and Electron/browser suites | Pass: 56 common and 129 Electron/browser tests; transient stat preservation, overlapping ownership, special open modes, malformed ordering, and visited-target MRU selection are covered |
 
 ## Completion criteria
 
@@ -1480,6 +1487,7 @@ The feature is complete only when:
 - full and loaded quick pickers, last-active, and next/previous commands include
   the appropriate project and arbitrary targets;
 - legacy navigation command IDs and keybindings remain compatible;
-- automated and manual validation passes;
+- automated and targeted runtime validation passes;
+- outstanding extended manual acceptance remains documented explicitly;
 - documentation and `.changes` metadata are complete;
 - this progress tracker reflects the final implementation and residual risks.

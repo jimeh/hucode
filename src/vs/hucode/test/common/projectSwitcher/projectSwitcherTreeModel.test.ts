@@ -69,22 +69,30 @@ suite('ProjectSwitcherTreeModel', () => {
 	test('ignores transient section collapse changes during tree sync', () => {
 		const collapsedSections = new Set(['section:workbenches']);
 
-		assert.strictEqual(applyOmniSectionCollapseChange(
+		const transientChanged = applyOmniSectionCollapseChange(
 			collapsedSections,
 			'section:workbenches',
 			false,
 			true
-		), false);
-		assert.deepStrictEqual([...collapsedSections], [
-			'section:workbenches'
-		]);
-		assert.strictEqual(applyOmniSectionCollapseChange(
+		);
+		const afterTransient = [...collapsedSections];
+		const userChanged = applyOmniSectionCollapseChange(
 			collapsedSections,
 			'section:workbenches',
 			false,
 			false
-		), true);
-		assert.deepStrictEqual([...collapsedSections], []);
+		);
+		assert.deepStrictEqual({
+			transientChanged,
+			afterTransient,
+			userChanged,
+			afterUserChange: [...collapsedSections],
+		}, {
+			transientChanged: false,
+			afterTransient: ['section:workbenches'],
+			userChanged: true,
+			afterUserChange: [],
+		});
 	});
 
 	test('keeps targets hidden by intentionally collapsed Omni sections', () => {
@@ -114,18 +122,24 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.ok(workbench);
 		assert.ok(worktree);
 
-		assert.strictEqual(isItemInCollapsedOmniSection(
-			workbench,
-			new Set(['section:workbenches'])
-		), true);
-		assert.strictEqual(isItemInCollapsedOmniSection(
-			worktree,
-			new Set(['section:projects'])
-		), true);
-		assert.strictEqual(isItemInCollapsedOmniSection(
-			workbench,
-			new Set()
-		), false);
+		assert.deepStrictEqual({
+			workbenchCollapsed: isItemInCollapsedOmniSection(
+				workbench,
+				new Set(['section:workbenches'])
+			),
+			worktreeCollapsed: isItemInCollapsedOmniSection(
+				worktree,
+				new Set(['section:projects'])
+			),
+			workbenchExpanded: isItemInCollapsedOmniSection(
+				workbench,
+				new Set()
+			),
+		}, {
+			workbenchCollapsed: true,
+			worktreeCollapsed: true,
+			workbenchExpanded: false,
+		});
 	});
 
 	test('shows retained workbenches in manual order and hides promotions', () => {

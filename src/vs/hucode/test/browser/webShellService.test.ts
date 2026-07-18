@@ -18,6 +18,10 @@ import { ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
+	FileOperationError,
+	FileOperationResult,
+} from '../../../platform/files/common/files.js';
+import {
 	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
@@ -87,8 +91,20 @@ suite('WebHucodeShellService', () => {
 			).exists('/srv/file'), false);
 			assert.strictEqual(await createWebHucodeShellFolderAccess(
 				'server-authority',
-				async () => { throw new Error('missing'); }
+				async () => {
+					throw new FileOperationError(
+						'missing',
+						FileOperationResult.FILE_NOT_FOUND
+					);
+				}
 			).exists('/srv/missing'), false);
+			await assert.rejects(
+				createWebHucodeShellFolderAccess(
+					'server-authority',
+					async () => { throw new Error('provider unavailable'); }
+				).exists('/srv/transient'),
+				/provider unavailable/
+			);
 		}
 	);
 
@@ -1028,6 +1044,53 @@ suite('WebHucodeShellService', () => {
 			);
 		});
 
+	test('project ownership wins an overlapping arbitrary preflight',
+		async () => {
+			const projectStat = new DeferredPromise<boolean>();
+			const arbitraryStat = new DeferredPromise<boolean>();
+			let statCalls = 0;
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					exists: async () => ++statCalls === 1
+						? projectStat.p
+						: arbitraryStat.p,
+				}
+			);
+
+			const projectOpen = service.openWorkspace(
+				browser.windowId,
+				'/tmp/promoted',
+				'project'
+			);
+			await Promise.resolve();
+			const arbitraryOpen = service.openWorkspace(
+				browser.windowId,
+				'/tmp/promoted'
+			);
+			projectStat.complete(true);
+			await projectOpen;
+			arbitraryStat.complete(true);
+			const state = await arbitraryOpen;
+
+			assert.deepStrictEqual({
+				instances: state.instances.map(instance => ({
+					projectId: instance.projectId,
+					worktreePath: instance.worktreePath,
+				})),
+				retainedWorkbenches: state.retainedWorkbenches,
+			}, {
+				instances: [{
+					projectId: 'project',
+					worktreePath: '/tmp/promoted',
+				}],
+				retainedWorkbenches: [],
+			});
+		}
+	);
+
 	test('does not unload a workbench reactivated during its handshake',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -1296,6 +1359,39 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('preserves retained restore intent after a transient stat failure',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'scratch',
+					folderUri: URI.file('/tmp/scratch').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/scratch',
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{ exists: async () => { throw new Error('offline'); } }
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instances: state.instances,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			}, {
+				instances: [],
+				desiredState: 'loaded',
+				folderStatus: undefined,
+			});
+		}
+	);
+
 	test('reuses an available workbench without repeating folder preflight',
 		async () => {
 			let folderExists = true;
@@ -1431,11 +1527,14 @@ suite('WebHucodeShellService', () => {
 			browser.windowId,
 			URI.file('/tmp/scratch').toJSON()
 		);
-		const beforeShutdown = persistence.state;
+		const beforeShutdown = structuredClone(persistence.state);
 
 		await service.shutdownWindowWorkspaces(browser.windowId, 1);
 
-		assert.deepStrictEqual(persistence.state, beforeShutdown);
+		assert.deepStrictEqual(
+			structuredClone(persistence.load()),
+			beforeShutdown
+		);
 	});
 });
 

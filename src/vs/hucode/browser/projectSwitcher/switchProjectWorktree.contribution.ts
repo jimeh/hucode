@@ -53,6 +53,7 @@ import {
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
+	getLastActiveSwitchWorkbenchPick,
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
@@ -617,11 +618,7 @@ async function switchLastActiveProjectWorktree(
 			labelService,
 			omniState?.projectSwitcherSectionOrder
 		);
-		const pick = [...picks]
-			.filter(candidate => !candidate.isCurrent)
-			.sort((a, b) =>
-				(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)
-			)[0];
+		const pick = getLastActiveSwitchWorkbenchPick(picks);
 		if (
 			!pick ||
 			(activeWorktreePath !== undefined &&

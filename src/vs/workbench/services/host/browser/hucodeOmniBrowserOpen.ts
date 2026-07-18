@@ -7,12 +7,11 @@ import { getWindowId } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Schemas } from '../../../../base/common/network.js';
+import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
 	'../../../../platform/environment/common/hucodeWebConfiguration.js';
-import { IProjectManagerService } from
-	'../../../../platform/projectManager/common/projectManager.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../../../platform/projectManager/common/projectManagerState.js';
 import {
@@ -20,8 +19,6 @@ import {
 	IWindowOpenable,
 	isFolderToOpen,
 } from '../../../../platform/window/common/window.js';
-import { IBrowserWorkbenchEnvironmentService } from
-	'../../environment/browser/environmentService.js';
 
 interface IHucodeBrowserOmniShellService {
 	readonly _serviceBrand: undefined;
@@ -38,6 +35,27 @@ interface IHucodeBrowserOmniShellService {
 	focusWorkspace(windowId: number): Promise<void>;
 }
 
+/** Environment fields used by browser-local Omni folder routing. */
+export interface IHucodeOmniBrowserEnvironment {
+	readonly isOmniWindow?: boolean;
+	readonly isHostedOmniWorkspace?: boolean;
+	readonly extensionDevelopmentLocationURI?: readonly URI[];
+	readonly remoteAuthority?: string;
+	readonly options?: object;
+}
+
+/** Project-manager operations used by browser-local Omni folder routing. */
+export interface IHucodeOmniBrowserProjectManager {
+	getProjects(): Promise<readonly {
+		readonly id: string;
+		readonly worktrees: readonly { readonly path: string }[];
+	}[]>;
+	setLastActiveWorktree(
+		projectId: string,
+		worktreePath: string
+	): Promise<void>;
+}
+
 /** Browser-local view of the Hucode shell service. */
 export const IHucodeBrowserOmniShellService =
 	createDecorator<IHucodeBrowserOmniShellService>('hucodeShellService');
@@ -46,9 +64,9 @@ export const IHucodeBrowserOmniShellService =
 export async function tryOpenHucodeOmniBrowserWindow(
 	toOpen: IWindowOpenable[],
 	options: IOpenWindowOptions | undefined,
-	environmentService: IBrowserWorkbenchEnvironmentService,
+	environmentService: IHucodeOmniBrowserEnvironment,
 	shellService: IHucodeBrowserOmniShellService,
-	projectManagerService: IProjectManagerService
+	projectManagerService: IHucodeOmniBrowserProjectManager
 ): Promise<boolean> {
 	if ((!environmentService.isOmniWindow &&
 		!environmentService.isHostedOmniWorkspace) ||

@@ -263,24 +263,30 @@ suite('HucodeOmniOpen', () => {
 			const shell = createShellService();
 			shell.hostedWorkspacePaths.add('/outside');
 
-			assert.strictEqual(await tryOpenHucodeOmniWindow(
+			const handled = await tryOpenHucodeOmniWindow(
 				[{ folderUri: URI.file('/outside') }],
 				undefined,
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
 				projectManager.service
-			), true);
-			assert.deepStrictEqual(
-				shell.focusHostedWorkspaceByPathCalls,
-				['/outside']
 			);
-			assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, []);
-			assert.deepStrictEqual(shell.openWorkspaceCalls, []);
-			assert.deepStrictEqual(
-				projectManager.setLastActiveWorktreeCalls,
-				[{ projectId: 'project', worktreePath: '/outside' }]
-			);
+			assert.deepStrictEqual({
+				handled,
+				focusHosted: shell.focusHostedWorkspaceByPathCalls,
+				focusNormal: shell.focusNormalWindowByPathCalls,
+				openWorkspace: shell.openWorkspaceCalls,
+				setLastActive: projectManager.setLastActiveWorktreeCalls,
+			}, {
+				handled: true,
+				focusHosted: ['/outside'],
+				focusNormal: [],
+				openWorkspace: [],
+				setLastActive: [{
+					projectId: 'project',
+					worktreePath: '/outside',
+				}],
+			});
 		});
 
 	test('opens known folders in Omni when normal-window lookup fails', async () => {
@@ -319,26 +325,29 @@ suite('HucodeOmniOpen', () => {
 		const shell = createShellService();
 		const toOpen = [{ folderUri: URI.file('/outside') }];
 
-		assert.strictEqual(
-			await tryOpenHucodeOmniWindow(
-				toOpen,
-				{ forceReuseWindow: true },
-				nativeHost.service,
-				environment({ isHostedOmniWorkspace: true }),
-				shell.service,
-				projectManager.service
-			),
-			true
+		const handled = await tryOpenHucodeOmniWindow(
+			toOpen,
+			{ forceReuseWindow: true },
+			nativeHost.service,
+			environment({ isHostedOmniWorkspace: true }),
+			shell.service,
+			projectManager.service
 		);
-		assert.deepStrictEqual(shell.openWorkspaceCalls, [{
-			windowId: nativeHost.service.windowId,
-			worktreePath: '/outside',
-			projectId: undefined,
-		}]);
-		assert.deepStrictEqual(shell.focusWorkspaceCalls, [
-			nativeHost.service.windowId,
-		]);
-		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+		assert.deepStrictEqual({
+			handled,
+			openWorkspace: shell.openWorkspaceCalls,
+			focusWorkspace: shell.focusWorkspaceCalls,
+			openWindow: nativeHost.openWindowCalls,
+		}, {
+			handled: true,
+			openWorkspace: [{
+				windowId: nativeHost.service.windowId,
+				worktreePath: '/outside',
+				projectId: undefined,
+			}],
+			focusWorkspace: [nativeHost.service.windowId],
+			openWindow: [],
+		});
 	});
 
 	test('leaves remote folders for native window handling', async () => {
@@ -346,26 +355,33 @@ suite('HucodeOmniOpen', () => {
 		const projectManager = createProjectManagerService([]);
 		const shell = createShellService();
 
-		assert.strictEqual(
-			await tryOpenHucodeOmniWindow(
-				[{
-					folderUri: URI.parse(
-						'vscode-remote://ssh-remote+host/repo'
-					),
-				}],
-				undefined,
-				nativeHost.service,
-				environment({ isOmniWindow: true }),
-				shell.service,
-				projectManager.service
-			),
-			false
+		const handled = await tryOpenHucodeOmniWindow(
+			[{
+				folderUri: URI.parse(
+					'vscode-remote://ssh-remote+host/repo'
+				),
+			}],
+			undefined,
+			nativeHost.service,
+			environment({ isOmniWindow: true }),
+			shell.service,
+			projectManager.service
 		);
-		assert.deepStrictEqual(shell.focusHostedWorkspaceByPathCalls, []);
-		assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, []);
-		assert.deepStrictEqual(shell.openWorkspaceCalls, []);
-		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
-		assert.deepStrictEqual(projectManager.setLastActiveWorktreeCalls, []);
+		assert.deepStrictEqual({
+			handled,
+			focusHosted: shell.focusHostedWorkspaceByPathCalls,
+			focusNormal: shell.focusNormalWindowByPathCalls,
+			openWorkspace: shell.openWorkspaceCalls,
+			openWindow: nativeHost.openWindowCalls,
+			setLastActive: projectManager.setLastActiveWorktreeCalls,
+		}, {
+			handled: false,
+			focusHosted: [],
+			focusNormal: [],
+			openWorkspace: [],
+			openWindow: [],
+			setLastActive: [],
+		});
 	});
 
 	test('falls back to a new window for workspace files', async () => {
@@ -405,6 +421,9 @@ suite('HucodeOmniOpen', () => {
 			{ mergeMode: true },
 			{ gotoLineMode: true },
 			{ waitMarkerFileURI: URI.file('/tmp/wait') },
+			{ forceProfile: 'Development' },
+			{ forceTempProfile: true },
+			{ chatSessionToOpen: URI.file('/tmp/chat') },
 		];
 
 		for (const options of blockedOptions) {
@@ -430,6 +449,23 @@ suite('HucodeOmniOpen', () => {
 				undefined,
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
+				shell.service,
+				projectManager.service
+			),
+			false
+		);
+
+		assert.strictEqual(
+			await tryOpenHucodeOmniWindow(
+				[{ folderUri: URI.file('/repo') }],
+				undefined,
+				nativeHost.service,
+				{
+					...environment({ isOmniWindow: true }),
+					extensionDevelopmentLocationURI: [
+						URI.file('/extension'),
+					],
+				},
 				shell.service,
 				projectManager.service
 			),

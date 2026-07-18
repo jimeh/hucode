@@ -8,22 +8,45 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
-import { IProjectManagerService } from
-	'../../../../../platform/projectManager/common/projectManager.js';
-import { IBrowserWorkbenchEnvironmentService } from
-	'../../../../services/environment/browser/environmentService.js';
-import { tryOpenHucodeOmniBrowserWindow } from
+import {
+	IHucodeOmniBrowserEnvironment,
+	IHucodeOmniBrowserProjectManager,
+	tryOpenHucodeOmniBrowserWindow,
+} from
 	'../../browser/hucodeOmniBrowserOpen.js';
 
 suite('HucodeOmniBrowserOpen', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const environment = (
+		overrides: IHucodeOmniBrowserEnvironment = {}
+	): IHucodeOmniBrowserEnvironment => overrides;
+
+	const projectManager = (
+		projects: readonly {
+			readonly id: string;
+			readonly worktrees: readonly { readonly path: string }[];
+		}[] = []
+	): IHucodeOmniBrowserProjectManager => ({
+		async getProjects() { return projects; },
+		async setLastActiveWorktree() { },
+	});
+
+	const shellService = (
+	): Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3] => ({
+		_serviceBrand: undefined,
+		async focusHostedWorkspaceByPath() { return false; },
+		async focusNormalWindowByPath() { return false; },
+		async openWorkspace() { },
+		async focusWorkspace() { },
+	});
 
 	test('routes arbitrary folders into a retained hosted workbench', async () => {
 		const calls: string[] = [];
 		const handled = await tryOpenHucodeOmniBrowserWindow(
 			[{ folderUri: URI.file('/scratch') }],
 			undefined,
-			{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
+			environment({ isOmniWindow: true }),
 			{
 				_serviceBrand: undefined,
 				async focusHostedWorkspaceByPath(path: string) {
@@ -45,9 +68,7 @@ suite('HucodeOmniBrowserOpen', () => {
 					calls.push(`focus:${windowId}`);
 				},
 			},
-			{
-				async getProjects() { return []; },
-			} as unknown as IProjectManagerService
+			projectManager()
 		);
 
 		assert.strictEqual(handled, true);
@@ -66,10 +87,10 @@ suite('HucodeOmniBrowserOpen', () => {
 			await tryOpenHucodeOmniBrowserWindow(
 				[{ folderUri: URI.file('/repos/PROJECT') }],
 				undefined,
-				{
+				environment({
 					isOmniWindow: true,
 					options: { hucodeServerPathCaseSensitive: false },
-				} as unknown as IBrowserWorkbenchEnvironmentService,
+				}),
 				{
 					_serviceBrand: undefined,
 					async focusHostedWorkspaceByPath() { return false; },
@@ -80,15 +101,10 @@ suite('HucodeOmniBrowserOpen', () => {
 					},
 					async focusWorkspace() { },
 				},
-				{
-					async getProjects() {
-						return [{
-							id: 'project',
-							worktrees: [{ path: '/repos/project' }],
-						}];
-					},
-					async setLastActiveWorktree() { },
-				} as unknown as IProjectManagerService
+				projectManager([{
+					id: 'project',
+					worktrees: [{ path: '/repos/project' }],
+				}])
 			);
 
 			assert.strictEqual(openedProjectId, 'project');
@@ -101,7 +117,7 @@ suite('HucodeOmniBrowserOpen', () => {
 			const handled = await tryOpenHucodeOmniBrowserWindow(
 				[{ folderUri: URI.file('/scratch') }],
 				undefined,
-				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
+				environment({ isOmniWindow: true }),
 				{
 					_serviceBrand: undefined,
 					async focusHostedWorkspaceByPath() { return true; },
@@ -109,9 +125,7 @@ suite('HucodeOmniBrowserOpen', () => {
 					async openWorkspace() { opened = true; },
 					async focusWorkspace() { },
 				},
-				{
-					async getProjects() { return []; },
-				} as unknown as IProjectManagerService
+				projectManager()
 			);
 
 			assert.strictEqual(handled, true);
@@ -123,9 +137,9 @@ suite('HucodeOmniBrowserOpen', () => {
 			const handled = await tryOpenHucodeOmniBrowserWindow(
 				[{ folderUri: URI.file('/scratch') }],
 				{ forceNewWindow: true },
-				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
-				{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
-				{} as IProjectManagerService
+				environment({ isOmniWindow: true }),
+				shellService(),
+				projectManager()
 			);
 
 			assert.strictEqual(handled, false);
@@ -136,9 +150,9 @@ suite('HucodeOmniBrowserOpen', () => {
 			const handled = await tryOpenHucodeOmniBrowserWindow(
 				[{ folderUri: URI.file('/scratch') }],
 				{ forceProfile: 'Development' },
-				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
-				{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
-				{} as IProjectManagerService
+				environment({ isOmniWindow: true }),
+				shellService(),
+				projectManager()
 			);
 
 			assert.strictEqual(handled, false);
@@ -149,9 +163,9 @@ suite('HucodeOmniBrowserOpen', () => {
 			const handled = await tryOpenHucodeOmniBrowserWindow(
 				[{ folderUri: URI.from({ scheme: 'memfs', path: '/scratch' }) }],
 				undefined,
-				{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
-				{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
-				{} as IProjectManagerService
+				environment({ isOmniWindow: true }),
+				shellService(),
+				projectManager()
 			);
 
 			assert.strictEqual(handled, false);
@@ -164,9 +178,9 @@ suite('HucodeOmniBrowserOpen', () => {
 				{ folderUri: URI.file('/second') },
 			],
 			undefined,
-			{ isOmniWindow: true } as IBrowserWorkbenchEnvironmentService,
-			{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
-			{} as IProjectManagerService
+			environment({ isOmniWindow: true }),
+			shellService(),
+			projectManager()
 		);
 
 		assert.strictEqual(handled, false);
@@ -182,12 +196,12 @@ suite('HucodeOmniBrowserOpen', () => {
 				}),
 			}],
 			undefined,
-			{
+			environment({
 				isOmniWindow: true,
 				remoteAuthority: 'ssh-remote+host',
-			} as IBrowserWorkbenchEnvironmentService,
-			{} as Parameters<typeof tryOpenHucodeOmniBrowserWindow>[3],
-			{} as IProjectManagerService
+			}),
+			shellService(),
+			projectManager()
 		);
 
 		assert.strictEqual(handled, false);
@@ -198,9 +212,7 @@ suite('HucodeOmniBrowserOpen', () => {
 		const handled = await tryOpenHucodeOmniBrowserWindow(
 			[{ folderUri: URI.file('/scratch') }],
 			undefined,
-			{
-				isHostedOmniWorkspace: true,
-			} as IBrowserWorkbenchEnvironmentService,
+			environment({ isHostedOmniWorkspace: true }),
 			{
 				_serviceBrand: undefined,
 				async focusHostedWorkspaceByPath() { return false; },
@@ -208,9 +220,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				async openWorkspace() { opened = true; },
 				async focusWorkspace() { },
 			},
-			{
-				async getProjects() { return []; },
-			} as unknown as IProjectManagerService
+			projectManager()
 		);
 
 		assert.strictEqual(handled, true);
@@ -228,10 +238,10 @@ suite('HucodeOmniBrowserOpen', () => {
 				}),
 			}],
 			undefined,
-			{
+			environment({
 				isOmniWindow: true,
 				remoteAuthority: 'ssh-remote+host',
-			} as IBrowserWorkbenchEnvironmentService,
+			}),
 			{
 				_serviceBrand: undefined,
 				async focusHostedWorkspaceByPath() { return false; },
@@ -239,9 +249,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				async openWorkspace(_windowId, path) { openedPath = path; },
 				async focusWorkspace() { },
 			},
-			{
-				async getProjects() { return []; },
-			} as unknown as IProjectManagerService
+			projectManager()
 		);
 
 		assert.strictEqual(handled, true);

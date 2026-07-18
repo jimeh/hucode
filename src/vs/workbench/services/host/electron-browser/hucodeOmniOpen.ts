@@ -50,13 +50,17 @@ export async function tryOpenHucodeOmniWindow(
 	}
 
 	if (
+		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow ||
 		options?.addMode ||
 		options?.removeMode ||
 		options?.diffMode ||
 		options?.mergeMode ||
 		options?.gotoLineMode ||
-		options?.waitMarkerFileURI
+		options?.waitMarkerFileURI ||
+		options?.forceProfile ||
+		options?.forceTempProfile ||
+		options?.chatSessionToOpen
 	) {
 		return false;
 	}

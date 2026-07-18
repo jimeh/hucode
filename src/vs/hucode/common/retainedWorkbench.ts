@@ -180,20 +180,26 @@ export function deserializeRetainedWorkbenches(
 	const ids = new Set<string>();
 	const resources = new Set<string>();
 	const records: IHucodeRetainedWorkbench[] = [];
-	for (const candidate of value) {
-		if (!isRetainedWorkbench(candidate)) {
+	for (const [index, candidate] of value.entries()) {
+		const normalized = {
+			...candidate,
+			order: Number.isFinite(candidate?.order) && candidate.order >= 0
+				? candidate.order
+				: index,
+		};
+		if (!isRetainedWorkbench(normalized)) {
 			continue;
 		}
 
-		const uri = URI.revive(candidate.folderUri);
+		const uri = URI.revive(normalized.folderUri);
 		const key = toResourceKey(uri);
-		if (ids.has(candidate.id) || resources.has(key)) {
+		if (ids.has(normalized.id) || resources.has(key)) {
 			continue;
 		}
 
-		ids.add(candidate.id);
+		ids.add(normalized.id);
 		resources.add(key);
-		records.push({ ...candidate, folderUri: uri.toJSON() });
+		records.push({ ...normalized, folderUri: uri.toJSON() });
 	}
 
 	return compactRetainedWorkbenchOrder(records.sort((a, b) =>

@@ -97,6 +97,18 @@ suite('RetainedWorkbench', () => {
 				folderStatus: 'unknown' as 'missing',
 				order: 2,
 			},
+			{
+				id: 'missing-order',
+				folderUri: URI.file('/repos/four').toJSON(),
+				desiredState: 'loaded',
+				order: undefined as unknown as number,
+			},
+			{
+				id: 'non-finite-order',
+				folderUri: URI.file('/repos/five').toJSON(),
+				desiredState: 'unloaded',
+				order: Number.NaN,
+			},
 		]);
 
 		assert.deepStrictEqual(
@@ -105,7 +117,19 @@ suite('RetainedWorkbench', () => {
 				folderStatus: record.folderStatus,
 				order: record.order,
 			})),
-			[{ id: 'valid', folderStatus: 'missing', order: 0 }]
+			[{
+				id: 'missing-order',
+				folderStatus: undefined,
+				order: 0,
+			}, {
+				id: 'non-finite-order',
+				folderStatus: undefined,
+				order: 1,
+			}, {
+				id: 'valid',
+				folderStatus: 'missing',
+				order: 2,
+			}]
 		);
 	});
 
