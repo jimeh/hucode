@@ -113,7 +113,7 @@
 	color: var(--vscode-list-warningForeground);
 }
 
-.hucode-project-switcher-workbench .hucode-project-switcher-text {
+.hucode-project-switcher-two-line .hucode-project-switcher-text {
 	flex-direction: column;
 	align-items: stretch;
 	justify-content: center;
@@ -121,8 +121,8 @@
 	line-height: 17px;
 }
 
-.hucode-project-switcher-workbench .hucode-project-switcher-label,
-.hucode-project-switcher-workbench .hucode-project-switcher-description {
+.hucode-project-switcher-two-line .hucode-project-switcher-label,
+.hucode-project-switcher-two-line .hucode-project-switcher-description {
 	display: block;
 	flex: 0 1 auto;
 	width: 100%;
@@ -236,4 +236,9 @@
 	overflow: visible;
 	opacity: 1;
 	pointer-events: auto;
+}
+
+.hucode-project-switcher-section-actions {
+	gap: 2px;
+	margin-right: 6px;
 }

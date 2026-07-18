@@ -31,6 +31,7 @@ import {
 } from '../../common/omniWindow.js';
 import {
 	IWebHucodeShellBrowserAdapter,
+	IWebHucodeShellFolderAccess,
 	IWebHucodeShellPersistedState,
 	IWebHucodeShellPersistenceAdapter,
 	WebHucodeShellController,
@@ -42,7 +43,8 @@ suite('WebHucodeShellService', () => {
 	function createService(
 		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
 		persistence?: IWebHucodeShellPersistenceAdapter,
-		restorePolicy: 'active' | 'all' | 'none' = 'active'
+		restorePolicy: 'active' | 'all' | 'none' = 'active',
+		folderAccess?: IWebHucodeShellFolderAccess
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -69,7 +71,8 @@ suite('WebHucodeShellService', () => {
 			},
 			browser,
 			persistence,
-			restorePolicy
+			restorePolicy,
+			folderAccess
 		));
 		return { service, surface, browser };
 	}
@@ -831,6 +834,100 @@ suite('WebHucodeShellService', () => {
 			[['/tmp/one', 'loading'], ['/tmp/two', 'dormant']]
 		);
 		assert.strictEqual(surface.querySelectorAll('iframe').length, 1);
+	});
+
+	test('retains missing folders without creating restored iframes', async () => {
+		const persistence = new FakePersistence({
+			retainedWorkbenches: [{
+				id: 'missing',
+				folderUri: URI.file('/tmp/missing').toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+			}],
+			residentWorkspaces: [],
+			activeWorktreePath: '/tmp/missing',
+		});
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence,
+			'active',
+			{ exists: async () => false }
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.deepStrictEqual({
+			instances: state.instances,
+			folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			iframes: surface.querySelectorAll('iframe').length,
+		}, {
+			instances: [],
+			folderStatus: 'missing',
+			iframes: 0,
+		});
+	});
+
+	test('falls back to an available workbench when active restore is missing',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'missing',
+					folderUri: URI.file('/tmp/missing').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}, {
+					id: 'available',
+					folderUri: URI.file('/tmp/available').toJSON(),
+					desiredState: 'loaded',
+					order: 1,
+					lastActiveAt: 20,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/missing',
+			});
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{ exists: async path => path === '/tmp/available' }
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instances: state.instances.map(instance => [
+					instance.worktreePath,
+					instance.state,
+				]),
+				missingStatus: state.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instances: [['/tmp/available', 'loading']],
+				missingStatus: 'missing',
+				iframes: 1,
+			});
+		}
+	);
+
+	test('rejects an explicit missing folder before iframe creation', async () => {
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			undefined,
+			'active',
+			{ exists: async () => false }
+		);
+
+		const state = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/missing').toJSON()
+		);
+		assert.deepStrictEqual({
+			instances: state.instances,
+			folderStatus: state.retainedWorkbenches?.[0].folderStatus,
+			iframes: surface.querySelectorAll('iframe').length,
+		}, {
+			instances: [],
+			folderStatus: 'missing',
+			iframes: 0,
+		});
 	});
 
 	test('persists one complete snapshot after restoring all workbenches',

@@ -17,6 +17,17 @@ export type HucodeHostedWorkbenchRestorePolicy = 'active' | 'all' | 'none';
 export const HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING =
 	'hucode.omni.restoreHostedWorkbenches';
 
+/** Layout variants supported by Omni sidebar workbench rows. */
+export type HucodeOmniItemLayout = 'compact' | 'twoLine';
+
+/** User setting controlling arbitrary workbench row layout. */
+export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
+	'hucode.omni.workbenchItemLayout';
+
+/** User setting controlling project worktree row layout. */
+export const HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING =
+	'hucode.omni.worktreeItemLayout';
+
 /** Persisted arbitrary-folder entry owned by one Omni window. */
 export type IHucodeRetainedWorkbench = IOmniRetainedWorkbench;
 

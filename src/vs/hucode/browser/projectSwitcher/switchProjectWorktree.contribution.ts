@@ -61,6 +61,10 @@ import {
 	withSwitchWorktreeSeparators,
 } from '../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	ProjectSwitcherOmniSection,
+} from '../../common/projectSwitcher/projectSwitcherViewState.js';
+import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
@@ -198,7 +202,11 @@ function getSwitchWorktreePicks(
 		}
 	}
 
-	return picks.sort(compareSwitchWorktreePicks);
+	return picks.sort((a, b) => compareSwitchWorktreePicks(
+		a,
+		b,
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
+	));
 }
 
 function getRetainedWorkbenchPicks(
@@ -218,7 +226,11 @@ function getRetainedWorkbenchPicks(
 				pathsEqual(candidate.worktreePath, path)
 			);
 			const isLoaded = !!instance && isHostedWorkspaceAvailable(instance);
-			const isDormant = record.desiredState === 'loaded' && !isLoaded;
+			const lifecycleState = instance?.state ??
+				(record.folderStatus === 'missing'
+					? 'missing'
+					: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
+			const isDormant = lifecycleState === 'dormant';
 			const label = basename(path);
 			const description = labelService.getUriLabel(uri);
 			return {
@@ -232,7 +244,16 @@ function getRetainedWorkbenchPicks(
 				worktreeOrder: record.order,
 				label,
 				iconClass: ThemeIcon.asClassName(
-					isDormant ? Codicon.debugPause : Codicon.window
+					lifecycleState === 'restore-pending' ||
+						lifecycleState === 'loading'
+						? ThemeIcon.modify(Codicon.loading, 'spin')
+						: isDormant ? Codicon.debugPause
+							: lifecycleState === 'unloaded'
+								? Codicon.circleOutline
+								: lifecycleState === 'missing' ||
+									lifecycleState === 'crashed'
+									? Codicon.warning
+									: Codicon.window
 				),
 				description,
 				detail: path,
@@ -272,7 +293,9 @@ function getCombinedSwitchWorkbenchPicks(
 	state: IHucodeHostedWorkspaceState | undefined,
 	activeWorktreePath: string | undefined,
 	loadedWorktrees: readonly ILoadedWorkbenchWorktree[],
-	labelService: ILabelService
+	labelService: ILabelService,
+	sectionOrder: readonly ProjectSwitcherOmniSection[] =
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
 ): SwitchWorktreeQuickPick[] {
 	const projectPicks = getSwitchWorktreePicks(
 		projects,
@@ -283,24 +306,44 @@ function getCombinedSwitchWorkbenchPicks(
 		const instance = state?.instances.find(candidate =>
 			pathsEqual(candidate.worktreePath, pick.worktreePath)
 		);
-		return instance?.state === 'dormant'
-			? { ...pick, isDormant: true }
-			: pick;
+		const icon = !state
+			? undefined
+			: instance?.state === 'restore-pending' ||
+				instance?.state === 'loading'
+				? ThemeIcon.modify(Codicon.loading, 'spin')
+				: instance?.state === 'dormant'
+					? Codicon.debugPause
+					: instance?.state === 'crashed' ||
+						instance?.state === 'missing'
+						? Codicon.warning
+						: instance?.state === 'unloaded' || !instance
+							? Codicon.circleOutline
+							: undefined;
+		return {
+			...pick,
+			...(instance?.state === 'dormant' ? { isDormant: true } : {}),
+			...(icon ? { iconClass: ThemeIcon.asClassName(icon) } : {}),
+		};
 	});
 	return combineProjectSwitcherTargets(
 		getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
 		projectPicks,
-		pathsEqual
-	).sort(compareSwitchWorktreePicks);
+		pathsEqual,
+		sectionOrder
+	).sort((a, b) => compareSwitchWorktreePicks(a, b, sectionOrder));
 }
 
 function compareSwitchWorktreePicks(
 	a: SwitchWorktreeQuickPick,
-	b: SwitchWorktreeQuickPick
+	b: SwitchWorktreeQuickPick,
+	sectionOrder: readonly ProjectSwitcherOmniSection[]
 ): number {
+	const sectionRank = (pick: SwitchWorktreeQuickPick) =>
+		sectionOrder.indexOf(pick.projectId ? 'projects' : 'workbenches');
 	return Number(b.isCurrent) - Number(a.isCurrent) ||
 		Number(b.isLoaded) - Number(a.isLoaded) ||
 		Number(!!b.isDormant) - Number(!!a.isDormant) ||
+		sectionRank(a) - sectionRank(b) ||
 		a.projectOrder - b.projectOrder ||
 		a.worktreeOrder - b.worktreeOrder ||
 		a.label.localeCompare(b.label) ||
@@ -499,7 +542,8 @@ async function switchAdjacentProjectWorktree(
 					worktreePath: URI.revive(record.folderUri).fsPath,
 				})),
 			getVisualProjectWorktreeTargets(projects),
-			pathsEqual
+			pathsEqual,
+			omniState?.projectSwitcherSectionOrder
 		);
 		const targets = loadedOnly
 			? getLoadedProjectWorktreeTargets(
@@ -585,7 +629,8 @@ async function switchLastActiveProjectWorktree(
 			omniState,
 			activeWorktreePath,
 			loadedWorktrees,
-			labelService
+			labelService,
+			omniState?.projectSwitcherSectionOrder
 		);
 		const pick = [...picks]
 			.filter(candidate => !candidate.isCurrent)
@@ -661,7 +706,8 @@ async function quickSwitchLoadedProjectWorktree(
 			omniState,
 			activeWorktreePath,
 			loadedWorktrees,
-			labelService
+			labelService,
+			omniState?.projectSwitcherSectionOrder
 		));
 		if (!picks.some(pick => !pick.isCurrent)) {
 			return;
@@ -784,7 +830,8 @@ registerAction2(class extends Action2 {
 				omniState,
 				activeWorktreePath,
 				loadedWorktrees,
-				labelService
+				labelService,
+				omniState?.projectSwitcherSectionOrder
 			);
 			if (!picks.length) {
 				notificationService.info(localize(

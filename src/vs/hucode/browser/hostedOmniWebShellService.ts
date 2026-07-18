@@ -29,6 +29,8 @@ import {
 	IHucodeShellService,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
+import { ProjectSwitcherOmniSection } from
+	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { createEmptyHostedWorkspaceState } from
 	'../common/hostedWorkspaceState.js';
 import { ShutdownReason } from
@@ -268,6 +270,14 @@ export class HostedOmniWebShellService extends Disposable
 				canGoBack,
 				canGoForward
 			));
+	}
+
+	setProjectSwitcherSectionOrder(
+		_windowId: number,
+		order: readonly ProjectSwitcherOmniSection[]
+	): Promise<void> {
+		return this.withShell(() => undefined, (shell, windowId) =>
+			shell.setProjectSwitcherSectionOrder(windowId, order));
 	}
 
 	runActionInShell(

@@ -50,6 +50,22 @@ suite('ProjectSwitcherTreeModel', () => {
 		));
 	});
 
+	test('applies persisted Omni section order', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState(),
+			omniSectionOrder: ['projects', 'workbenches'],
+		});
+
+		assert.deepStrictEqual(
+			model.roots.map(root => root.element.label),
+			['Projects', 'Workbenches']
+		);
+	});
+
 	test('ignores transient section collapse changes during tree sync', () => {
 		const collapsedSections = new Set(['section:workbenches']);
 
@@ -223,6 +239,8 @@ suite('ProjectSwitcherTreeModel', () => {
 		const active = '/repos/hucode.worktrees/active';
 		const loading = '/repos/hucode.worktrees/loading';
 		const unloaded = '/repos/hucode.worktrees/unloaded';
+		const absent = '/repos/hucode.worktrees/absent';
+		const dormant = '/repos/hucode.worktrees/dormant';
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
 				createProject({
@@ -231,6 +249,8 @@ suite('ProjectSwitcherTreeModel', () => {
 						createWorktree(active, { branch: 'active' }),
 						createWorktree(loading, { branch: 'loading' }),
 						createWorktree(unloaded, { branch: 'unloaded' }),
+						createWorktree(absent, { branch: 'absent' }),
+						createWorktree(dormant, { branch: 'dormant' }),
 					],
 				}),
 			],
@@ -249,6 +269,20 @@ suite('ProjectSwitcherTreeModel', () => {
 						focused: true,
 					},
 					{
+						instanceId: 'unloaded-instance',
+						worktreePath: unloaded,
+						state: 'unloaded',
+						visible: false,
+						focused: false,
+					},
+					{
+						instanceId: 'dormant-instance',
+						worktreePath: dormant,
+						state: 'dormant',
+						visible: false,
+						focused: false,
+					},
+					{
 						instanceId: 'loading-instance',
 						worktreePath: loading,
 						state: 'loading',
@@ -262,6 +296,8 @@ suite('ProjectSwitcherTreeModel', () => {
 		const activeItem = getWorktree(model.roots, active);
 		const loadingItem = getWorktree(model.roots, loading);
 		const unloadedItem = getWorktree(model.roots, unloaded);
+		const absentItem = getWorktree(model.roots, absent);
+		const dormantItem = getWorktree(model.roots, dormant);
 
 		assert.deepStrictEqual({
 			active: {
@@ -275,8 +311,18 @@ suite('ProjectSwitcherTreeModel', () => {
 			unloaded: {
 				contextValue: unloadedItem.contextValue,
 				label: unloadedItem.label,
+				hostedWorkbenchState: unloadedItem.hostedWorkbenchState,
 				hostedWorkbenchInstanceId:
 					unloadedItem.hostedWorkbenchInstanceId,
+				iconClasses: ThemeIcon.asClassNameArray(unloadedItem.themeIcon!),
+			},
+			absent: {
+				hostedWorkbenchInstanceId: absentItem.hostedWorkbenchInstanceId,
+				iconClasses: ThemeIcon.asClassNameArray(absentItem.themeIcon!),
+			},
+			dormant: {
+				hostedWorkbenchState: dormantItem.hostedWorkbenchState,
+				iconClasses: ThemeIcon.asClassNameArray(dormantItem.themeIcon!),
 			},
 		}, {
 			active: {
@@ -294,7 +340,17 @@ suite('ProjectSwitcherTreeModel', () => {
 			unloaded: {
 				contextValue: WORKTREE_CONTEXT_VALUE,
 				label: 'unloaded',
+				hostedWorkbenchState: 'unloaded',
+				hostedWorkbenchInstanceId: 'unloaded-instance',
+				iconClasses: ['codicon', 'codicon-circle-outline'],
+			},
+			absent: {
 				hostedWorkbenchInstanceId: undefined,
+				iconClasses: ['codicon', 'codicon-circle-outline'],
+			},
+			dormant: {
+				hostedWorkbenchState: 'dormant',
+				iconClasses: ['codicon', 'codicon-debug-pause'],
 			},
 		});
 	});

@@ -12,6 +12,11 @@ import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 } from './omniWindow.js';
+import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	isProjectSwitcherOmniSectionOrder,
+	ProjectSwitcherOmniSection,
+} from './projectSwitcher/projectSwitcherViewState.js';
 
 export interface IHostedWorkspaceStateEntry {
 	readonly instanceId: string;
@@ -34,6 +39,9 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 	projectsSidebarVisible = true;
 	projectSwitcherCanGoBack = false;
 	projectSwitcherCanGoForward = false;
+	projectSwitcherSectionOrder = [
+		...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	];
 
 	constructor(
 		private readonly toPathKey: (path: string) => string = path => path,
@@ -136,6 +144,20 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 		return true;
 	}
 
+	/** Stores the mixed workbench navigation section order. */
+	setProjectSwitcherSectionOrder(
+		order: readonly ProjectSwitcherOmniSection[]
+	): boolean {
+		if (!isProjectSwitcherOmniSectionOrder(order) ||
+			this.projectSwitcherSectionOrder.join() === order.join()
+		) {
+			return false;
+		}
+
+		this.projectSwitcherSectionOrder = [...order];
+		return true;
+	}
+
 	/**
 	 * Stores project-sidebar visibility while preserving the no-workbench guard.
 	 */
@@ -164,6 +186,7 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 			this.projectsSidebarVisible,
 			this.projectSwitcherCanGoBack,
 			this.projectSwitcherCanGoForward,
+			this.projectSwitcherSectionOrder,
 			toExternalInstance
 		);
 	}
@@ -177,6 +200,9 @@ export function createEmptyHostedWorkspaceState(): IHucodeHostedWorkspaceState {
 		projectsSidebarVisible: true,
 		projectSwitcherCanGoBack: false,
 		projectSwitcherCanGoForward: false,
+		projectSwitcherSectionOrder: [
+			...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+		],
 		instances: [],
 	};
 }
@@ -190,6 +216,8 @@ export function createHostedWorkspaceState<T extends IHostedWorkspaceStateEntry>
 	projectsSidebarVisible: boolean,
 	projectSwitcherCanGoBack: boolean,
 	projectSwitcherCanGoForward: boolean,
+	projectSwitcherSectionOrder: readonly ProjectSwitcherOmniSection[] =
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	toExternalInstance: (entry: T) => IHucodeHostedWorkbenchInstance =
 		defaultExternalInstance
 ): IHucodeHostedWorkspaceState {
@@ -198,6 +226,7 @@ export function createHostedWorkspaceState<T extends IHostedWorkspaceStateEntry>
 		projectsSidebarVisible,
 		projectSwitcherCanGoBack,
 		projectSwitcherCanGoForward,
+		projectSwitcherSectionOrder,
 		instances: sortHostedWorkspaceEntries(
 			Array.from(entries).map(toExternalInstance),
 			activeInstanceId

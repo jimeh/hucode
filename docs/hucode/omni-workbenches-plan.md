@@ -27,8 +27,8 @@ chat history.
 
 ## Current status
 
-- Overall status: **Implemented, locally validated, and under final review**
-- Implementation status: **Complete; awaiting final review and latest-sha CI**
+- Overall status: **Follow-up refinements implemented and locally validated**
+- Implementation status: **Complete; awaiting orchestrator review and CI**
 - Last updated: **2026-07-17**
 - Current owner: **Hucode maintainers**
 
@@ -41,6 +41,7 @@ chat history.
 | 4. Build the combined sidebar model and UI | Complete | Sections, ordering, actions, and navigation |
 | 5. Route arbitrary folder opens into Omni | Complete | Desktop and browser host routing |
 | 6. Complete tests, documentation, and runtime validation | Complete | Automated suites and fresh-profile desktop QA pass |
+| 7. Refine density, ordering, state icons, and missing paths | Complete | Focused compile, tests, and hygiene pass |
 
 ## Goal
 
@@ -83,7 +84,7 @@ The following decisions are considered approved unless plan review changes
 them:
 
 - The Omni sidebar has distinct **Projects** and **Workbenches** sections.
-- The Workbenches section appears above Projects because it is expected to be
+- The Workbenches section defaults above Projects because it is expected to be
   the shorter, more transient list.
 - Each section has its own visible plus action.
 - Both section headers are collapsible and default to expanded.
@@ -96,8 +97,13 @@ them:
 - A workbench row uses the full home-relative path, such as
   `~/Projects/example`, as secondary text.
 - Paths outside the user home use the normal absolute platform label.
-- Workbench rows are two-line rows so the secondary path is useful at normal
-  sidebar widths.
+- Workbench rows default to two lines so the secondary path is useful at
+  normal sidebar widths. `hucode.omni.workbenchItemLayout` independently
+  switches them to a compact single-line layout.
+- Project worktree rows default to compact and can independently use two lines
+  through `hucode.omni.worktreeItemLayout`.
+- Workbenches and Projects section headers can be reordered by drag-and-drop.
+  Their order persists per Omni window and defaults to Workbenches first.
 - Workbench rows can be reordered with drag-and-drop. Their manual order is
   persisted and is independent of activation recency.
 - Unloading an arbitrary workbench releases its hosted renderer but leaves the
@@ -121,6 +127,14 @@ them:
   workbenches are outside the initial scope.
 - Desktop and serve-web should expose equivalent sidebar and lifecycle
   semantics, even though their persistence adapters differ.
+- Serve-web does not try to discover or focus an existing browser tab for a
+  folder. Upstream VS Code web only avoids navigation when reusing the current
+  tab for the same workspace; otherwise it navigates or opens a tab and does
+  not maintain an existing-tab workspace registry. Desktop retains its
+  focus-existing-window behavior.
+- The Omni shell checks folder availability before loading. Missing retained
+  folders stay catalogued in a missing/unloaded presentation and do not create
+  a desktop hosted view or serve-web iframe.
 - On Omni startup, eagerly restore the last selected hosted workbench by
   default. Keep other previously loaded workbenches dormant until first
   activation, visually distinct from explicitly unloaded workbenches.
@@ -195,7 +209,8 @@ hosted-workbench stack.
 
 ### Sidebar structure
 
-The sidebar should render in this order:
+The sidebar should render in this default order. Dragging either section header
+persists the alternate Projects-first order:
 
 ```text
 Workbenches                                   [+]
@@ -277,8 +292,8 @@ Dismissal must never delete or modify the selected directory.
   when selected.
 - Previous/Next Loaded Project Worktree becomes **Previous/Next Loaded
   Workbench** and cycles only across live hosted instances.
-- Combined target order follows the sidebar's logical order: manually ordered
-  arbitrary Workbenches first, followed by Projects using their existing
+- Combined target order follows the persisted sidebar section order. Within
+  Workbenches it uses manual order; within Projects it uses existing
   pinned/unpinned project and worktree order. Collapsed section state does not
   remove targets from keyboard navigation.
 - Quick-pick grouping should distinguish Current, Loaded, Dormant, and Not
@@ -574,7 +589,8 @@ Add a Hucode-owned pure model, tentatively
 `src/vs/hucode/common/omniSidebar/omniSidebarTreeModel.ts`, that composes:
 
 - the existing project/worktree tree model;
-- Workbenches-then-Projects section-header items;
+- top-level section-header items in persisted order, defaulting to Workbenches
+  then Projects;
 - retained arbitrary workbench items;
 - active and lifecycle projection;
 - classification and duplicate suppression;
@@ -616,7 +632,8 @@ tests do not instantiate browser services.
 
 ### Section rows
 
-- Add Workbenches and Projects section item render paths in that order.
+- Add Workbenches and Projects section item render paths with Workbenches first
+  by default and persisted drag ordering.
 - Keep plus buttons always visible and keyboard accessible.
 - Prevent section rows from invoking Open Selected Worktree.
 - Keep existing Pinned and Unpinned separators within Projects.
@@ -626,8 +643,8 @@ tests do not instantiate browser services.
 ### Workbench rows
 
 - Use a dynamic tree-row height for two-line workbench rows.
-- Keep project and worktree row heights unchanged.
-- Stack workbench label and description vertically.
+- Keep compact project and worktree row heights unchanged by default.
+- Stack labels and descriptions vertically for rows configured as two-line.
 - Ellipsize both lines independently and preserve a full tooltip.
 - Use the existing active row treatment.
 - Use loading, dormant, unloaded, crashed, and missing-folder visual states.
@@ -651,10 +668,11 @@ tests do not instantiate browser services.
 - Preserve legacy command IDs and keybindings while updating localized titles,
   empty messages, and quick-pick section labels.
 - Allow workbench rows to be reordered within Workbenches by drag-and-drop.
+- Allow Workbenches and Projects section headers to be reordered by
+  drag-and-drop and persist that order per Omni window.
 - Reuse the existing project/worktree drag feedback and reorder conventions
   where they fit the two-line workbench row.
 - Reject drops across section boundaries and drops onto folder contents.
-- Keep section headers themselves non-draggable.
 - Rename user-facing “selected worktree” messages when they also apply to
   workbench rows.
 
@@ -800,7 +818,7 @@ Goal: settle behavior that changes architecture or user expectations.
 - [x] Confirm single-folder-only scope.
 - [x] Confirm existing standalone/hosted ownership is focused, not duplicated.
 - [x] Confirm both section headers are collapsible.
-- [x] Confirm Workbenches renders above Projects.
+- [x] Confirm Workbenches defaults above Projects with persistent reordering.
 - [x] Confirm arbitrary workbench drag-and-drop ordering is persisted.
 - [x] Confirm desktop and serve-web share startup restore behavior.
 - [x] Confirm promoted workbenches are removed from the arbitrary catalog.
@@ -885,8 +903,8 @@ Exit criteria:
 Goal: present Workbenches and Projects as distinct, usable sections.
 
 - [x] Add the pure combined sidebar model.
-- [x] Add Workbenches and Projects section rows in that order, with plus
-      actions.
+- [x] Add Workbenches and Projects section rows with Workbenches first by
+      default, persisted header drag ordering, and plus actions.
 - [x] Make both section rows collapsible and preserve expansion view state.
 - [x] Preserve Pinned/Unpinned project rendering.
 - [x] Add two-line arbitrary workbench rows.
@@ -950,6 +968,28 @@ Exit criteria:
 - automated gates pass, manual acceptance criteria pass, documentation matches
   behavior, and the plan tracker has no unexplained incomplete items.
 
+### Phase 7 - Follow-up sidebar and restore refinements
+
+Goal: make lifecycle state, density, section ordering, and missing-folder
+behavior consistent across desktop and serve-web.
+
+- [x] Project worktrees use pause for dormant and circle for unloaded state.
+- [x] Workbench and project-worktree row layouts have independent settings.
+- [x] The Settings editor has a top-level Hucode category for `hucode.*`.
+- [x] Section header action padding remains stable across hover.
+- [x] Section headers support persisted drag ordering with Workbenches first by
+      default.
+- [x] Quick pickers and previous/next navigation use persisted section order.
+- [x] Serve-web preflights restored and explicitly opened folders before iframe
+      creation, retaining missing arbitrary folders as dismissible records.
+- [x] Document browser cross-tab ownership as an accepted platform limitation.
+- [x] Add migration, order, lifecycle-icon, and folder-preflight tests.
+
+Exit criteria:
+
+- focused compilation, common tests, browser controller tests, and precommit
+  hygiene pass before the follow-up patch is handed to final review.
+
 ## Automated test plan
 
 ### Common state tests
@@ -981,7 +1021,8 @@ Add coverage for:
 
 Add coverage for:
 
-- Workbenches then Projects section ordering;
+- default Workbenches-then-Projects ordering and persisted Projects-first
+  ordering;
 - empty sections remain visible;
 - collapsed sections preserve their view state;
 - pinned/unpinned project ordering is unchanged;
@@ -1090,8 +1131,9 @@ Add coverage for:
 ### Desktop
 
 - [x] Launch a clean Omni window with no projects or workbenches.
-- [x] Verify Workbenches appears above Projects and both plus actions are
+- [x] Verify Workbenches defaults above Projects and both plus actions are
       visible.
+- [ ] Drag Projects above Workbenches, restart, and verify the order persists.
 - [x] Collapse and expand both sections and verify their view state is kept.
 - [ ] Add a Git project and confirm current project behavior is unchanged.
 - [x] Add a non-Git directory as a workbench.
@@ -1105,7 +1147,7 @@ Add coverage for:
       load and activate.
 - [ ] Open Quick Switch Loaded Workbench and verify it includes live project
       and arbitrary targets but excludes dormant and unloaded entries.
-- [ ] Verify Previous/Next Workbench follows Workbenches-then-Projects order,
+- [ ] Verify Previous/Next Workbench follows the persisted section order,
       wraps, and loads non-live targets.
 - [ ] Verify Previous/Next Loaded Workbench follows the same order while
       skipping dormant and unloaded targets.
@@ -1358,6 +1400,10 @@ implementation.
 | 2026-07-17 | Finalize `hucode.omni.restoreHostedWorkbenches` | `active`, `all`, and `none` provide explicit resource-restoration control with `active` as the balanced default |
 | 2026-07-17 | Apply restore policy to every hosted workbench | Project and arbitrary workbenches should not have conflicting startup resource behavior |
 | 2026-07-17 | Persist section collapse per Omni window | Sidebar organization should survive reopening the same Omni window |
+| 2026-07-17 | Persist draggable top-level section order | Users can choose Projects first while keeping Workbenches first as the default |
+| 2026-07-17 | Configure workbench and worktree density independently | Transient folder paths and project branch metadata have different space needs |
+| 2026-07-17 | Keep serve-web tab ownership browser-local | VS Code web has no cross-tab workspace registry or reliable tab-focus API |
+| 2026-07-17 | Preflight folders in the Omni shell | Missing folders remain recoverable without launching a broken hosted workbench |
 
 ## Implementation log
 
@@ -1375,6 +1421,7 @@ Add dated entries as implementation progresses.
 | 2026-07-17 | 6 | Added focused coverage and documentation | CI includes new common and browser routing suites; architecture and agent invariants updated |
 | 2026-07-17 | QA hardening | Preserved top-level section collapse across startup selection | Tree synchronization events are ignored and active-target reveal does not expand an intentionally collapsed section |
 | 2026-07-17 | Review hardening | Closed lifecycle, ownership, restore, and promotion gaps | Failed desktop loads now publish coherent state; restore policy is configured before main-side restore; retained standalone opens release hosted ownership; navigation canonicalizes promoted folders; missing desktop folders surface a warning state; persistence migrations and cross-window guards have focused coverage |
+| 2026-07-17 | Follow-up refinement | Added configurable row density, draggable section order, project lifecycle icons, Hucode Settings TOC, stable header actions, and serve-web missing-folder preflight | Focused compile, 48 common tests, 28 browser tests, and precommit pass |
 
 ## Validation log
 
@@ -1391,13 +1438,18 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-17 | Desktop manual visual review | Fresh isolated desktop profile under Xvfb, driven through CDP | Pass: add two folders, two-line rows, drag reorder, unload-retain, reopen, dismiss, active/dormant restore, quick picker, previous navigation, and collapse persistence |
 | 2026-07-17 | Serve-web manual visual review | Fresh browser profiles against local `hucode:web`, driven with `agent-browser` | Pass after fixing delayed hidden-iframe focus: second add activates, refresh produces active/dormant states, dormant activation works, quick picker includes both targets, and collapsed Workbenches state survives refresh; screenshots retained under `.build/manual-qa/omni-workbenches-web/` |
 | 2026-07-17 | Review-round type check | `npm run typecheck-client` | Pass |
+| 2026-07-17 | Follow-up compile and layers | `npm run typecheck-client`; `npm run gulp compile-client`; `npm run valid-layers-check` | Pass with zero TypeScript or layer errors |
+| 2026-07-17 | Follow-up common tests | Four focused `npm run test-node -- --run ...` invocations for hosted state, tree model, view state, and switch model | 48 tests pass |
+| 2026-07-17 | Follow-up browser tests | `xvfb-run -a ./scripts/test.sh --no-sandbox --grep WebHucodeShellService` | 28 tests pass |
+| 2026-07-17 | Follow-up hygiene | `npm run -s precommit -- <edited paths>` | Pass |
 
 ## Completion criteria
 
 The feature is complete only when:
 
-- the Workbenches section renders above Projects as distinct collapsible
-  sections with separate plus actions;
+- Workbenches and Projects render as distinct collapsible sections with
+  separate plus actions, default Workbenches-first ordering, and persisted
+  header drag ordering;
 - workbench drag order persists independently of activation recency;
 - arbitrary folders can be retained and opened as hosted workbenches;
 - unload releases resources without removing the sidebar entry;

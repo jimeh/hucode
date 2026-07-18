@@ -56,6 +56,8 @@ import {
 	HucodeHostedWorkbenchRestorePolicy,
 	RetainedWorkbenchCatalog,
 } from '../common/retainedWorkbench.js';
+import { ProjectSwitcherOmniSection } from
+	'../common/projectSwitcher/projectSwitcherViewState.js';
 import type { IBrowserViewMainService } from
 	'../../platform/browserView/electron-main/browserViewMainService.js';
 
@@ -1594,6 +1596,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			canGoBack,
 			canGoForward
 		)) {
+			return;
+		}
+
+		this.emitState();
+	}
+
+	setProjectSwitcherSectionOrder(
+		order: readonly ProjectSwitcherOmniSection[]
+	): void {
+		if (!this.hostedWorkspaces.setProjectSwitcherSectionOrder(order)) {
 			return;
 		}
 

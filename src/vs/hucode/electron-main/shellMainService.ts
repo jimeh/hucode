@@ -32,6 +32,8 @@ import {
 	IHucodeHostedWorkspaceOwner,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
+import { ProjectSwitcherOmniSection } from
+	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { IHucodeShellMainService } from './omniWindow.js';
 import { findWindowOnWorkspaceOrFolder } from
 	'../../platform/windows/electron-main/windowsFinder.js';
@@ -337,6 +339,14 @@ export class HucodeShellMainService extends Disposable
 	): Promise<void> {
 		this.getOrCreateController(windowId)
 			.setProjectSwitcherNavigationState(canGoBack, canGoForward);
+	}
+
+	async setProjectSwitcherSectionOrder(
+		windowId: number,
+		order: readonly ProjectSwitcherOmniSection[]
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setProjectSwitcherSectionOrder(order);
 	}
 
 	async runActionInShell(

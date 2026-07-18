@@ -390,6 +390,10 @@ VS Code code that Hucode customizes.
 
 ## Learnings
 
+- Registering a Hucode configuration node does not create a top-level Settings
+  category. The Settings table of contents in
+  `src/vs/workbench/contrib/preferences/browser/settingsLayout.ts` is static;
+  keep its `hucode.*` entry when adding Hucode settings.
 - In a clean worktree, run `npm run hucode:prepare` before
   `npm run hucode:validate`. Validation reads generated files under
   `.build/distro/mixin/stable/`, so prepare must run first.

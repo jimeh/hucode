@@ -120,6 +120,17 @@ suite('HostedWorkspaceState', () => {
 			false
 		);
 		assert.strictEqual(model.projectSwitcherCanGoBack, true);
+		assert.strictEqual(model.setProjectSwitcherSectionOrder(
+			['projects', 'workbenches']
+		), true);
+		assert.strictEqual(model.setProjectSwitcherSectionOrder([]), false);
+		assert.strictEqual(model.setProjectSwitcherSectionOrder(
+			['projects', 'projects']
+		), false);
+		assert.deepStrictEqual(model.projectSwitcherSectionOrder, [
+			'projects',
+			'workbenches',
+		]);
 
 		assert.strictEqual(model.setProjectsSidebarVisible(false, false), false);
 		assert.strictEqual(model.projectsSidebarVisible, true);

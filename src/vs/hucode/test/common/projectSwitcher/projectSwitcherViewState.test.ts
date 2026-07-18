@@ -6,7 +6,10 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
-import { parseProjectSwitcherViewState } from
+import {
+	parseProjectSwitcherViewState,
+	reorderProjectSwitcherOmniSections,
+} from
 	'../../../common/projectSwitcher/projectSwitcherViewState.js';
 
 suite('ProjectSwitcherViewState', () => {
@@ -18,30 +21,61 @@ suite('ProjectSwitcherViewState', () => {
 			collapsedProjectIds: ['project:unpinned:one'],
 		})), {
 			state: {
-				version: 2,
+				version: 3,
 				collapsedProjectIds: ['project:unpinned:one'],
 				collapsedOmniSections: [],
+				omniSectionOrder: ['workbenches', 'projects'],
 			},
 			migrated: true,
 		});
 	});
 
-	test('validates version 2 state', () => {
+	test('migrates version 2 section collapse state', () => {
 		assert.deepStrictEqual(parseProjectSwitcherViewState(JSON.stringify({
 			version: 2,
 			collapsedProjectIds: ['project:pinned:one'],
 			collapsedOmniSections: ['section:workbenches'],
 		}))?.state, {
-			version: 2,
+			version: 3,
 			collapsedProjectIds: ['project:pinned:one'],
 			collapsedOmniSections: ['section:workbenches'],
+			omniSectionOrder: ['workbenches', 'projects'],
 		});
 		assert.strictEqual(parseProjectSwitcherViewState(JSON.stringify({
 			version: 2,
+			collapsedProjectIds: [],
+			collapsedOmniSections: [1],
+		})), undefined);
+	});
+
+	test('validates version 3 state and section order', () => {
+		assert.deepStrictEqual(parseProjectSwitcherViewState(JSON.stringify({
+			version: 3,
+			collapsedProjectIds: [],
+			collapsedOmniSections: [],
+			omniSectionOrder: ['projects', 'workbenches'],
+		}))?.state.omniSectionOrder, ['projects', 'workbenches']);
+		assert.strictEqual(parseProjectSwitcherViewState(JSON.stringify({
+			version: 3,
 			collapsedProjectIds: [1],
 			collapsedOmniSections: [],
+			omniSectionOrder: ['workbenches', 'projects'],
+		})), undefined);
+		assert.strictEqual(parseProjectSwitcherViewState(JSON.stringify({
+			version: 3,
+			collapsedProjectIds: [],
+			collapsedOmniSections: [],
+			omniSectionOrder: ['projects', 'projects'],
 		})), undefined);
 		assert.strictEqual(parseProjectSwitcherViewState('null'), undefined);
 		assert.strictEqual(parseProjectSwitcherViewState('42'), undefined);
+	});
+
+	test('reorders the top-level Omni sections', () => {
+		assert.deepStrictEqual(reorderProjectSwitcherOmniSections(
+			['workbenches', 'projects'],
+			'workbenches',
+			'projects'
+		), ['projects', 'workbenches']);
 	});
 });

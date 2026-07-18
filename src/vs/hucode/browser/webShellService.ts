@@ -21,6 +21,7 @@ import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { IConfigurationService } from
 	'../../platform/configuration/common/configuration.js';
+import { IFileService } from '../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import {
@@ -80,6 +81,8 @@ import {
 } from '../common/retainedWorkbench.js';
 import { IStorageService, StorageScope, StorageTarget } from
 	'../../platform/storage/common/storage.js';
+import { ProjectSwitcherOmniSection } from
+	'../common/projectSwitcher/projectSwitcherViewState.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -116,6 +119,11 @@ export interface IWebHucodeShellPersistenceAdapter {
 	save(state: IWebHucodeShellPersistedState): void;
 }
 
+/** File-system seam used to reject missing folders before iframe creation. */
+export interface IWebHucodeShellFolderAccess {
+	exists(worktreePath: string): Promise<boolean>;
+}
+
 /** Drops malformed serve-web persistence entries before restore scheduling. */
 export function sanitizeWebHucodeShellPersistedState(
 	value: unknown
@@ -149,6 +157,10 @@ export function sanitizeWebHucodeShellPersistedState(
 const emptyWebPersistence: IWebHucodeShellPersistenceAdapter = {
 	load: () => undefined,
 	save: () => { },
+};
+
+const assumeFoldersExist: IWebHucodeShellFolderAccess = {
+	exists: async () => true,
 };
 
 const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
@@ -283,6 +295,7 @@ export class WebHucodeShellController extends Disposable
 	>;
 	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
+	private readonly initialization: Promise<void>;
 	private shuttingDown = false;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
@@ -302,6 +315,8 @@ export class WebHucodeShellController extends Disposable
 		private readonly persistence: IWebHucodeShellPersistenceAdapter =
 			emptyWebPersistence,
 		restorePolicy: HucodeHostedWorkbenchRestorePolicy = 'active',
+		private readonly folderAccess: IWebHucodeShellFolderAccess =
+			assumeFoldersExist,
 	) {
 		super();
 
@@ -321,7 +336,7 @@ export class WebHucodeShellController extends Disposable
 			uri => this.toPathKey(uri.fsPath),
 			generateUuid
 		);
-		this.restorePersistedWorkbenches(persisted);
+		this.initialization = this.restorePersistedWorkbenches(persisted);
 		this._register(this.hostSurfaceService.onDidChangeSurface(surface => {
 			if (surface) {
 				this.attachIframes(surface);
@@ -338,12 +353,14 @@ export class WebHucodeShellController extends Disposable
 	async getWindowState(
 		windowId: number
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		return windowId === this.windowId ? this.getState() : emptyState();
 	}
 
 	async findHostedWorkspaceByPath(
 		worktreePath: string
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
+		await this.initialization;
 		const candidate = this.getInstanceByPath(worktreePath);
 		const instance = candidate && isHostedWorkspaceRestorable(candidate)
 			? candidate
@@ -362,6 +379,7 @@ export class WebHucodeShellController extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<boolean> {
+		await this.initialization;
 		let instance = this.getInstanceByPath(worktreePath);
 		if (!instance || !isHostedWorkspaceRestorable(instance)) {
 			return false;
@@ -393,6 +411,7 @@ export class WebHucodeShellController extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -408,6 +427,20 @@ export class WebHucodeShellController extends Disposable
 				'loaded',
 				Date.now()
 			);
+		}
+		if (!await this.folderAccess.exists(worktreePath)) {
+			if (retained) {
+				this.retainedWorkbenches.update(retained.id, {
+					folderStatus: 'missing',
+				});
+				this.emitState();
+			}
+			return this.getState();
+		}
+		if (retained?.folderStatus === 'missing') {
+			this.retainedWorkbenches.update(retained.id, {
+				folderStatus: undefined,
+			});
 		}
 
 		const existing = this.getInstanceByPath(worktreePath);
@@ -441,6 +474,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		folderUri: UriComponents
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -453,6 +487,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		workbenchId: string
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -484,6 +519,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		workbenchId: string
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -526,6 +562,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		orderedWorkbenchIds: readonly string[]
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId === this.windowId &&
 			this.retainedWorkbenches.reorder(orderedWorkbenchIds)
 		) {
@@ -541,6 +578,7 @@ export class WebHucodeShellController extends Disposable
 			readonly folderUri: UriComponents;
 		}[]
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -564,6 +602,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		policy: HucodeHostedWorkbenchRestorePolicy
 	): Promise<void> {
+		await this.initialization;
 		if (windowId === this.windowId) {
 			this.restorePolicy = policy;
 		}
@@ -593,6 +632,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		request: INativeOpenFileRequest
 	): Promise<boolean> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return false;
 		}
@@ -607,6 +647,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		instanceId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
@@ -640,6 +681,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		instanceId: string
 	): Promise<boolean> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return false;
 		}
@@ -660,6 +702,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		instanceId: string
 	): Promise<void> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return;
 		}
@@ -674,6 +717,7 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	async focusWorkspace(_windowId: number): Promise<void> {
+		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
 		if (instance) {
 			this.focusIframe(instance);
@@ -688,6 +732,7 @@ export class WebHucodeShellController extends Disposable
 		_windowId: number,
 		visible: boolean
 	): Promise<void> {
+		await this.initialization;
 		this.hostedWorkspaces.setProjectsSidebarVisible(
 			visible,
 			hasLoadedHostedWorkspace(this.instancesById.values())
@@ -700,10 +745,23 @@ export class WebHucodeShellController extends Disposable
 		canGoBack: boolean,
 		canGoForward: boolean
 	): Promise<void> {
+		await this.initialization;
 		if (!this.hostedWorkspaces.setProjectSwitcherNavigationState(
 			canGoBack,
 			canGoForward
 		)) {
+			return;
+		}
+
+		this.emitState();
+	}
+
+	async setProjectSwitcherSectionOrder(
+		_windowId: number,
+		order: readonly ProjectSwitcherOmniSection[]
+	): Promise<void> {
+		await this.initialization;
+		if (!this.hostedWorkspaces.setProjectSwitcherSectionOrder(order)) {
 			return;
 		}
 
@@ -725,6 +783,7 @@ export class WebHucodeShellController extends Disposable
 		_windowId: number,
 		request: INativeRunActionInWindowRequest
 	): Promise<boolean> {
+		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
 		if (!instance) {
 			return false;
@@ -741,6 +800,7 @@ export class WebHucodeShellController extends Disposable
 		_windowId: number,
 		_request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
+		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
 		if (instance?.iframe) {
 			this.browser.focusIframeContent(instance.iframe);
@@ -749,6 +809,7 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	async triggerPasteInWorkspace(_windowId: number): Promise<boolean> {
+		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
 		if (instance?.iframe) {
 			this.browser.focusIframeContent(instance.iframe);
@@ -757,6 +818,7 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	async reloadWorkspace(_windowId: number): Promise<void> {
+		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
 		if (!instance) {
 			return;
@@ -807,6 +869,7 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		_reason: ShutdownReason
 	): Promise<void> {
+		await this.initialization;
 		if (windowId !== this.windowId) {
 			return;
 		}
@@ -923,9 +986,9 @@ export class WebHucodeShellController extends Disposable
 		this.pendingConnectionDisposals.clear();
 	}
 
-	private restorePersistedWorkbenches(
+	private async restorePersistedWorkbenches(
 		persisted: IWebHucodeShellPersistedState | undefined
-	): void {
+	): Promise<void> {
 		if (!persisted) {
 			return;
 		}
@@ -936,11 +999,16 @@ export class WebHucodeShellController extends Disposable
 				retainedWorkbenchId: record.id,
 				lastActiveAt: record.lastActiveAt,
 			}));
-		const plan = createHostedWorkbenchRestorePlan([
+		const availableCandidates = await this.filterAvailableRestoreCandidates([
 			...retainedCandidates,
 			...persisted.residentWorkspaces.filter(entry => !!entry.projectId),
-		], persisted.activeWorktreePath, this.restorePolicy, (a, b) =>
-			this.toPathKey(a) === this.toPathKey(b));
+		]);
+		const plan = createHostedWorkbenchRestorePlan(
+			availableCandidates,
+			persisted.activeWorktreePath,
+			this.restorePolicy,
+			(a, b) =>
+				this.toPathKey(a) === this.toPathKey(b));
 
 		for (const candidate of plan.dormant) {
 			this.hostedWorkspaces.addInstance({
@@ -972,6 +1040,38 @@ export class WebHucodeShellController extends Disposable
 		if (activeInstance) {
 			this.activateInstance(activeInstance);
 		}
+		if (!activeInstance) {
+			this.emitState();
+		}
+	}
+
+	private async filterAvailableRestoreCandidates(
+		candidates: readonly {
+			readonly worktreePath: string;
+			readonly projectId?: string;
+			readonly retainedWorkbenchId?: string;
+			readonly lastActiveAt?: number;
+		}[]
+	): Promise<typeof candidates> {
+		const available = [];
+		for (const candidate of candidates) {
+			if (await this.folderAccess.exists(candidate.worktreePath)) {
+				if (candidate.retainedWorkbenchId) {
+					this.retainedWorkbenches.update(
+						candidate.retainedWorkbenchId,
+						{ folderStatus: undefined }
+					);
+				}
+				available.push(candidate);
+				continue;
+			}
+			if (candidate.retainedWorkbenchId) {
+				this.retainedWorkbenches.update(candidate.retainedWorkbenchId, {
+					folderStatus: 'missing',
+				});
+			}
+		}
+		return available;
 	}
 
 	private createInstance(
@@ -1309,6 +1409,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		hostSurfaceService: IHucodeWebOmniHostSurfaceService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IStorageService storageService: IStorageService,
+		@IFileService fileService: IFileService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -1324,7 +1425,9 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			new StorageServiceWebHucodeShellPersistence(storageService),
 			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
 				HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING
-			) ?? 'active');
+			) ?? 'active', {
+			exists: worktreePath => fileService.exists(URI.file(worktreePath)),
+		});
 	}
 }
 

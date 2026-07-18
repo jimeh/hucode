@@ -290,6 +290,22 @@ suite('SwitchProjectWorktreeModel', () => {
 		}]);
 	});
 
+	test('combines mixed targets in the persisted section order', () => {
+		const pathsEqual = (pathA: string, pathB: string) => pathA === pathB;
+
+		assert.deepStrictEqual(combineProjectSwitcherTargets([{
+			worktreePath: '/tmp/scratch',
+		}], [{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}], pathsEqual, ['projects', 'workbenches']), [{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}, {
+			worktreePath: '/tmp/scratch',
+		}]);
+	});
+
 	test('canonicalizes promoted path-only targets to project ownership', () => {
 		const project = createProject({
 			id: 'project',

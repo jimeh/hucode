@@ -18,6 +18,8 @@ import {
 	HucodeHostedWorkbenchRestorePolicy,
 	IHucodeRetainedWorkbench,
 } from './retainedWorkbench.js';
+import { ProjectSwitcherOmniSection } from
+	'./projectSwitcher/projectSwitcherViewState.js';
 
 export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
@@ -60,6 +62,7 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectsSidebarVisible: boolean;
 	readonly projectSwitcherCanGoBack: boolean;
 	readonly projectSwitcherCanGoForward: boolean;
+	readonly projectSwitcherSectionOrder?: readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
 }
@@ -195,6 +198,11 @@ export interface IHucodeShellService {
 		windowId: number,
 		canGoBack: boolean,
 		canGoForward: boolean
+	): Promise<void>;
+	/** Updates the visual order used by mixed workbench navigation. */
+	setProjectSwitcherSectionOrder(
+		windowId: number,
+		order: readonly ProjectSwitcherOmniSection[]
 	): Promise<void>;
 	/**
 	 * Sends an action invocation to the Omni shell renderer.

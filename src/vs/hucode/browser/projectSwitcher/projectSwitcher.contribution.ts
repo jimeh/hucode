@@ -129,12 +129,18 @@ import {
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
+	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
+	HucodeOmniItemLayout,
 } from '../../common/retainedWorkbench.js';
 import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	IProjectSwitcherViewState,
 	parseProjectSwitcherViewState,
+	ProjectSwitcherOmniSection,
 	PROJECT_SWITCHER_VIEW_STATE_VERSION,
+	reorderProjectSwitcherOmniSections,
 } from '../../common/projectSwitcher/projectSwitcherViewState.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
@@ -295,9 +301,14 @@ class ProjectSwitcherAccessibilityProvider
 
 class ProjectSwitcherDelegate
 	implements IListVirtualDelegate<ProjectSwitcherItem> {
+	constructor(
+		private readonly getItemLayout: (
+			item: ProjectSwitcherItem
+		) => HucodeOmniItemLayout
+	) { }
 
 	getHeight(item: ProjectSwitcherItem): number {
-		return isRetainedWorkbenchItem(item)
+		return this.getItemLayout(item) === 'twoLine'
 			? PROJECT_SWITCHER_ITEM_HEIGHT * 2
 			: PROJECT_SWITCHER_ITEM_HEIGHT;
 	}
@@ -331,6 +342,9 @@ class ProjectSwitcherRenderer
 	readonly templateId = ProjectSwitcherRenderer.ID;
 
 	constructor(
+		private readonly getItemLayout: (
+			item: ProjectSwitcherItem
+		) => HucodeOmniItemLayout,
 		@ICommandService
 		private readonly commandService: ICommandService,
 	) {
@@ -411,6 +425,11 @@ class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		if (this.getItemLayout(item) === 'twoLine') {
+			templateData.container.classList.add(
+				'hucode-project-switcher-two-line'
+			);
+		}
 		templateData.label.textContent = item.label;
 		templateData.description.textContent = item.description ?? '';
 		templateData.description.style.display = item.description ? '' : 'none';
@@ -665,6 +684,10 @@ class ProjectSwitcherDragAndDrop
 	implements ITreeDragAndDrop<ProjectSwitcherItem> {
 
 	constructor(
+		private readonly reorderOmniSections: (
+			source: ProjectSwitcherOmniSection,
+			target: ProjectSwitcherOmniSection
+		) => void,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@INotificationService
@@ -683,6 +706,9 @@ class ProjectSwitcherDragAndDrop
 		}
 		if (isRetainedWorkbenchItem(item)) {
 			return item.worktreePath;
+		}
+		if (isOmniSectionItem(item)) {
+			return `hucode-omni-section:///${item.sectionKind}`;
 		}
 
 		return null;
@@ -706,8 +732,19 @@ class ProjectSwitcherDragAndDrop
 		}
 
 		const source = data.elements[0] as ProjectSwitcherItem | undefined;
-		if (!source || isSeparatorItem(source) || isOmniSectionItem(source)) {
+		if (!source || isSeparatorItem(source)) {
 			return false;
+		}
+		if (isOmniSectionItem(source)) {
+			if (!target || !isOmniSectionItem(target) ||
+				target.sectionKind === source.sectionKind
+			) {
+				return false;
+			}
+			return this.createReaction(
+				targetIndex,
+				getDropPosition(targetSector)
+			);
 		}
 
 		if (isProjectItem(source)) {
@@ -750,7 +787,16 @@ class ProjectSwitcherDragAndDrop
 		}
 
 		const source = data.elements[0] as ProjectSwitcherItem | undefined;
-		if (!source || isSeparatorItem(source) || isOmniSectionItem(source)) {
+		if (!source || isSeparatorItem(source)) {
+			return;
+		}
+		if (isOmniSectionItem(source)) {
+			if (target && isOmniSectionItem(target)) {
+				this.reorderOmniSections(
+					source.sectionKind,
+					target.sectionKind
+				);
+			}
 			return;
 		}
 
@@ -952,6 +998,9 @@ export class ProjectSwitcherWidget extends Disposable {
 	private lastProjectsRefreshAt = 0;
 	private collapsedProjectIds = new Set<string>();
 	private collapsedOmniSections = new Set<string>();
+	private omniSectionOrder = [
+		...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	];
 	private isSynchronizingTree = false;
 	private worktreeNavigationHistory: IProjectSwitcherSelectionTarget[] = [];
 	private worktreeNavigationIndex = -1;
@@ -1039,6 +1088,17 @@ export class ProjectSwitcherWidget extends Disposable {
 
 				this.updateOmniHostedWorkspaceState(change.state);
 			}));
+			this._register(this.configurationService.onDidChangeConfiguration(
+				event => {
+					if (event.affectsConfiguration(
+						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
+					) || event.affectsConfiguration(
+						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+					)) {
+						this.renderProjects(this.projects);
+					}
+				}
+			));
 		}
 	}
 
@@ -1054,6 +1114,40 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private getPathLabel(path: string): string {
 		return this.labelService.getUriLabel(URI.file(path));
+	}
+
+	private getItemLayout(item: ProjectSwitcherItem): HucodeOmniItemLayout {
+		if (!this.environmentService.isOmniWindow) {
+			return 'compact';
+		}
+		if (isRetainedWorkbenchItem(item)) {
+			return this.configurationService.getValue<HucodeOmniItemLayout>(
+				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
+			) ?? 'twoLine';
+		}
+		if (isWorktreeItem(item)) {
+			return this.configurationService.getValue<HucodeOmniItemLayout>(
+				HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+			) ?? 'compact';
+		}
+		return 'compact';
+	}
+
+	private reorderOmniSections(
+		source: ProjectSwitcherOmniSection,
+		target: ProjectSwitcherOmniSection
+	): void {
+		this.omniSectionOrder = reorderProjectSwitcherOmniSections(
+			this.omniSectionOrder,
+			source,
+			target
+		);
+		void this.shellService.setProjectSwitcherSectionOrder(
+			this.windowId,
+			this.omniSectionOrder
+		);
+		this.saveState();
+		this.renderProjects(this.projects);
 	}
 
 	render(container: HTMLElement): void {
@@ -1088,8 +1182,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			WorkbenchObjectTree<ProjectSwitcherItem, void>,
 			PROJECT_SWITCHER_VIEW_ID,
 			this.treeContainer,
-			new ProjectSwitcherDelegate(),
-			[this.instantiationService.createInstance(ProjectSwitcherRenderer)],
+			new ProjectSwitcherDelegate(item => this.getItemLayout(item)),
+			[this.instantiationService.createInstance(
+				ProjectSwitcherRenderer,
+				(item: ProjectSwitcherItem) => this.getItemLayout(item)
+			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
 				identityProvider: { getId: item => item.id },
@@ -1099,7 +1196,11 @@ export class ProjectSwitcherWidget extends Disposable {
 				expandOnlyOnTwistieClick: true,
 				multipleSelectionSupport: false,
 				dnd: this.instantiationService.createInstance(
-					ProjectSwitcherDragAndDrop
+					ProjectSwitcherDragAndDrop,
+					(
+						source: ProjectSwitcherOmniSection,
+						target: ProjectSwitcherOmniSection
+					) => this.reorderOmniSections(source, target)
 				),
 				overrideStyles: {
 					listBackground: asCssVariable(sessionsSidebarBackground),
@@ -1317,6 +1418,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			activeWorktreePath: this.getActiveWorktreePath(),
 			hostedWorkspaceState: this.omniHostedWorkspaceState,
 			collapsedOmniSections: this.collapsedOmniSections,
+			omniSectionOrder: this.omniSectionOrder,
 		});
 	}
 
@@ -1384,6 +1486,10 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private async initializeOmniHostedWorkspaceState(): Promise<void> {
 		try {
+			await this.shellService.setProjectSwitcherSectionOrder(
+				this.windowId,
+				this.omniSectionOrder
+			);
 			await this.shellService.setHostedWorkbenchRestorePolicy(
 				this.windowId,
 				this.configurationService.getValue<
@@ -2022,6 +2128,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			version: PROJECT_SWITCHER_VIEW_STATE_VERSION,
 			collapsedProjectIds: [...this.collapsedProjectIds].sort(),
 			collapsedOmniSections: [...this.collapsedOmniSections].sort(),
+			omniSectionOrder: [...this.omniSectionOrder],
 		};
 		this.storageService.store(
 			PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY,
@@ -2048,12 +2155,16 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (!parsed) {
 			this.collapsedProjectIds.clear();
 			this.collapsedOmniSections.clear();
+			this.omniSectionOrder = [
+				...DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+			];
 			return;
 		}
 		this.collapsedProjectIds = new Set(parsed.state.collapsedProjectIds);
 		this.collapsedOmniSections = new Set(
 			parsed.state.collapsedOmniSections
 		);
+		this.omniSectionOrder = [...parsed.state.omniSectionOrder];
 		if (migratedScope || parsed.migrated) {
 			this.saveState();
 		}

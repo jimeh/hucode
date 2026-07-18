@@ -19,6 +19,10 @@ import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 } from '../omniWindow.js';
+import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	ProjectSwitcherOmniSection,
+} from './projectSwitcherViewState.js';
 
 /**
  * Context value used by regular project rows in the Projects tree.
@@ -226,6 +230,7 @@ export interface IProjectSwitcherTreeModelOptions {
 	readonly activeWorktreePath?: string;
 	readonly hostedWorkspaceState: IHucodeHostedWorkspaceState;
 	readonly collapsedOmniSections?: ReadonlySet<string>;
+	readonly omniSectionOrder?: readonly ProjectSwitcherOmniSection[];
 }
 
 /**
@@ -486,22 +491,29 @@ export function buildProjectSwitcherTreeModel(
 	};
 	itemsById.set(workbenchesSection.handle, workbenchesSection);
 	itemsById.set(projectsSection.handle, projectsSection);
+	const sectionRoots = new Map<ProjectSwitcherOmniSection,
+		ProjectSwitcherTreeElement>([[
+			'workbenches', {
+				element: workbenchesSection,
+				collapsible: true,
+				collapsed: options.collapsedOmniSections?.has(
+					WORKBENCHES_SECTION_HANDLE
+				),
+				children: workbenchChildren,
+			}], [
+			'projects', {
+				element: projectsSection,
+				collapsible: true,
+				collapsed: options.collapsedOmniSections?.has(
+					PROJECTS_SECTION_HANDLE
+				),
+				children: roots,
+			}],
+		]);
+	const sectionOrder = options.omniSectionOrder ??
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER;
 	return {
-		roots: [{
-			element: workbenchesSection,
-			collapsible: true,
-			collapsed: options.collapsedOmniSections?.has(
-				WORKBENCHES_SECTION_HANDLE
-			),
-			children: workbenchChildren,
-		}, {
-			element: projectsSection,
-			collapsible: true,
-			collapsed: options.collapsedOmniSections?.has(
-				PROJECTS_SECTION_HANDLE
-			),
-			children: roots,
-		}],
+		roots: sectionOrder.map(section => sectionRoots.get(section)!),
 		itemsById,
 	};
 }
@@ -643,7 +655,12 @@ function toWorktreeElement(
 			: WORKTREE_CONTEXT_VALUE,
 		themeIcon: isHostedWorkbenchInProgress(hostedWorkbenchInstance?.state)
 			? ThemeIcon.modify(Codicon.loading, 'spin')
-			: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
+			: hostedWorkbenchInstance?.state === 'dormant'
+				? Codicon.debugPause
+				: hostedWorkbenchInstance?.state === 'unloaded' ||
+					options.isOmniWindow && !hostedWorkbenchInstance
+					? Codicon.circleOutline
+					: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };

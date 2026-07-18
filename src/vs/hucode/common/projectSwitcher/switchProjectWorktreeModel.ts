@@ -16,6 +16,10 @@ import {
 } from '../../../platform/quickinput/common/quickInput.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
+import {
+	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	ProjectSwitcherOmniSection,
+} from './projectSwitcherViewState.js';
 
 export interface IProjectSwitcherSelectionTarget {
 	readonly projectId?: string;
@@ -183,14 +187,18 @@ export function combineProjectSwitcherTargets<
 >(
 	retainedTargets: readonly T[],
 	projectTargets: readonly T[],
-	pathsEqual: (pathA: string, pathB: string) => boolean
+	pathsEqual: (pathA: string, pathB: string) => boolean,
+	sectionOrder: readonly ProjectSwitcherOmniSection[] =
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
 ): T[] {
-	return [
-		...retainedTargets.filter(retained => !projectTargets.some(project =>
-			pathsEqual(retained.worktreePath, project.worktreePath)
-		)),
-		...projectTargets,
-	];
+	const retained = retainedTargets.filter(candidate =>
+		!projectTargets.some(project =>
+			pathsEqual(candidate.worktreePath, project.worktreePath)
+		)
+	);
+	return sectionOrder[0] === 'projects'
+		? [...projectTargets, ...retained]
+		: [...retained, ...projectTargets];
 }
 
 /** Resolves a path-only target to its current project-owned identity. */
