@@ -944,6 +944,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
+	setRetainedWorkbenchLabel(
+		workbenchId: string,
+		label: string | undefined,
+	): void {
+		if (this.retainedWorkbenches.setLabel(workbenchId, label)) {
+			this.emitState();
+		}
+	}
+
 	async reconcileRetainedWorkbenches(projectFolders: readonly {
 		readonly projectId: string;
 		readonly folderUri: URI;

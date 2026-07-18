@@ -660,6 +660,20 @@ export class WebHucodeShellController extends Disposable
 		return this.getState();
 	}
 
+	async setRetainedWorkbenchLabel(
+		windowId: number,
+		workbenchId: string,
+		label: string | undefined,
+	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
+		if (windowId === this.windowId &&
+			this.retainedWorkbenches.setLabel(workbenchId, label)
+		) {
+			this.emitState();
+		}
+		return this.getState();
+	}
+
 	async reconcileRetainedWorkbenches(
 		windowId: number,
 		projectFolders: readonly {

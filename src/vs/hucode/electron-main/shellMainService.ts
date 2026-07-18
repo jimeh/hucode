@@ -221,6 +221,16 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
+	async setRetainedWorkbenchLabel(
+		windowId: number,
+		workbenchId: string,
+		label: string | undefined,
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		controller.setRetainedWorkbenchLabel(workbenchId, label);
+		return controller.getState();
+	}
+
 	async reconcileRetainedWorkbenches(
 		windowId: number,
 		projectFolders: readonly {

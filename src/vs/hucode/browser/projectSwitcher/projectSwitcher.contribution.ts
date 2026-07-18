@@ -49,6 +49,8 @@ import { WorkbenchObjectTree } from
 	'../../../platform/list/browser/listService.js';
 import { INotificationService } from
 	'../../../platform/notification/common/notification.js';
+import { IQuickInputService } from
+	'../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from
 	'../../../platform/storage/common/storage.js';
 import { asCssVariable } from
@@ -112,6 +114,8 @@ import {
 	applyOmniSectionCollapseChange,
 	buildProjectSwitcherTreeModel,
 	encodeProjectHandle,
+	getLastVisibleDescendantIndex,
+	getProjectSwitcherItemDescription,
 	isHostedWorkbenchInProgress,
 	isItemInCollapsedOmniSection,
 	isProjectItem,
@@ -122,6 +126,7 @@ import {
 	PINNED_SECTION,
 	ProjectSwitcherItem,
 	ProjectSwitcherProjectItem,
+	ProjectSwitcherSectionItem,
 	ProjectSwitcherTreeElement,
 	ProjectSwitcherWorkbenchItem,
 	ProjectSwitcherWorktreeItem,
@@ -161,6 +166,9 @@ const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
 const ADD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.addWorkbench';
 const OPEN_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.openWorkbench';
+const RENAME_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.renameWorkbench';
+const RESET_WORKBENCH_LABEL_COMMAND_ID =
+	'hucode.projectSwitcher.resetWorkbenchLabel';
 const UNLOAD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.unloadWorkbench';
 const DISMISS_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.dismissWorkbench';
 
@@ -374,6 +382,8 @@ class ProjectSwitcherRenderer
 				dom.$('button.hucode-project-switcher-action-button')
 			) as HTMLButtonElement;
 			button.type = 'button';
+			button.hidden = true;
+			button.tabIndex = -1;
 			const action: ProjectSwitcherActionTemplate = { button };
 
 			const stopPropagation = (event: Event) => {
@@ -431,9 +441,13 @@ class ProjectSwitcherRenderer
 				'hucode-project-switcher-two-line'
 			);
 		}
+		const description = getProjectSwitcherItemDescription(
+			item,
+			this.getItemLayout(item)
+		);
 		templateData.label.textContent = item.label;
-		templateData.description.textContent = item.description ?? '';
-		templateData.description.style.display = item.description ? '' : 'none';
+		templateData.description.textContent = description ?? '';
+		templateData.description.style.display = description ? '' : 'none';
 		templateData.container.title = item.tooltip ?? '';
 		templateData.actions.className = 'hucode-project-switcher-actions';
 		templateData.actions.style.display = 'none';
@@ -615,7 +629,8 @@ class ProjectSwitcherRenderer
 
 	private resetAction(action: ProjectSwitcherActionTemplate): void {
 		action.button.className = 'hucode-project-switcher-action-button';
-		action.button.style.display = 'none';
+		action.button.hidden = true;
+		action.button.tabIndex = -1;
 		action.button.title = '';
 		action.button.setAttribute('aria-label', '');
 		action.currentAction = undefined;
@@ -629,7 +644,8 @@ class ProjectSwitcherRenderer
 		run: () => void
 	): void {
 		templateData.actions.style.display = '';
-		action.button.style.display = '';
+		action.button.hidden = false;
+		action.button.tabIndex = 0;
 		action.button.title = label;
 		action.button.setAttribute('aria-label', label);
 		action.button.classList.add(...ThemeIcon.asClassNameArray(icon));
@@ -688,6 +704,10 @@ class ProjectSwitcherDragAndDrop
 			source: ProjectSwitcherOmniSection,
 			target: ProjectSwitcherOmniSection
 		) => void,
+		private readonly getSectionAfterFeedbackIndex: (
+			target: ProjectSwitcherSectionItem,
+			targetIndex: number
+		) => number,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@INotificationService
@@ -741,9 +761,13 @@ class ProjectSwitcherDragAndDrop
 			) {
 				return false;
 			}
+			const position = getDropPosition(targetSector);
 			return this.createReaction(
-				targetIndex,
-				getDropPosition(targetSector)
+				position === ListDragOverEffectPosition.After &&
+					targetIndex !== undefined
+					? this.getSectionAfterFeedbackIndex(target, targetIndex)
+					: targetIndex,
+				position
 			);
 		}
 
@@ -1128,7 +1152,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (isRetainedWorkbenchItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
 				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
-			) ?? 'twoLine';
+			) ?? 'compact';
 		}
 		if (isWorktreeItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
@@ -1205,7 +1229,14 @@ export class ProjectSwitcherWidget extends Disposable {
 					(
 						source: ProjectSwitcherOmniSection,
 						target: ProjectSwitcherOmniSection
-					) => this.reorderOmniSections(source, target)
+					) => this.reorderOmniSections(source, target),
+					(target: ProjectSwitcherSectionItem, targetIndex: number) =>
+						this.tree
+							? getLastVisibleDescendantIndex(
+								targetIndex,
+								this.tree.getNode(target)
+							)
+							: targetIndex
 				),
 				overrideStyles: {
 					listBackground: asCssVariable(sessionsSidebarBackground),
@@ -1634,6 +1665,28 @@ export class ProjectSwitcherWidget extends Disposable {
 				item.hostedWorkbenchState === 'active' ||
 				item.hostedWorkbenchState === 'loaded';
 			return [
+				toAction({
+					id: RENAME_WORKBENCH_COMMAND_ID,
+					label: localize('renameWorkbench', 'Rename Workbench'),
+					run: () => this.commandService.executeCommand(
+						RENAME_WORKBENCH_COMMAND_ID,
+						handle
+					),
+				}),
+				...(item.hasCustomLabel
+					? [toAction({
+						id: RESET_WORKBENCH_LABEL_COMMAND_ID,
+						label: localize(
+							'resetWorkbenchLabel',
+							'Reset Workbench Name'
+						),
+						run: () => this.commandService.executeCommand(
+							RESET_WORKBENCH_LABEL_COMMAND_ID,
+							handle
+						),
+					})]
+					: []),
+				new Separator(),
 				toAction({
 					id: OPEN_WORKBENCH_COMMAND_ID,
 					label: localize(
@@ -2257,6 +2310,89 @@ registerAction2(class extends Action2 {
 		} catch (error) {
 			notificationService.error(String(error));
 		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: RENAME_WORKBENCH_COMMAND_ID,
+			title: localize2('renameRetainedWorkbench', 'Rename Workbench'),
+		});
+	}
+
+	async run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<void> {
+		const workbenchId = parseWorkbenchHandle(handle.$treeItemHandle);
+		if (!workbenchId) {
+			return;
+		}
+		const shellService = accessor.get(IHucodeShellService);
+		const quickInputService = accessor.get(IQuickInputService);
+		const notificationService = accessor.get(INotificationService);
+		const windowId = dom.getWindowId(mainWindow);
+		try {
+			const record = (await shellService.getWindowState(windowId))
+				.retainedWorkbenches?.find(candidate =>
+					candidate.id === workbenchId
+				);
+			if (!record) {
+				return;
+			}
+
+			await shellService.focusShell(windowId);
+			const label = await quickInputService.input({
+				prompt: localize('renameWorkbenchPrompt', 'Workbench label'),
+				value: record.label ?? basename(
+					URI.revive(record.folderUri).fsPath
+				),
+				validateInput: async value => value.trim()
+					? undefined
+					: localize(
+						'renameWorkbenchValidate',
+						'Workbench label is required.'
+					),
+			});
+			if (!label) {
+				return;
+			}
+
+			await shellService.setRetainedWorkbenchLabel(
+				windowId,
+				workbenchId,
+				label
+			);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: RESET_WORKBENCH_LABEL_COMMAND_ID,
+			title: localize2(
+				'resetRetainedWorkbenchLabel',
+				'Reset Workbench Name'
+			),
+		});
+	}
+
+	run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<unknown> {
+		const id = parseWorkbenchHandle(handle.$treeItemHandle);
+		return id
+			? accessor.get(IHucodeShellService).setRetainedWorkbenchLabel(
+				dom.getWindowId(mainWindow),
+				id,
+				undefined
+			)
+			: Promise.resolve();
 	}
 });
 

@@ -327,7 +327,9 @@ jobs:
             --run \
             src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts \
             --run \
-            src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts
+            src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts \
+            --run \
+            src/vs/workbench/services/dialogs/test/electron-browser/hucodeOmniFileDialog.test.ts
 
       - name: Prepare Electron sandbox
         run: |

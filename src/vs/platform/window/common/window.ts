@@ -61,6 +61,7 @@ export interface IOmniWorkspaceRestoreEntry {
 export interface IOmniRetainedWorkbench {
 	readonly id: string;
 	readonly folderUri: UriComponents;
+	readonly label?: string;
 	readonly desiredState: 'loaded' | 'unloaded';
 	readonly folderStatus?: 'missing';
 	readonly order: number;

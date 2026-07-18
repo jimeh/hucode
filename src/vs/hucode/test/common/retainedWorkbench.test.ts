@@ -69,11 +69,33 @@ suite('RetainedWorkbench', () => {
 		assert.deepStrictEqual(catalog.all, []);
 	});
 
+	test('sets, trims, resets, and validates custom labels', () => {
+		const catalog = new RetainedWorkbenchCatalog(
+			[],
+			uri => uri.fsPath,
+			() => 'workbench'
+		);
+		const record = catalog.retain(URI.file('/repos/one'));
+
+		assert.deepStrictEqual({
+			renamed: catalog.setLabel(record.id, '  Scratch Pad  ')?.label,
+			invalid: catalog.setLabel(record.id, '   '),
+			preserved: catalog.getById(record.id)?.label,
+			reset: catalog.setLabel(record.id, undefined)?.label,
+		}, {
+			renamed: 'Scratch Pad',
+			invalid: undefined,
+			preserved: 'Scratch Pad',
+			reset: undefined,
+		});
+	});
+
 	test('validates and deduplicates persisted records', () => {
 		const records = deserializeRetainedWorkbenches([
 			{
 				id: 'valid',
 				folderUri: URI.file('/repos/one').toJSON(),
+				label: '  Custom One  ',
 				desiredState: 'loaded',
 				folderStatus: 'missing',
 				order: 7,
@@ -109,26 +131,42 @@ suite('RetainedWorkbench', () => {
 				desiredState: 'unloaded',
 				order: Number.NaN,
 			},
+			{
+				id: 'blank-label',
+				folderUri: URI.file('/repos/six').toJSON(),
+				label: '   ',
+				desiredState: 'unloaded',
+				order: 9,
+			},
 		]);
 
 		assert.deepStrictEqual(
 			records.map(record => ({
 				id: record.id,
+				label: record.label,
 				folderStatus: record.folderStatus,
 				order: record.order,
 			})),
 			[{
 				id: 'missing-order',
+				label: undefined,
 				folderStatus: undefined,
 				order: 0,
 			}, {
 				id: 'non-finite-order',
+				label: undefined,
 				folderStatus: undefined,
 				order: 1,
 			}, {
 				id: 'valid',
+				label: 'Custom One',
 				folderStatus: 'missing',
 				order: 2,
+			}, {
+				id: 'blank-label',
+				label: undefined,
+				folderStatus: undefined,
+				order: 3,
 			}]
 		);
 	});

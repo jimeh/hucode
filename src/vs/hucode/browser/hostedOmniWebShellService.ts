@@ -175,6 +175,15 @@ export class HostedOmniWebShellService extends Disposable
 			shell.reorderRetainedWorkbenches(windowId, orderedWorkbenchIds));
 	}
 
+	setRetainedWorkbenchLabel(
+		_windowId: number,
+		workbenchId: string,
+		label: string | undefined,
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.setRetainedWorkbenchLabel(windowId, workbenchId, label));
+	}
+
 	reconcileRetainedWorkbenches(
 		_windowId: number,
 		projectFolders: readonly {

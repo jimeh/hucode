@@ -28,6 +28,7 @@ import { IEditorService } from '../../editor/common/editorService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { getActiveWindow } from '../../../../base/browser/dom.js';
 import { IRemoteAgentService } from '../../remote/common/remoteAgentService.js';
+import { tryPickHucodeOmniFolderAndOpen } from './hucodeOmniFileDialog.js';
 
 export class FileDialogService extends AbstractFileDialogService implements IFileDialogService {
 
@@ -113,6 +114,19 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 
 		if (this.shouldUseSimplified(schema).useSimplified) {
 			return this.pickFolderAndOpenSimplified(schema, options);
+		}
+		if (await tryPickHucodeOmniFolderAndOpen(
+			schema,
+			options,
+			this.environmentService,
+			{
+				showOpenDialog: dialogOptions =>
+					this.showOpenDialog(dialogOptions),
+				openWindow: (openables, openOptions) =>
+					this.hostService.openWindow(openables, openOptions),
+			}
+		)) {
+			return;
 		}
 		return this.nativeHostService.pickFolderAndOpen(this.toNativeOpenDialogOptions(options));
 	}

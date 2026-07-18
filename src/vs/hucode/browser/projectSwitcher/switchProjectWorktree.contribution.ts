@@ -66,6 +66,8 @@ import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	ProjectSwitcherOmniSection,
 } from '../../common/projectSwitcher/projectSwitcherViewState.js';
+import { getRetainedWorkbenchPresentation } from
+	'../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
@@ -218,8 +220,11 @@ function getRetainedWorkbenchPicks(
 	return (state.retainedWorkbenches ?? [])
 		.toSorted((a, b) => a.order - b.order)
 		.map(record => {
-			const uri = URI.revive(record.folderUri);
-			const path = uri.fsPath;
+			const presentation = getRetainedWorkbenchPresentation(
+				record,
+				path => labelService.getUriLabel(URI.file(path))
+			);
+			const path = presentation.path;
 			const instance = state.instances.find(candidate =>
 				pathsEqual(candidate.worktreePath, path)
 			);
@@ -229,8 +234,8 @@ function getRetainedWorkbenchPicks(
 					? 'missing'
 					: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
 			const isDormant = lifecycleState === 'dormant';
-			const label = basename(path);
-			const description = labelService.getUriLabel(uri);
+			const label = presentation.label;
+			const description = presentation.pathLabel;
 			return {
 				worktreePath: path,
 				isCurrent: activeWorktreePath !== undefined &&
@@ -254,7 +259,7 @@ function getRetainedWorkbenchPicks(
 									: Codicon.window
 				),
 				description,
-				detail: path,
+				detail: description,
 				tooltip: path,
 				searchFields: [
 					{ target: 'label' as const, text: label },

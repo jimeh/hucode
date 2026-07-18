@@ -845,6 +845,44 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
+	test('persists retained workbench label changes', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/scratch-label').toJSON()
+		);
+		const workbenchId = opened.retainedWorkbenches?.[0].id;
+		assert.ok(workbenchId);
+		const beforeRenameSaves = persistence.saveCalls;
+
+		const renamed = await service.setRetainedWorkbenchLabel(
+			browser.windowId,
+			workbenchId,
+			'  Notes  '
+		);
+		const reset = await service.setRetainedWorkbenchLabel(
+			browser.windowId,
+			workbenchId,
+			undefined
+		);
+
+		assert.deepStrictEqual({
+			renamed: renamed.retainedWorkbenches?.[0].label,
+			reset: reset.retainedWorkbenches?.[0].label,
+			persisted: persistence.state?.retainedWorkbenches[0].label,
+			saves: persistence.saveCalls - beforeRenameSaves,
+		}, {
+			renamed: 'Notes',
+			reset: undefined,
+			persisted: undefined,
+			saves: 2,
+		});
+	});
+
 	test('generic close persists one coherent retained unload state', async () => {
 		const persistence = new FakePersistence();
 		const { service, browser } = createService(

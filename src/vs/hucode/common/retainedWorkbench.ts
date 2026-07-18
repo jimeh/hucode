@@ -124,6 +124,28 @@ export class RetainedWorkbenchCatalog {
 		return next;
 	}
 
+	/** Sets or resets a retained workbench's custom display label. */
+	setLabel(
+		id: string,
+		label: string | undefined,
+	): IHucodeRetainedWorkbench | undefined {
+		const normalizedLabel = label?.trim();
+		if (label !== undefined && !normalizedLabel) {
+			return undefined;
+		}
+
+		const record = this.getById(id);
+		if (!record) {
+			return undefined;
+		}
+
+		const next = { ...record, label: normalizedLabel };
+		this.records = this.records.map(candidate =>
+			candidate.id === id ? next : candidate
+		);
+		return next;
+	}
+
 	/** Removes one retained record without touching its folder. */
 	dismiss(id: string): boolean {
 		const next = this.records.filter(record => record.id !== id);
@@ -181,8 +203,12 @@ export function deserializeRetainedWorkbenches(
 	const resources = new Set<string>();
 	const records: IHucodeRetainedWorkbench[] = [];
 	for (const [index, candidate] of value.entries()) {
+		const label = typeof candidate?.label === 'string'
+			? candidate.label.trim() || undefined
+			: candidate?.label;
 		const normalized = {
 			...candidate,
+			...(candidate?.label === undefined ? {} : { label }),
 			order: Number.isFinite(candidate?.order) && candidate.order >= 0
 				? candidate.order
 				: index,
@@ -263,6 +289,8 @@ function isRetainedWorkbench(
 			Number.isFinite(value.order) && value.order >= 0 &&
 			(value.folderStatus === undefined ||
 				value.folderStatus === 'missing') &&
+			(value.label === undefined ||
+				typeof value.label === 'string' && value.label.length > 0) &&
 			(value.lastActiveAt === undefined ||
 				Number.isFinite(value.lastActiveAt));
 	} catch {
