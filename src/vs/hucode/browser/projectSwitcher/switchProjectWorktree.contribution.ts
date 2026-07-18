@@ -49,6 +49,7 @@ import {
 } from '../../../workbench/common/contextkeys.js';
 import {
 	combineProjectSwitcherTargets,
+	compareSwitchWorktreePicks,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -202,11 +203,7 @@ function getSwitchWorktreePicks(
 		}
 	}
 
-	return picks.sort((a, b) => compareSwitchWorktreePicks(
-		a,
-		b,
-		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
-	));
+	return picks.sort(compareSwitchWorktreePicks);
 }
 
 function getRetainedWorkbenchPicks(
@@ -330,24 +327,11 @@ function getCombinedSwitchWorkbenchPicks(
 		projectPicks,
 		pathsEqual,
 		sectionOrder
-	).sort((a, b) => compareSwitchWorktreePicks(a, b, sectionOrder));
-}
-
-function compareSwitchWorktreePicks(
-	a: SwitchWorktreeQuickPick,
-	b: SwitchWorktreeQuickPick,
-	sectionOrder: readonly ProjectSwitcherOmniSection[]
-): number {
-	const sectionRank = (pick: SwitchWorktreeQuickPick) =>
-		sectionOrder.indexOf(pick.projectId ? 'projects' : 'workbenches');
-	return Number(b.isCurrent) - Number(a.isCurrent) ||
-		Number(b.isLoaded) - Number(a.isLoaded) ||
-		Number(!!b.isDormant) - Number(!!a.isDormant) ||
-		sectionRank(a) - sectionRank(b) ||
-		a.projectOrder - b.projectOrder ||
-		a.worktreeOrder - b.worktreeOrder ||
-		a.label.localeCompare(b.label) ||
-		a.worktreePath.localeCompare(b.worktreePath);
+	).sort((a, b) => compareSwitchWorktreePicks(
+		a,
+		b,
+		state ? sectionOrder : undefined
+	));
 }
 
 async function getActiveWorkbenchWorktreePath(

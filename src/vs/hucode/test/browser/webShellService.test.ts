@@ -30,6 +30,8 @@ import {
 	IHucodeShellService,
 } from '../../common/omniWindow.js';
 import {
+	createWebHucodeShellFolderAccess,
+	getWebHucodeShellFolderResource,
 	IWebHucodeShellBrowserAdapter,
 	IWebHucodeShellFolderAccess,
 	IWebHucodeShellPersistedState,
@@ -39,6 +41,42 @@ import {
 
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('stats server folders through the remote file-system resource',
+		async () => {
+			const resources: URI[] = [];
+			const access = createWebHucodeShellFolderAccess(
+				'server-authority',
+				async resource => {
+					resources.push(resource);
+					return { isDirectory: true };
+				}
+			);
+
+			assert.strictEqual(await access.exists('/srv/project'), true);
+			assert.deepStrictEqual({
+				scheme: resources[0].scheme,
+				authority: resources[0].authority,
+				path: resources[0].path,
+			}, {
+				scheme: 'vscode-remote',
+				authority: 'server-authority',
+				path: '/srv/project',
+			});
+			assert.strictEqual(
+				getWebHucodeShellFolderResource('/tmp/local', undefined).scheme,
+				'file'
+			);
+			assert.strictEqual(await createWebHucodeShellFolderAccess(
+				'server-authority',
+				async () => ({ isDirectory: false })
+			).exists('/srv/file'), false);
+			assert.strictEqual(await createWebHucodeShellFolderAccess(
+				'server-authority',
+				async () => { throw new Error('missing'); }
+			).exists('/srv/missing'), false);
+		}
+	);
 
 	function createService(
 		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
@@ -836,6 +874,48 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(surface.querySelectorAll('iframe').length, 1);
 	});
 
+	test('removes a dormant workbench when its folder becomes missing',
+		async () => {
+			let folderExists = true;
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'dormant',
+					folderUri: URI.file('/tmp/dormant').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+				residentWorkspaces: [],
+			});
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none',
+				{ exists: async () => folderExists }
+			);
+			const restored = await service.getWindowState(browser.windowId);
+			assert.strictEqual(restored.instances[0].state, 'dormant');
+			const beforeOpenSaves = persistence.saveCalls;
+
+			folderExists = false;
+			const missing = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/dormant'
+			);
+
+			assert.deepStrictEqual({
+				instances: missing.instances,
+				folderStatus: missing.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+				saves: persistence.saveCalls - beforeOpenSaves,
+			}, {
+				instances: [],
+				folderStatus: 'missing',
+				iframes: 0,
+				saves: 1,
+			});
+		}
+	);
+
 	test('retains missing folders without creating restored iframes', async () => {
 		const persistence = new FakePersistence({
 			retainedWorkbenches: [{
@@ -929,6 +1009,40 @@ suite('WebHucodeShellService', () => {
 			iframes: 0,
 		});
 	});
+
+	test('reuses an available workbench without repeating folder preflight',
+		async () => {
+			let folderExists = true;
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{ exists: async () => folderExists }
+			);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/loading').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+
+			folderExists = false;
+			const reused = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/loading'
+			);
+
+			assert.deepStrictEqual({
+				instanceIds: reused.instances.map(instance => instance.instanceId),
+				folderStatus: reused.retainedWorkbenches?.[0].folderStatus,
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instanceIds: [instanceId],
+				folderStatus: undefined,
+				iframes: 1,
+			});
+		}
+	);
 
 	test('persists one complete snapshot after restoring all workbenches',
 		async () => {

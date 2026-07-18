@@ -613,6 +613,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			projectsSidebarVisible: true,
 			projectSwitcherCanGoBack: false,
 			projectSwitcherCanGoForward: false,
+			projectSwitcherSectionOrder: ['workbenches', 'projects'],
 			instances: [],
 			retainedWorkbenches: [],
 		});

@@ -1,7 +1,7 @@
 ---
 title: Hucode Omni Workbenches and Projects Sidebar Plan
 status: implemented
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 ---
 
 # Hucode Omni Workbenches and Projects Sidebar Plan
@@ -29,7 +29,7 @@ chat history.
 
 - Overall status: **Follow-up refinements implemented and locally validated**
 - Implementation status: **Complete; awaiting orchestrator review and CI**
-- Last updated: **2026-07-17**
+- Last updated: **2026-07-18**
 - Current owner: **Hucode maintainers**
 
 | Phase | Status | Notes |
@@ -1422,6 +1422,7 @@ Add dated entries as implementation progresses.
 | 2026-07-17 | QA hardening | Preserved top-level section collapse across startup selection | Tree synchronization events are ignored and active-target reveal does not expand an intentionally collapsed section |
 | 2026-07-17 | Review hardening | Closed lifecycle, ownership, restore, and promotion gaps | Failed desktop loads now publish coherent state; restore policy is configured before main-side restore; retained standalone opens release hosted ownership; navigation canonicalizes promoted folders; missing desktop folders surface a warning state; persistence migrations and cross-window guards have focused coverage |
 | 2026-07-17 | Follow-up refinement | Added configurable row density, draggable section order, project lifecycle icons, Hucode Settings TOC, stable header actions, and serve-web missing-folder preflight | Focused compile, 48 common tests, 28 browser tests, and precommit pass |
+| 2026-07-18 | Review/CI hardening | Corrected serve-web remote folder preflight and stale dormant cleanup; preserved standalone picker MRU ordering; deduplicated promoted navigation history; completed focused CI registration and fixture updates | Focused type, compile, layer, common, browser, and Electron suites pass locally; final orchestrator review and CI remain pending |
 
 ## Validation log
 
@@ -1442,6 +1443,11 @@ Add exact commands, results, runtime observations, and links to CI here.
 | 2026-07-17 | Follow-up common tests | Four focused `npm run test-node -- --run ...` invocations for hosted state, tree model, view state, and switch model | 48 tests pass |
 | 2026-07-17 | Follow-up browser tests | `xvfb-run -a ./scripts/test.sh --no-sandbox --grep WebHucodeShellService` | 28 tests pass |
 | 2026-07-17 | Follow-up hygiene | `npm run -s precommit -- <edited paths>` | Pass |
+| 2026-07-18 | Review/CI hardening checks | `npm run typecheck-client`; `npm run gulp compile-client`; `npm run valid-layers-check` | Pass with zero TypeScript, compile, or layer errors |
+| 2026-07-18 | Review/CI hardening common tests | `npm run test-node -- --run src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts` | 16 tests pass |
+| 2026-07-18 | Review/CI hardening browser tests | Focused `WebHucodeShellService` and `OmniSelectionOpen` Electron invocations | 31 and 11 tests pass |
+| 2026-07-18 | Review/CI hardening desktop tests | Focused `ResidentHostedWorkspacesController` Electron invocation | 41 tests pass |
+| 2026-07-18 | Review/CI hardening hygiene | `npm run -s precommit -- <edited paths>`; `git diff --check` | Pass |
 
 ## Completion criteria
 

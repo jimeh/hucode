@@ -348,6 +348,8 @@ jobs:
             --run \
             src/vs/hucode/test/browser/omniLayoutModel.test.ts \
             --run \
+            src/vs/hucode/test/browser/omniSelectionOpen.test.ts \
+            --run \
             src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
             --run \
             src/vs/hucode/test/browser/webShellService.test.ts \

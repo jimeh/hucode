@@ -2070,7 +2070,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			...sortProjectSwitcherNavigationHistory([
 				...visitedTargets,
 				...retainedTargets,
-			]),
+			], selectionTargetsEqual),
 			activeTarget,
 		].slice(-PROJECT_SWITCHER_HISTORY_LIMIT);
 		this.worktreeNavigationIndex =

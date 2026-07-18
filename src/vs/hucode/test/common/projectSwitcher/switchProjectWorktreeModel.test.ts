@@ -12,6 +12,7 @@ import { ProjectRecord, WorktreeRecord } from
 import {
 	canonicalizeProjectSwitcherTarget,
 	combineProjectSwitcherTargets,
+	compareSwitchWorktreePicks,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -344,6 +345,55 @@ suite('SwitchProjectWorktreeModel', () => {
 			projectId: 'project',
 			worktreePath: '/tmp/project',
 		}]);
+	});
+
+	test('keeps the most recent history target after project promotion', () => {
+		assert.deepStrictEqual(sortProjectSwitcherNavigationHistory([{
+			worktreePath: '/tmp/promoted',
+			lastVisitedAt: 10,
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/other',
+			lastVisitedAt: 20,
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+			lastVisitedAt: 30,
+		}], (a, b) => a.worktreePath === b.worktreePath), [{
+			projectId: 'project',
+			worktreePath: '/tmp/other',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}]);
+	});
+
+	test('uses MRU outside Omni and section order inside Omni', () => {
+		const project = {
+			...createPick({ projectId: 'project' }),
+			lastVisitedAt: 10,
+		};
+		const workbench = {
+			...createPick({ projectId: 'scratch' }),
+			projectId: undefined,
+			lastVisitedAt: 30,
+		};
+
+		assert.deepStrictEqual(
+			[project, workbench].toSorted(compareSwitchWorktreePicks)
+				.map(pick => pick.worktreePath),
+			['/tmp/scratch', '/tmp/project']
+		);
+		assert.deepStrictEqual([project, workbench]
+			.toSorted((a, b) => compareSwitchWorktreePicks(
+				a,
+				b,
+				['projects', 'workbenches']
+			))
+			.map(pick => pick.worktreePath), [
+			'/tmp/project',
+			'/tmp/scratch',
+		]);
 	});
 });
 

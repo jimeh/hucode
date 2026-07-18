@@ -7,6 +7,7 @@ import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
+import { Schemas } from '../../base/common/network.js';
 import {
 	Disposable,
 	DisposableStore,
@@ -122,6 +123,40 @@ export interface IWebHucodeShellPersistenceAdapter {
 /** File-system seam used to reject missing folders before iframe creation. */
 export interface IWebHucodeShellFolderAccess {
 	exists(worktreePath: string): Promise<boolean>;
+}
+
+/** Resolves a server path through the active remote file-system provider. */
+export function getWebHucodeShellFolderResource(
+	worktreePath: string,
+	remoteAuthority: string | undefined
+): URI {
+	return remoteAuthority
+		? URI.from({
+			scheme: Schemas.vscodeRemote,
+			authority: remoteAuthority,
+			path: worktreePath,
+		})
+		: URI.file(worktreePath);
+}
+
+/** Creates the production folder preflight adapter around file-service stat. */
+export function createWebHucodeShellFolderAccess(
+	remoteAuthority: string | undefined,
+	stat: (resource: URI) => Promise<{ readonly isDirectory: boolean }>
+): IWebHucodeShellFolderAccess {
+	return {
+		async exists(worktreePath: string): Promise<boolean> {
+			try {
+				const resource = getWebHucodeShellFolderResource(
+					worktreePath,
+					remoteAuthority
+				);
+				return (await stat(resource)).isDirectory;
+			} catch {
+				return false;
+			}
+		},
+	};
 }
 
 /** Drops malformed serve-web persistence entries before restore scheduling. */
@@ -428,13 +463,32 @@ export class WebHucodeShellController extends Disposable
 				Date.now()
 			);
 		}
-		if (!await this.folderAccess.exists(worktreePath)) {
-			if (retained) {
+
+		const existing = this.getInstanceByPath(worktreePath);
+		if (existing && isHostedWorkspaceAvailable(existing)) {
+			existing.projectId = projectId ?? existing.projectId;
+			existing.retainedWorkbenchId = retained?.id;
+			if (retained?.folderStatus === 'missing') {
 				this.retainedWorkbenches.update(retained.id, {
-					folderStatus: 'missing',
+					folderStatus: undefined,
 				});
-				this.emitState();
 			}
+			this.activateInstance(existing);
+			return this.getState();
+		}
+
+		if (!await this.folderAccess.exists(worktreePath)) {
+			await this.deferStateEmission(async () => {
+				if (existing) {
+					this.removeInstance(existing);
+				}
+				if (retained) {
+					this.retainedWorkbenches.update(retained.id, {
+						folderStatus: 'missing',
+					});
+				}
+				this.emitState();
+			});
 			return this.getState();
 		}
 		if (retained?.folderStatus === 'missing') {
@@ -443,15 +497,7 @@ export class WebHucodeShellController extends Disposable
 			});
 		}
 
-		const existing = this.getInstanceByPath(worktreePath);
 		if (existing) {
-			if (isHostedWorkspaceAvailable(existing)) {
-				existing.projectId = projectId ?? existing.projectId;
-				existing.retainedWorkbenchId = retained?.id;
-				this.activateInstance(existing);
-				return this.getState();
-			}
-
 			if (existing.state === 'dormant') {
 				this.hostedWorkspaces.removeInstance(existing);
 			} else {
@@ -1425,9 +1471,10 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			new StorageServiceWebHucodeShellPersistence(storageService),
 			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
 				HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING
-			) ?? 'active', {
-			exists: worktreePath => fileService.exists(URI.file(worktreePath)),
-		});
+			) ?? 'active', createWebHucodeShellFolderAccess(
+				environmentService.remoteAuthority,
+				resource => fileService.stat(resource)
+			));
 	}
 }
 

@@ -32,12 +32,21 @@ export interface IProjectSwitcherNavigationHistoryEntry
 	readonly lastVisitedAt: number;
 }
 
-/** Globally orders mixed project and arbitrary-workbench history entries. */
+/** Globally orders history and keeps the most recent equivalent target. */
 export function sortProjectSwitcherNavigationHistory(
-	entries: readonly IProjectSwitcherNavigationHistoryEntry[]
+	entries: readonly IProjectSwitcherNavigationHistoryEntry[],
+	targetsEqual: (
+		a: IProjectSwitcherSelectionTarget,
+		b: IProjectSwitcherSelectionTarget
+	) => boolean = (a, b) => a.projectId === b.projectId &&
+		a.worktreePath === b.worktreePath
 ): IProjectSwitcherSelectionTarget[] {
-	return [...entries]
-		.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt)
+	const sorted = [...entries]
+		.sort((a, b) => a.lastVisitedAt - b.lastVisitedAt);
+	return sorted
+		.filter((entry, index) => !sorted.slice(index + 1).some(candidate =>
+			targetsEqual(entry, candidate)
+		))
 		.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }));
 }
 
@@ -56,6 +65,26 @@ export type SwitchWorktreeQuickPick = IQuickPickItem &
 		readonly worktreeOrder: number;
 		readonly searchFields: readonly SwitchWorktreeSearchField[];
 	};
+
+/** Orders quick-pick rows by MRU or by the Omni sidebar section order. */
+export function compareSwitchWorktreePicks(
+	a: SwitchWorktreeQuickPick,
+	b: SwitchWorktreeQuickPick,
+	sectionOrder?: readonly ProjectSwitcherOmniSection[]
+): number {
+	const sectionRank = (pick: SwitchWorktreeQuickPick) =>
+		sectionOrder?.indexOf(pick.projectId ? 'projects' : 'workbenches') ?? 0;
+	return Number(b.isCurrent) - Number(a.isCurrent) ||
+		Number(b.isLoaded) - Number(a.isLoaded) ||
+		Number(!!b.isDormant) - Number(!!a.isDormant) ||
+		(sectionOrder
+			? sectionRank(a) - sectionRank(b)
+			: (b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)) ||
+		a.projectOrder - b.projectOrder ||
+		a.worktreeOrder - b.worktreeOrder ||
+		a.label.localeCompare(b.label) ||
+		a.worktreePath.localeCompare(b.worktreePath);
+}
 
 export function filterSwitchWorktreePicks(
 	picks: readonly SwitchWorktreeQuickPick[],
