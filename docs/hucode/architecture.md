@@ -137,11 +137,18 @@ Responsibilities:
 - share project/worktree watchers globally instead of duplicating them per
   renderer
 
-### Projects Surface
+### Workbenches And Projects Surface
 
-The Omni Projects surface is shell-owned under
+The Omni sidebar surface is shell-owned under
 `src/vs/hucode/browser/parts/projectsPart.ts`. It is not a normal registered
 workbench view/container in the Omni sidebar.
+
+It combines a per-window catalog of arbitrary folder workbenches with the
+global project manager. Arbitrary entries persist independently of hosted
+renderer instances: unload removes the instance but retains the entry, while
+dismiss removes the entry after a successful unload. When a retained path
+becomes a project worktree, the project record becomes authoritative and the
+catalog entry is removed.
 
 This keeps Explorer, Search, SCM, and other standard sidebar behavior from
 leaking into the Omni shell. Hosted workbenches can still deregister redundant
@@ -162,9 +169,13 @@ Important lifecycle rules:
 - unload and app quit must run the normal renderer unload handshake before a
   hosted `WebContentsView` is destroyed
 - hosted browser views owned by a workspace must be destroyed separately
-- the service contract still has a `dormant` state, but current resource
-  policy treats hidden resident workbenches as normal loaded workbenches rather
-  than applying LRU or dormant-state heuristics
+- desired-loaded workbenches not selected for eager startup are represented as
+  `dormant` without creating a renderer; activation materializes them on demand
+
+The `hucode.omni.restoreHostedWorkbenches` setting controls eager startup on
+desktop and serve-web. `active` (the default) restores the last selected
+workbench and leaves the rest dormant, `all` restores every desired-loaded
+workbench, and `none` leaves every desired-loaded workbench dormant.
 
 ### Integrated Browser Views
 

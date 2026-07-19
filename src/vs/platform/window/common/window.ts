@@ -57,6 +57,17 @@ export interface IOmniWorkspaceRestoreEntry {
 	readonly state?: 'active' | 'loaded';
 }
 
+/** Persisted arbitrary folder workbench owned by an Omni window. */
+export interface IOmniRetainedWorkbench {
+	readonly id: string;
+	readonly folderUri: UriComponents;
+	readonly label?: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly folderStatus?: 'missing';
+	readonly order: number;
+	readonly lastActiveAt?: number;
+}
+
 export interface IBaseOpenWindowsOptions {
 
 	/**
@@ -504,6 +515,7 @@ export interface INativeWindowConfiguration extends IWindowConfiguration, Native
 	hostedInstanceId?: string;
 	omniActiveWorktreePath?: string;
 	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
 }
 
 /**

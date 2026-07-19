@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import {
 	createHucodeOmniWindowPath,
@@ -42,6 +43,12 @@ suite('HucodeOmniOpenPlan', () => {
 	});
 
 	test('identifies and restores Omni window paths', () => {
+		const retainedWorkbenches = [{
+			id: 'scratch',
+			folderUri: URI.file('/scratch').toJSON(),
+			desiredState: 'unloaded' as const,
+			order: 0,
+		}];
 		const omniPath = createHucodeOmniWindowPath({
 			omniActiveWorktreePath: '/repo',
 			omniResidentWorkspaces: [{
@@ -49,7 +56,8 @@ suite('HucodeOmniOpenPlan', () => {
 				worktreePath: '/repo',
 				lastActiveAt: 1,
 				state: 'active'
-			}]
+			}],
+			omniRetainedWorkbenches: retainedWorkbenches,
 		});
 
 		assert.strictEqual(isHucodeOmniPathToOpen(omniPath), true);
@@ -58,7 +66,8 @@ suite('HucodeOmniOpenPlan', () => {
 			getHucodeOmniPathFromWindowState({
 				windowKind: 'omni',
 				omniActiveWorktreePath: '/repo',
-				omniResidentWorkspaces: omniPath.omniResidentWorkspaces
+				omniResidentWorkspaces: omniPath.omniResidentWorkspaces,
+				omniRetainedWorkbenches: retainedWorkbenches,
 			}),
 			omniPath
 		);
@@ -131,7 +140,8 @@ suite('HucodeOmniOpenPlan', () => {
 				forceTempProfile: true,
 				isOmniWindow: true,
 				omniActiveWorktreePath: '/repo',
-				omniResidentWorkspaces: undefined
+				omniResidentWorkspaces: undefined,
+				omniRetainedWorkbenches: undefined,
 			}
 		);
 	});

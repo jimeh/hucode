@@ -56,6 +56,10 @@ VS Code code that Hucode customizes.
   terminal, clear inherited Electron/VS Code process env such as
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
+- The generic Code OSS launch helper invokes `scripts/code.sh` against the
+  upstream root product. If `.build/electron` contains a Hucode-branded runtime,
+  use the mixin-aware `scripts/hucode.sh` with the helper's isolated profile and
+  debug arguments; otherwise `code.sh` looks for a missing `code-oss` binary.
 
 ## Code Documentation
 
@@ -390,6 +394,10 @@ VS Code code that Hucode customizes.
 
 ## Learnings
 
+- Registering a Hucode configuration node does not create a top-level Settings
+  category. The Settings table of contents in
+  `src/vs/workbench/contrib/preferences/browser/settingsLayout.ts` is static;
+  keep its `hucode.*` entry when adding Hucode settings.
 - In a clean worktree, run `npm run hucode:prepare` before
   `npm run hucode:validate`. Validation reads generated files under
   `.build/distro/mixin/stable/`, so prepare must run first.
@@ -452,10 +460,10 @@ VS Code code that Hucode customizes.
   hosted instances as missing worktree rows under the project and avoid
   git-worktree management actions for them; unloading the resident workbench
   remains valid.
-- Generic folder/workspace opens from an Omni shell or hosted Omni workbench
-  must not reuse the Omni window for unknown paths. Known project worktrees
-  should route through the shell; unknown folders/workspaces should open in a
-  new normal workbench window.
+- Generic single-folder opens from an Omni shell or hosted Omni workbench route
+  through the shell. Known project worktrees remain project-backed; unknown
+  folders become retained arbitrary workbenches. Explicit new-window requests
+  and `.code-workspace` opens remain normal standalone windows.
 - External `hucode <file>` CLI launches bypass renderer `IHostService`
   routing and enter the main-process `WindowsMainService` path directly.
   Keep CLI file routing in main-process code; otherwise upstream fallback can
@@ -471,6 +479,16 @@ VS Code code that Hucode customizes.
 - Omni resident workbenches are keyed by worktree path. Hidden workbenches stay
   loaded and switch back to `active` instead of being recreated on each
   selection change.
+- Arbitrary workbench catalog records outlive their renderer. Unload must keep
+  the record with desired state `unloaded`; dismiss removes it only after the
+  normal unload handshake succeeds. Desired-loaded startup entries may be
+  `dormant`, which is restorable but not live and must not own a renderer.
+- Desktop stores retained catalogs in Omni window state. Serve-web stores the
+  equivalent catalog and resident snapshot in profile storage. Page/window
+  teardown must not overwrite the pre-shutdown desired restore set.
+- If a retained path becomes a project worktree, update any live instance with
+  the project id before removing the retained record. Do not recreate the
+  arbitrary record when the project is later removed.
 - Omni resident-workspace restore must always choose one active workspace, even
   for older restore entries without an explicit `active` state. Shell-to-workspace
   action forwarding should wait for restore before looking up the active hosted
@@ -588,6 +606,9 @@ VS Code code that Hucode customizes.
   the renderer can inspect focused DOM and will steal paste from shell
   QuickInput prompts. Let renderer keybinding/clipboard routing decide when
   Projects focus should forward paste.
+- Project Switcher tree synchronization and active-target reveal are not user
+  collapse intent. Ignore collapse events while replacing roots, and do not
+  reveal a target through an intentionally collapsed top-level Omni section.
 
 ## Extension Filtering
 

@@ -10,12 +10,17 @@ import { URI } from '../../../../base/common/uri.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../../platform/projectManager/common/projectManager.js';
 import {
+	canonicalizeProjectSwitcherTarget,
+	combineProjectSwitcherTargets,
+	compareSwitchWorktreePicks,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
+	getLastActiveSwitchWorkbenchPick,
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
 	getVisualProjectWorktreeTargets,
+	sortProjectSwitcherNavigationHistory,
 	SwitchWorktreeQuickPick,
 	withSwitchWorktreeSeparators,
 } from '../../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -90,18 +95,19 @@ suite('SwitchProjectWorktreeModel', () => {
 		);
 	});
 
-	test('groups current, loaded, and not loaded picks', () => {
+	test('groups current, loaded, dormant, and not loaded picks', () => {
 		const current = createPick({
 			projectId: 'current',
 			isCurrent: true,
-			isLoaded: true,
 		});
 		const loaded = createPick({ projectId: 'loaded', isLoaded: true });
+		const dormant = createPick({ projectId: 'dormant', isDormant: true });
 		const notLoaded = createPick({ projectId: 'not-loaded' });
 
 		const items = withSwitchWorktreeSeparators([
 			current,
 			loaded,
+			dormant,
 			notLoaded,
 		]);
 
@@ -115,6 +121,8 @@ suite('SwitchProjectWorktreeModel', () => {
 				'current',
 				'Loaded',
 				'loaded',
+				'Dormant',
+				'dormant',
 				'Not Loaded',
 				'not-loaded',
 			]
@@ -258,6 +266,170 @@ suite('SwitchProjectWorktreeModel', () => {
 			'/tmp/one'
 		);
 	});
+
+	test('combines workbenches before projects without promoted duplicates', () => {
+		const pathsEqual = (pathA: string, pathB: string) => pathA === pathB;
+
+		assert.deepStrictEqual(combineProjectSwitcherTargets([{
+			worktreePath: '/tmp/scratch',
+		}, {
+			worktreePath: '/tmp/promoted',
+		}], [{
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}], pathsEqual), [{
+			worktreePath: '/tmp/scratch',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}]);
+	});
+
+	test('combines mixed targets in the persisted section order', () => {
+		const pathsEqual = (pathA: string, pathB: string) => pathA === pathB;
+
+		assert.deepStrictEqual(combineProjectSwitcherTargets([{
+			worktreePath: '/tmp/scratch',
+		}], [{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}], pathsEqual, ['projects', 'workbenches']), [{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}, {
+			worktreePath: '/tmp/scratch',
+		}]);
+	});
+
+	test('canonicalizes promoted path-only targets to project ownership', () => {
+		const project = createProject({
+			id: 'project',
+			worktrees: [createWorktree('promoted')],
+		});
+
+		assert.deepStrictEqual(canonicalizeProjectSwitcherTarget(
+			{ worktreePath: '/tmp/promoted' },
+			[project],
+			(pathA, pathB) => pathA === pathB
+		), {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		});
+	});
+
+	test('globally orders mixed project and arbitrary history', () => {
+		assert.deepStrictEqual(sortProjectSwitcherNavigationHistory([{
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+			lastVisitedAt: 30,
+		}, {
+			worktreePath: '/tmp/scratch-old',
+			lastVisitedAt: 10,
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+			lastVisitedAt: 20,
+		}]), [{
+			projectId: undefined,
+			worktreePath: '/tmp/scratch-old',
+		}, {
+			projectId: 'other',
+			worktreePath: '/tmp/other',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/project',
+		}]);
+	});
+
+	test('keeps the most recent history target after project promotion', () => {
+		assert.deepStrictEqual(sortProjectSwitcherNavigationHistory([{
+			worktreePath: '/tmp/promoted',
+			lastVisitedAt: 10,
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/other',
+			lastVisitedAt: 20,
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+			lastVisitedAt: 30,
+		}], (a, b) => a.worktreePath === b.worktreePath), [{
+			projectId: 'project',
+			worktreePath: '/tmp/other',
+		}, {
+			projectId: 'project',
+			worktreePath: '/tmp/promoted',
+		}]);
+	});
+
+	test('uses MRU outside Omni and section order inside Omni', () => {
+		const project = {
+			...createPick({ projectId: 'project' }),
+			lastVisitedAt: 10,
+		};
+		const workbench = {
+			...createPick({ projectId: 'scratch' }),
+			projectId: undefined,
+			lastVisitedAt: 30,
+		};
+
+		assert.deepStrictEqual({
+			mru: [project, workbench]
+				.toSorted(compareSwitchWorktreePicks)
+				.map(pick => pick.worktreePath),
+			sectionOrder: [project, workbench]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['projects', 'workbenches']
+				))
+				.map(pick => pick.worktreePath),
+			partialSectionOrder: [workbench, project]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['projects']
+				))
+				.map(pick => pick.worktreePath),
+		}, {
+			mru: ['/tmp/scratch', '/tmp/project'],
+			sectionOrder: ['/tmp/project', '/tmp/scratch'],
+			partialSectionOrder: ['/tmp/project', '/tmp/scratch'],
+		});
+	});
+
+	test('last active excludes current and never-visited workbenches', () => {
+		const current = {
+			...createPick({ projectId: 'current', isCurrent: true }),
+			lastVisitedAt: 30,
+		};
+		const visited = {
+			...createPick({ projectId: 'visited' }),
+			lastVisitedAt: 20,
+		};
+		const neverVisited = createPick({ projectId: 'never' });
+
+		assert.deepStrictEqual({
+			selected: getLastActiveSwitchWorkbenchPick([
+				current,
+				visited,
+				neverVisited,
+			])?.worktreePath,
+			empty: getLastActiveSwitchWorkbenchPick([
+				current,
+				neverVisited,
+			]),
+		}, {
+			selected: '/tmp/visited',
+			empty: undefined,
+		});
+	});
 });
 
 function createPick(options: {
@@ -268,6 +440,7 @@ function createPick(options: {
 	readonly detail?: string;
 	readonly isCurrent?: boolean;
 	readonly isLoaded?: boolean;
+	readonly isDormant?: boolean;
 }): SwitchWorktreeQuickPick {
 	const label = options.label ?? `$(folder) ${options.projectId}`;
 	const description = options.description ?? 'local';
@@ -280,6 +453,7 @@ function createPick(options: {
 		detail: options.detail ?? `${branch} - /tmp/${options.projectId}`,
 		isCurrent: options.isCurrent ?? false,
 		isLoaded: options.isLoaded ?? false,
+		isDormant: options.isDormant,
 		projectOrder: 0,
 		worktreeOrder: 0,
 		searchFields: [

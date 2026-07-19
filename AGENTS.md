@@ -48,6 +48,8 @@ as the required Hucode instruction set for work in this fork.
   run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
   for the edited files. Do not bypass or ignore hygiene failures; fix them or
   report the blocker.
+- The `coderabbit:review` label does not override CodeRabbit's draft-PR skip.
+  Mark a PR ready before waiting for a label-triggered CodeRabbit review.
 - Build-script changelog tests create temporary Git commits and inherit global
   `commit.gpgSign`. On hosts with signing enabled, run the suite with
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`

@@ -8,9 +8,11 @@ import { Emitter } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isLinux } from '../../base/common/platform.js';
-import { URI } from '../../base/common/uri.js';
+import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
 	'../../platform/environment/electron-main/environmentMainService.js';
+import { IConfigurationService } from
+	'../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
@@ -30,6 +32,8 @@ import {
 	IHucodeHostedWorkspaceOwner,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
+import { ProjectSwitcherOmniSection } from
+	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { IHucodeShellMainService } from './omniWindow.js';
 import { findWindowOnWorkspaceOrFolder } from
 	'../../platform/windows/electron-main/windowsFinder.js';
@@ -39,6 +43,13 @@ import { IBrowserViewMainService } from
 import { ResidentHostedWorkspacesController } from './hostedWorkspacesController.js';
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'./omniWorkspaceReopen.js';
+import { isHostedWorkspaceRestorable } from
+	'../common/hostedWorkspaceState.js';
+import {
+	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HucodeHostedWorkbenchRestorePolicy,
+} from
+	'../common/retainedWorkbench.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -73,6 +84,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly logService: ILogService,
 		@IBrowserViewMainService
 		private readonly browserViewMainService: IBrowserViewMainService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -108,8 +121,7 @@ export class HucodeShellMainService extends Disposable
 			const controller = this.getOrCreateController(window.id);
 			await controller.ensureRestored();
 			const instance = controller.getState().instances.find(candidate =>
-				candidate.state !== 'crashed' &&
-				candidate.state !== 'unloaded' &&
+				isHostedWorkspaceRestorable(candidate) &&
 				isEqual(candidate.worktreePath, worktreePath, !isLinux)
 			);
 			if (instance) {
@@ -171,6 +183,80 @@ export class HucodeShellMainService extends Disposable
 		const controller = this.getOrCreateController(windowId);
 		await controller.openWorkspace(worktreePath, projectId);
 		return controller.getState();
+	}
+
+	async retainAndOpenWorkbench(
+		windowId: number,
+		folderUri: UriComponents
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.retainAndOpenWorkbench(URI.revive(folderUri));
+		return controller.getState();
+	}
+
+	async unloadRetainedWorkbench(
+		windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.unloadRetainedWorkbench(workbenchId);
+		return controller.getState();
+	}
+
+	async dismissRetainedWorkbench(
+		windowId: number,
+		workbenchId: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.dismissRetainedWorkbench(workbenchId);
+		return controller.getState();
+	}
+
+	async reorderRetainedWorkbenches(
+		windowId: number,
+		orderedWorkbenchIds: readonly string[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		controller.reorderRetainedWorkbenches(orderedWorkbenchIds);
+		return controller.getState();
+	}
+
+	/**
+	 * Updates or resets a retained workbench label and returns the resulting
+	 * Omni workspace state.
+	 */
+	async setRetainedWorkbenchLabel(
+		windowId: number,
+		workbenchId: string,
+		label: string | undefined,
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		controller.setRetainedWorkbenchLabel(workbenchId, label);
+		return controller.getState();
+	}
+
+	async reconcileRetainedWorkbenches(
+		windowId: number,
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: UriComponents;
+		}[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.reconcileRetainedWorkbenches(
+			projectFolders.map(folder => ({
+				projectId: folder.projectId,
+				folderUri: URI.revive(folder.folderUri),
+			}))
+		);
+		return controller.getState();
+	}
+
+	async setHostedWorkbenchRestorePolicy(
+		windowId: number,
+		policy: HucodeHostedWorkbenchRestorePolicy
+	): Promise<void> {
+		this.getOrCreateController(windowId).setRestorePolicy(policy);
 	}
 
 	/**
@@ -267,6 +353,14 @@ export class HucodeShellMainService extends Disposable
 	): Promise<void> {
 		this.getOrCreateController(windowId)
 			.setProjectSwitcherNavigationState(canGoBack, canGoForward);
+	}
+
+	async setProjectSwitcherSectionOrder(
+		windowId: number,
+		order: readonly ProjectSwitcherOmniSection[]
+	): Promise<void> {
+		this.getOrCreateController(windowId)
+			.setProjectSwitcherSectionOrder(order);
 	}
 
 	async runActionInShell(
@@ -394,7 +488,13 @@ export class HucodeShellMainService extends Disposable
 					-1
 				),
 				(state: IHucodeHostedWorkspaceState) =>
-					this._onDidChangeWindowState.fire({ windowId, state })
+					this._onDidChangeWindowState.fire({ windowId, state }),
+				{
+					restorePolicy: this.configurationService.getValue<
+						HucodeHostedWorkbenchRestorePolicy
+					>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ??
+						'active',
+				}
 			)
 		);
 		this.controllers.set(windowId, controller);
