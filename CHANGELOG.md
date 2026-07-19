@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.48 - 2026-07-19
+
+### Features
+
+- add retained workbenches to Omni (#91)
+
+### Bug Fixes
+
+- refine retained Omni workbench interactions (#92)
+
 ## 0.0.47 - 2026-07-17
 
 ### Features
