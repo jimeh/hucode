@@ -109,7 +109,7 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
 			enum: ['twoLine', 'compact'],
-			default: 'twoLine',
+			default: 'compact',
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.workbenchItemLayout',

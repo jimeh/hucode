@@ -23,6 +23,10 @@ import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	ProjectSwitcherOmniSection,
 } from './projectSwitcherViewState.js';
+import {
+	HucodeOmniItemLayout,
+	IHucodeRetainedWorkbench,
+} from '../retainedWorkbench.js';
 
 /**
  * Context value used by regular project rows in the Projects tree.
@@ -144,6 +148,7 @@ export interface ProjectSwitcherWorkbenchItem extends ProjectSwitcherBaseItem {
 	readonly hostedWorkbenchState: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
 	readonly order: number;
+	readonly hasCustomLabel: boolean;
 }
 
 /**
@@ -361,6 +366,64 @@ export function getWorktreeDisplayLabel(worktree: WorktreeRecord): string {
 			: basename(worktree.path));
 }
 
+/** Resolves retained-workbench path and display labels for sidebar and picker. */
+export function getRetainedWorkbenchPresentation(
+	record: IHucodeRetainedWorkbench,
+	getPathLabel: (path: string) => string,
+): {
+	readonly path: string;
+	readonly label: string;
+	readonly pathLabel: string;
+} {
+	const path = URI.revive(record.folderUri).fsPath;
+	return {
+		path,
+		label: record.label ?? basename(path),
+		pathLabel: getPathLabel(path),
+	};
+}
+
+/** Resolves secondary row text for compact and two-line layouts. */
+export function getProjectSwitcherItemDescription(
+	item: ProjectSwitcherItem,
+	layout: HucodeOmniItemLayout,
+): string | undefined {
+	if (layout === 'compact' && item.kind === 'worktree' &&
+		item.description === item.label
+	) {
+		return undefined;
+	}
+
+	return item.description;
+}
+
+/** Minimal live tree-node shape needed to place section drag feedback. */
+export interface IProjectSwitcherVisibleTreeNode {
+	readonly collapsed: boolean;
+	readonly visible: boolean;
+	readonly children: readonly IProjectSwitcherVisibleTreeNode[];
+}
+
+/** Returns the flat index of an expanded node's last visible descendant. */
+export function getLastVisibleDescendantIndex(
+	targetIndex: number,
+	node: IProjectSwitcherVisibleTreeNode,
+): number {
+	if (node.collapsed) {
+		return targetIndex;
+	}
+
+	let index = targetIndex;
+	for (const child of node.children) {
+		if (!child.visible) {
+			continue;
+		}
+		index++;
+		index = getLastVisibleDescendantIndex(index, child);
+	}
+	return index;
+}
+
 /**
  * Compares two project/worktree selection targets.
  *
@@ -523,8 +586,11 @@ function toRetainedWorkbenchElement(
 	options: IProjectSwitcherTreeModelOptions,
 	itemsById: Map<string, ProjectSwitcherItem>
 ): ProjectSwitcherTreeElement {
-	const uri = URI.revive(record.folderUri);
-	const worktreePath = uri.fsPath;
+	const presentation = getRetainedWorkbenchPresentation(
+		record,
+		options.getPathLabel
+	);
+	const worktreePath = presentation.path;
 	const instance = options.hostedWorkspaceState.instances.find(candidate =>
 		pathsEqual(candidate.worktreePath, worktreePath)
 	);
@@ -544,9 +610,10 @@ function toRetainedWorkbenchElement(
 		isActive: !!instance && instance.instanceId ===
 			options.hostedWorkspaceState.activeInstanceId,
 		order: record.order,
-		label: basename(worktreePath),
-		description: options.getPathLabel(worktreePath),
-		tooltip: options.getPathLabel(worktreePath),
+		hasCustomLabel: !!record.label,
+		label: presentation.label,
+		description: presentation.pathLabel,
+		tooltip: presentation.pathLabel,
 		contextValue: WORKBENCH_CONTEXT_VALUE,
 		themeIcon: state === 'restore-pending' || state === 'loading'
 			? ThemeIcon.modify(Codicon.loading, 'spin')
@@ -582,7 +649,7 @@ function toProjectElement(
 		rootPath,
 		hasCustomLabel: project.label !== rootBasename,
 		label: project.label,
-		description: project.label === rootBasename ? undefined : rootBasename,
+		description: options.getPathLabel(rootPath),
 		tooltip: options.getPathLabel(rootPath),
 		contextValue: project.pinned
 			? PINNED_PROJECT_CONTEXT_VALUE
@@ -646,9 +713,7 @@ function toWorktreeElement(
 		hasCustomLabel: !!worktree.customLabel,
 		missingGitWorktree: false,
 		label: worktreeLabel,
-		description: worktreeLabel === worktreeDescription
-			? undefined
-			: worktreeDescription,
+		description: worktreeDescription,
 		tooltip: options.getPathLabel(worktree.path),
 		contextValue: worktree.isMain
 			? MAIN_WORKTREE_CONTEXT_VALUE

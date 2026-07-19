@@ -579,6 +579,29 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 	});
 
+	test('persists and emits retained workbench label changes', async () => {
+		const scratch = createWorktree('renamed-scratch');
+		const { controller, stateChanges, window } = createController();
+		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		const workbenchId = controller.getState().retainedWorkbenches?.[0].id;
+		assert.ok(workbenchId);
+		const beforeRenameChanges = stateChanges.length;
+
+		controller.setRetainedWorkbenchLabel(workbenchId, '  Notes  ');
+		const renamed = window.config?.omniRetainedWorkbenches?.[0].label;
+		controller.setRetainedWorkbenchLabel(workbenchId, undefined);
+
+		assert.deepStrictEqual({
+			renamed,
+			reset: window.config?.omniRetainedWorkbenches?.[0].label,
+			changes: stateChanges.length - beforeRenameChanges,
+		}, {
+			renamed: 'Notes',
+			reset: undefined,
+			changes: 2,
+		});
+	});
+
 	test('reconciles project promotion after restoring resident state', async () => {
 		const alpha = createWorktree('alpha');
 		const folderUri = URI.file(alpha);

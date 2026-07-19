@@ -18,6 +18,8 @@ import {
 	applyOmniSectionCollapseChange,
 	buildProjectSwitcherTreeModel,
 	encodeWorktreeHandle,
+	getLastVisibleDescendantIndex,
+	getProjectSwitcherItemDescription,
 	isItemInCollapsedOmniSection,
 	isOmniSectionItem,
 	isProjectItem,
@@ -154,6 +156,7 @@ suite('ProjectSwitcherTreeModel', () => {
 			}, {
 				id: 'first',
 				folderUri: URI.file('/scratch/first').toJSON(),
+				label: 'Scratch One',
 				desiredState: 'loaded',
 				order: 0,
 			}, {
@@ -185,21 +188,25 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.deepStrictEqual(workbenches.map(item => ({
 			label: item.label,
 			description: item.description,
+			hasCustomLabel: item.hasCustomLabel,
 			state: item.hostedWorkbenchState,
 			isActive: item.isActive,
 		})), [{
-			label: 'first',
+			label: 'Scratch One',
 			description: 'label:/scratch/first',
+			hasCustomLabel: true,
 			state: 'dormant',
 			isActive: false,
 		}, {
 			label: 'second',
 			description: 'label:/scratch/second',
+			hasCustomLabel: false,
 			state: 'unloaded',
 			isActive: false,
 		}, {
 			label: 'missing',
 			description: 'label:/scratch/missing',
+			hasCustomLabel: false,
 			state: 'missing',
 			isActive: false,
 		}]);
@@ -452,13 +459,13 @@ suite('ProjectSwitcherTreeModel', () => {
 		const worktree = getWorktree(model.roots, '/repos/hucode');
 
 		assert.strictEqual(project.label, 'Hucode Fork');
-		assert.strictEqual(project.description, 'hucode');
+		assert.strictEqual(project.description, '/repos/hucode');
 		assert.strictEqual(worktree.label, 'stable');
 		assert.strictEqual(worktree.hasCustomLabel, true);
 		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
 	});
 
-	test('hides branch descriptions identical to worktree names', () => {
+	test('shows duplicate worktree descriptions only in two-line layout', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
 				createProject({
@@ -482,12 +489,15 @@ suite('ProjectSwitcherTreeModel', () => {
 			hostedWorkspaceState: createHostedState(),
 		});
 
+		const matching = getWorktree(
+			model.roots,
+			'/repos/hucode.worktrees/user-login'
+		);
 		assert.deepStrictEqual(
 			[
-				getWorktree(
-					model.roots,
-					'/repos/hucode.worktrees/user-login'
-				).description,
+				matching.description,
+				getProjectSwitcherItemDescription(matching, 'compact'),
+				getProjectSwitcherItemDescription(matching, 'twoLine'),
 				getWorktree(
 					model.roots,
 					'/repos/hucode.worktrees/fix-user-login'
@@ -498,11 +508,54 @@ suite('ProjectSwitcherTreeModel', () => {
 				).description,
 			],
 			[
+				'user-login',
 				undefined,
+				'user-login',
 				'fix/user-login',
 				'fix/user-login',
 			]
 		);
+	});
+
+	test('places after-section feedback after visible nested descendants', () => {
+		const nested = {
+			visible: true,
+			collapsed: false,
+			children: [{
+				visible: true,
+				collapsed: false,
+				children: [{
+					visible: true,
+					collapsed: true,
+					children: [],
+				}],
+			}, {
+				visible: false,
+				collapsed: false,
+				children: [{
+					visible: true,
+					collapsed: true,
+					children: [],
+				}],
+			}],
+		};
+
+		assert.deepStrictEqual({
+			expanded: getLastVisibleDescendantIndex(4, nested),
+			collapsed: getLastVisibleDescendantIndex(4, {
+				...nested,
+				collapsed: true,
+			}),
+			empty: getLastVisibleDescendantIndex(4, {
+				visible: true,
+				collapsed: false,
+				children: [],
+			}),
+		}, {
+			expanded: 6,
+			collapsed: 4,
+			empty: 4,
+		});
 	});
 
 	test('renders missing hosted instances under matching projects', () => {

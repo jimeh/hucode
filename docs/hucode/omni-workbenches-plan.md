@@ -94,15 +94,19 @@ them:
 - The Workbenches plus action opens a folder picker and creates a retained,
   loaded arbitrary workbench for the selected directory.
 - The first version supports single-folder workbenches only.
-- A workbench row uses the directory basename as its primary label.
+- A workbench row uses its custom name or the directory basename as its
+  primary label. Rename and reset actions mirror project worktree naming.
 - A workbench row uses the full home-relative path, such as
   `~/Projects/example`, as secondary text.
 - Paths outside the user home use the normal absolute platform label.
-- Workbench rows default to two lines so the secondary path is useful at
-  normal sidebar widths. `hucode.omni.workbenchItemLayout` independently
-  switches them to a compact single-line layout.
+- Workbench rows default to a compact single-line layout and can independently
+  use two lines through `hucode.omni.workbenchItemLayout`.
 - Project worktree rows default to compact and can independently use two lines
   through `hucode.omni.worktreeItemLayout`.
+- Two-line worktree rows always show their branch on the second line, even when
+  it matches the primary worktree name; compact rows suppress that duplicate.
+- Project rows show their home-relative project path as same-line secondary
+  text.
 - Workbenches and Projects section headers can be reordered by drag-and-drop.
   Their order persists per Omni window and defaults to Workbenches first.
 - Workbench rows can be reordered with drag-and-drop. Their manual order is
@@ -155,7 +159,7 @@ Do not expand the first implementation to include:
 - multi-root or `.code-workspace` hosted workbenches;
 - remote-authority workbenches;
 - changing the project manager into a general workspace registry;
-- pinning, custom labels, or grouping arbitrary workbenches;
+- pinning or grouping arbitrary workbenches;
 - automatic resource-limit or LRU eviction policies;
 - renaming the existing persisted `worktreePath`,
   `omniActiveWorktreePath`, or `omniResidentWorkspaces` contracts;
@@ -318,6 +322,7 @@ Add a Hucode-owned shared contract similar to:
 export interface IHucodeRetainedWorkbench {
   readonly id: string;
   readonly folderUri: UriComponents;
+  readonly label?: string;
   readonly desiredState: 'loaded' | 'unloaded';
   readonly order: number;
   readonly lastActiveAt?: number;
@@ -331,10 +336,10 @@ The exact name may change during implementation, but the contract must have:
 - persisted desired load state so explicit unload survives restart;
 - persisted manual order for drag-and-drop sorting;
 - persisted recency for activation and restore selection without changing the
-  manual sidebar order.
+  manual sidebar order;
+- an optional custom label that does not participate in identity or ordering.
 
-Do not put Git metadata, branches, project IDs, pinning, or custom labels in
-this record.
+Do not put Git metadata, branches, project IDs, or pinning in this record.
 
 ### Live and retained state relationship
 
@@ -347,7 +352,8 @@ small shared retained-workbench catalog model responsible for:
 - desired load state;
 - recency;
 - serialization and validation;
-- add, reorder, mark loaded, mark unloaded, and dismiss operations.
+- add, reorder, rename/reset, mark loaded, mark unloaded, and dismiss
+  operations.
 
 The shell’s public state should expose both the retained records and the live
 hosted instances. The sidebar model joins them by normalized folder identity:
@@ -661,6 +667,7 @@ tests do not instantiate browser services.
   shell-state rebuild.
 - Extend in-session back/forward history to arbitrary workbench targets.
 - Add Open/Activate, Unload, Dismiss, and Open in New Window command handling.
+- Add Rename Workbench and conditional Reset Workbench Name handling.
 - Generalize switch-picker construction, loaded filtering, last-active
   selection, and adjacent-target calculation over the same combined target
   model.

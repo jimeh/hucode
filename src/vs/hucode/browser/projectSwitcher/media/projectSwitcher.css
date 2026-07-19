@@ -242,3 +242,7 @@
 	gap: 2px;
 	margin-right: 6px;
 }
+
+.hucode-project-switcher-action-button[hidden] {
+	display: none !important;
+}

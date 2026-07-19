@@ -135,6 +135,12 @@ export interface IHucodeShellService {
 		windowId: number,
 		orderedWorkbenchIds: readonly string[],
 	): Promise<IHucodeHostedWorkspaceState>;
+	/** Sets or resets a retained workbench's custom display label. */
+	setRetainedWorkbenchLabel(
+		windowId: number,
+		workbenchId: string,
+		label: string | undefined,
+	): Promise<IHucodeHostedWorkspaceState>;
 	/** Removes arbitrary records that are now authoritative project worktrees. */
 	reconcileRetainedWorkbenches(
 		windowId: number,
