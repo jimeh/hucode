@@ -89,7 +89,10 @@ suite('Hucode WorkbenchObjectTree', () => {
 		instantiationService.stub(IListService, store.add(new ListService()));
 	});
 
-	function createTree(indent?: number): WorkbenchObjectTree<number, void> {
+	function createTree(
+		indent?: number,
+		overrideWorkbenchTreeIndent = false
+	): WorkbenchObjectTree<number, void> {
 		const container = document.createElement('div');
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
@@ -103,17 +106,23 @@ suite('Hucode WorkbenchObjectTree', () => {
 			{
 				accessibilityProvider: new TestAccessibilityProvider(),
 				indent,
+				overrideWorkbenchTreeIndent,
 			}
 		));
 	}
 
-	test('explicit indent overrides global configuration changes', async () => {
-		const explicitTree = createTree(12);
+	test('opted-in indent overrides global configuration changes', async () => {
+		const explicitTree = createTree(12, true);
+		const ordinaryExplicitTree = createTree(12);
 		const configuredTree = createTree();
 
 		assert.deepStrictEqual(
-			[explicitTree.options.indent, configuredTree.options.indent],
-			[12, 7]
+			[
+				explicitTree.options.indent,
+				ordinaryExplicitTree.options.indent,
+				configuredTree.options.indent,
+			],
+			[12, 7, 7]
 		);
 
 		explicitTree.updateOptions({ indent: 16 });
@@ -126,8 +135,12 @@ suite('Hucode WorkbenchObjectTree', () => {
 		} satisfies IConfigurationChangeEvent);
 
 		assert.deepStrictEqual(
-			[explicitTree.options.indent, configuredTree.options.indent],
-			[16, 20]
+			[
+				explicitTree.options.indent,
+				ordinaryExplicitTree.options.indent,
+				configuredTree.options.indent,
+			],
+			[16, 20, 20]
 		);
 	});
 });

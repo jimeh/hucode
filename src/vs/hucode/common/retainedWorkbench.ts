@@ -21,6 +21,9 @@ export const HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING =
 export const HUCODE_OMNI_TREE_INDENT_SETTING =
 	'hucode.omni.treeIndent';
 
+/** Default indentation for the Omni Projects tree. */
+export const HUCODE_OMNI_TREE_INDENT_DEFAULT = 8;
+
 /** Layout variants supported by Omni sidebar workbench rows. */
 export type HucodeOmniItemLayout = 'compact' | 'twoLine';
 

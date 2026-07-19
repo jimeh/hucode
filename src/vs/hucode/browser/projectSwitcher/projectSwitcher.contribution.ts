@@ -135,7 +135,6 @@ import {
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
-	HUCODE_OMNI_TREE_INDENT_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
@@ -149,6 +148,10 @@ import {
 	PROJECT_SWITCHER_VIEW_STATE_VERSION,
 	reorderProjectSwitcherOmniSections,
 } from '../../common/projectSwitcher/projectSwitcherViewState.js';
+import {
+	getProjectSwitcherTreeIndent,
+	onDidChangeProjectSwitcherTreeIndent,
+} from './projectSwitcherTreeIndent.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -1124,6 +1127,12 @@ export class ProjectSwitcherWidget extends Disposable {
 			void this.handleWorkspaceContextChange();
 		}));
 		if (this.environmentService.isOmniWindow) {
+			this._register(onDidChangeProjectSwitcherTreeIndent(
+				this.environmentService.isOmniWindow,
+				this.configurationService
+			)(indent => {
+				this.tree?.updateOptions({ indent });
+			}));
 			this._register(this.hostService.onDidChangeFocus(focused => {
 				if (focused) {
 					void this.refreshProjectsIfStale();
@@ -1138,13 +1147,6 @@ export class ProjectSwitcherWidget extends Disposable {
 			}));
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
-					if (event.affectsConfiguration(
-						HUCODE_OMNI_TREE_INDENT_SETTING
-					)) {
-						this.tree?.updateOptions({
-							indent: this.getTreeIndent(),
-						});
-					}
 					if (event.affectsConfiguration(
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
@@ -1169,12 +1171,6 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private getPathLabel(path: string): string {
 		return this.labelService.getUriLabel(URI.file(path));
-	}
-
-	private getTreeIndent(): number {
-		return this.configurationService.getValue<number>(
-			HUCODE_OMNI_TREE_INDENT_SETTING
-		) ?? 8;
 	}
 
 	private getItemLayout(item: ProjectSwitcherItem): HucodeOmniItemLayout {
@@ -1251,14 +1247,17 @@ export class ProjectSwitcherWidget extends Disposable {
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
 				identityProvider: { getId: item => item.id },
-				indent: this.environmentService.isOmniWindow
-					? this.getTreeIndent()
-					: undefined,
+				indent: getProjectSwitcherTreeIndent(
+					this.environmentService.isOmniWindow,
+					this.configurationService
+				),
 				keyboardNavigationLabelProvider: {
 					getKeyboardNavigationLabel: item => item.label,
 				},
 				expandOnlyOnTwistieClick: true,
 				multipleSelectionSupport: false,
+				overrideWorkbenchTreeIndent:
+					this.environmentService.isOmniWindow,
 				dnd: this.instantiationService.createInstance(
 					ProjectSwitcherDragAndDrop,
 					(
