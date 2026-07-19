@@ -58,7 +58,7 @@ export async function tryPickHucodeOmniFileFolderAndOpen(
 		canSelectFolders: true,
 		canSelectMany: true,
 		defaultUri: options.defaultUri,
-		title: localize('openFileOrFolder.title', 'Open File or Folder'),
+		title: localize('openFileOrFolder.title', "Open File or Folder"),
 	});
 	if (resources?.length) {
 		const files: URI[] = [];
@@ -115,6 +115,7 @@ export async function tryPickHucodeOmniFolderAndOpen(
 	return true;
 }
 
+/** Determines whether a local open request should stay in the Omni shell. */
 function shouldHandleHucodeOmniOpen(
 	schema: string,
 	options: IPickAndOpenOptions,
