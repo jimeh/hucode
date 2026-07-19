@@ -101,6 +101,8 @@ interface IOpenBrowserWindowOptions {
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
+	readonly omniRetainedWorkbenches?:
+	INativeWindowConfiguration['omniRetainedWorkbenches'];
 }
 
 interface IPathResolveOptions {
@@ -182,6 +184,8 @@ interface IPathToOpen<T = IEditorOptions> extends IPath<T> {
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
+	readonly omniRetainedWorkbenches?:
+	INativeWindowConfiguration['omniRetainedWorkbenches'];
 }
 
 const EMPTY_WINDOW: IPathToOpen = Object.create(null);
@@ -1740,6 +1744,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			isOmniWindow: options.isOmniWindow,
 			omniActiveWorktreePath: options.omniActiveWorktreePath,
 			omniResidentWorkspaces: options.omniResidentWorkspaces,
+			omniRetainedWorkbenches: options.omniRetainedWorkbenches,
 			'skip-sessions-welcome': options.isOmniWindow || undefined,
 		};
 

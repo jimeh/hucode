@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { tmpdir } from 'os';
 import { join } from '../../../../base/common/path.js';
+import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
 	getWindowsStateStoreData,
@@ -17,6 +18,12 @@ suite('HucodeWindowsStateHandler', () => {
 
 	test('stores and restores omni window state', () => {
 		const worktreePath = join(tmpdir(), 'windowStateTest', 'testFolder');
+		const retainedWorkbenches = [{
+			id: 'scratch',
+			folderUri: URI.file(join(tmpdir(), 'scratch')).toJSON(),
+			desiredState: 'unloaded' as const,
+			order: 0,
+		}];
 		const windowState: IWindowsState = {
 			openedWindows: [{
 				backupPath: join(tmpdir(), 'windowStateTest', 'backupFolder1'),
@@ -34,7 +41,8 @@ suite('HucodeWindowsStateHandler', () => {
 					worktreePath,
 					state: 'active',
 					lastActiveAt: 123,
-				}]
+				}],
+				omniRetainedWorkbenches: retainedWorkbenches,
 			}]
 		};
 
@@ -46,6 +54,7 @@ suite('HucodeWindowsStateHandler', () => {
 			windowKind: restoredWindow.windowKind,
 			omniActiveWorktreePath: restoredWindow.omniActiveWorktreePath,
 			omniResidentWorkspaces: restoredWindow.omniResidentWorkspaces,
+			omniRetainedWorkbenches: restoredWindow.omniRetainedWorkbenches,
 		}, {
 			windowKind: 'omni',
 			omniActiveWorktreePath: worktreePath,
@@ -54,7 +63,8 @@ suite('HucodeWindowsStateHandler', () => {
 				worktreePath,
 				state: 'active',
 				lastActiveAt: 123,
-			}]
+			}],
+			omniRetainedWorkbenches: retainedWorkbenches,
 		});
 	});
 

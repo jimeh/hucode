@@ -17,6 +17,7 @@ import {
 	HostedWorkspaceStateModel,
 	isHostedWorkspaceAvailable,
 	isHostedWorkspacePendingReady,
+	isHostedWorkspaceRestorable,
 	sortRestoreEntries,
 	waitForHostedWorkspaceReady,
 	type IHostedWorkspaceStateEntry,
@@ -56,8 +57,27 @@ suite('HostedWorkspaceState', () => {
 			entry('loading', { state: 'loading' }),
 		]), true);
 		assert.strictEqual(hasLoadedHostedWorkspace([
+			entry('dormant', { state: 'dormant' }),
+		]), false);
+		assert.strictEqual(hasLoadedHostedWorkspace([
 			entry('loaded'),
 		], candidate => candidate.instanceId === 'loaded'), false);
+	});
+
+	test('distinguishes dormant restore state from live availability', () => {
+		const dormant = entry('dormant', { state: 'dormant' });
+
+		assert.deepStrictEqual({
+			dormantAvailable: isHostedWorkspaceAvailable(dormant),
+			dormantRestorable: isHostedWorkspaceRestorable(dormant),
+			unloadedRestorable: isHostedWorkspaceRestorable(
+				entry('unloaded', { state: 'unloaded' })
+			),
+		}, {
+			dormantAvailable: false,
+			dormantRestorable: true,
+			unloadedRestorable: false,
+		});
 	});
 
 	test('uses active selection for ready state', () => {
@@ -106,6 +126,25 @@ suite('HostedWorkspaceState', () => {
 			false
 		);
 		assert.strictEqual(model.projectSwitcherCanGoBack, true);
+		const sectionOrderChanged = model.setProjectSwitcherSectionOrder(
+			['projects', 'workbenches']
+		);
+		const emptySectionOrderChanged =
+			model.setProjectSwitcherSectionOrder([]);
+		const duplicateSectionOrderChanged = model.setProjectSwitcherSectionOrder(
+			['projects', 'projects']
+		);
+		assert.deepStrictEqual({
+			sectionOrderChanged,
+			emptySectionOrderChanged,
+			duplicateSectionOrderChanged,
+			sectionOrder: model.projectSwitcherSectionOrder,
+		}, {
+			sectionOrderChanged: true,
+			emptySectionOrderChanged: false,
+			duplicateSectionOrderChanged: false,
+			sectionOrder: ['projects', 'workbenches'],
+		});
 
 		assert.strictEqual(model.setProjectsSidebarVisible(false, false), false);
 		assert.strictEqual(model.projectsSidebarVisible, true);

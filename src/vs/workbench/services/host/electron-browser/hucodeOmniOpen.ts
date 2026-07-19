@@ -5,6 +5,7 @@
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { isEqual } from '../../../../base/common/extpath.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { isLinux } from '../../../../base/common/platform.js';
 import { INativeHostService } from
 	'../../../../platform/native/common/native.js';
@@ -20,6 +21,10 @@ import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
 
 export interface IHucodeOmniOpenShellService {
+	focusHostedWorkspaceByPath(
+		worktreePath: string,
+		projectId?: string
+	): Promise<boolean>;
 	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
 		windowId: number,
@@ -45,13 +50,17 @@ export async function tryOpenHucodeOmniWindow(
 	}
 
 	if (
+		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow ||
 		options?.addMode ||
 		options?.removeMode ||
 		options?.diffMode ||
 		options?.mergeMode ||
 		options?.gotoLineMode ||
-		options?.waitMarkerFileURI
+		options?.waitMarkerFileURI ||
+		options?.forceProfile ||
+		options?.forceTempProfile ||
+		options?.chatSessionToOpen
 	) {
 		return false;
 	}
@@ -62,36 +71,47 @@ export async function tryOpenHucodeOmniWindow(
 
 	const openable = toOpen[0];
 	if (isFolderToOpen(openable)) {
+		if (openable.folderUri.scheme !== Schemas.file) {
+			return false;
+		}
 		const target = await getProjectWorktreeTarget(
 			projectManagerService,
 			openable.folderUri.fsPath
 		);
+		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
 		if (target) {
-			if (await focusNormalWindowByPathBestEffort(
-				shellService,
-				target.worktreePath
-			)) {
-				return true;
-			}
 			await setLastActiveWorktreeBestEffort(
 				projectManagerService,
 				target.projectId,
 				target.worktreePath
 			);
-			await shellService.openWorkspace(
-				nativeHostService.windowId,
-				target.worktreePath,
-				target.projectId
-			);
-			await focusWorkspaceBestEffort(
-				shellService,
-				nativeHostService.windowId
-			);
+		}
+		if (await focusHostedWorkspaceByPathBestEffort(
+			shellService,
+			worktreePath,
+			target?.projectId
+		)) {
 			return true;
 		}
+		if (await focusNormalWindowByPathBestEffort(
+			shellService,
+			worktreePath
+		)) {
+			return true;
+		}
+		await shellService.openWorkspace(
+			nativeHostService.windowId,
+			worktreePath,
+			target?.projectId
+		);
+		await focusWorkspaceBestEffort(
+			shellService,
+			nativeHostService.windowId
+		);
+		return true;
 	}
 
-	if (isFolderToOpen(openable) || isWorkspaceToOpen(openable)) {
+	if (isWorkspaceToOpen(openable)) {
 		await nativeHostService.openWindow(
 			toOpen,
 			toOmniFallbackOpenOptions(options)
@@ -100,6 +120,22 @@ export async function tryOpenHucodeOmniWindow(
 	}
 
 	return false;
+}
+
+async function focusHostedWorkspaceByPathBestEffort(
+	shellService: IHucodeOmniOpenShellService,
+	worktreePath: string,
+	projectId?: string
+): Promise<boolean> {
+	try {
+		return await shellService.focusHostedWorkspaceByPath(
+			worktreePath,
+			projectId
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+		return false;
+	}
 }
 
 async function getProjectWorktreeTarget(
