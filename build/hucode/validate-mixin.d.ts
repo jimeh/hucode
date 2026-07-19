@@ -7,3 +7,19 @@
  * Validates the generated Hucode product mixin output for one quality.
  */
 export function validateMixin(quality?: string): Promise<void>;
+
+/**
+ * Asserts that a package script does not manage package sources or keys.
+ */
+export function assertNoPackageSourceManagement(
+	contents: string,
+	label: string
+): void;
+
+/**
+ * Asserts that product metadata does not contain upstream identity.
+ */
+export function assertNoUpstreamIdentity(
+	contents: string,
+	label: string
+): void;

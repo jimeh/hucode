@@ -8,6 +8,8 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { generateLinuxIcons } from './generate-linux-icons.ts';
+import { generateServerIcons } from './generate-server-icons.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -72,6 +74,7 @@ async function buildDarwinIconAssets(tmpRoot) {
 		path.join(compiled, 'Hucode.icns'),
 		path.join(outputRoot, 'code.icns')
 	);
+	await generateServerIcons(path.join(compiled, 'Hucode.icns'));
 }
 
 async function main() {
@@ -80,6 +83,7 @@ async function main() {
 	try {
 		await fs.mkdir(outputRoot, { recursive: true });
 		await buildDarwinIconAssets(tmpRoot);
+		await generateLinuxIcons();
 	} finally {
 		await fs.rm(tmpRoot, { recursive: true, force: true });
 	}

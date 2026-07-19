@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License. See License.txt in the project root for license information.
+
+set -e
+
+command_path='/usr/bin/@@NAME@@'
+command_target='/usr/share/@@NAME@@/bin/@@NAME@@'
+
+# Symlink the Hucode command to /usr/bin.
+if [ -L "$command_path" ]; then
+	existing_target=$(readlink "$command_path")
+	if [ "$existing_target" != "$command_target" ]; then
+		printf 'Refusing to replace unrelated symlink: %s -> %s\n' \
+			"$command_path" "$existing_target" >&2
+		exit 1
+	fi
+	rm -f "$command_path"
+elif [ -e "$command_path" ]; then
+	printf 'Refusing to replace unrelated path: %s\n' "$command_path" >&2
+	exit 1
+fi
+ln -s "$command_target" "$command_path"
+
+# Register Hucode without overriding the preferred editor in auto mode.
+update-alternatives --install /usr/bin/editor editor "$command_path" 0
+
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database || true
+fi
+
+if hash update-mime-database 2>/dev/null; then
+	update-mime-database /usr/share/mime || true
+fi

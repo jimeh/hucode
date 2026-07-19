@@ -40,8 +40,12 @@ Current local workflow:
 - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
 - `npm run hucode:web`: launch the local serve-web development server through
   the Hucode wrapper.
-- `npm run hucode:generate-icons`: regenerate Hucode macOS icon assets from
-  `build/hucode/icons/darwin/`.
+- `npm run hucode:generate-icons`: regenerate Hucode macOS, serve-web, and
+  Linux icon assets from `build/hucode/icons/darwin/`.
+- `npm run hucode:generate-server-icons`: regenerate only the serve-web icons
+  from the tracked Hucode `code.icns` on any platform.
+- `npm run hucode:generate-linux-icons`: derive the Linux PNG and XPM from the
+  tracked stable ICNS without requiring macOS icon tools.
 - `npm run hucode:prepare-release -- --version <version>`: consume
   `.changes/*.md` fragments, update `CHANGELOG.md`, and bump Hucode release
   metadata before tagging a release.

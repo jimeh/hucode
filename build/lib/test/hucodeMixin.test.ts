@@ -61,5 +61,24 @@ suite('Hucode mixin', () => {
 			'GitHub.copilot-chat'
 		);
 		assert.ok(generated.trustedExtensionAuthAccess);
+
+		const webManifest = await readJson(
+			path.join(
+				path.dirname(outputProductPath),
+				'resources',
+				'server',
+				'manifest.json'
+			)
+		);
+		assert.deepStrictEqual(
+			{
+				name: webManifest.name,
+				short_name: webManifest.short_name
+			},
+			{
+				name: 'Hucode',
+				short_name: 'Hucode'
+			}
+		);
 	});
 });
