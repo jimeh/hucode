@@ -13,20 +13,65 @@ import {
 import { IWindowOpenable, IOpenWindowOptions } from
 	'../../../../platform/window/common/window.js';
 
-/** Environment flags used to decide whether Open Folder stays in Omni. */
+/** Environment flags used to decide whether folder opens stay in Omni. */
 export interface IHucodeOmniFileDialogEnvironment {
 	readonly isOmniWindow: boolean;
 	readonly isHostedOmniWorkspace?: boolean;
 	readonly extensionDevelopmentLocationURI?: readonly URI[];
 }
 
-/** Host and dialog operations needed by the Omni folder-picker route. */
+/** Host and dialog operations needed by Omni file-dialog routing. */
 export interface IHucodeOmniFileDialogHost {
 	showOpenDialog(options: IOpenDialogOptions): Promise<URI[] | undefined>;
 	openWindow(
 		openables: IWindowOpenable[],
 		options?: IOpenWindowOptions
 	): Promise<void>;
+}
+
+/** Host operations needed by the Omni file-or-folder picker route. */
+export interface IHucodeOmniFileFolderDialogHost
+	extends IHucodeOmniFileDialogHost {
+	isDirectory(resource: URI): Promise<boolean>;
+}
+
+/**
+ * Selects a local file or folder without allowing a folder selection to
+ * replace the Omni shell.
+ *
+ * @returns Whether the native file-or-folder path was handled, including
+ * cancel.
+ */
+export async function tryPickHucodeOmniFileFolderAndOpen(
+	schema: string,
+	options: IPickAndOpenOptions,
+	environment: IHucodeOmniFileDialogEnvironment,
+	host: IHucodeOmniFileFolderDialogHost,
+): Promise<boolean> {
+	if (!shouldHandleHucodeOmniOpen(schema, options, environment)) {
+		return false;
+	}
+
+	const resources = await host.showOpenDialog({
+		canSelectFiles: true,
+		canSelectFolders: true,
+		canSelectMany: false,
+		defaultUri: options.defaultUri,
+		title: localize('openFileOrFolder.title', 'Open File or Folder'),
+	});
+	if (resources?.[0]) {
+		const resource = resources[0];
+		const isDirectory = await host.isDirectory(resource);
+		const openable = isDirectory
+			? { folderUri: resource }
+			: { fileUri: resource };
+		await host.openWindow(
+			[openable],
+			{ remoteAuthority: options.remoteAuthority }
+		);
+	}
+
+	return true;
 }
 
 /**
@@ -41,10 +86,7 @@ export async function tryPickHucodeOmniFolderAndOpen(
 	environment: IHucodeOmniFileDialogEnvironment,
 	host: IHucodeOmniFileDialogHost,
 ): Promise<boolean> {
-	if (schema !== Schemas.file || options.forceNewWindow ||
-		(!environment.isOmniWindow && !environment.isHostedOmniWorkspace) ||
-		environment.extensionDevelopmentLocationURI
-	) {
+	if (!shouldHandleHucodeOmniOpen(schema, options, environment)) {
 		return false;
 	}
 
@@ -63,4 +105,15 @@ export async function tryPickHucodeOmniFolderAndOpen(
 	}
 
 	return true;
+}
+
+function shouldHandleHucodeOmniOpen(
+	schema: string,
+	options: IPickAndOpenOptions,
+	environment: IHucodeOmniFileDialogEnvironment,
+): boolean {
+	return schema === Schemas.file &&
+		!options.forceNewWindow &&
+		(environment.isOmniWindow || !!environment.isHostedOmniWorkspace) &&
+		!environment.extensionDevelopmentLocationURI;
 }

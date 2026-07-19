@@ -56,6 +56,10 @@ VS Code code that Hucode customizes.
   terminal, clear inherited Electron/VS Code process env such as
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
   can run as Node and fail before the Electron main process starts.
+- The generic Code OSS launch helper invokes `scripts/code.sh` against the
+  upstream root product. If `.build/electron` contains a Hucode-branded runtime,
+  use the mixin-aware `scripts/hucode.sh` with the helper's isolated profile and
+  debug arguments; otherwise `code.sh` looks for a missing `code-oss` binary.
 
 ## Code Documentation
 

@@ -8,16 +8,74 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
-import { isFolderToOpen } from
+import { isFileToOpen, isFolderToOpen } from
 	'../../../../../platform/window/common/window.js';
 import {
+	IHucodeOmniFileFolderDialogHost,
 	IHucodeOmniFileDialogEnvironment,
 	IHucodeOmniFileDialogHost,
+	tryPickHucodeOmniFileFolderAndOpen,
 	tryPickHucodeOmniFolderAndOpen,
 } from '../../electron-browser/hucodeOmniFileDialog.js';
 
 suite('HucodeOmniFileDialog', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('routes Omni file-or-folder selections by resource type', async () => {
+		const selected = [
+			URI.file('/repos/project'),
+			URI.file('/repos/project/README.md'),
+		];
+		const opened: string[] = [];
+		const host: IHucodeOmniFileFolderDialogHost = {
+			showOpenDialog: async options => {
+				assert.deepStrictEqual({
+					canSelectFiles: options.canSelectFiles,
+					canSelectFolders: options.canSelectFolders,
+					canSelectMany: options.canSelectMany,
+					defaultUri: options.defaultUri,
+				}, {
+					canSelectFiles: true,
+					canSelectFolders: true,
+					canSelectMany: false,
+					defaultUri: URI.file('/repos'),
+				});
+				return [selected.shift()!];
+			},
+			isDirectory: async resource =>
+				resource.fsPath === '/repos/project',
+			openWindow: async openables => {
+				const openable = openables[0];
+				if (isFolderToOpen(openable)) {
+					opened.push(`folder:${openable.folderUri.fsPath}`);
+				} else if (isFileToOpen(openable)) {
+					opened.push(`file:${openable.fileUri.fsPath}`);
+				}
+			},
+		};
+
+		const firstHandled = await tryPickHucodeOmniFileFolderAndOpen(
+			Schemas.file,
+			{ defaultUri: URI.file('/repos') },
+			{ isOmniWindow: true },
+			host
+		);
+		const secondHandled = await tryPickHucodeOmniFileFolderAndOpen(
+			Schemas.file,
+			{ defaultUri: URI.file('/repos') },
+			{ isHostedOmniWorkspace: true, isOmniWindow: false },
+			host
+		);
+
+		assert.deepStrictEqual({ firstHandled, secondHandled, opened }, {
+			firstHandled: true,
+			secondHandled: true,
+			opened: [
+				'folder:/repos/project',
+				'file:/repos/project/README.md',
+			],
+		});
+	});
 
 	test('routes Omni folder selection through the host open interceptor',
 		async () => {
@@ -62,26 +120,40 @@ suite('HucodeOmniFileDialog', () => {
 
 	test('handles cancellation without replacing the Omni shell', async () => {
 		let openCalls = 0;
-		const handled = await tryPickHucodeOmniFolderAndOpen(
+		const host: IHucodeOmniFileFolderDialogHost = {
+			showOpenDialog: async () => undefined,
+			isDirectory: async () => {
+				throw new Error('unexpected stat');
+			},
+			openWindow: async () => { openCalls++; },
+		};
+		const fileFolderHandled = await tryPickHucodeOmniFileFolderAndOpen(
 			Schemas.file,
 			{},
 			{ isOmniWindow: false, isHostedOmniWorkspace: true },
-			{
-				showOpenDialog: async () => undefined,
-				openWindow: async () => { openCalls++; },
-			}
+			host
+		);
+		const folderHandled = await tryPickHucodeOmniFolderAndOpen(
+			Schemas.file,
+			{},
+			{ isOmniWindow: false, isHostedOmniWorkspace: true },
+			host
 		);
 
-		assert.deepStrictEqual({ handled, openCalls }, {
-			handled: true,
+		assert.deepStrictEqual({ fileFolderHandled, folderHandled, openCalls }, {
+			fileFolderHandled: true,
+			folderHandled: true,
 			openCalls: 0,
 		});
 	});
 
 	test('preserves native routing for special and non-Omni opens', async () => {
-		const host: IHucodeOmniFileDialogHost = {
+		const host: IHucodeOmniFileFolderDialogHost = {
 			showOpenDialog: async () => {
 				throw new Error('unexpected dialog');
+			},
+			isDirectory: async () => {
+				throw new Error('unexpected stat');
 			},
 			openWindow: async () => {
 				throw new Error('unexpected open');
@@ -101,10 +173,20 @@ suite('HucodeOmniFileDialog', () => {
 				}],
 			];
 
-		const results = await Promise.all(cases.map(([schema, options, env]) =>
+		const fileFolderResults = await Promise.all(cases.map(
+			([schema, options, env]) =>
+				tryPickHucodeOmniFileFolderAndOpen(
+					schema,
+					options,
+					env,
+					host
+				)
+		));
+		const folderResults = await Promise.all(cases.map(([schema, options, env]) =>
 			tryPickHucodeOmniFolderAndOpen(schema, options, env, host)
 		));
 
-		assert.deepStrictEqual(results, [false, false, false, false]);
+		assert.deepStrictEqual(fileFolderResults, [false, false, false, false]);
+		assert.deepStrictEqual(folderResults, [false, false, false, false]);
 	});
 });
