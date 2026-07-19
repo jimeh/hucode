@@ -64,12 +64,24 @@ export async function tryPickHucodeOmniFileFolderAndOpen(
 		const files: URI[] = [];
 		const folders: URI[] = [];
 		for (const resource of resources) {
-			const isDirectory = await host.isDirectory(resource);
+			let isDirectory = false;
+			try {
+				isDirectory = await host.isDirectory(resource);
+			} catch {
+				// Match native open behavior by treating stat failures as files.
+			}
 			(isDirectory ? folders : files).push(resource);
 		}
 
 		if (files.length) {
-			await host.openFiles(files);
+			if (environment.isHostedOmniWorkspace) {
+				await host.openFiles(files);
+			} else {
+				await host.openWindow(
+					files.map(fileUri => ({ fileUri })),
+					{ remoteAuthority: options.remoteAuthority }
+				);
+			}
 		}
 		for (const folder of folders) {
 			await host.openWindow(
@@ -101,13 +113,13 @@ export async function tryPickHucodeOmniFolderAndOpen(
 	const folders = await host.showOpenDialog({
 		canSelectFiles: false,
 		canSelectFolders: true,
-		canSelectMany: false,
+		canSelectMany: true,
 		defaultUri: options.defaultUri,
 		title: localize('openFolder.title', 'Open Folder'),
 	});
-	if (folders?.[0]) {
+	for (const folder of folders ?? []) {
 		await host.openWindow(
-			[{ folderUri: folders[0] }],
+			[{ folderUri: folder }],
 			{ remoteAuthority: options.remoteAuthority }
 		);
 	}

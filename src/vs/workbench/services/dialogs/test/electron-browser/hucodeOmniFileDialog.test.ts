@@ -8,7 +8,7 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
-import { isFolderToOpen } from
+import { isFileToOpen, isFolderToOpen } from
 	'../../../../../platform/window/common/window.js';
 import {
 	IHucodeOmniFileFolderDialogHost,
@@ -23,12 +23,10 @@ suite('HucodeOmniFileDialog', () => {
 
 	test('routes Omni file-or-folder selections by resource type', async () => {
 		const selected = [
-			[
-				URI.file('/repos/project'),
-				URI.file('/repos/project/README.md'),
-				URI.file('/repos/project/package.json'),
-			],
-			[URI.file('/repos/other')],
+			URI.file('/repos/project'),
+			URI.file('/repos/other'),
+			URI.file('/repos/project/README.md'),
+			URI.file('/repos/project/package.json'),
 		];
 		const opened: string[] = [];
 		const host: IHucodeOmniFileFolderDialogHost = {
@@ -44,7 +42,7 @@ suite('HucodeOmniFileDialog', () => {
 					canSelectMany: true,
 					defaultUri: URI.file('/repos'),
 				});
-				return selected.shift()!;
+				return selected;
 			},
 			isDirectory: async resource =>
 				!resource.fsPath.includes('.'),
@@ -62,22 +60,15 @@ suite('HucodeOmniFileDialog', () => {
 			},
 		};
 
-		const firstHandled = await tryPickHucodeOmniFileFolderAndOpen(
-			Schemas.file,
-			{ defaultUri: URI.file('/repos') },
-			{ isOmniWindow: true },
-			host
-		);
-		const secondHandled = await tryPickHucodeOmniFileFolderAndOpen(
+		const handled = await tryPickHucodeOmniFileFolderAndOpen(
 			Schemas.file,
 			{ defaultUri: URI.file('/repos') },
 			{ isHostedOmniWorkspace: true, isOmniWindow: false },
 			host
 		);
 
-		assert.deepStrictEqual({ firstHandled, secondHandled, opened }, {
-			firstHandled: true,
-			secondHandled: true,
+		assert.deepStrictEqual({ handled, opened }, {
+			handled: true,
 			opened: [
 				'files:/repos/project/README.md,' +
 				'/repos/project/package.json',
@@ -87,9 +78,62 @@ suite('HucodeOmniFileDialog', () => {
 		});
 	});
 
+	test('routes shell files visibly and tolerates stat failures', async () => {
+		const selected = [
+			URI.file('/repos/project/README.md'),
+			URI.file('/repos/project/missing.txt'),
+			URI.file('/repos/project'),
+		];
+		const opened: string[] = [];
+		const host: IHucodeOmniFileFolderDialogHost = {
+			showOpenDialog: async () => selected,
+			isDirectory: async resource => {
+				if (resource.fsPath.endsWith('missing.txt')) {
+					throw new Error('missing');
+				}
+				return !resource.fsPath.includes('.');
+			},
+			openFiles: async () => {
+				throw new Error('unexpected hidden editor open');
+			},
+			openWindow: async openables => {
+				if (openables.every(isFileToOpen)) {
+					opened.push(`files:${openables.map(openable =>
+						openable.fileUri.fsPath
+					).join(',')}`);
+					return;
+				}
+				const openable = openables[0];
+				if (!isFolderToOpen(openable)) {
+					throw new Error('unexpected openable');
+				}
+				opened.push(`folder:${openable.folderUri.fsPath}`);
+			},
+		};
+
+		const handled = await tryPickHucodeOmniFileFolderAndOpen(
+			Schemas.file,
+			{ defaultUri: URI.file('/repos') },
+			{ isOmniWindow: true },
+			host
+		);
+
+		assert.deepStrictEqual({ handled, opened }, {
+			handled: true,
+			opened: [
+				'files:/repos/project/README.md,' +
+				'/repos/project/missing.txt',
+				'folder:/repos/project',
+			],
+		});
+	});
+
 	test('routes Omni folder selection through the host open interceptor',
 		async () => {
-			const folder = URI.file('/repos/project');
+			const folders = [
+				URI.file('/repos/project'),
+				URI.file('/repos/other'),
+			];
 			const opened: string[] = [];
 			const host: IHucodeOmniFileDialogHost = {
 				showOpenDialog: async options => {
@@ -101,10 +145,10 @@ suite('HucodeOmniFileDialog', () => {
 					}, {
 						canSelectFiles: false,
 						canSelectFolders: true,
-						canSelectMany: false,
+						canSelectMany: true,
 						defaultUri: URI.file('/repos'),
 					});
-					return [folder];
+					return folders;
 				},
 				openWindow: async openables => {
 					const openable = openables[0];
@@ -123,7 +167,7 @@ suite('HucodeOmniFileDialog', () => {
 
 			assert.deepStrictEqual({ handled, opened }, {
 				handled: true,
-				opened: ['/repos/project'],
+				opened: ['/repos/project', '/repos/other'],
 			});
 		}
 	);

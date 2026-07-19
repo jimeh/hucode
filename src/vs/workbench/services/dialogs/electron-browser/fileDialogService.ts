@@ -153,7 +153,7 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 			this.environmentService,
 			{
 				showOpenDialog: dialogOptions =>
-					this.showOpenDialog(dialogOptions),
+					this.doShowOpenDialog(dialogOptions, isMacintosh),
 				openWindow: (openables, openOptions) =>
 					this.hostService.openWindow(openables, openOptions),
 			}
