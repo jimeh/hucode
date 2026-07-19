@@ -17,6 +17,10 @@ export type HucodeHostedWorkbenchRestorePolicy = 'active' | 'all' | 'none';
 export const HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING =
 	'hucode.omni.restoreHostedWorkbenches';
 
+/** User setting controlling Omni Projects tree indentation. */
+export const HUCODE_OMNI_TREE_INDENT_SETTING =
+	'hucode.omni.treeIndent';
+
 /** Layout variants supported by Omni sidebar workbench rows. */
 export type HucodeOmniItemLayout = 'compact' | 'twoLine';
 

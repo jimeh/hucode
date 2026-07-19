@@ -1148,6 +1148,12 @@ function workbenchTreeDataPreamble<T, TFilterData, TOptions extends IAbstractTre
 	const horizontalScrolling = options.horizontalScrolling !== undefined ? options.horizontalScrolling : Boolean(configurationService.getValue(horizontalScrollingKey));
 	const [workbenchListOptions, disposable] = instantiationService.invokeFunction(toWorkbenchListOptions, options);
 	const paddingBottom = options.paddingBottom;
+	const configuredIndent = configurationService.getValue(treeIndentKey);
+	const indent = options.indent !== undefined
+		? options.indent
+		: typeof configuredIndent === 'number'
+			? configuredIndent
+			: undefined;
 	const renderIndentGuides = options.renderIndentGuides !== undefined ? options.renderIndentGuides : configurationService.getValue<RenderIndentGuides>(treeRenderIndentGuidesKey);
 
 	return {
@@ -1158,7 +1164,7 @@ function workbenchTreeDataPreamble<T, TFilterData, TOptions extends IAbstractTre
 			// ...options, // TODO@Joao why is this not splatted here?
 			keyboardSupport: false,
 			...workbenchListOptions,
-			indent: typeof configurationService.getValue(treeIndentKey) === 'number' ? configurationService.getValue(treeIndentKey) : undefined,
+			indent,
 			renderIndentGuides,
 			smoothScrolling: Boolean(configurationService.getValue(listSmoothScrolling)),
 			defaultFindMode: options.defaultFindMode ?? getDefaultTreeFindMode(configurationService),
@@ -1286,7 +1292,10 @@ class WorkbenchTreeInternals<TInput, T, TFilterData> {
 				if (e.affectsConfiguration(multiSelectModifierSettingKey)) {
 					this._useAltAsMultipleSelectionModifier = useAltAsMultipleSelectionModifier(configurationService);
 				}
-				if (e.affectsConfiguration(treeIndentKey)) {
+				if (
+					e.affectsConfiguration(treeIndentKey)
+					&& options.indent === undefined
+				) {
 					const indent = configurationService.getValue<number>(treeIndentKey);
 					newOptions = { ...newOptions, indent };
 				}

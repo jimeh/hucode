@@ -135,6 +135,7 @@ import {
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_TREE_INDENT_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
@@ -1138,6 +1139,13 @@ export class ProjectSwitcherWidget extends Disposable {
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
 					if (event.affectsConfiguration(
+						HUCODE_OMNI_TREE_INDENT_SETTING
+					)) {
+						this.tree?.updateOptions({
+							indent: this.getTreeIndent(),
+						});
+					}
+					if (event.affectsConfiguration(
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
 						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
@@ -1161,6 +1169,12 @@ export class ProjectSwitcherWidget extends Disposable {
 
 	private getPathLabel(path: string): string {
 		return this.labelService.getUriLabel(URI.file(path));
+	}
+
+	private getTreeIndent(): number {
+		return this.configurationService.getValue<number>(
+			HUCODE_OMNI_TREE_INDENT_SETTING
+		) ?? 8;
 	}
 
 	private getItemLayout(item: ProjectSwitcherItem): HucodeOmniItemLayout {
@@ -1237,6 +1251,9 @@ export class ProjectSwitcherWidget extends Disposable {
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
 				identityProvider: { getId: item => item.id },
+				indent: this.environmentService.isOmniWindow
+					? this.getTreeIndent()
+					: undefined,
 				keyboardNavigationLabelProvider: {
 					getKeyboardNavigationLabel: item => item.label,
 				},

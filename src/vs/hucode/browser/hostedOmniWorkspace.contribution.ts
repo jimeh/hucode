@@ -82,6 +82,7 @@ import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_TREE_INDENT_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 } from '../common/retainedWorkbench.js';
@@ -96,6 +97,17 @@ Registry.as<IConfigurationRegistry>(
 	title: localize('hucodeConfigurationTitle', "Hucode"),
 	type: 'object',
 	properties: {
+		[HUCODE_OMNI_TREE_INDENT_SETTING]: {
+			type: 'number',
+			default: 8,
+			minimum: 4,
+			maximum: 40,
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.omniTreeIndent',
+				"Controls tree indentation in the Omni Projects sidebar."
+			),
+		},
 		[HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING]: {
 			type: 'string',
 			enum: ['active', 'all', 'none'],
