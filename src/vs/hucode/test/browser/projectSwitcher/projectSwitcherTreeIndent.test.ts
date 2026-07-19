@@ -18,6 +18,8 @@ import {
 } from '../../../browser/projectSwitcher/projectSwitcherTreeIndent.js';
 import {
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
+	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
+	HUCODE_OMNI_TREE_INDENT_MINIMUM,
 	HUCODE_OMNI_TREE_INDENT_SETTING,
 } from '../../../common/retainedWorkbench.js';
 
@@ -31,6 +33,7 @@ suite('ProjectSwitcherTreeIndent', () => {
 		configurationService = new TestConfigurationService();
 	});
 
+	/** Fires a configuration event for the provided setting key. */
 	function fireConfigurationChange(key: string): void {
 		configurationService.onDidChangeConfigurationEmitter.fire({
 			affectsConfiguration: candidate => candidate === key,
@@ -46,23 +49,25 @@ suite('ProjectSwitcherTreeIndent', () => {
 			getProjectSwitcherTreeIndent(false, configurationService),
 		], [HUCODE_OMNI_TREE_INDENT_DEFAULT, undefined]);
 
-		await configurationService.setUserConfiguration(
-			HUCODE_OMNI_TREE_INDENT_SETTING,
-			14
-		);
-		assert.strictEqual(
-			getProjectSwitcherTreeIndent(true, configurationService),
-			14
-		);
-
-		await configurationService.setUserConfiguration(
-			HUCODE_OMNI_TREE_INDENT_SETTING,
-			'invalid'
-		);
-		assert.strictEqual(
-			getProjectSwitcherTreeIndent(true, configurationService),
-			HUCODE_OMNI_TREE_INDENT_DEFAULT
-		);
+		const cases: readonly [unknown, number][] = [
+			[HUCODE_OMNI_TREE_INDENT_MINIMUM, 4],
+			[HUCODE_OMNI_TREE_INDENT_MAXIMUM, 40],
+			[3, HUCODE_OMNI_TREE_INDENT_DEFAULT],
+			[41, HUCODE_OMNI_TREE_INDENT_DEFAULT],
+			[Number.NaN, HUCODE_OMNI_TREE_INDENT_DEFAULT],
+			[Number.POSITIVE_INFINITY, HUCODE_OMNI_TREE_INDENT_DEFAULT],
+			['invalid', HUCODE_OMNI_TREE_INDENT_DEFAULT],
+		];
+		for (const [configuredIndent, expectedIndent] of cases) {
+			await configurationService.setUserConfiguration(
+				HUCODE_OMNI_TREE_INDENT_SETTING,
+				configuredIndent
+			);
+			assert.strictEqual(
+				getProjectSwitcherTreeIndent(true, configurationService),
+				expectedIndent
+			);
+		}
 	});
 
 	test('emits only live Omni indent changes', async () => {

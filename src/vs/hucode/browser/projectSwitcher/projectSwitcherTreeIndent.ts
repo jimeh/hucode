@@ -8,6 +8,8 @@ import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 import {
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
+	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
+	HUCODE_OMNI_TREE_INDENT_MINIMUM,
 	HUCODE_OMNI_TREE_INDENT_SETTING,
 } from '../../common/retainedWorkbench.js';
 
@@ -24,6 +26,9 @@ export function getProjectSwitcherTreeIndent(
 		HUCODE_OMNI_TREE_INDENT_SETTING
 	);
 	return typeof configuredIndent === 'number'
+		&& Number.isFinite(configuredIndent)
+		&& configuredIndent >= HUCODE_OMNI_TREE_INDENT_MINIMUM
+		&& configuredIndent <= HUCODE_OMNI_TREE_INDENT_MAXIMUM
 		? configuredIndent
 		: HUCODE_OMNI_TREE_INDENT_DEFAULT;
 }

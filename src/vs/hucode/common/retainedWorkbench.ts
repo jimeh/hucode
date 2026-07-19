@@ -24,6 +24,12 @@ export const HUCODE_OMNI_TREE_INDENT_SETTING =
 /** Default indentation for the Omni Projects tree. */
 export const HUCODE_OMNI_TREE_INDENT_DEFAULT = 8;
 
+/** Minimum indentation for the Omni Projects tree. */
+export const HUCODE_OMNI_TREE_INDENT_MINIMUM = 4;
+
+/** Maximum indentation for the Omni Projects tree. */
+export const HUCODE_OMNI_TREE_INDENT_MAXIMUM = 40;
+
 /** Layout variants supported by Omni sidebar workbench rows. */
 export type HucodeOmniItemLayout = 'compact' | 'twoLine';
 

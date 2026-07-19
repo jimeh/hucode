@@ -38,11 +38,13 @@ import {
 
 const treeIndentSetting = 'workbench.tree.indent';
 
+/** Fixed-height delegate for WorkbenchObjectTree tests. */
 class TestDelegate implements IListVirtualDelegate<number> {
 	getHeight(): number { return 20; }
 	getTemplateId(): string { return 'test'; }
 }
 
+/** Minimal renderer for WorkbenchObjectTree tests. */
 class TestRenderer implements ITreeRenderer<number, void, HTMLElement> {
 	readonly templateId = 'test';
 
@@ -55,6 +57,7 @@ class TestRenderer implements ITreeRenderer<number, void, HTMLElement> {
 	disposeTemplate(templateData: HTMLElement): void { }
 }
 
+/** Accessibility labels for WorkbenchObjectTree tests. */
 class TestAccessibilityProvider implements IListAccessibilityProvider<number> {
 	getAriaLabel(element: number): string { return `${element}`; }
 	getWidgetAriaLabel(): string { return 'Test tree'; }
@@ -89,6 +92,7 @@ suite('Hucode WorkbenchObjectTree', () => {
 		instantiationService.stub(IListService, store.add(new ListService()));
 	});
 
+	/** Creates a tracked tree with optional local indent behavior. */
 	function createTree(
 		indent?: number,
 		overrideWorkbenchTreeIndent = false

@@ -83,6 +83,8 @@ import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
+	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
+	HUCODE_OMNI_TREE_INDENT_MINIMUM,
 	HUCODE_OMNI_TREE_INDENT_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
@@ -101,8 +103,8 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_TREE_INDENT_SETTING]: {
 			type: 'number',
 			default: HUCODE_OMNI_TREE_INDENT_DEFAULT,
-			minimum: 4,
-			maximum: 40,
+			minimum: HUCODE_OMNI_TREE_INDENT_MINIMUM,
+			maximum: HUCODE_OMNI_TREE_INDENT_MAXIMUM,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.omniTreeIndent',
