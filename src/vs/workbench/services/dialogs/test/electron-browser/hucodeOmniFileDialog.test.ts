@@ -8,7 +8,7 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
-import { isFileToOpen, isFolderToOpen } from
+import { isFolderToOpen } from
 	'../../../../../platform/window/common/window.js';
 import {
 	IHucodeOmniFileFolderDialogHost,
@@ -23,8 +23,12 @@ suite('HucodeOmniFileDialog', () => {
 
 	test('routes Omni file-or-folder selections by resource type', async () => {
 		const selected = [
-			URI.file('/repos/project'),
-			URI.file('/repos/project/README.md'),
+			[
+				URI.file('/repos/project'),
+				URI.file('/repos/project/README.md'),
+				URI.file('/repos/project/package.json'),
+			],
+			[URI.file('/repos/other')],
 		];
 		const opened: string[] = [];
 		const host: IHucodeOmniFileFolderDialogHost = {
@@ -37,20 +41,24 @@ suite('HucodeOmniFileDialog', () => {
 				}, {
 					canSelectFiles: true,
 					canSelectFolders: true,
-					canSelectMany: false,
+					canSelectMany: true,
 					defaultUri: URI.file('/repos'),
 				});
-				return [selected.shift()!];
+				return selected.shift()!;
 			},
 			isDirectory: async resource =>
-				resource.fsPath === '/repos/project',
+				!resource.fsPath.includes('.'),
+			openFiles: async resources => {
+				opened.push(`files:${resources.map(resource =>
+					resource.fsPath
+				).join(',')}`);
+			},
 			openWindow: async openables => {
 				const openable = openables[0];
-				if (isFolderToOpen(openable)) {
-					opened.push(`folder:${openable.folderUri.fsPath}`);
-				} else if (isFileToOpen(openable)) {
-					opened.push(`file:${openable.fileUri.fsPath}`);
+				if (!isFolderToOpen(openable)) {
+					throw new Error('unexpected non-folder openable');
 				}
+				opened.push(`folder:${openable.folderUri.fsPath}`);
 			},
 		};
 
@@ -71,8 +79,10 @@ suite('HucodeOmniFileDialog', () => {
 			firstHandled: true,
 			secondHandled: true,
 			opened: [
+				'files:/repos/project/README.md,' +
+				'/repos/project/package.json',
 				'folder:/repos/project',
-				'file:/repos/project/README.md',
+				'folder:/repos/other',
 			],
 		});
 	});
@@ -125,6 +135,7 @@ suite('HucodeOmniFileDialog', () => {
 			isDirectory: async () => {
 				throw new Error('unexpected stat');
 			},
+			openFiles: async () => { openCalls++; },
 			openWindow: async () => { openCalls++; },
 		};
 		const fileFolderHandled = await tryPickHucodeOmniFileFolderAndOpen(
@@ -154,6 +165,9 @@ suite('HucodeOmniFileDialog', () => {
 			},
 			isDirectory: async () => {
 				throw new Error('unexpected stat');
+			},
+			openFiles: async () => {
+				throw new Error('unexpected files');
 			},
 			openWindow: async () => {
 				throw new Error('unexpected open');

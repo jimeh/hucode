@@ -33,6 +33,7 @@ export interface IHucodeOmniFileDialogHost {
 export interface IHucodeOmniFileFolderDialogHost
 	extends IHucodeOmniFileDialogHost {
 	isDirectory(resource: URI): Promise<boolean>;
+	openFiles(resources: readonly URI[]): Promise<void>;
 }
 
 /**
@@ -55,20 +56,27 @@ export async function tryPickHucodeOmniFileFolderAndOpen(
 	const resources = await host.showOpenDialog({
 		canSelectFiles: true,
 		canSelectFolders: true,
-		canSelectMany: false,
+		canSelectMany: true,
 		defaultUri: options.defaultUri,
 		title: localize('openFileOrFolder.title', 'Open File or Folder'),
 	});
-	if (resources?.[0]) {
-		const resource = resources[0];
-		const isDirectory = await host.isDirectory(resource);
-		const openable = isDirectory
-			? { folderUri: resource }
-			: { fileUri: resource };
-		await host.openWindow(
-			[openable],
-			{ remoteAuthority: options.remoteAuthority }
-		);
+	if (resources?.length) {
+		const files: URI[] = [];
+		const folders: URI[] = [];
+		for (const resource of resources) {
+			const isDirectory = await host.isDirectory(resource);
+			(isDirectory ? folders : files).push(resource);
+		}
+
+		if (files.length) {
+			await host.openFiles(files);
+		}
+		for (const folder of folders) {
+			await host.openWindow(
+				[{ folderUri: folder }],
+				{ remoteAuthority: options.remoteAuthority }
+			);
+		}
 	}
 
 	return true;

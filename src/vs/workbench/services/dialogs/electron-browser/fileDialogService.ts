@@ -28,6 +28,8 @@ import { IEditorService } from '../../editor/common/editorService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { getActiveWindow } from '../../../../base/browser/dom.js';
 import { IRemoteAgentService } from '../../remote/common/remoteAgentService.js';
+import { EditorOpenSource } from '../../../../platform/editor/common/editor.js';
+import { isMacintosh } from '../../../../base/common/platform.js';
 import {
 	tryPickHucodeOmniFileFolderAndOpen,
 	tryPickHucodeOmniFolderAndOpen,
@@ -97,9 +99,21 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 			this.environmentService,
 			{
 				showOpenDialog: dialogOptions =>
-					this.showOpenDialog(dialogOptions),
+					this.doShowOpenDialog(dialogOptions, isMacintosh),
 				isDirectory: async resource =>
 					(await this.fileService.stat(resource)).isDirectory,
+				openFiles: async resources => {
+					resources.forEach(resource =>
+						this.addFileToRecentlyOpened(resource)
+					);
+					await this.editorService.openEditors(resources.map(resource => ({
+						resource,
+						options: {
+							source: EditorOpenSource.USER,
+							pinned: true,
+						},
+					})), undefined, { validateTrust: true });
+				},
 				openWindow: (openables, openOptions) =>
 					this.hostService.openWindow(openables, openOptions),
 			}
@@ -207,6 +221,13 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 	}
 
 	async showOpenDialog(options: IOpenDialogOptions): Promise<URI[] | undefined> {
+		return this.doShowOpenDialog(options, false);
+	}
+
+	private async doShowOpenDialog(
+		options: IOpenDialogOptions,
+		treatPackageAsDirectory: boolean
+	): Promise<URI[] | undefined> {
 		const schema = this.getFileSystemSchema(options);
 		if (this.shouldUseSimplified(schema).useSimplified) {
 			return this.showOpenDialogSimplified(schema, options);
@@ -233,6 +254,10 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 
 		if (options.canSelectMany) {
 			newOptions.properties.push('multiSelections');
+		}
+
+		if (treatPackageAsDirectory) {
+			newOptions.properties.push('treatPackageAsDirectory');
 		}
 
 		const result = await this.nativeHostService.showOpenDialog(newOptions);
