@@ -6,6 +6,7 @@
 import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { basename } from '../../../base/common/path.js';
+import { isWeb } from '../../../base/common/platform.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
 	'../../../platform/actions/common/actions.js';
@@ -27,6 +28,8 @@ import {
 	RENAME_PROJECT_COMMAND_ID,
 	RENAME_WORKTREE_COMMAND_ID,
 } from './projectSwitcherCommon.js';
+import { tryForwardShellRenameCommand } from
+	'./renameProjectWorktreeRouting.js';
 
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
@@ -69,26 +72,6 @@ function getHandle(
 	return arg?.$treeItemHandle;
 }
 
-async function tryForwardShellRenameCommand(
-	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
-	commandId: string,
-	handle: string | TreeViewItemHandleArg | undefined
-): Promise<boolean> {
-	if (!environmentService.isOmniWindow) {
-		return false;
-	}
-
-	return shellService.runActionInWorkspace(
-		dom.getWindowId(mainWindow),
-		{
-			id: commandId,
-			from: 'mouse',
-			args: handle !== undefined ? [handle] : undefined,
-		}
-	);
-}
-
 async function runShellRenameInput<T>(
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
@@ -128,8 +111,12 @@ registerAction2(class extends Action2 {
 
 		try {
 			const forwarded = await tryForwardShellRenameCommand(
-				environmentService,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					isWebClient: isWeb,
+				},
 				shellService,
+				dom.getWindowId(mainWindow),
 				RENAME_PROJECT_COMMAND_ID,
 				handle
 			);
@@ -194,8 +181,12 @@ registerAction2(class extends Action2 {
 
 		try {
 			const forwarded = await tryForwardShellRenameCommand(
-				environmentService,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					isWebClient: isWeb,
+				},
 				shellService,
+				dom.getWindowId(mainWindow),
 				RENAME_WORKTREE_COMMAND_ID,
 				handle
 			);
