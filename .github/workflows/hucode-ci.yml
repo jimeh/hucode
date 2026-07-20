@@ -354,6 +354,8 @@ jobs:
             --run \
             src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts \
             --run \
+            src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts \
+            --run \
             src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
             --run \
             src/vs/hucode/test/browser/webShellService.test.ts \

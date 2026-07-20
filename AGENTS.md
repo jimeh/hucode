@@ -83,3 +83,6 @@ as the required Hucode instruction set for work in this fork.
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
   variables or Electron unit tests may start in Node mode before loading tests.
+- Web Omni hosted-command forwarding has a bounded response timeout. Keep
+  interactive commands such as project and worktree renames in the web shell;
+  otherwise a slow Quick Input can time out and trigger a duplicate fallback.
