@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.52 - 2026-07-20
+
+### Bug Fixes
+
+- **omni:** enable project renaming on web (#94)
+
 ## 0.0.51 - 2026-07-20
 
 ### Features
