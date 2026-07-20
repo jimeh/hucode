@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.51 - 2026-07-20
+
+### Features
+
+- **omni:** add Projects tree indent setting (#93)
+
 ## 0.0.50 - 2026-07-19
 
 ### Features
