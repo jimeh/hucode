@@ -11,14 +11,16 @@ import type { IHucodeShellService } from '../../common/omniWindow.js';
  * forwarding has a bounded response timeout.
  */
 export async function tryForwardShellRenameCommand(
-	isOmniWindow: boolean,
-	isWebClient: boolean,
+	routing: {
+		readonly isOmniWindow: boolean;
+		readonly isWebClient: boolean;
+	},
 	shellService: Pick<IHucodeShellService, 'runActionInWorkspace'>,
 	windowId: number,
 	commandId: string,
 	handle?: unknown
 ): Promise<boolean> {
-	if (!isOmniWindow || isWebClient) {
+	if (!routing.isOmniWindow || routing.isWebClient) {
 		return false;
 	}
 

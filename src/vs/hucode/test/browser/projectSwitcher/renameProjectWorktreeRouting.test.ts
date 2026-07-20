@@ -35,8 +35,7 @@ suite('RenameProjectWorktreeRouting', () => {
 		const calls: IForwardedAction[] = [];
 		for (const command of renameCommands) {
 			assert.strictEqual(await tryForwardShellRenameCommand(
-				true,
-				true,
+				{ isOmniWindow: true, isWebClient: true },
 				shell(calls),
 				7,
 				command.id,
@@ -51,8 +50,7 @@ suite('RenameProjectWorktreeRouting', () => {
 		const calls: IForwardedAction[] = [];
 		for (const command of renameCommands) {
 			assert.strictEqual(await tryForwardShellRenameCommand(
-				true,
-				false,
+				{ isOmniWindow: true, isWebClient: false },
 				shell(calls),
 				7,
 				command.id,
@@ -70,11 +68,28 @@ suite('RenameProjectWorktreeRouting', () => {
 		})));
 	});
 
+	test('returns false when native Omni forwarding misses', async () => {
+		const calls: IForwardedAction[] = [];
+		assert.strictEqual(await tryForwardShellRenameCommand(
+			{ isOmniWindow: true, isWebClient: false },
+			shell(calls, false),
+			7,
+			RENAME_PROJECT_COMMAND_ID
+		), false);
+		assert.deepStrictEqual(calls, [{
+			windowId: 7,
+			request: {
+				id: RENAME_PROJECT_COMMAND_ID,
+				from: 'mouse',
+				args: undefined,
+			},
+		}]);
+	});
+
 	test('does not forward rename commands outside Omni', async () => {
 		const calls: IForwardedAction[] = [];
 		assert.strictEqual(await tryForwardShellRenameCommand(
-			false,
-			false,
+			{ isOmniWindow: false, isWebClient: false },
 			shell(calls),
 			7,
 			RENAME_PROJECT_COMMAND_ID
@@ -89,12 +104,13 @@ interface IForwardedAction {
 }
 
 function shell(
-	calls: IForwardedAction[]
+	calls: IForwardedAction[],
+	result = true
 ): Pick<IHucodeShellService, 'runActionInWorkspace'> {
 	return {
 		async runActionInWorkspace(windowId, request) {
 			calls.push({ windowId, request });
-			return true;
+			return result;
 		},
 	};
 }

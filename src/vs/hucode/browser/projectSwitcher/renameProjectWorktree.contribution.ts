@@ -111,8 +111,10 @@ registerAction2(class extends Action2 {
 
 		try {
 			const forwarded = await tryForwardShellRenameCommand(
-				environmentService.isOmniWindow,
-				isWeb,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					isWebClient: isWeb,
+				},
 				shellService,
 				dom.getWindowId(mainWindow),
 				RENAME_PROJECT_COMMAND_ID,
@@ -179,8 +181,10 @@ registerAction2(class extends Action2 {
 
 		try {
 			const forwarded = await tryForwardShellRenameCommand(
-				environmentService.isOmniWindow,
-				isWeb,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					isWebClient: isWeb,
+				},
 				shellService,
 				dom.getWindowId(mainWindow),
 				RENAME_WORKTREE_COMMAND_ID,
