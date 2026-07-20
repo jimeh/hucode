@@ -148,6 +148,10 @@ import {
 	PROJECT_SWITCHER_VIEW_STATE_VERSION,
 	reorderProjectSwitcherOmniSections,
 } from '../../common/projectSwitcher/projectSwitcherViewState.js';
+import {
+	getProjectSwitcherTreeIndent,
+	onDidChangeProjectSwitcherTreeIndent,
+} from './projectSwitcherTreeIndent.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -1123,6 +1127,12 @@ export class ProjectSwitcherWidget extends Disposable {
 			void this.handleWorkspaceContextChange();
 		}));
 		if (this.environmentService.isOmniWindow) {
+			this._register(onDidChangeProjectSwitcherTreeIndent(
+				this.environmentService.isOmniWindow,
+				this.configurationService
+			)(indent => {
+				this.tree?.updateOptions({ indent });
+			}));
 			this._register(this.hostService.onDidChangeFocus(focused => {
 				if (focused) {
 					void this.refreshProjectsIfStale();
@@ -1237,11 +1247,17 @@ export class ProjectSwitcherWidget extends Disposable {
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
 				identityProvider: { getId: item => item.id },
+				indent: getProjectSwitcherTreeIndent(
+					this.environmentService.isOmniWindow,
+					this.configurationService
+				),
 				keyboardNavigationLabelProvider: {
 					getKeyboardNavigationLabel: item => item.label,
 				},
 				expandOnlyOnTwistieClick: true,
 				multipleSelectionSupport: false,
+				overrideWorkbenchTreeIndent:
+					this.environmentService.isOmniWindow,
 				dnd: this.instantiationService.createInstance(
 					ProjectSwitcherDragAndDrop,
 					(

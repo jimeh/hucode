@@ -352,6 +352,8 @@ jobs:
             --run \
             src/vs/hucode/test/browser/omniSelectionOpen.test.ts \
             --run \
+            src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts \
+            --run \
             src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
             --run \
             src/vs/hucode/test/browser/webShellService.test.ts \
@@ -361,6 +363,8 @@ jobs:
             src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
             --run \
             src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
+            --run \
+            src/vs/platform/list/test/browser/hucodeListService.test.ts \
             --run \
             src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
             --run \
