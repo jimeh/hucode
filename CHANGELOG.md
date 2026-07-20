@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.53 - 2026-07-20
+
+### Bug Fixes
+
+- **omni:** enable worktree creation on web (#95)
+
 ## 0.0.52 - 2026-07-20
 
 ### Bug Fixes
