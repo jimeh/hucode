@@ -28,6 +28,7 @@ suite('Hucode Omni web entrypoint', () => {
 	});
 });
 
+/** Reads normalized static import paths from a repository entrypoint. */
 async function readImportPaths(entrypoint: string): Promise<Set<string>> {
 	const source = stripComments(
 		await fs.readFile(path.join(repoRoot, entrypoint), 'utf8')
@@ -50,6 +51,7 @@ async function readImportPaths(entrypoint: string): Promise<Set<string>> {
 	return paths;
 }
 
+/** Removes comments before static import parsing. */
 function stripComments(source: string): string {
 	return source
 		.replace(/\/\*[\s\S]*?\*\//g, '')

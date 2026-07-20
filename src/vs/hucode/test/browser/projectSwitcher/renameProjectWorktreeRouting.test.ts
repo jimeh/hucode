@@ -98,11 +98,13 @@ suite('RenameProjectWorktreeRouting', () => {
 	});
 });
 
+/** Records a forwarded shell action for routing assertions. */
 interface IForwardedAction {
 	readonly windowId: number;
 	readonly request: INativeRunActionInWindowRequest;
 }
 
+/** Creates a shell-service stub that records forwarded actions. */
 function shell(
 	calls: IForwardedAction[],
 	result = true
