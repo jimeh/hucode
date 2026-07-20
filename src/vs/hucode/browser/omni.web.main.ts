@@ -8,6 +8,7 @@ import './layoutActions.js';
 import './omniHost.contribution.js';
 import './services/omniAgentHostService.js';
 import './projectManager/webProjectManagerService.js';
+import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './webShellService.js';
 

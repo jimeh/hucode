@@ -19,6 +19,14 @@ const omniWebMain = 'src/vs/hucode/browser/omni.web.main.ts';
 
 suite('Hucode Omni web entrypoint', () => {
 
+	test('registers the create worktree command contribution', async () => {
+		const imports = await readImportPaths(omniWebMain);
+		assert.ok(imports.has(
+			'src/vs/hucode/browser/projectSwitcher/' +
+			'createProjectWorktree.contribution.js'
+		));
+	});
+
 	test('registers the project rename command contribution', async () => {
 		const imports = await readImportPaths(omniWebMain);
 		assert.ok(imports.has(

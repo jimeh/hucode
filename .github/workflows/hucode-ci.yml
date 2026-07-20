@@ -352,6 +352,8 @@ jobs:
             --run \
             src/vs/hucode/test/browser/omniSelectionOpen.test.ts \
             --run \
+            src/vs/hucode/test/browser/projectSwitcher/createProjectWorktreeRouting.test.ts \
+            --run \
             src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts \
             --run \
             src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts \
