@@ -216,9 +216,11 @@ suite('Hucode Web Clipboard Service', () => {
 		assert.deepStrictEqual({
 			values: await Promise.all([firstRead, secondRead]),
 			prompts: notifications.prompts.length,
+			promptClosed: notifications.prompts[0].handle.closed,
 		}, {
 			values: ['', ''],
 			prompts: 1,
+			promptClosed: true,
 		});
 	});
 

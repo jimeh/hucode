@@ -7,7 +7,7 @@ import { localize } from '../../../../nls.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IClipboardService, isDefaultClipboardType } from '../../../../platform/clipboard/common/clipboardService.js';
 import { BrowserClipboardService as BaseBrowserClipboardService } from '../../../../platform/clipboard/browser/clipboardService.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { INotificationHandle, INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
@@ -64,11 +64,11 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 			if (this._store.isDisposed) {
 				return '';
 			}
-			return this.promptForReadTextPermission(type);
+			return this.promptForReadTextPermission();
 		}
 	}
 
-	private promptForReadTextPermission(type?: string): Promise<string> {
+	private promptForReadTextPermission(): Promise<string> {
 		if (this._store.isDisposed) {
 			return Promise.resolve('');
 		}
@@ -83,6 +83,7 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 		const listener = new DisposableStore();
 		let settled = false;
 		let retrying = false;
+		const prompt: { handle: INotificationHandle | undefined } = { handle: undefined };
 		const finish = (value: string) => {
 			if (settled) {
 				return;
@@ -90,6 +91,7 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 
 			settled = true;
 			listener.dispose();
+			prompt.handle?.close();
 			if (this.pendingReadTextPrompt?.promise === pendingPromise) {
 				this.pendingReadTextPrompt = undefined;
 			}
@@ -110,7 +112,7 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 
 					retrying = true;
 					listener.dispose();
-					handle.close();
+					prompt.handle?.close();
 					try {
 						const readText = await this.readTextFromSystemClipboard();
 						this.logService.trace('BrowserClipboardService#readText with readText.length:', readText.length);
@@ -123,7 +125,7 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 						if (this.pendingReadTextPrompt?.promise === pendingPromise) {
 							this.pendingReadTextPrompt = undefined;
 						}
-						finish(await this.promptForReadTextPermission(type));
+						finish(await this.promptForReadTextPermission());
 					}
 				}
 			}, {
@@ -134,9 +136,14 @@ export class BrowserClipboardService extends BaseBrowserClipboardService {
 				sticky: true
 			}
 		);
+		prompt.handle = handle;
 
-		// Always resolve all waiters once the notification closes.
-		listener.add(Event.once(handle.onDidClose)(() => finish('')));
+		if (settled) {
+			handle.close();
+		} else {
+			// Always resolve all waiters once the notification closes.
+			listener.add(Event.once(handle.onDidClose)(() => finish('')));
+		}
 		return pendingPromise;
 	}
 }
