@@ -115,6 +115,11 @@ export interface IHucodeShellService {
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/** Unloads a live renderer while preserving a dormant restore entry. */
+	suspendWorkspace(
+		windowId: number,
+		instanceId: string,
+	): Promise<IHucodeHostedWorkspaceState>;
 	/** Retains, loads, and activates an arbitrary folder workbench. */
 	retainAndOpenWorkbench(
 		windowId: number,

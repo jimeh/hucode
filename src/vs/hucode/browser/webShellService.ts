@@ -572,6 +572,42 @@ export class WebHucodeShellController extends Disposable
 		return this.openWorkspace(windowId, URI.revive(folderUri).fsPath);
 	}
 
+	/** Gracefully unloads a ready iframe and leaves it dormant. */
+	async suspendWorkspace(
+		windowId: number,
+		instanceId: string,
+	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		const instance = this.instancesById.get(instanceId);
+		if (!instance || (
+			instance.state !== 'active' && instance.state !== 'loaded'
+		)) {
+			return this.getState();
+		}
+
+		await this.deferStateEmission(async () => {
+			if (!await this.unloadAndRemoveInstance(instance)) {
+				return;
+			}
+			this.hostedWorkspaces.addInstance({
+				instanceId: generateUuid(),
+				projectId: instance.projectId,
+				retainedWorkbenchId: instance.retainedWorkbenchId,
+				worktreePath: instance.worktreePath,
+				state: 'dormant',
+				visible: false,
+				focused: false,
+				lastActiveAt: instance.lastActiveAt,
+				lifecycleGeneration: 0,
+			});
+			this.emitState();
+		});
+		return this.getState();
+	}
+
 	async unloadRetainedWorkbench(
 		windowId: number,
 		workbenchId: string

@@ -877,6 +877,59 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		await this.openWorkspace(folderUri.fsPath);
 	}
 
+	/** Gracefully unloads a ready renderer and leaves it dormant. */
+	async suspendWorkspace(instanceId: string): Promise<void> {
+		await this.ensureRestored();
+		const instance = this.instancesById.get(instanceId);
+		if (!instance || (
+			instance.state !== 'active' && instance.state !== 'loaded'
+		)) {
+			return;
+		}
+
+		await this.deferStateEmission(async () => {
+			const lifecycleGeneration = instance.lifecycleGeneration;
+			const suspended = await this.destroyInstance(
+				instance,
+				true,
+				true,
+				UnloadReason.CLOSE,
+				false,
+				lifecycleGeneration
+			);
+			if (!suspended) {
+				return;
+			}
+
+			this.hostedWorkspaces.addInstance({
+				instanceId: this.createInstanceId(),
+				projectId: instance.projectId,
+				worktreePath: instance.worktreePath,
+				trustedProcessIds: new Set<number>(),
+				attached: false,
+				state: 'dormant',
+				visible: false,
+				focused: false,
+				lastActiveAt: instance.lastActiveAt,
+				lifecycleGeneration: 0,
+				disposed: false,
+			});
+
+			if (!this.getActiveInstance()) {
+				const nextActive = getMostRecentHostedWorkspace(
+					this.instancesById.values(),
+					undefined,
+					candidate => candidate.disposed
+				);
+				if (nextActive) {
+					this.activateInstance(nextActive);
+					return;
+				}
+			}
+			this.emitState();
+		});
+	}
+
 	async unloadRetainedWorkbench(workbenchId: string): Promise<void> {
 		await this.ensureRestored();
 		const record = this.retainedWorkbenches.getById(workbenchId);

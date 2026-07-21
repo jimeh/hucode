@@ -437,6 +437,130 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('suspends active project workspace and activates next MRU', async () => {
+		const { service, surface, browser } = createService();
+		const windowId = browser.windowId;
+		const first = await service.openWorkspace(
+			windowId,
+			'/tmp/suspend-project-one',
+			'project-one'
+		);
+		const firstInstanceId = first.activeInstanceId;
+		assert.ok(firstInstanceId);
+		connectChild(browser, surface, firstInstanceId);
+		const second = await service.openWorkspace(
+			windowId,
+			'/tmp/suspend-project-two',
+			'project-two'
+		);
+		const secondInstanceId = second.activeInstanceId;
+		assert.ok(secondInstanceId);
+		const secondChild = connectChild(browser, surface, secondInstanceId);
+		const secondIframe = getIframe(surface, secondInstanceId);
+		const emitted: IHucodeHostedWorkspaceState[] = [];
+		const listener = service.onDidChangeWindowState(change => {
+			emitted.push(change.state);
+		});
+
+		const suspended = await service.suspendWorkspace(
+			windowId,
+			secondInstanceId
+		);
+		listener.dispose();
+
+		assert.deepStrictEqual({
+			activePath: suspended.instances.find(instance =>
+				instance.instanceId === suspended.activeInstanceId
+			)?.worktreePath,
+			states: suspended.instances.map(instance => ({
+				path: instance.worktreePath,
+				state: instance.state,
+			})),
+			unloads: secondChild.workbench.prepareUnloadCalls,
+			oldIframeConnected: secondIframe.isConnected,
+		}, {
+			activePath: '/tmp/suspend-project-one',
+			states: [
+				{ path: '/tmp/suspend-project-one', state: 'active' },
+				{ path: '/tmp/suspend-project-two', state: 'dormant' },
+			],
+			unloads: 1,
+			oldIframeConnected: false,
+		});
+		assert.ok(emitted.every(state =>
+			state.instances.every(instance => instance.state !== 'unloaded')
+		));
+	});
+
+	test('suspends loaded retained workbench without unloading its record',
+		async () => {
+			const { service, surface, browser } = createService();
+			const retained = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/suspend-retained').toJSON()
+			);
+			const retainedInstanceId = retained.activeInstanceId;
+			assert.ok(retainedInstanceId);
+			connectChild(browser, surface, retainedInstanceId);
+			const project = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/suspend-retained-project',
+				'project'
+			);
+			assert.ok(project.activeInstanceId);
+			connectChild(browser, surface, project.activeInstanceId);
+
+			const suspended = await service.suspendWorkspace(
+				browser.windowId,
+				retainedInstanceId
+			);
+
+			assert.deepStrictEqual({
+				activePath: suspended.instances.find(instance =>
+					instance.instanceId === suspended.activeInstanceId
+				)?.worktreePath,
+				retainedState: suspended.instances.find(instance =>
+					instance.worktreePath === '/tmp/suspend-retained'
+				)?.state,
+				desiredState:
+					suspended.retainedWorkbenches?.[0].desiredState,
+			}, {
+				activePath: '/tmp/suspend-retained-project',
+				retainedState: 'dormant',
+				desiredState: 'loaded',
+			});
+		}
+	);
+
+	test('preserves active workbench when suspension is vetoed', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/suspend-veto').toJSON()
+		);
+		const instanceId = opened.activeInstanceId;
+		assert.ok(instanceId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.prepareUnloadResult = false;
+
+		const state = await service.suspendWorkspace(
+			browser.windowId,
+			instanceId
+		);
+
+		assert.deepStrictEqual({
+			activeInstanceId: state.activeInstanceId,
+			state: state.instances[0].state,
+			desiredState: state.retainedWorkbenches?.[0].desiredState,
+			iframeConnected: getIframe(surface, instanceId).isConnected,
+		}, {
+			activeInstanceId: instanceId,
+			state: 'active',
+			desiredState: 'loaded',
+			iframeConnected: true,
+		});
+	});
+
 	test('closes never-ready workbenches without an unload handshake', async () => {
 		const { service, browser } = createService();
 		const windowId = browser.windowId;
