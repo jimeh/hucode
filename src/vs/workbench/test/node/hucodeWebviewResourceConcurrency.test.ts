@@ -41,12 +41,13 @@ suite('HucodeWebviewResourceConcurrency', () => {
 	});
 
 	test('cancels transferred resource streams in browser webviews', () => {
-		const webviewElement = readFileSync(FileAccess.asFileUri(
+		// Node tests run from out/, so validate the compiled artifact that ships.
+		const compiledWebviewElement = readFileSync(FileAccess.asFileUri(
 			'vs/workbench/contrib/webview/browser/webviewElement.js'
 		).fsPath, 'utf8');
 
 		assert.match(
-			webviewElement,
+			compiledWebviewElement,
 			/const streamCts = [^;]*?platform === ["']electron["'][^;]*?\|\|[^;]*?platform === ["']browser["']/,
 			'expected transferred-stream cancellation to include browser webviews'
 		);
