@@ -152,6 +152,10 @@ import {
 	getProjectSwitcherTreeIndent,
 	onDidChangeProjectSwitcherTreeIndent,
 } from './projectSwitcherTreeIndent.js';
+import {
+	canSuspendHostedWorkbench,
+	shouldUnloadHostedWorkbench,
+} from './hostedWorkbenchActions.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -167,12 +171,15 @@ const PIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.pinWorktree';
 const UNPIN_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unpinWorktree';
 const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
+const SUSPEND_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.suspendWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
 const ADD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.addWorkbench';
 const OPEN_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.openWorkbench';
 const RENAME_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.renameWorkbench';
 const RESET_WORKBENCH_LABEL_COMMAND_ID =
 	'hucode.projectSwitcher.resetWorkbenchLabel';
+const SUSPEND_WORKBENCH_COMMAND_ID =
+	'hucode.projectSwitcher.suspendWorkbench';
 const UNLOAD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.unloadWorkbench';
 const DISMISS_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.dismissWorkbench';
 
@@ -589,21 +596,24 @@ class ProjectSwitcherRenderer
 				);
 			}
 
-			const isLiveHostedWorkbench =
-				item.hostedWorkbenchState === 'restore-pending' ||
-				item.hostedWorkbenchState === 'loading' ||
-				item.hostedWorkbenchState === 'active' ||
-				item.hostedWorkbenchState === 'loaded';
+			const shouldUnload = shouldUnloadHostedWorkbench(
+				item.hostedWorkbenchState
+			);
 			if (item.missingGitWorktree) {
 				templateData.container.classList.add(
 					'hucode-project-switcher-worktree-missing'
 				);
 			}
-			if (isLiveHostedWorkbench) {
+			if (shouldUnload) {
 				templateData.container.classList.add(
-					isHostedWorkbenchInProgress(item.hostedWorkbenchState)
-						? 'hucode-project-switcher-worktree-loading'
-						: 'hucode-project-switcher-worktree-loaded'
+					item.hostedWorkbenchState === 'dormant'
+						? 'hucode-project-switcher-worktree-dormant'
+						: isHostedWorkbenchInProgress(item.hostedWorkbenchState)
+							? 'hucode-project-switcher-worktree-loading'
+							: item.hostedWorkbenchState === 'active' ||
+								item.hostedWorkbenchState === 'loaded'
+								? 'hucode-project-switcher-worktree-loaded'
+								: 'hucode-project-switcher-worktree-unloaded'
 				);
 				const label = localize('unloadWorkbenchButton', 'Unload');
 				this.setAction(
@@ -620,9 +630,7 @@ class ProjectSwitcherRenderer
 				);
 			} else {
 				templateData.container.classList.add(
-					item.hostedWorkbenchState === 'dormant'
-						? 'hucode-project-switcher-worktree-dormant'
-						: 'hucode-project-switcher-worktree-unloaded'
+					'hucode-project-switcher-worktree-unloaded'
 				);
 				if (!item.isMain && !item.missingGitWorktree) {
 					const label = localize(
@@ -695,20 +703,19 @@ class ProjectSwitcherRenderer
 		templateData.container.classList.add(
 			`hucode-project-switcher-workbench-${item.hostedWorkbenchState}`
 		);
-		const isLive = item.hostedWorkbenchState === 'restore-pending' ||
-			item.hostedWorkbenchState === 'loading' ||
-			item.hostedWorkbenchState === 'active' ||
-			item.hostedWorkbenchState === 'loaded';
+		const shouldUnload = shouldUnloadHostedWorkbench(
+			item.hostedWorkbenchState
+		);
 		this.setAction(
 			templateData,
 			templateData.trailingAction,
-			isLive
+			shouldUnload
 				? localize('unloadRetainedWorkbenchButton', 'Unload Workbench')
 				: localize('dismissWorkbenchButton', 'Dismiss Workbench'),
-			isLive ? Codicon.chromeMinimize : Codicon.close,
+			shouldUnload ? Codicon.chromeMinimize : Codicon.close,
 			() => {
 				void this.commandService.executeCommand(
-					isLive
+					shouldUnload
 						? UNLOAD_WORKBENCH_COMMAND_ID
 						: DISMISS_WORKBENCH_COMMAND_ID,
 					toHandleArg(item)
@@ -1694,10 +1701,12 @@ export class ProjectSwitcherWidget extends Disposable {
 	private getContextActions(item: ProjectSwitcherItem): IAction[] {
 		if (isRetainedWorkbenchItem(item)) {
 			const handle = toHandleArg(item);
-			const isLive = item.hostedWorkbenchState === 'restore-pending' ||
-				item.hostedWorkbenchState === 'loading' ||
-				item.hostedWorkbenchState === 'active' ||
-				item.hostedWorkbenchState === 'loaded';
+			const canSuspend = canSuspendHostedWorkbench(
+				item.hostedWorkbenchState
+			);
+			const shouldUnload = shouldUnloadHostedWorkbench(
+				item.hostedWorkbenchState
+			);
 			return [
 				toAction({
 					id: RENAME_WORKBENCH_COMMAND_ID,
@@ -1754,7 +1763,18 @@ export class ProjectSwitcherWidget extends Disposable {
 						}
 					),
 				}),
-				...(isLive || item.hostedWorkbenchState === 'dormant' ? [toAction({
+				...(canSuspend ? [toAction({
+					id: SUSPEND_WORKBENCH_COMMAND_ID,
+					label: localize(
+						'suspendRetainedWorkbench',
+						'Suspend Workbench'
+					),
+					run: () => this.commandService.executeCommand(
+						SUSPEND_WORKBENCH_COMMAND_ID,
+						handle
+					),
+				})] : []),
+				...(shouldUnload ? [toAction({
 					id: UNLOAD_WORKBENCH_COMMAND_ID,
 					label: localize(
 						'unloadRetainedWorkbench',
@@ -1845,8 +1865,9 @@ export class ProjectSwitcherWidget extends Disposable {
 
 		if (isWorktreeItem(item)) {
 			const worktreeHandle = toHandleArg(item);
-			const hostedWorkbenchInstanceId =
-				this.getHostedWorkbenchInstance(item.worktreePath)?.instanceId;
+			const hostedWorkbench =
+				this.getHostedWorkbenchInstance(item.worktreePath);
+			const hostedWorkbenchInstanceId = hostedWorkbench?.instanceId;
 			if (item.missingGitWorktree) {
 				return hostedWorkbenchInstanceId
 					? [toAction({
@@ -1922,6 +1943,19 @@ export class ProjectSwitcherWidget extends Disposable {
 				}),
 			];
 			if (hostedWorkbenchInstanceId) {
+				if (canSuspendHostedWorkbench(hostedWorkbench.state)) {
+					actions.push(toAction({
+						id: SUSPEND_WORKTREE_COMMAND_ID,
+						label: localize(
+							'suspendWorktree',
+							'Suspend Worktree'
+						),
+						run: () => this.commandService.executeCommand(
+							SUSPEND_WORKTREE_COMMAND_ID,
+							worktreeHandle
+						),
+					}));
+				}
 				actions.push(toAction({
 					id: UNLOAD_WORKTREE_COMMAND_ID,
 					label: localize('unloadWorkbench', 'Unload'),
@@ -2539,6 +2573,52 @@ registerAction2(class extends Action2 {
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
+			id: SUSPEND_WORKBENCH_COMMAND_ID,
+			title: localize2(
+				'suspendRetainedWorkbench',
+				'Suspend Workbench'
+			),
+		});
+	}
+
+	async run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<void> {
+		const workbenchId = parseWorkbenchHandle(handle.$treeItemHandle);
+		if (!workbenchId) {
+			return;
+		}
+		const shellService = accessor.get(IHucodeShellService);
+		const notificationService = accessor.get(INotificationService);
+		const windowId = dom.getWindowId(mainWindow);
+		try {
+			const state = await shellService.getWindowState(windowId);
+			const record = state.retainedWorkbenches?.find(candidate =>
+				candidate.id === workbenchId
+			);
+			if (!record) {
+				return;
+			}
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const instance = state.instances.find(candidate =>
+				pathsEqual(candidate.worktreePath, worktreePath)
+			);
+			if (instance && canSuspendHostedWorkbench(instance.state)) {
+				await shellService.suspendWorkspace(
+					windowId,
+					instance.instanceId
+				);
+			}
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
 			id: UNLOAD_WORKBENCH_COMMAND_ID,
 			title: localize2('unloadRetainedWorkbench', 'Unload Workbench'),
 		});
@@ -3018,6 +3098,48 @@ registerAction2(class extends Action2 {
 				parsed.projectId,
 				parsed.worktreePath
 			);
+		} catch (error) {
+			notificationService.error(String(error));
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: SUSPEND_WORKTREE_COMMAND_ID,
+			title: localize2('suspendWorktree', 'Suspend Worktree'),
+		});
+	}
+
+	async run(
+		accessor: ServicesAccessor,
+		handle: TreeViewItemHandleArg
+	): Promise<void> {
+		const parsed = parseWorktreeHandle(handle.$treeItemHandle);
+		if (!parsed) {
+			return;
+		}
+
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (!environmentService.isOmniWindow) {
+			return;
+		}
+
+		const shellService = accessor.get(IHucodeShellService);
+		const notificationService = accessor.get(INotificationService);
+		const windowId = dom.getWindowId(mainWindow);
+		try {
+			const state = await shellService.getWindowState(windowId);
+			const instance = state.instances.find(candidate =>
+				pathsEqual(candidate.worktreePath, parsed.worktreePath)
+			);
+			if (instance && canSuspendHostedWorkbench(instance.state)) {
+				await shellService.suspendWorkspace(
+					windowId,
+					instance.instanceId
+				);
+			}
 		} catch (error) {
 			notificationService.error(String(error));
 		}

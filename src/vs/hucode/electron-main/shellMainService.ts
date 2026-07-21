@@ -185,6 +185,15 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
+	async suspendWorkspace(
+		windowId: number,
+		instanceId: string,
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.suspendWorkspace(instanceId);
+		return controller.getState();
+	}
+
 	async retainAndOpenWorkbench(
 		windowId: number,
 		folderUri: UriComponents

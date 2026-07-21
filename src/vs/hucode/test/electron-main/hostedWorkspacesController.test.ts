@@ -1249,6 +1249,141 @@ suite('ResidentHostedWorkspacesController', () => {
 		]);
 	});
 
+	test('suspends active project workspace and activates next MRU', async () => {
+		const alpha = createWorktree('suspend-active-alpha');
+		const bravo = createWorktree('suspend-active-bravo');
+		const { controller, stateChanges, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		now = 2000;
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		const changesBeforeSuspend = stateChanges.length;
+
+		await controller.suspendWorkspace('instance-2');
+
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			worktreePath: instance.worktreePath,
+			state: instance.state,
+			lastActiveAt: instance.lastActiveAt,
+		})), [
+			{ worktreePath: alpha, state: 'active', lastActiveAt: 2000 },
+			{ worktreePath: bravo, state: 'dormant', lastActiveAt: 2000 },
+		]);
+		assert.deepStrictEqual(
+			viewFactory.views[1].rawWebContents.sent.map(item => item.channel),
+			['vscode:onBeforeUnload', 'vscode:onWillUnload']
+		);
+		assert.strictEqual(stateChanges.length, changesBeforeSuspend + 1);
+		assert.ok(stateChanges.slice(changesBeforeSuspend).every(state =>
+			state.instances.every(instance => instance.state !== 'unloaded')
+		));
+	});
+
+	test('suspends loaded retained workbench without unloading its record',
+		async () => {
+			const scratch = createWorktree('suspend-retained');
+			const project = createWorktree('suspend-project');
+			const { controller } = createController();
+
+			await controller.retainAndOpenWorkbench(URI.file(scratch));
+			const retainedInstanceId = controller.getState().activeInstanceId;
+			assert.ok(retainedInstanceId);
+			controller.notifyHostedWorkspaceReady(retainedInstanceId);
+			now = 2000;
+			await controller.openWorkspace(project, 'project');
+			const projectInstanceId = controller.getState().activeInstanceId;
+			assert.ok(projectInstanceId);
+			controller.notifyHostedWorkspaceReady(projectInstanceId);
+
+			await controller.suspendWorkspace(retainedInstanceId);
+
+			const state = controller.getState();
+			assert.deepStrictEqual({
+				activePath: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				retainedState: state.instances.find(instance =>
+					instance.worktreePath === scratch
+				)?.state,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+			}, {
+				activePath: project,
+				retainedState: 'dormant',
+				desiredState: 'loaded',
+			});
+		}
+	);
+
+	test('preserves active retained workbench when suspension is vetoed',
+		async () => {
+			const scratch = createWorktree('suspend-veto');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.retainAndOpenWorkbench(URI.file(scratch));
+			const instanceId = controller.getState().activeInstanceId;
+			assert.ok(instanceId);
+			controller.notifyHostedWorkspaceReady(instanceId);
+			viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
+				if (channel === 'vscode:onBeforeUnload') {
+					const { cancelChannel } = request as { cancelChannel: string };
+					setTimeout(() => ipcMain.emitReply(cancelChannel), 0);
+				}
+				return true;
+			};
+
+			await controller.suspendWorkspace(instanceId);
+
+			assert.deepStrictEqual({
+				activeInstanceId: controller.getState().activeInstanceId,
+				state: controller.getState().instances[0].state,
+				desiredState:
+					controller.getState().retainedWorkbenches?.[0].desiredState,
+				closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
+			}, {
+				activeInstanceId: instanceId,
+				state: 'active',
+				desiredState: 'loaded',
+				closeCalls: [],
+			});
+		}
+	);
+
+	test('ignores unknown, loading, and dormant suspension targets', async () => {
+		const alpha = createWorktree('suspend-guards');
+		const { controller, stateChanges, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const loadingState = controller.getState();
+		const instanceId = loadingState.activeInstanceId;
+		assert.ok(instanceId);
+		const changesBeforeGuards = stateChanges.length;
+
+		await controller.suspendWorkspace('unknown-instance');
+		await controller.suspendWorkspace(instanceId);
+
+		assert.deepStrictEqual(controller.getState(), loadingState);
+		assert.strictEqual(stateChanges.length, changesBeforeGuards);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, []);
+
+		controller.notifyHostedWorkspaceReady(instanceId);
+		await controller.suspendWorkspace(instanceId);
+		const dormantState = controller.getState();
+		const dormantInstanceId = dormantState.instances[0].instanceId;
+		const unloadMessages = viewFactory.views[0].rawWebContents.sent.length;
+		const changesBeforeDormantGuard = stateChanges.length;
+
+		await controller.suspendWorkspace(dormantInstanceId);
+
+		assert.deepStrictEqual(controller.getState(), dormantState);
+		assert.strictEqual(
+			viewFactory.views[0].rawWebContents.sent.length,
+			unloadMessages
+		);
+		assert.strictEqual(stateChanges.length, changesBeforeDormantGuard);
+	});
+
 	test('does not close a workspace reactivated during unload', async () => {
 		const alpha = createWorktree('alpha-reactivated');
 		const bravo = createWorktree('bravo-reactivated');
