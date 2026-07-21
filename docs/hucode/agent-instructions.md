@@ -70,6 +70,14 @@ VS Code code that Hucode customizes.
 
 ## Upstream Patch Boundaries And Tests
 
+- VS Code commit `17d3b86b9361cba49d8d0238787d9aa590e657ca` is backported
+  to bound concurrent webview host-resource response bodies and cancel
+  transferable streams (microsoft/vscode#326272). Hucode additionally enables
+  both behaviors for the `browser` platform to protect `hucode serve-web`; see
+  jimeh/hucode#83 and microsoft/vscode#319468. When upgrading to a VS Code
+  baseline that contains the upstream commit, drop the standalone backport but
+  preserve Hucode's browser enablement and regression tests unless upstream has
+  generalized the behavior beyond Electron.
 - Keep upstream VS Code files as thin integration points for Hucode behavior.
   When extracting Hucode behavior out of an upstream-owned file, move the
   decision-making and error/result mapping into Hucode-owned helpers, services,
