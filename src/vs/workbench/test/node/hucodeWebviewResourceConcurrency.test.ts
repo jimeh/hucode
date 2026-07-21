@@ -12,6 +12,22 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 suite('HucodeWebviewResourceConcurrency', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
+	test('forwards the webview platform to the service worker', () => {
+		const indexHtml = readFileSync(FileAccess.asFileUri(
+			'vs/workbench/contrib/webview/browser/pre/index.html'
+		).fsPath, 'utf8');
+
+		const swPath = indexHtml.match(
+			/const\s+swPath\s*=\s*encodeURI\((?<value>[\s\S]*?)\);/
+		);
+		assert.ok(swPath?.groups, 'expected the service-worker URL initializer');
+		assert.match(
+			swPath.groups.value,
+			/&platform=\$\{\s*searchParams\.get\(\s*["']platform["']\s*\)\s*\}/,
+			'expected the service-worker URL to forward the webview platform'
+		);
+	});
+
 	test('limits host resource response bodies in browser webviews', () => {
 		const serviceWorker = readFileSync(FileAccess.asFileUri(
 			'vs/workbench/contrib/webview/browser/pre/service-worker.js'
