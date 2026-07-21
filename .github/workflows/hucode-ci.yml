@@ -370,6 +370,8 @@ jobs:
             --run \
             src/vs/platform/list/test/browser/hucodeListService.test.ts \
             --run \
+            src/vs/workbench/services/clipboard/test/browser/hucodeClipboardService.test.ts \
+            --run \
             src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
             --run \
             src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
