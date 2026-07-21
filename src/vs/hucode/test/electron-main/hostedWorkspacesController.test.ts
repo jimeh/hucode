@@ -1350,6 +1350,40 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('ignores unknown, loading, and dormant suspension targets', async () => {
+		const alpha = createWorktree('suspend-guards');
+		const { controller, stateChanges, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const loadingState = controller.getState();
+		const instanceId = loadingState.activeInstanceId;
+		assert.ok(instanceId);
+		const changesBeforeGuards = stateChanges.length;
+
+		await controller.suspendWorkspace('unknown-instance');
+		await controller.suspendWorkspace(instanceId);
+
+		assert.deepStrictEqual(controller.getState(), loadingState);
+		assert.strictEqual(stateChanges.length, changesBeforeGuards);
+		assert.deepStrictEqual(viewFactory.views[0].rawWebContents.sent, []);
+
+		controller.notifyHostedWorkspaceReady(instanceId);
+		await controller.suspendWorkspace(instanceId);
+		const dormantState = controller.getState();
+		const dormantInstanceId = dormantState.instances[0].instanceId;
+		const unloadMessages = viewFactory.views[0].rawWebContents.sent.length;
+		const changesBeforeDormantGuard = stateChanges.length;
+
+		await controller.suspendWorkspace(dormantInstanceId);
+
+		assert.deepStrictEqual(controller.getState(), dormantState);
+		assert.strictEqual(
+			viewFactory.views[0].rawWebContents.sent.length,
+			unloadMessages
+		);
+		assert.strictEqual(stateChanges.length, changesBeforeDormantGuard);
+	});
+
 	test('does not close a workspace reactivated during unload', async () => {
 		const alpha = createWorktree('alpha-reactivated');
 		const bravo = createWorktree('bravo-reactivated');

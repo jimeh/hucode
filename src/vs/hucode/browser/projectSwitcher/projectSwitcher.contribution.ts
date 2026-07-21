@@ -630,9 +630,7 @@ class ProjectSwitcherRenderer
 				);
 			} else {
 				templateData.container.classList.add(
-					item.hostedWorkbenchState === 'dormant'
-						? 'hucode-project-switcher-worktree-dormant'
-						: 'hucode-project-switcher-worktree-unloaded'
+					'hucode-project-switcher-worktree-unloaded'
 				);
 				if (!item.isMain && !item.missingGitWorktree) {
 					const label = localize(
@@ -2592,20 +2590,28 @@ registerAction2(class extends Action2 {
 			return;
 		}
 		const shellService = accessor.get(IHucodeShellService);
+		const notificationService = accessor.get(INotificationService);
 		const windowId = dom.getWindowId(mainWindow);
-		const state = await shellService.getWindowState(windowId);
-		const record = state.retainedWorkbenches?.find(candidate =>
-			candidate.id === workbenchId
-		);
-		if (!record) {
-			return;
-		}
-		const worktreePath = URI.revive(record.folderUri).fsPath;
-		const instance = state.instances.find(candidate =>
-			pathsEqual(candidate.worktreePath, worktreePath)
-		);
-		if (instance && canSuspendHostedWorkbench(instance.state)) {
-			await shellService.suspendWorkspace(windowId, instance.instanceId);
+		try {
+			const state = await shellService.getWindowState(windowId);
+			const record = state.retainedWorkbenches?.find(candidate =>
+				candidate.id === workbenchId
+			);
+			if (!record) {
+				return;
+			}
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const instance = state.instances.find(candidate =>
+				pathsEqual(candidate.worktreePath, worktreePath)
+			);
+			if (instance && canSuspendHostedWorkbench(instance.state)) {
+				await shellService.suspendWorkspace(
+					windowId,
+					instance.instanceId
+				);
+			}
+		} catch (error) {
+			notificationService.error(String(error));
 		}
 	}
 });
@@ -3115,14 +3121,27 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (!environmentService.isOmniWindow) {
+			return;
+		}
+
 		const shellService = accessor.get(IHucodeShellService);
+		const notificationService = accessor.get(INotificationService);
 		const windowId = dom.getWindowId(mainWindow);
-		const state = await shellService.getWindowState(windowId);
-		const instance = state.instances.find(candidate =>
-			pathsEqual(candidate.worktreePath, parsed.worktreePath)
-		);
-		if (instance && canSuspendHostedWorkbench(instance.state)) {
-			await shellService.suspendWorkspace(windowId, instance.instanceId);
+		try {
+			const state = await shellService.getWindowState(windowId);
+			const instance = state.instances.find(candidate =>
+				pathsEqual(candidate.worktreePath, parsed.worktreePath)
+			);
+			if (instance && canSuspendHostedWorkbench(instance.state)) {
+				await shellService.suspendWorkspace(
+					windowId,
+					instance.instanceId
+				);
+			}
+		} catch (error) {
+			notificationService.error(String(error));
 		}
 	}
 });

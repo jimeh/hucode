@@ -561,6 +561,51 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
+	test('ignores unknown, loading, and dormant suspension targets', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/suspend-guards',
+			'project'
+		);
+		const instanceId = opened.activeInstanceId;
+		assert.ok(instanceId);
+		const emitted: IHucodeHostedWorkspaceState[] = [];
+		const listener = service.onDidChangeWindowState(change => {
+			emitted.push(change.state);
+		});
+
+		await service.suspendWorkspace(browser.windowId, 'unknown-instance');
+		const loadingGuard = await service.suspendWorkspace(
+			browser.windowId,
+			instanceId
+		);
+
+		assert.deepStrictEqual(loadingGuard, opened);
+		assert.deepStrictEqual(emitted, []);
+
+		const child = connectChild(browser, surface, instanceId);
+		const dormantState = await service.suspendWorkspace(
+			browser.windowId,
+			instanceId
+		);
+		const dormantInstanceId = dormantState.instances[0].instanceId;
+		const emissionsBeforeDormantGuard = emitted.length;
+
+		const guardedState = await service.suspendWorkspace(
+			browser.windowId,
+			dormantInstanceId
+		);
+		listener.dispose();
+
+		assert.deepStrictEqual(guardedState, dormantState);
+		assert.strictEqual(
+			emitted.length,
+			emissionsBeforeDormantGuard
+		);
+		assert.strictEqual(child.workbench.prepareUnloadCalls, 1);
+	});
+
 	test('closes never-ready workbenches without an unload handshake', async () => {
 		const { service, browser } = createService();
 		const windowId = browser.windowId;
