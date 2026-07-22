@@ -2,6 +2,17 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.54 - 2026-07-22
+
+### Features
+
+- **omni:** suspend hosted workbenches (#97)
+
+### Bug Fixes
+
+- **terminal:** support OSC 52 clipboard in serve-web (#96)
+- **webview:** prevent listener buildup during high-fan-out resource loads (#98)
+
 ## 0.0.53 - 2026-07-20
 
 ### Bug Fixes
