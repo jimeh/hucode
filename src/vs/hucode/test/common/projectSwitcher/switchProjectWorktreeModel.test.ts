@@ -19,6 +19,7 @@ import {
 	getLastActiveSwitchWorkbenchPick,
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
+	getRetainedWorkbenchQuickPickPresentation,
 	getVisualProjectWorktreeTargets,
 	sortProjectSwitcherNavigationHistory,
 	SwitchWorktreeQuickPick,
@@ -93,6 +94,72 @@ suite('SwitchProjectWorktreeModel', () => {
 			filterSwitchWorktreePicks(picks, 'hucode Projects').length,
 			0
 		);
+	});
+
+	test('presents retained workbenches with name and path on separate lines', () => {
+		assert.deepStrictEqual(
+			getRetainedWorkbenchQuickPickPresentation(
+				'Scratch',
+				'~/Projects/scratch',
+				'/home/test/Projects/scratch'
+			),
+			{
+				label: 'Scratch',
+				detail: '~/Projects/scratch',
+				tooltip: '/home/test/Projects/scratch',
+				searchFields: [
+					{ target: 'label', text: 'Scratch' },
+					{ target: 'detail', text: '~/Projects/scratch' },
+					{ text: '/home/test/Projects/scratch' },
+				],
+			}
+		);
+	});
+
+	test('searches retained paths with highlights only for visible text', () => {
+		const presentation = getRetainedWorkbenchQuickPickPresentation(
+			'Scratch',
+			'~/Projects/scratch',
+			'/home/test/Projects/scratch'
+		);
+		const pick = {
+			...createPick({ projectId: 'scratch' }),
+			...presentation,
+			projectId: undefined,
+			description: undefined,
+		};
+
+		const hiddenResult = filterSwitchWorktreePicks([pick], 'home');
+		const visibleResult = filterSwitchWorktreePicks([pick], 'Projects');
+
+		assert.deepStrictEqual({
+			description: pick.description,
+			hiddenLength: hiddenResult.length,
+			hiddenHighlights: hiddenResult[0]?.highlights,
+			visibleLength: visibleResult.length,
+			visibleHasDetailHighlight: Boolean(
+				visibleResult[0]?.highlights?.detail?.length
+			),
+		}, {
+			description: undefined,
+			hiddenLength: 1,
+			hiddenHighlights: {},
+			visibleLength: 1,
+			visibleHasDetailHighlight: true,
+		});
+	});
+
+	test('does not duplicate identical retained workbench search paths', () => {
+		const presentation = getRetainedWorkbenchQuickPickPresentation(
+			'Scratch',
+			'/tmp/scratch',
+			'/tmp/scratch'
+		);
+
+		assert.deepStrictEqual(presentation.searchFields, [
+			{ target: 'label', text: 'Scratch' },
+			{ target: 'detail', text: '/tmp/scratch' },
+		]);
 	});
 
 	test('groups current, loaded, dormant, and not loaded picks', () => {
@@ -368,29 +435,69 @@ suite('SwitchProjectWorktreeModel', () => {
 		}]);
 	});
 
-	test('uses MRU outside Omni and section order inside Omni', () => {
+	test('uses MRU inside and outside Omni', () => {
 		const project = {
-			...createPick({ projectId: 'project' }),
-			lastVisitedAt: 10,
+			...createPick({ projectId: 'project', isLoaded: true }),
+			lastVisitedAt: 30,
 		};
 		const workbench = {
-			...createPick({ projectId: 'scratch' }),
+			...createPick({ projectId: 'scratch', isLoaded: true }),
 			projectId: undefined,
-			lastVisitedAt: 30,
+			lastVisitedAt: 10,
 		};
 
 		assert.deepStrictEqual({
-			mru: [project, workbench]
+			standalone: [project, workbench]
 				.toSorted(compareSwitchWorktreePicks)
 				.map(pick => pick.worktreePath),
-			sectionOrder: [project, workbench]
+			workbenchesFirst: [project, workbench]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['workbenches', 'projects']
+				))
+				.map(pick => pick.worktreePath),
+			projectsFirst: [workbench, project]
 				.toSorted((a, b) => compareSwitchWorktreePicks(
 					a,
 					b,
 					['projects', 'workbenches']
 				))
 				.map(pick => pick.worktreePath),
-			partialSectionOrder: [workbench, project]
+		}, {
+			standalone: ['/tmp/project', '/tmp/scratch'],
+			workbenchesFirst: ['/tmp/project', '/tmp/scratch'],
+			projectsFirst: ['/tmp/project', '/tmp/scratch'],
+		});
+	});
+
+	test('uses logical section order to break MRU ties', () => {
+		const project = {
+			...createPick({ projectId: 'project', isLoaded: true }),
+			lastVisitedAt: 20,
+		};
+		const workbench = {
+			...createPick({ projectId: 'scratch', isLoaded: true }),
+			projectId: undefined,
+			lastVisitedAt: 20,
+		};
+
+		assert.deepStrictEqual({
+			workbenchesFirst: [project, workbench]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['workbenches', 'projects']
+				))
+				.map(pick => pick.worktreePath),
+			projectsFirst: [workbench, project]
+				.toSorted((a, b) => compareSwitchWorktreePicks(
+					a,
+					b,
+					['projects', 'workbenches']
+				))
+				.map(pick => pick.worktreePath),
+			partialProjectsFirst: [workbench, project]
 				.toSorted((a, b) => compareSwitchWorktreePicks(
 					a,
 					b,
@@ -398,10 +505,97 @@ suite('SwitchProjectWorktreeModel', () => {
 				))
 				.map(pick => pick.worktreePath),
 		}, {
-			mru: ['/tmp/scratch', '/tmp/project'],
-			sectionOrder: ['/tmp/project', '/tmp/scratch'],
-			partialSectionOrder: ['/tmp/project', '/tmp/scratch'],
+			workbenchesFirst: ['/tmp/scratch', '/tmp/project'],
+			projectsFirst: ['/tmp/project', '/tmp/scratch'],
+			partialProjectsFirst: ['/tmp/project', '/tmp/scratch'],
 		});
+	});
+
+	test('uses pinned sidebar order after MRU ties', () => {
+		const projects = [
+			createProject({
+				id: 'first',
+				worktrees: [
+					createWorktree('first/local', { isMain: true }),
+					createWorktree('first/pinned', { pinned: true }),
+				],
+			}),
+			createProject({
+				id: 'pinned-project',
+				pinned: true,
+				worktrees: [createWorktree('pinned-project/local')],
+			}),
+		];
+		const targets = getVisualProjectWorktreeTargets(projects);
+		const picks = targets.map((target, logicalOrder) => ({
+			...createPick({
+				projectId: target.projectId ?? 'retained',
+				isLoaded: true,
+			}),
+			worktreePath: target.worktreePath,
+			lastVisitedAt: 20,
+			logicalOrder,
+		})).reverse();
+
+		assert.deepStrictEqual(
+			picks.toSorted(compareSwitchWorktreePicks)
+				.map(pick => pick.worktreePath),
+			targets.map(target => target.worktreePath)
+		);
+	});
+
+	test('keeps lifecycle groups separate while sorting each by MRU', () => {
+		const current = {
+			...createPick({ projectId: 'current', isCurrent: true }),
+			lastVisitedAt: 10,
+		};
+		const loadedOld = {
+			...createPick({ projectId: 'loaded-old', isLoaded: true }),
+			lastVisitedAt: 20,
+		};
+		const loadedNew = {
+			...createPick({ projectId: 'loaded-new', isLoaded: true }),
+			lastVisitedAt: 30,
+		};
+		const dormantOld = {
+			...createPick({ projectId: 'dormant-old', isDormant: true }),
+			lastVisitedAt: 40,
+		};
+		const dormantNew = {
+			...createPick({ projectId: 'dormant-new', isDormant: true }),
+			lastVisitedAt: 50,
+		};
+		const notLoadedOld = {
+			...createPick({ projectId: 'not-loaded-old' }),
+			lastVisitedAt: 60,
+		};
+		const notLoadedNew = {
+			...createPick({ projectId: 'not-loaded-new' }),
+			lastVisitedAt: 70,
+		};
+
+		assert.deepStrictEqual(
+			[
+				notLoadedOld,
+				dormantNew,
+				loadedOld,
+				notLoadedNew,
+				current,
+				loadedNew,
+				dormantOld,
+			]
+				.toSorted(compareSwitchWorktreePicks)
+				.map(pick => pick.worktreePath),
+			[
+				'/tmp/current',
+				'/tmp/loaded-new',
+				'/tmp/loaded-old',
+				'/tmp/dormant-new',
+				'/tmp/dormant-old',
+				'/tmp/not-loaded-new',
+				'/tmp/not-loaded-old',
+			]
+		);
 	});
 
 	test('last active excludes current and never-visited workbenches', () => {
@@ -441,6 +635,7 @@ function createPick(options: {
 	readonly isCurrent?: boolean;
 	readonly isLoaded?: boolean;
 	readonly isDormant?: boolean;
+	readonly logicalOrder?: number;
 }): SwitchWorktreeQuickPick {
 	const label = options.label ?? `$(folder) ${options.projectId}`;
 	const description = options.description ?? 'local';
@@ -454,6 +649,7 @@ function createPick(options: {
 		isCurrent: options.isCurrent ?? false,
 		isLoaded: options.isLoaded ?? false,
 		isDormant: options.isDormant,
+		logicalOrder: options.logicalOrder ?? 0,
 		projectOrder: 0,
 		worktreeOrder: 0,
 		searchFields: [
