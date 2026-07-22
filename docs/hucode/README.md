@@ -1,109 +1,49 @@
-# Hucode Docs
+# Hucode Documentation
 
-This directory captures Hucode-specific product, architecture, repository, and
-agent guidance for this VS Code fork.
+Hucode is a VS Code fork built around Omni: a persistent shell for navigating
+projects, git worktrees, and several hosted workbenches without opening a
+separate application window for each one.
 
-Start here:
+## Using Hucode
 
-- [Agent Instructions](./agent-instructions.md): Hucode-specific rules, gotchas,
-  and boundaries agents should load before Hucode work.
-- [Architecture](./architecture.md): current runtime shape, module ownership,
-  and core invariants.
-- [Repo Strategy](./repo-strategy.md): how to structure the fork, track VS Code
-  releases, and package Hucode.
-- [Release Build Size Analysis](./release-build-size-analysis.md): investigation
-  notes on Hucode macOS app size, source maps, node_modules pruning, and
-  upstream Copilot VSIX packaging.
-- [Linux Installation And Updates](./linux-installation.md): choose a public
-  Linux package and perform manual upgrades.
-- [Roadmap](./roadmap.md): completed, active, and later work.
-- [Upgrade Skill](../../.agents/skills/hucode-upgrade-vscode/SKILL.md):
-  operational workflow for upgrading the underlying VS Code release.
+- [Omni](omni.md) explains projects, workbenches, lifecycle actions, settings,
+  and the differences between desktop and serve-web.
+- [Linux Installation and Updates](linux-installation.md) covers public Linux
+  packages and manual upgrades.
+- [Roadmap](roadmap.md) summarizes what exists today, what is being hardened,
+  and what remains exploratory.
 
-Current assumptions:
+## Understanding Hucode
 
-- Hucode is a real fork of `microsoft/vscode`, not a wrapper that downloads VS
-  Code at build time.
-- Hucode product identity lives in the tracked mixin overlay under
-  `build/hucode/mixin/stable/`; root product files stay upstream OSS.
-- The project manager lives outside any individual workspace renderer.
-- Omni workspaces are hosted in Electron `WebContentsView` instances.
-- Hucode is rebranded and uses OpenVSX for extension discovery and install.
+- [Architecture](architecture.md) describes the current runtime shape, module
+  ownership, and design invariants.
+- [Repository Strategy](repo-strategy.md) explains the rolling `series-*`
+  development model and the VS Code upgrade process.
+- [Release Guide](release.md) documents versions, change fragments, CI builds,
+  public assets, signing, and updates.
 
-Current local workflow:
+## Developing Hucode
 
-- `npm run hucode:prepare`: generate the tracked stable overlay into
-  `.build/distro/mixin/stable/`.
-- `npm run hucode:validate`: verify the Hucode mixin and generated output.
-- `npm run hucode:compile`: build client, built-in extensions, and extension
-  media with Hucode product config staged for the subprocess.
-- `npm run hucode:watch`: run the normal watch flow with Hucode product config
-  staged for the subprocess.
-- `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
-- `npm run hucode:web`: launch the local serve-web development server through
-  the Hucode wrapper.
-- `npm run hucode:generate-icons`: regenerate Hucode macOS, serve-web, and
-  Linux icon assets from `build/hucode/icons/darwin/`.
-- `npm run hucode:generate-server-icons`: regenerate only the serve-web icons
-  from the tracked Hucode `code.icns` on any platform.
-- `npm run hucode:generate-linux-icons`: derive the Linux PNG and XPM from the
-  tracked stable ICNS without requiring macOS icon tools.
-- `npm run hucode:prepare-release -- --version <version>`: consume
-  `.changes/*.md` fragments, update `CHANGELOG.md`, and bump Hucode release
-  metadata before tagging a release.
-- `npm run hucode:build:production`: build a minified desktop app and move it
-  into the default `dist/hucode-<platform>-<arch>` output directory. Local
-  release builds strip packaged source maps by default; pass
-  `-- --include-source-maps` to keep them for debugging.
-- `npm run hucode:build:release`: build a minified desktop app, create a zip
-  archive, and move the app output into `dist/`.
-- `node build/hucode/release-build.ts --phase build`: build the final unsigned
-  app output at `../VSCode-<platform>-<arch>`, including Copilot target shims
-  and the Hucode Rust CLI.
-- `node build/hucode/release-build.ts --phase package --artifacts <list>`:
-  package an existing final app output into release assets. The default phase is
-  `all`, which preserves the older build-and-package flow. Include `cli` to
-  package the mixed-in Rust CLI as a one-file standalone archive.
-- `node build/hucode/release-build.ts --copilot-vsix <path>`: inject a
-  prebuilt Copilot VSIX into `.build/extensions/copilot` before packaging the
-  desktop app, matching the release workflow's smaller Copilot package shape.
-- `node build/hucode/release-build.ts --prebuilt-cli <path>`: mix a CLI built
-  for the selected target into the final app output. Release CI uses this for
-  the x64-hosted Linux arm64 cross-build so the standalone CLI retains
-  upstream's GLIBC 2.28 compatibility baseline.
-- `node build/hucode/release-build.ts --platform darwin --arch <arch> --sign`:
-  sign the macOS app, then sign, notarize, staple, and validate DMG release
-  assets. Signed Darwin ZIP archives are still supported for explicit local
-  artifact requests by notarizing and stapling the app before archiving it.
-  Local signing uses the current keychain search list by default and does not
-  create or switch keychains. It needs `APPLE_TEAM_ID` plus either
-  `APPLE_NOTARIZATION_KEYCHAIN_PROFILE`, `APPLE_NOTARIZATION_KEY_PATH`, or
-  `APPLE_NOTARIZATION_KEY_P8_BASE64`; API-key paths/base64 also need
-  `APPLE_NOTARIZATION_ISSUER_ID` and `APPLE_NOTARIZATION_KEY_ID`. Release CI
-  passes `--signing-mode ci` to import its base64 certificate and notary key
-  into a temporary keychain.
-- `node build/hucode/release-size-report.js --app <path>`: report packaged app
-  size, key subdirectory sizes, source-map totals, and release size guardrails.
+- [Development Guide](development.md) covers setup, the Hucode overlay, common
+  commands, and validation.
+- [Agent Instructions](agent-instructions.md) contains detailed operational
+  rules and hard-won gotchas for automated contributors. Humans changing
+  Hucode internals should consult it too.
+- [VS Code Upgrade Skill](../../.agents/skills/hucode-upgrade-vscode/SKILL.md)
+  is the executable, step-by-step upgrade procedure for coding agents.
 
-## Updates
+## Historical Design Records
 
-Hucode stable builds use `https://updates.hucode.dev` as the built-in update
-feed. The feed serves VS Code updater responses at
-`/api/update/<platform>/stable/<commit>`, where macOS x64 uses `darwin` and
-macOS arm64 uses `darwin-arm64`.
+Completed plans and investigations are retained in [archive](archive/) for
+decision history. They describe the state and assumptions at the time they
+were written; the guides above are the source of truth for current behavior.
 
-Release DMGs are manual install assets. macOS release ZIPs are the Squirrel.Mac
-auto-update assets consumed by Electron's macOS updater. Linux x64 and arm64
-builds report available updates in the built-in update UI, but selecting the
-update action opens the latest GitHub Release for a manual ZIP, DEB, or RPM
-upgrade. Hucode does not change Linux package sources or infer the installed
-package format. Builds produced before the Hucode product mixin included
-`updateUrl` cannot discover updates automatically, so the first updater-enabled
-release is the bootstrap for later updates.
+- [Omni Workbenches and Projects Plan](archive/omni-workbenches-plan.md)
+- [Serve-Web Omni Plan](archive/serve-web-omni-plan.html)
+- [Serve-Web Omni Self-Review](archive/serve-web-omni-self-review.md)
+- [Release Build Size Analysis](archive/release-build-size-analysis.md)
 
-GitHub Releases publish Linux desktop ZIP, DEB, and RPM packages for x64 and
-arm64, plus standalone CLI and server-web archives for macOS, Linux, and
-Windows x64/arm64. The CLI resolves matching server-web archives through the
-platform-specific
-`/api/latest/server-<platform>-<arch>-web/stable` endpoints; Linux armhf does
-not support `serve-web` because there is no arm32 server build.
+When behavior changes, update the smallest current guide that owns the
+contract. Add implementation-specific pitfalls to `agent-instructions.md`, and
+move completed execution plans into `archive/` instead of leaving them mixed
+with current guidance.

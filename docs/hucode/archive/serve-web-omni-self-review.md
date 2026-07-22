@@ -1,8 +1,12 @@
 # Serve Web Omni Self-Review Follow-Up
 
-This checklist tracks the self-review findings for the serve-web Omni shell PR.
-Keep this file current while fixing the branch so another agent can see which
-items remain open.
+> [!NOTE]
+> This completed review checklist is preserved for implementation history. See
+> the current [Omni guide](../omni.md) and
+> [architecture](../architecture.md) for the supported behavior.
+
+This checklist tracked the self-review findings for the serve-web Omni shell
+pull request. All recorded items are complete.
 
 ## Findings
 

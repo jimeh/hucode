@@ -5,7 +5,7 @@
 Hucode is a VS Code fork with a persistent project manager shell around one or
 more hosted workspaces. The shell owns global navigation, project/worktree
 state, and workspace lifecycle. Individual workspaces continue to run as mostly
-normal VS Code desktop workbenches.
+normal VS Code workbenches, hosted in Electron on desktop or iframes on web.
 
 The core user experience is:
 
@@ -14,7 +14,8 @@ The core user experience is:
 - a left-side Projects surface
 - saved projects with nested git worktrees
 - fast switching between resident workspaces
-- explicit active, loaded, loading, unloaded, and crashed workspace states
+- explicit restore-pending, loading, active, loaded, dormant, unloaded,
+  missing, and crashed workspace states
 
 ## Runtime Shape
 
@@ -91,11 +92,11 @@ Hucode route selection lives in `src/vs/server/node/hucodeWebOmniRoutes.ts` and
 `webClientServer.ts` as a thin integration point that delegates routing and
 Hucode workbench configuration into those companions.
 
-### Main-Process Services
+### Desktop Main-Process and Web Server Services
 
-The project manager and hosted workspace controller are main-process services.
-They coordinate shared state across the Omni shell and hosted workbench
-renderers.
+On desktop, the project manager and hosted workspace controller are
+main-process services. They coordinate shared state across the Omni shell and
+hosted workbench renderers.
 
 Key services:
 
@@ -124,9 +125,10 @@ browser-side serve-web concern.
 
 ### Project Manager
 
-The project manager stores the user-defined project list and worktrees. It is a
-single main-process service exposed to the Omni shell and hosted workbench
-renderers through the `projectManager` channel.
+The project manager stores the user-defined project list and worktrees. Desktop
+exposes one main-process service to the Omni shell and hosted workbench
+renderers through the `projectManager` channel. Serve-web hosts the same shared
+Node service behind its HTTP/SSE adapter.
 
 Responsibilities:
 

@@ -4,6 +4,17 @@ These instructions capture Hucode-specific conventions and gotchas. Read this
 file before changing Hucode code, Hucode docs, Hucode build scripts, or shared
 VS Code code that Hucode customizes.
 
+Use the shorter guides for orientation before loading subsystem detail:
+
+- [Development](development.md) for setup, commands, and routine validation
+- [Omni](omni.md) for the user-visible project and lifecycle model
+- [Architecture](architecture.md) for runtime ownership and invariants
+- [Repository Strategy](repo-strategy.md) for branch and upgrade policy
+- [Release Guide](release.md) for versions, assets, signing, and updates
+
+The rules below are deliberately operational and specific. They supplement the
+human-facing guides rather than replacing them.
+
 ## Product Identity And Release Overlay
 
 - Hucode's current tree does not require Git LFS. Older reachable commits may
@@ -177,7 +188,8 @@ VS Code code that Hucode customizes.
   `--include-source-maps` to `build/hucode/release-build.ts` only when a local
   package needs debuggable bundled source maps.
 - For release app size work, read
-  [Release Build Size Analysis](release-build-size-analysis.md). Upstream VS
+  [Release Build Size Analysis](archive/release-build-size-analysis.md).
+  Upstream VS
   Code strips core source maps in CI, prunes production `node_modules` through
   `.moduleignore`, and injects Copilot from a separately built VSIX. Hucode's
   release workflow builds a Copilot VSIX once, uploads it as

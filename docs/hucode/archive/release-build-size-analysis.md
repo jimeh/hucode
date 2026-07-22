@@ -1,5 +1,10 @@
 # Hucode macOS Release Build Size Analysis
 
+> [!NOTE]
+> This historical investigation predates the completed Copilot VSIX packaging
+> and release-matrix work. Its measurements and interim recommendations are not
+> the current release contract. See the [Release Guide](../release.md).
+
 This document captures the investigation into why Hucode macOS app bundles are
 larger than official VS Code bundles, and how upstream VS Code production builds
 reduce final app size. It is intended as a handoff for agents working on Hucode
