@@ -1,6 +1,6 @@
 <div align="center">
 
-<img height="196px" width="196px" src="./build/hucode/mixin/stable/resources/server/code-512.png" alt="Hucode app icon">
+<img height="196" width="196" src="./build/hucode/mixin/stable/resources/server/code-512.png" alt="Hucode app icon">
 
 # Hucode
 
@@ -75,10 +75,16 @@ Every release includes `SHA256SUMS`. Verify a downloaded asset with:
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
+On macOS, use `shasum -a 256 <downloaded-asset>` and compare the result with
+the matching entry in `SHA256SUMS`.
+
 ## Self-Host Hucode
 
 Hucode publishes standalone CLI and server-web archives for macOS, Linux, and
-Windows. Once the `hucode` CLI is installed, start the Omni web shell with:
+Windows. Download the `hucode-cli-<platform>-<arch>` archive for your system
+from the [latest GitHub Release](https://github.com/jimeh/hucode/releases/latest),
+extract it, and place `hucode` (`hucode.exe` on Windows) on your `PATH`. Then
+start the Omni web shell with:
 
 ```sh
 hucode serve-web --omni

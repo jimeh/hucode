@@ -57,9 +57,9 @@ source and can be substantially larger than CI output.
 
 The `Hucode release build` workflow builds a target matrix, compiles Copilot
 once as a production VSIX, injects that VSIX into each desktop app, produces
-size reports, and smoke-tests the published Linux packages. App assembly and
-packaging are separate phases so signing happens only after the payload is
-final.
+size reports, and smoke-tests the Linux packages before publication. App
+assembly and packaging are separate phases so signing happens only after the
+payload is final.
 
 Every published tag release must contain:
 
@@ -101,6 +101,15 @@ Stable builds use `https://updates.hucode.dev`.
   not modify package repositories or guess the installed package format.
 - `hucode serve-web` resolves the matching server-web archive through the
   update service.
+
+The machine-facing update routes are part of this contract:
+
+- Desktop update checks use
+  `/api/update/<platform>/<quality>/<commit>`. Stable macOS builds use `darwin`
+  for x64 and `darwin-arm64` for arm64 as the platform segment.
+- The CLI resolves server-web builds through
+  `/api/latest/server-<platform>-<arch>-web/<quality>`, such as
+  `/api/latest/server-linux-x64-web/stable`.
 
 Builds from before the product overlay acquired `updateUrl` cannot discover a
 new release automatically; the first updater-enabled build is the bootstrap

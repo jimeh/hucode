@@ -9,7 +9,7 @@ normal VS Code workbenches, hosted in Electron on desktop or iframes on web.
 
 The core user experience is:
 
-- one native Omni window
+- one or more native Omni windows
 - a serve-web Omni shell at `/omni`, optionally also at `/`
 - a left-side Projects surface
 - saved projects with nested git worktrees
