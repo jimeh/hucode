@@ -56,6 +56,7 @@ import {
 	getLastActiveSwitchWorkbenchPick,
 	getLoadedProjectWorktreeTargets,
 	getLoadedSwitchWorktreePicks,
+	getRetainedWorkbenchQuickPickPresentation,
 	getVisualProjectWorktreeTargets,
 	IProjectSwitcherSelectionTarget,
 	SwitchWorktreeQuickPick,
@@ -169,6 +170,7 @@ function getSwitchWorktreePicks(
 	labelService: ILabelService
 ): SwitchWorktreeQuickPick[] {
 	const picks: SwitchWorktreeQuickPick[] = [];
+	const logicalTargets = getVisualProjectWorktreeTargets(projects);
 	for (const project of projects) {
 		for (const [worktreeOrder, worktree] of project.worktrees.entries()) {
 			const worktreeLabel = getWorktreeDisplayLabel(worktree);
@@ -183,6 +185,9 @@ function getSwitchWorktreePicks(
 			const loadedWorktree = loadedWorktrees.find(entry =>
 				pathsEqual(entry.path, worktree.path)
 			);
+			const logicalOrder = logicalTargets.findIndex(target =>
+				pathsEqual(target.worktreePath, worktree.path)
+			);
 			picks.push({
 				projectId: project.id,
 				worktreePath: worktree.path,
@@ -190,6 +195,9 @@ function getSwitchWorktreePicks(
 				isLoaded: isCurrent || !!loadedWorktree,
 				lastVisitedAt: loadedWorktree?.lastActiveAt ??
 					worktree.lastVisitedAt,
+				logicalOrder: logicalOrder < 0
+					? Number.MAX_SAFE_INTEGER
+					: logicalOrder,
 				projectOrder: project.order,
 				worktreeOrder,
 				label: projectLabel,
@@ -234,8 +242,12 @@ function getRetainedWorkbenchPicks(
 					? 'missing'
 					: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
 			const isDormant = lifecycleState === 'dormant';
-			const label = presentation.label;
-			const description = presentation.pathLabel;
+			const quickPickPresentation =
+				getRetainedWorkbenchQuickPickPresentation(
+					presentation.label,
+					presentation.pathLabel,
+					path
+				);
 			return {
 				worktreePath: path,
 				isCurrent: activeWorktreePath !== undefined &&
@@ -243,9 +255,10 @@ function getRetainedWorkbenchPicks(
 				isLoaded,
 				isDormant,
 				lastVisitedAt: instance?.lastActiveAt ?? record.lastActiveAt,
+				logicalOrder: record.order,
 				projectOrder: -1,
 				worktreeOrder: record.order,
-				label,
+				...quickPickPresentation,
 				iconClass: ThemeIcon.asClassName(
 					lifecycleState === 'restore-pending' ||
 						lifecycleState === 'loading'
@@ -258,13 +271,6 @@ function getRetainedWorkbenchPicks(
 									? Codicon.warning
 									: Codicon.window
 				),
-				description,
-				tooltip: path,
-				searchFields: [
-					{ target: 'label' as const, text: label },
-					{ target: 'description' as const, text: description },
-					{ target: 'detail' as const, text: path },
-				],
 			};
 		});
 }

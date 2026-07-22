@@ -297,12 +297,16 @@ Dismissal must never delete or modify the selected directory.
   when selected.
 - Previous/Next Loaded Project Worktree becomes **Previous/Next Loaded
   Workbench** and cycles only across live hosted instances.
-- Combined target order follows the persisted sidebar section order. Within
-  Workbenches it uses manual order; within Projects it uses existing
+- Previous/Next target order follows the persisted sidebar section order.
+  Within Workbenches it uses manual order; within Projects it uses existing
   pinned/unpinned project and worktree order. Collapsed section state does not
   remove targets from keyboard navigation.
 - Quick-pick grouping should distinguish Current, Loaded, Dormant, and Not
-  Loaded while preserving combined target order within each group.
+  Loaded. Within each group, targets use combined activation recency, with
+  sidebar order as the fallback for equal or missing timestamps.
+- Arbitrary-workbench quick-pick rows show the workbench name on the first line
+  and its home-relative path as second-line detail, matching project worktree
+  row height.
 - Search arbitrary entries by basename and full/home-relative path; preserve
   existing project and worktree search fields.
 - Keep existing command IDs, quick-navigation context IDs, and keybindings for
@@ -1055,8 +1059,9 @@ Add coverage for:
 - the full picker includes project, loaded, dormant, and explicitly unloaded
   arbitrary targets;
 - the loaded quick switcher includes only live project and arbitrary targets;
-- Current, Loaded, Dormant, and Not Loaded grouping preserves relative logical
-  order;
+- Current, Loaded, Dormant, and Not Loaded grouping sorts each group by combined
+  activation recency and falls back to relative logical order;
+- arbitrary-workbench quick picks render the name and path on separate lines;
 - arbitrary basename, home-relative path, and full path are searchable;
 - previous/next wraps across the Workbenches/Projects boundary;
 - previous/next loaded skips dormant and explicitly unloaded targets;
@@ -1416,6 +1421,7 @@ implementation.
 | 2026-07-17 | Configure workbench and worktree density independently | Transient folder paths and project branch metadata have different space needs |
 | 2026-07-17 | Keep serve-web tab ownership browser-local | VS Code web has no cross-tab workspace registry or reliable tab-focus API |
 | 2026-07-17 | Preflight folders in the Omni shell | Missing folders remain recoverable without launching a broken hosted workbench |
+| 2026-07-22 | Sort quick-pick lifecycle groups by MRU | Quick switching should remain recency-driven while Previous/Next navigation follows stable sidebar order |
 
 ## Implementation log
 
@@ -1439,6 +1445,7 @@ Add dated entries as implementation progresses.
 | 2026-07-18 | Relaunch hardening | Preserved the pre-shutdown resident project snapshot during hosted-view teardown; coalesced same-folder opens; protected unloads from reactivation; canonicalized Workbenches-plus project targets; excluded virtual folders from Omni browser routing | 118 focused Electron/browser tests pass; a two-restart desktop QA run restored the arbitrary workbench active and rendered the previously loaded project worktree with the pause icon |
 | 2026-07-18 | Exact-head review fixes | Reloaded desktop workbenches reactivated after will-unload, including pre-ready instances; made overlapping closes single-owner; kept recency activation-driven across desktop and web; transitioned missing or failed web restores to explicit unloaded state; guarded inactive retained rows; preferred project metadata on restore overlap; and limited promotion reconciliation to authoritative project worktrees | Both review phases are covered by focused regressions; final exact-head re-review and CI remain pending |
 | 2026-07-18 | CodeRabbit follow-up | Preserved restore intent across transient web stat failures; rechecked project ownership after asynchronous preflight; bypassed Omni routing for profile, temporary-profile, chat-session, and extension-development opens; repaired malformed retained ordering; restricted Last Active to visited targets; and hardened persistence and routing tests | CodeRabbit approved `e74d4a5d2c0` with no new actionable comments; all eight original threads are resolved and all three test-maintainability nitpicks are addressed |
+| 2026-07-22 | Quick-picker consistency fix | Restored MRU sorting within lifecycle groups, retained pinned logical section order as the deterministic fallback, and aligned arbitrary-workbench rows with the two-line project-worktree layout | Full client compile, 23 focused model tests, dual-review fixes, and changed-file hygiene pass |
 
 ## Validation log
 

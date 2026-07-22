@@ -50,8 +50,9 @@ export function sortProjectSwitcherNavigationHistory(
 		.map(({ projectId, worktreePath }) => ({ projectId, worktreePath }));
 }
 
+/** Searchable quick-pick text with an optional visible highlight target. */
 export type SwitchWorktreeSearchField = {
-	readonly target: keyof IQuickPickItemHighlights;
+	readonly target?: keyof IQuickPickItemHighlights;
 	readonly text: string;
 };
 
@@ -61,10 +62,32 @@ export type SwitchWorktreeQuickPick = IQuickPickItem &
 		readonly isLoaded: boolean;
 		readonly isDormant?: boolean;
 		readonly lastVisitedAt?: number;
+		readonly logicalOrder: number;
 		readonly projectOrder: number;
 		readonly worktreeOrder: number;
 		readonly searchFields: readonly SwitchWorktreeSearchField[];
 	};
+
+/** Builds two-line text and search fields for a retained-workbench pick. */
+export function getRetainedWorkbenchQuickPickPresentation(
+	label: string,
+	pathLabel: string,
+	path: string
+): Pick<
+	SwitchWorktreeQuickPick,
+	'label' | 'detail' | 'tooltip' | 'searchFields'
+> {
+	return {
+		label,
+		detail: pathLabel,
+		tooltip: path,
+		searchFields: [
+			{ target: 'label', text: label },
+			{ target: 'detail', text: pathLabel },
+			...(pathLabel === path ? [] : [{ text: path }]),
+		],
+	};
+}
 
 /** Returns the most recently visited non-current workbench, if any. */
 export function getLastActiveSwitchWorkbenchPick(
@@ -80,7 +103,7 @@ export function getLastActiveSwitchWorkbenchPick(
 		)[0];
 }
 
-/** Orders quick-pick rows by MRU or by the Omni sidebar section order. */
+/** Orders lifecycle-grouped quick-pick rows by MRU, then logical order. */
 export function compareSwitchWorktreePicks(
 	a: SwitchWorktreeQuickPick,
 	b: SwitchWorktreeQuickPick,
@@ -95,9 +118,9 @@ export function compareSwitchWorktreePicks(
 	return Number(b.isCurrent) - Number(a.isCurrent) ||
 		Number(b.isLoaded) - Number(a.isLoaded) ||
 		Number(!!b.isDormant) - Number(!!a.isDormant) ||
-		(sectionOrder
-			? sectionRank(a) - sectionRank(b)
-			: (b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0)) ||
+		(b.lastVisitedAt ?? 0) - (a.lastVisitedAt ?? 0) ||
+		(sectionOrder ? sectionRank(a) - sectionRank(b) : 0) ||
+		a.logicalOrder - b.logicalOrder ||
 		a.projectOrder - b.projectOrder ||
 		a.worktreeOrder - b.worktreeOrder ||
 		a.label.localeCompare(b.label) ||
@@ -317,10 +340,12 @@ function getSwitchWorktreeHighlights(
 			}
 
 			didMatchToken = true;
-			highlights[field.target] = mergeMatches(
-				highlights[field.target],
-				matches
-			);
+			if (field.target) {
+				highlights[field.target] = mergeMatches(
+					highlights[field.target],
+					matches
+				);
+			}
 		}
 
 		if (!didMatchToken) {
