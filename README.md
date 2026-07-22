@@ -43,6 +43,26 @@ project-oriented shell.
 - **OpenVSX extensions.** Hucode uses [OpenVSX](https://open-vsx.org/) for
   extension discovery and installation.
 
+## Getting Around
+
+Hucode provides these default workbench shortcuts on macOS:
+
+| Command | macOS |
+| --- | --- |
+| Quick Switch Loaded Workbench | `Cmd+Ctrl+Tab` |
+| Switch Workbench... | `Cmd+Ctrl+P` |
+| Switch to Previous Loaded Workbench | `Cmd+Ctrl+[` |
+| Switch to Next Loaded Workbench | `Cmd+Ctrl+]` |
+
+Quick Switch works like the macOS app switcher: hold `Cmd+Ctrl`, press `Tab` to
+cycle through loaded workbenches, use `Shift+Tab` to move backward, then release
+the modifiers to activate the selected workbench. `Cmd+Ctrl+P` opens the full
+switcher, including dormant and unloaded workbenches.
+
+All four commands are also available from the Command Palette and can be
+changed in Keyboard Shortcuts. Windows and Linux defaults are being tracked in
+[issue #100](https://github.com/jimeh/hucode/issues/100).
+
 ## Download Hucode
 
 Prebuilt desktop releases are currently available for macOS and Linux from the
