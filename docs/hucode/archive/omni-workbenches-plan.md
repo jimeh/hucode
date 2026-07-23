@@ -1,10 +1,16 @@
 ---
 title: Hucode Omni Workbenches and Projects Sidebar Plan
-status: implemented
+status: archived
 last_updated: 2026-07-18
 ---
 
 # Hucode Omni Workbenches and Projects Sidebar Plan
+
+> [!NOTE]
+> This is a completed implementation plan preserved for decision history. See
+> the current [Omni guide](../omni.md) and
+> [architecture](../architecture.md) for the supported behavior and runtime
+> contract.
 
 ## Document purpose
 

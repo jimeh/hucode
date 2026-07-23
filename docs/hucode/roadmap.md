@@ -1,216 +1,112 @@
 # Hucode Roadmap
 
-This roadmap is grouped by current status instead of historical phase. Older
-phase names are kept as context where useful, but the source of truth is whether
-the capability is completed, active, or later.
+This roadmap describes product capability by current status. It is not a
+release schedule. Completed implementation plans are preserved under
+[`archive/`](archive/) rather than kept here as active checklists.
 
 ## Completed
 
-### Fork Baseline
+### Fork and Product Baseline
 
-Goal:
+- Hucode builds as a branded VS Code source fork.
+- Product identity is isolated in the tracked stable mixin overlay.
+- OpenVSX is the extension gallery.
+- Build, watch, run, web, icon, validation, changelog, and release commands are
+  available from the repository root.
+- Selected VS Code releases are tracked through clean `upstream-*` baselines
+  and rolling `series-*` development branches.
 
-- establish the fork as a buildable, branded Hucode baseline
+### Omni Projects and Workbenches
 
-Done:
+- The Omni shell owns project navigation outside individual workbench
+  renderers.
+- Saved projects expose their git worktrees in the Projects sidebar.
+- Arbitrary folder workbenches can coexist with project worktrees.
+- Add, create, remove, rename, refresh, pin, reorder, switch, suspend, unload,
+  and dismiss flows are implemented where applicable.
+- Quick-pick, recent-workbench, previous, and next navigation are available.
+- Folder-open requests route into Omni on desktop and serve-web.
 
-- Hucode product branding lives in the tracked mixin overlay
-- OpenVSX marketplace defaults are configured
-- Hucode build, run, release, icon, and validation scripts exist
-- repo strategy documents upstream, series, and replay branch workflows
-- a project-local `hucode-upgrade-vscode` skill captures the upgrade process
+### Hosted Workbench Lifecycle
 
-Validation:
+- Desktop workbenches are hosted in Electron `WebContentsView` instances.
+- Serve-web workbenches are hosted in same-origin iframes.
+- Both adapters share indexing, active selection, navigation, readiness, and
+  public lifecycle projection.
+- Startup can restore the active workbench, all desired-loaded workbenches, or
+  none of them eagerly.
+- Dormant and suspended workbenches release renderer resources while retaining
+  restoration intent.
+- Explicit unload, renderer unload handshakes, crash state, shutdown flushing,
+  and hosted browser-view cleanup are implemented.
 
-- `npm install`
-- `npm run hucode:validate`
-- `npm run hucode:compile`
-- `npm run hucode:run`
+### Shell and Extension Hardening
 
-### Project Model And Projects Surface
+- Shell commands and keybindings route to the correct shell or hosted
+  workbench scope.
+- Focus and native paste handoff work across the shell and desktop hosts.
+- User extensions are filtered for the lightweight Omni shell while hosted
+  workbenches keep normal extension behavior.
+- Integrated browser views remain interactive and track hosted-workbench
+  visibility and ownership.
 
-Goal:
+### Release and Update Pipeline
 
-- build the project and worktree model and expose it through the Omni Projects
-  surface
-
-Done:
-
-- persistent project registry
-- main-process git worktree service
-- combined Workbenches and Projects UI with retained arbitrary folders
-- per-window retained-workbench persistence, unload/dismiss lifecycle, and
-  drag-and-drop ordering
-- desktop and serve-web startup policy with active/all/none eager restore
-- combined quick picker, MRU, and previous/next workbench navigation
-- arbitrary folder-open routing into Omni on desktop and serve-web
-- Projects UI with projects and nested worktrees
-- add, remove, rename, refresh, pin, switch, and unload flows
-- shell-owned Projects part for Omni windows
-
-Validation:
-
-- project manager tests under `src/vs/platform/projectManager/test`
-- project switcher model tests under `src/vs/hucode/test`
-- manual add, remove, rename, refresh, switch, and unload testing
-
-### Omni Shell And Hosted Workspaces
-
-Goal:
-
-- move the project manager outside the workspace workbench and host workspaces
-  as native views
-
-Done:
-
-- Hucode Omni renderer entrypoint and shell bootstrap
-- Hucode-local shell parts under `src/vs/hucode/browser/`
-- hosted workspace creation through Electron `WebContentsView`
-- focus handoff between shell and hosted workspace
-- shell/workspace command and keybinding forwarding
-- native paste routing for hosted workspaces
-
-Validation:
-
-- launch Omni shell on macOS
-- switch focus between Projects and hosted workspace
-- verify native menu actions and keyboard shortcuts in both scopes
-- verify paste works in Projects prompts and hosted editors
-
-### Multi-Workspace Lifecycle
-
-Goal:
-
-- support multiple resident hosted workspaces with explicit lifecycle state
-
-Done:
-
-- active, loading, loaded, and unloaded hosted workspace states
-- resident workspaces keyed by worktree path
-- restart restore of resident hosted workspaces
-- shared in-flight restore to avoid partial startup snapshots
-- renderer unload handshake during workspace unload and app quit
-- hosted integrated-browser ownership cleanup during unload
-
-Validation:
-
-- manual switching across multiple real projects
-- verify hidden workspaces resume quickly
-- verify unload frees the hosted workspace without deleting project entries
-- verify restart restores one active workspace
-- verify app quit flushes hosted workspace state
-
-### Extension And Browser Hardening
-
-Goal:
-
-- keep the Omni shell lightweight and keep integrated browser views usable from
-  hosted workspaces
-
-Done:
-
-- centralized Hucode extension enablement policy
-- theme-only user extension filtering for the Omni shell
-- selected built-in extension suppression for shell startup
-- hosted integrated browser views as top-level native siblings
-- hosted browser view visibility, z-order, and unload ownership tracking
-
-Validation:
-
-- inspect shell and hosted extension-host logs
-- open integrated browser tabs inside hosted workspaces
-- switch workspaces while browser tabs are visible
-- unload hosted workspaces with browser tabs open
+- GitHub Actions builds macOS, Linux, and Windows matrix targets.
+- Required public releases contain macOS and Linux desktop packages plus
+  standalone CLI and server-web archives for supported targets.
+- Copilot is built once as a production VSIX and injected into platform builds.
+- Release output has size reports, checksums, metadata validation, Linux
+  package smoke tests, and guarded publication.
+- macOS signing and notarization are integrated.
+- Stable builds use `updates.hucode.dev`; macOS supports automatic ZIP updates,
+  while Linux directs users to manual package downloads.
 
 ## Active
 
-### Upgrade And Release Discipline
+### VS Code Upgrade Discipline
 
-Goal:
+- Keep the repository strategy and upgrade skill aligned with each new VS Code
+  baseline.
+- Curate replay branches so future upgrades carry stable Hucode patches rather
+  than development and conflict-resolution churn.
+- Keep the active `series-*` branch as the repository default and update
+  branch-aware automation when the active series changes.
+- Preserve thin, named Hucode integration seams as upstream APIs move.
 
-- keep Hucode rebases onto upstream VS Code releases repeatable and reviewable
+### Hosted Workbench Reliability
 
-Work:
+- Continue hardening launch, eager restore, suspend, unload, crash, focus, and
+  quit sequencing across desktop and serve-web.
+- Exercise repeated switching with real repositories and multiple resident
+  workbenches.
+- Keep browser views, devtools, extension hosts, and utility-process ownership
+  tied to the correct hosted workbench.
+- Add focused regression tests whenever a lifecycle edge case is fixed.
 
-- keep `repo-strategy.md` and the upgrade skill aligned after each release
-- publish `upstream-<version>` and `series-<version>` branches to origin
-- create aggressive replay branches from the previous series when useful
-- run `npm install` before replaying commits onto a new upstream branch
-- keep root `product.json` and upstream resources clean after Hucode commands
+### Documentation and Feedback Loops
 
-Validation:
+- Keep the current guides useful to humans and agents.
+- Move completed plans and one-off investigations into the archive with clear
+  historical status.
+- Record durable subsystem gotchas in `agent-instructions.md` and keep routine
+  setup in the shorter development guide.
+- Keep release documentation synchronized with machine-checked asset and
+  workflow contracts.
 
-- `npm run precommit`
-- `npm run hucode:validate`
-- tree-equivalence checks when creating replay branches
-- manual launch smoke test after each upgrade
+## Later or Exploratory
 
-### Hosted Workspace Reliability
+These are possible directions, not committed release promises:
 
-Goal:
-
-- make resident hosted workspaces boring under startup, shutdown, focus changes,
-  and native view churn
-
-Work:
-
-- continue hardening restore, unload, and app quit sequencing
-- test hidden and restored hosted workspaces with real projects
-- keep browser views, devtools, and utility process ownership tied to hosted
-  `webContentsId`
-- document any new native view gotchas in `agent-instructions.md`
-
-Validation:
-
-- repeated launch, switch, unload, reload, and quit cycles
-- integrated browser interaction after workspace switches
-- extension host and utility process startup log review
-
-### Documentation Harness
-
-Goal:
-
-- keep future agents pointed at the right Hucode context without overloading
-  root instructions
-
-Work:
-
-- keep root `AGENTS.md` as a small loader
-- keep Hucode operational rules in `agent-instructions.md`
-- update architecture when subsystem ownership changes
-- update this roadmap when active work moves to completed
-
-Validation:
-
-- markdown review after Hucode architecture changes
-- verify new hard-won gotchas are recorded in `agent-instructions.md`
-
-## Later
-
-Loaded resident workbenches are treated like multiple normal VS Code windows:
-users can keep as many open as their machine can reasonably support, and
-explicit unload remains the primary resource control.
-
-### CI Production Builds
-
-Goal:
-
-- produce production-ready Hucode builds for every supported platform through
-  GitHub Actions
-
-Work:
-
-- define the supported platform matrix for Hucode releases
-- wire GitHub Actions jobs for production builds on each supported platform
-- publish build artifacts from CI in a consistent layout
-- keep release build and archive flows documented around CI entrypoints
-- verify OpenVSX signature handling in production builds
-- add repeatable smoke checks for packaged CI artifacts
-
-Validation:
-
-- CI runs `npm run hucode:build:production` or the platform-specific release
-  wrapper for each supported platform
-- CI archives the expected Hucode artifacts for every platform
-- packaged app launch and extension install smoke tests pass on supported
-  platforms where automation is practical
+- Decide whether Hucode needs a stable `main` branch, and whether it would be a
+  mirror, archive, or true integration branch. Avoid automatic merges until the
+  desired history contract is clear.
+- Decide whether Windows desktop packages should become public release assets,
+  including signing, installation, update, and smoke-test requirements.
+- Extend hosted Omni support beyond single-folder workbenches where the product
+  model is clear, including workspace files, multi-root workspaces,
+  remote-authority windows, or empty workbenches.
+- Improve packaged-app and browser end-to-end coverage where reliable
+  automation can replace manual acceptance testing.
+- Continue reducing fork conflict surface as upstream VS Code evolves similar
+  workspace-hosting or project-management capabilities.
