@@ -220,8 +220,12 @@ pub struct ServeWebArgs {
 	/// Specifies the directory that server data is kept in.
 	#[clap(long)]
 	pub server_data_dir: Option<String>,
-	/// Enable the Hucode Omni Projects shell and serve it at the root URL.
-	#[clap(long)]
+	/// Serve the regular workbench at the root URL instead of the Hucode Omni
+	/// Projects shell.
+	#[clap(long, conflicts_with = "omni")]
+	pub no_omni: bool,
+	/// Legacy compatibility option. Omni is enabled by default.
+	#[clap(long, hide = true)]
 	pub omni: bool,
 	/// The workspace folder to open when no input is specified in the browser URL.
 	#[clap(long)]
@@ -235,6 +239,13 @@ pub struct ServeWebArgs {
 	/// Use a specific commit SHA for the client.
 	#[clap(long)]
 	pub commit_id: Option<String>,
+}
+
+impl ServeWebArgs {
+	/// Returns whether serve-web should expose the Hucode Omni Projects shell.
+	pub fn omni_enabled(&self) -> bool {
+		!self.no_omni
+	}
 }
 
 #[derive(Args, Debug, Clone)]
@@ -968,4 +979,38 @@ pub struct LoginArgs {
 pub enum AuthProvider {
 	Microsoft,
 	Github,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn parse_serve_web(args: &[&str]) -> ServeWebArgs {
+		let cli = IntegratedCli::try_parse_from(args).unwrap();
+		match cli.core.subcommand {
+			Some(Commands::ServeWeb(args)) => args,
+			_ => panic!("expected serve-web command"),
+		}
+	}
+
+	#[test]
+	fn serve_web_enables_omni_by_default() {
+		let args = parse_serve_web(&["hucode", "serve-web"]);
+
+		assert!(args.omni_enabled());
+	}
+
+	#[test]
+	fn serve_web_can_disable_omni() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--no-omni"]);
+
+		assert!(!args.omni_enabled());
+	}
+
+	#[test]
+	fn serve_web_accepts_legacy_omni_option() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--omni"]);
+
+		assert!(args.omni_enabled());
+	}
 }

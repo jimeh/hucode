@@ -88,12 +88,12 @@ hosts workbenches in same-origin iframes.
 Start the web shell with:
 
 ```sh
-hucode serve-web --omni
+hucode serve-web
 ```
 
-All Hucode-specific web routes are gated by `--omni`. Without it, serve-web
-keeps upstream behavior: `/` is the regular workbench and the Omni routes do
-not exist. With it, routes beneath the configured server base path are:
+Hucode-specific web routes are enabled by default. Pass `--no-omni` to keep
+upstream behavior instead: `/` is the regular workbench and the Omni routes do
+not exist. By default, routes beneath the configured server base path are:
 
 | Route | Surface |
 | --- | --- |
