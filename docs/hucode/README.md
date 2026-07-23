@@ -26,6 +26,8 @@ separate application window for each one.
 
 - [Development Guide](development.md) covers setup, the Hucode overlay, common
   commands, and validation.
+- [Copyright Attribution Audit Plan](copyright-attribution-plan.md) defines the
+  active file-by-file review of Hucode and upstream source ownership.
 - [Agent Instructions](agent-instructions.md) contains detailed operational
   rules and hard-won gotchas for automated contributors. Humans changing
   Hucode internals should consult it too.
