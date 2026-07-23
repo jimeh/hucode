@@ -1,7 +1,7 @@
 {
 	"nameShort": "Hucode",
 	"nameLong": "Hucode",
-	"hucodeVersion": "0.0.38",
+	"hucodeVersion": "0.0.56",
 	"hucodeReleaseNotesUrlTemplate": "https://updates.hucode.dev/release-notes/{version}.md",
 	"quality": "stable",
 	"updateUrl": "https://updates.hucode.dev",
