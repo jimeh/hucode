@@ -1013,4 +1013,12 @@ mod tests {
 
 		assert!(args.omni_enabled());
 	}
+
+	#[test]
+	fn serve_web_rejects_conflicting_omni_options() {
+		let error = IntegratedCli::try_parse_from(["hucode", "serve-web", "--omni", "--no-omni"])
+			.unwrap_err();
+
+		assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+	}
 }
