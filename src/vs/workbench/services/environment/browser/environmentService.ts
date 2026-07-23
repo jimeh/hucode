@@ -19,6 +19,7 @@ import { isUndefined } from '../../../../base/common/types.js';
 import { refineServiceDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ITextEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { EXTENSION_IDENTIFIER_WITH_LOG_REGEX } from '../../../../platform/environment/common/environmentService.js';
+import { isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
 
 export const IBrowserWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IBrowserWorkbenchEnvironmentService>(IEnvironmentService);
 
@@ -220,6 +221,18 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 
 	@memoize
 	get disableExtensions() { return this.payload?.get('disableExtensions') === 'true'; }
+
+	@memoize
+	get isOmniWindow(): boolean {
+		return this.payload?.get('isOmniWindow') === 'true' ||
+			isHucodeOmniWebConfiguration(this.options);
+	}
+
+	@memoize
+	get isHostedOmniWorkspace(): boolean { return this.payload?.get('isHostedOmniWorkspace') === 'true'; }
+
+	@memoize
+	get hostedInstanceId(): string | undefined { return this.payload?.get('hostedInstanceId'); }
 
 	@memoize
 	get enableExtensions() { return this.options.enabledExtensions; }
