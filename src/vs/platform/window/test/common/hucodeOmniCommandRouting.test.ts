@@ -1,0 +1,124 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	FOCUS_WORKSPACE_COMMAND_ID,
+	isHucodeForwardedFromOmniShell,
+	isHucodeOmniShellAction,
+	isHucodeOmniShellCommandForwardingDisabled,
+	isHucodeOmniShellLayoutAction,
+	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+	RELOAD_WORKSPACE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+	withHucodeOmniShellCommandForwardingDisabled,
+} from '../../common/hucodeOmniCommandRouting.js';
+
+suite('HucodeOmniCommandRouting', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('identifies shell-owned actions', () => {
+		assert.deepStrictEqual([
+			FOCUS_PROJECT_PANE_COMMAND_ID,
+			OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
+			OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
+			FOCUS_WORKSPACE_COMMAND_ID,
+			RELOAD_WORKSPACE_COMMAND_ID,
+			CLOSE_WORKSPACE_COMMAND_ID,
+			UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+			'hucode.projectSwitcher.refresh',
+			'workbench.action.files.save',
+		].map(commandId => isHucodeOmniShellAction(commandId)), [
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			false,
+		]);
+	});
+
+	test('identifies shell layout actions', () => {
+		assert.strictEqual(
+			isHucodeOmniShellLayoutAction('workbench.action.togglePanel'),
+			true
+		);
+		assert.strictEqual(
+			isHucodeOmniShellLayoutAction('workbench.action.files.save'),
+			false
+		);
+	});
+
+	test('detects requests already forwarded from the shell', () => {
+		assert.strictEqual(
+			isHucodeForwardedFromOmniShell({
+				id: 'workbench.action.files.save',
+				from: 'keybinding',
+				hucodeForwardedFromOmniShell: true
+			}),
+			true
+		);
+		assert.strictEqual(
+			isHucodeForwardedFromOmniShell({
+				id: 'workbench.action.files.save',
+				from: 'keybinding'
+			}),
+			false
+		);
+	});
+
+	test('scopes forwarding suppression to the callback', async () => {
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
+
+		await withHucodeOmniShellCommandForwardingDisabled(async () => {
+			assert.strictEqual(
+				isHucodeOmniShellCommandForwardingDisabled(),
+				true
+			);
+			await withHucodeOmniShellCommandForwardingDisabled(() => {
+				assert.strictEqual(
+					isHucodeOmniShellCommandForwardingDisabled(),
+					true
+				);
+			});
+			assert.strictEqual(
+				isHucodeOmniShellCommandForwardingDisabled(),
+				true
+			);
+		});
+
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
+	});
+
+	test('restores forwarding suppression after callback errors', async () => {
+		await assert.rejects(
+			withHucodeOmniShellCommandForwardingDisabled(() => {
+				throw new Error('expected');
+			}),
+			/expected/
+		);
+		assert.strictEqual(
+			isHucodeOmniShellCommandForwardingDisabled(),
+			false
+		);
+	});
+});

@@ -225,7 +225,8 @@ export interface ICommonNativeHostService {
 	openWindow(options?: IOpenEmptyWindowOptions): Promise<void>;
 	openWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void>;
 
-	openAgentsWindow(options?: { folderUri?: UriComponents; sessionResource?: UriComponents }): Promise<void>;
+	openAgentsWindow(options?: { folderUri?: UriComponents; initialQuery?: string; sessionResource?: UriComponents; preferredSessionType?: { providerId?: string; sessionTypeId: string } }): Promise<void>;
+	openOmniWindow(): Promise<void>;
 
 	/**
 	 * Registers this window's set of system-wide (OS global) keybindings with the main process,
