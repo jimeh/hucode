@@ -89,8 +89,9 @@ human-facing guides rather than replacing them.
   paths, or formatting conventions alone.
 - Formats without a practical inline notice rely on the repository-level
   attribution in `LICENSE.txt`.
-- Header syntax is enforced by both `build/hucode/copyright-headers.ts` and
-  `eslint.config.js`; update them together and extend the focused header tests.
+- Header syntax is defined in `build/hucode/copyright-headers.ts` and consumed
+  by hygiene and `eslint.config.js`; update the shared definitions and focused
+  header tests together.
 
 ## Upstream Patch Boundaries And Tests
 

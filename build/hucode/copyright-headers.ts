@@ -8,14 +8,14 @@ const microsoftCopyrightHeader = [
 	' *  Copyright (c) Microsoft Corporation. All rights reserved.',
 	' *  Licensed under the MIT License. See License.txt in the project root for license information.',
 	' *--------------------------------------------------------------------------------------------*/',
-];
+] as const;
 
 const hucodeCopyrightHeader = [
 	'/*---------------------------------------------------------------------------------------------',
 	' *  Copyright (c) Hucode contributors. All rights reserved.',
 	' *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.',
 	' *--------------------------------------------------------------------------------------------*/',
-];
+] as const;
 
 const dualCopyrightHeader = [
 	'/*---------------------------------------------------------------------------------------------',
@@ -23,19 +23,48 @@ const dualCopyrightHeader = [
 	' *  Copyright (c) Hucode contributors. All rights reserved.',
 	' *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.',
 	' *--------------------------------------------------------------------------------------------*/',
-];
+] as const;
 
-const copyrightHeaders = [
+/**
+ * Exact source headers accepted by Hucode's hygiene and ESLint checks.
+ */
+export const canonicalCopyrightHeaders = [
 	microsoftCopyrightHeader,
 	hucodeCopyrightHeader,
 	dualCopyrightHeader,
-];
+] as const;
+
+function commentBody(header: readonly string[]): string {
+	return header.join('\n').slice(2, -2);
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const canonicalCopyrightHeaderBodies =
+	canonicalCopyrightHeaders.map(commentBody);
+
+/**
+ * Exact ESLint header pattern, accepting LF and CRLF line endings.
+ */
+export const copyrightHeaderEslintPattern = `^(?:${
+	canonicalCopyrightHeaderBodies
+		.map(body => escapeRegExp(body).replaceAll('\n', '\\r?\\n'))
+		.join('|')
+})$`;
+
+/**
+ * Canonical Hucode comment body used when ESLint adds a missing header.
+ */
+export const copyrightHeaderEslintTemplate =
+	commentBody(hucodeCopyrightHeader);
 
 /**
  * Checks whether source lines start with an exact supported copyright header.
  */
 export function hasValidCopyrightHeader(lines: readonly string[]): boolean {
-	return copyrightHeaders.some(header =>
+	return canonicalCopyrightHeaders.some(header =>
 		header.every((line, index) => lines[index] === line)
 	);
 }
