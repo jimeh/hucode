@@ -79,6 +79,20 @@ human-facing guides rather than replacing them.
   Keep comments focused on behavior and contracts so automated docstring review
   checks do not flag avoidable omissions.
 
+## Copyright Attribution
+
+- Follow [Copyright Policy](copyright.md) for every new or copied file.
+- Preserve Microsoft's notice in inherited Code OSS files.
+- Use the Hucode contributors notice for original Hucode source files.
+- Use both notices when a new file materially copies or adapts Code OSS.
+- Do not infer Microsoft ownership from VS Code APIs, interfaces, architecture,
+  paths, or formatting conventions alone.
+- Formats without a practical inline notice rely on the repository-level
+  attribution in `LICENSE.txt`.
+- Header syntax is defined in `build/hucode/copyright-headers.ts` and consumed
+  by hygiene and `eslint.config.js`; update the shared definitions and focused
+  header tests together.
+
 ## Upstream Patch Boundaries And Tests
 
 - VS Code commit `17d3b86b9361cba49d8d0238787d9aa590e657ca` is backported

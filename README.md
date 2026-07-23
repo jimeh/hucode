@@ -190,7 +190,12 @@ source codebase underlying Visual Studio Code. Hucode keeps the standard
 workbench experience while adding its own product identity, Omni shell, project
 manager, worktree workflows, release infrastructure, and OpenVSX integration.
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+The inherited Code OSS sources remain copyright Microsoft Corporation.
+Original Hucode additions are copyright Hucode contributors. Files materially
+derived from Code OSS retain Microsoft's notice alongside Hucode's. See the
+[copyright policy](docs/hucode/copyright.md) for the repository's attribution
+rules.
 
-Licensed under the [MIT License](LICENSE.txt). See
-[ThirdPartyNotices.txt](ThirdPartyNotices.txt) for third-party notices.
+All Code OSS and Hucode code is licensed under the
+[MIT License](LICENSE.txt). See [ThirdPartyNotices.txt](ThirdPartyNotices.txt)
+for third-party notices.
