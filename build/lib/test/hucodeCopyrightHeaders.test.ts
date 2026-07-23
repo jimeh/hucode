@@ -28,6 +28,9 @@ const microsoftLicense =
 const hucodeLicense =
 	' *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.';
 
+/**
+ * Returns the inner block-comment body used by the ESLint header rule.
+ */
 function commentBody(header: readonly string[]): string {
 	return header.join('\n').slice(2, -2);
 }

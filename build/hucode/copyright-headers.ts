@@ -34,10 +34,16 @@ export const canonicalCopyrightHeaders = [
 	dualCopyrightHeader,
 ] as const;
 
+/**
+ * Returns the inner block-comment body for a canonical source header.
+ */
 function commentBody(header: readonly string[]): string {
 	return header.join('\n').slice(2, -2);
 }
 
+/**
+ * Escapes regular-expression metacharacters for literal matching.
+ */
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
