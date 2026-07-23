@@ -18,6 +18,20 @@ import pluginJsdoc from 'eslint-plugin-jsdoc';
 import pluginHeader from 'eslint-plugin-header';
 pluginHeader.rules.header.meta.schema = false;
 
+const copyrightHeaderPattern = [
+	'^---------------------------------------------------------------------------------------------\\n(?:',
+	' \\*  Copyright \\(c\\) Microsoft Corporation\\. All rights reserved\\.\\n',
+	' \\*  Licensed under the MIT License\\. See License\\.txt in the project root for license information\\.',
+	'|',
+	' \\*  Copyright \\(c\\) Hucode contributors\\. All rights reserved\\.\\n',
+	' \\*  Licensed under the MIT License\\. See LICENSE\\.txt in the project root for license information\\.',
+	'|',
+	' \\*  Copyright \\(c\\) Microsoft Corporation\\. All rights reserved\\.\\n',
+	' \\*  Copyright \\(c\\) Hucode contributors\\. All rights reserved\\.\\n',
+	' \\*  Licensed under the MIT License\\. See LICENSE\\.txt in the project root for license information\\.',
+	')\\n \\*--------------------------------------------------------------------------------------------$',
+].join('');
+
 const ignores = fs.readFileSync(path.join(import.meta.dirname, '.eslint-ignore'), 'utf8')
 	.toString()
 	.split(/\r\n|\n/)
@@ -134,12 +148,7 @@ export default defineConfig(
 			'header/header': [
 				2,
 				'block',
-				[
-					'---------------------------------------------------------------------------------------------',
-					' *  Copyright (c) Microsoft Corporation. All rights reserved.',
-					' *  Licensed under the MIT License. See License.txt in the project root for license information.',
-					' *--------------------------------------------------------------------------------------------'
-				]
+				{ pattern: copyrightHeaderPattern }
 			]
 		},
 	},

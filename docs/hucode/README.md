@@ -26,8 +26,8 @@ separate application window for each one.
 
 - [Development Guide](development.md) covers setup, the Hucode overlay, common
   commands, and validation.
-- [Copyright Attribution Audit Plan](copyright-attribution-plan.md) defines the
-  active file-by-file review of Hucode and upstream source ownership.
+- [Copyright Policy](copyright.md) defines file provenance and notice
+  requirements for Hucode and inherited Code OSS sources.
 - [Agent Instructions](agent-instructions.md) contains detailed operational
   rules and hard-won gotchas for automated contributors. Humans changing
   Hucode internals should consult it too.
@@ -44,6 +44,8 @@ were written; the guides above are the source of truth for current behavior.
 - [Serve-Web Omni Plan](archive/serve-web-omni-plan.html)
 - [Serve-Web Omni Self-Review](archive/serve-web-omni-self-review.md)
 - [Release Build Size Analysis](archive/release-build-size-analysis.md)
+- [Copyright Attribution Audit](archive/copyright-audit-1.129.1.md)
+- [Copyright Attribution Audit Plan](archive/copyright-attribution-plan.md)
 
 When behavior changes, update the smallest current guide that owns the
 contract. Add implementation-specific pitfalls to `agent-instructions.md`, and

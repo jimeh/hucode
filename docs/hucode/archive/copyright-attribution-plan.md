@@ -1,5 +1,9 @@
 # Copyright Attribution Audit Plan
 
+> Historical record. The completed audit is in
+> [Copyright Attribution Audit](copyright-audit-1.129.1.md), and
+> [Copyright Policy](../copyright.md) is the current source of truth.
+
 ## Objective
 
 Correct copyright attribution across the Hucode patch set while keeping all
