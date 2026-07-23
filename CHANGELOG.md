@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.55 - 2026-07-23
+
+### Features
+
+- **cli:** default serve-web to the Omni shell (#102)
+
+### Bug Fixes
+
+- **omni:** restore MRU workbench picker ordering (#99)
+
 ## 0.0.54 - 2026-07-22
 
 ### Features
