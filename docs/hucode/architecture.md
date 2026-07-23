@@ -10,7 +10,7 @@ normal VS Code workbenches, hosted in Electron on desktop or iframes on web.
 The core user experience is:
 
 - one or more native Omni windows
-- a serve-web Omni shell at `/omni`, optionally also at `/`
+- a serve-web Omni shell at `/`, with `/omni` as its explicit route
 - a left-side Projects surface
 - saved projects with nested git worktrees
 - fast switching between resident workspaces
@@ -76,9 +76,10 @@ window `postMessage` is only used for the bootstrap handshake: `Ready` and
 
 ### Serve-Web Routing
 
-All Hucode web routes and the Projects API are gated on the `--omni` flag
-(`--hucode-web-omni-root` on the inner server). Without it, serve-web keeps
-upstream behavior: the regular workbench at `/` and nothing else. With it:
+Hucode serve-web enables its web routes and Projects API by default through the
+inner server's `--hucode-web-omni-root` argument. Pass `--no-omni` to keep
+upstream behavior instead: the regular workbench at `/` and no Hucode web
+routes. By default:
 
 - `/` loads the Omni Projects shell
 - `/omni` also loads the Omni Projects shell
@@ -115,11 +116,11 @@ services.
 
 Serve-web reuses the project manager service from the shared `node` layer
 through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
-under the server user-data path and is only active when serve-web runs with
-`--omni`. Browser requests must be same-origin (cross-origin `Origin` headers
-are rejected and POST bodies must be JSON) so the mutating API stays safe even
-with `--without-connection-token`. User settings/state remain the existing
-browser-side serve-web concern.
+under the server user-data path and is active unless serve-web runs with
+`--no-omni`. Browser requests must be same-origin (cross-origin `Origin`
+headers are rejected and POST bodies must be JSON) so the mutating API stays
+safe even with `--without-connection-token`. User settings/state remain the
+existing browser-side serve-web concern.
 
 ## Core Subsystems
 

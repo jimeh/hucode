@@ -39,7 +39,7 @@ project-oriented shell.
 - **Worktree operations in the editor.** Create, rename, and remove worktrees
   from the Projects surface while keeping destructive Git operations explicit.
 - **Desktop and web shells.** Use Omni in the native desktop app or self-host it
-  in a browser with `hucode serve-web --omni`.
+  in a browser with `hucode serve-web`.
 - **OpenVSX extensions.** Hucode uses [OpenVSX](https://open-vsx.org/) for
   extension discovery and installation.
 
@@ -107,12 +107,14 @@ extract it, and place `hucode` (`hucode.exe` on Windows) on your `PATH`. Then
 start the Omni web shell with:
 
 ```sh
-hucode serve-web --omni
+hucode serve-web
 ```
 
-By default, the server listens on localhost and protects access with a
-connection token. Run `hucode serve-web --help` for bind, port, authentication,
-and browser-launch options.
+The Omni shell is available at the root URL by default. Pass `--no-omni` to
+serve a regular standalone workbench at the root instead. By default, the
+server listens on localhost and protects access with a connection token. Run
+`hucode serve-web --help` for bind, port, authentication, and browser-launch
+options.
 
 ## Build From Source
 
