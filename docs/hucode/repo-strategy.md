@@ -11,7 +11,22 @@ tracking upstream development.
 ## Remotes and Branches
 
 - `origin` is `jimeh/hucode`.
-- `upstream` is `microsoft/vscode`.
+- A second remote points at `microsoft/vscode`. Its name is not fixed; local
+  checkouts use `upstream`, `vscode`, or something else. Resolve it by URL
+  rather than assuming a name:
+
+  ```sh
+  git remote -v | awk '
+    $3 != "(fetch)" { next }
+    $2 ~ /^https:\/\/github\.com\/microsoft\/vscode(\.git)?$/ ||
+    $2 ~ /^ssh:\/\/git@github\.com\/microsoft\/vscode(\.git)?$/ ||
+    $2 ~ /^git@github\.com:microsoft\/vscode(\.git)?$/ { print $1; exit }'
+  ```
+
+  Match the whole URL field rather than a substring, so a mirror or proxy
+  whose path merely contains `github.com/microsoft/vscode` is not accepted
+  as the upstream baseline source.
+
 - `upstream-<version>` points to an unmodified selected VS Code release tag.
 - `series-<version>` contains the Hucode patch series on that baseline.
 - `series-<version>-replay` is a temporary curated replay of a completed Hucode
