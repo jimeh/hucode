@@ -26,6 +26,26 @@ not push `series-<version>` while it still points at the same commit as
 `upstream-<version>`. Publish the series branch only after the Hucode patch
 stack has been replayed and validated.
 
+## Remotes
+
+`origin` is the Hucode fork (`jimeh/hucode`). The VS Code remote may be named
+anything (`vscode`, `upstream`, …), so resolve it by URL rather than assuming a
+name:
+
+```sh
+VSCODE_REMOTE=$(git remote -v | awk '
+  /github\.com[:\/]microsoft\/vscode(\.git)?[[:space:]]+\(fetch\)/ {
+    print $1; exit
+  }')
+```
+
+If that resolves to nothing, stop and ask the user how they want the
+`microsoft/vscode` remote configured. Do not add or rename remotes on their
+behalf.
+
+Note that `upstream-<version>` branch names are unrelated to any remote named
+`upstream`; the prefix stays the same regardless of remote naming.
+
 ## Preflight
 
 1. Confirm target versions and current branch names:
@@ -181,10 +201,11 @@ is the branch that carries the upgraded Hucode patch series forward.
 
 ## Create The New Baseline
 
-Fetch only the selected tag:
+Resolve `VSCODE_REMOTE` as described in `Remotes`, then fetch only the selected
+tag:
 
 ```sh
-git fetch upstream tag <new-version>
+git fetch "$VSCODE_REMOTE" tag <new-version>
 git switch --create upstream-<new-version> <new-version>
 git push -u origin upstream-<new-version>
 ```
