@@ -46,6 +46,7 @@ were written; the guides above are the source of truth for current behavior.
 - [Release Build Size Analysis](archive/release-build-size-analysis.md)
 - [Copyright Attribution Audit](archive/copyright-audit-1.129.1.md)
 - [Copyright Attribution Audit Plan](archive/copyright-attribution-plan.md)
+- [Architecture and Quality Review 2026-07-25](archive/hucode-architecture-review-2026-07-25/README.md)
 
 When behavior changes, update the smallest current guide that owns the
 contract. Add implementation-specific pitfalls to `agent-instructions.md`, and
