@@ -34,10 +34,16 @@ name:
 
 ```sh
 VSCODE_REMOTE=$(git remote -v | awk '
-  /github\.com[:\/]microsoft\/vscode(\.git)?[[:space:]]+\(fetch\)/ {
-    print $1; exit
-  }')
+  $3 != "(fetch)" { next }
+  $2 ~ /^https:\/\/github\.com\/microsoft\/vscode(\.git)?$/ ||
+  $2 ~ /^ssh:\/\/git@github\.com\/microsoft\/vscode(\.git)?$/ ||
+  $2 ~ /^git@github\.com:microsoft\/vscode(\.git)?$/ { print $1; exit }')
 ```
+
+Match the whole URL field, not a substring of the line. An unanchored
+pattern would also accept a mirror or proxy that merely contains
+`github.com/microsoft/vscode` in its path, and the upgrade would then build
+its baseline from an untrusted source.
 
 If that resolves to nothing, stop and ask the user how they want the
 `microsoft/vscode` remote configured. Do not add or rename remotes on their
