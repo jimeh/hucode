@@ -814,8 +814,15 @@ be removed from the store.
 retained. A main-process heap profile after the fix confirms the retained size
 is gone.
 
-**Validation.** Unit assertion that the store's size returns to baseline across
-an open/close cycle, plus a one-off heap profile as the review recommends.
+**Validation.** The intended unit assertion is not available:
+`shellMainService.ts` cannot be loaded by either runner, for the reason
+recorded under G3, and that is not a small refactor away. Nothing in the module
+is reachable from a test until G3 extracts the testable parts, so this ships on
+the existing Electron suite as regression cover plus a heap profile.
+
+Be honest about what that leaves: **no existing test fails if this fix is
+reverted.** Independent review confirmed it. The retention property stays
+unverified by automation until G3.
 
 **Risk.** Low. Small, local, well-understood.
 
@@ -884,6 +891,29 @@ surfaces.
 `src/vs/hucode/browser/workbench.ts:806`,
 `src/vs/hucode/electron-main/shellMainService.ts`, and the shell Part
 implementations.
+
+**`shellMainService.ts` cannot be loaded by any runner today, and the fix is
+not a small one.** Found while implementing F1. The first failure is
+`IBrowserViewMainService`, imported as a value for the constructor decorator,
+which reaches `browserView.ts` and its named import of `WebContentsView` from
+`electron` — a main-process-only export. The Electron unit runner executes in a
+*renderer*, so the import fails there, and under `npm run test-node` too.
+
+Moving that one decorator would only expose the next failure. The service's
+runtime import graph spans 190 modules and includes nine that named-import from
+`electron`, among them `nativeHostMainService.ts`, `auxiliaryWindow.ts` and
+`browserSession.ts`, pulling in `app`, `BrowserWindow`, `screen`, `session`,
+`Menu`, `webContents`, `powerMonitor` and more. A renderer exposes almost none
+of those. Contrast `hostedWorkspacesController.ts`, which has a working
+electron-main suite precisely because it uses `import type` for the decorator
+and a default `import electron from 'electron'` for the namespace — both
+renderer-safe.
+
+So direct coverage of this service is not one refactor away. The realistic
+routes are to extract the parts worth testing — controller ownership, window
+lifecycle bookkeeping — into a renderer-safe module and test that, or to stand
+up a main-process test harness. Prefer the extraction: it is bounded, and it
+is what makes the logic testable rather than merely loadable.
 
 **Direction.** Extend the existing injected-adapter pattern to DOM, drag/drop,
 service wiring, visibility, and multi-window orchestration. Use G2's real-app

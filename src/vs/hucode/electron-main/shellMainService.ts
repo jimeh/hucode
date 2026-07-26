@@ -6,7 +6,7 @@
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import { Disposable, DisposableMap } from '../../base/common/lifecycle.js';
 import { isLinux } from '../../base/common/platform.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
@@ -64,10 +64,18 @@ export class HucodeShellMainService extends Disposable
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
 	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
 
-	private readonly controllers = new Map<
+	/**
+	 * Per-window hosted workspace controllers.
+	 *
+	 * A `DisposableMap` rather than a plain `Map` plus `_register`: a
+	 * `DisposableStore` keeps every entry until it is cleared or disposed, so
+	 * registering each controller there would retain one disposed controller
+	 * per closed Omni-window for the lifetime of the main process.
+	 */
+	private readonly controllers = this._register(new DisposableMap<
 		number,
 		ResidentHostedWorkspacesController
-	>();
+	>());
 	private readonly trustedHostedWorkspaceProcessIds = new Map<number, number>();
 	private readonly trustedHostedWorkspaceWebContentsIds =
 		new Map<number, number>();
@@ -90,8 +98,7 @@ export class HucodeShellMainService extends Disposable
 		super();
 
 		this._register(this.windowsMainService.onDidDestroyWindow(window => {
-			this.controllers.get(window.id)?.dispose();
-			this.controllers.delete(window.id);
+			this.controllers.deleteAndDispose(window.id);
 		}));
 	}
 
@@ -468,7 +475,7 @@ export class HucodeShellMainService extends Disposable
 			throw new Error(`Window ${windowId} is not a Hucode Omni-window.`);
 		}
 
-		const controller = this._register(
+		const controller =
 			new ResidentHostedWorkspacesController(
 				this.protocolMainService,
 				this.environmentMainService,
@@ -504,8 +511,7 @@ export class HucodeShellMainService extends Disposable
 					>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ??
 						'active',
 				}
-			)
-		);
+			);
 		this.controllers.set(windowId, controller);
 		return controller;
 	}
