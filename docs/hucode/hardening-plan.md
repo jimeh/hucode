@@ -222,61 +222,74 @@ must not wait for it.
 - `test/unit/node/index.js:57-64` (layer exclusion rules are the reference for
   which runner owns which layer)
 
-**Direction.** Two shapes were considered: replacing the explicit list with
-layer-appropriate globs, or keeping the list and adding a completeness check.
-**Decided: the check.** The glob shape was rejected on evidence from the
-runner:
+**Direction. Decided: generate the lists.** `build/hucode/test-suites.ts`
+resolves which suites exist and which runner each reaches; the workflow calls
+it per runner and passes the result as repeated `--run=` arguments. A new suite
+under `src/vs/hucode/`, or any `hucode*.test.ts` anywhere, is picked up with no
+workflow edit, so the orphan failure mode disappears for everything a rule can
+see rather than merely being detected.
 
-- `--runGlob`/`--glob` takes a single pattern, is mutually exclusive with
-  `--run` (`test/unit/electron/renderer.js:163`), and matches compiled `out/`
-  paths through `glob@5`, which has no array support. Mixing globs with
-  explicit entries would need an upstream runner patch.
-- Globbing the layers the Electron runner owns selects 795 committed suites
-  against the 34 enumerated — the full upstream matrix that
-  `docs/hucode/agent-instructions.md` keeps out of the fork baseline.
-- Selection is semantic, not path-derivable: eleven enumerated suites are
-  upstream-named files included only because Hucode patched their subject.
-- Decisively, a glob inverts the failure mode. `--run` on a missing file throws
-  a loader error; a glob matching nothing runs nothing, silently.
+Two earlier shapes were considered and rejected. Handing the runner a glob does
+not work: `--runGlob`/`--glob` takes a single pattern, is mutually exclusive
+with `--run` (`test/unit/electron/renderer.js:163`), matches compiled `out/`
+paths through `glob@5`, and globbing the layers the Electron runner owns would
+select 795 committed suites against the 34 wanted — the full upstream matrix
+`docs/hucode/agent-instructions.md` keeps out of the fork baseline. Keeping the
+hand-maintained list and adding a completeness *checker* works, but leaves the
+list hand-maintained; generation subsumes it. Those objections were about the
+runner's glob support, not about pattern matching as such — doing the matching
+in TypeScript sidesteps all of them.
 
-The check enumerates `src/vs/hucode/**/*.test.ts` plus `hucode*`-named suites
-elsewhere and fails on any owned by no runner. **Assignment is resolved from
-the workflow's actual `--run` arguments, not by layer** — explicit `--run`
-bypasses the Node runner's layer exclusions, and two Electron-layer suites are
-deliberately run under `npm run test-node`. Layer only supplies the suggested
-remedy.
+**Assignment is not derivable from the layer.** An explicit `--run` bypasses
+the Node runner's layer exclusions, and two Electron-layer suites deliberately
+run under `npm run test-node`; they are recorded as `NODE_RUNNER_OVERRIDES`
+rather than inferred.
 
-**Known limitation, and an H1 dependent.** The inventory is scoped to
-Hucode-owned and `hucode*`-named suites. Eleven of the workflow's 56 `--run`
-arguments name upstream suites listed only because Hucode patched their subject
-— seven in the Electron list, four in the Node list — and none of them are
-guarded. A twelfth would still orphan silently.
+**What generation gives up, and how it is repaid.** A hand-maintained list
+makes a pull request show exactly what CI will run. A generated one does not,
+so the resolved lists are committed to `build/hucode/test-suites.snapshot.json`
+and a stale snapshot fails the check. Ordering is stably sorted, because suites
+that have never shared a runner can leak state and an ordering change should be
+deliberate. Each step prints its resolved list so a CI failure is diagnosable
+without re-running the resolver.
 
-This is not hypothetical: of the five orphans A1 fixed, **this check would have
-caught four**. The fifth,
+**Known limitation, and an H1 dependent.** Eleven suites are upstream-named and
+run only because Hucode patched their subject. No rule can find them, so they
+stay listed by hand in `UPSTREAM_SUITES` — with a reason each, and validated to
+exist — and a twelfth would still be invisible.
+
+This is not hypothetical: of the five orphans A1 fixed, rules find **four**. The
+fifth,
 `src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts`,
-is invisible to the inventory. A copyright-header rule does not close it either
-— that file carries Microsoft's notice. Only provenance distinguishes "upstream
-file Hucode has forked" from "upstream file Hucode does not run", which is H1's
-map. Extend the inventory from it when H1 lands rather than building a second
+is invisible, and a copyright-header rule would not close it either — that file
+carries Microsoft's notice. Only provenance distinguishes "upstream file Hucode
+has forked" from "upstream file Hucode does not run", which is H1's map. Derive
+`UPSTREAM_SUITES` from it when H1 lands rather than building a second
 provenance mechanism here.
 
 **Acceptance criteria.**
 
-- Adding a test file in any layer without wiring it fails CI with a message
-  naming the file and its expected runner.
-- The check itself has coverage under `npm run test-build-scripts`.
-- No currently-committed suite is reported as unassigned.
+- Adding a Hucode suite in any layer requires no workflow edit, and shows up in
+  the committed snapshot.
+- A stale snapshot, a missing or redundant `UPSTREAM_SUITES` entry, a workflow
+  that stops invoking either runner, and a workflow that stops using the
+  resolver all fail the check.
+- The resolver has coverage under `npm run test-build-scripts`.
 
-**Validation.** Add a deliberately unassigned fixture in the build-script test
-suite and assert the checker rejects it. Note the `test-build-scripts` filtering
-constraint in `AGENTS.md` when running a subset.
+**Validation.** The generated Electron list must reproduce the previous
+hand-maintained list exactly, verified end to end through the real runner — 415
+passing, matching the A1 baseline. The Node list drops 20 entries the bare
+`npm run test-node` pass already enumerates, confirmed against compiled output
+rather than against the resolver's own model of it. Note the
+`test-build-scripts` filtering constraint in `AGENTS.md` when running a subset.
 
-**Risk.** A too-strict rule blocks unrelated PRs. Mitigate with an explicit,
-documented opt-out list for intentionally-excluded suites, mirroring the
-existing exclusion comments in `test/unit/node/index.js`.
+**Risk.** A rule that matches too much runs unwanted suites; one that matches
+too little silently runs none. The snapshot covers both — either shows as a
+diff — and the resolver refuses to emit an empty Electron list. Deliberate
+exclusions have no opt-out list by design: a suite Hucode owns but does not
+want run should say so where it lives, not in a second registry that rots.
 
-**Prerequisites.** A1 (so the guard starts from a clean state).
+**Prerequisites.** A1 (so generation starts from a clean, verified list).
 
 **PR size.** Small-medium. **Changelog fragment.** No — `ci:` title.
 
@@ -921,10 +934,10 @@ a new fork fails the check.
 **Prerequisites.** None, but naturally triggered by the next VS Code upgrade —
 sequence it with that rather than as a standalone push.
 
-**Dependents.** A2's assignment check, whose inventory cannot see
-upstream-named suites that exist only because Hucode patched their subject.
-Feed the provenance map into `build/hucode/check-test-assignment.ts` so those
-suites are guarded too.
+**Dependents.** A2's suite resolver, whose rules cannot see upstream-named
+suites that exist only because Hucode patched their subject. Feed the
+provenance map into `UPSTREAM_SUITES` in `build/hucode/test-suites.ts` so that
+list is derived rather than remembered.
 
 **PR size.** Medium. **Changelog fragment.** Yes — `feat:`.
 

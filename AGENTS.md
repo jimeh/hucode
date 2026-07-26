@@ -94,26 +94,34 @@ as the required Hucode instruction set for work in this fork.
   VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
     ./scripts/test.sh --run <test-file>
   ```
-- Electron and browser layer suites are enumerated by hand in
-  `.github/workflows/hucode-ci.yml`; the Node runner excludes those layers
-  (`test/unit/node/index.js`). A committed suite in `browser`,
-  `electron-browser`, or `electron-main` that is missing from that list runs
-  nowhere and fails nothing. Add new suites to the list in the same change that
-  adds the test. `npm run hucode:check-test-assignment` enforces this for
-  Hucode-owned and `hucode*`-named suites and runs in CI. It does not cover the
-  eleven upstream-named suites listed only because Hucode patched their
-  subject, so adding another one still needs care; a copyright-header rule
-  would not close that gap either, since several carry Microsoft's notice.
+- CI suite lists are generated, not hand-maintained.
+  `build/hucode/test-suites.ts` resolves them and
+  `.github/workflows/hucode-ci.yml` calls it per runner. A new suite under
+  `src/vs/hucode/`, or any `hucode*.test.ts` anywhere, is picked up with no
+  workflow edit. Do not paste suite paths back into the workflow; a test
+  asserts there are none.
+- The resolved lists are committed to
+  `build/hucode/test-suites.snapshot.json` so a pull request still shows what
+  CI will run. Adding a suite changes that file — regenerate with
+  `npm run hucode:test-suites -- --write-snapshot` and commit it, or
+  `npm run hucode:check-test-suites` fails.
+- An upstream-named suite Hucode runs because it patched the subject cannot be
+  found by any rule. Those live in `UPSTREAM_SUITES` with a reason each.
+  Forgetting to add one is still invisible — that gap closes with H1's
+  provenance map, not before.
 - Runner assignment is not derivable from the layer alone. An explicit `--run`
   argument bypasses the Node runner's layer exclusions, and two Electron-layer
-  suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) are
-  deliberately run by `npm run test-node`. Resolve assignment from the
-  workflow's actual `--run` arguments, not from the directory name.
+  suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) run
+  under `npm run test-node` on purpose; they are `NODE_RUNNER_OVERRIDES`.
+  Everything else in `browser`, `electron-browser`, `electron-main`, or
+  `electron-utility` goes to the Electron runner, and everything else again is
+  enumerated by the bare `npm run test-node` pass. Naming an already-enumerated
+  suite explicitly just runs it twice.
 - The Electron runner does accept a glob (`--runGlob`/`--glob`), but it takes a
-  single pattern, is mutually exclusive with `--run`, and matches against
-  compiled `out/` paths. A glob over the layers it owns would pull in the whole
-  upstream VS Code suite, and a glob that matches nothing fails silently, so
-  the explicit list plus the assignment check is deliberate.
+  single pattern, is mutually exclusive with `--run`, and matches compiled
+  `out/` paths — and a glob matching nothing fails silently. That is why the
+  list is computed in TypeScript and passed as repeated `--run=` arguments
+  rather than handed to the runner as a pattern.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
