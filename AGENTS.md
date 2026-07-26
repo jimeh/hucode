@@ -50,6 +50,16 @@ as the required Hucode instruction set for work in this fork.
   report the blocker.
 - The `coderabbit:review` label does not override CodeRabbit's draft-PR skip.
   Mark a PR ready before waiting for a label-triggered CodeRabbit review.
+- `changelog.ts check-pr` fails a PR when *any* added `.changes/` fragment does
+  not match its title, not only when the title requires one. When a sibling PR
+  carrying a fragment merges first, every other open PR sees that fragment as
+  newly added against a stale base SHA and fails — including `ci:` and `docs:`
+  PRs that need no fragment of their own. Merge or rebase the base branch into
+  the PR to refresh the comparison; the failure is stale state, not a missing
+  fragment.
+- Pushing to a branch while CodeRabbit is mid-review aborts that review with
+  "head commit changed during the review". Let a review finish, or re-request
+  it afterwards with a new `@coderabbitai review` comment.
 - Build-script changelog tests create temporary Git commits and inherit global
   `commit.gpgSign`. On hosts with signing enabled, run the suite with
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`

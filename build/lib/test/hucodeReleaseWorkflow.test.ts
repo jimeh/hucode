@@ -191,6 +191,102 @@ suite('Hucode release workflow contract', () => {
 		});
 	});
 
+	suite('packaged Omni startup smoke', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  linux-omni-smoke:'),
+			workflow.indexOf('  package:')
+		);
+
+		test('consumes the built app instead of rebuilding one', () => {
+			// Rebuilding outside app-build means duplicating its environment
+			// -- sysroots, OpenSSL, arch variables -- which then drifts.
+			assert.match(job, /needs:\n      - app-build/);
+			assert.match(job, /name: hucode-app-\$\{\{ steps\.version\.outputs\.safe_version \}\}-linux-x64/);
+			// The download path and the untar path have to agree; asserting
+			// only the untar leaves them free to diverge into `tar: Cannot
+			// open`.
+			assert.match(job, /path: \.build\/hucode\/app\n/);
+			assert.match(job, /tar -xf \.build\/hucode\/app\/VSCode-linux-x64\.tar -C \.\./);
+			assert.doesNotMatch(job, /release-build\.ts/);
+		});
+
+		// Scoped to the launch step. Asserting against the whole job lets the
+		// environment drift onto a different step, where the packaged app
+		// never inherits it.
+		const launchStep = job.slice(
+			job.indexOf('- name: Run packaged Omni startup smoke')
+		);
+
+		test('runs the declared smoke script under a display and bus', () => {
+			// Matched as one contract: dropping the `--` separator while
+			// leaving the `--app` line behind stops npm forwarding the path.
+			assert.match(
+				launchStep,
+				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64/
+			);
+		});
+
+		test('disables the sandbox the artifact cannot carry', () => {
+			// tar cannot restore chrome-sandbox as root-owned mode 4755 for a
+			// non-root extraction, so the setuid bit is gone from the artifact
+			// and Electron aborts in the SUID sandbox helper without this.
+			assert.match(launchStep, /env:\n          ELECTRON_DISABLE_SANDBOX: 1/);
+		});
+
+		test('keeps the composite action build toolchain', () => {
+			// apt-packages replaces the action's defaults rather than adding
+			// to them, so dropping these breaks `npm ci` on a cold cache.
+			for (const pkg of [
+				'build-essential',
+				'libkrb5-dev',
+				'libx11-dev',
+				'libxkbfile-dev',
+				'pkg-config',
+			]) {
+				assert.ok(
+					job.includes(`\n            ${pkg}\n`),
+					`apt-packages must still install ${pkg}`
+				);
+			}
+		});
+
+		test('installs what Electron needs to start on a runner', () => {
+			for (const pkg of ['dbus-x11', 'libgbm1', 'libgtk-3-0', 'xvfb']) {
+				assert.ok(
+					job.includes(`\n            ${pkg}\n`),
+					`apt-packages must install ${pkg}`
+				);
+			}
+		});
+
+		test('runs on tag pushes, and skips only a dispatch without x64', () => {
+			// Matched whole. Asserting the operands separately passes over an
+			// inverted condition that never runs on a tag push, and over `&&`
+			// becoming `||`, which would run the smoke after a failed
+			// app-build and fail downloading an artifact that does not exist.
+			assert.match(
+				job,
+				/if: >-\n      needs\.app-build\.result == 'success' &&\n      \(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
+			);
+		});
+
+		test('does not gate publication yet', () => {
+			// Real-app smokes are the flakiest thing in any suite; this one
+			// reports on its own until it has proven stable.
+			const publish = workflow.slice(
+				workflow.indexOf('  publish-release:'),
+				workflow.indexOf('  refresh-update-service:')
+			);
+			const needs = publish.slice(
+				publish.indexOf('    needs:'),
+				publish.indexOf('    runs-on:')
+			);
+
+			assert.doesNotMatch(needs, /- linux-omni-smoke/);
+			assert.doesNotMatch(publish, /needs\.linux-omni-smoke/);
+		});
+	});
+
 	test('downloads only public-containing producer artifacts', () => {
 		const job = workflow.slice(workflow.indexOf('  publish-release:'));
 		assert.match(
