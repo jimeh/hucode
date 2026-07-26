@@ -16,6 +16,7 @@ import {
 	checkTestAssignment,
 	collectCandidateSuites,
 	formatReport,
+	hasNodeRunnerDefaultPass,
 	isClean,
 	isCoveredByNodeRunner,
 	isHucodeSuite,
@@ -37,6 +38,7 @@ function input(overrides: Partial<TestAssignmentInput>): TestAssignmentInput {
 	return {
 		candidates,
 		workflowRunPaths,
+		nodeRunnerDefaultPass: overrides.nodeRunnerDefaultPass ?? true,
 		existingFiles: overrides.existingFiles
 			?? new Set([...candidates, ...workflowRunPaths]),
 		knownUnassigned: overrides.knownUnassigned ?? [],
@@ -178,6 +180,20 @@ suite('Hucode test assignment check', () => {
 		}
 	});
 
+	test('stops trusting automatic coverage without the Node default pass', () => {
+		const report = checkTestAssignment(input({
+			candidates: [NODE_SUITE],
+			nodeRunnerDefaultPass: false,
+		}));
+
+		assert.ok(report.nodeRunnerNotInvoked);
+		assert.deepStrictEqual(
+			report.unassigned.map(entry => entry.file),
+			[NODE_SUITE]
+		);
+		assert.match(formatReport(report), /no longer runs `npm run test-node`/);
+	});
+
 	suite('workflow parsing', () => {
 
 		test('reads arguments across line continuations', () => {
@@ -197,11 +213,37 @@ suite('Hucode test assignment check', () => {
 		});
 
 		test('reads inline and equals-delimited arguments', () => {
-			const workflow = '--run src/a.test.ts --run=src/b.test.js';
+			const workflow = '--run src/a.test.ts --run=src/b.test.ts';
 
 			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), [
 				'src/a.test.ts',
-				'src/b.test.js',
+				'src/b.test.ts',
+			]);
+		});
+
+		test('normalises compiled paths back to source paths', () => {
+			// Both runners accept a `.test.js` argument, so the inventory has
+			// to see it as the source suite rather than a missing reference.
+			assert.deepStrictEqual(
+				parseWorkflowRunArguments('--run src/a.test.js'),
+				['src/a.test.ts']
+			);
+		});
+
+		test('ignores commented-out arguments', () => {
+			const workflow = [
+				'          run: |',
+				'            ./scripts/test.sh \\',
+				'              --run \\',
+				'              src/vs/hucode/test/browser/a.test.ts',
+				'              # disabled while flaky:',
+				'              # --run src/vs/hucode/test/browser/b.test.ts',
+				'              # --run \\',
+				'              src/vs/hucode/test/browser/c.test.ts',
+			].join('\n');
+
+			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), [
+				'src/vs/hucode/test/browser/a.test.ts',
 			]);
 		});
 
@@ -221,6 +263,36 @@ suite('Hucode test assignment check', () => {
 			assert.ok(found.includes(
 				'src/vs/hucode/test/browser/webShellService.test.ts'
 			));
+		});
+	});
+
+	suite('Node runner default pass', () => {
+
+		test('is detected in the real workflow', async () => {
+			const workflow = await fs.readFile(
+				path.join(repoRoot, WORKFLOW_PATH),
+				'utf8'
+			);
+
+			assert.ok(hasNodeRunnerDefaultPass(workflow));
+		});
+
+		test('is not satisfied by an explicit --run invocation alone', () => {
+			const workflow = [
+				'      - name: Run Hucode Node and common unit tests',
+				'        run: |',
+				'          npm run test-node -- \\',
+				'            --run \\',
+				'            src/vs/hucode/test/common/a.test.ts',
+			].join('\n');
+
+			assert.ok(!hasNodeRunnerDefaultPass(workflow));
+		});
+
+		test('is not satisfied by a commented-out invocation', () => {
+			const workflow = '        # run: npm run test-node';
+
+			assert.ok(!hasNodeRunnerDefaultPass(workflow));
 		});
 	});
 

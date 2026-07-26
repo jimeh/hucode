@@ -79,6 +79,13 @@ export interface TestAssignmentInput {
 	/** Repository-relative paths named by workflow `--run` arguments. */
 	readonly workflowRunPaths: readonly string[];
 
+	/**
+	 * Whether the workflow still invokes the Node runner without `--run`. The
+	 * default pass is what enumerates node and common suites automatically, so
+	 * nothing may be treated as automatically covered when it is gone.
+	 */
+	readonly nodeRunnerDefaultPass: boolean;
+
 	/** Repository-relative paths of files that exist on disk. */
 	readonly existingFiles: ReadonlySet<string>;
 
@@ -99,6 +106,9 @@ export interface TestAssignmentReport {
 
 	/** Opt-out entries that are gone or no longer needed. */
 	readonly staleOptOuts: readonly string[];
+
+	/** Whether the workflow stopped invoking the Node runner's default pass. */
+	readonly nodeRunnerNotInvoked: boolean;
 }
 
 /**
@@ -162,20 +172,49 @@ function remedyFor(file: string): string {
 }
 
 /**
- * Extracts every `--run` argument from a workflow file.
+ * Drops commented-out lines, then folds shell line continuations so a `--run`
+ * and its argument end up adjacent.
  *
- * Arguments are written one per line with a trailing backslash, so line
- * continuations are folded before matching. Both `--run <path>` and
- * `--run=<path>` are recognised.
+ * Comments are removed first because a `#` prefix disables the line under both
+ * readings of a workflow file — YAML comment outside a block scalar, shell
+ * comment inside one. Leaving them in would let a suite that somebody
+ * commented out still count as assigned.
+ */
+function foldRunnableLines(workflow: string): string {
+	return workflow
+		.split('\n')
+		.filter(line => !/^\s*#/.test(line))
+		.join('\n')
+		.replace(/\\\r?\n\s*/g, ' ');
+}
+
+/**
+ * Extracts every `--run` argument from a workflow file, as a source path.
+ *
+ * Both runners accept a compiled `.test.js` path as well as the `.test.ts`
+ * source path, so `.js` references are normalised back to their source form to
+ * stay comparable with the committed inventory.
  */
 export function parseWorkflowRunArguments(workflow: string): string[] {
-	const folded = workflow.replace(/\\\r?\n\s*/g, ' ');
 	const pattern = /--run[=\s]+(\S+\.test\.[jt]s)/g;
 	const found: string[] = [];
-	for (const match of folded.matchAll(pattern)) {
-		found.push(match[1]);
+	for (const match of foldRunnableLines(workflow).matchAll(pattern)) {
+		found.push(match[1].replace(/\.test\.js$/, '.test.ts'));
 	}
 	return found;
+}
+
+/**
+ * Returns true when the workflow still invokes the Node runner without `--run`.
+ *
+ * That bare invocation is the only thing that enumerates node and common
+ * suites automatically. If it disappears, those suites run nowhere, so the
+ * check must stop treating them as covered rather than staying green.
+ */
+export function hasNodeRunnerDefaultPass(workflow: string): boolean {
+	return foldRunnableLines(workflow)
+		.split('\n')
+		.some(line => /npm run test-node/.test(line) && !/--run/.test(line));
 }
 
 /**
@@ -192,7 +231,7 @@ export function checkTestAssignment(
 
 	for (const file of input.candidates) {
 		const assigned = assignedExplicitly.has(file)
-			|| isCoveredByNodeRunner(file);
+			|| (input.nodeRunnerDefaultPass && isCoveredByNodeRunner(file));
 		if (assigned) {
 			assignedCandidates.add(file);
 			continue;
@@ -212,7 +251,12 @@ export function checkTestAssignment(
 			!input.existingFiles.has(file) || assignedCandidates.has(file))
 		.sort();
 
-	return { unassigned, missingWorkflowRefs, staleOptOuts };
+	return {
+		unassigned,
+		missingWorkflowRefs,
+		staleOptOuts,
+		nodeRunnerNotInvoked: !input.nodeRunnerDefaultPass,
+	};
 }
 
 /**
@@ -221,7 +265,8 @@ export function checkTestAssignment(
 export function isClean(report: TestAssignmentReport): boolean {
 	return report.unassigned.length === 0
 		&& report.missingWorkflowRefs.length === 0
-		&& report.staleOptOuts.length === 0;
+		&& report.staleOptOuts.length === 0
+		&& !report.nodeRunnerNotInvoked;
 }
 
 /**
@@ -229,6 +274,14 @@ export function isClean(report: TestAssignmentReport): boolean {
  */
 export function formatReport(report: TestAssignmentReport): string {
 	const lines: string[] = [];
+
+	if (report.nodeRunnerNotInvoked) {
+		lines.push(
+			`${WORKFLOW_PATH} no longer runs \`npm run test-node\` without `
+			+ '`--run`. That pass is what enumerates node and common suites, '
+			+ 'so nothing is automatically covered any more.'
+		);
+	}
 
 	if (report.unassigned.length) {
 		lines.push('Committed test suites that no CI runner executes:');
@@ -306,6 +359,7 @@ export async function checkRepository(
 	return checkTestAssignment({
 		candidates: allTestFiles.filter(isHucodeSuite).sort(),
 		workflowRunPaths,
+		nodeRunnerDefaultPass: hasNodeRunnerDefaultPass(workflow),
 		existingFiles,
 		knownUnassigned: KNOWN_UNASSIGNED,
 	});
