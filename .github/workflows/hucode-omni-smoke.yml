@@ -25,8 +25,12 @@ concurrency:
 permissions:
   contents: read
 
+# Deliberately no ELECTRON_SKIP_BINARY_DOWNLOAD. The other Hucode workflows
+# set it globally because nothing in them packages an app, and
+# hucode-release-build.yml scopes it to its npm install step for the same
+# reason. This job does package an app, so the Electron binary has to be
+# fetchable.
 env:
-  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
   VSCODE_QUALITY: stable
 
@@ -58,6 +62,9 @@ jobs:
             pkg-config
             xvfb
 
+      # `setup-env.sh` reads VSCODE_ARCH and npm_config_arch unguarded, so both
+      # must be exported before sourcing or `set -u` aborts on an unbound
+      # variable. Values match the linux-x64 row of the release build matrix.
       - name: Build packaged Linux app
         run: |
           set -euo pipefail
@@ -69,6 +76,8 @@ jobs:
             --out .build/hucode/release/smoke
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VSCODE_ARCH: x64
+          npm_config_arch: x64
 
       # `--phase build` leaves the app in its upstream handoff location rather
       # than the output directory; see docs/hucode/agent-instructions.md.
