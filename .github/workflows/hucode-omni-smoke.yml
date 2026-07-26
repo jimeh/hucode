@@ -1,0 +1,81 @@
+name: Hucode Omni Smoke
+
+# The packaged Omni startup smoke lives in its own workflow rather than in
+# `hucode-ci.yml` because it has to build a release app first, which takes far
+# longer than every other check combined. Keeping it separate means it reports
+# on its own and never gates the fast feedback in Hucode CI.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "series-*"
+      - "release/*"
+  push:
+    branches:
+      - main
+      - "series-*"
+      - "release/*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+  VSCODE_QUALITY: stable
+
+jobs:
+  linux-omni-smoke:
+    name: Packaged Omni Smoke (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          apt-packages: |
+            build-essential
+            fakeroot
+            file
+            libkrb5-dev
+            libnotify-bin
+            libssl-dev
+            libx11-dev
+            libx11-xcb-dev
+            libxkbfile-dev
+            pkg-config
+            xvfb
+
+      - name: Build packaged Linux app
+        run: |
+          set -euo pipefail
+          source ./build/azure-pipelines/linux/setup-env.sh
+          node build/hucode/release-build.ts \
+            --platform linux \
+            --arch x64 \
+            --phase build \
+            --out .build/hucode/release/smoke
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # `--phase build` leaves the app in its upstream handoff location rather
+      # than the output directory; see docs/hucode/agent-instructions.md.
+      # On failure the script prints the tail of the app's own stdout/stderr,
+      # so the job log carries the diagnostic and there is nothing to upload.
+      - name: Run packaged Omni startup smoke
+        run: |
+          set -euo pipefail
+          xvfb-run npm run hucode:smoke:linux-omni -- \
+            --app ../VSCode-linux-x64
