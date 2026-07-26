@@ -21,6 +21,9 @@ separate application window for each one.
   development model and the VS Code upgrade process.
 - [Release Guide](release.md) documents versions, change fragments, CI builds,
   public assets, signing, and updates.
+- [Hardening Plan](hardening-plan.md) is the active work breakdown for the
+  verified findings from the 2026-07-25 architecture and quality review, plus
+  the runtime issues raised alongside it.
 
 ## Developing Hucode
 
