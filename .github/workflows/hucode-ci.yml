@@ -400,6 +400,16 @@ jobs:
             --run \
             src/vs/workbench/services/host/test/browser/hucodeOmniBrowserOpen.test.ts \
             --run \
-            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
+            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts \
+            --run \
+            src/vs/hucode/test/browser/omniConfigurationService.test.ts \
+            --run \
+            src/vs/hucode/test/browser/projectSwitcher/openProjectSwitcherTarget.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniWorkspaceOpen.test.ts \
+            --run \
+            src/vs/hucode/test/electron-main/omniWorkspaceReopen.test.ts \
+            --run \
+            src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts
         env:
           VSCODE_SKIP_PRELAUNCH: 1

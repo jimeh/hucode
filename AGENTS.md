@@ -83,6 +83,23 @@ as the required Hucode instruction set for work in this fork.
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
   variables or Electron unit tests may start in Node mode before loading tests.
+- Local `./scripts/test.sh` runs need `ELECTRON_DISABLE_SANDBOX=1`, because
+  `.build/electron/chrome-sandbox` must be root-owned with mode 4755 and only
+  CI does that (`sudo chown root` / `sudo chmod 4755`). Without it the runner
+  aborts with `FATAL:setuid_sandbox_host.cc`. On headless hosts also wrap the
+  call in `xvfb-run`, and set `VSCODE_SKIP_PRELAUNCH=1` to avoid re-running
+  `npm run electron` on every invocation:
+
+  ```sh
+  VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
+    ./scripts/test.sh --run <test-file>
+  ```
+- Electron and browser layer suites are enumerated by hand in
+  `.github/workflows/hucode-ci.yml`; the Node runner excludes those layers
+  (`test/unit/node/index.js`). A committed suite in `browser`,
+  `electron-browser`, or `electron-main` that is missing from that list runs
+  nowhere and fails nothing. Add new suites to the list in the same change that
+  adds the test.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
