@@ -128,9 +128,14 @@ ready.
 
 Because `continue-on-error` would otherwise make a failure look like success,
 the job writes a warning and a step-summary entry when either attestation
-fails. If you see that on a release, the assets are fine but unverifiable:
-treat the procedure above as unavailable for that release rather than
-concluding the download is bad.
+fails, naming which one.
+
+The two are independent, so a partial failure still leaves a working path. If
+only the `SHA256SUMS` attestation failed, per-asset verification is unaffected.
+If only the per-asset attestation failed, `SHA256SUMS` is still attested, so
+checking a download against it by hand remains trustworthy. The step summary
+spells out which applies. In either case the assets themselves are fine —
+a failed attestation says nothing about the download.
 
 Once a tag build has produced attestations that actually verify, remove
 `continue-on-error` from both attest steps so a release cannot silently ship

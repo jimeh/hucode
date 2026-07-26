@@ -265,11 +265,18 @@ suite('Hucode release workflow contract', () => {
 			assert.match(job, /subject-checksums: SHA256SUMS/);
 		});
 
-		test('attests the checksums file itself', () => {
+		test('attests the checksums file itself, after it exists', () => {
 			// A checksums file cannot list itself, so without a second
 			// attestation `gh attestation verify SHA256SUMS` hard-fails on a
-			// perfectly good release.
-			assert.match(job, /- name: Attest checksums file provenance/);
+			// perfectly good release. Ordering matters as much as presence:
+			// run it before the file is written and `subject-path` resolves
+			// nothing, which `continue-on-error` then swallows.
+			const checksums = job.indexOf('--checksums SHA256SUMS');
+			const attest = job.indexOf('- name: Attest checksums file provenance');
+			const report = job.indexOf('- name: Report attestation failures');
+
+			assert.ok(attest > checksums, 'must follow checksum generation');
+			assert.ok(report > attest, 'reporting must follow both attestations');
 			assert.match(job, /subject-path: SHA256SUMS/);
 		});
 

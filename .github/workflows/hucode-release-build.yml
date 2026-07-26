@@ -1360,18 +1360,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          assets='${{ steps.attest-assets.outcome }}'
+          checksums='${{ steps.attest-checksums.outcome }}'
           {
             echo "### Release provenance attestation failed"
             echo
-            echo "assets: ${{ steps.attest-assets.outcome }}"
-            echo "checksums: ${{ steps.attest-checksums.outcome }}"
+            echo "- per-asset attestation: $assets"
+            echo "- SHA256SUMS attestation: $checksums"
             echo
-            echo "The release still published. Downloads from it cannot be"
-            echo "verified with \`gh attestation verify\`, so treat the"
-            echo "verification procedure in docs/hucode/release.md as"
-            echo "unavailable for this release."
+            echo "The release still published. What remains verifiable:"
+            if [ "$assets" != 'failure' ]; then
+              echo "- \`gh attestation verify <asset>\` still works."
+            else
+              echo "- Release assets have no direct attestation."
+            fi
+            if [ "$checksums" != 'failure' ]; then
+              echo "- \`gh attestation verify SHA256SUMS\` still works, so"
+              echo "  checking downloads against it by hand is trustworthy."
+            else
+              echo "- SHA256SUMS has no attestation of its own."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::warning::Release provenance attestation failed"
+          echo "::warning::Release provenance attestation failed" \
+            "(assets=$assets checksums=$checksums)"
 
       - name: Create or update draft release
         if: needs.package.result != 'cancelled'
