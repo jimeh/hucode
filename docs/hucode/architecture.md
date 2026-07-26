@@ -198,7 +198,25 @@ forwarded to the active hosted workspace.
 
 Routing policy should stay command-id based and close to the layer that consumes
 it. Generic workbench files may import same-layer `hucode*` helpers or lower
-platform helpers, but should not import from `src/vs/hucode/*`.
+platform helpers, and should not import from `src/vs/hucode/*`.
+
+**With one deliberate exception, enforced rather than assumed.**
+`src/vs/platform/windows/electron-main/windowsMainService.ts` does import from
+`src/vs/hucode/electron-main/`. `eslint.config.js` allow-lists
+`vs/hucode/common/**` and `vs/hucode/electron-main/**` in its `hasNode` block,
+which covers the `node`, `electron-utility`, and `electron-main` layers, so the
+import is checked rather than merely tolerated.
+
+The reason is a platform mechanic, not history: an external `hucode <file>`
+launch never reaches a renderer. It enters `WindowsMainService` directly, so
+CLI file and folder routing has to make its Omni decision in main-process code.
+Moving those helpers behind an indirection would relocate the dependency
+without removing it, and the review that examined this found it would not
+materially reduce the upgrade conflict surface.
+
+Treat the allow-list as the definition of the exception. Anything not in it
+still follows the rule, and widening it needs the same kind of justification —
+a specific mechanic that makes the import unavoidable.
 
 Native replies and utility-process startup can target either the owning window
 or a hosted workspace `webContents`. Hucode-specific renderer reply-target
