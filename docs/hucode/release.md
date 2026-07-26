@@ -90,6 +90,36 @@ verifies the complete set, and publishes the GitHub Release. Update-service
 metadata is generated from those verified assets rather than inferred from
 arbitrary workflow artifacts.
 
+### Verifying Release Provenance
+
+`SHA256SUMS` proves that a download matches what the release lists, but not
+that the release itself came from this repository's build. The publication job
+therefore records a GitHub build provenance attestation for every asset listed
+in `SHA256SUMS`.
+
+Verify a downloaded asset against it:
+
+```sh
+gh attestation verify hucode-linux-x64.zip --repo jimeh/hucode
+```
+
+This succeeds only when the file's digest matches an attestation GitHub issued
+to a workflow run in `jimeh/hucode`. A tampered or substituted asset fails with
+"no matching attestation found" — the digest simply is not in any attestation.
+Add `--format json` to inspect the workflow, commit, and run that produced it.
+
+The attestation is issued per asset rather than over the `SHA256SUMS` file, so
+verification works directly against the artifact rather than against a file
+that vouches for it. Checking `SHA256SUMS` by hand remains useful offline; the
+attestation is what makes provenance verifiable independently of the channel
+that delivered the download.
+
+Attestation is currently a **non-blocking** step: a failure there is logged but
+does not stop a release. That is deliberate while the wiring proves itself
+across a real tag build. Once a release has produced attestations that verify,
+remove `continue-on-error` from the `Attest release asset provenance` step so a
+release cannot silently ship without provenance.
+
 ## Updates
 
 Stable builds use `https://updates.hucode.dev`.

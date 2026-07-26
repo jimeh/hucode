@@ -243,4 +243,39 @@ suite('Hucode release workflow contract', () => {
 		assert.match(job, /release-assets\.ts verify/);
 		assert.match(job, /gh release edit "\$TAG_NAME" --draft=false/);
 	});
+
+	suite('release provenance attestation', () => {
+		const job = workflow.slice(workflow.indexOf('  publish-release:'));
+
+		test('attests the assets after checksums exist', () => {
+			// SHA256SUMS supplies the subject digests, so attestation cannot
+			// run before the step that writes it.
+			const checksums = job.indexOf('--checksums SHA256SUMS');
+			const attest = job.indexOf('- name: Attest release asset provenance');
+
+			assert.ok(checksums > -1, 'checksums step missing');
+			assert.ok(attest > checksums, 'attestation must follow checksums');
+			assert.match(job, /subject-checksums: SHA256SUMS/);
+		});
+
+		test('grants the permissions attestation requires', () => {
+			// Without both of these the action fails at run time, and only
+			// during a real tag build where it is most expensive to discover.
+			const permissions = job.slice(
+				job.indexOf('permissions:'),
+				job.indexOf('steps:')
+			);
+
+			assert.match(permissions, /id-token: write/);
+			assert.match(permissions, /attestations: write/);
+		});
+
+		test('pins the attestation action to a full commit SHA', () => {
+			const uses = /uses: actions\/attest-build-provenance@(?<ref>\S+)/
+				.exec(job);
+
+			assert.ok(uses, 'attestation action not referenced');
+			assert.match(uses.groups?.ref ?? '', /^[0-9a-f]{40}$/);
+		});
+	});
 });
