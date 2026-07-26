@@ -222,13 +222,36 @@ must not wait for it.
 - `test/unit/node/index.js:57-64` (layer exclusion rules are the reference for
   which runner owns which layer)
 
-**Direction.** Two viable shapes, in preference order. Either replace the
-explicit list with layer-appropriate globs so assignment is automatic, or keep
-the list and add a check that enumerates `src/vs/hucode/**/*.test.ts` plus
-Hucode-named suites elsewhere, resolves each to its owning runner by layer, and
-fails on any file owned by none. The glob approach removes the failure mode
-outright and is preferred if the runner can accept it; the guard approach is
-the fallback.
+**Direction.** Two shapes were considered: replacing the explicit list with
+layer-appropriate globs, or keeping the list and adding a completeness check.
+**Decided: the check.** The glob shape was rejected on evidence from the
+runner:
+
+- `--runGlob`/`--glob` takes a single pattern, is mutually exclusive with
+  `--run` (`test/unit/electron/renderer.js:163`), and matches compiled `out/`
+  paths through `glob@5`, which has no array support. Mixing globs with
+  explicit entries would need an upstream runner patch.
+- Globbing the layers the Electron runner owns selects 795 committed suites
+  against the 34 enumerated — the full upstream matrix that
+  `docs/hucode/agent-instructions.md` keeps out of the fork baseline.
+- Selection is semantic, not path-derivable: seven enumerated suites are
+  upstream-named files included only because Hucode patched their subject.
+- Decisively, a glob inverts the failure mode. `--run` on a missing file throws
+  a loader error; a glob matching nothing runs nothing, silently.
+
+The check enumerates `src/vs/hucode/**/*.test.ts` plus `hucode*`-named suites
+elsewhere and fails on any owned by no runner. **Assignment is resolved from
+the workflow's actual `--run` arguments, not by layer** — explicit `--run`
+bypasses the Node runner's layer exclusions, and two Electron-layer suites are
+deliberately run under `npm run test-node`. Layer only supplies the suggested
+remedy.
+
+**Known limitation, and an H1 dependent.** The inventory is scoped to
+Hucode-owned and `hucode*`-named suites, so the seven upstream-named suites
+listed because Hucode patched their subject remain unguarded — an eighth would
+still orphan silently. Closing that requires knowing which upstream files
+Hucode has forked, which is H1's provenance map. Extend the inventory from that
+map when H1 lands rather than building a second provenance mechanism here.
 
 **Acceptance criteria.**
 
@@ -889,6 +912,11 @@ a new fork fails the check.
 
 **Prerequisites.** None, but naturally triggered by the next VS Code upgrade —
 sequence it with that rather than as a standalone push.
+
+**Dependents.** A2's assignment check, whose inventory cannot see
+upstream-named suites that exist only because Hucode patched their subject.
+Feed the provenance map into `build/hucode/check-test-assignment.ts` so those
+suites are guarded too.
 
 **PR size.** Medium. **Changelog fragment.** Yes — `feat:`.
 

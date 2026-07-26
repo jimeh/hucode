@@ -14,6 +14,7 @@
     "hucode:prepare": "node build/hucode/prepare-mixin.js --quality stable",
     "hucode:validate": "node build/hucode/validate-mixin.js --quality stable",
     "hucode:compile": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run gulp -- compile-client compile-extensions compile-extension-media",
+    "hucode:check-test-assignment": "node build/hucode/check-test-assignment.ts",
     "hucode:smoke:linux-omni": "node build/hucode/linux-omni-smoke.ts",
     "hucode:watch": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run watch",
     "hucode:run": "npm run hucode:prepare && ./scripts/hucode.sh",

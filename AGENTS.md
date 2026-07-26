@@ -99,7 +99,20 @@ as the required Hucode instruction set for work in this fork.
   (`test/unit/node/index.js`). A committed suite in `browser`,
   `electron-browser`, or `electron-main` that is missing from that list runs
   nowhere and fails nothing. Add new suites to the list in the same change that
-  adds the test.
+  adds the test. `npm run hucode:check-test-assignment` enforces this for
+  Hucode-owned and `hucode*`-named suites and runs in CI; it does not cover
+  upstream-named suites that are listed only because Hucode patched their
+  subject.
+- Runner assignment is not derivable from the layer alone. An explicit `--run`
+  argument bypasses the Node runner's layer exclusions, and two Electron-layer
+  suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) are
+  deliberately run by `npm run test-node`. Resolve assignment from the
+  workflow's actual `--run` arguments, not from the directory name.
+- The Electron runner does accept a glob (`--runGlob`/`--glob`), but it takes a
+  single pattern, is mutually exclusive with `--run`, and matches against
+  compiled `out/` paths. A glob over the layers it owns would pull in the whole
+  upstream VS Code suite, and a glob that matches nothing fails silently, so
+  the explicit list plus the assignment check is deliberate.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.

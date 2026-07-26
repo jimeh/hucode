@@ -51,6 +51,9 @@ jobs:
         run: npm run typecheck
         working-directory: build
 
+      - name: Check Hucode test assignment
+        run: npm run hucode:check-test-assignment
+
       - name: Test build scripts
         run: npm run test-build-scripts
 
