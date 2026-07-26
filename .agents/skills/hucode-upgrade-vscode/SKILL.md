@@ -377,6 +377,29 @@ minute and runs against the same esbuild-transpiled `out/` that Hucode CI
 uses, so local results predict the CI Unit Tests job. Run additional targeted
 tests for touched Hucode areas when available.
 
+### Undocumented Upstream Seams
+
+Some Hucode behavior depends on upstream implementation details that no
+upstream API documents. Those are the seams most likely to break silently on a
+baseline bump, so check them deliberately rather than trusting a green compile.
+
+**ProxyChannel event discovery.** `hucodeCreateLazyEventService`
+(`src/vs/base/parts/ipc/common/hucodeLazyEventService.ts`) hides selected event
+properties from enumeration while keeping them reachable by direct lookup. That
+only works because `ProxyChannel.fromService` finds events by *enumerating* the
+service's properties and eagerly subscribing to anything shaped like an event.
+Hucode relies on that enumeration to keep high-volume `ILocalPtyService` streams
+lazy; if upstream switches to explicit registration, a decorator, or a
+different property walk, the proxy either subscribes eagerly again — restoring
+the `Event.buffer` leak warnings this exists to avoid — or stops exposing the
+events at all.
+
+There is a tripwire: `hucodeLazyEventService.test.ts` round-trips through the
+real `ProxyChannel.fromService` and asserts zero eager subscriptions. A
+regression fails that test rather than passing silently, so **do not dismiss it
+as a fixture problem.** If it fails after a bump, read
+`ProxyChannel.fromService` in the new baseline before changing the test.
+
 ### Triage Of Failing Tests
 
 Do not classify a failing test as a pre-existing or environment-only artifact
