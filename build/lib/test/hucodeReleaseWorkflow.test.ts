@@ -224,6 +224,7 @@ suite('Hucode release workflow contract', () => {
 		const job = workflow.slice(workflow.indexOf('  publish-release:'));
 		const steps = [
 			'- name: Prepare release assets',
+			'- name: Attest release asset provenance',
 			'- name: Create or update draft release',
 			'- name: Upload draft release assets',
 			'- name: Verify remote release assets',
@@ -242,5 +243,68 @@ suite('Hucode release workflow contract', () => {
 		assert.match(job, /gh release view "\$TAG_NAME"[\s\S]*--json assets/);
 		assert.match(job, /release-assets\.ts verify/);
 		assert.match(job, /gh release edit "\$TAG_NAME" --draft=false/);
+	});
+
+	suite('release provenance attestation', () => {
+		// Bounded deliberately. An unbounded slice runs to end of file, so
+		// these assertions would still pass with the attest step sitting in a
+		// later job that has neither the permissions nor the checksums file.
+		const job = workflow.slice(
+			workflow.indexOf('  publish-release:'),
+			workflow.indexOf('  refresh-update-service:')
+		);
+
+		test('attests the assets after checksums exist', () => {
+			// SHA256SUMS supplies the subject digests, so attestation cannot
+			// run before the step that writes it.
+			const checksums = job.indexOf('--checksums SHA256SUMS');
+			const attest = job.indexOf('- name: Attest release asset provenance');
+
+			assert.ok(checksums > -1, 'checksums step missing');
+			assert.ok(attest > checksums, 'attestation must follow checksums');
+			assert.match(job, /subject-checksums: SHA256SUMS/);
+		});
+
+		test('attests the checksums file itself, after it exists', () => {
+			// A checksums file cannot list itself, so without a second
+			// attestation `gh attestation verify SHA256SUMS` hard-fails on a
+			// perfectly good release. Ordering matters as much as presence:
+			// run it before the file is written and `subject-path` resolves
+			// nothing, which `continue-on-error` then swallows.
+			const checksums = job.indexOf('--checksums SHA256SUMS');
+			const attest = job.indexOf('- name: Attest checksums file provenance');
+			const report = job.indexOf('- name: Report attestation failures');
+
+			assert.ok(attest > checksums, 'must follow checksum generation');
+			assert.ok(report > attest, 'reporting must follow both attestations');
+			assert.match(job, /subject-path: SHA256SUMS/);
+		});
+
+		test('surfaces a failure that continue-on-error would hide', () => {
+			assert.match(job, /- name: Report attestation failures/);
+			assert.match(job, /steps\.attest-assets\.outcome == 'failure'/);
+			assert.match(job, /steps\.attest-checksums\.outcome == 'failure'/);
+			assert.match(job, /::warning::/);
+		});
+
+		test('grants the permissions attestation requires', () => {
+			// Without both of these the action fails at run time, and only
+			// during a real tag build where it is most expensive to discover.
+			const permissions = job.slice(
+				job.indexOf('permissions:'),
+				job.indexOf('steps:')
+			);
+
+			assert.match(permissions, /id-token: write/);
+			assert.match(permissions, /attestations: write/);
+		});
+
+		test('pins the attestation action to a full commit SHA', () => {
+			const uses = /uses: actions\/attest-build-provenance@(?<ref>\S+)/
+				.exec(job);
+
+			assert.ok(uses, 'attestation action not referenced');
+			assert.match(uses.groups?.ref ?? '', /^[0-9a-f]{40}$/);
+		});
 	});
 });

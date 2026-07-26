@@ -1215,6 +1215,11 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      # Both are required to mint a build provenance attestation: id-token to
+      # obtain the OIDC token identifying this workflow, attestations to record
+      # the result against the repository.
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -1315,6 +1320,69 @@ jobs:
             --metadata hucode-release-metadata.json \
             --checksums SHA256SUMS \
             --manifest release-assets.json
+
+      # Attests every asset listed in SHA256SUMS rather than the checksums file
+      # itself, so `gh attestation verify` works against the artifact a user
+      # actually downloaded instead of against a file that merely vouches for
+      # it. Verification procedure lives in docs/hucode/release.md.
+      #
+      # Non-blocking on purpose while the wiring proves itself across a real
+      # release: a misconfiguration here should not strand a release that is
+      # otherwise ready. Remove continue-on-error once a tag has produced
+      # attestations that verify.
+      - name: Attest release asset provenance
+        id: attest-assets
+        if: needs.package.result != 'cancelled'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-checksums: SHA256SUMS
+
+      # SHA256SUMS cannot list itself, so the step above does not cover it —
+      # and it is the file a careful user reaches for first. Without this,
+      # verifying it would hard-fail on a perfectly good release and teach
+      # people to ignore verification failures.
+      - name: Attest checksums file provenance
+        id: attest-checksums
+        if: needs.package.result != 'cancelled'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: SHA256SUMS
+
+      # continue-on-error hides a failure as a green run with only a step
+      # annotation. Surface it where someone reading the release will see it.
+      - name: Report attestation failures
+        if: >-
+          needs.package.result != 'cancelled' &&
+          (steps.attest-assets.outcome == 'failure' ||
+            steps.attest-checksums.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets='${{ steps.attest-assets.outcome }}'
+          checksums='${{ steps.attest-checksums.outcome }}'
+          {
+            echo "### Release provenance attestation failed"
+            echo
+            echo "- per-asset attestation: $assets"
+            echo "- SHA256SUMS attestation: $checksums"
+            echo
+            echo "The release still published. What remains verifiable:"
+            if [ "$assets" != 'failure' ]; then
+              echo "- \`gh attestation verify <asset>\` still works."
+            else
+              echo "- Release assets have no direct attestation."
+            fi
+            if [ "$checksums" != 'failure' ]; then
+              echo "- \`gh attestation verify SHA256SUMS\` still works, so"
+              echo "  checking downloads against it by hand is trustworthy."
+            else
+              echo "- SHA256SUMS has no attestation of its own."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Release provenance attestation failed" \
+            "(assets=$assets checksums=$checksums)"
 
       - name: Create or update draft release
         if: needs.package.result != 'cancelled'

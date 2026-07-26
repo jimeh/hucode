@@ -90,6 +90,57 @@ verifies the complete set, and publishes the GitHub Release. Update-service
 metadata is generated from those verified assets rather than inferred from
 arbitrary workflow artifacts.
 
+### Verifying Release Provenance
+
+`SHA256SUMS` proves that a download matches what the release lists, but not
+that the release itself came from this repository's build. The publication job
+therefore records a GitHub build provenance attestation for every asset listed
+in `SHA256SUMS`.
+
+Verify a downloaded asset against it:
+
+```sh
+gh attestation verify hucode-linux-x64.zip --repo jimeh/hucode
+```
+
+This succeeds only when the file's digest matches an attestation GitHub issued
+to a workflow run in `jimeh/hucode`. A tampered or substituted asset fails with
+`no attestations found` — its digest is simply not in any attestation. Add
+`--format json` to inspect the workflow, commit, and run that produced it.
+
+`SHA256SUMS` is attested too, so it can serve as a root of trust when checking
+downloads by hand:
+
+```sh
+gh attestation verify SHA256SUMS --repo jimeh/hucode
+```
+
+That needs its own attestation because a checksums file cannot list itself.
+Every published asset is covered: the release assets through the digests
+recorded in `SHA256SUMS`, and `SHA256SUMS` through a second attestation over
+the file. Verification therefore works directly against the artifact you
+downloaded rather than against a file that merely vouches for it.
+
+Attestation is currently **non-blocking**: a failure is reported but does not
+stop a release. That is deliberate while the wiring proves itself across a real
+tag build — a misconfiguration should not strand a release that is otherwise
+ready.
+
+Because `continue-on-error` would otherwise make a failure look like success,
+the job writes a warning and a step-summary entry when either attestation
+fails, naming which one.
+
+The two are independent, so a partial failure still leaves a working path. If
+only the `SHA256SUMS` attestation failed, per-asset verification is unaffected.
+If only the per-asset attestation failed, `SHA256SUMS` is still attested, so
+checking a download against it by hand remains trustworthy. The step summary
+spells out which applies. In either case the assets themselves are fine —
+a failed attestation says nothing about the download.
+
+Once a tag build has produced attestations that actually verify, remove
+`continue-on-error` from both attest steps so a release cannot silently ship
+without provenance.
+
 ## Updates
 
 Stable builds use `https://updates.hucode.dev`.
