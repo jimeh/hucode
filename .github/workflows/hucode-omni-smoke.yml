@@ -69,6 +69,12 @@ jobs:
         run: |
           set -euo pipefail
           source ./build/azure-pipelines/linux/setup-env.sh
+          # setup-env.sh downloads the client sysroot and exports its location
+          # as VSCODE_CLIENT_SYSROOT_DIR, but release-build.ts reads
+          # VSCODE_SYSROOT_DIR. Without this bridge it looks directly under
+          # .build/sysroots, finds no toolchain, and fails while mixing in the
+          # Rust CLI -- after a full app build has already run.
+          export VSCODE_SYSROOT_DIR="$VSCODE_CLIENT_SYSROOT_DIR"
           node build/hucode/release-build.ts \
             --platform linux \
             --arch x64 \
