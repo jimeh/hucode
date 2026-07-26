@@ -86,6 +86,12 @@ export interface TestAssignmentInput {
 	 */
 	readonly nodeRunnerDefaultPass: boolean;
 
+	/**
+	 * Whether the workflow still invokes the Electron runner, which every
+	 * explicitly assigned suite in the excluded layers depends on.
+	 */
+	readonly electronRunnerInvoked: boolean;
+
 	/** Repository-relative paths of files that exist on disk. */
 	readonly existingFiles: ReadonlySet<string>;
 
@@ -107,8 +113,12 @@ export interface TestAssignmentReport {
 	/** Opt-out entries that are gone or no longer needed. */
 	readonly staleOptOuts: readonly string[];
 
-	/** Whether the workflow stopped invoking the Node runner's default pass. */
-	readonly nodeRunnerNotInvoked: boolean;
+	/**
+	 * Runner invocations the workflow no longer makes unconditionally. Each
+	 * one strands every suite that depends on it, so this is reported as the
+	 * root cause ahead of the suites it orphans.
+	 */
+	readonly missingRunnerInvocations: readonly string[];
 }
 
 /**
@@ -172,34 +182,122 @@ function remedyFor(file: string): string {
 }
 
 /**
- * Drops commented-out lines, then folds shell line continuations so a `--run`
- * and its argument end up adjacent.
- *
- * Comments are removed first because a `#` prefix disables the line under both
- * readings of a workflow file — YAML comment outside a block scalar, shell
- * comment inside one. Leaving them in would let a suite that somebody
- * commented out still count as assigned.
+ * Command text of one workflow step.
  */
-function foldRunnableLines(workflow: string): string {
-	return workflow
-		.split('\n')
-		.filter(line => !/^\s*#/.test(line))
-		.join('\n')
-		.replace(/\\\r?\n\s*/g, ' ');
+export interface WorkflowStep {
+
+	/**
+	 * The step's `run:` body, with commented-out lines dropped and shell line
+	 * continuations folded so a `--run` and its argument end up adjacent.
+	 *
+	 * Comments go first because a `#` prefix disables the line under both
+	 * readings of a workflow file — YAML comment outside a block scalar, shell
+	 * comment inside one. Leaving them in would let a suite somebody commented
+	 * out still count as assigned.
+	 */
+	readonly command: string;
+
+	/** Whether an `if:` key can stop the step from executing. */
+	readonly conditional: boolean;
+}
+
+/**
+ * Splits a workflow into its steps, keeping only their command text.
+ *
+ * Reading the file as a flat blob is not good enough: a `--run` argument only
+ * assigns a suite if the step around it actually invokes a runner and actually
+ * executes. Full YAML parsing is not needed for that — step boundaries and the
+ * `run:` body are, and they carry no dependency.
+ */
+export function parseWorkflowSteps(workflow: string): WorkflowStep[] {
+	const steps: WorkflowStep[] = [];
+	let current: string[] | undefined;
+	let conditional = false;
+	let inRunBody = false;
+
+	const flush = () => {
+		if (current) {
+			steps.push({
+				command: current
+					.join('\n')
+					.replace(/\\\r?\n\s*/g, ' '),
+				conditional,
+			});
+		}
+	};
+
+	for (const raw of workflow.split('\n')) {
+		if (/^\s*-\s/.test(raw)) {
+			flush();
+			current = [];
+			conditional = false;
+			inRunBody = false;
+		}
+		if (!current) {
+			continue;
+		}
+		if (/^\s*#/.test(raw)) {
+			continue;
+		}
+		if (/^\s*if:/.test(raw)) {
+			conditional = true;
+			inRunBody = false;
+			continue;
+		}
+		const runKey = /^\s*(?:-\s+)?run:\s*(.*)$/.exec(raw);
+		if (runKey) {
+			inRunBody = true;
+			if (runKey[1] && !/^[|>]/.test(runKey[1])) {
+				current.push(runKey[1]);
+			}
+			continue;
+		}
+		if (/^\s*[a-zA-Z-]+:/.test(raw)) {
+			inRunBody = false;
+			continue;
+		}
+		if (inRunBody) {
+			current.push(raw);
+		}
+	}
+	flush();
+
+	return steps;
+}
+
+function isRunnerInvocation(line: string): boolean {
+	return /npm run test-node/.test(line) || /scripts\/test\.sh/.test(line);
+}
+
+/**
+ * Steps that both execute unconditionally and invoke a test runner.
+ */
+function runnerSteps(workflow: string): WorkflowStep[] {
+	return parseWorkflowSteps(workflow)
+		.filter(step => !step.conditional)
+		.filter(step => step.command.split('\n').some(isRunnerInvocation));
 }
 
 /**
  * Extracts every `--run` argument from a workflow file, as a source path.
  *
- * Both runners accept a compiled `.test.js` path as well as the `.test.ts`
- * source path, so `.js` references are normalised back to their source form to
- * stay comparable with the committed inventory.
+ * Arguments only count when the step around them invokes a runner and is not
+ * gated by an `if:`, so a commented-out or disabled runner cannot leave its
+ * argument list behind and keep the suites looking assigned.
+ *
+ * Both runners accept a compiled path as well as the `.test.ts` source path,
+ * so compiled references are normalised back to their source form to stay
+ * comparable with the committed inventory.
  */
 export function parseWorkflowRunArguments(workflow: string): string[] {
 	const pattern = /--run[=\s]+(\S+\.test\.[jt]s)/g;
 	const found: string[] = [];
-	for (const match of foldRunnableLines(workflow).matchAll(pattern)) {
-		found.push(match[1].replace(/\.test\.js$/, '.test.ts'));
+	for (const step of runnerSteps(workflow)) {
+		for (const match of step.command.matchAll(pattern)) {
+			found.push(match[1]
+				.replace(/^out\//, 'src/')
+				.replace(/\.test\.js$/, '.test.ts'));
+		}
 	}
 	return found;
 }
@@ -212,9 +310,22 @@ export function parseWorkflowRunArguments(workflow: string): string[] {
  * check must stop treating them as covered rather than staying green.
  */
 export function hasNodeRunnerDefaultPass(workflow: string): boolean {
-	return foldRunnableLines(workflow)
+	return runnerSteps(workflow).some(step => step.command
 		.split('\n')
-		.some(line => /npm run test-node/.test(line) && !/--run/.test(line));
+		.some(line => /npm run test-node/.test(line) && !/--run/.test(line)));
+}
+
+/**
+ * Returns true when the workflow still invokes the Electron runner.
+ *
+ * Every suite in the layers the Node runner excludes depends on this step, so
+ * losing it strands all of them at once. The Node runner has an equivalent
+ * guard above; this is the same protection for the runner where suites have
+ * actually been orphaned.
+ */
+export function hasElectronRunnerInvocation(workflow: string): boolean {
+	return runnerSteps(workflow).some(step =>
+		/scripts\/test\.sh/.test(step.command));
 }
 
 /**
@@ -246,16 +357,33 @@ export function checkTestAssignment(
 		.filter(file => !input.existingFiles.has(file))
 		.sort();
 
+	const candidateSet = new Set(input.candidates);
 	const staleOptOuts = input.knownUnassigned
 		.filter(file =>
-			!input.existingFiles.has(file) || assignedCandidates.has(file))
+			!input.existingFiles.has(file)
+			|| !candidateSet.has(file)
+			|| assignedCandidates.has(file))
 		.sort();
+
+	const missingRunnerInvocations: string[] = [];
+	if (!input.nodeRunnerDefaultPass) {
+		missingRunnerInvocations.push(
+			'`npm run test-node` without `--run`, which enumerates node and '
+			+ 'common suites'
+		);
+	}
+	if (!input.electronRunnerInvoked) {
+		missingRunnerInvocations.push(
+			'`scripts/test.sh`, which runs every explicitly assigned suite in '
+			+ 'the browser and electron layers'
+		);
+	}
 
 	return {
 		unassigned,
 		missingWorkflowRefs,
 		staleOptOuts,
-		nodeRunnerNotInvoked: !input.nodeRunnerDefaultPass,
+		missingRunnerInvocations,
 	};
 }
 
@@ -266,7 +394,7 @@ export function isClean(report: TestAssignmentReport): boolean {
 	return report.unassigned.length === 0
 		&& report.missingWorkflowRefs.length === 0
 		&& report.staleOptOuts.length === 0
-		&& !report.nodeRunnerNotInvoked;
+		&& report.missingRunnerInvocations.length === 0;
 }
 
 /**
@@ -275,12 +403,14 @@ export function isClean(report: TestAssignmentReport): boolean {
 export function formatReport(report: TestAssignmentReport): string {
 	const lines: string[] = [];
 
-	if (report.nodeRunnerNotInvoked) {
+	if (report.missingRunnerInvocations.length) {
 		lines.push(
-			`${WORKFLOW_PATH} no longer runs \`npm run test-node\` without `
-			+ '`--run`. That pass is what enumerates node and common suites, '
-			+ 'so nothing is automatically covered any more.'
+			`${WORKFLOW_PATH} no longer invokes these unconditionally:`
 		);
+		for (const invocation of report.missingRunnerInvocations) {
+			lines.push(`  ${invocation}`);
+		}
+		lines.push('  A step gated by `if:` does not count.');
 	}
 
 	if (report.unassigned.length) {
@@ -354,13 +484,13 @@ export async function checkRepository(
 
 	const allTestFiles: string[] = [];
 	await collectTestFiles(repoRoot, 'src', allTestFiles);
-	const existingFiles = new Set(allTestFiles);
 
 	return checkTestAssignment({
-		candidates: allTestFiles.filter(isHucodeSuite).sort(),
+		candidates: await collectCandidateSuites(repoRoot),
 		workflowRunPaths,
 		nodeRunnerDefaultPass: hasNodeRunnerDefaultPass(workflow),
-		existingFiles,
+		electronRunnerInvoked: hasElectronRunnerInvocation(workflow),
+		existingFiles: new Set(allTestFiles),
 		knownUnassigned: KNOWN_UNASSIGNED,
 	});
 }

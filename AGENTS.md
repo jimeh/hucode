@@ -100,9 +100,10 @@ as the required Hucode instruction set for work in this fork.
   `electron-browser`, or `electron-main` that is missing from that list runs
   nowhere and fails nothing. Add new suites to the list in the same change that
   adds the test. `npm run hucode:check-test-assignment` enforces this for
-  Hucode-owned and `hucode*`-named suites and runs in CI; it does not cover
-  upstream-named suites that are listed only because Hucode patched their
-  subject.
+  Hucode-owned and `hucode*`-named suites and runs in CI. It does not cover the
+  eleven upstream-named suites listed only because Hucode patched their
+  subject, so adding another one still needs care; a copyright-header rule
+  would not close that gap either, since several carry Microsoft's notice.
 - Runner assignment is not derivable from the layer alone. An explicit `--run`
   argument bypasses the Node runner's layer exclusions, and two Electron-layer
   suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) are

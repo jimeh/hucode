@@ -16,6 +16,7 @@ import {
 	checkTestAssignment,
 	collectCandidateSuites,
 	formatReport,
+	hasElectronRunnerInvocation,
 	hasNodeRunnerDefaultPass,
 	isClean,
 	isCoveredByNodeRunner,
@@ -39,6 +40,7 @@ function input(overrides: Partial<TestAssignmentInput>): TestAssignmentInput {
 		candidates,
 		workflowRunPaths,
 		nodeRunnerDefaultPass: overrides.nodeRunnerDefaultPass ?? true,
+		electronRunnerInvoked: overrides.electronRunnerInvoked ?? true,
 		existingFiles: overrides.existingFiles
 			?? new Set([...candidates, ...workflowRunPaths]),
 		knownUnassigned: overrides.knownUnassigned ?? [],
@@ -186,24 +188,77 @@ suite('Hucode test assignment check', () => {
 			nodeRunnerDefaultPass: false,
 		}));
 
-		assert.ok(report.nodeRunnerNotInvoked);
+		assert.deepStrictEqual(report.missingRunnerInvocations.length, 1);
+		assert.match(report.missingRunnerInvocations[0], /npm run test-node/);
 		assert.deepStrictEqual(
 			report.unassigned.map(entry => entry.file),
 			[NODE_SUITE]
 		);
-		assert.match(formatReport(report), /no longer runs `npm run test-node`/);
+		assert.match(formatReport(report), /no longer invokes/);
+	});
+
+	test('reports a missing Electron runner invocation', () => {
+		const report = checkTestAssignment(input({
+			candidates: [ELECTRON_SUITE],
+			workflowRunPaths: [ELECTRON_SUITE],
+			electronRunnerInvoked: false,
+		}));
+
+		assert.ok(!isClean(report));
+		assert.deepStrictEqual(report.missingRunnerInvocations.length, 1);
+		assert.match(report.missingRunnerInvocations[0], /scripts\/test\.sh/);
+	});
+
+	test('reports both missing invocations together', () => {
+		const report = checkTestAssignment(input({
+			nodeRunnerDefaultPass: false,
+			electronRunnerInvoked: false,
+		}));
+
+		assert.strictEqual(report.missingRunnerInvocations.length, 2);
+	});
+
+	test('reports an opt-out entry for a file outside the inventory', () => {
+		// Exempting something the check never looked at suppresses nothing,
+		// so it must not sit in the list looking like protection.
+		const upstream = 'src/vs/platform/windows/test/electron-main/'
+			+ 'windowsFinder.test.ts';
+		const report = checkTestAssignment(input({
+			candidates: [],
+			knownUnassigned: [upstream],
+			existingFiles: new Set([upstream]),
+		}));
+
+		assert.deepStrictEqual(report.staleOptOuts, [upstream]);
+	});
+
+	test('formats every section of a report at once', () => {
+		const report = checkTestAssignment(input({
+			candidates: [ELECTRON_SUITE],
+			workflowRunPaths: ['src/vs/hucode/test/browser/gone.test.ts'],
+			knownUnassigned: [NODE_SUITE],
+			existingFiles: new Set([ELECTRON_SUITE]),
+			nodeRunnerDefaultPass: false,
+		}));
+		const formatted = formatReport(report);
+
+		assert.match(formatted, /no longer invokes/);
+		assert.match(formatted, /no CI runner executes/);
+		assert.match(formatted, /do not exist/);
+		assert.match(formatted, /Stale KNOWN_UNASSIGNED/);
 	});
 
 	suite('workflow parsing', () => {
 
 		test('reads arguments across line continuations', () => {
 			const workflow = [
-				'          run: |',
-				'            ./scripts/test.sh \\',
-				'              --run \\',
-				'              src/vs/hucode/test/browser/a.test.ts \\',
-				'              --run \\',
-				'              src/vs/hucode/test/browser/b.test.ts',
+				'      - name: Run Hucode Electron unit tests',
+				'        run: |',
+				'          ./scripts/test.sh \\',
+				'            --run \\',
+				'            src/vs/hucode/test/browser/a.test.ts \\',
+				'            --run \\',
+				'            src/vs/hucode/test/browser/b.test.ts',
 			].join('\n');
 
 			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), [
@@ -213,7 +268,8 @@ suite('Hucode test assignment check', () => {
 		});
 
 		test('reads inline and equals-delimited arguments', () => {
-			const workflow = '--run src/a.test.ts --run=src/b.test.ts';
+			const workflow = '      - run: npm run test-node -- '
+				+ '--run src/a.test.ts --run=src/b.test.ts';
 
 			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), [
 				'src/a.test.ts',
@@ -222,24 +278,55 @@ suite('Hucode test assignment check', () => {
 		});
 
 		test('normalises compiled paths back to source paths', () => {
-			// Both runners accept a `.test.js` argument, so the inventory has
-			// to see it as the source suite rather than a missing reference.
+			// Both runners resolve a compiled argument, in either the `src/`
+			// or the `out/` rooted form, so the inventory has to see the
+			// source suite rather than a missing reference.
 			assert.deepStrictEqual(
-				parseWorkflowRunArguments('--run src/a.test.js'),
-				['src/a.test.ts']
+				parseWorkflowRunArguments(
+					'      - run: npm run test-node -- --run src/a.test.js '
+					+ '--run out/b.test.js'
+				),
+				['src/a.test.ts', 'src/b.test.ts']
 			);
+		});
+
+		test('ignores arguments left behind by a disabled runner', () => {
+			const workflow = [
+				'      - name: Run Hucode Electron unit tests',
+				'        run: |',
+				'          # xvfb-run ./scripts/test.sh \\',
+				'          echo SKIPPING \\',
+				'            --run \\',
+				'            src/vs/hucode/test/electron-main/b.test.ts',
+			].join('\n');
+
+			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), []);
+		});
+
+		test('ignores arguments in a conditional step', () => {
+			const workflow = [
+				'      - name: Run Hucode Electron unit tests',
+				'        if: false',
+				'        run: |',
+				'          ./scripts/test.sh \\',
+				'            --run \\',
+				'            src/vs/hucode/test/electron-main/b.test.ts',
+			].join('\n');
+
+			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), []);
 		});
 
 		test('ignores commented-out arguments', () => {
 			const workflow = [
-				'          run: |',
-				'            ./scripts/test.sh \\',
-				'              --run \\',
-				'              src/vs/hucode/test/browser/a.test.ts',
-				'              # disabled while flaky:',
-				'              # --run src/vs/hucode/test/browser/b.test.ts',
-				'              # --run \\',
-				'              src/vs/hucode/test/browser/c.test.ts',
+				'      - name: Run Hucode Electron unit tests',
+				'        run: |',
+				'          ./scripts/test.sh \\',
+				'            --run \\',
+				'            src/vs/hucode/test/browser/a.test.ts',
+				'            # disabled while flaky:',
+				'            # --run src/vs/hucode/test/browser/b.test.ts',
+				'            # --run \\',
+				'            src/vs/hucode/test/browser/c.test.ts',
 			].join('\n');
 
 			assert.deepStrictEqual(parseWorkflowRunArguments(workflow), [
@@ -266,18 +353,19 @@ suite('Hucode test assignment check', () => {
 		});
 	});
 
-	suite('Node runner default pass', () => {
+	suite('runner invocations', () => {
 
-		test('is detected in the real workflow', async () => {
+		test('are both detected in the real workflow', async () => {
 			const workflow = await fs.readFile(
 				path.join(repoRoot, WORKFLOW_PATH),
 				'utf8'
 			);
 
 			assert.ok(hasNodeRunnerDefaultPass(workflow));
+			assert.ok(hasElectronRunnerInvocation(workflow));
 		});
 
-		test('is not satisfied by an explicit --run invocation alone', () => {
+		test('the Node default pass needs an invocation without --run', () => {
 			const workflow = [
 				'      - name: Run Hucode Node and common unit tests',
 				'        run: |',
@@ -289,8 +377,38 @@ suite('Hucode test assignment check', () => {
 			assert.ok(!hasNodeRunnerDefaultPass(workflow));
 		});
 
-		test('is not satisfied by a commented-out invocation', () => {
-			const workflow = '        # run: npm run test-node';
+		test('a commented-out invocation does not count', () => {
+			const workflow = [
+				'      - name: Run Node unit tests',
+				'        run: |',
+				'          # npm run test-node',
+				'          # ./scripts/test.sh',
+			].join('\n');
+
+			assert.ok(!hasNodeRunnerDefaultPass(workflow));
+			assert.ok(!hasElectronRunnerInvocation(workflow));
+		});
+
+		test('a conditional step does not count', () => {
+			const workflow = [
+				'      - name: Run Node unit tests',
+				'        if: false',
+				'        run: npm run test-node',
+				'',
+				'      - name: Run Hucode Electron unit tests',
+				'        if: github.event_name == \'push\'',
+				'        run: ./scripts/test.sh --run src/a.test.ts',
+			].join('\n');
+
+			assert.ok(!hasNodeRunnerDefaultPass(workflow));
+			assert.ok(!hasElectronRunnerInvocation(workflow));
+		});
+
+		test('a mention outside a run body does not count', () => {
+			const workflow = [
+				'      - name: replaces npm run test-node someday',
+				'        uses: ./.github/actions/setup-hucode-linux',
+			].join('\n');
 
 			assert.ok(!hasNodeRunnerDefaultPass(workflow));
 		});
@@ -329,7 +447,14 @@ suite('Hucode test assignment check', () => {
 			const excludeMatch =
 				/const excludeGlobs = \[([\s\S]*?)\n\];/.exec(source);
 			assert.ok(excludeMatch, 'excludeGlobs not found in the Node runner');
-			const declared = [...excludeMatch[1].matchAll(/'([^']+)'/g)]
+			// Trailing `//` comments are stripped first: upstream writes prose
+			// there, and an apostrophe in it would otherwise be read as a glob
+			// delimiter — failing on exactly the upgrade this test exists for.
+			const declared = [...excludeMatch[1]
+				.split('\n')
+				.map(line => line.replace(/\/\/.*$/, ''))
+				.join('\n')
+				.matchAll(/'([^']+)'/g)]
 				.map(entry => entry[1]);
 
 			assert.deepStrictEqual(declared, NODE_RUNNER_EXCLUDE_GLOBS);

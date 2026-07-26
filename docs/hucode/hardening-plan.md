@@ -234,7 +234,7 @@ runner:
 - Globbing the layers the Electron runner owns selects 795 committed suites
   against the 34 enumerated — the full upstream matrix that
   `docs/hucode/agent-instructions.md` keeps out of the fork baseline.
-- Selection is semantic, not path-derivable: seven enumerated suites are
+- Selection is semantic, not path-derivable: eleven enumerated suites are
   upstream-named files included only because Hucode patched their subject.
 - Decisively, a glob inverts the failure mode. `--run` on a missing file throws
   a loader error; a glob matching nothing runs nothing, silently.
@@ -247,11 +247,19 @@ deliberately run under `npm run test-node`. Layer only supplies the suggested
 remedy.
 
 **Known limitation, and an H1 dependent.** The inventory is scoped to
-Hucode-owned and `hucode*`-named suites, so the seven upstream-named suites
-listed because Hucode patched their subject remain unguarded — an eighth would
-still orphan silently. Closing that requires knowing which upstream files
-Hucode has forked, which is H1's provenance map. Extend the inventory from that
-map when H1 lands rather than building a second provenance mechanism here.
+Hucode-owned and `hucode*`-named suites. Eleven of the workflow's 56 `--run`
+arguments name upstream suites listed only because Hucode patched their subject
+— seven in the Electron list, four in the Node list — and none of them are
+guarded. A twelfth would still orphan silently.
+
+This is not hypothetical: of the five orphans A1 fixed, **this check would have
+caught four**. The fifth,
+`src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts`,
+is invisible to the inventory. A copyright-header rule does not close it either
+— that file carries Microsoft's notice. Only provenance distinguishes "upstream
+file Hucode has forked" from "upstream file Hucode does not run", which is H1's
+map. Extend the inventory from it when H1 lands rather than building a second
+provenance mechanism here.
 
 **Acceptance criteria.**
 
