@@ -210,16 +210,27 @@ suite('Hucode release workflow contract', () => {
 			assert.doesNotMatch(job, /release-build\.ts/);
 		});
 
+		// Scoped to the launch step. Asserting against the whole job lets the
+		// environment drift onto a different step, where the packaged app
+		// never inherits it.
+		const launchStep = job.slice(
+			job.indexOf('- name: Run packaged Omni startup smoke')
+		);
+
 		test('runs the declared smoke script under a display and bus', () => {
-			assert.match(job, /dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni/);
-			assert.match(job, /--app \.\.\/VSCode-linux-x64/);
+			// Matched as one contract: dropping the `--` separator while
+			// leaving the `--app` line behind stops npm forwarding the path.
+			assert.match(
+				launchStep,
+				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64/
+			);
 		});
 
 		test('disables the sandbox the artifact cannot carry', () => {
 			// tar cannot restore chrome-sandbox as root-owned mode 4755 for a
 			// non-root extraction, so the setuid bit is gone from the artifact
 			// and Electron aborts in the SUID sandbox helper without this.
-			assert.match(job, /ELECTRON_DISABLE_SANDBOX: 1/);
+			assert.match(launchStep, /env:\n          ELECTRON_DISABLE_SANDBOX: 1/);
 		});
 
 		test('keeps the composite action build toolchain', () => {
@@ -249,14 +260,14 @@ suite('Hucode release workflow contract', () => {
 		});
 
 		test('runs on tag pushes, and skips only a dispatch without x64', () => {
-			// Asserting just `inputs.linux_x64` passes over an inverted
-			// condition that would never run on a tag push — the only trigger
-			// a release build actually has.
+			// Matched whole. Asserting the operands separately passes over an
+			// inverted condition that never runs on a tag push, and over `&&`
+			// becoming `||`, which would run the smoke after a failed
+			// app-build and fail downloading an artifact that does not exist.
 			assert.match(
 				job,
-				/\(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
+				/if: >-\n      needs\.app-build\.result == 'success' &&\n      \(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
 			);
-			assert.match(job, /needs\.app-build\.result == 'success'/);
 		});
 
 		test('does not gate publication yet', () => {
