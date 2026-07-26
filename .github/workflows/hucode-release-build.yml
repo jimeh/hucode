@@ -887,11 +887,25 @@ jobs:
           safe_version="$(printf '%s' "$version" | tr '/: ' '---')"
           echo "safe_version=$safe_version" >> "$GITHUB_OUTPUT"
 
+      # apt-packages REPLACES the composite action's defaults rather than
+      # adding to them, so the build toolchain has to be repeated here or a
+      # cold node_modules cache fails compiling kerberos/node-pty. The rest
+      # mirrors what hucode-ci.yml installs to run Electron on a runner.
       - name: Setup Hucode Linux CI
         uses: ./.github/actions/setup-hucode-linux
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           apt-packages: |
+            build-essential
+            dbus-x11
+            libgbm1
+            libgtk-3-0
+            libkrb5-dev
+            libnotify-bin
+            libx11-dev
+            libx11-xcb-dev
+            libxkbfile-dev
+            pkg-config
             xvfb
 
       - name: Download release app artifact
@@ -908,13 +922,25 @@ jobs:
           tar -xf .build/hucode/app/VSCode-linux-x64.tar -C ..
           rm -rf .build/hucode/app
 
+      # ELECTRON_DISABLE_SANDBOX because the app's chrome-sandbox needs to be
+      # root-owned mode 4755 and tar cannot restore that for a non-root
+      # extraction -- the setuid bit is simply gone from the artifact. The
+      # smoke script strips only ELECTRON_RUN_AS_NODE and VSCODE_* from the
+      # child environment, so this reaches the app.
+      #
+      # dbus-run-session and `xvfb-run -a` match linux-package-smoke.sh: a
+      # session bus keeps the app off its D-Bus error path, and -a picks a free
+      # display instead of failing when :99 is taken.
+      #
       # On failure the script prints the tail of the app's own output, so the
       # job log carries the diagnostic.
       - name: Run packaged Omni startup smoke
         shell: bash
+        env:
+          ELECTRON_DISABLE_SANDBOX: 1
         run: |
           set -euo pipefail
-          xvfb-run npm run hucode:smoke:linux-omni -- \
+          dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \
             --app ../VSCode-linux-x64
 
   package:

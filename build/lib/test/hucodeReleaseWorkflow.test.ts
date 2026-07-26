@@ -202,19 +202,61 @@ suite('Hucode release workflow contract', () => {
 			// -- sysroots, OpenSSL, arch variables -- which then drifts.
 			assert.match(job, /needs:\n      - app-build/);
 			assert.match(job, /name: hucode-app-\$\{\{ steps\.version\.outputs\.safe_version \}\}-linux-x64/);
+			// The download path and the untar path have to agree; asserting
+			// only the untar leaves them free to diverge into `tar: Cannot
+			// open`.
+			assert.match(job, /path: \.build\/hucode\/app\n/);
 			assert.match(job, /tar -xf \.build\/hucode\/app\/VSCode-linux-x64\.tar -C \.\./);
 			assert.doesNotMatch(job, /release-build\.ts/);
 		});
 
-		test('runs the declared smoke script under a display', () => {
-			assert.match(job, /xvfb-run npm run hucode:smoke:linux-omni/);
+		test('runs the declared smoke script under a display and bus', () => {
+			assert.match(job, /dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni/);
 			assert.match(job, /--app \.\.\/VSCode-linux-x64/);
 		});
 
-		test('skips when a dispatch build excludes linux x64', () => {
-			// Otherwise the artifact download fails on a build that never
-			// produced an x64 app.
-			assert.match(job, /inputs\.linux_x64/);
+		test('disables the sandbox the artifact cannot carry', () => {
+			// tar cannot restore chrome-sandbox as root-owned mode 4755 for a
+			// non-root extraction, so the setuid bit is gone from the artifact
+			// and Electron aborts in the SUID sandbox helper without this.
+			assert.match(job, /ELECTRON_DISABLE_SANDBOX: 1/);
+		});
+
+		test('keeps the composite action build toolchain', () => {
+			// apt-packages replaces the action's defaults rather than adding
+			// to them, so dropping these breaks `npm ci` on a cold cache.
+			for (const pkg of [
+				'build-essential',
+				'libkrb5-dev',
+				'libx11-dev',
+				'libxkbfile-dev',
+				'pkg-config',
+			]) {
+				assert.ok(
+					job.includes(`\n            ${pkg}\n`),
+					`apt-packages must still install ${pkg}`
+				);
+			}
+		});
+
+		test('installs what Electron needs to start on a runner', () => {
+			for (const pkg of ['dbus-x11', 'libgbm1', 'libgtk-3-0', 'xvfb']) {
+				assert.ok(
+					job.includes(`\n            ${pkg}\n`),
+					`apt-packages must install ${pkg}`
+				);
+			}
+		});
+
+		test('runs on tag pushes, and skips only a dispatch without x64', () => {
+			// Asserting just `inputs.linux_x64` passes over an inverted
+			// condition that would never run on a tag push — the only trigger
+			// a release build actually has.
+			assert.match(
+				job,
+				/\(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
+			);
+			assert.match(job, /needs\.app-build\.result == 'success'/);
 		});
 
 		test('does not gate publication yet', () => {
