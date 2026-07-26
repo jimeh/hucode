@@ -814,8 +814,11 @@ be removed from the store.
 retained. A main-process heap profile after the fix confirms the retained size
 is gone.
 
-**Validation.** Unit assertion that the store's size returns to baseline across
-an open/close cycle, plus a one-off heap profile as the review recommends.
+**Validation.** The intended unit assertion is not available:
+`shellMainService.ts` cannot be loaded by either runner, for the reason
+recorded under G3. Nothing in the module is reachable from a test until that
+is unblocked, so this ships on the existing Electron suite as regression cover
+plus a heap profile. Add the store-size assertion as part of G3.
 
 **Risk.** Low. Small, local, well-understood.
 
@@ -884,6 +887,19 @@ surfaces.
 `src/vs/hucode/browser/workbench.ts:806`,
 `src/vs/hucode/electron-main/shellMainService.ts`, and the shell Part
 implementations.
+
+**`shellMainService.ts` cannot be loaded by any runner today.** Found while
+implementing F1. It imports `IBrowserViewMainService` from
+`browserViewMainService.ts`, which imports `browserView.ts`, which does a named
+import of `WebContentsView` from `electron`. That export exists only in the
+main process, and the Electron unit runner executes in a renderer — so the
+import fails there, and under `npm run test-node` too. The absence of direct
+coverage for this service is a structural constraint, not an oversight.
+
+Unblocking it means moving the `IBrowserViewMainService` decorator and
+interface into a module that does not pull in `browserView.ts`; six files
+import the decorator. That refactor belongs here rather than bundled into an
+unrelated fix, and it is a prerequisite for any direct test of this service.
 
 **Direction.** Extend the existing injected-adapter pattern to DOM, drag/drop,
 service wiring, visibility, and multi-window orchestration. Use G2's real-app
