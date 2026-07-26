@@ -290,7 +290,12 @@ jobs:
 
       - name: Run Hucode Node and common unit tests
         run: |
-          readarray -t SUITES < <(node build/hucode/test-suites.ts --runner node)
+          SUITES_OUTPUT=$(node build/hucode/test-suites.ts --runner node)
+          readarray -t SUITES <<< "$SUITES_OUTPUT"
+          if [ -z "${SUITES[0]}" ]; then
+            echo "No Hucode Node suites resolved" >&2
+            exit 1
+          fi
           printf 'Running %d Hucode Node suites:\n' "${#SUITES[@]}"
           printf '  %s\n' "${SUITES[@]}"
           npm run test-node -- "${SUITES[@]/#/--run=}"
@@ -304,7 +309,12 @@ jobs:
 
       - name: Run Hucode Electron unit tests
         run: |
-          readarray -t SUITES < <(node build/hucode/test-suites.ts --runner electron)
+          SUITES_OUTPUT=$(node build/hucode/test-suites.ts --runner electron)
+          readarray -t SUITES <<< "$SUITES_OUTPUT"
+          if [ -z "${SUITES[0]}" ]; then
+            echo "No Hucode Electron suites resolved" >&2
+            exit 1
+          fi
           printf 'Running %d Hucode Electron suites:\n' "${#SUITES[@]}"
           printf '  %s\n' "${SUITES[@]}"
           xvfb-run ./scripts/test.sh "${SUITES[@]/#/--run=}"

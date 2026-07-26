@@ -24,7 +24,9 @@ import {
 	isHucodeSuite,
 	parseWorkflowSteps,
 	partitionSuites,
+	readsResolverUnchecked,
 	resolveSuites,
+	selectRunnerSuites,
 	usesGeneratedLists,
 	validate
 } from '../../hucode/test-suites.ts';
@@ -121,6 +123,28 @@ suite('Hucode test suite inventory', () => {
 			}
 		});
 
+		test('refuses to hand back an empty list', () => {
+			const empty = { electron: [], node: [], automatic: [] };
+
+			assert.throws(
+				() => selectRunnerSuites(empty, 'electron'),
+				/No suites resolved for the electron runner/
+			);
+			assert.throws(
+				() => selectRunnerSuites(empty, 'node'),
+				/No suites resolved for the node runner/
+			);
+		});
+
+		test('hands back a non-empty list unchanged', async () => {
+			const resolved = await resolveSuites(repoRoot);
+
+			assert.deepStrictEqual(
+				selectRunnerSuites(resolved, 'electron'),
+				resolved.electron
+			);
+		});
+
 		test('the Node list is only the overrides', async () => {
 			const resolved = await resolveSuites(repoRoot);
 
@@ -179,6 +203,20 @@ suite('Hucode test suite inventory', () => {
 				[],
 				'suite paths belong in build/hucode/test-suites.ts'
 			);
+		});
+
+		test('the resolver is not read through a process substitution', async () => {
+			// `readarray < <(node ...)` returns 0 even when the resolver dies,
+			// leaving an empty list and a runner invoked with no `--run`
+			// arguments — which both runners read as "run everything".
+			assert.ok(!readsResolverUnchecked(await readWorkflow()));
+		});
+
+		test('detects the unchecked process-substitution form', () => {
+			const workflow = '          readarray -t SUITES < '
+				+ '<(node build/hucode/test-suites.ts --runner electron)';
+
+			assert.ok(readsResolverUnchecked(workflow));
 		});
 
 		test('one generated step does not excuse a hard-coded sibling', () => {
@@ -273,22 +311,22 @@ suite('Hucode test suite inventory', () => {
 				'utf8'
 			);
 
-			const globMatch = /const TEST_GLOB = '([^']+)'/.exec(source);
+			const globMatch = /const TEST_GLOB = '(?<glob>[^']+)'/.exec(source);
 			assert.ok(globMatch, 'TEST_GLOB not found in the Node runner');
-			assert.strictEqual(globMatch[1], NODE_RUNNER_TEST_GLOB);
+			assert.strictEqual(globMatch.groups?.glob, NODE_RUNNER_TEST_GLOB);
 
 			const excludeMatch =
-				/const excludeGlobs = \[([\s\S]*?)\n\];/.exec(source);
+				/const excludeGlobs = \[(?<body>[\s\S]*?)\n\];/.exec(source);
 			assert.ok(excludeMatch, 'excludeGlobs not found in the Node runner');
 			// Trailing `//` comments are stripped first: upstream writes prose
 			// there, and an apostrophe in it would otherwise be read as a glob
 			// delimiter — failing on exactly the upgrade this test exists for.
-			const declared = [...excludeMatch[1]
+			const declared = [...(excludeMatch.groups?.body ?? '')
 				.split('\n')
 				.map(line => line.replace(/\/\/.*$/, ''))
 				.join('\n')
-				.matchAll(/'([^']+)'/g)]
-				.map(entry => entry[1]);
+				.matchAll(/'(?<entry>[^']+)'/g)]
+				.map(entry => entry.groups?.entry);
 
 			assert.deepStrictEqual(declared, NODE_RUNNER_EXCLUDE_GLOBS);
 		});

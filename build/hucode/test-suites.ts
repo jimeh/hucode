@@ -314,11 +314,12 @@ export function parseWorkflowSteps(workflow: string): WorkflowStep[] {
 			inRunBody = false;
 			continue;
 		}
-		const runKey = /^\s*(?:-\s+)?run:\s*(.*)$/.exec(raw);
+		const runKey = /^\s*(?:-\s+)?run:\s*(?<command>.*)$/.exec(raw);
 		if (runKey) {
 			inRunBody = true;
-			if (runKey[1] && !/^[|>]/.test(runKey[1])) {
-				current.push(runKey[1]);
+			const inline = runKey.groups?.command;
+			if (inline && !/^[|>]/.test(inline)) {
+				current.push(inline);
 			}
 			continue;
 		}
@@ -384,7 +385,43 @@ export function usesGeneratedLists(workflow: string): boolean {
  * which is the failure this item exists to remove.
  */
 export function hardCodedSuitePaths(workflow: string): string[] {
-	return [...workflow.matchAll(/\S+\.test\.ts/g)].map(match => match[0]);
+	return [...workflow.matchAll(/(?<suite>\S+\.test\.ts)/g)]
+		.map(match => match.groups?.suite ?? '');
+}
+
+/**
+ * Returns true when the workflow reads the resolver through a process
+ * substitution, which discards its exit status.
+ *
+ * `readarray -t SUITES < <(node ...)` succeeds even when the resolver dies:
+ * `set -e` never sees the failure, the array ends up empty, and the runner is
+ * then invoked with no `--run` arguments — which both runners read as "run
+ * everything". Command substitution propagates the status instead.
+ */
+export function readsResolverUnchecked(workflow: string): boolean {
+	return /<\s*<\(\s*node\s+build\/hucode\/test-suites\.ts/.test(workflow);
+}
+
+/**
+ * Returns the list for one runner, refusing to hand back an empty one.
+ *
+ * An empty list is never a safe thing to print: the caller would invoke a
+ * runner with no `--run` arguments and silently run the entire suite instead
+ * of the intended subset.
+ */
+export function selectRunnerSuites(
+	resolved: ResolvedSuites,
+	runner: 'electron' | 'node'
+): readonly string[] {
+	const suites = resolved[runner];
+	if (!suites.length) {
+		throw new Error(
+			`No suites resolved for the ${runner} runner. If that is `
+			+ `intended, remove the step from ${WORKFLOW_PATH} rather than `
+			+ 'letting it run with an empty list.'
+		);
+	}
+	return suites;
 }
 
 /**
@@ -487,6 +524,14 @@ export async function validate(repoRoot: string): Promise<string[]> {
 			+ 'belong in build/hucode/test-suites.ts.'
 		);
 	}
+	if (readsResolverUnchecked(workflow)) {
+		problems.push(
+			`${WORKFLOW_PATH} reads the resolver through a process `
+			+ 'substitution, which throws away its exit status and would run '
+			+ 'the runner with an empty list. Assign the output to a variable '
+			+ 'with `$(...)` so a failure fails the step.'
+		);
+	}
 
 	return problems;
 }
@@ -526,7 +571,8 @@ async function main(): Promise<void> {
 	}
 
 	const resolved = await resolveSuites(repoRoot);
-	process.stdout.write(`${resolved[runner].join('\n')}\n`);
+	const suites = selectRunnerSuites(resolved, runner);
+	process.stdout.write(`${suites.join('\n')}\n`);
 }
 
 if (
