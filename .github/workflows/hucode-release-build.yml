@@ -1331,11 +1331,47 @@ jobs:
       # otherwise ready. Remove continue-on-error once a tag has produced
       # attestations that verify.
       - name: Attest release asset provenance
+        id: attest-assets
         if: needs.package.result != 'cancelled'
         continue-on-error: true
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-checksums: SHA256SUMS
+
+      # SHA256SUMS cannot list itself, so the step above does not cover it —
+      # and it is the file a careful user reaches for first. Without this,
+      # verifying it would hard-fail on a perfectly good release and teach
+      # people to ignore verification failures.
+      - name: Attest checksums file provenance
+        id: attest-checksums
+        if: needs.package.result != 'cancelled'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: SHA256SUMS
+
+      # continue-on-error hides a failure as a green run with only a step
+      # annotation. Surface it where someone reading the release will see it.
+      - name: Report attestation failures
+        if: >-
+          needs.package.result != 'cancelled' &&
+          (steps.attest-assets.outcome == 'failure' ||
+            steps.attest-checksums.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Release provenance attestation failed"
+            echo
+            echo "assets: ${{ steps.attest-assets.outcome }}"
+            echo "checksums: ${{ steps.attest-checksums.outcome }}"
+            echo
+            echo "The release still published. Downloads from it cannot be"
+            echo "verified with \`gh attestation verify\`, so treat the"
+            echo "verification procedure in docs/hucode/release.md as"
+            echo "unavailable for this release."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Release provenance attestation failed"
 
       - name: Create or update draft release
         if: needs.package.result != 'cancelled'

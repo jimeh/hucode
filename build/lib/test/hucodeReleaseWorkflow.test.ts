@@ -224,6 +224,7 @@ suite('Hucode release workflow contract', () => {
 		const job = workflow.slice(workflow.indexOf('  publish-release:'));
 		const steps = [
 			'- name: Prepare release assets',
+			'- name: Attest release asset provenance',
 			'- name: Create or update draft release',
 			'- name: Upload draft release assets',
 			'- name: Verify remote release assets',
@@ -245,7 +246,13 @@ suite('Hucode release workflow contract', () => {
 	});
 
 	suite('release provenance attestation', () => {
-		const job = workflow.slice(workflow.indexOf('  publish-release:'));
+		// Bounded deliberately. An unbounded slice runs to end of file, so
+		// these assertions would still pass with the attest step sitting in a
+		// later job that has neither the permissions nor the checksums file.
+		const job = workflow.slice(
+			workflow.indexOf('  publish-release:'),
+			workflow.indexOf('  refresh-update-service:')
+		);
 
 		test('attests the assets after checksums exist', () => {
 			// SHA256SUMS supplies the subject digests, so attestation cannot
@@ -256,6 +263,21 @@ suite('Hucode release workflow contract', () => {
 			assert.ok(checksums > -1, 'checksums step missing');
 			assert.ok(attest > checksums, 'attestation must follow checksums');
 			assert.match(job, /subject-checksums: SHA256SUMS/);
+		});
+
+		test('attests the checksums file itself', () => {
+			// A checksums file cannot list itself, so without a second
+			// attestation `gh attestation verify SHA256SUMS` hard-fails on a
+			// perfectly good release.
+			assert.match(job, /- name: Attest checksums file provenance/);
+			assert.match(job, /subject-path: SHA256SUMS/);
+		});
+
+		test('surfaces a failure that continue-on-error would hide', () => {
+			assert.match(job, /- name: Report attestation failures/);
+			assert.match(job, /steps\.attest-assets\.outcome == 'failure'/);
+			assert.match(job, /steps\.attest-checksums\.outcome == 'failure'/);
+			assert.match(job, /::warning::/);
 		});
 
 		test('grants the permissions attestation requires', () => {

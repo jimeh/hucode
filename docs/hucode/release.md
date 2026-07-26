@@ -105,20 +105,36 @@ gh attestation verify hucode-linux-x64.zip --repo jimeh/hucode
 
 This succeeds only when the file's digest matches an attestation GitHub issued
 to a workflow run in `jimeh/hucode`. A tampered or substituted asset fails with
-"no matching attestation found" — the digest simply is not in any attestation.
-Add `--format json` to inspect the workflow, commit, and run that produced it.
+`no attestations found` — its digest is simply not in any attestation. Add
+`--format json` to inspect the workflow, commit, and run that produced it.
 
-The attestation is issued per asset rather than over the `SHA256SUMS` file, so
-verification works directly against the artifact rather than against a file
-that vouches for it. Checking `SHA256SUMS` by hand remains useful offline; the
-attestation is what makes provenance verifiable independently of the channel
-that delivered the download.
+`SHA256SUMS` is attested too, so it can serve as a root of trust when checking
+downloads by hand:
 
-Attestation is currently a **non-blocking** step: a failure there is logged but
-does not stop a release. That is deliberate while the wiring proves itself
-across a real tag build. Once a release has produced attestations that verify,
-remove `continue-on-error` from the `Attest release asset provenance` step so a
-release cannot silently ship without provenance.
+```sh
+gh attestation verify SHA256SUMS --repo jimeh/hucode
+```
+
+That needs its own attestation because a checksums file cannot list itself.
+Every published asset is covered: the release assets through the digests
+recorded in `SHA256SUMS`, and `SHA256SUMS` through a second attestation over
+the file. Verification therefore works directly against the artifact you
+downloaded rather than against a file that merely vouches for it.
+
+Attestation is currently **non-blocking**: a failure is reported but does not
+stop a release. That is deliberate while the wiring proves itself across a real
+tag build — a misconfiguration should not strand a release that is otherwise
+ready.
+
+Because `continue-on-error` would otherwise make a failure look like success,
+the job writes a warning and a step-summary entry when either attestation
+fails. If you see that on a release, the assets are fine but unverifiable:
+treat the procedure above as unavailable for that release rather than
+concluding the download is bad.
+
+Once a tag build has produced attestations that actually verify, remove
+`continue-on-error` from both attest steps so a release cannot silently ship
+without provenance.
 
 ## Updates
 
