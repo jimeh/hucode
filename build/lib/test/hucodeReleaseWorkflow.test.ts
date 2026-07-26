@@ -191,6 +191,49 @@ suite('Hucode release workflow contract', () => {
 		});
 	});
 
+	suite('packaged Omni startup smoke', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  linux-omni-smoke:'),
+			workflow.indexOf('  package:')
+		);
+
+		test('consumes the built app instead of rebuilding one', () => {
+			// Rebuilding outside app-build means duplicating its environment
+			// -- sysroots, OpenSSL, arch variables -- which then drifts.
+			assert.match(job, /needs:\n      - app-build/);
+			assert.match(job, /name: hucode-app-\$\{\{ steps\.version\.outputs\.safe_version \}\}-linux-x64/);
+			assert.match(job, /tar -xf \.build\/hucode\/app\/VSCode-linux-x64\.tar -C \.\./);
+			assert.doesNotMatch(job, /release-build\.ts/);
+		});
+
+		test('runs the declared smoke script under a display', () => {
+			assert.match(job, /xvfb-run npm run hucode:smoke:linux-omni/);
+			assert.match(job, /--app \.\.\/VSCode-linux-x64/);
+		});
+
+		test('skips when a dispatch build excludes linux x64', () => {
+			// Otherwise the artifact download fails on a build that never
+			// produced an x64 app.
+			assert.match(job, /inputs\.linux_x64/);
+		});
+
+		test('does not gate publication yet', () => {
+			// Real-app smokes are the flakiest thing in any suite; this one
+			// reports on its own until it has proven stable.
+			const publish = workflow.slice(
+				workflow.indexOf('  publish-release:'),
+				workflow.indexOf('  refresh-update-service:')
+			);
+			const needs = publish.slice(
+				publish.indexOf('    needs:'),
+				publish.indexOf('    runs-on:')
+			);
+
+			assert.doesNotMatch(needs, /- linux-omni-smoke/);
+			assert.doesNotMatch(publish, /needs\.linux-omni-smoke/);
+		});
+	});
+
 	test('downloads only public-containing producer artifacts', () => {
 		const job = workflow.slice(workflow.indexOf('  publish-release:'));
 		assert.match(
