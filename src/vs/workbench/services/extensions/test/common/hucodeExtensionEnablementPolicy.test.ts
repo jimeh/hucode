@@ -143,15 +143,27 @@ suite('HucodeExtensionEnablementPolicy', () => {
 		});
 	});
 
-	test('leaves user extensions to the theme-only policy', () => {
-		// `toExtension` reports user built-ins as built-in too, so the type
-		// carries the distinction the skip list is scoped to.
+	test('leaves marketplace extensions to the theme-only policy', () => {
 		assert.strictEqual(
 			hucodeIsExtensionSkippedInOmniShell(
 				aExtension('GitHub.copilot-chat', {}, ExtensionType.User)
 			),
 			false
 		);
+	});
+
+	test('skips a user-installed builtin', () => {
+		// `toExtension` sets `isBuiltin` from `isBuiltin || isUserBuiltin` while
+		// deriving `type` from `isBuiltin` alone, so an extension installed with
+		// --install-builtin-extension arrives as User *and* builtin. The
+		// predicate keys off `isBuiltin`, so it is skipped; the ordinary
+		// marketplace copy above is not.
+		const userBuiltin = {
+			...aExtension('vscode.git', {}, ExtensionType.User),
+			isBuiltin: true,
+		};
+
+		assert.strictEqual(hucodeIsExtensionSkippedInOmniShell(userBuiltin), true);
 	});
 
 	test('matches skipped built-in ids without regard to case', () => {
@@ -179,6 +191,26 @@ suite('HucodeExtensionEnablementPolicy', () => {
 		assert.ok(
 			HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS.includes('vscode.git')
 		);
+	});
+
+	test('skip list covers every eagerly activating built-in', () => {
+		// These six are the only bundled built-ins declaring `*` or
+		// `onStartupFinished`, so anything omitted here still starts in a shell
+		// that cannot use it. vscode.git-base activates on `*` and was missed
+		// on the first pass.
+		for (const id of [
+			'GitHub.copilot-chat',
+			'vscode.debug-auto-launch',
+			'vscode.git',
+			'vscode.git-base',
+			'vscode.github',
+			'vscode.merge-conflict',
+		]) {
+			assert.ok(
+				hucodeIsOmniShellSkippedBuiltinId(id),
+				`${id} activates eagerly but is not skipped in the shell`
+			);
+		}
 	});
 
 	test('filters scanned user extensions only when policy is active', () => {

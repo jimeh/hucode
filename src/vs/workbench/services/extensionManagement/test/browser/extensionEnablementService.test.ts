@@ -1423,6 +1423,29 @@ suite('ExtensionEnablementService Test', () => {
 		});
 	});
 
+	test('test an explicitly enabled built-in stays disabled in the shell', async () => {
+		// The branch is deliberately not gated on `isEnabled`, matching
+		// `_isDisabledBySessionsWindow`: enabling vscode.git in an ordinary
+		// window must not pull it into the shell, and the shell must not offer
+		// to change that.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.EnabledGlobally);
+		assert.strictEqual(testObject.getEnablementState(git), EnablementState.EnabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.deepStrictEqual({
+			state: testObject.getEnablementState(git),
+			canChange: testObject.canChangeEnablement(git),
+		}, {
+			state: EnablementState.DisabledByEnvironment,
+			canChange: false,
+		});
+	});
+
 	test('test omni shell leaves user extensions to the theme-only policy', () => {
 		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));

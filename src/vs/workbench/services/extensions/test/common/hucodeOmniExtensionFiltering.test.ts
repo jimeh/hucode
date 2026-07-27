@@ -23,11 +23,22 @@ import { hucodeIsExtensionSkippedInOmniShell } from
 	'../../common/hucodeExtensionEnablementPolicy.js';
 
 /**
- * The Omni shell filter only stops extensions from activating because
- * `filterEnabledExtensions` drops disabled extensions before
- * `_resolveAndProcessExtensions` hands them to `_registry.deltaExtensions`,
- * and extension hosts are started from that registry. These tests pin that
- * link: enablement state alone is not the outcome anyone cares about.
+ * Pins one link in the chain, and only one: that `filterEnabledExtensions`
+ * drops a disabled extension before `_resolveAndProcessExtensions` hands the
+ * survivors to `_registry.deltaExtensions`.
+ *
+ * The hops after it — the registry delta, and the snapshot the extension host
+ * is started from — stay uncovered. Driving `AbstractExtensionService` far
+ * enough to assert on host membership trips the disposable leak checker,
+ * because `LockableExtensionDescriptionRegistry` never registers its inner
+ * `ExtensionDescriptionRegistry` (extensionDescriptionRegistry.ts:268) and
+ * that only shows up once a test registers real extensions. Those hops are
+ * upstream and shared by every extension, not specific to this filter.
+ *
+ * Whether the *enablement service* reaches the right verdict is not tested
+ * here; the stubs below stand in for it deliberately, so a change to
+ * `_computeEnablementState` will not be caught by this file. That belongs to
+ * `extensionEnablementService.test.ts`, which drives the real service.
  */
 suite('HucodeOmniExtensionFiltering', () => {
 
@@ -72,6 +83,9 @@ suite('HucodeOmniExtensionFiltering', () => {
 	});
 
 	test('an extension under development is never filtered', () => {
+		// Consequence, and intended: running the shell in extension-development
+		// mode does load vscode.git. `filterEnabledExtensions` exempts
+		// `isUnderDevelopment` before consulting enablement at all.
 		const underDevelopment = {
 			...aBuiltinExtension('vscode.git'),
 			isUnderDevelopment: true,
@@ -117,10 +131,7 @@ suite('HucodeOmniExtensionFiltering', () => {
 					? EnablementState.DisabledByEnvironment
 					: EnablementState.EnabledGlobally
 			),
-			isEnabledEnablementState: (state: EnablementState) =>
-				state === EnablementState.EnabledGlobally
-				|| state === EnablementState.EnabledWorkspace
-				|| state === EnablementState.EnabledByEnvironment,
+			isEnabledEnablementState: isEnabledState,
 		} as unknown as IWorkbenchExtensionEnablementService;
 	}
 
@@ -128,9 +139,17 @@ suite('HucodeOmniExtensionFiltering', () => {
 		return {
 			getEnablementStates: (extensions: IExtension[]) =>
 				extensions.map(() => EnablementState.EnabledGlobally),
-			isEnabledEnablementState: (state: EnablementState) =>
-				state === EnablementState.EnabledGlobally,
+			isEnabledEnablementState: isEnabledState,
 		} as unknown as IWorkbenchExtensionEnablementService;
+	}
+
+	// Mirrors ExtensionEnablementService.isEnabledEnablementState. Shared so
+	// the two stubs differ only in the verdict they return, not in how a
+	// verdict is read.
+	function isEnabledState(state: EnablementState): boolean {
+		return state === EnablementState.EnabledGlobally
+			|| state === EnablementState.EnabledWorkspace
+			|| state === EnablementState.EnabledByEnvironment;
 	}
 
 	// `toExtension` is what `filterEnabledExtensions` maps through before it

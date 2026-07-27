@@ -34,6 +34,7 @@ export const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
 	'vscode.debug-auto-launch',
 	'vscode.debug-server-ready',
 	'vscode.git',
+	'vscode.git-base',
 	'vscode.github',
 	'vscode.github-authentication',
 	'vscode.grunt',
@@ -60,8 +61,10 @@ export function hucodeIsOmniShellSkippedBuiltinId(id: string): boolean {
 /**
  * Returns whether the Omni shell should refuse to load this extension.
  *
- * Only built-ins are considered. A user extension sharing one of these ids is
- * left to the theme-only user extension policy, which already covers it.
+ * Scoped to built-ins, which here means what `toExtension` reports: a
+ * user-installed *builtin* has `type === User` and `isBuiltin === true`, and is
+ * skipped. An ordinary marketplace extension sharing one of these ids is not,
+ * and is left to the theme-only user extension policy, which already covers it.
  */
 export function hucodeIsExtensionSkippedInOmniShell(
 	extension: IExtension

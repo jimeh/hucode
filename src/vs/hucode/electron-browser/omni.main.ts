@@ -151,7 +151,7 @@ import {
 	type HucodeExtensionEnablementPolicy,
 } from '../../workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js';
 
-class HucodeOmniWorkbenchEnvironmentService
+export class HucodeOmniWorkbenchEnvironmentService
 	extends NativeWorkbenchEnvironmentService {
 
 	get hucodeExtensionEnablementPolicy(): HucodeExtensionEnablementPolicy {
