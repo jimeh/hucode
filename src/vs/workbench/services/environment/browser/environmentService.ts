@@ -20,6 +20,10 @@ import { refineServiceDecorator } from '../../../../platform/instantiation/commo
 import { ITextEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { EXTENSION_IDENTIFIER_WITH_LOG_REGEX } from '../../../../platform/environment/common/environmentService.js';
 import { isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
+import {
+	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+	type HucodeExtensionEnablementPolicy,
+} from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 export const IBrowserWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IBrowserWorkbenchEnvironmentService>(IEnvironmentService);
 
@@ -230,6 +234,19 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 
 	@memoize
 	get isHostedOmniWorkspace(): boolean { return this.payload?.get('isHostedOmniWorkspace') === 'true'; }
+
+	/**
+	 * Matches the desktop Omni window, which applies this policy through
+	 * `HucodeOmniWorkbenchEnvironmentService`. Hosted workbenches are ordinary
+	 * workbenches and keep normal extension behavior.
+	 */
+	@memoize
+	get hucodeExtensionEnablementPolicy():
+		HucodeExtensionEnablementPolicy | undefined {
+		return this.isOmniWindow && !this.isHostedOmniWorkspace
+			? HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY
+			: undefined;
+	}
 
 	@memoize
 	get hostedInstanceId(): string | undefined { return this.payload?.get('hostedInstanceId'); }

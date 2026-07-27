@@ -20,6 +20,57 @@ export type HucodeExtensionEnablementPolicy =
 	typeof HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY;
 
 /**
+ * Built-in extensions the Omni shell neither exposes nor needs.
+ *
+ * The shell has no editor, SCM, debug, or chat surfaces, so these contribute
+ * nothing there while still paying their activation cost. Desktop drops them
+ * at scan time through `skipBuiltinExtensions`, which is a native environment
+ * setting the server-web extension scanner never sees; web drops them at
+ * enablement instead. Both platforms read this one list so the two mechanisms
+ * cannot drift apart.
+ */
+export const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
+	'GitHub.copilot-chat',
+	'vscode.debug-auto-launch',
+	'vscode.debug-server-ready',
+	'vscode.git',
+	'vscode.github',
+	'vscode.github-authentication',
+	'vscode.grunt',
+	'vscode.gulp',
+	'vscode.jake',
+	'vscode.merge-conflict',
+	'vscode.microsoft-authentication',
+	'vscode.npm',
+	'vscode.terminal-suggest',
+	'vscode.tunnel-forwarding',
+] as const;
+
+const hucodeOmniShellSkippedBuiltinIds = new Set<string>(
+	HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS.map(id => id.toLowerCase())
+);
+
+/**
+ * Returns whether the Omni shell skips the built-in extension with this id.
+ */
+export function hucodeIsOmniShellSkippedBuiltinId(id: string): boolean {
+	return hucodeOmniShellSkippedBuiltinIds.has(id.toLowerCase());
+}
+
+/**
+ * Returns whether the Omni shell should refuse to load this extension.
+ *
+ * Only built-ins are considered. A user extension sharing one of these ids is
+ * left to the theme-only user extension policy, which already covers it.
+ */
+export function hucodeIsExtensionSkippedInOmniShell(
+	extension: IExtension
+): boolean {
+	return extension.isBuiltin
+		&& hucodeIsOmniShellSkippedBuiltinId(extension.identifier.id);
+}
+
+/**
  * Returns whether Hucode should filter user extensions to theme contributors.
  */
 export function hucodeShouldKeepOnlyUserThemeExtensions(

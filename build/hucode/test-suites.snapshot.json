@@ -27,6 +27,7 @@
 		"src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
 		"src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
 		"src/vs/workbench/services/clipboard/test/browser/hucodeClipboardService.test.ts",
+		"src/vs/workbench/services/environment/test/browser/hucodeOmniEnvironmentService.test.ts",
 		"src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts",
 		"src/vs/workbench/services/host/test/browser/hucodeOmniBrowserOpen.test.ts",
 		"src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts",

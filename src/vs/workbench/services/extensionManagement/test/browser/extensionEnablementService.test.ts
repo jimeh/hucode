@@ -1323,6 +1323,102 @@ suite('ExtensionEnablementService Test', () => {
 		]);
 	});
 
+	// The route distinction is the whole safety property of this filter: the
+	// shell must lose these built-ins and every workbench must keep them.
+	function omniShellStates(environment: Partial<IWorkbenchEnvironmentService>) {
+		instantiationService.stub(IWorkbenchEnvironmentService, environment);
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		const copilotChat = aLocalExtension('GitHub.copilot-chat', undefined, ExtensionType.System);
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		const unlistedBuiltin = aLocalExtension('vscode.theme-defaults', undefined, ExtensionType.System);
+
+		return [copilotChat, git, unlistedBuiltin].map(ext => testObject.getEnablementState(ext));
+	}
+
+	test('test omni shell disables the built-ins it does not expose', () => {
+		assert.deepStrictEqual(omniShellStates({ isOmniWindow: true }), [
+			EnablementState.DisabledByEnvironment,
+			EnablementState.DisabledByEnvironment,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test hosted omni workbenches keep normal extension behavior', () => {
+		assert.deepStrictEqual(omniShellStates({ isHostedOmniWorkspace: true }), [
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test a hosted workbench flagged as omni keeps its extensions', () => {
+		assert.deepStrictEqual(
+			omniShellStates({ isOmniWindow: true, isHostedOmniWorkspace: true }),
+			[
+				EnablementState.EnabledGlobally,
+				EnablementState.EnabledGlobally,
+				EnablementState.EnabledGlobally,
+			]
+		);
+	});
+
+	test('test a plain workbench keeps the shell built-ins', () => {
+		assert.deepStrictEqual(omniShellStates({}), [
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test omni shell does not run the chat enablement migration', async () => {
+		// The migration writes profile-scoped state that every other window
+		// inherits, so running it in the shell would reach through to the
+		// hosted workbenches. Desktop never gets here because
+		// `skipBuiltinExtensions` carries the chat id; on web that filter is
+		// unset, which is exactly the divergence this guards.
+		// The instance from setup() is not omni-scoped and still reacts to
+		// storage changes, so it would run the migration this test is watching.
+		testObject.dispose();
+
+		const chatExtensionId = productService.defaultChatAgent!.chatExtensionId;
+		const chatExtension = aLocalExtension(chatExtensionId, undefined, ExtensionType.System);
+		installed.push(chatExtension);
+
+		const storageService = instantiationService.get(IStorageService);
+		storageService.store('builtinChatExtensionEnablementMigration', false, StorageScope.PROFILE, StorageTarget.MACHINE);
+
+		const chatEntitlementService = new TestChatEntitlementService();
+		chatEntitlementService.context = new Lazy(() => ({ state: { completed: false }, onDidChange: Event.None })) as unknown as Lazy<ChatEntitlementContext>;
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
+		await testObject.waitUntilInitialized();
+		const inOmniShell = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
+
+		// Same fixture in an ordinary window, to show the migration was
+		// reachable and the shell check is what stopped it.
+		storageService.store('builtinChatExtensionEnablementMigration', false, StorageScope.PROFILE, StorageTarget.MACHINE);
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: false });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
+		await testObject.waitUntilInitialized();
+		const inWorkbench = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
+
+		assert.deepStrictEqual({ inOmniShell, inWorkbench }, {
+			inOmniShell: false,
+			inWorkbench: true,
+		});
+	});
+
+	test('test omni shell leaves user extensions to the theme-only policy', () => {
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		const userCopilotChat = aLocalExtension('GitHub.copilot-chat');
+
+		assert.strictEqual(testObject.getEnablementState(userCopilotChat), EnablementState.EnabledGlobally);
+	});
+
 });
 
 function anExtensionManagementServer(authority: string, instantiationService: TestInstantiationService): IExtensionManagementServer {

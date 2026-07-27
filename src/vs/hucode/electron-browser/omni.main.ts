@@ -147,25 +147,9 @@ import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+	HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS,
 	type HucodeExtensionEnablementPolicy,
 } from '../../workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js';
-
-const HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS = [
-	'GitHub.copilot-chat',
-	'vscode.debug-auto-launch',
-	'vscode.debug-server-ready',
-	'vscode.git',
-	'vscode.github',
-	'vscode.github-authentication',
-	'vscode.grunt',
-	'vscode.gulp',
-	'vscode.jake',
-	'vscode.merge-conflict',
-	'vscode.microsoft-authentication',
-	'vscode.npm',
-	'vscode.terminal-suggest',
-	'vscode.tunnel-forwarding',
-] as const;
 
 class HucodeOmniWorkbenchEnvironmentService
 	extends NativeWorkbenchEnvironmentService {
