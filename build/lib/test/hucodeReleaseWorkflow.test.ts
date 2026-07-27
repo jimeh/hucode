@@ -75,6 +75,11 @@ suite('Hucode release workflow contract', () => {
 		);
 		assert.doesNotMatch(job, /github\.event_name == 'push'/);
 		assert.match(job, /inputs\.linux_x64 \|\| inputs\.linux_arm64/);
+		// The dispatch inputs above only get evaluated if the job is reachable
+		// at all. Without always(), an upstream skip on a partial dispatch
+		// skips this job before its own conditions are considered — which is
+		// how it came to never run on the manual builds it was written for.
+		assert.match(job, /if: >-\n      always\(\) &&/);
 	});
 
 	test('runs arm64 package smoke natively', () => {
@@ -266,8 +271,17 @@ suite('Hucode release workflow contract', () => {
 			// app-build and fail downloading an artifact that does not exist.
 			assert.match(
 				job,
-				/if: >-\n      needs\.app-build\.result == 'success' &&\n      \(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
+				/if: >-\n      always\(\) &&\n      needs\.app-build\.result == 'success' &&\n      \(github\.event_name != 'workflow_dispatch' \|\| inputs\.linux_x64\)/
 			);
+		});
+
+		test('survives an upstream skip on a partial dispatch', () => {
+			// Verified the hard way: without a status function GitHub adds an
+			// implicit success(), and a skipped linux-arm64-cli propagated
+			// through app-build — which used always() and succeeded — to skip
+			// this job with both of its own conditions true. The run still
+			// reported success, because skipped jobs do not fail a run.
+			assert.match(job, /if: >-\n      always\(\) &&/);
 		});
 
 		test('does not gate publication yet', () => {
