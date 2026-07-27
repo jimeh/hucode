@@ -1446,6 +1446,25 @@ suite('ExtensionEnablementService Test', () => {
 		});
 	});
 
+	test('test the shell branch runs whatever the user enablement is', async () => {
+		// Pins that the branch is reached without an `isEnabled` guard. Adding
+		// one would leave this reporting DisabledGlobally: still disabled, so
+		// not a loading regression, but the shell would then offer to re-enable
+		// an extension it has no surface for.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.DisabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.strictEqual(
+			testObject.getEnablementState(git),
+			EnablementState.DisabledByEnvironment
+		);
+	});
+
 	test('test omni shell leaves user extensions to the theme-only policy', () => {
 		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
