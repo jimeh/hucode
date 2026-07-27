@@ -863,7 +863,15 @@ jobs:
     # one. A packaged app is the only thing this smoke can run against, and
     # rebuilding it outside this workflow means duplicating the app-build
     # environment -- sysroots, OpenSSL, arch variables -- which then drifts.
+    # `always()` is load-bearing, not decoration. Without a status function
+    # GitHub adds an implicit `success()`, and a skip anywhere upstream
+    # propagates through the graph even when the intervening jobs used
+    # `always()` and succeeded. A dispatch that deselects linux-arm64 skips
+    # linux-arm64-cli, which silently skipped this job with both of its own
+    # conditions true. The `result == 'success'` test below still keeps it from
+    # running after a failed or cancelled build.
     if: >-
+      always() &&
       needs.app-build.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.linux_x64)
     needs:
@@ -1220,7 +1228,11 @@ jobs:
 
   linux-package-smoke:
     name: Smoke Linux package (${{ matrix.arch }} ${{ matrix.format }})
+    # See the note on linux-omni-smoke: without `always()` an upstream skip
+    # propagates here and this job never runs on a manual dispatch, which is
+    # exactly the case it was written for.
     if: >-
+      always() &&
       needs.package.result == 'success' &&
       (github.event_name != 'workflow_dispatch' ||
         inputs.linux_x64 || inputs.linux_arm64)
