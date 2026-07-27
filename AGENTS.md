@@ -38,6 +38,20 @@ as the required Hucode instruction set for work in this fork.
 
 ## Repository hygiene notes
 
+- npm is this repository's package manager. Do not run `pnpm` or `yarn`.
+  `build/npm/preinstall.ts` rejects yarn by name and refuses npm 12 or newer,
+  but it does **not** catch pnpm: pnpm sets a different
+  `npm_config_user_agent`, so the version check finds no match, silently does
+  nothing, and the install proceeds with the wrong resolver. `.npmrc` also
+  carries Electron native-build settings — `runtime`, `target`, `disturl`,
+  `build_from_source` — that native modules such as `@vscode/sqlite3` and
+  `node-pty` depend on.
+- The tracked `pnpm-lock.yaml` at the repository root is upstream debris, not
+  a supported alternative. Upstream committed it by accident inside an
+  unrelated CSS commit, nothing reads it, and it has not been updated since.
+  Running pnpm rewrites that tracked file and leaves an untracked
+  `pnpm-workspace.yaml` beside it; restore the lockfile and delete the
+  workspace file rather than committing either.
 - For code changes, inspect nearby existing tests before considering the work
   complete. Add or extend focused tests for new behavior and regressions when
   an applicable test suite exists. If automated coverage is not practical, say
