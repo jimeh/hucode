@@ -2,6 +2,21 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.58 - 2026-07-27
+
+### Features
+
+- **release:** attest release asset provenance (#112)
+
+### Bug Fixes
+
+- **changelog:** ignore fragments owned by another pull request (#114)
+- **omni:** release destroyed hosted workspace controllers (#109)
+
+### Miscellaneous Chores
+
+- merge the 1.130.0 hardening base into mainline (#113)
+
 ## 0.0.57 - 2026-07-23
 
 ### Features
