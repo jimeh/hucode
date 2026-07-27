@@ -38,6 +38,20 @@ as the required Hucode instruction set for work in this fork.
 
 ## Repository hygiene notes
 
+- npm is this repository's package manager. Do not run `pnpm` or `yarn`.
+  `build/npm/preinstall.ts` rejects yarn by name and refuses npm 12 or newer,
+  but it does **not** catch pnpm: pnpm sets a different
+  `npm_config_user_agent`, so the version check finds no match, silently does
+  nothing, and the install proceeds with the wrong resolver. `.npmrc` also
+  carries Electron native-build settings — `runtime`, `target`, `disturl`,
+  `build_from_source` — that native modules such as `@vscode/sqlite3` and
+  `node-pty` depend on.
+- The tracked `pnpm-lock.yaml` at the repository root is upstream debris, not
+  a supported alternative. Upstream committed it by accident inside an
+  unrelated CSS commit, nothing reads it, and it has not been updated since.
+  Running pnpm rewrites that tracked file and leaves an untracked
+  `pnpm-workspace.yaml` beside it; restore the lockfile and delete the
+  workspace file rather than committing either.
 - For code changes, inspect nearby existing tests before considering the work
   complete. Add or extend focused tests for new behavior and regressions when
   an applicable test suite exists. If automated coverage is not practical, say
@@ -50,6 +64,17 @@ as the required Hucode instruction set for work in this fork.
   report the blocker.
 - The `coderabbit:review` label does not override CodeRabbit's draft-PR skip.
   Mark a PR ready before waiting for a label-triggered CodeRabbit review.
+- `changelog.ts check-pr` requires the PR title to match any added `.changes/`
+  fragment that the PR owns — an unnumbered one, or one numbered for this PR.
+  Fragments already numbered for a *different* PR are ignored, so an
+  integration branch carrying several merged PRs, or a branch that merged a
+  base which had just gained a fragment, does not fail for carrying them.
+- An integration PR merging a batch should use a hidden type such as `chore:`.
+  A `feat:`/`fix:` title still requires a fragment of its own, which an
+  integration PR has no business adding — its constituents already carry theirs.
+- Pushing to a branch while CodeRabbit is mid-review aborts that review with
+  "head commit changed during the review". Let a review finish, or re-request
+  it afterwards with a new `@coderabbitai review` comment.
 - Build-script changelog tests create temporary Git commits and inherit global
   `commit.gpgSign`. On hosts with signing enabled, run the suite with
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`
@@ -83,6 +108,45 @@ as the required Hucode instruction set for work in this fork.
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
   variables or Electron unit tests may start in Node mode before loading tests.
+- Local `./scripts/test.sh` runs need `ELECTRON_DISABLE_SANDBOX=1`, because
+  `.build/electron/chrome-sandbox` must be root-owned with mode 4755 and only
+  CI does that (`sudo chown root` / `sudo chmod 4755`). Without it the runner
+  aborts with `FATAL:setuid_sandbox_host.cc`. On headless hosts also wrap the
+  call in `xvfb-run`, and set `VSCODE_SKIP_PRELAUNCH=1` to avoid re-running
+  `npm run electron` on every invocation:
+
+  ```sh
+  VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
+    ./scripts/test.sh --run <test-file>
+  ```
+- CI suite lists are generated, not hand-maintained.
+  `build/hucode/test-suites.ts` resolves them and
+  `.github/workflows/hucode-ci.yml` calls it per runner. A new suite under
+  `src/vs/hucode/`, or any `hucode*.test.ts` anywhere, is picked up with no
+  workflow edit. Do not paste suite paths back into the workflow; a test
+  asserts there are none.
+- The resolved lists are committed to
+  `build/hucode/test-suites.snapshot.json` so a pull request still shows what
+  CI will run. Adding a suite changes that file — regenerate with
+  `npm run hucode:test-suites -- --write-snapshot` and commit it, or
+  `npm run hucode:check-test-suites` fails.
+- An upstream-named suite Hucode runs because it patched the subject cannot be
+  found by any rule. Those live in `UPSTREAM_SUITES` with a reason each.
+  Forgetting to add one is still invisible — that gap closes with H1's
+  provenance map, not before.
+- Runner assignment is not derivable from the layer alone. An explicit `--run`
+  argument bypasses the Node runner's layer exclusions, and two Electron-layer
+  suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) run
+  under `npm run test-node` on purpose; they are `NODE_RUNNER_OVERRIDES`.
+  Everything else in `browser`, `electron-browser`, `electron-main`, or
+  `electron-utility` goes to the Electron runner, and everything else again is
+  enumerated by the bare `npm run test-node` pass. Naming an already-enumerated
+  suite explicitly just runs it twice.
+- The Electron runner does accept a glob (`--runGlob`/`--glob`), but it takes a
+  single pattern, is mutually exclusive with `--run`, and matches compiled
+  `out/` paths — and a glob matching nothing fails silently. That is why the
+  list is computed in TypeScript and passed as repeated `--run=` arguments
+  rather than handed to the runner as a pattern.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.

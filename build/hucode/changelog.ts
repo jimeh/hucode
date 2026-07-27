@@ -93,10 +93,6 @@ export async function checkPullRequest(
 	const fragments = await Promise.all(
 		addedFiles.map(filePath => readChangeFragment(options.root, filePath))
 	);
-	const matchingFragments = fragments.filter(fragment =>
-		headersMatch(title, fragment)
-	);
-
 	for (const fragment of fragments) {
 		if (
 			fragment.prNumber !== undefined &&
@@ -112,7 +108,26 @@ export async function checkPullRequest(
 
 	const requiredChangeTypes = await getRequiredChangeTypes();
 	const needsFragment = title.breaking || requiredChangeTypes.has(title.type);
-	const hasAnyFragment = fragments.length > 0;
+
+	// A fragment already numbered for a different pull request belongs to that
+	// pull request, which validated it on the way in. Two cases produce them
+	// here and neither means this title is missing a fragment: an integration
+	// branch carrying several merged pull requests, and an ordinary branch that
+	// merged a base which had just gained one. Requiring this title to match
+	// them is impossible when there is more than one, and wrong when there is
+	// one.
+	const ownFragments = fragments.filter(fragment =>
+		fragment.prNumber === undefined || fragment.prNumber === options.number
+	);
+
+	// Only a fragment this pull request owns can satisfy the requirement. The
+	// mis-numbering guard above already rejects a carried fragment whose header
+	// matches, so this cannot change an outcome today — it keeps the two rules
+	// from disagreeing if that guard is ever relaxed.
+	const matchingFragments = ownFragments.filter(fragment =>
+		headersMatch(title, fragment)
+	);
+	const hasAnyFragment = ownFragments.length > 0;
 	if ((needsFragment || hasAnyFragment) && matchingFragments.length === 0) {
 		throw new Error(
 			`PR title '${options.title}' requires a matching .changes/` +

@@ -51,6 +51,9 @@ jobs:
         run: npm run typecheck
         working-directory: build
 
+      - name: Check Hucode test suite inventory
+        run: npm run hucode:check-test-suites
+
       - name: Test build scripts
         run: npm run test-build-scripts
 
@@ -287,51 +290,15 @@ jobs:
 
       - name: Run Hucode Node and common unit tests
         run: |
-          npm run test-node -- \
-            --run \
-            src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts \
-            --run \
-            src/vs/hucode/test/common/projectSwitcher/projectSwitcherTreeModel.test.ts \
-            --run \
-            src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts \
-            --run \
-            src/vs/hucode/test/common/hostedWorkspaceState.test.ts \
-            --run \
-            src/vs/hucode/test/common/retainedWorkbench.test.ts \
-            --run \
-            src/vs/platform/browserView/test/common/browserViewLayout.test.ts \
-            --run \
-            src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts \
-            --run \
-            src/vs/platform/environment/test/common/hucodeWebConfiguration.test.ts \
-            --run \
-            src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts \
-            --run \
-            src/vs/workbench/test/node/hucodeWebviewResourceConcurrency.test.ts \
-            --run \
-            src/vs/platform/projectManager/test/common/projectManagerState.test.ts \
-            --run \
-            src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts \
-            --run \
-            src/vs/server/test/node/hucodeWebOmniRoutes.test.ts \
-            --run \
-            src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts \
-            --run \
-            src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts \
-            --run \
-            src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts \
-            --run \
-            src/vs/platform/update/test/electron-main/hucodeLinuxUpdate.test.ts \
-            --run \
-            src/vs/platform/window/test/common/hucodeOmniCommandRouting.test.ts \
-            --run \
-            src/vs/platform/window/test/common/hucodeRendererReplyTarget.test.ts \
-            --run \
-            src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts \
-            --run \
-            src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts \
-            --run \
-            src/vs/workbench/services/dialogs/test/electron-browser/hucodeOmniFileDialog.test.ts
+          SUITES_OUTPUT=$(node build/hucode/test-suites.ts --runner node)
+          readarray -t SUITES <<< "$SUITES_OUTPUT"
+          if [ -z "${SUITES[0]}" ]; then
+            echo "No Hucode Node suites resolved" >&2
+            exit 1
+          fi
+          printf 'Running %d Hucode Node suites:\n' "${#SUITES[@]}"
+          printf '  %s\n' "${SUITES[@]}"
+          npm run test-node -- "${SUITES[@]/#/--run=}"
 
       - name: Prepare Electron sandbox
         run: |
@@ -342,64 +309,14 @@ jobs:
 
       - name: Run Hucode Electron unit tests
         run: |
-          xvfb-run ./scripts/test.sh \
-            --run \
-            src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts \
-            --run \
-            src/vs/workbench/test/electron-browser/hucodeOmniWindowAction.test.ts \
-            --run \
-            src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts \
-            --run \
-            src/vs/hucode/test/browser/omniLayoutModel.test.ts \
-            --run \
-            src/vs/hucode/test/browser/omniSelectionOpen.test.ts \
-            --run \
-            src/vs/hucode/test/browser/projectSwitcher/createProjectWorktreeRouting.test.ts \
-            --run \
-            src/vs/hucode/test/browser/projectSwitcher/hostedWorkbenchActions.test.ts \
-            --run \
-            src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts \
-            --run \
-            src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts \
-            --run \
-            src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts \
-            --run \
-            src/vs/hucode/test/browser/webShellService.test.ts \
-            --run \
-            src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts \
-            --run \
-            src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts \
-            --run \
-            src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts \
-            --run \
-            src/vs/platform/list/test/browser/hucodeListService.test.ts \
-            --run \
-            src/vs/workbench/services/clipboard/test/browser/hucodeClipboardService.test.ts \
-            --run \
-            src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts \
-            --run \
-            src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts \
-            --run \
-            src/vs/platform/windows/test/electron-main/hucodeWindowsStateHandler.test.ts \
-            --run \
-            src/vs/platform/windows/test/electron-main/windowsFinder.test.ts \
-            --run \
-            src/vs/hucode/test/electron-main/omniFileOpen.test.ts \
-            --run \
-            src/vs/hucode/test/electron-main/omniOpenPlan.test.ts \
-            --run \
-            src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts \
-            --run \
-            src/vs/hucode/test/electron-main/omniStartup.test.ts \
-            --run \
-            src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts \
-            --run \
-            src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts \
-            --run \
-            src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts \
-            --run \
-            src/vs/workbench/services/host/test/browser/hucodeOmniBrowserOpen.test.ts \
-            --run \
-            src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts
+          SUITES_OUTPUT=$(node build/hucode/test-suites.ts --runner electron)
+          readarray -t SUITES <<< "$SUITES_OUTPUT"
+          if [ -z "${SUITES[0]}" ]; then
+            echo "No Hucode Electron suites resolved" >&2
+            exit 1
+          fi
+          printf 'Running %d Hucode Electron suites:\n' "${#SUITES[@]}"
+          printf '  %s\n' "${SUITES[@]}"
+          xvfb-run ./scripts/test.sh "${SUITES[@]/#/--run=}"
         env:
           VSCODE_SKIP_PRELAUNCH: 1
