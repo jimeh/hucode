@@ -112,7 +112,18 @@ export async function checkPullRequest(
 
 	const requiredChangeTypes = await getRequiredChangeTypes();
 	const needsFragment = title.breaking || requiredChangeTypes.has(title.type);
-	const hasAnyFragment = fragments.length > 0;
+
+	// A fragment already numbered for a different pull request belongs to that
+	// pull request, which validated it on the way in. Two cases produce them
+	// here and neither means this title is missing a fragment: an integration
+	// branch carrying several merged pull requests, and an ordinary branch that
+	// merged a base which had just gained one. Requiring this title to match
+	// them is impossible when there is more than one, and wrong when there is
+	// one.
+	const ownFragments = fragments.filter(fragment =>
+		fragment.prNumber === undefined || fragment.prNumber === options.number
+	);
+	const hasAnyFragment = ownFragments.length > 0;
 	if ((needsFragment || hasAnyFragment) && matchingFragments.length === 0) {
 		throw new Error(
 			`PR title '${options.title}' requires a matching .changes/` +
