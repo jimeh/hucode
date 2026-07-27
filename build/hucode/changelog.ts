@@ -93,10 +93,6 @@ export async function checkPullRequest(
 	const fragments = await Promise.all(
 		addedFiles.map(filePath => readChangeFragment(options.root, filePath))
 	);
-	const matchingFragments = fragments.filter(fragment =>
-		headersMatch(title, fragment)
-	);
-
 	for (const fragment of fragments) {
 		if (
 			fragment.prNumber !== undefined &&
@@ -122,6 +118,14 @@ export async function checkPullRequest(
 	// one.
 	const ownFragments = fragments.filter(fragment =>
 		fragment.prNumber === undefined || fragment.prNumber === options.number
+	);
+
+	// Only a fragment this pull request owns can satisfy the requirement. The
+	// mis-numbering guard above already rejects a carried fragment whose header
+	// matches, so this cannot change an outcome today — it keeps the two rules
+	// from disagreeing if that guard is ever relaxed.
+	const matchingFragments = ownFragments.filter(fragment =>
+		headersMatch(title, fragment)
 	);
 	const hasAnyFragment = ownFragments.length > 0;
 	if ((needsFragment || hasAnyFragment) && matchingFragments.length === 0) {
