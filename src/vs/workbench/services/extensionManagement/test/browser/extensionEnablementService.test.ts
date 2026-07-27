@@ -1337,7 +1337,7 @@ suite('ExtensionEnablementService Test', () => {
 	}
 
 	test('test omni shell disables the built-ins it does not expose', () => {
-		assert.deepStrictEqual(omniShellStates({ isOmniWindow: true }), [
+		assert.deepStrictEqual(omniShellStates({ isOmniShellWindow: true }), [
 			EnablementState.DisabledByEnvironment,
 			EnablementState.DisabledByEnvironment,
 			EnablementState.EnabledGlobally,
@@ -1345,19 +1345,32 @@ suite('ExtensionEnablementService Test', () => {
 	});
 
 	test('test hosted omni workbenches keep normal extension behavior', () => {
-		assert.deepStrictEqual(omniShellStates({ isHostedOmniWorkspace: true }), [
+		assert.deepStrictEqual(omniShellStates({ isOmniShellWindow: false, isHostedOmniWorkspace: true }), [
 			EnablementState.EnabledGlobally,
 			EnablementState.EnabledGlobally,
 			EnablementState.EnabledGlobally,
 		]);
 	});
 
-	test('test a hosted workbench flagged as omni keeps its extensions', () => {
+	test('test the untrusted omni flag cannot strip a workbench', () => {
+		// `isOmniWindow` is settable from the web client's `payload` URL
+		// parameter, so only the trusted flag may drive extension policy.
 		assert.deepStrictEqual(
-			omniShellStates({ isOmniWindow: true, isHostedOmniWorkspace: true }),
+			omniShellStates({ isOmniWindow: true, isOmniShellWindow: false }),
 			[
 				EnablementState.EnabledGlobally,
 				EnablementState.EnabledGlobally,
+				EnablementState.EnabledGlobally,
+			]
+		);
+	});
+
+	test('test the untrusted hosted flag cannot unfilter the shell', () => {
+		assert.deepStrictEqual(
+			omniShellStates({ isOmniShellWindow: true, isHostedOmniWorkspace: true }),
+			[
+				EnablementState.DisabledByEnvironment,
+				EnablementState.DisabledByEnvironment,
 				EnablementState.EnabledGlobally,
 			]
 		);
@@ -1391,7 +1404,7 @@ suite('ExtensionEnablementService Test', () => {
 		const chatEntitlementService = new TestChatEntitlementService();
 		chatEntitlementService.context = new Lazy(() => ({ state: { completed: false }, onDidChange: Event.None })) as unknown as Lazy<ChatEntitlementContext>;
 
-		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: true });
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
 		await testObject.waitUntilInitialized();
 		const inOmniShell = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
@@ -1399,7 +1412,7 @@ suite('ExtensionEnablementService Test', () => {
 		// Same fixture in an ordinary window, to show the migration was
 		// reachable and the shell check is what stopped it.
 		storageService.store('builtinChatExtensionEnablementMigration', false, StorageScope.PROFILE, StorageTarget.MACHINE);
-		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: false });
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: false });
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
 		await testObject.waitUntilInitialized();
 		const inWorkbench = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
@@ -1411,7 +1424,7 @@ suite('ExtensionEnablementService Test', () => {
 	});
 
 	test('test omni shell leaves user extensions to the theme-only policy', () => {
-		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniWindow: true });
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
 
 		const userCopilotChat = aLocalExtension('GitHub.copilot-chat');

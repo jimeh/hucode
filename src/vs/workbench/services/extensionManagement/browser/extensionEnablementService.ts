@@ -161,7 +161,7 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 		// because that filter is a native scanner setting. Without the shell
 		// check the migration would run there and write profile-scoped chat
 		// enablement that every other window inherits.
-		if (!this._chatExtensionId || this.environmentService.isSessionsWindow || this.environmentService.skipBuiltinExtensions?.some(id => id.toLowerCase() === this._chatExtensionId) || (this._isOmniShellWindow() && hucodeIsOmniShellSkippedBuiltinId(this._chatExtensionId))) {
+		if (!this._chatExtensionId || this.environmentService.isSessionsWindow || this.environmentService.skipBuiltinExtensions?.some(id => id.toLowerCase() === this._chatExtensionId) || (this.environmentService.isOmniShellWindow && hucodeIsOmniShellSkippedBuiltinId(this._chatExtensionId))) {
 			return;
 		}
 
@@ -713,21 +713,15 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 	}
 
 	/**
-	 * Whether this window is the Omni shell itself rather than a workbench.
-	 *
-	 * Hosted workbenches run inside the shell but are ordinary workbenches, so
-	 * they keep normal extension behavior. They do not set `isOmniWindow`
-	 * today, which makes the second term redundant; it is kept so that
-	 * granting hosted frames the shell flag cannot silently strip their
-	 * extensions.
+	 * Deliberately `isOmniShellWindow` and not `isOmniWindow`: the latter can be
+	 * set from the web client's `payload` URL parameter, so trusting it here
+	 * would let `/workbench?payload=[["isOmniWindow","true"]]` strip a normal
+	 * workbench's extensions, and let the shell opt back into loading them.
+	 * Hosted workbenches run inside the shell but are ordinary workbenches and
+	 * keep normal extension behavior.
 	 */
-	private _isOmniShellWindow(): boolean {
-		return this.environmentService.isOmniWindow
-			&& !this.environmentService.isHostedOmniWorkspace;
-	}
-
 	private _isDisabledByOmniShell(extension: IExtension): boolean {
-		if (!this._isOmniShellWindow()) {
+		if (!this.environmentService.isOmniShellWindow) {
 			return false;
 		}
 

@@ -150,3 +150,11 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
+  trusted** on web. `WorkspaceProvider.create` parses the `payload` query
+  parameter straight out of the page URL, so any page can set either flag. That
+  is fine for UI routing, which is all they were added for. Anything deciding
+  what a window is *allowed* to do — extension policy, and anything similar
+  added later — must use `isOmniShellWindow`, which comes from the
+  server-injected page configuration on web and the main-process window
+  configuration on desktop.

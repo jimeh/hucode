@@ -62,6 +62,7 @@
 		"src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts",
 		"src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
 		"src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts",
+		"src/vs/workbench/services/extensions/test/common/hucodeOmniExtensionFiltering.test.ts",
 		"src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts",
 		"src/vs/workbench/test/node/hucodeWebviewResourceConcurrency.test.ts"
 	]

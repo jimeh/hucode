@@ -20,6 +20,20 @@ suite('HucodeOmniEnvironmentService', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
+	test('treats only the server-injected shell route as the shell', () => {
+		assert.deepStrictEqual({
+			shell: serviceFor({ hucodeOmniShell: true }).isOmniShellWindow,
+			hostedWorkbench: serviceFor({
+				hucodeHostedOmniWorkbench: true,
+			}).isOmniShellWindow,
+			plainWorkbench: serviceFor({}).isOmniShellWindow,
+		}, {
+			shell: true,
+			hostedWorkbench: false,
+			plainWorkbench: false,
+		});
+	});
+
 	test('applies the Omni extension policy only to the shell route', () => {
 		assert.deepStrictEqual({
 			shell: policyFor({ hucodeOmniShell: true }),
@@ -32,29 +46,43 @@ suite('HucodeOmniEnvironmentService', () => {
 		});
 	});
 
-	test('withholds the policy from a hosted workspace payload', () => {
-		// Hosted iframes carry `isHostedOmniWorkspace` in their payload. They
-		// do not set `isOmniWindow` today, so this covers the guard rather
-		// than the route.
-		assert.strictEqual(
-			policyFor({ hucodeOmniShell: true }, [
-				['isHostedOmniWorkspace', 'true'],
-			]),
-			undefined
-		);
+	// `payload` is parsed straight out of the page's own query string, so it
+	// must not be able to move a window in or out of the shell's extension
+	// policy. `isOmniWindow` still honours it for UI routing.
+	test('ignores a payload claiming the workbench is the shell', () => {
+		const service = serviceFor({}, [['isOmniWindow', 'true']]);
+
+		assert.deepStrictEqual({
+			isOmniWindow: service.isOmniWindow,
+			isOmniShellWindow: service.isOmniShellWindow,
+			policy: service.hucodeExtensionEnablementPolicy,
+		}, {
+			isOmniWindow: true,
+			isOmniShellWindow: false,
+			policy: undefined,
+		});
 	});
 
-	test('reads the shell flag from the connection payload', () => {
-		assert.strictEqual(
-			policyFor({}, [['isOmniWindow', 'true']]),
-			HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY
-		);
+	test('ignores a payload disclaiming the shell', () => {
+		const service = serviceFor({ hucodeOmniShell: true }, [
+			['isHostedOmniWorkspace', 'true'],
+		]);
+
+		assert.deepStrictEqual({
+			isHostedOmniWorkspace: service.isHostedOmniWorkspace,
+			isOmniShellWindow: service.isOmniShellWindow,
+			policy: service.hucodeExtensionEnablementPolicy,
+		}, {
+			isHostedOmniWorkspace: true,
+			isOmniShellWindow: true,
+			policy: HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+		});
 	});
 
-	function policyFor(
+	function serviceFor(
 		options: object,
 		payload?: [string, string][]
-	): string | undefined {
+	): BrowserWorkbenchEnvironmentService {
 		const constructionOptions = {
 			...options,
 			workspaceProvider: payload
@@ -67,6 +95,13 @@ suite('HucodeOmniEnvironmentService', () => {
 			URI.file('/logs'),
 			constructionOptions,
 			TestProductService
-		).hucodeExtensionEnablementPolicy;
+		);
+	}
+
+	function policyFor(
+		options: object,
+		payload?: [string, string][]
+	): string | undefined {
+		return serviceFor(options, payload).hucodeExtensionEnablementPolicy;
 	}
 });

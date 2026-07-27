@@ -249,8 +249,16 @@ simply never registers them.
 
 The route distinction is the safety property. `/` and `/omni` are the shell;
 `/workbench` and the `/omni/workbench` hosted iframes are ordinary workbenches
-and keep normal extension behavior. Both filters gate on
-`isOmniWindow && !isHostedOmniWorkspace`.
+and keep normal extension behavior.
+
+Both filters gate on `isOmniShellWindow`, **not** on
+`isOmniWindow && !isHostedOmniWorkspace`. Those two flags are readable from the
+web client's `payload` URL parameter, which is fine for the UI routing that
+consumes them but would let `/workbench?payload=[["isOmniWindow","true"]]` strip
+a workbench's extensions and let the shell opt back into loading them.
+`isOmniShellWindow` is derived from the server-injected page configuration on
+web and from the main-process window configuration on desktop, so the page
+cannot set it.
 
 ## Product Identity
 

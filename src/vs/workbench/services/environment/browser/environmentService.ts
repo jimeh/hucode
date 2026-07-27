@@ -19,7 +19,7 @@ import { isUndefined } from '../../../../base/common/types.js';
 import { refineServiceDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ITextEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { EXTENSION_IDENTIFIER_WITH_LOG_REGEX } from '../../../../platform/environment/common/environmentService.js';
-import { isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
+import { isHucodeHostedOmniWebConfiguration, isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
 	type HucodeExtensionEnablementPolicy,
@@ -236,6 +236,18 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get isHostedOmniWorkspace(): boolean { return this.payload?.get('isHostedOmniWorkspace') === 'true'; }
 
 	/**
+	 * Read from `options` rather than `isOmniWindow`/`isHostedOmniWorkspace`,
+	 * which the `payload` URL parameter can set. The server injects these two
+	 * flags per route and they are mutually exclusive, so a request cannot
+	 * claim to be the shell or disclaim being a hosted workbench.
+	 */
+	@memoize
+	get isOmniShellWindow(): boolean {
+		return isHucodeOmniWebConfiguration(this.options)
+			&& !isHucodeHostedOmniWebConfiguration(this.options);
+	}
+
+	/**
 	 * Matches the desktop Omni window, which applies this policy through
 	 * `HucodeOmniWorkbenchEnvironmentService`. Hosted workbenches are ordinary
 	 * workbenches and keep normal extension behavior.
@@ -243,7 +255,7 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	@memoize
 	get hucodeExtensionEnablementPolicy():
 		HucodeExtensionEnablementPolicy | undefined {
-		return this.isOmniWindow && !this.isHostedOmniWorkspace
+		return this.isOmniShellWindow
 			? HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY
 			: undefined;
 	}
