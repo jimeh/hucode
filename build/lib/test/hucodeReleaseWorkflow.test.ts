@@ -364,6 +364,17 @@ suite('Hucode release workflow contract', () => {
 			workflow.indexOf('  refresh-update-service:')
 		);
 
+		// Each attest step sliced separately. The two subject inputs are
+		// mutually exclusive, so asserting them against the whole job passes
+		// with both on one step and neither on the other — a state where both
+		// actions fail and `continue-on-error` publishes without provenance.
+		const stepBody = (name: string): string => {
+			const start = job.indexOf(`- name: ${name}`);
+			assert.ok(start > -1, `${name} step missing`);
+			const next = job.indexOf('      - name: ', start + 1);
+			return job.slice(start, next === -1 ? undefined : next);
+		};
+
 		test('attests the assets after checksums exist', () => {
 			// SHA256SUMS supplies the subject digests, so attestation cannot
 			// run before the step that writes it.
@@ -372,7 +383,10 @@ suite('Hucode release workflow contract', () => {
 
 			assert.ok(checksums > -1, 'checksums step missing');
 			assert.ok(attest > checksums, 'attestation must follow checksums');
-			assert.match(job, /subject-checksums: SHA256SUMS/);
+
+			const step = stepBody('Attest release asset provenance');
+			assert.match(step, /subject-checksums: SHA256SUMS/);
+			assert.doesNotMatch(step, /subject-path:/);
 		});
 
 		test('attests the checksums file itself, after it exists', () => {
@@ -387,7 +401,10 @@ suite('Hucode release workflow contract', () => {
 
 			assert.ok(attest > checksums, 'must follow checksum generation');
 			assert.ok(report > attest, 'reporting must follow both attestations');
-			assert.match(job, /subject-path: SHA256SUMS/);
+
+			const step = stepBody('Attest checksums file provenance');
+			assert.match(step, /subject-path: SHA256SUMS/);
+			assert.doesNotMatch(step, /subject-checksums:/);
 		});
 
 		test('surfaces a failure that continue-on-error would hide', () => {
