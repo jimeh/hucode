@@ -82,7 +82,7 @@ need it. Ordering is therefore by **dependency and risk**, not by release tier:
 
 Dependencies between items, independent of which phase they land in:
 
-```
+```text
 A1 ──── A2                     (guard starts from a clean inventory)
 
 B1 ──┬── E4 (#105 orphan adoption)
@@ -169,7 +169,7 @@ and it is the regression net under every other item in this plan.
 
 **Direction.** Append the five suites to the existing `--run` list:
 
-```
+```text
 src/vs/hucode/test/browser/omniConfigurationService.test.ts
 src/vs/hucode/test/browser/projectSwitcher/openProjectSwitcherTarget.test.ts
 src/vs/hucode/test/electron-main/omniWorkspaceOpen.test.ts
@@ -1186,7 +1186,11 @@ branch should still not outlive its purpose.
 Work splits into two batches with a review gate between them.
 
 **Phase 1 — mechanical and independent.** Branch
-`series-1.130.0-hardening-base`. Six PRs, none touching runtime lifecycle code:
+`series-1.130.0-hardening-base`. Six PRs, none touching the *coupled* lifecycle
+work phase 2 is about. F1 does change lifecycle ownership in
+`shellMainService.ts`, but that file is reached by nothing phase 2 touches (see
+the overlap check below), so it cannot conflict with the unload, shutdown, and
+adoption work:
 
 | PR | Item | Surface |
 | --- | --- | --- |

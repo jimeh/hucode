@@ -2,7 +2,7 @@
 
 ## Review target
 
-- Repository: `/home/jimeh/.herdr/worktrees/hucode/architecture-quality-review`
+- Repository: `jimeh/hucode`, reviewed from a local worktree
 - Review branch: `architecture-quality-review`
 - Hucode HEAD: `9988ea33b8b22cadc9332eae44c01df7589a22ad`
 - Equivalent series tip: `series-1.130.0`
@@ -18,12 +18,16 @@ The current review branch and `series-1.130.0` resolve to the same commit. The
 comparison therefore represents the complete current Hucode patch stack on top
 of the selected VS Code 1.130.0 baseline.
 
-Supporting inventories in this directory:
+Supporting inventories, in the original handoff package rather than this
+trimmed archive — see Provenance in the archive README:
 
 - `changed-files.tsv`: name/status inventory for the complete comparison.
 - `diff-stat.txt`: per-file diff statistics.
 - `commits.tsv`: Hucode patch-series commits.
 - `findings.schema.json`: required structured output schema.
+
+The scope inventories are regenerable with
+`git diff --name-status upstream-1.130.0..9988ea33b8b`.
 
 ## Primary question
 

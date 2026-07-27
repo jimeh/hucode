@@ -728,12 +728,19 @@ hardened fork to a codebase with credible beta—and eventually stable—quality
 
 ## Artifact index
 
+Retained in this archive:
+
 - `review-brief.md` — baseline, scope, and rubric.
+- `candidate-matrix.md` — human-readable verified candidate matrix.
+- `candidate-matrix.final.json` — complete deduplication and verification data.
+
+In the original handoff package only — see Provenance in the archive README.
+Every verification verdict from these is folded verbatim into
+`candidate-matrix.final.json`:
+
 - `sol/report.md`, `sol/findings.json` — independent Sol review.
 - `fable/report.md`, `fable/findings.json` — independent Fable architecture
   review.
 - `opus/report.md`, `opus/findings.json` — independent Opus review.
-- `candidate-matrix.md` — human-readable verified candidate matrix.
-- `candidate-matrix.final.json` — complete deduplication and verification data.
 - `verification/` — cross-review verdicts and evidence.
 - `validate_artifacts.py` — dependency-free artifact schema validator.
