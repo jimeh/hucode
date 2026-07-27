@@ -127,6 +127,98 @@ suite('Hucode changelog', () => {
 		);
 	});
 
+	test('accepts an integration PR carrying other PRs fragments', async () => {
+		// A branch that merged several numbered PRs adds all their fragments
+		// at once. No single title can match more than one of them, and each
+		// was validated by the PR that introduced it.
+		await initRepo(tmpDir);
+		const baseRef = currentHead(tmpDir);
+		await writeChange(
+			tmpDir,
+			'109-release-destroyed-omni-controllers.md',
+			'fix(omni): release destroyed hosted workspace controllers\n'
+		);
+		await writeChange(
+			tmpDir,
+			'112-attest-release-checksums.md',
+			'feat(release): attest release asset provenance\n'
+		);
+		commitAll(tmpDir, 'chore: merge feature branches');
+
+		await checkPullRequest({
+			baseRef,
+			number: 113,
+			root: tmpDir,
+			title: 'chore: merge the hardening base into mainline',
+		});
+	});
+
+	test('accepts a sibling fragment inherited from a base merge', async () => {
+		// Merging an updated base pulls in whatever fragment landed there
+		// meanwhile. That is not this PR forgetting its own.
+		await initRepo(tmpDir);
+		const baseRef = currentHead(tmpDir);
+		await writeChange(
+			tmpDir,
+			'109-release-destroyed-omni-controllers.md',
+			'fix(omni): release destroyed hosted workspace controllers\n'
+		);
+		commitAll(tmpDir, 'chore: merge base');
+
+		await checkPullRequest({
+			baseRef,
+			number: 110,
+			root: tmpDir,
+			title: 'ci: smoke Omni startup from the release build app artifact',
+		});
+	});
+
+	test('still requires this PR to document its own user-facing change',
+		async () => {
+			// The carried fragment must not excuse a `feat:` title from
+			// having a fragment of its own.
+			await initRepo(tmpDir);
+			const baseRef = currentHead(tmpDir);
+			await writeChange(
+				tmpDir,
+				'109-release-destroyed-omni-controllers.md',
+				'fix(omni): release destroyed hosted workspace controllers\n'
+			);
+			commitAll(tmpDir, 'chore: merge base');
+
+			await assert.rejects(
+				() => checkPullRequest({
+					baseRef,
+					number: 110,
+					root: tmpDir,
+					title: 'feat(omni): add a new thing',
+				}),
+				/requires a matching \.changes\/110-\*\.md or \.changes\/<slug>\.md file/
+			);
+		});
+
+	test('still requires an unnumbered fragment to match the title', async () => {
+		// Unnumbered fragments have no owner, so they are this PR's to match.
+		await initRepo(tmpDir);
+		const baseRef = currentHead(tmpDir);
+		await writeChange(
+			tmpDir,
+			'some-unnumbered-change.md',
+			'fix(omni): something else entirely\n'
+		);
+		commitAll(tmpDir, 'chore: add fragment');
+
+		await assert.rejects(
+			() => checkPullRequest({
+				baseRef,
+				number: 113,
+				root: tmpDir,
+				title: 'ci: unrelated title',
+			}),
+			/requires a matching \.changes\/113-\*\.md or \.changes\/<slug>\.md file/
+		);
+	});
+
 	test('accepts numbered backfill fragments for prior PRs', async () => {
 		await initRepo(tmpDir);
 		const baseRef = currentHead(tmpDir);

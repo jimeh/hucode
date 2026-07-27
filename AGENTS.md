@@ -50,13 +50,14 @@ as the required Hucode instruction set for work in this fork.
   report the blocker.
 - The `coderabbit:review` label does not override CodeRabbit's draft-PR skip.
   Mark a PR ready before waiting for a label-triggered CodeRabbit review.
-- `changelog.ts check-pr` fails a PR when *any* added `.changes/` fragment does
-  not match its title, not only when the title requires one. When a sibling PR
-  carrying a fragment merges first, every other open PR sees that fragment as
-  newly added against a stale base SHA and fails — including `ci:` and `docs:`
-  PRs that need no fragment of their own. Merge or rebase the base branch into
-  the PR to refresh the comparison; the failure is stale state, not a missing
-  fragment.
+- `changelog.ts check-pr` requires the PR title to match any added `.changes/`
+  fragment that the PR owns — an unnumbered one, or one numbered for this PR.
+  Fragments already numbered for a *different* PR are ignored, so an
+  integration branch carrying several merged PRs, or a branch that merged a
+  base which had just gained a fragment, does not fail for carrying them.
+- An integration PR merging a batch should use a hidden type such as `chore:`.
+  A `feat:`/`fix:` title still requires a fragment of its own, which an
+  integration PR has no business adding — its constituents already carry theirs.
 - Pushing to a branch while CodeRabbit is mid-review aborts that review with
   "head commit changed during the review". Let a review finish, or re-request
   it afterwards with a new `@coderabbitai review` comment.
