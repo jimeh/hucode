@@ -105,6 +105,30 @@ export const UPSTREAM_SUITES: readonly UpstreamSuite[] = [
 			+ 'extends — rationale predates this list and is unrecorded '
 			+ 'elsewhere',
 	},
+	// The rest sit in layers the Node runner enumerates automatically, so they
+	// need no explicit assignment. They are listed anyway: without them the
+	// snapshot is not the inventory it claims to be, and coverage could be
+	// lost to a future Node exclusion with nothing to show for it.
+	{
+		file: 'src/vs/platform/browserView/test/common/'
+			+ 'browserViewLayout.test.ts',
+		reason: 'Hucode-authored suite for browser-view layout arithmetic',
+	},
+	{
+		file: 'src/vs/platform/extensionManagement/test/node/'
+			+ 'extensionSignatureVerificationService.test.ts',
+		reason: 'Hucode patches the subject to verify OpenVSX signatures',
+	},
+	{
+		file: 'src/vs/platform/projectManager/test/common/'
+			+ 'projectManagerState.test.ts',
+		reason: 'the project manager service is Hucode-owned throughout',
+	},
+	{
+		file: 'src/vs/workbench/contrib/browserView/test/common/'
+			+ 'browserViewOwnership.test.ts',
+		reason: 'Hucode-authored suite for browser-view ownership rules',
+	},
 ];
 
 /**
@@ -379,6 +403,59 @@ export function usesGeneratedLists(workflow: string): boolean {
 }
 
 /**
+ * Runner steps whose `--runner` selector does not match the runner they then
+ * invoke, or which pass `--run` arguments without asking the resolver for them.
+ *
+ * `usesGeneratedLists` only proves the resolver is mentioned. It does not stop
+ * the Electron step asking for `--runner node`, which passes every check while
+ * handing `scripts/test.sh` the two Node overrides and running none of the
+ * Electron suites.
+ */
+export function runnerSelectorProblems(workflow: string): string[] {
+	const problems: string[] = [];
+
+	for (const command of unconditionalCommands(workflow)) {
+		const selector =
+			/test-suites\.ts --runner (?<runner>[a-z]+)/.exec(command)
+				?.groups?.runner;
+		const invokesElectron = /scripts\/test\.sh/.test(command);
+		const invokesNode = /npm run test-node/.test(command);
+		const passesRunArguments = /--run=/.test(command);
+
+		if (!selector) {
+			if (passesRunArguments) {
+				problems.push(
+					'A step passes --run arguments without resolving them from '
+					+ 'build/hucode/test-suites.ts.'
+				);
+			}
+			continue;
+		}
+
+		if (selector === 'electron' && !invokesElectron) {
+			problems.push(
+				'A step resolves --runner electron but does not invoke '
+				+ 'scripts/test.sh with the result.'
+			);
+		}
+		if (selector === 'node' && !invokesNode) {
+			problems.push(
+				'A step resolves --runner node but does not invoke '
+				+ '`npm run test-node` with the result.'
+			);
+		}
+		if (invokesElectron && selector !== 'electron') {
+			problems.push(
+				`The scripts/test.sh step resolves --runner ${selector}, so the `
+				+ 'Electron suites would run nowhere.'
+			);
+		}
+	}
+
+	return problems;
+}
+
+/**
  * Suite paths written directly into the workflow.
  *
  * Any hit means assignment has partly gone back to being hand-maintained,
@@ -524,6 +601,7 @@ export async function validate(repoRoot: string): Promise<string[]> {
 			+ 'belong in build/hucode/test-suites.ts.'
 		);
 	}
+	problems.push(...runnerSelectorProblems(workflow));
 	if (readsResolverUnchecked(workflow)) {
 		problems.push(
 			`${WORKFLOW_PATH} reads the resolver through a process `

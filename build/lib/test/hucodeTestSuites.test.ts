@@ -23,6 +23,7 @@ import {
 	isCoveredByNodeRunner,
 	isHucodeSuite,
 	parseWorkflowSteps,
+	runnerSelectorProblems,
 	partitionSuites,
 	readsResolverUnchecked,
 	resolveSuites,
@@ -172,13 +173,25 @@ suite('Hucode test suite inventory', () => {
 			}
 		});
 
-		test('upstream entries are all in an excluded layer', async () => {
-			// An entry the default pass already enumerates would be listed
-			// for no reason, and would quietly stop being checked.
+		test('every upstream entry lands in the resolved inventory', async () => {
+			// Entries in a layer the Node runner enumerates are listed on
+			// purpose: they need no explicit assignment, but leaving them out
+			// makes the snapshot something less than the inventory it claims
+			// to be, and their coverage could be lost to a future Node
+			// exclusion with nothing in the diff to show it.
+			const resolved = await resolveSuites(repoRoot);
+			const all = new Set([
+				...resolved.electron,
+				...resolved.node,
+				...resolved.automatic,
+			]);
+
 			for (const { file } of UPSTREAM_SUITES) {
-				assert.ok(
-					!isCoveredByNodeRunner(file),
-					`${file} needs no entry — the Node runner enumerates it`
+				assert.ok(all.has(file), `${file} is not in the inventory`);
+				assert.strictEqual(
+					isCoveredByNodeRunner(file),
+					resolved.automatic.includes(file),
+					`${file} is partitioned against its layer`
 				);
 			}
 		});
@@ -195,6 +208,30 @@ suite('Hucode test suite inventory', () => {
 
 		test('the workflow builds its lists from the resolver', async () => {
 			assert.ok(usesGeneratedLists(await readWorkflow()));
+		});
+
+		test('each step resolves the runner it then invokes', async () => {
+			assert.deepStrictEqual(
+				runnerSelectorProblems(await readWorkflow()),
+				[]
+			);
+		});
+
+		test('catches an Electron step asking for the Node list', () => {
+			// Passes usesGeneratedLists — the resolver is still mentioned —
+			// while scripts/test.sh receives the two Node overrides and every
+			// Electron suite runs nowhere.
+			const workflow = [
+				'      - name: Run Hucode Electron unit tests',
+				'        run: |',
+				'          S=$(node build/hucode/test-suites.ts --runner node)',
+				'          xvfb-run ./scripts/test.sh "${S[@]/#/--run=}"',
+			].join('\n');
+
+			assert.match(
+				runnerSelectorProblems(workflow).join('\n'),
+				/Electron suites would run nowhere/
+			);
 		});
 
 		test('no suite paths are hard-coded back into the workflow', async () => {
