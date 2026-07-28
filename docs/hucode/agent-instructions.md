@@ -560,6 +560,13 @@ human-facing guides rather than replacing them.
   shell's checks and the removal, so two callers otherwise each apply their own
   outcome and the result depends on arrival order, typically leaving a dormant
   record offering to restore a workbench the user closed.
+- When closing several hosted workbenches in one window, close non-active
+  instances concurrently and wait before closing the snapshot-active instance.
+  Closing the active instance promotes a sibling and bumps its lifecycle
+  generation, which can supersede that sibling's in-flight close.
+- Desktop before-unload timeout or send failure must preserve an ordinary close
+  as a veto. Terminal shutdown deliberately overrides that veto, still runs the
+  will-unload phase, and destroys the native view.
 - Removing an unloaded workbench and applying its disposition are separate
   decisions with separate rules. Removal after a successful commit is
   unconditional — the workbench is shut down, and refusing to remove it strands

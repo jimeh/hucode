@@ -1789,7 +1789,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace before-unload reply for ${instance.worktreePath}.`
 				);
-				complete(false);
+				complete(true);
 			}, this.beforeUnloadTimeoutMs);
 
 			try {
@@ -1803,7 +1803,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Failed to send hosted workspace ' +
 					`before-unload for ${instance.worktreePath}: ${error}`
 				);
-				complete(false);
+				complete(true);
 			}
 		});
 	}

@@ -158,6 +158,7 @@ import {
 	canSuspendHostedWorkbench,
 	shouldUnloadHostedWorkbench,
 } from './hostedWorkbenchActions.js';
+import { removeProjectWithHostedWorkbenchCleanup } from './removeProject.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -3007,6 +3008,8 @@ registerAction2(class extends Action2 {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const dialogService = accessor.get(IDialogService);
 		const notificationService = accessor.get(INotificationService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 
 		try {
 			const projectId = parseProjectHandle(handle.$treeItemHandle);
@@ -3014,29 +3017,27 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			const projects = await projectManagerService.getProjects();
-			const project = projects.find(entry => entry.id === projectId);
-			if (!project) {
-				return;
-			}
-
-			const result = await dialogService.confirm({
-				type: 'warning',
-				message: localize(
-					'removeProjectConfirm',
-					'Remove project "{0}" from Hucode?',
-					project.label
-				),
-				detail: localize(
-					'removeProjectDetail',
-					'This only removes the project from the sidebar. Repository files are left untouched.'
-				),
-			});
-			if (!result.confirmed) {
-				return;
-			}
-
-			await projectManagerService.removeProject(projectId);
+			await removeProjectWithHostedWorkbenchCleanup(
+				projectId,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					windowId: dom.getWindowId(mainWindow),
+				},
+				projectManagerService,
+				shellService,
+				async project => (await dialogService.confirm({
+					type: 'warning',
+					message: localize(
+						'removeProjectConfirm',
+						'Remove project "{0}" from Hucode?',
+						project.label
+					),
+					detail: localize(
+						'removeProjectDetail',
+						'Matching workbenches are unloaded where possible. Repository files are left untouched.'
+					),
+				})).confirmed
+			);
 		} catch (error) {
 			notificationService.error(String(error));
 		}
