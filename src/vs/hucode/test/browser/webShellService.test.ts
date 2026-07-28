@@ -853,6 +853,396 @@ suite('WebHucodeShellService', () => {
 		createLifecycleContractAdapter
 	);
 
+	test('shutdown does not supersede a slow peer after active removal',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			const alphaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/shutdown-slow-alpha',
+				'project-alpha'
+			);
+			const alphaId = alphaState.activeInstanceId;
+			assert.ok(alphaId);
+			const alpha = connectChild(browser, surface, alphaId).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				alphaId,
+				'active'
+			);
+			const bravoState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/shutdown-active-bravo',
+				'project-bravo'
+			);
+			const bravoId = bravoState.activeInstanceId;
+			assert.ok(bravoId);
+			const bravo = connectChild(browser, surface, bravoId).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				bravoId,
+				'active'
+			);
+			const alphaPreparationStarted = new DeferredPromise<void>();
+			const releaseAlphaPreparation = new DeferredPromise<boolean>();
+			alpha.onPrepareUnload = () => {
+				if (!alphaPreparationStarted.isSettled) {
+					void alphaPreparationStarted.complete();
+				}
+			};
+			alpha.prepareUnloadResult = releaseAlphaPreparation.p;
+
+			const shutdown = service.shutdownWindowWorkspaces(
+				browser.windowId,
+				1
+			);
+			await alphaPreparationStarted.p;
+			await waitFor(
+				() => bravo.commitUnloadCalls === 1 &&
+					!isIframeConnected(surface, bravoId),
+				'expected the active workbench to finish first'
+			);
+			await releaseAlphaPreparation.complete(true);
+			await shutdown;
+
+			assert.deepStrictEqual({
+				instances: (await service.getWindowState(browser.windowId))
+					.instances.length,
+				alphaPhases: alpha.unloadPhases,
+				bravoPhases: bravo.unloadPhases,
+			}, {
+				instances: 0,
+				alphaPhases: ['prepare', 'commit'],
+				bravoPhases: ['prepare', 'commit'],
+			});
+		}
+	);
+
+	test('incomplete shutdown unloads removed retained workbench identity',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			const scratchState = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/shutdown-retained-scratch').toJSON()
+			);
+			const scratchId = scratchState.activeInstanceId;
+			const retainedId = scratchState.retainedWorkbenches?.[0].id;
+			assert.ok(scratchId);
+			assert.ok(retainedId);
+			const scratch = connectChild(
+				browser,
+				surface,
+				scratchId
+			).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				scratchId,
+				'active'
+			);
+			const projectState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/shutdown-project-survivor',
+				'project-survivor'
+			);
+			const projectId = projectState.activeInstanceId;
+			assert.ok(projectId);
+			const project = connectChild(
+				browser,
+				surface,
+				projectId
+			).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				projectId,
+				'active'
+			);
+			project.prepareUnloadResult = false;
+			const savesBeforeShutdown = persistence.saveCalls;
+			let emissions = 0;
+			disposables.add(service.onDidChangeWindowState(() => emissions++));
+
+			await service.shutdownWindowWorkspaces(browser.windowId, 1);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instancePaths: state.instances.map(instance =>
+					instance.worktreePath),
+				scratchPhases: scratch.unloadPhases,
+				projectPhases: project.unloadPhases,
+				retainedState: state.retainedWorkbenches?.find(record =>
+					record.id === retainedId
+				)?.desiredState,
+				persistedRetainedState:
+					persistence.state?.retainedWorkbenches.find(record =>
+						record.id === retainedId
+					)?.desiredState,
+				saves: persistence.saveCalls - savesBeforeShutdown,
+				emissions,
+			}, {
+				instancePaths: ['/tmp/shutdown-project-survivor'],
+				scratchPhases: ['prepare', 'commit'],
+				projectPhases: ['prepare'],
+				retainedState: 'unloaded',
+				persistedRetainedState: 'unloaded',
+				saves: 1,
+				emissions: 1,
+			});
+		}
+	);
+
+	test('incomplete shutdown preserves a dormant retained replacement',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/shutdown-retained-dormant').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const retainedId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(retainedId);
+			const child = connectChild(
+				browser,
+				surface,
+				instanceId
+			).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				instanceId,
+				'active'
+			);
+			const preparationStarted = new DeferredPromise<void>();
+			const releasePreparation = new DeferredPromise<boolean>();
+			child.onPrepareUnload = () => {
+				if (!preparationStarted.isSettled) {
+					void preparationStarted.complete();
+				}
+			};
+			child.prepareUnloadResult = releasePreparation.p;
+
+			const shutdown = service.shutdownWindowWorkspaces(
+				browser.windowId,
+				1
+			);
+			await preparationStarted.p;
+			const suspend = service.suspendWorkspace(
+				browser.windowId,
+				instanceId
+			);
+			await releasePreparation.complete(true);
+			await Promise.all([shutdown, suspend]);
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instanceStates: state.instances.map(instance => instance.state),
+				retainedState: state.retainedWorkbenches?.find(record =>
+					record.id === retainedId
+				)?.desiredState,
+				persistedRetainedState:
+					persistence.state?.retainedWorkbenches.find(record =>
+						record.id === retainedId
+					)?.desiredState,
+			}, {
+				instanceStates: ['dormant'],
+				retainedState: 'loaded',
+				persistedRetainedState: 'loaded',
+			});
+		}
+	);
+
+	test('completed shutdown ignores a stale failed batch result', async () => {
+		const persistence = new FakePersistence();
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const alphaState = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/shutdown-stale-alpha',
+			'project-alpha'
+		);
+		const alphaId = alphaState.activeInstanceId;
+		assert.ok(alphaId);
+		const alpha = connectChild(browser, surface, alphaId).workbench;
+		await waitForInstanceState(
+			service,
+			browser.windowId,
+			alphaId,
+			'active'
+		);
+		const bravoState = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/shutdown-stale-bravo',
+			'project-bravo'
+		);
+		const bravoId = bravoState.activeInstanceId;
+		assert.ok(bravoId);
+		const bravo = connectChild(browser, surface, bravoId).workbench;
+		await waitForInstanceState(
+			service,
+			browser.windowId,
+			bravoId,
+			'active'
+		);
+		alpha.prepareUnloadResult = false;
+		const bravoPreparationStarted = new DeferredPromise<void>();
+		const releaseBravoPreparation = new DeferredPromise<boolean>();
+		bravo.onPrepareUnload = () => {
+			if (!bravoPreparationStarted.isSettled) {
+				void bravoPreparationStarted.complete();
+			}
+		};
+		bravo.prepareUnloadResult = releaseBravoPreparation.p;
+		const persistedBeforeShutdown = structuredClone(persistence.state);
+		const savesBeforeShutdown = persistence.saveCalls;
+
+		const shutdown = service.shutdownWindowWorkspaces(
+			browser.windowId,
+			1
+		);
+		await bravoPreparationStarted.p;
+		alpha.prepareUnloadResult = true;
+		for (let attempt = 0; attempt < 5; attempt++) {
+			await service.closeWorkspace(browser.windowId, alphaId);
+			if (!(await service.getWindowState(browser.windowId)).instances
+				.some(instance => instance.instanceId === alphaId)
+			) {
+				break;
+			}
+			await Promise.resolve();
+		}
+		assert.strictEqual(
+			(await service.getWindowState(browser.windowId)).instances
+				.some(instance => instance.instanceId === alphaId),
+			false
+		);
+		await releaseBravoPreparation.complete(true);
+		await shutdown;
+
+		assert.strictEqual(
+			(await service.getWindowState(browser.windowId)).instances.length,
+			0
+		);
+		assert.strictEqual(persistence.saveCalls, savesBeforeShutdown);
+		assert.deepStrictEqual(persistence.state, persistedBeforeShutdown);
+	});
+
+	test('recovery save failure leaves shutdown retryable', async () => {
+		const persistence = new ThrowOncePersistence();
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/shutdown-save-retry',
+			'project'
+		);
+		const instanceId = opened.activeInstanceId;
+		assert.ok(instanceId);
+		const child = connectChild(browser, surface, instanceId).workbench;
+		await waitForInstanceState(
+			service,
+			browser.windowId,
+			instanceId,
+			'active'
+		);
+		child.prepareUnloadResult = false;
+		persistence.throwNextSave = true;
+
+		await assert.rejects(
+			service.shutdownWindowWorkspaces(browser.windowId, 1),
+			/recovery save failed/
+		);
+
+		child.prepareUnloadResult = true;
+		child.unloadPhases.length = 0;
+		await service.shutdownWindowWorkspaces(browser.windowId, 1);
+		assert.deepStrictEqual({
+			instances: (await service.getWindowState(browser.windowId))
+				.instances.length,
+			phases: child.unloadPhases,
+		}, {
+			instances: 0,
+			phases: ['prepare', 'commit'],
+		});
+	});
+
+	test('shutdown settles sibling tasks and retries after host removal throws',
+		async () => {
+			const { service, surface, browser } = createService();
+			const alphaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/shutdown-throw-alpha',
+				'project-alpha'
+			);
+			const alphaId = alphaState.activeInstanceId;
+			assert.ok(alphaId);
+			const alpha = connectChild(browser, surface, alphaId).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				alphaId,
+				'active'
+			);
+			const alphaIframe = getIframe(surface, alphaId);
+			const removeAlphaIframe = alphaIframe.remove.bind(alphaIframe);
+			const bravoState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/shutdown-throw-bravo',
+				'project-bravo'
+			);
+			const bravoId = bravoState.activeInstanceId;
+			assert.ok(bravoId);
+			const bravo = connectChild(browser, surface, bravoId).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				bravoId,
+				'active'
+			);
+			alphaIframe.remove = () => {
+				throw new Error('host iframe removal failed');
+			};
+
+			try {
+				await assert.rejects(
+					service.shutdownWindowWorkspaces(browser.windowId, 1),
+					/host iframe removal failed/
+				);
+			} finally {
+				alphaIframe.remove = removeAlphaIframe;
+			}
+			assert.deepStrictEqual(bravo.unloadPhases, ['prepare', 'commit']);
+
+			await service.shutdownWindowWorkspaces(browser.windowId, 1);
+			assert.deepStrictEqual({
+				instances: (await service.getWindowState(browser.windowId))
+					.instances.length,
+				alphaPhases: alpha.unloadPhases,
+			}, {
+				instances: 0,
+				alphaPhases: ['prepare', 'commit'],
+			});
+		}
+	);
+
 	test('loads hosted iframes through the hosted workbench route', async () => {
 		const { service, surface, browser } = createService();
 
@@ -2988,6 +3378,18 @@ class FakePersistence implements IWebHucodeShellPersistenceAdapter {
 	save(state: IWebHucodeShellPersistedState): void {
 		this.saveCalls++;
 		this.state = structuredClone(state);
+	}
+}
+
+class ThrowOncePersistence extends FakePersistence {
+	throwNextSave = false;
+
+	override save(state: IWebHucodeShellPersistedState): void {
+		if (this.throwNextSave) {
+			this.throwNextSave = false;
+			throw new Error('recovery save failed');
+		}
+		super.save(state);
 	}
 }
 

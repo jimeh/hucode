@@ -1059,28 +1059,99 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
-		this.shutdownPromise = this.runWindowWorkspaceShutdown();
-		await this.shutdownPromise;
+		const shutdown = this.runWindowWorkspaceShutdown();
+		this.shutdownPromise = shutdown;
+		try {
+			await shutdown;
+		} finally {
+			// Complete teardown keeps the settled promise and frozen restore
+			// snapshot. Recovery makes a later request start a fresh batch,
+			// including when reconciliation or persistence failed.
+			if (!this.shuttingDown && this.shutdownPromise === shutdown) {
+				this.shutdownPromise = undefined;
+			}
+		}
 	}
 
 	private async runWindowWorkspaceShutdown(): Promise<void> {
 		// Teardown must not rewrite the resident set used for the next startup.
 		this.shuttingDown = true;
-		const results = await Promise.all(
-			[...this.instancesById.values()].map(instance =>
-				this.unloadAndRemoveInstance(instance, 'shutdown')
-			)
-		);
-		if (
-			results.some(result => !result) ||
-			this.instancesById.size > 0
-		) {
-			// A retained workbench means page teardown did not finish. Resume
-			// persistence once with the surviving set, then allow a later
-			// shutdown request to start a fresh batch.
-			this.shuttingDown = false;
-			this.emitState();
-			this.shutdownPromise = undefined;
+		const batch = [...this.instancesById.values()];
+		let taskFailure: { readonly error: unknown } | undefined;
+		let reconciliationFailure: { readonly error: unknown } | undefined;
+		let recoveryFailure: { readonly error: unknown } | undefined;
+		try {
+			await this.deferStateEmission(async () => {
+				const results = await Promise.allSettled(batch.map(instance =>
+					this.unloadAndRemoveInstance(instance, 'shutdown')
+				));
+				const rejected = results.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === 'rejected'
+				);
+				if (rejected) {
+					taskFailure = { error: rejected.reason };
+				}
+
+				const survivors = [...this.instancesById.values()];
+				if (survivors.length === 0) {
+					return;
+				}
+
+				try {
+					this.reconcileRetainedShutdownBatch(batch, survivors);
+					if (!this.getAvailableActiveInstance()) {
+						const next = getMostRecentHostedWorkspace(survivors);
+						if (next) {
+							this.activateInstance(next);
+						}
+					}
+				} catch (error) {
+					reconciliationFailure = { error };
+				} finally {
+					// A retained workbench means page teardown did not finish.
+					// Resume persistence once with the coherent surviving set,
+					// then allow a later shutdown request to start a fresh batch.
+					this.shuttingDown = false;
+					this.emitState();
+				}
+			});
+		} catch (error) {
+			recoveryFailure = { error };
+		}
+
+		if (taskFailure) {
+			throw taskFailure.error;
+		}
+		if (reconciliationFailure) {
+			throw reconciliationFailure.error;
+		}
+		if (recoveryFailure) {
+			throw recoveryFailure.error;
+		}
+	}
+
+	private reconcileRetainedShutdownBatch(
+		batch: readonly IHostedIframeInstance[],
+		survivors: readonly IHostedIframeInstance[]
+	): void {
+		const batchRetainedIds = new Set(batch.flatMap(instance =>
+			instance.retainedWorkbenchId
+				? [instance.retainedWorkbenchId]
+				: []
+		));
+		const survivorRetainedIds = new Set(survivors.flatMap(instance =>
+			instance.retainedWorkbenchId &&
+				isHostedWorkspaceRestorable(instance)
+				? [instance.retainedWorkbenchId]
+				: []
+		));
+		for (const retainedId of batchRetainedIds) {
+			if (!survivorRetainedIds.has(retainedId)) {
+				this.retainedWorkbenches.update(retainedId, {
+					desiredState: 'unloaded',
+				});
+			}
 		}
 	}
 
@@ -1340,7 +1411,7 @@ export class WebHucodeShellController extends Disposable
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
-		if (wasActive) {
+		if (wasActive && !this.shuttingDown) {
 			const next = getMostRecentHostedWorkspace(this.instancesById.values());
 			if (next) {
 				this.activateInstance(next);

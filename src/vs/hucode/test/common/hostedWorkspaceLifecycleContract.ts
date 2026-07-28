@@ -67,6 +67,7 @@ export interface IHostedWorkspaceConcurrentShutdownResult {
 	readonly secondCallResolvedBeforeRelease: boolean;
 	readonly phasesByPath: Readonly<Record<string, readonly string[]>>;
 	readonly shutdownState: IHostedWorkspaceContractState;
+	readonly nativeDestructionBeforeFinalHandshake?: readonly number[];
 	readonly nativeDestructionOrder?: readonly string[];
 	readonly persistenceSavesDuringIncompleteShutdown?: number;
 	readonly persistedPaths?: readonly string[];
@@ -209,6 +210,10 @@ export function registerHostedWorkspaceLifecycleContract(
 							instance.state !== 'unloaded'
 						),
 						false
+					);
+					assert.deepStrictEqual(
+						result.nativeDestructionBeforeFinalHandshake,
+						[]
 					);
 					assert.deepStrictEqual(
 						result.nativeDestructionOrder,

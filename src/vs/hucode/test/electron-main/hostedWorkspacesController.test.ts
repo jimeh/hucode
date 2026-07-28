@@ -665,6 +665,8 @@ suite('ResidentHostedWorkspacesController', () => {
 					charlie: [],
 				};
 				let releaseAlphaPreparation: (() => void) | undefined;
+				let releaseCharlieCommit: (() => void) | undefined;
+				const charlieCommitStarted = new DeferredPromise<void>();
 				for (const [
 					viewIndex,
 					path,
@@ -672,7 +674,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				] of [
 					[0, 'alpha', 'gated'],
 					[1, 'bravo', 'veto'],
-					[2, 'charlie', 'silent'],
+					[2, 'charlie', 'ready'],
 				] as const) {
 					harness.viewFactory.views[viewIndex].rawWebContents.sendHook =
 						(channel, request) => {
@@ -690,6 +692,8 @@ suite('ResidentHostedWorkspacesController', () => {
 										harness.ipcMain.emitReply(okChannel);
 								} else if (preparation === 'veto') {
 									harness.ipcMain.emitReply(cancelChannel);
+								} else {
+									harness.ipcMain.emitReply(okChannel);
 								}
 								return true;
 							}
@@ -698,7 +702,15 @@ suite('ResidentHostedWorkspacesController', () => {
 								const { replyChannel } = request as {
 									replyChannel: string;
 								};
-								harness.ipcMain.emitReply(replyChannel);
+								if (path === 'charlie') {
+									releaseCharlieCommit = () =>
+										harness.ipcMain.emitReply(replyChannel);
+									if (!charlieCommitStarted.isSettled) {
+										void charlieCommitStarted.complete();
+									}
+								} else {
+									harness.ipcMain.emitReply(replyChannel);
+								}
 								return true;
 							}
 							return false;
@@ -723,6 +735,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				const resolvedBeforeRelease = secondCallResolvedBeforeRelease;
 				assert.ok(releaseAlphaPreparation);
 				releaseAlphaPreparation();
+				await charlieCommitStarted.p;
+				await Promise.resolve();
+				const nativeDestructionBeforeFinalHandshake =
+					[...harness.browserViewMainService
+						.destroyedHostedWebContentsIds];
+				assert.ok(releaseCharlieCommit);
+				releaseCharlieCommit();
 				await Promise.all([firstShutdown, secondShutdown]);
 				const pathByWebContentsId = new Map([
 					[1, 'alpha'],
@@ -743,6 +762,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
 					phasesByPath,
 					shutdownState: toContractState(harness.controller),
+					nativeDestructionBeforeFinalHandshake,
 					nativeDestructionOrder,
 				};
 			},
