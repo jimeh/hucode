@@ -417,10 +417,9 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	function createLifecycleContractAdapter():
 		IHostedWorkspaceLifecycleContractAdapter {
-		const toContractState = (
-			controller: ResidentHostedWorkspacesController
+		const normalizeState = (
+			state: ReturnType<ResidentHostedWorkspacesController['getState']>
 		): IHostedWorkspaceContractState => {
-			const state = controller.getState();
 			const active = state.instances.find(instance =>
 				instance.instanceId === state.activeInstanceId
 			);
@@ -430,8 +429,14 @@ suite('ResidentHostedWorkspacesController', () => {
 					path: basename(instance.worktreePath),
 					state: instance.state,
 				})),
+				retainedDesiredState:
+					state.retainedWorkbenches?.[0]?.desiredState,
 			};
 		};
+		const toContractState = (
+			controller: ResidentHostedWorkspacesController
+		): IHostedWorkspaceContractState =>
+			normalizeState(controller.getState());
 		const configureUnload = (
 			harness: ReturnType<typeof createController>,
 			viewIndex: number,
@@ -520,9 +525,9 @@ suite('ResidentHostedWorkspacesController', () => {
 
 				return {
 					state: toContractState(harness.controller),
+					emittedState: harness.stateChanges[beforeClose] &&
+						normalizeState(harness.stateChanges[beforeClose]),
 					emissionCount: harness.stateChanges.length - beforeClose,
-					retainedDesiredState: harness.controller.getState()
-						.retainedWorkbenches?.[0].desiredState,
 				};
 			},
 			async restoreActiveOnly() {
@@ -560,15 +565,47 @@ suite('ResidentHostedWorkspacesController', () => {
 			async closeActiveAndPromoteNext() {
 				const alpha = createWorktree('alpha');
 				const beta = createWorktree('beta');
-				const harness = createController();
-				await harness.controller.openWorkspace(alpha, 'project-alpha');
-				harness.controller.notifyHostedWorkspaceReady('instance-1');
-				await harness.controller.openWorkspace(beta, 'project-beta');
-				harness.controller.notifyHostedWorkspaceReady('instance-2');
+				const gamma = createWorktree('gamma');
+				const harness = createController({
+					activeWorktreePath: gamma,
+					restoreEntries: [{
+						projectId: 'project-alpha',
+						worktreePath: alpha,
+						state: 'loaded',
+						lastActiveAt: 100,
+					}, {
+						projectId: 'project-beta',
+						worktreePath: beta,
+						state: 'loaded',
+						lastActiveAt: 300,
+					}, {
+						projectId: 'project-gamma',
+						worktreePath: gamma,
+						state: 'active',
+						lastActiveAt: 200,
+					}],
+					restorePolicy: 'all',
+				});
+				await harness.controller.ensureRestored();
+				for (const instance of harness.controller.getState().instances) {
+					harness.controller.notifyHostedWorkspaceReady(
+						instance.instanceId
+					);
+				}
+				const gammaInstance = harness.controller.getState().instances.find(
+					instance => instance.worktreePath === gamma
+				);
+				assert.ok(gammaInstance);
+				const gammaViewIndex = harness.viewFactory.views.findIndex(view =>
+					view.rawWebContents.id === gammaInstance.webContentsId
+				);
+				assert.notStrictEqual(gammaViewIndex, -1);
 				const phases: string[] = [];
-				configureUnload(harness, 1, phases, 'ready');
+				configureUnload(harness, gammaViewIndex, phases, 'ready');
 
-				await harness.controller.closeWorkspace('instance-2');
+				await harness.controller.closeWorkspace(
+					gammaInstance.instanceId
+				);
 
 				return {
 					state: toContractState(harness.controller),

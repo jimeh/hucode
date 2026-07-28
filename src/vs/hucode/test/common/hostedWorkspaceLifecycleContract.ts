@@ -12,6 +12,7 @@ export interface IHostedWorkspaceContractState {
 		readonly path: string;
 		readonly state: string;
 	}[];
+	readonly retainedDesiredState?: string;
 }
 
 /** Outcome of reactivating a workbench during its unload preparation. */
@@ -23,8 +24,8 @@ export interface IHostedWorkspaceGenerationGuardResult {
 /** Outcome of closing one retained workbench. */
 export interface IHostedWorkspaceCoherentCloseResult {
 	readonly state: IHostedWorkspaceContractState;
+	readonly emittedState?: IHostedWorkspaceContractState;
 	readonly emissionCount: number;
-	readonly retainedDesiredState?: string;
 }
 
 /** State transitions produced by active-only startup restoration. */
@@ -88,9 +89,12 @@ export function registerHostedWorkspaceLifecycleContract(
 		test('a retained close publishes one coherent final state', async () => {
 			const result = await createAdapter().coherentRetainedClose();
 
-			assertState(result.state, { instances: [] });
 			assert.strictEqual(result.emissionCount, 1);
-			assert.strictEqual(result.retainedDesiredState, 'unloaded');
+			assertState(result.state, {
+				instances: [],
+				retainedDesiredState: 'unloaded',
+			});
+			assertState(result.emittedState, result.state);
 		});
 
 		test('active-only restoration defers readiness and dormancy',
@@ -120,8 +124,11 @@ export function registerHostedWorkspaceLifecycleContract(
 				const result = await createAdapter().closeActiveAndPromoteNext();
 
 				assertState(result.state, {
-					activePath: 'alpha',
-					instances: [{ path: 'alpha', state: 'active' }],
+					activePath: 'beta',
+					instances: [
+						{ path: 'alpha', state: 'loaded' },
+						{ path: 'beta', state: 'active' },
+					],
 				});
 				assert.deepStrictEqual(
 					result.unloadPhases,
@@ -157,16 +164,19 @@ export function registerHostedWorkspaceLifecycleContract(
 }
 
 function assertState(
-	actual: IHostedWorkspaceContractState,
+	actual: IHostedWorkspaceContractState | undefined,
 	expected: IHostedWorkspaceContractState
 ): void {
+	assert.ok(actual);
 	assert.deepStrictEqual({
 		activePath: actual.activePath,
 		instances: [...actual.instances].sort((a, b) =>
 			a.path.localeCompare(b.path)),
+		retainedDesiredState: actual.retainedDesiredState,
 	}, {
 		activePath: expected.activePath,
 		instances: [...expected.instances].sort((a, b) =>
 			a.path.localeCompare(b.path)),
+		retainedDesiredState: expected.retainedDesiredState,
 	});
 }

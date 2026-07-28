@@ -446,11 +446,9 @@ suite('WebHucodeShellService', () => {
 
 	function createLifecycleContractAdapter():
 		IHostedWorkspaceLifecycleContractAdapter {
-		const toContractState = async (
-			service: WebHucodeShellController,
-			browser: FakeBrowserAdapter
-		): Promise<IHostedWorkspaceContractState> => {
-			const state = await service.getWindowState(browser.windowId);
+		const normalizeState = (
+			state: IHucodeHostedWorkspaceState
+		): IHostedWorkspaceContractState => {
 			const active = state.instances.find(instance =>
 				instance.instanceId === state.activeInstanceId
 			);
@@ -460,11 +458,19 @@ suite('WebHucodeShellService', () => {
 					path: basename(instance.worktreePath),
 					state: instance.state,
 				})),
+				retainedDesiredState:
+					state.retainedWorkbenches?.[0]?.desiredState,
 			};
 		};
+		const toContractState = async (
+			service: WebHucodeShellController,
+			browser: FakeBrowserAdapter
+		): Promise<IHostedWorkspaceContractState> =>
+			normalizeState(await service.getWindowState(browser.windowId));
 		const readyChild = async (
 			harness: ReturnType<typeof createService>,
-			instanceId: string
+			instanceId: string,
+			expectedState: 'active' | 'loaded' = 'active'
 		): Promise<FakeHostedWorkbench> => {
 			const child = connectChild(
 				harness.browser,
@@ -475,7 +481,7 @@ suite('WebHucodeShellService', () => {
 				harness.service,
 				harness.browser.windowId,
 				instanceId,
-				'active'
+				expectedState
 			);
 			return child.workbench;
 		};
@@ -544,11 +550,13 @@ suite('WebHucodeShellService', () => {
 				assert.ok(instanceId);
 				await readyChild(harness, instanceId);
 				let emissionCount = 0;
-				disposables.add(harness.service.onDidChangeWindowState(() => {
+				let emittedState: IHostedWorkspaceContractState | undefined;
+				disposables.add(harness.service.onDidChangeWindowState(change => {
 					emissionCount++;
+					emittedState = normalizeState(change.state);
 				}));
 
-				const closed = await harness.service.closeWorkspace(
+				await harness.service.closeWorkspace(
 					harness.browser.windowId,
 					instanceId
 				);
@@ -558,9 +566,8 @@ suite('WebHucodeShellService', () => {
 						harness.service,
 						harness.browser
 					),
+					emittedState,
 					emissionCount,
-					retainedDesiredState:
-						closed.retainedWorkbenches?.[0].desiredState,
 				};
 			},
 			async restoreActiveOnly() {
@@ -607,27 +614,52 @@ suite('WebHucodeShellService', () => {
 				};
 			},
 			async closeActiveAndPromoteNext() {
-				const harness = createService();
-				const alphaState = await harness.service.openWorkspace(
-					harness.browser.windowId,
-					'/tmp/alpha',
-					'project-alpha'
+				const persistence = new FakePersistence({
+					retainedWorkbenches: [],
+					residentWorkspaces: [{
+						projectId: 'project-alpha',
+						worktreePath: '/tmp/alpha',
+						lastActiveAt: 100,
+					}, {
+						projectId: 'project-beta',
+						worktreePath: '/tmp/beta',
+						lastActiveAt: 300,
+					}, {
+						projectId: 'project-gamma',
+						worktreePath: '/tmp/gamma',
+						lastActiveAt: 200,
+					}],
+					activeWorktreePath: '/tmp/gamma',
+				});
+				const harness = createService(
+					new FakeBrowserAdapter(),
+					persistence,
+					'all',
+					{ exists: async () => true }
 				);
-				const alphaId = alphaState.activeInstanceId;
-				assert.ok(alphaId);
-				await readyChild(harness, alphaId);
-				const betaState = await harness.service.openWorkspace(
-					harness.browser.windowId,
-					'/tmp/beta',
-					'project-beta'
+				const state = await harness.service.getWindowState(
+					harness.browser.windowId
 				);
-				const betaId = betaState.activeInstanceId;
-				assert.ok(betaId);
-				const betaChild = await readyChild(harness, betaId);
+				const gamma = state.instances.find(instance =>
+					instance.worktreePath === '/tmp/gamma'
+				);
+				assert.ok(gamma);
+				const children = new Map<string, FakeHostedWorkbench>();
+				for (const instance of state.instances) {
+					children.set(instance.worktreePath, await readyChild(
+						harness,
+						instance.instanceId,
+						instance.instanceId === gamma.instanceId
+							? 'active'
+							: 'loaded'
+					));
+				}
+				const gammaChild = children.get('/tmp/gamma');
+				assert.ok(gammaChild);
 
 				await harness.service.closeWorkspace(
 					harness.browser.windowId,
-					betaId
+					gamma.instanceId
 				);
 
 				return {
@@ -635,7 +667,7 @@ suite('WebHucodeShellService', () => {
 						harness.service,
 						harness.browser
 					),
-					unloadPhases: betaChild.unloadPhases,
+					unloadPhases: gammaChild.unloadPhases,
 				};
 			},
 			async vetoThenShutdown() {
