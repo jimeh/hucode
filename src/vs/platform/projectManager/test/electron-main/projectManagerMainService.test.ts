@@ -738,7 +738,6 @@ suite('GitWorktreeService', () => {
 		});
 		child.stdout.write(Buffer.from('four'));
 		child.stderr.write(Buffer.from('!!!'));
-		child.close(null, 'SIGKILL');
 
 		await assert.rejects(promise, error => {
 			assert.ok(error instanceof GitCommandError);
@@ -748,6 +747,8 @@ suite('GitWorktreeService', () => {
 			return true;
 		});
 		assert.deepStrictEqual(killCalls, [[1234, true]]);
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
 	});
 
 	test('spawn runner counts multibyte output in bytes', async () => {
@@ -832,6 +833,50 @@ suite('GitWorktreeService', () => {
 		));
 	});
 
+	test('timeout rejects when descendants keep pipes open and cleanup hangs', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				timer,
+				killTree: () => new Promise<void>(() => { }),
+			}
+		);
+
+		child.emit('exit', 0, null);
+		timer.fire();
+
+		let guard: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await assert.rejects(
+				Promise.race([
+					promise,
+					new Promise<never>((_resolve, reject) => {
+						guard = setTimeout(() => {
+							reject(new Error(
+								'Git timeout did not settle promptly.'
+							));
+						}, 100);
+					}),
+				]),
+				error => {
+					assert.ok(error instanceof GitCommandError);
+					assert.strictEqual(error.kind, 'timeout');
+					return true;
+				}
+			);
+		} finally {
+			if (guard !== undefined) {
+				clearTimeout(guard);
+			}
+		}
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
+	});
+
 	test('pre-spawn cancellation rejects without spawning', async () => {
 		const child = new TestGitChild();
 		const source = new CancellationTokenSource();
@@ -869,10 +914,11 @@ suite('GitWorktreeService', () => {
 			}
 		);
 		source.cancel();
-		child.close(null, 'SIGKILL');
 
 		await assert.rejects(promise, error => error instanceof CancellationError);
 		assert.deepStrictEqual(killCalls, [[1234, true]]);
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
 		source.dispose();
 	});
 

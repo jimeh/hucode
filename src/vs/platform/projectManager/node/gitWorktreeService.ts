@@ -575,7 +575,7 @@ export class GitWorktreeService {
 	}
 
 	/**
-	 * Runs one bounded Git subprocess and settles only after its pipes close.
+	 * Runs one bounded Git subprocess, draining normal outcomes through close.
 	 */
 	static execGit(
 		args: readonly string[],
@@ -633,6 +633,8 @@ export class GitWorktreeService {
 			let failure: Error | undefined;
 			let killStarted = false;
 			let timer: NodeJS.Timeout | undefined;
+			let cancellationListener: { dispose(): void } | undefined;
+			let settled = false;
 
 			const killChild = (): void => {
 				if (killStarted) {
@@ -673,17 +675,31 @@ export class GitWorktreeService {
 				})();
 			};
 
-			const setFailure = (
-				error: Error,
-				kill: boolean
-			): void => {
-				if (failure) {
+			const clearPolicyHooks = (destroyPipes: boolean): void => {
+				if (timer) {
+					runner.clearTimeout(timer);
+					timer = undefined;
+				}
+				cancellationListener?.dispose();
+				cancellationListener = undefined;
+				child.stdout?.removeListener('data', onStdout);
+				child.stderr?.removeListener('data', onStderr);
+				if (destroyPipes) {
+					child.stdout?.destroy();
+					child.stderr?.destroy();
+				}
+			};
+
+			const abort = (error: Error): void => {
+				if (failure || settled) {
 					return;
 				}
+
 				failure = error;
-				if (kill) {
-					killChild();
-				}
+				settled = true;
+				clearPolicyHooks(true);
+				reject(error);
+				killChild();
 			};
 
 			const collect = (
@@ -706,7 +722,7 @@ export class GitWorktreeService {
 				}
 				bufferedBytes += chunk.byteLength;
 				if (bufferedBytes > policy.maxOutputBytes) {
-					setFailure(new GitCommandError(
+					abort(new GitCommandError(
 						`${command} exceeded its ` +
 						`${policy.maxOutputBytes}-byte output limit.`,
 						{
@@ -716,7 +732,7 @@ export class GitWorktreeService {
 							stderr: Buffer.concat(stderr).toString('utf8'),
 							maxOutputBytes: policy.maxOutputBytes,
 						}
-					), true);
+					));
 				}
 			};
 
@@ -725,7 +741,11 @@ export class GitWorktreeService {
 			const onStderr = (chunk: Buffer | string): void =>
 				collect(chunk, stderr);
 			const onError = (cause: Error): void => {
-				setFailure(new GitCommandError(
+				if (failure || settled) {
+					return;
+				}
+
+				failure = new GitCommandError(
 					`${command} failed to start: ${cause.message}`,
 					{
 						kind: 'spawn',
@@ -734,25 +754,23 @@ export class GitWorktreeService {
 						stderr: Buffer.concat(stderr).toString('utf8'),
 						cause,
 					}
-				), false);
+				);
 			};
-			const cancellationListener = token.onCancellationRequested(() => {
-				setFailure(new CancellationError(), true);
+			cancellationListener = token.onCancellationRequested(() => {
+				abort(new CancellationError());
 			});
 			const onClose = (
 				code: number | null,
 				signal: NodeJS.Signals | null
 			): void => {
-				if (timer) {
-					runner.clearTimeout(timer);
-					timer = undefined;
-				}
-				cancellationListener.dispose();
-				child.stdout?.removeListener('data', onStdout);
-				child.stderr?.removeListener('data', onStderr);
+				clearPolicyHooks(false);
 				child.removeListener('error', onError);
 				child.removeListener('close', onClose);
 
+				if (settled) {
+					return;
+				}
+				settled = true;
 				const stdoutText = Buffer.concat(stdout).toString('utf8');
 				const stderrText = Buffer.concat(stderr).toString('utf8');
 				if (failure) {
@@ -793,14 +811,14 @@ export class GitWorktreeService {
 			child.on('error', onError);
 			child.on('close', onClose);
 			timer = runner.setTimeout(() => {
-				if (failure) {
+				if (failure || settled) {
 					return;
 				}
 				runner.warn(
 					`[GitWorktreeService] ${policy.operation} timed out ` +
 					`after ${policy.timeoutMs}ms; killing ${command}.`
 				);
-				setFailure(new GitCommandError(
+				abort(new GitCommandError(
 					`${command} timed out after ${policy.timeoutMs}ms.`,
 					{
 						kind: 'timeout',
@@ -809,7 +827,7 @@ export class GitWorktreeService {
 						stderr: Buffer.concat(stderr).toString('utf8'),
 						timeoutMs: policy.timeoutMs,
 					}
-				), true);
+				));
 			}, policy.timeoutMs);
 		});
 	}
