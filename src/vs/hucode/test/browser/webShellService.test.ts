@@ -535,7 +535,7 @@ suite('WebHucodeShellService', () => {
 			});
 		});
 
-	test('keeps the hosted iframe when the unload commit times out',
+	test('removes the hosted iframe when the unload commit times out',
 		async () => {
 			const browser = new CollapsibleTimeoutBrowserAdapter();
 			const { service, surface } = createService(browser);
@@ -546,21 +546,68 @@ suite('WebHucodeShellService', () => {
 				'project'
 			);
 			const instanceId = state.instances[0].instanceId;
-			const child = connectChild(browser, surface, instanceId);
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
 			// Preparation answers normally; only the commit runs out of time.
 			child.workbench.onPrepareUnload = () => {
 				browser.collapseTimeouts = true;
 			};
-			child.workbench.commitUnloadResult = new Promise<boolean>(
-				() => { }
-			);
+			const commitGate = new DeferredPromise<void>();
+			child.workbench.commitUnloadGate = commitGate.p;
 
 			const timedOutState = await service.closeWorkspace(
 				windowId,
 				instanceId
 			);
+			// The workbench was mid-commit when the shell gave up on it.
+			// Letting it finish shows what the shell would be wrapping in a
+			// live-looking iframe if a commit timeout kept the instance.
+			await commitGate.complete();
+			const committed = await child.workbench.commitUnloadSettled.p;
+
 			assert.deepStrictEqual({
 				instanceIds: timedOutState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+				committed,
+				didShutdown: child.events.didShutdown,
+			}, {
+				instanceIds: [],
+				iframeConnected: false,
+				prepareCalls: 1,
+				commitCalls: 1,
+				committed: true,
+				didShutdown: 1,
+			});
+		});
+
+	test('keeps the hosted iframe when the workbench refuses the commit',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			// An answered refusal is not a timeout: the workbench is still
+			// running and said so, so the close must not proceed.
+			child.workbench.commitUnloadResult = false;
+
+			const refusedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: refusedState.instances.map(
 					instance => instance.instanceId
 				),
 				iframeConnected: isIframeConnected(surface, instanceId),
@@ -571,6 +618,92 @@ suite('WebHucodeShellService', () => {
 				iframeConnected: true,
 				prepareCalls: 1,
 				commitCalls: 1,
+			});
+		});
+
+	test('shares one unload handshake across concurrent close requests',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			const first = service.closeWorkspace(windowId, instanceId);
+			const second = service.closeWorkspace(windowId, instanceId);
+			await child.workbench.prepareUnloadStarted.p;
+			await prepareGate.complete();
+			await Promise.all([first, second]);
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instances: finalState.instances.length,
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+				beforeShutdown: child.events.beforeShutdown,
+				didShutdown: child.events.didShutdown,
+			}, {
+				instances: 0,
+				prepareCalls: 1,
+				commitCalls: 1,
+				beforeShutdown: 1,
+				didShutdown: 1,
+			});
+		});
+
+	test('does not leave a dormant record for a concurrently closed workbench',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const opened = await service.retainAndOpenWorkbench(
+				windowId,
+				URI.file('/tmp/race-close-suspend').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const commitGate = new DeferredPromise<void>();
+			child.workbench.commitUnloadGate = commitGate.p;
+
+			// Park the close inside its commit, so the suspend runs its
+			// checks while the instance is still registered and only removes
+			// it afterwards. That ordering is what turns two unloads into a
+			// dormant record for a workbench the user closed.
+			const closing = service.closeWorkspace(windowId, instanceId);
+			await child.workbench.commitUnloadStarted.p;
+			const suspending = service.suspendWorkspace(windowId, instanceId);
+			// A second handshake only exists while the two unloads are
+			// unaware of each other; once they share one there is nothing
+			// here to wait for.
+			await raceTimeout(child.workbench.repeatPrepareUnloadStarted.p, 50);
+			await commitGate.complete();
+			await Promise.all([closing, suspending]);
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instanceStates: finalState.instances.map(
+					instance => instance.state
+				),
+				desiredState: finalState.retainedWorkbenches?.[0].desiredState,
+				beforeShutdown: child.events.beforeShutdown,
+			}, {
+				instanceStates: [],
+				desiredState: 'unloaded',
+				beforeShutdown: 1,
 			});
 		});
 
@@ -2108,7 +2241,12 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	prepareUnloadCalls = 0;
 	commitUnloadCalls = 0;
 	prepareUnloadGate: Promise<unknown> | undefined;
+	commitUnloadGate: Promise<unknown> | undefined;
+	onPrepareUnload: (() => void) | undefined;
 	readonly prepareUnloadStarted = new DeferredPromise<void>();
+	readonly repeatPrepareUnloadStarted = new DeferredPromise<void>();
+	readonly commitUnloadStarted = new DeferredPromise<void>();
+	readonly commitUnloadSettled = new DeferredPromise<boolean>();
 	readonly commands: {
 		readonly commandId: string;
 		readonly args: readonly unknown[];
@@ -2141,7 +2279,12 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
-		if (!this.prepareUnloadStarted.isSettled) {
+		this.onPrepareUnload?.();
+		if (this.prepareUnloadStarted.isSettled) {
+			if (!this.repeatPrepareUnloadStarted.isSettled) {
+				await this.repeatPrepareUnloadStarted.complete();
+			}
+		} else {
 			await this.prepareUnloadStarted.complete();
 		}
 		await this.prepareUnloadGate;
@@ -2150,7 +2293,15 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 	async commitUnload(): Promise<boolean> {
 		this.commitUnloadCalls++;
-		return this.coordinator.commitUnload();
+		if (!this.commitUnloadStarted.isSettled) {
+			await this.commitUnloadStarted.complete();
+		}
+		await this.commitUnloadGate;
+		const committed = await this.coordinator.commitUnload();
+		if (!this.commitUnloadSettled.isSettled) {
+			await this.commitUnloadSettled.complete(committed);
+		}
+		return committed;
 	}
 }
 

@@ -82,8 +82,9 @@ export interface IHucodeOmniWebWorkbenchClient {
 	/**
 	 * Runs the veto-capable half of the hosted workbench unload handshake.
 	 * Resolves false when preparation was vetoed or failed, telling the shell
-	 * to keep the hosted workbench alive. The workbench is left untouched
-	 * either way; it only shuts down once {@link commitUnload} follows.
+	 * to keep the hosted workbench alive. The workbench does not shut down
+	 * either way — that only happens once {@link commitUnload} follows —
+	 * though its shutdown listeners do run.
 	 */
 	prepareUnload(): Promise<boolean>;
 
@@ -92,6 +93,11 @@ export interface IHucodeOmniWebWorkbenchClient {
 	 * and the shell's decision that the workbench is really going away. This
 	 * is the irreversible half of the handshake. Resolves false when no
 	 * prepared unload was outstanding, leaving the workbench alive.
+	 *
+	 * This needs no capability negotiation with older workbenches. Hosted
+	 * iframes are children of the shell document, so a shell that reloads
+	 * recreates every workbench from the server; a shell can never end up
+	 * driving a workbench built before this call existed.
 	 */
 	commitUnload(): Promise<boolean>;
 }

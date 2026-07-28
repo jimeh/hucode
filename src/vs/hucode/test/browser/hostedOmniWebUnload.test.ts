@@ -159,6 +159,51 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		});
 	});
 
+	test('does not re-ask a workbench it has already shut down', async () => {
+		const { lifecycleService, counts } = createLifecycleService();
+		const coordinator = createCoordinator(lifecycleService);
+
+		await coordinator.prepareUnload();
+		await coordinator.commitUnload();
+		// The shell retries an unload whose commit it never saw confirmed.
+		const prepared = await coordinator.prepareUnload();
+		const committed = await coordinator.commitUnload();
+
+		assert.deepStrictEqual({ prepared, committed, counts }, {
+			prepared: true,
+			committed: true,
+			counts: { beforeShutdown: 1, willShutdown: 1, didShutdown: 1 },
+		});
+	});
+
+	test('runs shutdown listeners even when preparation is abandoned',
+		async () => {
+			const { lifecycleService, counts } = createLifecycleService();
+			let listenerRan = false;
+			disposables.add(lifecycleService.onBeforeShutdown(event => {
+				listenerRan = true;
+				event.veto(true, 'test.unsavedWorkingCopy');
+			}));
+			const coordinator = createCoordinator(lifecycleService);
+
+			const prepared = await coordinator.prepareUnload();
+
+			// "Still usable" is the claim, not "untouched": listeners that
+			// latch state have already latched it by the time a veto comes
+			// back.
+			assert.deepStrictEqual({
+				prepared,
+				listenerRan,
+				willShutdown: lifecycleService.willShutdown,
+				willShutdownFired: counts.willShutdown,
+			}, {
+				prepared: false,
+				listenerRan: true,
+				willShutdown: false,
+				willShutdownFired: 0,
+			});
+		});
+
 	test('refuses to unload without two-phase lifecycle support', async () => {
 		let shutdowns = 0;
 		const lifecycleService = {

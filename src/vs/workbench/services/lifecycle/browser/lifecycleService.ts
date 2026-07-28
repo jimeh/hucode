@@ -107,10 +107,16 @@ export class BrowserLifecycleService extends AbstractLifecycleService {
 
 	/**
 	 * Hucode: runs the veto-capable half of a shutdown on its own and reports
-	 * the collected veto. Nothing here is irreversible, so an attempt that is
-	 * vetoed or abandoned leaves the workbench fully usable. `onBeforeShutdown`
-	 * fires exactly once per call; a caller that decides to go ahead continues
-	 * with {@link commitShutdown}, which never fires it again.
+	 * the collected veto. No lifecycle-service state changes, so an attempt
+	 * that is vetoed or abandoned leaves the workbench usable and this service
+	 * able to shut down later. `onBeforeShutdown` fires exactly once per call;
+	 * a caller that decides to go ahead continues with {@link commitShutdown},
+	 * which never fires it again.
+	 *
+	 * Its listeners do run, however, and not all of them are idempotent or
+	 * conditional on the shutdown actually happening — the same is true of the
+	 * `beforeunload` path this shares, but an abandoned preparation is not a
+	 * no-op for the workbench as a whole.
 	 *
 	 * Hosted Omni workbenches are unloaded by a shell that only knows whether
 	 * the workbench is really going away after it has seen the veto answer, so

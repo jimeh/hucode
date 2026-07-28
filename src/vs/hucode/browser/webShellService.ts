@@ -29,6 +29,7 @@ import {
 } from '../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
+import { ILogService } from '../../platform/log/common/log.js';
 import {
 	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
@@ -106,6 +107,7 @@ interface IHostedIframeInstance {
 	lastActiveAt?: number;
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
+	pendingUnload?: Promise<boolean>;
 }
 
 /** Persisted serve-web catalog and hosted-workbench restore snapshot. */
@@ -206,6 +208,11 @@ const assumeFoldersExist: IWebHucodeShellFolderAccess = {
 	exists: async () => true,
 };
 
+const silentWebShellLog: IWebHucodeShellLogService = {
+	info: () => { },
+	warn: () => { },
+};
+
 const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
 	'hucode.omni.webRetainedWorkbenches';
 
@@ -247,6 +254,7 @@ type HostedUnloadResult =
 	| 'prepare-timeout'
 	| 'commit-timeout';
 type IWebHucodeShellCommandService = Pick<ICommandService, 'executeCommand'>;
+type IWebHucodeShellLogService = Pick<ILogService, 'info' | 'warn'>;
 type IWebHucodeShellHostSurfaceService = Pick<
 	IHucodeWebOmniHostSurfaceService,
 	'onDidChangeSurface' | 'getSurface'
@@ -332,11 +340,15 @@ export class WebHucodeShellController extends Disposable
 	readonly supportsWorkspaceScreenshotOverlay = false;
 	private static readonly READY_TIMEOUT_MS = 30000;
 	private static readonly COMMAND_TIMEOUT_MS = 5000;
-	// The two unload phases get the budgets the desktop controller uses for
-	// its own before-unload and will-unload handshakes: preparation can open
-	// a dialog the user has to answer, the commit only has to flush state.
-	private static readonly PREPARE_UNLOAD_TIMEOUT_MS = 5000;
-	private static readonly COMMIT_UNLOAD_TIMEOUT_MS = 15000;
+	// Neither phase can block on the user: the web lifecycle service treats a
+	// pending veto answer as a veto and never awaits one, so both budgets only
+	// bound how long an unresponsive iframe holds up the caller. Preparation
+	// is a latency choice — giving up early only refuses the close — so it
+	// keeps the budget the single-phase handshake used to have. The commit is
+	// a durability choice: giving up early removes a workbench that may still
+	// be flushing its state, so it gets more room.
+	private static readonly PREPARE_UNLOAD_TIMEOUT_MS = 1500;
+	private static readonly COMMIT_UNLOAD_TIMEOUT_MS = 5000;
 
 	private readonly windowId: number;
 	private readonly workbenchRoute: string;
@@ -371,6 +383,8 @@ export class WebHucodeShellController extends Disposable
 		restorePolicy: HucodeHostedWorkbenchRestorePolicy = 'active',
 		private readonly folderAccess: IWebHucodeShellFolderAccess =
 			assumeFoldersExist,
+		private readonly logService: IWebHucodeShellLogService =
+			silentWebShellLog,
 	) {
 		super();
 
@@ -601,6 +615,18 @@ export class WebHucodeShellController extends Disposable
 			if (!await this.unloadAndRemoveInstance(instance)) {
 				return;
 			}
+			// Another request may have shared this handshake and decided the
+			// workbench is not coming back. Offering to restore something
+			// the user closed is worse than not suspending it.
+			const retained = this.retainedWorkbenches.getByUri(
+				URI.file(instance.worktreePath)
+			);
+			if (
+				this.getInstanceByPath(instance.worktreePath) ||
+				(retained && retained.desiredState !== 'loaded')
+			) {
+				return;
+			}
 			this.hostedWorkspaces.addInstance({
 				instanceId: generateUuid(),
 				projectId: instance.projectId,
@@ -638,8 +664,17 @@ export class WebHucodeShellController extends Disposable
 			) {
 				return;
 			}
-			if (instance?.state === 'dormant') {
-				this.hostedWorkspaces.removeInstance(instance);
+			// The record and the instance are both re-read: a request that
+			// shared this handshake may have dismissed the one or left a
+			// fresh dormant placeholder as the other.
+			if (!this.retainedWorkbenches.getById(workbenchId)) {
+				return;
+			}
+			const dormant = this.getInstanceByPath(
+				URI.revive(record.folderUri).fsPath
+			);
+			if (dormant?.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(dormant);
 			}
 			this.retainedWorkbenches.update(workbenchId, {
 				desiredState: 'unloaded',
@@ -670,8 +705,16 @@ export class WebHucodeShellController extends Disposable
 			) {
 				return;
 			}
-			if (instance?.state === 'dormant') {
-				this.hostedWorkspaces.removeInstance(instance);
+			// Re-read both: a request that shared this handshake may have
+			// dismissed the record or left a fresh dormant placeholder.
+			if (!this.retainedWorkbenches.getById(workbenchId)) {
+				return;
+			}
+			const dormant = this.getInstanceByPath(
+				URI.revive(record.folderUri).fsPath
+			);
+			if (dormant?.state === 'dormant') {
+				this.hostedWorkspaces.removeInstance(dormant);
 			}
 			this.retainedWorkbenches.dismiss(workbenchId);
 			this.emitState();
@@ -815,7 +858,12 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 		await this.deferStateEmission(async () => {
-			if (await this.unloadAndRemoveInstance(instance)) {
+			// Re-read the record: a request that shared this handshake may
+			// have dismissed it while the workbench was shutting down.
+			if (
+				await this.unloadAndRemoveInstance(instance) &&
+				this.retainedWorkbenches.getById(retained.id)
+			) {
 				this.retainedWorkbenches.update(retained.id, {
 					desiredState: 'unloaded',
 				});
@@ -1292,7 +1340,30 @@ export class WebHucodeShellController extends Disposable
 		this.emitState();
 	}
 
-	private async unloadAndRemoveInstance(
+	/**
+	 * Unloads a hosted workbench and removes it once removal is certain.
+	 *
+	 * Concurrent requests for the same workbench share one handshake. The
+	 * commit sits between the shell's checks and the removal, so without
+	 * sharing two callers both pass the checks and both remove, and the
+	 * workbench is asked to shut down twice.
+	 */
+	private unloadAndRemoveInstance(
+		instance: IHostedIframeInstance
+	): Promise<boolean> {
+		const pending = instance.pendingUnload;
+		if (pending) {
+			return pending;
+		}
+
+		const unload = this.runUnloadHandshake(instance).finally(() => {
+			instance.pendingUnload = undefined;
+		});
+		instance.pendingUnload = unload;
+		return unload;
+	}
+
+	private async runUnloadHandshake(
 		instance: IHostedIframeInstance
 	): Promise<boolean> {
 		const lifecycleGeneration = instance.lifecycleGeneration;
@@ -1300,9 +1371,18 @@ export class WebHucodeShellController extends Disposable
 		// cannot hold unsaved state and is not listening yet, and a reloading
 		// one is already running its own beforeunload handling, where a
 		// handshake would only hang until the unload timeout.
-		const handshake = isHostedWorkspaceAvailable(instance) &&
-			!isHostedWorkspacePendingReady(instance);
-		if (handshake && await this.prepareUnload(instance) !== 'ready') {
+		//
+		// Both phases address the connection captured here. A workbench that
+		// connects part-way through would be asked to commit an unload it
+		// never prepared, and would rightly refuse.
+		const workbench = isHostedWorkspaceAvailable(instance) &&
+			!isHostedWorkspacePendingReady(instance)
+			? instance.connection?.workbench
+			: undefined;
+		if (
+			workbench &&
+			await this.prepareUnload(instance, workbench) !== 'ready'
+		) {
 			return false;
 		}
 		if (
@@ -1312,8 +1392,11 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 		// The workbench shuts down only now that its removal is decided: a
-		// preparation abandoned above leaves it live and interactive.
-		if (handshake && await this.commitUnload(instance) !== 'ready') {
+		// preparation the shell abandons above leaves it running.
+		if (
+			workbench &&
+			await this.commitUnload(instance, workbench) === 'refused'
+		) {
 			return false;
 		}
 
@@ -1322,18 +1405,16 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	/**
-	 * Asks a hosted workbench to prepare for unload. Preparation collects the
-	 * workbench's veto and changes nothing, so the shell can still abandon
-	 * the unload afterwards.
+	 * Asks a hosted workbench to prepare for unload. Preparation leaves the
+	 * lifecycle service untouched, so the shell can still abandon the unload
+	 * afterwards, and it fails closed: a veto or a silent workbench keeps the
+	 * workbench. Its shutdown listeners do run, and not all of them are
+	 * idempotent.
 	 */
 	private async prepareUnload(
-		instance: IHostedIframeInstance
+		instance: IHostedIframeInstance,
+		workbench: IHucodeOmniWebWorkbenchClient
 	): Promise<HostedUnloadResult> {
-		const workbench = instance.connection?.workbench;
-		if (!workbench) {
-			return 'ready';
-		}
-
 		const result = await this.raceTimeout(
 			workbench.prepareUnload().then(
 				ready => ready ? 'ready' as const : 'vetoed' as const,
@@ -1341,22 +1422,35 @@ export class WebHucodeShellController extends Disposable
 			),
 			WebHucodeShellController.PREPARE_UNLOAD_TIMEOUT_MS
 		);
-		return result === REQUEST_TIMEOUT ? 'prepare-timeout' : result;
+		if (result === REQUEST_TIMEOUT) {
+			this.logService.warn(
+				'[hucode] Hosted workbench did not answer the unload ' +
+				`preparation for ${instance.worktreePath}; keeping it.`
+			);
+			return 'prepare-timeout';
+		}
+		if (result === 'vetoed') {
+			this.logService.info(
+				'[hucode] Hosted workbench vetoed its unload for ' +
+				`${instance.worktreePath}.`
+			);
+		}
+		return result;
 	}
 
 	/**
-	 * Commits a prepared unload. A workbench that never answers keeps its
-	 * iframe: the shell cannot tell a shut-down workbench from a stuck one,
-	 * and removing a live workbench is the more destructive guess.
+	 * Commits a prepared unload. This phase fails open: the request is
+	 * already in flight and irreversible, and preparation established that
+	 * the workbench had no objection, so a silent workbench is far more
+	 * likely to be shutting down than to be recoverable. Keeping its iframe
+	 * would leave the page holding a workbench that has already gone. An
+	 * answered refusal is different — the workbench is still running and
+	 * said so, so it stays.
 	 */
 	private async commitUnload(
-		instance: IHostedIframeInstance
+		instance: IHostedIframeInstance,
+		workbench: IHucodeOmniWebWorkbenchClient
 	): Promise<HostedUnloadResult> {
-		const workbench = instance.connection?.workbench;
-		if (!workbench) {
-			return 'ready';
-		}
-
 		const result = await this.raceTimeout(
 			workbench.commitUnload().then(
 				committed => committed ? 'ready' as const : 'refused' as const,
@@ -1364,7 +1458,14 @@ export class WebHucodeShellController extends Disposable
 			),
 			WebHucodeShellController.COMMIT_UNLOAD_TIMEOUT_MS
 		);
-		return result === REQUEST_TIMEOUT ? 'commit-timeout' : result;
+		if (result === REQUEST_TIMEOUT) {
+			this.logService.warn(
+				'[hucode] Hosted workbench did not confirm its unload commit ' +
+				`for ${instance.worktreePath}; removing it anyway.`
+			);
+			return 'commit-timeout';
+		}
+		return result;
 	}
 
 	private async openFilesInInstance(
@@ -1608,6 +1709,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IConfigurationService configurationService: IConfigurationService,
 		@IStorageService storageService: IStorageService,
 		@IFileService fileService: IFileService,
+		@ILogService logService: ILogService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -1626,7 +1728,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			) ?? 'active', createWebHucodeShellFolderAccess(
 				environmentService.remoteAuthority,
 				resource => fileService.stat(resource)
-			));
+			), logService);
 	}
 }
 

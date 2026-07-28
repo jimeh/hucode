@@ -10,8 +10,10 @@ had been reactivated, or its path no longer matched — left a workbench that
 looked live in the page but was dead and unresponsive.
 
 Unload is now the two-phase handshake the desktop shell already uses.
-Preparation asks the workbench for its veto and changes no lifecycle state, the
-shell re-checks that nothing superseded the request, and only then does the
-workbench commit to shutting down. A vetoed or abandoned unload leaves the
-workbench running and interactive, and a successful one shuts it down exactly
-once.
+Preparation asks the workbench for its veto without shutting it down, the shell
+re-checks that nothing superseded the request, and only then does the workbench
+commit. A vetoed or abandoned unload leaves the workbench running and usable —
+its shutdown listeners still run, as they always have on the browser's own
+unload path, and a few of those do not reset themselves — and a successful
+unload shuts the workbench down exactly once, however many requests raced for
+it.

@@ -41,8 +41,8 @@ export function supportsTwoPhaseShutdown(
  * The shell only knows whether a hosted workbench is really going away after
  * it has seen the veto answer and re-checked that nothing superseded the
  * request, so the handshake is two calls: {@link prepareUnload} answers the
- * question and leaves the workbench untouched, and {@link commitUnload}
- * performs the shutdown the shell has by then committed to.
+ * question without shutting anything down, and {@link commitUnload} performs
+ * the shutdown the shell has by then committed to.
  */
 export class HucodeHostedOmniWebUnloadCoordinator {
 
@@ -57,7 +57,13 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 	/**
 	 * Runs the veto-capable half of the handshake. Resolves false when a
 	 * shutdown listener vetoed or the attempt failed; either way the
-	 * workbench stays fully usable and the shell keeps it alive.
+	 * lifecycle service has not shut down and the shell keeps the workbench
+	 * alive.
+	 *
+	 * The shutdown listeners themselves do run, and some are not idempotent:
+	 * the web terminal service, for one, latches itself into a shutting-down
+	 * state that stops it persisting layout. An abandoned preparation leaves
+	 * a usable workbench, not an untouched one.
 	 */
 	async prepareUnload(): Promise<boolean> {
 		if (this.committed) {

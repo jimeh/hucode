@@ -534,12 +534,21 @@ human-facing guides rather than replacing them.
 - Hosted workbench unload is two-phase on web as well as desktop. Never use
   `ILifecycleService.shutdown()` as a preflight: `BrowserLifecycleService`
   collects every `onBeforeShutdown` veto and drops it, and unloads regardless.
-  The veto-capable half is `prepareShutdown()`, which changes no lifecycle
-  state, and `commitShutdown()` is the irreversible half; the hosted iframe
-  protocol exposes them as `prepareUnload`/`commitUnload` in
+  The veto-capable half is `prepareShutdown()`, which changes no
+  lifecycle-service state, and `commitShutdown()` is the irreversible half;
+  the hosted iframe protocol exposes them as `prepareUnload`/`commitUnload` in
   `src/vs/hucode/browser/hostedOmniWebUnload.ts`. Keep the shell's generation
   and path checks between the two, or an unload the shell aborts leaves a
-  workbench that looks live but is shut down.
+  workbench that looks live but is shut down. Preparation is not a no-op for
+  the workbench, though: `onBeforeShutdown` listeners run for real, and some
+  do not reset themselves when the shutdown is abandoned.
+- The two unload phases fail in opposite directions, deliberately. Preparation
+  fails closed — a veto or a silent workbench keeps the workbench, because it
+  is still running and there is state to protect. The commit fails open — the
+  request is irreversible and already in flight, so a silent workbench is
+  removed anyway; keeping its iframe would leave the page wrapping a workbench
+  that has already gone. An *answered* refusal is not a timeout and still
+  keeps the workbench.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child
