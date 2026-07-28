@@ -372,6 +372,40 @@ function runTestGitChild(
 suite('GitWorktreeService', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
+	test('bounds error message and stderr diagnostics with head and tail', () => {
+		const exact = 'x'.repeat(8 * 1024);
+		const exactError = new GitCommandError(exact, {
+			kind: 'exit',
+			operation: 'listRefs',
+			command: 'git for-each-ref',
+			stderr: exact,
+		});
+		assert.strictEqual(exactError.message, exact);
+		assert.strictEqual(exactError.stderr, exact);
+
+		const aboveLimit = (first: string, last: string): string =>
+			first +
+			'x'.repeat((8 * 1024) + 1 - first.length - last.length) +
+			last;
+		const message = aboveLimit('MESSAGE-FIRST', 'MESSAGE-LAST');
+		const stderr = aboveLimit('STDERR-FIRST', 'STDERR-LAST');
+		const boundedError = new GitCommandError(message, {
+			kind: 'exit',
+			operation: 'listRefs',
+			command: 'git for-each-ref',
+			stderr,
+		});
+
+		assert.strictEqual(Buffer.byteLength(boundedError.message), 8 * 1024);
+		assert.ok(boundedError.message.startsWith('MESSAGE-FIRST'));
+		assert.ok(boundedError.message.endsWith('MESSAGE-LAST'));
+		assert.ok(boundedError.message.includes('diagnostic output omitted'));
+		assert.strictEqual(Buffer.byteLength(boundedError.stderr), 8 * 1024);
+		assert.ok(boundedError.stderr.startsWith('STDERR-FIRST'));
+		assert.ok(boundedError.stderr.endsWith('STDERR-LAST'));
+		assert.ok(boundedError.stderr.includes('diagnostic output omitted'));
+	});
+
 	test('parseWorktreeList sorts main first and extracts branches', () => {
 		const worktrees = GitWorktreeService.parseWorktreeList(
 			'/repo',
@@ -699,9 +733,11 @@ suite('GitWorktreeService', () => {
 			SSH_ASKPASS_REQUIRE: 'force',
 		};
 		let spawnOptions: cp.SpawnOptions | undefined;
+		let spawnArgs: readonly string[] | undefined;
 		const { promise } = runTestGitChild(child, undefined, undefined, {
 			env: inheritedEnv,
-			spawn: (_command, _args, options) => {
+			spawn: (_command, args, options) => {
+				spawnArgs = args;
 				spawnOptions = options;
 				return child as unknown as cp.ChildProcess;
 			},
@@ -733,6 +769,12 @@ suite('GitWorktreeService', () => {
 			GCM_INTERACTIVE: 'Never',
 			SSH_ASKPASS_REQUIRE: 'never',
 		});
+		assert.deepStrictEqual(spawnArgs, [
+			'-c',
+			'core.askPass=',
+			'for-each-ref',
+			'refs/heads',
+		]);
 	});
 
 	test('spawn runner accepts the exact aggregate byte limit', async () => {
@@ -984,6 +1026,34 @@ suite('GitWorktreeService', () => {
 		assert.deepStrictEqual(child.killSignals, ['SIGKILL']);
 	});
 
+	test('pipe error rejects promptly and cleans up a live process', async () => {
+		const child = new TestGitChild();
+		const killCalls: [number, boolean][] = [];
+		const cause = new Error('stdout read failed');
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				killTree: async (pid, forceful) => {
+					killCalls.push([pid, forceful]);
+				},
+			}
+		);
+
+		child.stdout.emit('error', cause);
+
+		await assert.rejects(promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'spawn');
+			assert.strictEqual(error.cause, cause);
+			return true;
+		});
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
+		assert.deepStrictEqual(killCalls, [[1234, true]]);
+	});
+
 	test('emitted spawn error rejects promptly without process cleanup', async () => {
 		const child = new TestGitChild();
 		const timer = new TestGitTimer();
@@ -1038,6 +1108,10 @@ suite('GitWorktreeService', () => {
 		assert.doesNotThrow(() => {
 			child.emit('error', new Error('later spawn error'));
 		});
+		assert.doesNotThrow(() => {
+			child.stdout.emit('error', new Error('later stdout error'));
+			child.stderr.emit('error', new Error('later stderr error'));
+		});
 	});
 
 	test('synchronous spawn throw rejects without installing policy hooks', async () => {
@@ -1060,9 +1134,24 @@ suite('GitWorktreeService', () => {
 			assert.ok(error instanceof GitCommandError);
 			assert.strictEqual(error.kind, 'spawn');
 			assert.strictEqual(error.cause, cause);
+			assert.strictEqual(error.command, 'git for-each-ref refs/heads');
+			assert.strictEqual(error.message.includes('core.askPass'), false);
 			return true;
 		});
 		assert.strictEqual(timer.pendingCount, 0);
+	});
+
+	test('pipe error listeners remain through execution and leave on close', async () => {
+		const child = new TestGitChild();
+		const { promise } = runTestGitChild(child);
+
+		assert.strictEqual(child.stdout.listenerCount('error'), 1);
+		assert.strictEqual(child.stderr.listenerCount('error'), 1);
+		child.close();
+		await promise;
+
+		assert.strictEqual(child.stdout.listenerCount('error'), 0);
+		assert.strictEqual(child.stderr.listenerCount('error'), 0);
 	});
 
 	test('pre-spawn cancellation rejects without spawning', async () => {

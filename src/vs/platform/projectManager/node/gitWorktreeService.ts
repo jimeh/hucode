@@ -96,12 +96,12 @@ export class GitCommandError extends Error {
 		message: string,
 		options: GitCommandErrorOptions
 	) {
-		super(message);
+		super(boundGitDiagnostic(message));
 		this.name = 'GitCommandError';
 		this.kind = options.kind;
 		this.operation = options.operation;
 		this.command = options.command;
-		this.stderr = options.stderr;
+		this.stderr = boundGitDiagnostic(options.stderr);
 		this.code = options.code;
 		this.signal = options.signal;
 		this.timeoutMs = options.timeoutMs;
@@ -132,6 +132,9 @@ export interface GitProcessRunnerDependencies {
 const KIB = 1024;
 const MIB = KIB * KIB;
 const GIT_COMMAND_SUMMARY_LIMIT = 512;
+const GIT_DIAGNOSTIC_LIMIT_BYTES = 8 * KIB;
+const GIT_DIAGNOSTIC_OMISSION_MARKER =
+	'\n… diagnostic output omitted …\n';
 // Tree-kill is best-effort, so bound it before falling back to the root process.
 const GIT_PROCESS_CLEANUP_WATCHDOG_MS = 1_000;
 const GIT_POLICIES: Readonly<Record<GitOperation, GitCommandPolicy>> = {
@@ -609,7 +612,8 @@ export class GitWorktreeService {
 		const env = nonInteractiveGitEnvironment(runner.env);
 		let child: cp.ChildProcess;
 		try {
-			child = runner.spawn('git', args, {
+			// Git consults core.askPass after GIT_ASKPASS, so disable both.
+			child = runner.spawn('git', ['-c', 'core.askPass=', ...args], {
 				cwd,
 				env,
 				stdio: ['ignore', 'pipe', 'pipe'],
@@ -828,6 +832,25 @@ export class GitWorktreeService {
 				collect(chunk, stdout);
 			const onStderr = (chunk: Buffer | string): void =>
 				collect(chunk, stderr);
+			const onPipeError = (
+				pipe: 'stdout' | 'stderr',
+				cause: Error
+			): void => {
+				abort(new GitCommandError(
+					`${command} ${pipe} pipe failed: ${cause.message}`,
+					{
+						kind: 'spawn',
+						operation: policy.operation,
+						command,
+						stderr: Buffer.concat(stderr).toString('utf8'),
+						cause,
+					}
+				));
+			};
+			const onStdoutError = (cause: Error): void =>
+				onPipeError('stdout', cause);
+			const onStderrError = (cause: Error): void =>
+				onPipeError('stderr', cause);
 			const onError = (cause: Error): void => {
 				abort(new GitCommandError(
 					`${command} failed to start: ${cause.message}`,
@@ -848,6 +871,8 @@ export class GitWorktreeService {
 				signal: NodeJS.Signals | null
 			): void => {
 				clearPolicyHooks(false);
+				child.stdout?.removeListener('error', onStdoutError);
+				child.stderr?.removeListener('error', onStderrError);
 				child.removeListener('error', onError);
 				child.removeListener('close', onClose);
 
@@ -888,6 +913,8 @@ export class GitWorktreeService {
 				}
 			};
 
+			child.stdout?.on('error', onStdoutError);
+			child.stderr?.on('error', onStderrError);
 			child.stdout?.on('data', onStdout);
 			child.stderr?.on('data', onStderr);
 			child.on('error', onError);
@@ -984,6 +1011,62 @@ function nonInteractiveGitEnvironment(
 	env.GCM_INTERACTIVE = 'Never';
 	env.SSH_ASKPASS_REQUIRE = 'never';
 	return env;
+}
+
+function boundGitDiagnostic(value: string): string {
+	if (Buffer.byteLength(value) <= GIT_DIAGNOSTIC_LIMIT_BYTES) {
+		return value;
+	}
+
+	const markerBytes = Buffer.byteLength(GIT_DIAGNOSTIC_OMISSION_MARKER);
+	const contentBytes = GIT_DIAGNOSTIC_LIMIT_BYTES - markerBytes;
+	const headBytes = Math.ceil(contentBytes / 2);
+	const tailBytes = Math.floor(contentBytes / 2);
+	return takeUtf8Prefix(value, headBytes) +
+		GIT_DIAGNOSTIC_OMISSION_MARKER +
+		takeUtf8Suffix(value, tailBytes);
+}
+
+function takeUtf8Prefix(value: string, maxBytes: number): string {
+	let bytes = 0;
+	let end = 0;
+	for (const character of value) {
+		const characterBytes = Buffer.byteLength(character);
+		if (bytes + characterBytes > maxBytes) {
+			break;
+		}
+		bytes += characterBytes;
+		end += character.length;
+	}
+	return value.slice(0, end);
+}
+
+function takeUtf8Suffix(value: string, maxBytes: number): string {
+	let bytes = 0;
+	let start = value.length;
+	while (start > 0) {
+		let characterStart = start - 1;
+		const code = value.charCodeAt(characterStart);
+		if (
+			code >= 0xDC00 &&
+			code <= 0xDFFF &&
+			characterStart > 0
+		) {
+			const leadingCode = value.charCodeAt(characterStart - 1);
+			if (leadingCode >= 0xD800 && leadingCode <= 0xDBFF) {
+				characterStart--;
+			}
+		}
+		const characterBytes = Buffer.byteLength(
+			value.slice(characterStart, start)
+		);
+		if (bytes + characterBytes > maxBytes) {
+			break;
+		}
+		bytes += characterBytes;
+		start = characterStart;
+	}
+	return value.slice(start);
 }
 
 function summarizeGitCommand(args: readonly string[]): string {
