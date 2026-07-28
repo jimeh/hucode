@@ -67,6 +67,7 @@ interface HucodeWebProjectEventClient {
 export interface HucodeProjectStateFileSystem {
 	readFile(path: string): string;
 	renameSync(source: string, target: string): void;
+	exists(path: string): boolean;
 	mkdir(path: string): Promise<void>;
 	writeFile(path: string, data: string): Promise<void>;
 	rename(source: string, target: string): Promise<void>;
@@ -76,6 +77,7 @@ export interface HucodeProjectStateFileSystem {
 const defaultProjectStateFileSystem: HucodeProjectStateFileSystem = {
 	readFile: path => fs.readFileSync(path, 'utf8'),
 	renameSync: (source, target) => fs.renameSync(source, target),
+	exists: path => fs.existsSync(path),
 	mkdir: async path => {
 		await fs.promises.mkdir(path, { recursive: true });
 	},
@@ -90,7 +92,10 @@ const defaultProjectStateFileSystem: HucodeProjectStateFileSystem = {
 	},
 };
 
-class HucodeProjectFileStateService implements IStateService {
+/**
+ * File-backed state service for the serve-web project registry.
+ */
+export class HucodeProjectFileStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly storagePath: string;
@@ -98,13 +103,18 @@ class HucodeProjectFileStateService implements IStateService {
 	private state: StoredProjectManagerState | undefined;
 	private loaded = false;
 	private readonly writeQueue = new Queue<void>();
+	private stateVersion = 0;
+	private persistedVersion = 0;
+	private writeGeneration = 0;
+	private latestWriteGeneration = 0;
 	private latestWrite: Promise<void> = Promise.resolve();
-	private readonly writeFailures: unknown[] = [];
+	private dirtyWriteError: unknown;
 
 	constructor(
 		private readonly serverDataPath: string,
 		private readonly logService: ILogService,
 		private readonly fileSystem: HucodeProjectStateFileSystem,
+		private readonly acquireWriteLease?: () => IDisposable,
 	) {
 		this.storagePath = join(serverDataPath, 'hucode', 'projects.json');
 		this.tempStoragePath = `${this.storagePath}.tmp`;
@@ -157,13 +167,27 @@ class HucodeProjectFileStateService implements IStateService {
 
 	async close(): Promise<void> {
 		await this.writeQueue.whenIdle();
-		if (this.writeFailures.length) {
-			throw this.writeFailures.shift();
+		if (this.isDirty) {
+			throw this.dirtyWriteError ??
+			new Error('Project state has not been persisted.');
 		}
 	}
 
-	async flushCurrentWrite(): Promise<void> {
-		await this.latestWrite;
+	async retryDirtyState(): Promise<void> {
+		if (!this.isDirty) {
+			return;
+		}
+		await this.queueStateWrite(this.state, this.stateVersion);
+	}
+
+	get currentWriteGeneration(): number {
+		return this.writeGeneration;
+	}
+
+	async flushWritesAfter(generation: number): Promise<void> {
+		if (this.latestWriteGeneration > generation) {
+			await this.latestWrite;
+		}
 	}
 
 	private ensureLoaded(): void {
@@ -210,7 +234,12 @@ class HucodeProjectFileStateService implements IStateService {
 	 * later retry, so preserve its exact bytes before starting from empty state.
 	 */
 	private preserveCorruptStateFile(error: unknown): void {
-		const preservePath = `${this.storagePath}.corrupt`;
+		const basePreservePath = `${this.storagePath}.corrupt`;
+		let preservePath = basePreservePath;
+		let suffix = 0;
+		while (this.fileSystem.exists(preservePath)) {
+			preservePath = `${basePreservePath}.${++suffix}`;
+		}
 		this.logService.error(
 			'[Hucode Projects] Stored project state is corrupt; ' +
 			`continuing with empty state (${this.storagePath})`,
@@ -231,18 +260,50 @@ class HucodeProjectFileStateService implements IStateService {
 	}
 
 	private writeState(): void {
-		const state = this.state;
-		const write = this.writeQueue.queue(() => this.persistState(state));
+		this.stateVersion++;
+		void this.queueStateWrite(this.state, this.stateVersion);
+	}
+
+	private queueStateWrite(
+		state: StoredProjectManagerState | undefined,
+		stateVersion: number
+	): Promise<void> {
+		const lease = this.acquireWriteLease?.();
+		const generation = ++this.writeGeneration;
+		let write: Promise<void>;
+		try {
+			write = this.writeQueue.queue(async () => {
+				try {
+					await this.persistState(state);
+					this.persistedVersion = Math.max(
+						this.persistedVersion,
+						stateVersion
+					);
+					if (!this.isDirty) {
+						this.dirtyWriteError = undefined;
+					}
+				} catch (error) {
+					this.dirtyWriteError = error;
+					this.logService.error(error);
+					throw error;
+				} finally {
+					lease?.dispose();
+				}
+			});
+		} catch (error) {
+			lease?.dispose();
+			throw error;
+		}
+		this.latestWriteGeneration = generation;
 		this.latestWrite = write;
-		void write.then(
-			// Each write is a complete snapshot. A later success recovers any
-			// earlier failed state and must not leave close() permanently stale.
-			() => this.writeFailures.splice(0),
-			error => {
-				this.writeFailures.push(error);
-				this.logService.error(error);
-			}
-		);
+		// setItem cannot return the write promise. Attach a rejection handler
+		// immediately; flushWritesAfter and close still report the stored error.
+		void write.catch(() => { });
+		return write;
+	}
+
+	private get isDirty(): boolean {
+		return this.persistedVersion < this.stateVersion;
 	}
 
 	private async persistState(
@@ -261,6 +322,9 @@ class HucodeProjectFileStateService implements IStateService {
 				this.tempStoragePath,
 				this.storagePath
 			);
+			// Atomic rename protects process-level replacement semantics. Like
+			// upstream FileStorage, this does not fsync file and directory data
+			// against kernel or power loss.
 		} catch (error) {
 			try {
 				await this.fileSystem.remove(this.tempStoragePath);
@@ -388,6 +452,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		options: {
 			readonly enabled: boolean;
 			readonly fileSystem?: HucodeProjectStateFileSystem;
+			readonly acquireStateWriteLease?: () => IDisposable;
 		} = { enabled: true },
 	) {
 		super();
@@ -400,7 +465,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			new HucodeProjectFileStateService(
 				serverDataPath,
 				logService,
-				options.fileSystem ?? defaultProjectStateFileSystem
+				options.fileSystem ?? defaultProjectStateFileSystem,
+				options.acquireStateWriteLease
 			);
 		this.service = this._register(new ProjectManagerMainService(
 			this.stateService,
@@ -467,7 +533,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 			if (req.method === 'DELETE' && isSinglePathSegment(relativePath)) {
 				const projects = await this.runDurableMutation(async () => {
-					await service.removeProject(decodeURIComponent(relativePath));
+					const projectId = decodeURIComponent(relativePath);
+					if ((await service.getProjects()).some(
+						project => project.id === projectId
+					)) {
+						await service.removeProject(projectId);
+					}
 					return service.getProjects();
 				});
 				return this.writeProjects(res, 200, projects);
@@ -507,10 +578,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	/**
-	 * Waits for queued project state writes to reach disk. The owning server
-	 * uses synchronous disposal, so it cannot await this method during generic
-	 * disposal. HTTP mutations already await their own durable write before
-	 * success; explicit async shutdown and tests can use this final join.
+	 * Waits for queued project state writes. Production writes hold a server
+	 * lifetime consumer lease until they settle; this explicit join supports
+	 * diagnostics and tests rather than owning production shutdown.
 	 */
 	async flushState(): Promise<void> {
 		await this.stateService?.close();
@@ -701,8 +771,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	): Promise<T> {
 		let result: T | undefined;
 		await this.mutationQueue.queue(async () => {
+			await this.stateService?.retryDirtyState();
+			const writeGeneration =
+				this.stateService?.currentWriteGeneration ?? 0;
 			result = await mutation();
-			await this.stateService?.flushCurrentWrite();
+			await this.stateService?.flushWritesAfter(writeGeneration);
 		});
 		return result!;
 	}

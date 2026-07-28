@@ -15,9 +15,11 @@ import { toDisposable } from '../../../base/common/lifecycle.js';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
+import { PROJECT_MANAGER_STORAGE_KEY } from '../../../platform/projectManager/common/projectManager.js';
 import {
 	HUCODE_WEB_PROJECTS_API_PATH,
 	HucodeNodeProjectMetadataWatcher,
+	HucodeProjectFileStateService,
 	HucodeProjectStateFileSystem,
 	HucodeWebProjectManagerServer,
 	isHucodeWebProjectsApiPath,
@@ -386,6 +388,47 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 	});
 
+	test('does not overwrite an existing corrupt-state backup', async () => {
+		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		const oldCorruptState = '{ old corrupt state';
+		const newCorruptState = '{ new corrupt state';
+		await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+		await fs.writeFile(`${storagePath}.corrupt`, oldCorruptState);
+		await fs.writeFile(storagePath, newCorruptState);
+		const fileSystem = new TestProjectStateFileSystem();
+
+		const loaded = await handle<ProjectsResponseBody>(
+			createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			),
+			'GET',
+			HUCODE_WEB_PROJECTS_API_PATH
+		);
+		const newBackupPath = `${storagePath}.corrupt.1`;
+
+		assert.deepStrictEqual({
+			response: loaded,
+			oldBackup: await fs.readFile(`${storagePath}.corrupt`, 'utf8'),
+			newBackup: await pathExists(newBackupPath)
+				? await fs.readFile(newBackupPath, 'utf8')
+				: undefined,
+			primaryExists: await pathExists(storagePath),
+			existenceChecks: fileSystem.existenceChecks,
+		}, {
+			response: { statusCode: 200, body: { projects: [] } },
+			oldBackup: oldCorruptState,
+			newBackup: newCorruptState,
+			primaryExists: false,
+			existenceChecks: [
+				`${storagePath}.corrupt`,
+				`${storagePath}.corrupt.1`,
+			],
+		});
+	});
+
 	for (const code of ['EACCES', 'EBUSY', 'EMFILE']) {
 		test(`keeps ${code} project state degraded until a retry loads`, async () => {
 			const storagePath = join(serverDataPath, 'hucode', 'projects.json');
@@ -563,6 +606,111 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 	}
 
+	test('retries dirty state before an idempotent pinned mutation', async () => {
+		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		const fileSystem = new TestProjectStateFileSystem();
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			fileSystem
+		);
+		const added = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const pinnedPath = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${added.body.project.id}/pinned`;
+		fileSystem.renameError = new Error('pinned write failed');
+
+		const failed = await handle<ErrorResponseBody>(
+			server,
+			'POST',
+			pinnedPath,
+			{ pinned: true }
+		);
+		await assert.rejects(server.flushState(), /pinned write failed/);
+		await assert.rejects(server.flushState(), /pinned write failed/);
+		fileSystem.renameError = undefined;
+
+		const retried = await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			pinnedPath,
+			{ pinned: true }
+		);
+		const stored = JSON.parse(
+			await fs.readFile(storagePath, 'utf8')
+		) as {
+			readonly projects: readonly { readonly pinned: boolean }[];
+		};
+
+		assert.deepStrictEqual({
+			failed,
+			retriedStatus: retried.statusCode,
+			storedPinned: stored.projects[0].pinned,
+		}, {
+			failed: {
+				statusCode: 500,
+				body: { error: 'pinned write failed' },
+			},
+			retriedStatus: 200,
+			storedPinned: true,
+		});
+		await server.flushState();
+		await server.flushState();
+	});
+
+	test('retries dirty deletion before idempotent route handling', async () => {
+		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		const fileSystem = new TestProjectStateFileSystem();
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			fileSystem
+		);
+		const added = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const deletePath = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			added.body.project.id;
+		fileSystem.renameError = new Error('delete write failed');
+
+		const failed = await handle<ErrorResponseBody>(
+			server,
+			'DELETE',
+			deletePath
+		);
+		fileSystem.renameError = undefined;
+		const retried = await handle<ProjectsResponseBody>(
+			server,
+			'DELETE',
+			deletePath
+		);
+		const stored = JSON.parse(
+			await fs.readFile(storagePath, 'utf8')
+		) as { readonly projects: readonly unknown[] };
+
+		assert.deepStrictEqual({
+			failed,
+			retried,
+			storedProjectCount: stored.projects.length,
+		}, {
+			failed: {
+				statusCode: 500,
+				body: { error: 'delete write failed' },
+			},
+			retried: { statusCode: 200, body: { projects: [] } },
+			storedProjectCount: 0,
+		});
+	});
+
 	test('flush waits for an in-flight write and propagates its failure', async () => {
 		const writeStarted = new DeferredPromise<void>();
 		const releaseWrite = new DeferredPromise<void>();
@@ -599,6 +747,126 @@ suite('HucodeWebProjectManagerServer', function () {
 			body: { error: 'gated write failed' },
 		});
 		await assert.rejects(flushPromise, /gated write failed/);
+	});
+
+	for (const outcome of ['success', 'failure'] as const) {
+		test(`holds a server lifetime lease through write ${outcome}`, async () => {
+			const writeStarted = new DeferredPromise<void>();
+			const releaseWrite = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				async writeFile(path, data) {
+					await writeStarted.complete();
+					await releaseWrite.p;
+					if (outcome === 'failure') {
+						throw new Error('leased write failed');
+					}
+					await fs.writeFile(path, data);
+				},
+			});
+			let activeLeases = 0;
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem,
+				() => {
+					activeLeases++;
+					return toDisposable(() => activeLeases--);
+				}
+			);
+
+			const responsePromise = handle<ProjectResponseBody | ErrorResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await writeStarted.p;
+			const flushPromise = server.flushState();
+			const duringWrite = {
+				activeLeases,
+				response: await raceTimeout(
+					responsePromise.then(() => true),
+					20
+				),
+				flush: await raceTimeout(
+					flushPromise.then(() => true, () => false),
+					20
+				),
+			};
+			await releaseWrite.complete();
+			const response = await responsePromise;
+			if (outcome === 'success') {
+				await assert.doesNotReject(flushPromise);
+			} else {
+				await assert.rejects(flushPromise, /leased write failed/);
+			}
+
+			assert.deepStrictEqual({
+				duringWrite,
+				responseStatus: response.statusCode,
+				activeLeases,
+			}, {
+				duringWrite: {
+					activeLeases: 1,
+					response: undefined,
+					flush: undefined,
+				},
+				responseStatus: outcome === 'success' ? 201 : 500,
+				activeLeases: 0,
+			});
+		});
+	}
+
+	test('a queued successful snapshot supersedes an earlier write failure', async () => {
+		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		const firstWriteStarted = new DeferredPromise<void>();
+		const releaseFirstWrite = new DeferredPromise<void>();
+		let renameCount = 0;
+		const fileSystem = new TestProjectStateFileSystem({
+			async rename(source, target) {
+				renameCount++;
+				if (renameCount === 1) {
+					await firstWriteStarted.complete();
+					await releaseFirstWrite.p;
+					throw new Error('first queued write failed');
+				}
+				await fs.rename(source, target);
+			},
+		});
+		const stateService = new HucodeProjectFileStateService(
+			serverDataPath,
+			new NullLogService(),
+			fileSystem
+		);
+		const firstState = JSON.parse(serializeStoredProjects([{
+			id: 'first',
+			label: 'first',
+			rootPath: projectPath,
+		}]));
+		const secondState = JSON.parse(serializeStoredProjects([{
+			id: 'second',
+			label: 'second',
+			rootPath: projectPath,
+		}]));
+
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, firstState);
+		await firstWriteStarted.p;
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, secondState);
+		const closePromise = stateService.close();
+		await releaseFirstWrite.complete();
+		await assert.doesNotReject(closePromise);
+		const stored = JSON.parse(
+			await fs.readFile(storagePath, 'utf8')
+		) as { readonly projects: readonly { readonly id: string }[] };
+
+		assert.deepStrictEqual({
+			renameCount,
+			storedIds: stored.projects.map(project => project.id),
+		}, {
+			renameCount: 2,
+			storedIds: ['second'],
+		});
 	});
 
 	test('returns bad request for oversized JSON bodies', async () => {
@@ -883,12 +1151,13 @@ function createServer(
 	serverDataPath: string,
 	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>,
 	servers: HucodeWebProjectManagerServer[],
-	fileSystem?: HucodeProjectStateFileSystem
+	fileSystem?: HucodeProjectStateFileSystem,
+	acquireStateWriteLease?: () => ReturnType<typeof toDisposable>
 ): HucodeWebProjectManagerServer {
 	const server = disposables.add(new HucodeWebProjectManagerServer(
 		serverDataPath,
 		new NullLogService(),
-		{ enabled: true, fileSystem }
+		{ enabled: true, fileSystem, acquireStateWriteLease }
 	));
 	servers.push(server);
 	return server;
@@ -896,12 +1165,14 @@ function createServer(
 
 interface TestProjectStateFileSystemHooks {
 	readonly writeFile?: (path: string, data: string) => Promise<void>;
+	readonly rename?: (source: string, target: string) => Promise<void>;
 }
 
 class TestProjectStateFileSystem implements HucodeProjectStateFileSystem {
 	readError: NodeJS.ErrnoException | undefined;
 	writeError: Error | undefined;
 	renameError: Error | undefined;
+	readonly existenceChecks: string[] = [];
 
 	constructor(
 		private readonly hooks: TestProjectStateFileSystemHooks = {}
@@ -916,6 +1187,11 @@ class TestProjectStateFileSystem implements HucodeProjectStateFileSystem {
 
 	renameSync(source: string, target: string): void {
 		nodeFs.renameSync(source, target);
+	}
+
+	exists(path: string): boolean {
+		this.existenceChecks.push(path);
+		return nodeFs.existsSync(path);
 	}
 
 	async mkdir(path: string): Promise<void> {
@@ -935,6 +1211,9 @@ class TestProjectStateFileSystem implements HucodeProjectStateFileSystem {
 	async rename(source: string, target: string): Promise<void> {
 		if (this.renameError) {
 			throw this.renameError;
+		}
+		if (this.hooks.rename) {
+			return this.hooks.rename(source, target);
 		}
 		await fs.rename(source, target);
 	}
