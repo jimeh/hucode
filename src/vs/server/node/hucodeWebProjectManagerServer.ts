@@ -19,8 +19,10 @@ import { ILogService } from '../../platform/log/common/log.js';
 import {
 	CreateWorktreeOptions,
 	PROJECT_MANAGER_STORAGE_KEY,
+	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
 	StoredProjectManagerState,
+	StoredProjectRecord,
 	WorktreeRefQueryOptions,
 } from '../../platform/projectManager/common/projectManager.js';
 import {
@@ -59,19 +61,53 @@ interface HucodeWebProjectEventClient {
 	readonly res: HucodeWebProjectManagerResponse;
 }
 
+/**
+ * Filesystem operations used by serve-web project-state persistence.
+ */
+export interface HucodeProjectStateFileSystem {
+	readFile(path: string): string;
+	renameSync(source: string, target: string): void;
+	mkdir(path: string): Promise<void>;
+	writeFile(path: string, data: string): Promise<void>;
+	rename(source: string, target: string): Promise<void>;
+	remove(path: string): Promise<void>;
+}
+
+const defaultProjectStateFileSystem: HucodeProjectStateFileSystem = {
+	readFile: path => fs.readFileSync(path, 'utf8'),
+	renameSync: (source, target) => fs.renameSync(source, target),
+	mkdir: async path => {
+		await fs.promises.mkdir(path, { recursive: true });
+	},
+	writeFile: async (path, data) => {
+		await fs.promises.writeFile(path, data);
+	},
+	rename: async (source, target) => {
+		await fs.promises.rename(source, target);
+	},
+	remove: async path => {
+		await fs.promises.rm(path, { force: true });
+	},
+};
+
 class HucodeProjectFileStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly storagePath: string;
+	private readonly tempStoragePath: string;
 	private state: StoredProjectManagerState | undefined;
 	private loaded = false;
 	private readonly writeQueue = new Queue<void>();
+	private latestWrite: Promise<void> = Promise.resolve();
+	private readonly writeFailures: unknown[] = [];
 
 	constructor(
 		private readonly serverDataPath: string,
 		private readonly logService: ILogService,
+		private readonly fileSystem: HucodeProjectStateFileSystem,
 	) {
 		this.storagePath = join(serverDataPath, 'hucode', 'projects.json');
+		this.tempStoragePath = `${this.storagePath}.tmp`;
 	}
 
 	getItem<T>(key: string, defaultValue: T): T;
@@ -93,6 +129,7 @@ class HucodeProjectFileStateService implements IStateService {
 			return;
 		}
 
+		this.ensureLoaded();
 		this.state = data as StoredProjectManagerState | undefined;
 		this.writeState();
 	}
@@ -113,12 +150,20 @@ class HucodeProjectFileStateService implements IStateService {
 			return;
 		}
 
+		this.ensureLoaded();
 		this.state = undefined;
 		this.writeState();
 	}
 
 	async close(): Promise<void> {
 		await this.writeQueue.whenIdle();
+		if (this.writeFailures.length) {
+			throw this.writeFailures.shift();
+		}
+	}
+
+	async flushCurrentWrite(): Promise<void> {
+		await this.latestWrite;
 	}
 
 	private ensureLoaded(): void {
@@ -126,35 +171,53 @@ class HucodeProjectFileStateService implements IStateService {
 			return;
 		}
 
+		let serializedState: string;
 		try {
-			this.state = JSON.parse(
-				fs.readFileSync(this.storagePath, 'utf8'),
-			) as StoredProjectManagerState;
+			serializedState = this.fileSystem.readFile(this.storagePath);
 		} catch (error) {
-			this.state = undefined;
-			if (
-				!(error instanceof Error) ||
-				(error as NodeJS.ErrnoException).code !== 'ENOENT'
-			) {
-				this.preserveUnreadableStateFile(error);
+			if (isFileSystemError(error, 'ENOENT')) {
+				this.state = undefined;
+				this.loaded = true;
+				return;
 			}
+
+			this.logService.error(
+				`[Hucode Projects] Failed to load ${this.storagePath}`,
+				error
+			);
+			throw new ProjectStateUnavailableError();
+		}
+
+		try {
+			const state: unknown = JSON.parse(serializedState);
+			if (!isStoredProjectManagerState(state)) {
+				throw new InvalidProjectStateError();
+			}
+			this.state = state;
+		} catch (error) {
+			if (!(error instanceof SyntaxError) &&
+				!(error instanceof InvalidProjectStateError)) {
+				throw error;
+			}
+			this.preserveCorruptStateFile(error);
+			this.state = undefined;
 		}
 		this.loaded = true;
 	}
 
 	/**
-	 * An unreadable state file must not permanently fail every Projects API
-	 * request, so fall back to empty state and keep the file for inspection.
+	 * A syntactically or structurally corrupt state file cannot be loaded on a
+	 * later retry, so preserve its exact bytes before starting from empty state.
 	 */
-	private preserveUnreadableStateFile(error: unknown): void {
+	private preserveCorruptStateFile(error: unknown): void {
 		const preservePath = `${this.storagePath}.corrupt`;
 		this.logService.error(
-			'[Hucode Projects] Failed to load stored projects; ' +
+			'[Hucode Projects] Stored project state is corrupt; ' +
 			`continuing with empty state (${this.storagePath})`,
 			error,
 		);
 		try {
-			fs.renameSync(this.storagePath, preservePath);
+			this.fileSystem.renameSync(this.storagePath, preservePath);
 			this.logService.info(
 				`[Hucode Projects] Preserved unreadable state as ${preservePath}`,
 			);
@@ -163,35 +226,52 @@ class HucodeProjectFileStateService implements IStateService {
 				`[Hucode Projects] Could not preserve ${this.storagePath}`,
 				renameError,
 			);
+			throw new ProjectStateUnavailableError();
 		}
 	}
 
 	private writeState(): void {
-		// IStateService writes are fire-and-forget; queue them so the HTTP
-		// request path never blocks on disk and writes stay ordered.
 		const state = this.state;
-		void this.writeQueue.queue(() => this.persistState(state));
+		const write = this.writeQueue.queue(() => this.persistState(state));
+		this.latestWrite = write;
+		void write.then(
+			// Each write is a complete snapshot. A later success recovers any
+			// earlier failed state and must not leave close() permanently stale.
+			() => this.writeFailures.splice(0),
+			error => {
+				this.writeFailures.push(error);
+				this.logService.error(error);
+			}
+		);
 	}
 
 	private async persistState(
 		state: StoredProjectManagerState | undefined
 	): Promise<void> {
+		await this.fileSystem.mkdir(join(this.serverDataPath, 'hucode'));
 		try {
-			await fs.promises.mkdir(
-				join(this.serverDataPath, 'hucode'),
-				{ recursive: true },
+			await this.fileSystem.writeFile(
+				this.tempStoragePath,
+				`${JSON.stringify(state ?? {
+					version: PROJECT_MANAGER_STORAGE_VERSION,
+					projects: [],
+				}, null, '\t')}\n`,
 			);
-			if (!state) {
-				await fs.promises.rm(this.storagePath, { force: true });
-				return;
-			}
-
-			await fs.promises.writeFile(
-				this.storagePath,
-				`${JSON.stringify(state, null, '\t')}\n`,
+			await this.fileSystem.rename(
+				this.tempStoragePath,
+				this.storagePath
 			);
 		} catch (error) {
-			this.logService.error(error);
+			try {
+				await this.fileSystem.remove(this.tempStoragePath);
+			} catch (cleanupError) {
+				this.logService.error(
+					`[Hucode Projects] Failed to remove ` +
+					`${this.tempStoragePath}`,
+					cleanupError
+				);
+			}
+			throw error;
 		}
 	}
 }
@@ -299,12 +379,16 @@ function nearestExistingAncestor(
 export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly service: ProjectManagerMainService | undefined;
 	private readonly stateService: HucodeProjectFileStateService | undefined;
+	private readonly mutationQueue = new Queue<void>();
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 
 	constructor(
 		serverDataPath: string,
 		logService: ILogService,
-		options: { readonly enabled: boolean } = { enabled: true },
+		options: {
+			readonly enabled: boolean;
+			readonly fileSystem?: HucodeProjectStateFileSystem;
+		} = { enabled: true },
 	) {
 		super();
 
@@ -313,7 +397,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 
 		this.stateService =
-			new HucodeProjectFileStateService(serverDataPath, logService);
+			new HucodeProjectFileStateService(
+				serverDataPath,
+				logService,
+				options.fileSystem ?? defaultProjectStateFileSystem
+			);
 		this.service = this._register(new ProjectManagerMainService(
 			this.stateService,
 			logService,
@@ -362,18 +450,27 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 			if (req.method === 'POST' && !relativePath) {
 				const body = await this.readJson(req);
-				const project = await service.addProject(
-					URI.file(requireString(body, 'rootPath')),
-				);
+				const result = await this.runDurableMutation(async () => {
+					const project = await service.addProject(
+						URI.file(requireString(body, 'rootPath')),
+					);
+					return {
+						project,
+						projects: await service.getProjects(),
+					};
+				});
 				return this.writeJson(res, 201, {
-					project,
-					projects: await service.getProjects(),
+					project: result.project,
+					projects: result.projects,
 				});
 			}
 
 			if (req.method === 'DELETE' && isSinglePathSegment(relativePath)) {
-				await service.removeProject(decodeURIComponent(relativePath));
-				return this.writeProjects(res, 200, await service.getProjects());
+				const projects = await this.runDurableMutation(async () => {
+					await service.removeProject(decodeURIComponent(relativePath));
+					return service.getProjects();
+				});
+				return this.writeProjects(res, 200, projects);
 			}
 
 			if (req.method === 'DELETE') {
@@ -381,7 +478,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			}
 
 			if (req.method === 'POST') {
-				return this.handlePost(
+				return await this.handlePost(
 					service,
 					res,
 					relativePath,
@@ -393,6 +490,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				error: `Unsupported method ${req.method}`,
 			});
 		} catch (error) {
+			if (error instanceof ProjectStateUnavailableError) {
+				return this.writeJson(res, 503, {
+					error: error.message,
+					code: error.code,
+				});
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			const status = error instanceof BadRequestError ? 400 : 500;
 			return this.writeJson(res, status, { error: message });
@@ -404,7 +507,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	/**
-	 * Waits for queued project state writes to reach disk.
+	 * Waits for queued project state writes to reach disk. The owning server
+	 * uses synchronous disposal, so it cannot await this method during generic
+	 * disposal. HTTP mutations already await their own durable write before
+	 * success; explicit async shutdown and tests can use this final join.
 	 */
 	async flushState(): Promise<void> {
 		await this.stateService?.close();
@@ -430,7 +536,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const command = parts.join('/');
 
 		if (relativePath === 'refresh') {
-			return this.writeProjects(res, 200, await service.refresh());
+			const projects = await this.runDurableMutation(
+				() => service.refresh()
+			);
+			return this.writeProjects(res, 200, projects);
 		}
 
 		if (!projectId) {
@@ -439,29 +548,53 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 		switch (command) {
 			case 'refresh':
-				return this.writeProjects(
-					res,
-					200,
-					await service.refresh(projectId),
-				);
+				{
+					const projects = await this.runDurableMutation(
+						() => service.refresh(projectId)
+					);
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'label':
-				await service.renameProject(
-					projectId,
-					requireString(body, 'label'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.renameProject(
+							projectId,
+							requireString(body, 'label'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'label/reset':
-				await service.resetProjectLabel(projectId);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.resetProjectLabel(projectId);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'pinned':
-				await service.setPinned(projectId, requireBoolean(body, 'pinned'));
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.setPinned(
+							projectId,
+							requireBoolean(body, 'pinned')
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'move':
-				await service.moveProject(
-					projectId,
-					optionalString(body, 'beforeProjectId'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.moveProject(
+							projectId,
+							optionalString(body, 'beforeProjectId'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/refs':
 				return this.writeJson(res, 200, {
 					refs: await service.getWorktreeRefs(
@@ -479,55 +612,99 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					),
 				});
 			case 'worktrees':
-				return this.writeJson(res, 201, {
-					worktree: await service.createWorktree(
-						projectId,
-						(optionalObject(body, 'options') ?? {}) as CreateWorktreeOptions,
-					),
-					projects: await service.getProjects(),
-				});
+				{
+					const result = await this.runDurableMutation(async () => ({
+						worktree: await service.createWorktree(
+							projectId,
+							readCreateWorktreeOptions(body),
+						),
+						projects: await service.getProjects(),
+					}));
+					return this.writeJson(res, 201, result);
+				}
 			case 'worktrees/remove':
-				await service.removeWorktree(
-					projectId,
-					requireString(body, 'worktreePath'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.removeWorktree(
+							projectId,
+							requireString(body, 'worktreePath'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/move':
-				await service.moveWorktree(
-					projectId,
-					requireString(body, 'worktreePath'),
-					optionalString(body, 'beforeWorktreePath'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.moveWorktree(
+							projectId,
+							requireString(body, 'worktreePath'),
+							optionalString(body, 'beforeWorktreePath'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/label':
-				await service.renameWorktree(
-					projectId,
-					requireString(body, 'worktreePath'),
-					requireString(body, 'label'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.renameWorktree(
+							projectId,
+							requireString(body, 'worktreePath'),
+							requireString(body, 'label'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/label/reset':
-				await service.resetWorktreeLabel(
-					projectId,
-					requireString(body, 'worktreePath'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.resetWorktreeLabel(
+							projectId,
+							requireString(body, 'worktreePath'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/pinned':
-				await service.setWorktreePinned(
-					projectId,
-					requireString(body, 'worktreePath'),
-					requireBoolean(body, 'pinned'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.setWorktreePinned(
+							projectId,
+							requireString(body, 'worktreePath'),
+							requireBoolean(body, 'pinned'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 			case 'worktrees/last-active':
-				await service.setLastActiveWorktree(
-					projectId,
-					requireString(body, 'worktreePath'),
-				);
-				return this.writeProjects(res, 200, await service.getProjects());
+				{
+					const projects = await this.runDurableMutation(async () => {
+						await service.setLastActiveWorktree(
+							projectId,
+							requireString(body, 'worktreePath'),
+						);
+						return service.getProjects();
+					});
+					return this.writeProjects(res, 200, projects);
+				}
 		}
 
 		return this.writeJson(res, 404, { error: 'Not found.' });
+	}
+
+	private async runDurableMutation<T>(
+		mutation: () => Promise<T>
+	): Promise<T> {
+		let result: T | undefined;
+		await this.mutationQueue.queue(async () => {
+			result = await mutation();
+			await this.stateService?.flushCurrentWrite();
+		});
+		return result!;
 	}
 
 	private async readJson(
@@ -620,6 +797,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 class BadRequestError extends Error { }
 
+class ProjectStateUnavailableError extends Error {
+	readonly code = 'PROJECT_STATE_UNAVAILABLE';
+
+	constructor() {
+		super('Project state is temporarily unavailable.');
+	}
+}
+
+class InvalidProjectStateError extends Error { }
+
 function requireString(body: unknown, key: string): string {
 	const value = readProperty(body, key);
 	if (typeof value !== 'string' || !value.trim()) {
@@ -646,10 +833,128 @@ function optionalObject(body: unknown, key: string): object | undefined {
 	return value && typeof value === 'object' ? value : undefined;
 }
 
+function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
+	const value = readProperty(body, 'options');
+	if (value === undefined) {
+		return {};
+	}
+	if (!isRecord(value)) {
+		throw new BadRequestError('Invalid options.');
+	}
+
+	const branchName = readOptionalWorktreeString(value, 'branchName');
+	const path = readOptionalWorktreeString(value, 'path');
+	const startPointValue = readProperty(value, 'startPoint');
+	let startPoint: string | undefined;
+	if (startPointValue !== undefined) {
+		if (typeof startPointValue !== 'string') {
+			throw new BadRequestError('Invalid options.startPoint.');
+		}
+		startPoint = startPointValue.trim();
+		if (!startPoint || startPoint.startsWith('-')) {
+			throw new BadRequestError('Invalid options.startPoint.');
+		}
+	}
+
+	const detachedValue = readProperty(value, 'detached');
+	if (detachedValue !== undefined && typeof detachedValue !== 'boolean') {
+		throw new BadRequestError('Invalid options.detached.');
+	}
+
+	return {
+		...(branchName !== undefined ? { branchName } : {}),
+		...(startPoint !== undefined ? { startPoint } : {}),
+		...(detachedValue !== undefined ? { detached: detachedValue } : {}),
+		...(path !== undefined ? { path } : {}),
+	};
+}
+
+function readOptionalWorktreeString(
+	options: Record<string, unknown>,
+	key: 'branchName' | 'path'
+): string | undefined {
+	const value = readProperty(options, key);
+	if (value === undefined) {
+		return undefined;
+	}
+	if (typeof value !== 'string') {
+		throw new BadRequestError(`Invalid options.${key}.`);
+	}
+	return value;
+}
+
 function readProperty(body: unknown, key: string): unknown {
 	return body && typeof body === 'object'
 		? (body as Record<string, unknown>)[key]
 		: undefined;
+}
+
+function isStoredProjectManagerState(
+	value: unknown
+): value is StoredProjectManagerState {
+	if (!isRecord(value) ||
+		value.version !== PROJECT_MANAGER_STORAGE_VERSION ||
+		!Array.isArray(value.projects)) {
+		return false;
+	}
+	return value.projects.every(isStoredProjectRecord);
+}
+
+function isStoredProjectRecord(value: unknown): value is StoredProjectRecord {
+	if (!isRecord(value) ||
+		typeof value.id !== 'string' ||
+		typeof value.label !== 'string' ||
+		typeof value.rootPath !== 'string' ||
+		typeof value.pinned !== 'boolean' ||
+		!isFiniteNumber(value.order)) {
+		return false;
+	}
+
+	return isOptionalString(value.lastActiveWorktreePath) &&
+		isOptionalStringArray(value.worktreeOrder) &&
+		isOptionalStringArray(value.pinnedWorktreePaths) &&
+		isOptionalArray(value.worktreeLabels, item =>
+			isRecord(item) &&
+			typeof item.path === 'string' &&
+			typeof item.label === 'string'
+		) &&
+		isOptionalArray(value.worktreeVisits, item =>
+			isRecord(item) &&
+			typeof item.path === 'string' &&
+			isFiniteNumber(item.lastVisitedAt)
+		);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+	return value === undefined || typeof value === 'string';
+}
+
+function isOptionalStringArray(
+	value: unknown
+): value is readonly string[] | undefined {
+	return value === undefined ||
+		(Array.isArray(value) && value.every(item => typeof item === 'string'));
+}
+
+function isOptionalArray(
+	value: unknown,
+	guard: (item: unknown) => boolean
+): boolean {
+	return value === undefined ||
+		(Array.isArray(value) && value.every(guard));
+}
+
+function isFileSystemError(error: unknown, code: string): boolean {
+	return error instanceof Error &&
+		(error as NodeJS.ErrnoException).code === code;
 }
 
 function isSinglePathSegment(path: string): boolean {
