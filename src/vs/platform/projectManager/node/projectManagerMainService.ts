@@ -65,6 +65,7 @@ const PROJECT_REFRESH_RETRY_DELAYS_MS = [
 
 interface ProjectRefreshOwner {
 	readonly source: CancellationTokenSource;
+	initialAttempt?: Promise<boolean>;
 }
 
 /**
@@ -151,6 +152,8 @@ export class ProjectManagerMainService extends Disposable
 		new Map<string, ProjectWorktreeState>();
 	private readonly projectRefreshOwners =
 		new Map<string, ProjectRefreshOwner>();
+	private readonly projectHydrations =
+		new Map<string, Promise<void>>();
 	private readonly projectWatchers =
 		this._register(new DisposableMap<string>());
 	private readonly autoRefreshDelayers =
@@ -183,6 +186,7 @@ export class ProjectManagerMainService extends Disposable
 				owner.source.dispose(true);
 			}
 			this.projectRefreshOwners.clear();
+			this.projectHydrations.clear();
 		}));
 	}
 
@@ -251,8 +255,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.refreshProject(project);
+		const worktrees = await this.getProjectWorktrees(project);
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -290,8 +293,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.refreshProject(project);
+		const worktrees = await this.getProjectWorktrees(project);
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -346,8 +348,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.refreshProject(project);
+		const worktrees = await this.getProjectWorktrees(project);
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -385,6 +386,7 @@ export class ProjectManagerMainService extends Disposable
 		this.ensureStateLoaded();
 		this.requireProject(id);
 		this.storedProjects = this.storedProjects.filter(project => project.id !== id);
+		this.projectHydrations.delete(id);
 		this.cancelProjectRefresh(id);
 		this.projectWorktrees.delete(id);
 		this.projectWorktreeStates.delete(id);
@@ -439,8 +441,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<readonly WorktreeRefRecord[]> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.gitWorktreeService.listWorktrees(project.rootPath);
+		const worktrees = await this.getProjectWorktrees(project);
 
 		return this.gitWorktreeService.listRefs(
 			project.rootPath,
@@ -467,8 +468,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<WorktreeRecord> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const existingWorktrees = this.projectWorktrees.get(projectId) ??
-			await this.gitWorktreeService.listWorktrees(project.rootPath);
+		const existingWorktrees = await this.getProjectWorktrees(project);
 		const worktreePath = await this.gitWorktreeService.createWorktree(
 			project.rootPath,
 			options,
@@ -495,8 +495,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.gitWorktreeService.listWorktrees(project.rootPath);
+		const worktrees = await this.getProjectWorktrees(project);
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -520,8 +519,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.refreshProject(project);
+		const worktrees = await this.getProjectWorktrees(project);
 		const source = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -579,8 +577,7 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<void> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = this.projectWorktrees.get(projectId) ??
-			await this.refreshProject(project);
+		const worktrees = await this.getProjectWorktrees(project);
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
@@ -598,9 +595,16 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord
 	): Promise<readonly WorktreeRecord[]> {
 		const owner = this.replaceProjectRefreshOwner(project.id);
-		const succeeded = await this.tryRefreshProject(project, owner);
+		const initialAttempt = this.tryRefreshProject(project, owner);
+		owner.initialAttempt = initialAttempt;
+		const succeeded = await initialAttempt;
 		if (!succeeded && this.isCurrentRefreshOwner(project.id, owner)) {
-			void this.retryProjectRefresh(project, owner);
+			this.retryProjectRefresh(project, owner).then(undefined, error =>
+				this.logService.warn(
+					`[ProjectManagerMainService] Failed to retry refresh ` +
+					`${project.rootPath}: ${error}`
+				)
+			);
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
@@ -622,13 +626,29 @@ export class ProjectManagerMainService extends Disposable
 				: undefined;
 			commonGitDirPromise?.catch(() => undefined);
 
-			const stagedProject = this.cloneStoredProject(project);
-			const labeledWorktrees = this.applyWorktreeLabels(
-				stagedProject,
+			const discoveredWorktrees =
 				await this.gitWorktreeService.listWorktrees(
 					project.rootPath,
 					token
-				)
+				);
+			const watchers = await this.createProjectWatchers(
+				project,
+				commonGitDirPromise,
+				token
+			);
+			if (!this.isCurrentRefreshOwner(project.id, owner) ||
+				token.isCancellationRequested) {
+				watchers?.dispose();
+				return false;
+			}
+
+			// No await may occur between cloning the live metadata and committing
+			// the refreshed snapshot. User mutations made while Git or watcher
+			// discovery was pending must be incorporated rather than overwritten.
+			const stagedProject = this.cloneStoredProject(project);
+			const labeledWorktrees = this.applyWorktreeLabels(
+				stagedProject,
+				discoveredWorktrees
 			);
 			const orderedWorktrees = this.applyWorktreeOrder(
 				stagedProject,
@@ -658,25 +678,18 @@ export class ProjectManagerMainService extends Disposable
 				stagedProject.lastActiveWorktreePath = undefined;
 			}
 
-			const watchers = await this.createProjectWatchers(
-				project,
-				commonGitDirPromise,
-				token
-			);
-			if (!this.isCurrentRefreshOwner(project.id, owner) ||
-				token.isCancellationRequested) {
-				watchers?.dispose();
-				return false;
-			}
-
 			Object.assign(project, stagedProject);
 			this.projectWorktrees.set(project.id, worktrees);
 			this.projectWorktreeStates.set(project.id, 'current');
-			if (watchers) {
+			if (watchers instanceof DisposableStore) {
 				this.projectWatchers.set(project.id, watchers);
 			}
-			this.finishProjectRefresh(project.id, owner);
-			return true;
+			if (watchers !== null) {
+				this.finishProjectRefresh(project.id, owner);
+				return true;
+			}
+
+			return false;
 		} catch (error) {
 			if (isCancellationError(error) ||
 				token.isCancellationRequested ||
@@ -702,7 +715,7 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord,
 		commonGitDirPromise: Promise<string> | undefined,
 		token: CancellationToken
-	): Promise<DisposableStore | undefined> {
+	): Promise<DisposableStore | null | undefined> {
 		if (!this.metadataWatcher) {
 			return undefined;
 		}
@@ -749,7 +762,7 @@ export class ProjectManagerMainService extends Disposable
 				`[ProjectManagerMainService] Failed to watch ` +
 				`${project.rootPath}: ${error}`
 			);
-			return undefined;
+			return null;
 		}
 	}
 
@@ -1054,6 +1067,56 @@ export class ProjectManagerMainService extends Disposable
 		pruneStoredWorktreeVisits(project, worktrees, isLinux);
 	}
 
+	private async getProjectWorktrees(
+		project: StoredProjectRecord
+	): Promise<readonly WorktreeRecord[]> {
+		const worktrees = this.projectWorktrees.get(project.id);
+		if (worktrees) {
+			return worktrees;
+		}
+		if (!this.projectWorktreeStates.has(project.id)) {
+			await this.hydrateProjectWorktrees(project);
+		}
+
+		return this.projectWorktrees.get(project.id) ?? [];
+	}
+
+	private hydrateProjectWorktrees(
+		project: StoredProjectRecord
+	): Promise<void> {
+		const existing = this.projectHydrations.get(project.id);
+		if (existing) {
+			return existing;
+		}
+		if (this.projectWorktreeStates.has(project.id)) {
+			return Promise.resolve();
+		}
+
+		const hydration = this.runProjectHydration(project)
+			.finally(() => {
+				if (this.projectHydrations.get(project.id) === hydration) {
+					this.projectHydrations.delete(project.id);
+				}
+			});
+		this.projectHydrations.set(project.id, hydration);
+		return hydration;
+	}
+
+	private async runProjectHydration(
+		project: StoredProjectRecord
+	): Promise<void> {
+		await this.refreshProject(project);
+		while (!this.projectWorktreeStates.has(project.id)) {
+			const currentAttempt = this.projectRefreshOwners.get(project.id)
+				?.initialAttempt;
+			if (!currentAttempt) {
+				return;
+			}
+
+			await currentAttempt;
+		}
+	}
+
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
 		const missing = this.storedProjects.filter(
 			project => !this.projectWorktreeStates.has(project.id)
@@ -1065,7 +1128,9 @@ export class ProjectManagerMainService extends Disposable
 		// Projects are independent (per-project-keyed state), so refresh them
 		// concurrently: the first getProjects() after start otherwise pays each
 		// project's git subprocesses in series.
-		await Promise.all(missing.map(project => this.refreshProject(project)));
+		await Promise.all(missing.map(project =>
+			this.hydrateProjectWorktrees(project)
+		));
 		this.saveState();
 	}
 }

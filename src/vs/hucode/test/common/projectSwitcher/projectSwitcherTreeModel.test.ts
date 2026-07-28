@@ -337,6 +337,41 @@ suite('ProjectSwitcherTreeModel', () => {
 		}
 	});
 
+	test('keeps hosted workbenches under unavailable Omni projects', () => {
+		const hostedPath = '/repos/unavailable.worktrees/hosted';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'unavailable',
+				worktreeState: 'unavailable',
+				worktrees: [],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState({
+				instances: [{
+					instanceId: 'hosted-instance',
+					projectId: 'unavailable',
+					worktreePath: hostedPath,
+					state: 'loaded',
+					visible: false,
+					focused: false,
+				}],
+			}),
+		});
+
+		const project = flatten(model.roots).find(root =>
+			isProjectItem(root.element)
+		);
+		assert.ok(project);
+		assert.strictEqual(project.collapsible, true);
+		assert.strictEqual(project.children?.length, 1);
+		const hosted = getWorktree(model.roots, hostedPath);
+		assert.strictEqual(hosted.hostedWorkbenchInstanceId, 'hosted-instance');
+		assert.strictEqual(hosted.missingGitWorktree, true);
+		assert.strictEqual(hosted.contextValue, MISSING_WORKTREE_CONTEXT_VALUE);
+	});
+
 	test('marks active, loaded, loading, and unloaded worktree UI state', () => {
 		const active = '/repos/hucode.worktrees/active';
 		const loading = '/repos/hucode.worktrees/loading';

@@ -677,13 +677,13 @@ function toProjectElement(
 
 	return {
 		element: item,
-		collapsible: !unavailable,
+		collapsible: !unavailable || missingHostedInstances.length > 0,
 		collapsed: options.collapsedProjectIds.has(item.id) ||
 			options.collapsedProjectIds.has(project.id),
-		children: unavailable ? [] : [
-			...worktrees.map(worktree =>
+		children: [
+			...(unavailable ? [] : worktrees.map(worktree =>
 				toWorktreeElement(project, worktree, section, options, itemsById)
-			),
+			)),
 			...missingHostedInstances.map(instance =>
 				toMissingWorktreeElement(
 					project,
