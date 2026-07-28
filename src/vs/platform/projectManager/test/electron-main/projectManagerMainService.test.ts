@@ -2270,6 +2270,55 @@ suite('ProjectManagerMainService', () => {
 		assert.strictEqual(retryToken.isCancellationRequested, false);
 	});
 
+	test('failed stale publication is retried after storage recovers', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		const retry = new TestRetryDelay();
+		metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				retryDelay: retry.delay,
+			}
+		);
+		await service.addProject(URI.file('/repo'));
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('Git remains unavailable');
+		};
+
+		stateService.setItemError = new Error('state save failed');
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+		assert.deepStrictEqual(retry.delays, [1000, 2000]);
+		assert.strictEqual(events.length, 0);
+
+		stateService.setItemError = undefined;
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'stale');
+		assert.deepStrictEqual(
+			events[0][0].worktrees,
+			[createMainWorktree('/repo')]
+		);
+		assert.deepStrictEqual(retry.delays, [1000, 2000, 5000]);
+		assert.strictEqual(new Set(retry.tokens).size, 1);
+	});
+
 	test('retry delay rejection releases refresh ownership', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();

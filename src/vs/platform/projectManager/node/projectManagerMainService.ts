@@ -817,6 +817,7 @@ export class ProjectManagerMainService extends Disposable
 		project: StoredProjectRecord,
 		owner: ProjectRefreshOwner
 	): Promise<void> {
+		let publicationPending = false;
 		for (let retry = 0;
 			this.isCurrentRefreshOwner(project.id, owner);
 			retry++
@@ -847,12 +848,15 @@ export class ProjectManagerMainService extends Disposable
 			if (
 				result.kind === 'complete' ||
 				result.kind === 'committed-retry' ||
-				result.kind === 'failed' && result.stateChanged
+				result.kind === 'failed' && result.stateChanged ||
+				publicationPending
 			) {
 				try {
 					this.saveState();
 					this.emitChange();
+					publicationPending = false;
 				} catch (error) {
+					publicationPending = true;
 					this.logService.warn(
 						`[ProjectManagerMainService] Failed to publish retry ` +
 						`refresh ${project.rootPath}: ${error}`
