@@ -12,6 +12,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/openProjectSwitcherTarget.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherCollapse.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts",
+		"src/vs/hucode/test/browser/projectSwitcher/removeProject.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",
 		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
