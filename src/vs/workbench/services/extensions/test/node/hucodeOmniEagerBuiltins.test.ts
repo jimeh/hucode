@@ -26,6 +26,13 @@ import {
  * fail. Add it to `intentionallyEagerInShell` with a note, rather than
  * loosening the check.
  */
+/** Only the fields this suite reads out of an extension manifest. */
+interface BuiltinManifest {
+	name?: string;
+	publisher?: string;
+	activationEvents?: string[];
+}
+
 suite('HucodeOmniEagerBuiltins', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -120,8 +127,10 @@ suite('HucodeOmniEagerBuiltins', () => {
 			.map(({ id }) => id);
 	}
 
-	function activatesEagerly(manifest: any): boolean {
-		const events: unknown = manifest.activationEvents;
+	function activatesEagerly(manifest: BuiltinManifest): boolean {
+		// The declared shape is a claim about parsed JSON rather than a check,
+		// so the array guard stays.
+		const events = manifest.activationEvents;
 		return Array.isArray(events)
 			&& events.some(e => e === '*' || e === 'onStartupFinished');
 	}
@@ -136,12 +145,14 @@ suite('HucodeOmniEagerBuiltins', () => {
 			.filter((name: string | undefined): name is string => !!name);
 	}
 
-	function builtinManifests(): { id: string; manifest: any }[] {
+	function builtinManifests(): { id: string; manifest: BuiltinManifest }[] {
 		return manifestsIn(path.join(repositoryRoot(), 'extensions'));
 	}
 
-	function manifestsIn(extensionsDir: string): { id: string; manifest: any }[] {
-		const result: { id: string; manifest: any }[] = [];
+	function manifestsIn(
+		extensionsDir: string
+	): { id: string; manifest: BuiltinManifest }[] {
+		const result: { id: string; manifest: BuiltinManifest }[] = [];
 
 		for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
 			if (!entry.isDirectory()) {
@@ -153,7 +164,9 @@ suite('HucodeOmniEagerBuiltins', () => {
 				continue;
 			}
 
-			const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+			const manifest: BuiltinManifest = JSON.parse(
+				fs.readFileSync(manifestPath, 'utf8')
+			);
 			if (!manifest.name) {
 				continue;
 			}
