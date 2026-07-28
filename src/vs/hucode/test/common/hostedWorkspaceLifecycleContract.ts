@@ -67,6 +67,7 @@ export interface IHostedWorkspaceConcurrentShutdownResult {
 	readonly secondCallResolvedBeforeRelease: boolean;
 	readonly phasesByPath: Readonly<Record<string, readonly string[]>>;
 	readonly shutdownState: IHostedWorkspaceContractState;
+	readonly ignoredVetoWarnings?: readonly string[];
 	readonly nativeDestructionBeforeFinalHandshake?: readonly number[];
 	readonly nativeDestructionOrder?: readonly string[];
 	readonly persistenceSavesDuringIncompleteShutdown?: number;
@@ -215,6 +216,10 @@ export function registerHostedWorkspaceLifecycleContract(
 						result.nativeDestructionBeforeFinalHandshake,
 						[]
 					);
+					assert.deepStrictEqual(result.ignoredVetoWarnings, [
+						'[HucodeShellMainService] Ignoring hosted workspace ' +
+						'unload veto during Omni shutdown for bravo.'
+					]);
 					assert.deepStrictEqual(
 						result.nativeDestructionOrder,
 						['alpha', 'bravo', 'charlie']

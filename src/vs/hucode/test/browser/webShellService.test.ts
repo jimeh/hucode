@@ -1243,6 +1243,99 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('zero-survivor task failure leaves frozen shutdown retryable',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/shutdown-zero-survivor-throw').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(
+				browser,
+				surface,
+				instanceId
+			).workbench;
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				instanceId,
+				'active'
+			);
+			const preparationStarted = new DeferredPromise<void>();
+			const releasePreparation = new DeferredPromise<boolean>();
+			child.onPrepareUnload = () => {
+				if (!preparationStarted.isSettled) {
+					void preparationStarted.complete();
+				}
+			};
+			child.prepareUnloadResult = releasePreparation.p;
+			const frozenState = structuredClone(persistence.state);
+			const frozenSaveCalls = persistence.saveCalls;
+			const internals = service as unknown as {
+				readonly hostedWorkspaces: {
+					addInstance(instance: unknown): void;
+					readonly instancesById: Map<string, {
+						readonly pendingUnloadDisposition?: string;
+					}>;
+				};
+			};
+			const addInstance =
+				internals.hostedWorkspaces.addInstance.bind(
+					internals.hostedWorkspaces
+				);
+
+			const shutdown = service.shutdownWindowWorkspaces(
+				browser.windowId,
+				1
+			);
+			await preparationStarted.p;
+			const suspend = service.suspendWorkspace(
+				browser.windowId,
+				instanceId
+			);
+			await waitFor(
+				() => internals.hostedWorkspaces.instancesById.get(instanceId)
+					?.pendingUnloadDisposition === 'suspend',
+				'expected suspend to join the shutdown handshake'
+			);
+			internals.hostedWorkspaces.addInstance = () => {
+				throw new Error('dormant replacement failed');
+			};
+			const shutdownRejected = assert.rejects(
+				shutdown,
+				/dormant replacement failed/
+			);
+			const suspendRejected = assert.rejects(
+				suspend,
+				/dormant replacement failed/
+			);
+			try {
+				await releasePreparation.complete(true);
+				await Promise.all([shutdownRejected, suspendRejected]);
+			} finally {
+				internals.hostedWorkspaces.addInstance = addInstance;
+			}
+
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId))
+					.instances.length,
+				0
+			);
+			assert.strictEqual(persistence.saveCalls, frozenSaveCalls);
+			assert.deepStrictEqual(persistence.state, frozenState);
+
+			await service.shutdownWindowWorkspaces(browser.windowId, 1);
+			assert.strictEqual(persistence.saveCalls, frozenSaveCalls);
+			assert.deepStrictEqual(persistence.state, frozenState);
+		}
+	);
+
 	test('loads hosted iframes through the hosted workbench route', async () => {
 		const { service, surface, browser } = createService();
 

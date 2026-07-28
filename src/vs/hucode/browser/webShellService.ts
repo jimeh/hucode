@@ -1061,13 +1061,21 @@ export class WebHucodeShellController extends Disposable
 
 		const shutdown = this.runWindowWorkspaceShutdown();
 		this.shutdownPromise = shutdown;
+		let failed = false;
 		try {
 			await shutdown;
+		} catch (error) {
+			failed = true;
+			throw error;
 		} finally {
 			// Complete teardown keeps the settled promise and frozen restore
-			// snapshot. Recovery makes a later request start a fresh batch,
-			// including when reconciliation or persistence failed.
-			if (!this.shuttingDown && this.shutdownPromise === shutdown) {
+			// snapshot. Recovery or a failed task makes a later request start
+			// a fresh batch, including when persistence failed or no live
+			// workbench survived the task failure.
+			if (
+				(failed || !this.shuttingDown) &&
+				this.shutdownPromise === shutdown
+			) {
 				this.shutdownPromise = undefined;
 			}
 		}

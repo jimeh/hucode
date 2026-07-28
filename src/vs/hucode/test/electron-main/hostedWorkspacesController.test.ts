@@ -31,6 +31,14 @@ import {
 	registerHostedWorkspaceLifecycleContract,
 } from '../common/hostedWorkspaceLifecycleContract.js';
 
+class RecordingLogService extends NullLogService {
+	readonly warnings: string[] = [];
+
+	override warn(message: string, ..._args: unknown[]): void {
+		this.warnings.push(message);
+	}
+}
+
 class TestWebContents extends EventEmitter {
 	readonly id: number;
 	private destroyed = false;
@@ -329,8 +337,10 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
 		readonly loadUrlPromises?: Promise<void>[];
+		readonly beforeUnloadTimeoutMs?: number;
 		readonly readyTimeoutMs?: number;
 		readonly restorePolicy?: 'active' | 'all' | 'none';
+		readonly willUnloadTimeoutMs?: number;
 		readonly windowId?: number;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
@@ -345,6 +355,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const untrustedProcessIds: number[] = [];
 		const trustedWebContentsIds: number[] = [];
 		const untrustedWebContentsIds: number[] = [];
+		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
 			ResidentHostedWorkspacesController['getState']
 		>[] = [];
@@ -380,7 +391,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			protocolMainService as unknown as IProtocolMainService,
 			{ useCodeCache: false } as unknown as IEnvironmentMainService,
 			{ getBackgroundColor: () => '#111111' } as IThemeMainService,
-			new NullLogService(),
+			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
 			window,
 			id => trustedProcessIds.push(id),
@@ -390,8 +401,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			state => stateChanges.push(state),
 			{
 				restorePolicy: options.restorePolicy,
-				beforeUnloadTimeoutMs: 100,
-				willUnloadTimeoutMs: 100,
+				beforeUnloadTimeoutMs:
+					options.beforeUnloadTimeoutMs ?? 100,
+				willUnloadTimeoutMs:
+					options.willUnloadTimeoutMs ?? 100,
 				readyTimeoutMs: options.readyTimeoutMs ?? 100,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
@@ -404,6 +417,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			browserViewMainService,
 			controller,
 			ipcMain,
+			logService,
 			protocolMainService,
 			stateChanges,
 			trustedProcessIds,
@@ -736,7 +750,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				assert.ok(releaseAlphaPreparation);
 				releaseAlphaPreparation();
 				await charlieCommitStarted.p;
-				await Promise.resolve();
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
 				const nativeDestructionBeforeFinalHandshake =
 					[...harness.browserViewMainService
 						.destroyedHostedWebContentsIds];
@@ -762,6 +776,9 @@ suite('ResidentHostedWorkspacesController', () => {
 					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
 					phasesByPath,
 					shutdownState: toContractState(harness.controller),
+					ignoredVetoWarnings: harness.logService.warnings.map(
+						warning => warning.replace(bravo, 'bravo')
+					),
 					nativeDestructionBeforeFinalHandshake,
 					nativeDestructionOrder,
 				};
@@ -2221,6 +2238,47 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 		assert.strictEqual(controller.getState().instances[0].state, 'unloaded');
 	});
+
+	test('shutdown times out silent renderer phases and destroys the view',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const {
+				browserViewMainService,
+				controller,
+				logService,
+				viewFactory,
+			} = createController({
+				beforeUnloadTimeoutMs: 5,
+				willUnloadTimeoutMs: 5,
+			});
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.sendHook = () => true;
+
+			await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+
+			assert.deepStrictEqual(
+				viewFactory.views[0].rawWebContents.sent.map(item =>
+					item.channel),
+				['vscode:onBeforeUnload', 'vscode:onWillUnload']
+			);
+			assert.deepStrictEqual(logService.warnings, [
+				'[HucodeShellMainService] Timed out waiting for hosted ' +
+				`workspace before-unload reply for ${alpha}.`,
+				'[HucodeShellMainService] Timed out waiting for hosted ' +
+				`workspace will-unload reply for ${alpha}.`,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1]
+			);
+			assert.strictEqual(
+				controller.getState().instances[0].state,
+				'unloaded'
+			);
+		}
+	);
 
 	test('shutdown preserves the resident workspace restore snapshot', async () => {
 		const alpha = createWorktree('alpha');
