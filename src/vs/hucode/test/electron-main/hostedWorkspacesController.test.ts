@@ -1050,6 +1050,31 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
 	});
 
+	test('promotes a live retained workbench and persists project ownership',
+		async () => {
+			const promotedPath = createWorktree('promoted-live');
+			const { controller, window } = createController();
+			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+
+			await controller.promoteRetainedWorkbenchProjectFolders([{
+				projectId: 'project',
+				folderUri: URI.file(promotedPath),
+			}]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, 'project');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project', worktreePath: promotedPath }]
+			);
+		}
+	);
+
 	test('adopts active, loaded, and dormant orphaned project workbenches',
 		async () => {
 			const alpha = createWorktree('alpha');

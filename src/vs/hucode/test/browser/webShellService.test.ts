@@ -2922,6 +2922,86 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('reconciles a project open after folder preflight against the latest catalog',
+		async () => {
+			const folderStatStarted = new DeferredPromise<void>();
+			const folderStat = new DeferredPromise<boolean>();
+			const persistence = new FakePersistence();
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{
+					exists: () => {
+						folderStatStarted.complete();
+						return folderStat.p;
+					},
+				}
+			);
+			const opening = service.openWorkspace(
+				browser.windowId,
+				'/tmp/project-removed-during-stat',
+				'removed-project'
+			);
+			await folderStatStarted.p;
+
+			await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+			folderStat.complete(true);
+			const state = await opening;
+
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.strictEqual(state.retainedWorkbenches?.length, 1);
+			assert.deepStrictEqual(persistence.state?.residentWorkspaces, []);
+			assert.deepStrictEqual(
+				persistence.state?.retainedWorkbenches.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				['/tmp/project-removed-during-stat']
+			);
+		}
+	);
+
+	test('focus does not restore ownership removed from the latest catalog',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'removed-project',
+					worktreePath: '/tmp/focus-removed-project',
+				}],
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none'
+			);
+			await service.getWindowState(browser.windowId);
+			await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+
+			assert.strictEqual(
+				await service.focusHostedWorkspaceByPath(
+					'/tmp/focus-removed-project',
+					'removed-project'
+				),
+				true
+			);
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.strictEqual(state.retainedWorkbenches?.length, 1);
+			assert.deepStrictEqual(persistence.state?.residentWorkspaces, []);
+		}
+	);
+
 	test('latest workspace open wins across different folder preflights',
 		async () => {
 			const alphaStat = new DeferredPromise<boolean>();
@@ -3416,6 +3496,94 @@ suite('WebHucodeShellService', () => {
 
 		assert.strictEqual(state.retainedWorkbenches?.length, 1);
 		assert.strictEqual(state.instances[0].projectId, undefined);
+	});
+
+	test('promotes a live retained workbench and persists project ownership',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/promoted-live').toJSON()
+			);
+			assert.ok(opened.activeInstanceId);
+			connectChild(browser, surface, opened.activeInstanceId);
+			await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+
+			const promoted = await service
+				.promoteRetainedWorkbenchProjectFolders(
+					browser.windowId,
+					[{
+						projectId: 'project',
+						folderUri: URI.file('/tmp/promoted-live').toJSON(),
+					}]
+				);
+
+			assert.strictEqual(promoted.instances[0].projectId, 'project');
+			assert.deepStrictEqual(promoted.retainedWorkbenches, []);
+			assert.deepStrictEqual(persistence.state?.retainedWorkbenches, []);
+			assert.deepStrictEqual(
+				persistence.state?.residentWorkspaces.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{
+					projectId: 'project',
+					worktreePath: '/tmp/promoted-live',
+				}]
+			);
+
+			const suspended = await service.suspendWorkspace(
+				browser.windowId,
+				opened.activeInstanceId
+			);
+			assert.strictEqual(suspended.instances[0].state, 'dormant');
+			assert.strictEqual(suspended.instances[0].projectId, 'project');
+			assert.deepStrictEqual(suspended.retainedWorkbenches, []);
+
+			const reopened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/promoted-live',
+				'project'
+			);
+			assert.strictEqual(reopened.instances[0].projectId, 'project');
+			assert.deepStrictEqual(reopened.retainedWorkbenches, []);
+		}
+	);
+
+	test('ignores retained promotion for another window', async () => {
+		const persistence = new FakePersistence();
+		const { service, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.retainAndOpenWorkbench(
+			browser.windowId,
+			URI.file('/tmp/wrong-window-promotion').toJSON()
+		);
+		const savesBeforePromotion = persistence.saveCalls;
+
+		const state = await service.promoteRetainedWorkbenchProjectFolders(
+			browser.windowId + 1,
+			[{
+				projectId: 'project',
+				folderUri: URI.file('/tmp/wrong-window-promotion').toJSON(),
+			}]
+		);
+
+		assert.strictEqual(state.instances[0].projectId, undefined);
+		assert.deepStrictEqual(
+			state.retainedWorkbenches?.map(record => record.id),
+			opened.retainedWorkbenches?.map(record => record.id)
+		);
+		assert.strictEqual(persistence.saveCalls, savesBeforePromotion);
 	});
 
 	test('adopts active, loaded, and dormant orphaned project workbenches',
