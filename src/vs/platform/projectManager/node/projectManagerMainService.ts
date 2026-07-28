@@ -73,7 +73,7 @@ type ProjectRefreshAttemptResult =
 	| { readonly kind: 'canceled' }
 	| { readonly kind: 'failed'; readonly stateChanged: boolean }
 	| { readonly kind: 'committed-retry'; readonly stateChanged: boolean }
-	| { readonly kind: 'complete' };
+	| { readonly kind: 'complete'; readonly stateChanged: boolean };
 
 /**
  * Watches targeted project metadata paths for worktree-affecting changes.
@@ -615,16 +615,7 @@ export class ProjectManagerMainService extends Disposable
 			completed.owner === owner &&
 			this.isCurrentRefreshOwner(project.id, completed.owner)
 		) {
-			this.retryProjectRefresh(project, completed.owner).then(
-				undefined,
-				error => {
-					this.logService.warn(
-						`[ProjectManagerMainService] Failed to retry refresh ` +
-						`${project.rootPath}: ${error}`
-					);
-					this.finishProjectRefresh(project.id, completed.owner);
-				}
-			);
+			this.startProjectRefreshRetry(project, completed.owner);
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
@@ -739,7 +730,7 @@ export class ProjectManagerMainService extends Disposable
 				if (!retainOwnerOnComplete) {
 					this.finishProjectRefresh(project.id, owner);
 				}
-				return { kind: 'complete' };
+				return { kind: 'complete', stateChanged };
 			}
 
 			return { kind: 'committed-retry', stateChanged };
@@ -823,10 +814,10 @@ export class ProjectManagerMainService extends Disposable
 
 	private async retryProjectRefresh(
 		project: StoredProjectRecord,
-		owner: ProjectRefreshOwner
+		owner: ProjectRefreshOwner,
+		publicationPending: boolean = false,
+		publicationOnly: boolean = false
 	): Promise<void> {
-		let publicationPending = false;
-		let publicationOnly = false;
 		for (let retry = 0;
 			this.isCurrentRefreshOwner(project.id, owner);
 			retry++
@@ -870,7 +861,7 @@ export class ProjectManagerMainService extends Disposable
 				return;
 			}
 			if (
-				result.kind === 'complete' ||
+				result.kind === 'complete' && result.stateChanged ||
 				result.kind === 'committed-retry' && result.stateChanged ||
 				result.kind === 'failed' && result.stateChanged ||
 				publicationPending
@@ -898,6 +889,29 @@ export class ProjectManagerMainService extends Disposable
 				return;
 			}
 		}
+	}
+
+	private startProjectRefreshRetry(
+		project: StoredProjectRecord,
+		owner: ProjectRefreshOwner,
+		publicationPending: boolean = false,
+		publicationOnly: boolean = false
+	): void {
+		this.retryProjectRefresh(
+			project,
+			owner,
+			publicationPending,
+			publicationOnly
+		).then(
+			undefined,
+			error => {
+				this.logService.warn(
+					`[ProjectManagerMainService] Failed to retry refresh ` +
+					`${project.rootPath}: ${error}`
+				);
+				this.finishProjectRefresh(project.id, owner);
+			}
+		);
 	}
 
 	private replaceProjectRefreshOwner(projectId: string): ProjectRefreshOwner {
@@ -1175,11 +1189,7 @@ export class ProjectManagerMainService extends Disposable
 			return worktrees;
 		}
 		if (this.needsProjectHydration(project.id)) {
-			const initiated = await this.hydrateProjectWorktrees(project);
-			if (initiated) {
-				this.saveState();
-				this.emitChange();
-			}
+			await this.hydrateProjectWorktrees(project);
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
@@ -1187,18 +1197,31 @@ export class ProjectManagerMainService extends Disposable
 
 	private async hydrateProjectWorktrees(
 		project: StoredProjectRecord
-	): Promise<boolean> {
+	): Promise<void> {
 		const existing = this.projectHydrations.get(project.id);
 		if (existing) {
 			await existing;
-			return false;
+			return;
 		}
 		if (!this.needsProjectHydration(project.id)) {
-			return false;
+			return;
 		}
 
-		const hydration = this.refreshProject(project)
-			.then(() => undefined)
+		const activeOwner = this.projectRefreshOwners.get(project.id);
+		const activeAttempt = activeOwner?.initialAttempt;
+		const owner = activeOwner && activeAttempt
+			? activeOwner
+			: this.replaceProjectRefreshOwner(project.id);
+		const ownsOwner = owner !== activeOwner;
+		const initialAttempt = activeAttempt ??
+			this.tryRefreshProject(project, owner, true);
+		owner.initialAttempt = initialAttempt;
+		const hydration = this.completeProjectHydration(
+			project,
+			owner,
+			initialAttempt,
+			ownsOwner
+		)
 			.finally(() => {
 				if (this.projectHydrations.get(project.id) === hydration) {
 					this.projectHydrations.delete(project.id);
@@ -1206,7 +1229,63 @@ export class ProjectManagerMainService extends Disposable
 			});
 		this.projectHydrations.set(project.id, hydration);
 		await hydration;
-		return true;
+	}
+
+	private async completeProjectHydration(
+		project: StoredProjectRecord,
+		owner: ProjectRefreshOwner,
+		initialAttempt: Promise<ProjectRefreshAttemptResult>,
+		ownsOwner: boolean
+	): Promise<void> {
+		const completed = await this.waitForRefreshAttempt(
+			project.id,
+			owner,
+			initialAttempt
+		);
+		if (!ownsOwner ||
+			completed.owner !== owner ||
+			completed.result.kind === 'canceled' ||
+			!this.isCurrentRefreshOwner(project.id, owner)) {
+			return;
+		}
+
+		const result = completed.result;
+		let publicationPending = false;
+		if (result.stateChanged) {
+			try {
+				this.saveState();
+				this.emitChange();
+			} catch (error) {
+				publicationPending = true;
+				this.logService.warn(
+					`[ProjectManagerMainService] Failed to publish hydration ` +
+					`${project.rootPath}: ${error}`
+				);
+			}
+		}
+		if (!this.isCurrentRefreshOwner(project.id, owner)) {
+			return;
+		}
+
+		if (result.kind === 'complete') {
+			if (publicationPending) {
+				this.startProjectRefreshRetry(
+					project,
+					owner,
+					true,
+					true
+				);
+			} else {
+				this.finishProjectRefresh(project.id, owner);
+			}
+			return;
+		}
+
+		this.startProjectRefreshRetry(
+			project,
+			owner,
+			publicationPending
+		);
 	}
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
@@ -1220,13 +1299,9 @@ export class ProjectManagerMainService extends Disposable
 		// Projects are independent (per-project-keyed state), so refresh them
 		// concurrently: the first getProjects() after start otherwise pays each
 		// project's git subprocesses in series.
-		const initiated = await Promise.all(missing.map(project =>
+		await Promise.all(missing.map(project =>
 			this.hydrateProjectWorktrees(project)
 		));
-		if (initiated.some(Boolean)) {
-			this.saveState();
-			this.emitChange();
-		}
 	}
 
 	private needsProjectHydration(projectId: string): boolean {
