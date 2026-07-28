@@ -351,6 +351,20 @@ suite('WebHucodeShellService', () => {
 		assert.ok(await predicate(), message);
 	}
 
+	/**
+	 * Gives MessagePort requests a bounded number of event-loop turns to
+	 * arrive without making elapsed wall-clock time part of the assertion.
+	 */
+	async function observeWithinTurns(
+		predicate: () => boolean,
+		turns: number = 20
+	): Promise<boolean> {
+		for (let attempt = 0; attempt < turns && !predicate(); attempt++) {
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+		}
+		return predicate();
+	}
+
 	async function waitForInstanceState(
 		service: WebHucodeShellController,
 		windowId: number,
@@ -720,6 +734,116 @@ suite('WebHucodeShellService', () => {
 						persistence.state?.residentWorkspaces.map(entry =>
 							basename(entry.worktreePath)
 						) ?? [],
+				};
+			},
+			async concurrentShutdown() {
+				const persistence = new FakePersistence();
+				const browser = new ManualTimeoutBrowserAdapter();
+				const harness = createService(browser, persistence);
+				const children = new Map<string, FakeHostedWorkbench>();
+				for (const [path, projectId] of [
+					['alpha', 'project-alpha'],
+					['bravo', 'project-bravo'],
+					['charlie', 'project-charlie'],
+				] as const) {
+					const opened = await harness.service.openWorkspace(
+						browser.windowId,
+						`/tmp/${path}`,
+						projectId
+					);
+					const instanceId = opened.activeInstanceId;
+					assert.ok(instanceId);
+					children.set(path, await readyChild(
+						harness,
+						instanceId
+					));
+				}
+
+				const alpha = children.get('alpha');
+				const bravo = children.get('bravo');
+				const charlie = children.get('charlie');
+				assert.ok(alpha);
+				assert.ok(bravo);
+				assert.ok(charlie);
+				const releaseAlphaPreparation =
+					new DeferredPromise<boolean>();
+				alpha.prepareUnloadResult = releaseAlphaPreparation.p;
+				bravo.prepareUnloadResult = false;
+				charlie.prepareUnloadResult = new Promise<boolean>(() => { });
+				const saveCallsBeforeShutdown = persistence.saveCalls;
+
+				const firstShutdown = harness.service.shutdownWindowWorkspaces(
+					browser.windowId,
+					1
+				);
+				const allPreparationsStarted = await observeWithinTurns(
+					() => [...children.values()].every(
+						child => child.prepareUnloadCalls === 1
+					)
+				);
+				const preparationsStartedBeforeRelease = allPreparationsStarted
+					? [...children.keys()]
+					: [...children.entries()]
+						.filter(([, child]) => child.prepareUnloadCalls === 1)
+						.map(([path]) => path);
+				let secondCallResolvedBeforeRelease = false;
+				const secondShutdown = harness.service.shutdownWindowWorkspaces(
+					browser.windowId,
+					1
+				).then(() => {
+					secondCallResolvedBeforeRelease = true;
+				});
+				await Promise.resolve();
+				const resolvedBeforeRelease = secondCallResolvedBeforeRelease;
+
+				await releaseAlphaPreparation.complete(true);
+				await waitFor(
+					() => alpha.commitUnloadCalls === 1,
+					'expected the successful workbench to enter commit'
+				);
+				browser.expireTimeouts(5000);
+				await Promise.all([firstShutdown, secondShutdown]);
+
+				const shutdownState = await toContractState(
+					harness.service,
+					browser
+				);
+				const phasesByPath = Object.fromEntries(
+					[...children].map(([path, child]) => [
+						path,
+						[...child.unloadPhases],
+					])
+				);
+				const persistedPaths = persistence.state?.residentWorkspaces
+					.map(entry => basename(entry.worktreePath));
+				const persistenceSavesDuringIncompleteShutdown =
+					persistence.saveCalls - saveCallsBeforeShutdown;
+
+				bravo.prepareUnloadResult = true;
+				charlie.prepareUnloadResult = true;
+				bravo.unloadPhases.length = 0;
+				charlie.unloadPhases.length = 0;
+				await harness.service.shutdownWindowWorkspaces(
+					browser.windowId,
+					1
+				);
+
+				return {
+					failurePolicy: 'retain',
+					preparationsStartedBeforeRelease,
+					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
+					phasesByPath,
+					shutdownState,
+					persistenceSavesDuringIncompleteShutdown,
+					persistedPaths,
+					retryPhasesByPath: {
+						bravo: [...bravo.unloadPhases],
+						charlie: [...charlie.unloadPhases],
+					},
+					retryState: await toContractState(
+						harness.service,
+						browser
+					),
 				};
 			},
 		};
@@ -3120,6 +3244,36 @@ class ZeroDelayBrowserAdapter extends FakeBrowserAdapter {
 		_timeout: number
 	): ReturnType<typeof setTimeout> {
 		return setTimeout(callback, 0);
+	}
+}
+
+class ManualTimeoutBrowserAdapter extends FakeBrowserAdapter {
+	private nextHandle = 0;
+	private readonly timeouts = new Map<
+		number,
+		{ readonly callback: () => void; readonly timeout: number }
+	>();
+
+	override setTimeout(
+		callback: () => void,
+		timeout: number
+	): ReturnType<typeof setTimeout> {
+		const handle = ++this.nextHandle;
+		this.timeouts.set(handle, { callback, timeout });
+		return handle as unknown as ReturnType<typeof setTimeout>;
+	}
+
+	override clearTimeout(handle: ReturnType<typeof setTimeout>): void {
+		this.timeouts.delete(handle as unknown as number);
+	}
+
+	expireTimeouts(timeout: number): void {
+		for (const [handle, pending] of [...this.timeouts]) {
+			if (pending.timeout === timeout) {
+				this.timeouts.delete(handle);
+				pending.callback();
+			}
+		}
 	}
 }
 

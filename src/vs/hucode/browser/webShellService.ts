@@ -410,6 +410,7 @@ export class WebHucodeShellController extends Disposable
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 	private readonly initialization: Promise<void>;
 	private shuttingDown = false;
+	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
@@ -1053,10 +1054,33 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
+		if (this.shutdownPromise) {
+			await this.shutdownPromise;
+			return;
+		}
+
+		this.shutdownPromise = this.runWindowWorkspaceShutdown();
+		await this.shutdownPromise;
+	}
+
+	private async runWindowWorkspaceShutdown(): Promise<void> {
 		// Teardown must not rewrite the resident set used for the next startup.
 		this.shuttingDown = true;
-		for (const instance of [...this.instancesById.values()]) {
-			await this.unloadAndRemoveInstance(instance, 'shutdown');
+		const results = await Promise.all(
+			[...this.instancesById.values()].map(instance =>
+				this.unloadAndRemoveInstance(instance, 'shutdown')
+			)
+		);
+		if (
+			results.some(result => !result) ||
+			this.instancesById.size > 0
+		) {
+			// A retained workbench means page teardown did not finish. Resume
+			// persistence once with the surviving set, then allow a later
+			// shutdown request to start a fresh batch.
+			this.shuttingDown = false;
+			this.emitState();
+			this.shutdownPromise = undefined;
 		}
 	}
 

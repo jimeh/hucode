@@ -167,6 +167,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
 	private shuttingDown = false;
+	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
@@ -1520,11 +1521,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					return false;
 				}
 
-				this.logService.warn(
-					'[HucodeShellMainService] Ignoring hosted workspace ' +
-					`unload veto during Omni shutdown for ` +
-					`${instance.worktreePath}.`
-				);
+				this.logIgnoredShutdownUnloadVeto(instance);
 			}
 		}
 
@@ -1588,21 +1585,54 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
-	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
-		if (this.shuttingDown) {
-			return;
+	shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		if (this.shutdownPromise) {
+			return this.shutdownPromise;
 		}
 
 		this.updateWindowRestoreState();
 		this.shuttingDown = true;
-		const instances = Array.from(this.instancesById.values());
+		const instances = Array.from(this.instancesById.values())
+			.filter(instance => !instance.disposed);
+		this.shutdownPromise = Promise.resolve().then(
+			() => this.runShutdown(instances, reason)
+		);
+		return this.shutdownPromise;
+	}
+
+	private async runShutdown(
+		instances: readonly IHostedWorkbenchInstance[],
+		reason: UnloadReason
+	): Promise<void> {
+		const unloadResults = await Promise.all(instances.map(instance =>
+			this.unloadInRenderer(instance, reason, true)
+		));
+		for (let index = 0; index < instances.length; index++) {
+			if (unloadResults[index] === 'vetoed') {
+				this.logIgnoredShutdownUnloadVeto(instances[index]);
+			}
+		}
+
+		// Native view ownership changes remain ordered even though the renderer
+		// handshakes above are independent and can consume their budgets
+		// concurrently.
 		for (const instance of instances) {
 			if (instance.disposed) {
 				continue;
 			}
 
-			await this.destroyInstance(instance, false, true, reason, true);
+			await this.destroyInstance(instance, false, false);
 		}
+	}
+
+	private logIgnoredShutdownUnloadVeto(
+		instance: IHostedWorkbenchInstance
+	): void {
+		this.logService.warn(
+			'[HucodeShellMainService] Ignoring hosted workspace ' +
+			`unload veto during Omni shutdown for ` +
+			`${instance.worktreePath}.`
+		);
 	}
 
 	private async unloadInRenderer(

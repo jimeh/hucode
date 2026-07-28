@@ -645,6 +645,107 @@ suite('ResidentHostedWorkspacesController', () => {
 						) ?? [],
 				};
 			},
+			async concurrentShutdown() {
+				const alpha = createWorktree('alpha');
+				const bravo = createWorktree('bravo');
+				const charlie = createWorktree('charlie');
+				const harness = createController();
+				for (const [path, projectId, instanceId] of [
+					[alpha, 'project-alpha', 'instance-1'],
+					[bravo, 'project-bravo', 'instance-2'],
+					[charlie, 'project-charlie', 'instance-3'],
+				] as const) {
+					await harness.controller.openWorkspace(path, projectId);
+					harness.controller.notifyHostedWorkspaceReady(instanceId);
+				}
+
+				const phasesByPath: Record<string, string[]> = {
+					alpha: [],
+					bravo: [],
+					charlie: [],
+				};
+				let releaseAlphaPreparation: (() => void) | undefined;
+				for (const [
+					viewIndex,
+					path,
+					preparation,
+				] of [
+					[0, 'alpha', 'gated'],
+					[1, 'bravo', 'veto'],
+					[2, 'charlie', 'silent'],
+				] as const) {
+					harness.viewFactory.views[viewIndex].rawWebContents.sendHook =
+						(channel, request) => {
+							if (channel === 'vscode:onBeforeUnload') {
+								phasesByPath[path].push('prepare');
+								const {
+									okChannel,
+									cancelChannel,
+								} = request as {
+									okChannel: string;
+									cancelChannel: string;
+								};
+								if (preparation === 'gated') {
+									releaseAlphaPreparation = () =>
+										harness.ipcMain.emitReply(okChannel);
+								} else if (preparation === 'veto') {
+									harness.ipcMain.emitReply(cancelChannel);
+								}
+								return true;
+							}
+							if (channel === 'vscode:onWillUnload') {
+								phasesByPath[path].push('commit');
+								const { replyChannel } = request as {
+									replyChannel: string;
+								};
+								harness.ipcMain.emitReply(replyChannel);
+								return true;
+							}
+							return false;
+						};
+				}
+
+				const firstShutdown = harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				);
+				await Promise.resolve();
+				const preparationsStartedBeforeRelease = Object.entries(
+					phasesByPath
+				).filter(([, phases]) => phases[0] === 'prepare')
+					.map(([path]) => path);
+				let secondCallResolvedBeforeRelease = false;
+				const secondShutdown = harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				).then(() => {
+					secondCallResolvedBeforeRelease = true;
+				});
+				await Promise.resolve();
+				const resolvedBeforeRelease = secondCallResolvedBeforeRelease;
+				assert.ok(releaseAlphaPreparation);
+				releaseAlphaPreparation();
+				await Promise.all([firstShutdown, secondShutdown]);
+				const pathByWebContentsId = new Map([
+					[1, 'alpha'],
+					[2, 'bravo'],
+					[3, 'charlie'],
+				]);
+				const nativeDestructionOrder =
+					harness.browserViewMainService
+						.destroyedHostedWebContentsIds.map(id => {
+							const path = pathByWebContentsId.get(id);
+							assert.ok(path);
+							return path;
+						});
+
+				return {
+					failurePolicy: 'force',
+					preparationsStartedBeforeRelease,
+					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
+					phasesByPath,
+					shutdownState: toContractState(harness.controller),
+					nativeDestructionOrder,
+				};
+			},
 		};
 	}
 

@@ -52,6 +52,29 @@ export interface IHostedWorkspaceShutdownResult {
 }
 
 /**
+ * Platform policy for a hosted workbench that cannot complete shutdown.
+ *
+ * Desktop owns the native window and forces renderer teardown after logging
+ * the failure. Web must keep the iframe because preparation has not established
+ * that it is safe to remove.
+ */
+export type HostedWorkspaceShutdownFailurePolicy = 'force' | 'retain';
+
+/** Observable outcomes of a concurrent multi-workbench shell shutdown. */
+export interface IHostedWorkspaceConcurrentShutdownResult {
+	readonly failurePolicy: HostedWorkspaceShutdownFailurePolicy;
+	readonly preparationsStartedBeforeRelease: readonly string[];
+	readonly secondCallResolvedBeforeRelease: boolean;
+	readonly phasesByPath: Readonly<Record<string, readonly string[]>>;
+	readonly shutdownState: IHostedWorkspaceContractState;
+	readonly nativeDestructionOrder?: readonly string[];
+	readonly persistenceSavesDuringIncompleteShutdown?: number;
+	readonly persistedPaths?: readonly string[];
+	readonly retryPhasesByPath?: Readonly<Record<string, readonly string[]>>;
+	readonly retryState?: IHostedWorkspaceContractState;
+}
+
+/**
  * Platform adapter for the lifecycle outcomes whose policy desktop and web
  * Omni must keep identical. Each method owns only the platform mechanics
  * needed to drive the named scenario.
@@ -62,6 +85,7 @@ export interface IHostedWorkspaceLifecycleContractAdapter {
 	restoreActiveOnly(): Promise<IHostedWorkspaceRestoreResult>;
 	closeActiveAndPromoteNext(): Promise<IHostedWorkspaceCloseNextResult>;
 	vetoThenShutdown(): Promise<IHostedWorkspaceShutdownResult>;
+	concurrentShutdown(): Promise<IHostedWorkspaceConcurrentShutdownResult>;
 }
 
 /**
@@ -160,7 +184,83 @@ export function registerHostedWorkspaceLifecycleContract(
 				false
 			);
 		});
+
+		test('multi-workbench shutdown is concurrent and policy-preserving',
+			async () => {
+				const result = await createAdapter().concurrentShutdown();
+
+				assert.deepStrictEqual(
+					[...result.preparationsStartedBeforeRelease].sort(),
+					['alpha', 'bravo', 'charlie']
+				);
+				assert.strictEqual(
+					result.secondCallResolvedBeforeRelease,
+					false
+				);
+
+				if (result.failurePolicy === 'force') {
+					assertPhases(result.phasesByPath, {
+						alpha: ['prepare', 'commit'],
+						bravo: ['prepare', 'commit'],
+						charlie: ['prepare', 'commit'],
+					});
+					assert.strictEqual(
+						result.shutdownState.instances.some(instance =>
+							instance.state !== 'unloaded'
+						),
+						false
+					);
+					assert.deepStrictEqual(
+						result.nativeDestructionOrder,
+						['alpha', 'bravo', 'charlie']
+					);
+					assert.strictEqual(result.retryState, undefined);
+					return;
+				}
+
+				assertPhases(result.phasesByPath, {
+					alpha: ['prepare', 'commit'],
+					bravo: ['prepare'],
+					charlie: ['prepare'],
+				});
+				assertState(result.shutdownState, {
+					activePath: 'charlie',
+					instances: [
+						{ path: 'bravo', state: 'loaded' },
+						{ path: 'charlie', state: 'active' },
+					],
+				});
+				assert.strictEqual(
+					result.persistenceSavesDuringIncompleteShutdown,
+					1
+				);
+				assert.deepStrictEqual(
+					[...(result.persistedPaths ?? [])].sort(),
+					['bravo', 'charlie']
+				);
+				assertPhases(result.retryPhasesByPath, {
+					bravo: ['prepare', 'commit'],
+					charlie: ['prepare', 'commit'],
+				});
+				assertState(result.retryState, { instances: [] });
+			}
+		);
 	});
+}
+
+function assertPhases(
+	actual: Readonly<Record<string, readonly string[]>> | undefined,
+	expected: Readonly<Record<string, readonly string[]>>
+): void {
+	assert.ok(actual);
+	assert.deepStrictEqual(actual, expected);
+	for (const phases of Object.values(actual)) {
+		assert.strictEqual(phases[0], 'prepare');
+		assert.ok(phases.length <= 2);
+		if (phases.length === 2) {
+			assert.strictEqual(phases[1], 'commit');
+		}
+	}
 }
 
 function assertState(
