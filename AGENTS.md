@@ -150,3 +150,15 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
+  trusted** on web. `WorkspaceProvider.create` parses the `payload` query
+  parameter straight out of the page URL, so any page can set either flag.
+  They carry no trust on their own. A consumer is safe only because something
+  else does the real gating — either `isOmniShellWindow`, which comes from the
+  server-injected page configuration on web and the main-process window
+  configuration on desktop, or an independent check. `hostedOmniWorkspace.web`
+  is the case to learn from: it exposes a channel that runs arbitrary workbench
+  commands, and two of its three conditions are URL-settable. What protects it
+  is the third — a same-origin `MessagePort` handshake in
+  `hostedOmniWebConnection.ts`. Anything deciding what a window is *allowed* to
+  do needs one of those two, not the flags.

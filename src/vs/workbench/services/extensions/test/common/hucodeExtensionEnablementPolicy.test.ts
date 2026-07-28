@@ -17,7 +17,10 @@ import type {
 } from '../../../../../platform/extensionManagement/common/extensionsScannerService.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+	HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS,
 	hucodeIsExtensionDisabledByPolicy,
+	hucodeIsExtensionSkippedInOmniShell,
+	hucodeIsOmniShellSkippedBuiltinId,
 	hucodeShouldKeepScannedUserExtension,
 } from '../../common/hucodeExtensionEnablementPolicy.js';
 
@@ -121,6 +124,75 @@ suite('HucodeExtensionEnablementPolicy', () => {
 			false
 		);
 	});
+
+	test('skips the shell built-ins that caused the watcher exhaustion', () => {
+		assert.deepStrictEqual({
+			copilotChat: hucodeIsExtensionSkippedInOmniShell(
+				aExtension('GitHub.copilot-chat', {}, ExtensionType.System)
+			),
+			git: hucodeIsExtensionSkippedInOmniShell(
+				aExtension('vscode.git', {}, ExtensionType.System)
+			),
+			unlistedBuiltin: hucodeIsExtensionSkippedInOmniShell(
+				aExtension('vscode.theme-defaults', {}, ExtensionType.System)
+			),
+		}, {
+			copilotChat: true,
+			git: true,
+			unlistedBuiltin: false,
+		});
+	});
+
+	test('leaves marketplace extensions to the theme-only policy', () => {
+		assert.strictEqual(
+			hucodeIsExtensionSkippedInOmniShell(
+				aExtension('GitHub.copilot-chat', {}, ExtensionType.User)
+			),
+			false
+		);
+	});
+
+	test('skips a user-installed builtin', () => {
+		// `toExtension` sets `isBuiltin` from `isBuiltin || isUserBuiltin` while
+		// deriving `type` from `isBuiltin` alone, so an extension installed with
+		// --install-builtin-extension arrives as User *and* builtin. The
+		// predicate keys off `isBuiltin`, so it is skipped; the ordinary
+		// marketplace copy above is not.
+		const userBuiltin = {
+			...aExtension('vscode.git', {}, ExtensionType.User),
+			isBuiltin: true,
+		};
+
+		assert.strictEqual(hucodeIsExtensionSkippedInOmniShell(userBuiltin), true);
+	});
+
+	test('matches skipped built-in ids without regard to case', () => {
+		assert.deepStrictEqual({
+			asDeclared: hucodeIsOmniShellSkippedBuiltinId('GitHub.copilot-chat'),
+			lowered: hucodeIsOmniShellSkippedBuiltinId('github.copilot-chat'),
+			uppered: hucodeIsOmniShellSkippedBuiltinId('VSCODE.GIT'),
+			unlisted: hucodeIsOmniShellSkippedBuiltinId('vscode.json'),
+		}, {
+			asDeclared: true,
+			lowered: true,
+			uppered: true,
+			unlisted: false,
+		});
+	});
+
+	test('skip list covers the extensions issue #106 traced', () => {
+		// The Copilot Chat to vscode.git path is what opened 35 repositories
+		// and consumed 291,606 inotify watches from an empty shell.
+		assert.ok(
+			HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS.includes(
+				'GitHub.copilot-chat'
+			)
+		);
+		assert.ok(
+			HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS.includes('vscode.git')
+		);
+	});
+
 
 	test('filters scanned user extensions only when policy is active', () => {
 		const extension = aScannedExtension('pub.a');
