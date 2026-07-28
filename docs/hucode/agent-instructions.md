@@ -531,6 +531,15 @@ human-facing guides rather than replacing them.
   their `WebContentsView` is destroyed. If you tear them down directly from the
   shell main process without sending `vscode:onBeforeUnload` /
   `vscode:onWillUnload`, workspace UI state can reopen from stale storage.
+- Hosted workbench unload is two-phase on web as well as desktop. Never use
+  `ILifecycleService.shutdown()` as a preflight: `BrowserLifecycleService`
+  collects every `onBeforeShutdown` veto and drops it, and unloads regardless.
+  The veto-capable half is `prepareShutdown()`, which changes no lifecycle
+  state, and `commitShutdown()` is the irreversible half; the hosted iframe
+  protocol exposes them as `prepareUnload`/`commitUnload` in
+  `src/vs/hucode/browser/hostedOmniWebUnload.ts`. Keep the shell's generation
+  and path checks between the two, or an unload the shell aborts leaves a
+  workbench that looks live but is shut down.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child

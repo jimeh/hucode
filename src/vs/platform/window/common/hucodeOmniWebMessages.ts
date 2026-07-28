@@ -80,9 +80,18 @@ export interface IHucodeOmniWebWorkbenchClient {
 	openFiles(request: INativeOpenFileRequest): Promise<boolean>;
 
 	/**
-	 * Runs the hosted workbench shutdown handshake before unload. Resolves
-	 * false when shutdown failed or was vetoed, telling the shell to keep
-	 * the hosted workbench alive.
+	 * Runs the veto-capable half of the hosted workbench unload handshake.
+	 * Resolves false when preparation was vetoed or failed, telling the shell
+	 * to keep the hosted workbench alive. The workbench is left untouched
+	 * either way; it only shuts down once {@link commitUnload} follows.
 	 */
 	prepareUnload(): Promise<boolean>;
+
+	/**
+	 * Shuts the hosted workbench down after a successful {@link prepareUnload}
+	 * and the shell's decision that the workbench is really going away. This
+	 * is the irreversible half of the handshake. Resolves false when no
+	 * prepared unload was outstanding, leaving the workbench alive.
+	 */
+	commitUnload(): Promise<boolean>;
 }

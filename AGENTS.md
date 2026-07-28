@@ -119,6 +119,15 @@ as the required Hucode instruction set for work in this fork.
   VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
     ./scripts/test.sh --run <test-file>
   ```
+- That `VSCODE_SKIP_PRELAUNCH=1` also skips the build, and the Electron runner
+  executes compiled `out/`. Editing a `.ts` file and re-running therefore tests
+  the *previous* build. This matters most when deliberately breaking code to
+  confirm a test catches it: the run passes, which reads as "the test does not
+  detect this" when the truth is the change was never compiled. Run
+  `npm run gulp compile-client` after every source edit, and confirm the change
+  reached `out/` before drawing any conclusion from the result. Note esbuild
+  strips comments, so verify against the compiled behaviour rather than a
+  marker comment.
 - CI suite lists are generated, not hand-maintained.
   `build/hucode/test-suites.ts` resolves them and
   `.github/workflows/hucode-ci.yml` calls it per runner. A new suite under
@@ -150,6 +159,14 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
+  needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
+  `serve-web` therefore runs with Copilot Chat entirely absent, which silently
+  invalidated a runtime measurement that appeared to pass.
+- Extension *enablement* state is per-browser (localStorage), so
+  enablement-dependent behaviour can only be measured in a browser holding the
+  real profile state. A control run from a different browser profile proves
+  nothing.
 - `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
   trusted** on web. `WorkspaceProvider.create` parses the `payload` query
   parameter straight out of the page URL, so any page can set either flag.

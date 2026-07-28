@@ -240,7 +240,12 @@ class StorageServiceWebHucodeShellPersistence
 }
 
 type WebHucodeShellTimer = ReturnType<typeof setTimeout>;
-type HostedUnloadResult = 'ready' | 'vetoed' | 'timeout';
+type HostedUnloadResult =
+	| 'ready'
+	| 'vetoed'
+	| 'refused'
+	| 'prepare-timeout'
+	| 'commit-timeout';
 type IWebHucodeShellCommandService = Pick<ICommandService, 'executeCommand'>;
 type IWebHucodeShellHostSurfaceService = Pick<
 	IHucodeWebOmniHostSurfaceService,
@@ -327,7 +332,11 @@ export class WebHucodeShellController extends Disposable
 	readonly supportsWorkspaceScreenshotOverlay = false;
 	private static readonly READY_TIMEOUT_MS = 30000;
 	private static readonly COMMAND_TIMEOUT_MS = 5000;
-	private static readonly UNLOAD_TIMEOUT_MS = 1500;
+	// The two unload phases get the budgets the desktop controller uses for
+	// its own before-unload and will-unload handshakes: preparation can open
+	// a dialog the user has to answer, the commit only has to flush state.
+	private static readonly PREPARE_UNLOAD_TIMEOUT_MS = 5000;
+	private static readonly COMMIT_UNLOAD_TIMEOUT_MS = 15000;
 
 	private readonly windowId: number;
 	private readonly workbenchRoute: string;
@@ -1291,11 +1300,9 @@ export class WebHucodeShellController extends Disposable
 		// cannot hold unsaved state and is not listening yet, and a reloading
 		// one is already running its own beforeunload handling, where a
 		// handshake would only hang until the unload timeout.
-		if (
-			isHostedWorkspaceAvailable(instance) &&
-			!isHostedWorkspacePendingReady(instance) &&
-			await this.requestUnload(instance) !== 'ready'
-		) {
+		const handshake = isHostedWorkspaceAvailable(instance) &&
+			!isHostedWorkspacePendingReady(instance);
+		if (handshake && await this.prepareUnload(instance) !== 'ready') {
 			return false;
 		}
 		if (
@@ -1304,12 +1311,22 @@ export class WebHucodeShellController extends Disposable
 		) {
 			return false;
 		}
+		// The workbench shuts down only now that its removal is decided: a
+		// preparation abandoned above leaves it live and interactive.
+		if (handshake && await this.commitUnload(instance) !== 'ready') {
+			return false;
+		}
 
 		this.removeInstance(instance);
 		return true;
 	}
 
-	private async requestUnload(
+	/**
+	 * Asks a hosted workbench to prepare for unload. Preparation collects the
+	 * workbench's veto and changes nothing, so the shell can still abandon
+	 * the unload afterwards.
+	 */
+	private async prepareUnload(
 		instance: IHostedIframeInstance
 	): Promise<HostedUnloadResult> {
 		const workbench = instance.connection?.workbench;
@@ -1322,9 +1339,32 @@ export class WebHucodeShellController extends Disposable
 				ready => ready ? 'ready' as const : 'vetoed' as const,
 				() => 'vetoed' as const
 			),
-			WebHucodeShellController.UNLOAD_TIMEOUT_MS
+			WebHucodeShellController.PREPARE_UNLOAD_TIMEOUT_MS
 		);
-		return result === REQUEST_TIMEOUT ? 'timeout' : result;
+		return result === REQUEST_TIMEOUT ? 'prepare-timeout' : result;
+	}
+
+	/**
+	 * Commits a prepared unload. A workbench that never answers keeps its
+	 * iframe: the shell cannot tell a shut-down workbench from a stuck one,
+	 * and removing a live workbench is the more destructive guess.
+	 */
+	private async commitUnload(
+		instance: IHostedIframeInstance
+	): Promise<HostedUnloadResult> {
+		const workbench = instance.connection?.workbench;
+		if (!workbench) {
+			return 'ready';
+		}
+
+		const result = await this.raceTimeout(
+			workbench.commitUnload().then(
+				committed => committed ? 'ready' as const : 'refused' as const,
+				() => 'refused' as const
+			),
+			WebHucodeShellController.COMMIT_UNLOAD_TIMEOUT_MS
+		);
+		return result === REQUEST_TIMEOUT ? 'commit-timeout' : result;
 	}
 
 	private async openFilesInInstance(

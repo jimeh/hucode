@@ -21,6 +21,13 @@ import {
 	FileOperationError,
 	FileOperationResult,
 } from '../../../platform/files/common/files.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
+import { InMemoryStorageService } from
+	'../../../platform/storage/common/storage.js';
+import { BrowserLifecycleService } from
+	'../../../workbench/services/lifecycle/browser/lifecycleService.js';
+import { HucodeHostedOmniWebUnloadCoordinator } from
+	'../../browser/hostedOmniWebUnload.js';
 import {
 	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
@@ -215,6 +222,74 @@ suite('WebHucodeShellService', () => {
 		return { workbench, shell, shellWindowId: posted.windowId };
 	}
 
+	interface IChildLifecycleEvents {
+		beforeShutdown: number;
+		willShutdown: number;
+		didShutdown: number;
+	}
+
+	interface ILifecycleBackedChild {
+		readonly workbench: LifecycleBackedHostedWorkbench;
+		readonly lifecycleService: BrowserLifecycleService;
+		readonly events: IChildLifecycleEvents;
+		readonly shellWindowId: number;
+	}
+
+	/**
+	 * Connects a hosted child whose unload handshake runs the production
+	 * coordinator against a real lifecycle service, so vetoes and shutdowns
+	 * are produced rather than stubbed.
+	 */
+	function connectLifecycleBackedChild(
+		browser: FakeBrowserAdapter,
+		surface: HTMLElement,
+		instanceId: string
+	): ILifecycleBackedChild {
+		markReady(browser, surface, instanceId);
+
+		const posted = browser.portMessages.at(-1);
+		assert.ok(posted, 'expected a transferred shell port');
+		assert.strictEqual(posted.instanceId, instanceId);
+
+		const client = disposables.add(new MessagePortClient(
+			posted.port,
+			`test-child-${instanceId}`
+		));
+		const storageService = disposables.add(new InMemoryStorageService());
+		const lifecycleService = disposables.add(new BrowserLifecycleService(
+			new NullLogService(),
+			storageService
+		));
+		const events: IChildLifecycleEvents = {
+			beforeShutdown: 0,
+			willShutdown: 0,
+			didShutdown: 0,
+		};
+		disposables.add(lifecycleService.onBeforeShutdown(() => {
+			events.beforeShutdown++;
+		}));
+		disposables.add(lifecycleService.onWillShutdown(() => {
+			events.willShutdown++;
+		}));
+		disposables.add(lifecycleService.onDidShutdown(() => {
+			events.didShutdown++;
+		}));
+		const workbench = new LifecycleBackedHostedWorkbench(lifecycleService);
+		client.registerChannel(
+			HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+			ProxyChannel.fromService(
+				workbench,
+				disposables.add(new DisposableStore())
+			)
+		);
+		return {
+			workbench,
+			lifecycleService,
+			events,
+			shellWindowId: posted.windowId,
+		};
+	}
+
 	async function waitForInstanceState(
 		service: WebHucodeShellController,
 		windowId: number,
@@ -282,15 +357,30 @@ suite('WebHucodeShellService', () => {
 		await waitForInstanceState(service, windowId, instanceId, 'crashed');
 	}
 
+	function findIframe(
+		surface: HTMLElement,
+		instanceId: string
+	): HTMLIFrameElement | null {
+		return surface.querySelector<HTMLIFrameElement>(
+			`[data-hucode-hosted-instance-id="${instanceId}"]`
+		);
+	}
+
 	function getIframe(
 		surface: HTMLElement,
 		instanceId: string
 	): HTMLIFrameElement {
-		const iframe = surface.querySelector<HTMLIFrameElement>(
-			`[data-hucode-hosted-instance-id="${instanceId}"]`
-		);
+		const iframe = findIframe(surface, instanceId);
 		assert.ok(iframe);
 		return iframe;
+	}
+
+	/** Whether the hosted iframe is still attached to the shell surface. */
+	function isIframeConnected(
+		surface: HTMLElement,
+		instanceId: string
+	): boolean {
+		return findIframe(surface, instanceId)?.isConnected === true;
 	}
 
 	test('loads hosted iframes through the hosted workbench route', async () => {
@@ -412,30 +502,242 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(closedState.instances.length, 0);
 	});
 
-	test('keeps the hosted iframe when unload times out', async () => {
-		const browser = new ZeroDelayBrowserAdapter();
-		const { service, surface } = createService(browser);
-		const windowId = browser.windowId;
-		const state = await service.openWorkspace(
-			windowId,
-			'/tmp/hucode-worktree',
-			'project'
-		);
-		const instanceId = state.instances[0].instanceId;
-		const child = connectChild(browser, surface, instanceId);
-		child.workbench.prepareUnloadResult = new Promise<boolean>(() => { });
+	test('keeps the hosted iframe when unload preparation times out',
+		async () => {
+			const browser = new ZeroDelayBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			child.workbench.prepareUnloadResult = new Promise<boolean>(
+				() => { }
+			);
 
-		const timedOutState = await service.closeWorkspace(windowId, instanceId);
-		assert.deepStrictEqual({
-			instanceIds: timedOutState.instances.map(
-				instance => instance.instanceId
-			),
-			iframeConnected: getIframe(surface, instanceId).isConnected,
-		}, {
-			instanceIds: [instanceId],
-			iframeConnected: true,
+			const timedOutState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: timedOutState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				commitCalls: 0,
+			});
 		});
-	});
+
+	test('keeps the hosted iframe when the unload commit times out',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			// Preparation answers normally; only the commit runs out of time.
+			child.workbench.onPrepareUnload = () => {
+				browser.collapseTimeouts = true;
+			};
+			child.workbench.commitUnloadResult = new Promise<boolean>(
+				() => { }
+			);
+
+			const timedOutState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: timedOutState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				prepareCalls: 1,
+				commitCalls: 1,
+			});
+		});
+
+	test('keeps the hosted workbench when a shutdown listener vetoes',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			disposables.add(child.lifecycleService.onBeforeShutdown(event => {
+				event.veto(true, 'test.unsavedWorkingCopy');
+			}));
+
+			const vetoedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+
+			assert.deepStrictEqual({
+				instanceIds: vetoedState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				prepareCalls: 1,
+				commitCalls: 0,
+			});
+		});
+
+	test('leaves a vetoing hosted workbench running and interactive',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			disposables.add(child.lifecycleService.onBeforeShutdown(event => {
+				event.veto(true, 'test.unsavedWorkingCopy');
+			}));
+
+			await service.closeWorkspace(windowId, instanceId);
+			const responded = await service.runActionInWorkspace(windowId, {
+				id: 'test.command',
+				from: 'menu',
+			});
+
+			assert.deepStrictEqual({
+				responded,
+				willShutdown: child.events.willShutdown,
+				didShutdown: child.events.didShutdown,
+				lifecycleWillShutdown: child.lifecycleService.willShutdown,
+			}, {
+				responded: true,
+				willShutdown: 0,
+				didShutdown: 0,
+				lifecycleWillShutdown: false,
+			});
+		});
+
+	test('does not shut down a workbench reactivated between unload phases',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/reactivated').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			const unloading = service.unloadRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			await child.workbench.prepareUnloadStarted.p;
+			await service.openWorkspace(browser.windowId, '/tmp/reactivated');
+			await prepareGate.complete();
+			await unloading;
+
+			const responded = await service.runActionInWorkspace(
+				browser.windowId,
+				{ id: 'test.command', from: 'menu' }
+			);
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instanceIds: state.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				commitCalls: child.workbench.commitUnloadCalls,
+				willShutdown: child.events.willShutdown,
+				responded,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				commitCalls: 0,
+				willShutdown: 0,
+				responded: true,
+			});
+		});
+
+	test('shuts a hosted workbench down exactly once on a successful unload',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+
+			const closedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+
+			assert.deepStrictEqual({
+				instances: closedState.instances.length,
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+				beforeShutdown: child.events.beforeShutdown,
+				willShutdown: child.events.willShutdown,
+				didShutdown: child.events.didShutdown,
+			}, {
+				instances: 0,
+				prepareCalls: 1,
+				commitCalls: 1,
+				beforeShutdown: 1,
+				willShutdown: 1,
+				didShutdown: 1,
+			});
+		});
 
 	test('suspends active project workspace and activates next MRU', async () => {
 		const { service, surface, browser } = createService();
@@ -1764,6 +2066,9 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	openFilesResult = true;
 	prepareUnloadResult: boolean | Promise<boolean> = true;
 	prepareUnloadCalls = 0;
+	onPrepareUnload: (() => void) | undefined;
+	commitUnloadResult: boolean | Promise<boolean> = true;
+	commitUnloadCalls = 0;
 	readonly commands: {
 		readonly commandId: string;
 		readonly args: readonly unknown[];
@@ -1783,7 +2088,69 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
+		this.onPrepareUnload?.();
 		return this.prepareUnloadResult;
+	}
+
+	async commitUnload(): Promise<boolean> {
+		this.commitUnloadCalls++;
+		return this.commitUnloadResult;
+	}
+}
+
+/**
+ * Hosted workbench that answers the unload handshake through the production
+ * coordinator running against a real `BrowserLifecycleService`, so a veto has
+ * to come from an actual `onBeforeShutdown` listener and a commit has to be a
+ * real lifecycle shutdown.
+ */
+class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
+	prepareUnloadCalls = 0;
+	commitUnloadCalls = 0;
+	prepareUnloadGate: Promise<unknown> | undefined;
+	readonly prepareUnloadStarted = new DeferredPromise<void>();
+	readonly commands: {
+		readonly commandId: string;
+		readonly args: readonly unknown[];
+	}[] = [];
+
+	private readonly coordinator: HucodeHostedOmniWebUnloadCoordinator;
+
+	constructor(
+		private readonly lifecycleService: BrowserLifecycleService
+	) {
+		this.coordinator = new HucodeHostedOmniWebUnloadCoordinator(
+			lifecycleService,
+			new NullLogService()
+		);
+	}
+
+	async runCommand(
+		commandId: string,
+		args: readonly unknown[]
+	): Promise<boolean> {
+		this.commands.push({ commandId, args });
+		// A workbench whose lifecycle has shut down can no longer service
+		// commands, so this doubles as the "still interactive" answer.
+		return !this.lifecycleService.willShutdown;
+	}
+
+	async openFiles(_request: INativeOpenFileRequest): Promise<boolean> {
+		return true;
+	}
+
+	async prepareUnload(): Promise<boolean> {
+		this.prepareUnloadCalls++;
+		if (!this.prepareUnloadStarted.isSettled) {
+			await this.prepareUnloadStarted.complete();
+		}
+		await this.prepareUnloadGate;
+		return this.coordinator.prepareUnload();
+	}
+
+	async commitUnload(): Promise<boolean> {
+		this.commitUnloadCalls++;
+		return this.coordinator.commitUnload();
 	}
 }
 
@@ -1872,5 +2239,20 @@ class ZeroDelayBrowserAdapter extends FakeBrowserAdapter {
 		_timeout: number
 	): ReturnType<typeof setTimeout> {
 		return setTimeout(callback, 0);
+	}
+}
+
+/**
+ * Adapter whose timers can be collapsed to zero part-way through a test, so a
+ * later protocol phase times out while the earlier ones complete normally.
+ */
+class CollapsibleTimeoutBrowserAdapter extends FakeBrowserAdapter {
+	collapseTimeouts = false;
+
+	override setTimeout(
+		callback: () => void,
+		timeout: number
+	): ReturnType<typeof setTimeout> {
+		return super.setTimeout(callback, this.collapseTimeouts ? 0 : timeout);
 	}
 }
