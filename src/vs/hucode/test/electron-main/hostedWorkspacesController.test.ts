@@ -1038,9 +1038,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			}],
 		});
 
-		await controller.reconcileRetainedWorkbenches([{
+		await controller.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([{
 			projectId: 'project-alpha',
-			folderUri,
+			folderUris: [folderUri],
 		}]);
 
 		assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
@@ -1049,6 +1049,189 @@ suite('ResidentHostedWorkspacesController', () => {
 			'project-alpha');
 		assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
 	});
+
+	test('adopts active, loaded, and dormant orphaned project workbenches',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const dormant = createWorktree('dormant');
+			const { controller, window } = createController({
+				restoreEntries: [{
+					projectId: 'removed-dormant',
+					worktreePath: dormant,
+					state: 'loaded',
+					lastActiveAt: 10,
+				}],
+				restorePolicy: 'none',
+			});
+			await controller.ensureRestored();
+			await controller.openWorkspace(alpha, 'removed-alpha');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openWorkspace(bravo, 'removed-bravo');
+			controller.notifyHostedWorkspaceReady('instance-3');
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					state: instance.state,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{ path: alpha, state: 'loaded', projectId: undefined },
+					{ path: bravo, state: 'active', projectId: undefined },
+					{ path: dormant, state: 'dormant', projectId: undefined },
+				]
+			);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				).toSorted(),
+				[alpha, bravo, dormant].toSorted()
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				).toSorted(),
+				[alpha, bravo, dormant].toSorted()
+			);
+		}
+	);
+
+	test('adopts a pre-fix project snapshot during initial reconciliation',
+		async () => {
+			const orphan = createWorktree('restored-orphan');
+			const { controller, window } = createController({
+				restoreEntries: [{
+					projectId: 'removed-project',
+					worktreePath: orphan,
+					state: 'loaded',
+				}],
+				restorePolicy: 'none',
+			});
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].state, 'dormant');
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			const persistedRetained =
+				window.config?.omniRetainedWorkbenches?.[0];
+			assert.ok(persistedRetained);
+			assert.strictEqual(
+				URI.revive(persistedRetained.folderUri).fsPath,
+				orphan
+			);
+		}
+	);
+
+	test('uses complete project identity and keeps partial promotion safe',
+		async () => {
+			const readded = createWorktree('readded');
+			const liveWithoutWorktrees = createWorktree(
+				'live-without-worktrees'
+			);
+			const orphan = createWorktree('orphan');
+			const { controller } = createController({
+				restoreEntries: [{
+					projectId: 'old-owner',
+					worktreePath: readded,
+					state: 'loaded',
+				}, {
+					projectId: 'still-live',
+					worktreePath: liveWithoutWorktrees,
+					state: 'loaded',
+				}, {
+					projectId: 'removed-owner',
+					worktreePath: orphan,
+					state: 'loaded',
+				}],
+				restorePolicy: 'none',
+			});
+
+			await controller.promoteRetainedWorkbenchProjectFolders([{
+				projectId: 'unrelated',
+				folderUri: URI.file(createWorktree('unrelated')),
+			}]);
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance =>
+					instance.projectId
+				),
+				['old-owner', 'still-live', 'removed-owner']
+			);
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([{
+					projectId: 'replacement-owner',
+					folderUris: [URI.file(readded)],
+				}, {
+					projectId: 'still-live',
+					folderUris: [],
+				}]);
+
+			const state = controller.getState();
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{ path: liveWithoutWorktrees, projectId: 'still-live' },
+					{ path: orphan, projectId: undefined },
+					{ path: readded, projectId: 'replacement-owner' },
+				].toSorted((a, b) => a.path.localeCompare(b.path))
+			);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[orphan]
+			);
+		}
+	);
+
+	test('adopts a loading orphan before it becomes ready', async () => {
+		const loading = createWorktree('loading-orphan');
+		const { controller } = createController();
+		await controller.openWorkspace(loading, 'removed-owner');
+		assert.strictEqual(controller.getState().instances[0].state, 'loading');
+
+		await controller
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+		const state = controller.getState();
+		assert.strictEqual(state.instances[0].projectId, undefined);
+		const retained = state.retainedWorkbenches?.[0];
+		assert.ok(retained);
+		assert.strictEqual(
+			URI.revive(retained.folderUri).fsPath,
+			loading
+		);
+	});
+
+	test('leaves existing retained workbenches out of orphan adoption',
+		async () => {
+			const retained = createWorktree('already-retained');
+			const { controller, stateChanges } = createController();
+			await controller.openWorkspace(retained);
+			const changesBeforeReconcile = stateChanges.length;
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.strictEqual(state.retainedWorkbenches?.length, 1);
+			assert.strictEqual(stateChanges.length, changesBeforeReconcile);
+		}
+	);
 
 	test('missing retained restore is kept unloaded without a retry loop',
 		async () => {

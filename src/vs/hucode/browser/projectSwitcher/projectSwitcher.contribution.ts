@@ -1426,17 +1426,25 @@ export class ProjectSwitcherWidget extends Disposable {
 	): Promise<void> {
 		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
+		let reconciledHostedWorkspaceState:
+			IHucodeHostedWorkspaceState | undefined;
 		if (this.environmentService.isOmniWindow) {
-			await this.shellService.reconcileRetainedWorkbenches(
-				this.windowId,
-				projects.flatMap(project => project.worktrees.map(worktree => ({
-					projectId: project.id,
-					folderUri: URI.file(worktree.path).toJSON(),
-				})))
-			);
+			reconciledHostedWorkspaceState = await this.shellService
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					this.windowId,
+					projects.map(project => ({
+						projectId: project.id,
+						folderUris: project.worktrees.map(worktree =>
+							URI.file(worktree.path).toJSON()
+						),
+					}))
+				);
 		}
 		if (this.projects !== projects) {
 			return;
+		}
+		if (reconciledHostedWorkspaceState) {
+			this.omniHostedWorkspaceState = reconciledHostedWorkspaceState;
 		}
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
@@ -2366,7 +2374,7 @@ registerAction2(class extends Action2 {
 
 			const project = await projectManagerService.addProject(folder[0]);
 			if (environmentService.isOmniWindow) {
-				await shellService.reconcileRetainedWorkbenches(
+				await shellService.promoteRetainedWorkbenchProjectFolders(
 					dom.getWindowId(mainWindow),
 					project.worktrees.map(worktree => ({
 						projectId: project.id,

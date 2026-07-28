@@ -49,6 +49,7 @@ import {
 	getMostRecentHostedWorkspace,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
+	isHostedWorkspaceRestorable,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import {
@@ -1020,24 +1021,100 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	async reconcileRetainedWorkbenches(projectFolders: readonly {
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+		projects: readonly {
+			readonly projectId: string;
+			readonly folderUris: readonly URI[];
+		}[]
+	): Promise<void> {
+		await this.ensureRestored();
+		const liveProjectIds = new Set(projects.map(project =>
+			project.projectId
+		));
+		const projectFolders = projects.flatMap(project =>
+			project.folderUris.map(folderUri => ({
+				projectId: project.projectId,
+				folderUri,
+			}))
+		);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			getProjectManagerPathComparisonKey(
+				folder.folderUri.fsPath,
+				isLinux
+			),
+			folder.projectId,
+		]));
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				getProjectManagerPathComparisonKey(
+					instance.worktreePath,
+					isLinux
+				)
+			);
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId;
+				instance.projectId = claimedProjectId;
+				continue;
+			}
+			if (
+				!isHostedWorkspaceRestorable(instance) ||
+				!instance.projectId ||
+				liveProjectIds.has(instance.projectId)
+			) {
+				continue;
+			}
+
+			this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			instance.projectId = undefined;
+			changed = true;
+		}
+		if (this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		)) {
+			changed = true;
+		}
+		if (changed) {
+			this.emitState();
+		}
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: URI;
+		}[]
+	): Promise<void> {
+		await this.ensureRestored();
+		if (this.applyProjectFolderPromotions(projectFolders)) {
+			this.emitState();
+		}
+	}
+
+	private applyProjectFolderPromotions(projectFolders: readonly {
 		readonly projectId: string;
 		readonly folderUri: URI;
-	}[]): Promise<void> {
-		await this.ensureRestored();
+	}[]): boolean {
+		let changed = false;
 		for (const projectFolder of projectFolders) {
 			const instance = this.hostedWorkspaces.getInstanceByPath(
 				projectFolder.folderUri.fsPath
 			);
 			if (instance) {
+				changed ||= instance.projectId !== projectFolder.projectId;
 				instance.projectId = projectFolder.projectId;
 			}
 		}
 		if (this.retainedWorkbenches.reconcileProjectPaths(
 			projectFolders.map(folder => folder.folderUri)
 		)) {
-			this.emitState();
+			changed = true;
 		}
+		return changed;
 	}
 
 	async openFilesInWorkspace(

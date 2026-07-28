@@ -3405,17 +3405,260 @@ suite('WebHucodeShellService', () => {
 			'none'
 		);
 
-		const state = await service.reconcileRetainedWorkbenches(
-			browser.windowId + 1,
-			[{
-				projectId: 'project',
-				folderUri: URI.file('/tmp/promoted').toJSON(),
-			}]
-		);
+		const state = await service
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+				browser.windowId + 1,
+				[{
+					projectId: 'project',
+					folderUris: [URI.file('/tmp/promoted').toJSON()],
+				}]
+			);
 
 		assert.strictEqual(state.retainedWorkbenches?.length, 1);
 		assert.strictEqual(state.instances[0].projectId, undefined);
 	});
+
+	test('adopts active, loaded, and dormant orphaned project workbenches',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'removed-dormant',
+					worktreePath: '/tmp/dormant',
+					lastActiveAt: 10,
+				}],
+			});
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none'
+			);
+			await service.getWindowState(browser.windowId);
+
+			const alpha = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/alpha',
+				'removed-alpha'
+			);
+			assert.ok(alpha.activeInstanceId);
+			connectChild(browser, surface, alpha.activeInstanceId);
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				alpha.activeInstanceId,
+				'active'
+			);
+
+			const bravo = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/bravo',
+				'removed-bravo'
+			);
+			assert.ok(bravo.activeInstanceId);
+			connectChild(browser, surface, bravo.activeInstanceId);
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				bravo.activeInstanceId,
+				'active'
+			);
+
+			const state = await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					state: instance.state,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{
+						path: '/tmp/alpha',
+						state: 'loaded',
+						projectId: undefined,
+					},
+					{
+						path: '/tmp/bravo',
+						state: 'active',
+						projectId: undefined,
+					},
+					{
+						path: '/tmp/dormant',
+						state: 'dormant',
+						projectId: undefined,
+					},
+				]
+			);
+			assert.strictEqual(state.retainedWorkbenches?.length, 3);
+			assert.deepStrictEqual(persistence.state?.residentWorkspaces, []);
+			assert.deepStrictEqual(
+				persistence.state?.retainedWorkbenches.map(record =>
+					URI.revive(record.folderUri).fsPath
+				).toSorted(),
+				['/tmp/alpha', '/tmp/bravo', '/tmp/dormant']
+			);
+		}
+	);
+
+	test('adopts a pre-fix project snapshot during initial reconciliation',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'removed-project',
+					worktreePath: '/tmp/restored-orphan',
+				}],
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none'
+			);
+
+			const state = await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].state, 'dormant');
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(persistence.state?.residentWorkspaces, []);
+			const persistedRetained =
+				persistence.state?.retainedWorkbenches[0];
+			assert.ok(persistedRetained);
+			assert.strictEqual(
+				URI.revive(persistedRetained.folderUri).fsPath,
+				'/tmp/restored-orphan'
+			);
+		}
+	);
+
+	test('uses complete project identity and keeps partial promotion safe',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'old-owner',
+					worktreePath: '/tmp/readded',
+				}, {
+					projectId: 'still-live',
+					worktreePath: '/tmp/live-without-worktrees',
+				}, {
+					projectId: 'removed-owner',
+					worktreePath: '/tmp/orphan',
+				}],
+			});
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none'
+			);
+
+			const afterPartial = await service
+				.promoteRetainedWorkbenchProjectFolders(
+					browser.windowId,
+					[{
+						projectId: 'unrelated',
+						folderUri: URI.file('/tmp/unrelated').toJSON(),
+					}]
+				);
+			assert.deepStrictEqual(
+				afterPartial.instances.map(instance => instance.projectId),
+				['old-owner', 'still-live', 'removed-owner']
+			);
+
+			const state = await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[{
+						projectId: 'replacement-owner',
+						folderUris: [URI.file('/tmp/readded').toJSON()],
+					}, {
+						projectId: 'still-live',
+						folderUris: [],
+					}]
+				);
+
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{
+						path: '/tmp/live-without-worktrees',
+						projectId: 'still-live'
+					},
+					{ path: '/tmp/orphan', projectId: undefined },
+					{
+						path: '/tmp/readded',
+						projectId: 'replacement-owner'
+					},
+				]
+			);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				['/tmp/orphan']
+			);
+		}
+	);
+
+	test('adopts a loading orphan before it becomes ready', async () => {
+		const { service, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/loading-orphan',
+			'removed-owner'
+		);
+		assert.strictEqual(opened.instances[0].state, 'loading');
+
+		const state = await service
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+				browser.windowId,
+				[]
+			);
+
+		assert.strictEqual(state.instances[0].projectId, undefined);
+		const retained = state.retainedWorkbenches?.[0];
+		assert.ok(retained);
+		assert.strictEqual(
+			URI.revive(retained.folderUri).fsPath,
+			'/tmp/loading-orphan'
+		);
+	});
+
+	test('leaves existing retained workbenches out of orphan adoption',
+		async () => {
+			const persistence = new FakePersistence();
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence
+			);
+			await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/already-retained').toJSON()
+			);
+			const savesBeforeReconcile = persistence.saveCalls;
+
+			const state = await service
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					browser.windowId,
+					[]
+				);
+
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.strictEqual(state.retainedWorkbenches?.length, 1);
+			assert.strictEqual(persistence.saveCalls, savesBeforeReconcile);
+		}
+	);
 
 	test('drops malformed resident persistence entries during startup', async () => {
 		const persistence = new FakePersistence({

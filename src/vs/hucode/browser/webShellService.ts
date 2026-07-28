@@ -44,8 +44,10 @@ import { IBrowserWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/browser/environmentService.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
+	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceOwner,
 	IHucodeHostedWorkspaceState,
+	IHucodeProjectFolderPromotion,
 	IHucodeShellService,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
@@ -763,31 +765,106 @@ export class WebHucodeShellController extends Disposable
 		return this.getState();
 	}
 
-	async reconcileRetainedWorkbenches(
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[]
+		projects: readonly IHucodeCompleteProjectCatalogEntry[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
-		for (const projectFolder of projectFolders) {
-			const instance = this.getInstanceByPath(
-				URI.revive(projectFolder.folderUri).fsPath
+		const liveProjectIds = new Set(projects.map(project =>
+			project.projectId
+		));
+		const projectFolders = projects.flatMap(project =>
+			project.folderUris.map(folderUri => ({
+				projectId: project.projectId,
+				folderUri: URI.revive(folderUri),
+			}))
+		);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			this.toPathKey(folder.folderUri.fsPath),
+			folder.projectId,
+		]));
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				this.toPathKey(instance.worktreePath)
 			);
-			if (instance) {
-				instance.projectId = projectFolder.projectId;
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId ||
+					instance.retainedWorkbenchId !== undefined;
+				instance.projectId = claimedProjectId;
+				instance.retainedWorkbenchId = undefined;
+				continue;
 			}
+			if (
+				!isHostedWorkspaceRestorable(instance) ||
+				!instance.projectId ||
+				liveProjectIds.has(instance.projectId)
+			) {
+				continue;
+			}
+
+			const retained = this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			instance.projectId = undefined;
+			instance.retainedWorkbenchId = retained.id;
+			changed = true;
 		}
 		if (this.retainedWorkbenches.reconcileProjectPaths(
-			projectFolders.map(folder => URI.revive(folder.folderUri))
+			projectFolders.map(folder => folder.folderUri)
 		)) {
+			changed = true;
+		}
+		if (changed) {
 			this.emitState();
 		}
 		return this.getState();
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		if (this.applyProjectFolderPromotions(projectFolders.map(folder => ({
+			projectId: folder.projectId,
+			folderUri: URI.revive(folder.folderUri),
+		})))) {
+			this.emitState();
+		}
+		return this.getState();
+	}
+
+	private applyProjectFolderPromotions(projectFolders: readonly {
+		readonly projectId: string;
+		readonly folderUri: URI;
+	}[]): boolean {
+		let changed = false;
+		for (const projectFolder of projectFolders) {
+			const instance = this.getInstanceByPath(
+				projectFolder.folderUri.fsPath
+			);
+			if (instance) {
+				changed ||= instance.projectId !== projectFolder.projectId ||
+					instance.retainedWorkbenchId !== undefined;
+				instance.projectId = projectFolder.projectId;
+				instance.retainedWorkbenchId = undefined;
+			}
+		}
+		if (this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		)) {
+			changed = true;
+		}
+		return changed;
 	}
 
 	async setHostedWorkbenchRestorePolicy(
