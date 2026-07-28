@@ -52,9 +52,15 @@ suite('HucodeOmniEagerBuiltins', () => {
 	});
 
 	test('the skip list carries no built-in that no longer exists', () => {
-		const known = new Set(
-			builtinManifests().map(({ id }) => id.toLowerCase())
-		);
+		// "Built-in" is both the bundled directories and the ones product.json
+		// has downloaded. Nothing on the skip list arrives the second way
+		// today, but GitHub.copilot-chat is bundled only because this fork
+		// ships extensions/copilot; if it ever became a downloaded built-in,
+		// checking directories alone would fail here for the wrong reason.
+		const known = new Set([
+			...builtinManifests().map(({ id }) => id.toLowerCase()),
+			...downloadedBuiltinExtensionIds().map(id => id.toLowerCase()),
+		]);
 
 		assert.deepStrictEqual(
 			HUCODE_OMNI_SHELL_SKIP_BUILTIN_EXTENSIONS.filter(
@@ -72,6 +78,16 @@ suite('HucodeOmniEagerBuiltins', () => {
 					&& events.some(e => e === '*' || e === 'onStartupFinished');
 			})
 			.map(({ id }) => id);
+	}
+
+	function downloadedBuiltinExtensionIds(): string[] {
+		const product = JSON.parse(
+			fs.readFileSync(path.join(repositoryRoot(), 'product.json'), 'utf8')
+		);
+
+		return (product.builtInExtensions ?? [])
+			.map((extension: { name?: string }) => extension.name)
+			.filter((name: string | undefined): name is string => !!name);
 	}
 
 	function builtinManifests(): { id: string; manifest: any }[] {
