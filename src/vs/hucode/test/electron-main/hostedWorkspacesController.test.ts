@@ -1233,6 +1233,24 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('leaves crashed project workbenches out of orphan adoption', async () => {
+		const crashed = createWorktree('crashed-orphan');
+		const { controller, stateChanges, viewFactory } = createController();
+		await controller.openWorkspace(crashed, 'removed-project');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		viewFactory.views[0].rawWebContents.emit('render-process-gone');
+		const changesBeforeReconcile = stateChanges.length;
+
+		await controller
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+		const state = controller.getState();
+		assert.strictEqual(state.instances[0].state, 'crashed');
+		assert.strictEqual(state.instances[0].projectId, 'removed-project');
+		assert.deepStrictEqual(state.retainedWorkbenches, []);
+		assert.strictEqual(stateChanges.length, changesBeforeReconcile);
+	});
+
 	test('missing retained restore is kept unloaded without a retry loop',
 		async () => {
 			const missing = join(tempRoot, 'missing');

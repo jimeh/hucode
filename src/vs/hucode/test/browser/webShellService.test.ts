@@ -3660,6 +3660,39 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('leaves crashed project workbenches out of orphan adoption', async () => {
+		const persistence = new FakePersistence();
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			persistence
+		);
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/crashed-orphan',
+			'removed-project'
+		);
+		assert.ok(opened.activeInstanceId);
+		await crashInstance(
+			service,
+			browser,
+			surface,
+			browser.windowId,
+			opened.activeInstanceId
+		);
+		const savesBeforeReconcile = persistence.saveCalls;
+
+		const state = await service
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+				browser.windowId,
+				[]
+			);
+
+		assert.strictEqual(state.instances[0].state, 'crashed');
+		assert.strictEqual(state.instances[0].projectId, 'removed-project');
+		assert.deepStrictEqual(state.retainedWorkbenches, []);
+		assert.strictEqual(persistence.saveCalls, savesBeforeReconcile);
+	});
+
 	test('drops malformed resident persistence entries during startup', async () => {
 		const persistence = new FakePersistence({
 			retainedWorkbenches: [],
