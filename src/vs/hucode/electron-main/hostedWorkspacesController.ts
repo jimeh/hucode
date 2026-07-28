@@ -167,6 +167,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
 	private shuttingDown = false;
+	private terminalShutdownRequested = false;
 	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
@@ -1163,7 +1164,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		try {
 			await this.attachInstance(instance, makeActive, workspaceFolderStat);
-			if (this.shuttingDown) {
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
 				return undefined;
 			}
 
@@ -1187,6 +1193,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
+				throw error;
+			}
+
 			await this.deferStateEmission(async () => {
 				this.markRetainedWorkbenchCrashed(instance.worktreePath);
 				await this.destroyInstance(instance, true, false);
@@ -1602,6 +1617,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		if (
+			reason === UnloadReason.CLOSE ||
+			reason === UnloadReason.QUIT
+		) {
+			this.terminalShutdownRequested = true;
+		}
 		if (this.shutdownPromise) {
 			return this.shutdownPromise;
 		}
@@ -1616,11 +1637,20 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			() => this.runShutdown(instances, reason)
 		);
 		this.shutdownPromise = shutdown;
-		void shutdown.catch(() => {
+		const releaseShutdown = (failed: boolean) => {
 			if (this.shutdownPromise === shutdown) {
-				this.shutdownPromise = undefined;
+				if (failed || !this.terminalShutdownRequested) {
+					this.shutdownPromise = undefined;
+				}
+				if (!this.terminalShutdownRequested) {
+					this.shuttingDown = false;
+				}
 			}
-		});
+		};
+		void shutdown.then(
+			() => releaseShutdown(false),
+			() => releaseShutdown(true)
+		);
 		return shutdown;
 	}
 
