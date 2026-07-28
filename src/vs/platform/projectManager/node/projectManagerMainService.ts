@@ -616,11 +616,13 @@ export class ProjectManagerMainService extends Disposable
 		) {
 			this.retryProjectRefresh(project, completed.owner).then(
 				undefined,
-				error =>
+				error => {
 					this.logService.warn(
 						`[ProjectManagerMainService] Failed to retry refresh ` +
 						`${project.rootPath}: ${error}`
-					)
+					);
+					this.finishProjectRefresh(project.id, completed.owner);
+				}
 			);
 		}
 
@@ -847,8 +849,18 @@ export class ProjectManagerMainService extends Disposable
 				result.kind === 'committed-retry' ||
 				result.kind === 'failed' && result.stateChanged
 			) {
-				this.saveState();
-				this.emitChange();
+				try {
+					this.saveState();
+					this.emitChange();
+				} catch (error) {
+					this.logService.warn(
+						`[ProjectManagerMainService] Failed to publish retry ` +
+						`refresh ${project.rootPath}: ${error}`
+					);
+					if (result.kind === 'complete') {
+						return;
+					}
+				}
 			}
 			if (result.kind === 'complete') {
 				return;

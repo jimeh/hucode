@@ -2184,7 +2184,7 @@ suite('ProjectManagerMainService', () => {
 			assert.strictEqual(new Set(retry.tokens).size, 1);
 		});
 
-	test('logs detached retry completion failures', async () => {
+	test('logs completed retry persistence failures', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
 		const retry = new TestRetryDelay();
@@ -2212,9 +2212,99 @@ suite('ProjectManagerMainService', () => {
 		await timeout(0);
 
 		assert.ok(logService.warnings.some(warning =>
-			String(warning).includes('Failed to retry refresh /repo:') &&
+			String(warning).includes('Failed to publish retry refresh /repo:') &&
 			String(warning).includes('state save failed')
 		));
+	});
+
+	test('watcher retry continues after persistence failure', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		const retry = new TestRetryDelay();
+		const logService = new TestLogService();
+		metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				retryDelay: retry.delay,
+			},
+			logService
+		);
+
+		await service.addProject(URI.file('/repo'));
+		const retryToken = retry.tokens[0];
+		stateService.setItemError = new Error('state save failed');
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.deepStrictEqual(retry.delays, [1000, 2000]);
+		assert.ok(logService.warnings.some(warning =>
+			String(warning).includes('Failed to publish retry refresh /repo:') &&
+			String(warning).includes('state save failed')
+		));
+
+		stateService.setItemError = undefined;
+		metadataWatcher.throwPaths.clear();
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.strictEqual(
+			metadataWatcher.activeListenerCount('/repo/.git/HEAD'),
+			1
+		);
+		assert.strictEqual(
+			metadataWatcher.activeListenerCount('/repo/.git/worktrees'),
+			1
+		);
+		assert.strictEqual(new Set(retry.tokens).size, 1);
+		assert.strictEqual(retry.tokens[1], retryToken);
+		assert.strictEqual(retryToken.isCancellationRequested, false);
+	});
+
+	test('retry delay rejection releases refresh ownership', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const logService = new TestLogService();
+		let retryToken: CancellationToken | undefined;
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				retryDelay: async (_milliseconds, token) => {
+					retryToken = token;
+					throw new Error('delay failed');
+				},
+			},
+			logService
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('temporary Git failure');
+		};
+
+		await service.refresh(project.id);
+		await timeout(0);
+		assert.ok(retryToken);
+		assert.ok(logService.warnings.some(warning =>
+			String(warning).includes('Failed to delay refresh /repo:') &&
+			String(warning).includes('delay failed')
+		));
+
+		service.dispose();
+		assert.strictEqual(retryToken.isCancellationRequested, false);
 	});
 
 	test('recovers an initially unavailable project through retry', async () => {
