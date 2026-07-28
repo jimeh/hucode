@@ -167,6 +167,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
 	private shuttingDown = false;
+	private terminalShutdownRequested = false;
+	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
@@ -833,7 +835,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		worktreePath: string,
 		projectId?: string
 	): Promise<void> {
+		if (this.shuttingDown) {
+			return;
+		}
+
 		await this.ensureRestored();
+		if (this.shuttingDown) {
+			return;
+		}
+
 		const activationIntent = ++this.activationIntentGeneration;
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
@@ -1080,6 +1090,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		makeActive: boolean,
 		activationIntent?: number
 	): Promise<IHostedWorkbenchInstance | undefined> {
+		if (this.shuttingDown) {
+			return undefined;
+		}
+
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
@@ -1150,6 +1164,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		try {
 			await this.attachInstance(instance, makeActive, workspaceFolderStat);
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
+				return undefined;
+			}
+
 			this.traceRestore(
 				`instance:attached makeActive=${makeActive} state=${instance.state}`,
 				instance
@@ -1170,6 +1193,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
+				throw error;
+			}
+
 			await this.deferStateEmission(async () => {
 				this.markRetainedWorkbenchCrashed(instance.worktreePath);
 				await this.destroyInstance(instance, true, false);
@@ -1520,11 +1552,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					return false;
 				}
 
-				this.logService.warn(
-					'[HucodeShellMainService] Ignoring hosted workspace ' +
-					`unload veto during Omni shutdown for ` +
-					`${instance.worktreePath}.`
-				);
+				this.logIgnoredShutdownUnloadVeto(instance);
 			}
 		}
 
@@ -1588,21 +1616,96 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
-	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
-		if (this.shuttingDown) {
-			return;
+	shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		if (
+			reason === UnloadReason.CLOSE ||
+			reason === UnloadReason.QUIT
+		) {
+			this.terminalShutdownRequested = true;
+		}
+		if (this.shutdownPromise) {
+			return this.shutdownPromise;
 		}
 
 		this.updateWindowRestoreState();
 		this.shuttingDown = true;
-		const instances = Array.from(this.instancesById.values());
+		const instances = Array.from(this.instancesById.values())
+			.filter(instance => !instance.disposed ||
+				!!instance.view ||
+				!!instance.configObjectUrl);
+		const shutdown = Promise.resolve().then(
+			() => this.runShutdown(instances, reason)
+		);
+		this.shutdownPromise = shutdown;
+		const releaseShutdown = (failed: boolean) => {
+			if (this.shutdownPromise === shutdown) {
+				if (failed || !this.terminalShutdownRequested) {
+					this.shutdownPromise = undefined;
+				}
+				if (!this.terminalShutdownRequested) {
+					this.shuttingDown = false;
+				}
+			}
+		};
+		void shutdown.then(
+			() => releaseShutdown(false),
+			() => releaseShutdown(true)
+		);
+		return shutdown;
+	}
+
+	private async runShutdown(
+		instances: readonly IHostedWorkbenchInstance[],
+		reason: UnloadReason
+	): Promise<void> {
+		const unloadInstances = instances.filter(instance => !instance.disposed);
+		const unloadResults = await Promise.allSettled(
+			unloadInstances.map(instance =>
+				this.unloadInRenderer(instance, reason, true)
+			)
+		);
+		let firstFailure: { readonly error: unknown } | undefined;
+		for (let index = 0; index < unloadInstances.length; index++) {
+			const unloadResult = unloadResults[index];
+			if (unloadResult.status === 'rejected') {
+				firstFailure ??= { error: unloadResult.reason };
+			} else if (unloadResult.value === 'vetoed') {
+				this.logIgnoredShutdownUnloadVeto(unloadInstances[index]);
+			}
+		}
+
+		// Native view ownership changes remain ordered even though the renderer
+		// handshakes above are independent and can consume their budgets
+		// concurrently.
 		for (const instance of instances) {
-			if (instance.disposed) {
+			if (
+				instance.disposed &&
+				!instance.view &&
+				!instance.configObjectUrl
+			) {
 				continue;
 			}
 
-			await this.destroyInstance(instance, false, true, reason, true);
+			try {
+				await this.destroyInstance(instance, false, false);
+			} catch (error) {
+				firstFailure ??= { error };
+			}
 		}
+
+		if (firstFailure) {
+			throw firstFailure.error;
+		}
+	}
+
+	private logIgnoredShutdownUnloadVeto(
+		instance: IHostedWorkbenchInstance
+	): void {
+		this.logService.warn(
+			'[HucodeShellMainService] Ignoring hosted workspace ' +
+			`unload veto during Omni shutdown for ` +
+			`${instance.worktreePath}.`
+		);
 	}
 
 	private async unloadInRenderer(
