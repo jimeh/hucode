@@ -65,8 +65,14 @@ const PROJECT_REFRESH_RETRY_DELAYS_MS = [
 
 interface ProjectRefreshOwner {
 	readonly source: CancellationTokenSource;
-	initialAttempt?: Promise<boolean>;
+	initialAttempt?: Promise<ProjectRefreshAttemptResult>;
 }
+
+type ProjectRefreshAttemptResult =
+	| { readonly kind: 'canceled' }
+	| { readonly kind: 'failed'; readonly stateChanged: boolean }
+	| { readonly kind: 'committed-retry' }
+	| { readonly kind: 'complete' };
 
 /**
  * Watches targeted project metadata paths for worktree-affecting changes.
@@ -597,23 +603,60 @@ export class ProjectManagerMainService extends Disposable
 		const owner = this.replaceProjectRefreshOwner(project.id);
 		const initialAttempt = this.tryRefreshProject(project, owner);
 		owner.initialAttempt = initialAttempt;
-		const succeeded = await initialAttempt;
-		if (!succeeded && this.isCurrentRefreshOwner(project.id, owner)) {
-			this.retryProjectRefresh(project, owner).then(undefined, error =>
-				this.logService.warn(
-					`[ProjectManagerMainService] Failed to retry refresh ` +
-					`${project.rootPath}: ${error}`
-				)
+		const completed = await this.waitForRefreshAttempt(
+			project.id,
+			owner,
+			initialAttempt
+		);
+		if (
+			(completed.result.kind === 'failed' ||
+				completed.result.kind === 'committed-retry') &&
+			completed.owner === owner &&
+			this.isCurrentRefreshOwner(project.id, completed.owner)
+		) {
+			this.retryProjectRefresh(project, completed.owner).then(
+				undefined,
+				error =>
+					this.logService.warn(
+						`[ProjectManagerMainService] Failed to retry refresh ` +
+						`${project.rootPath}: ${error}`
+					)
 			);
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
 	}
 
+	private async waitForRefreshAttempt(
+		projectId: string,
+		owner: ProjectRefreshOwner,
+		attempt: Promise<ProjectRefreshAttemptResult>
+	): Promise<{
+		readonly owner: ProjectRefreshOwner;
+		readonly result: ProjectRefreshAttemptResult;
+	}> {
+		let currentOwner = owner;
+		let result = await attempt;
+		while (result.kind === 'canceled') {
+			const winningOwner = this.projectRefreshOwners.get(projectId);
+			const winningAttempt = winningOwner?.initialAttempt;
+			if (!winningOwner ||
+				winningOwner === currentOwner ||
+				!winningAttempt) {
+				break;
+			}
+
+			currentOwner = winningOwner;
+			result = await winningAttempt;
+		}
+
+		return { owner: currentOwner, result };
+	}
+
 	private async tryRefreshProject(
 		project: StoredProjectRecord,
 		owner: ProjectRefreshOwner
-	): Promise<boolean> {
+	): Promise<ProjectRefreshAttemptResult> {
 		const token = owner.source.token;
 		try {
 			// Resolve the git common dir (needed only for metadata watchers)
@@ -639,7 +682,7 @@ export class ProjectManagerMainService extends Disposable
 			if (!this.isCurrentRefreshOwner(project.id, owner) ||
 				token.isCancellationRequested) {
 				watchers?.dispose();
-				return false;
+				return { kind: 'canceled' };
 			}
 
 			// No await may occur between cloning the live metadata and committing
@@ -686,28 +729,30 @@ export class ProjectManagerMainService extends Disposable
 			}
 			if (watchers !== null) {
 				this.finishProjectRefresh(project.id, owner);
-				return true;
+				return { kind: 'complete' };
 			}
 
-			return false;
+			return { kind: 'committed-retry' };
 		} catch (error) {
 			if (isCancellationError(error) ||
 				token.isCancellationRequested ||
 				!this.isCurrentRefreshOwner(project.id, owner)) {
-				return false;
+				return { kind: 'canceled' };
 			}
 
 			this.logService.warn(
 				`[ProjectManagerMainService] Failed to refresh ` +
 				`${project.rootPath}: ${error}`
 			);
-			this.projectWorktreeStates.set(
-				project.id,
-				this.projectWorktrees.has(project.id)
-					? 'stale'
-					: 'unavailable'
-			);
-			return false;
+			const previousState = this.projectWorktreeStates.get(project.id);
+			const nextState = this.projectWorktrees.has(project.id)
+				? 'stale'
+				: 'unavailable';
+			this.projectWorktreeStates.set(project.id, nextState);
+			return {
+				kind: 'failed',
+				stateChanged: previousState !== nextState,
+			};
 		}
 	}
 
@@ -786,15 +831,26 @@ export class ProjectManagerMainService extends Disposable
 						`${project.rootPath}: ${error}`
 					);
 				}
+				this.finishProjectRefresh(project.id, owner);
 				return;
 			}
 
 			if (!this.isCurrentRefreshOwner(project.id, owner)) {
 				return;
 			}
-			if (await this.tryRefreshProject(project, owner)) {
+			const result = await this.tryRefreshProject(project, owner);
+			if (result.kind === 'canceled') {
+				return;
+			}
+			if (
+				result.kind === 'complete' ||
+				result.kind === 'committed-retry' ||
+				result.kind === 'failed' && result.stateChanged
+			) {
 				this.saveState();
 				this.emitChange();
+			}
+			if (result.kind === 'complete') {
 				return;
 			}
 		}
@@ -1092,7 +1148,8 @@ export class ProjectManagerMainService extends Disposable
 			return Promise.resolve();
 		}
 
-		const hydration = this.runProjectHydration(project)
+		const hydration = this.refreshProject(project)
+			.then(() => undefined)
 			.finally(() => {
 				if (this.projectHydrations.get(project.id) === hydration) {
 					this.projectHydrations.delete(project.id);
@@ -1100,21 +1157,6 @@ export class ProjectManagerMainService extends Disposable
 			});
 		this.projectHydrations.set(project.id, hydration);
 		return hydration;
-	}
-
-	private async runProjectHydration(
-		project: StoredProjectRecord
-	): Promise<void> {
-		await this.refreshProject(project);
-		while (!this.projectWorktreeStates.has(project.id)) {
-			const currentAttempt = this.projectRefreshOwners.get(project.id)
-				?.initialAttempt;
-			if (!currentAttempt) {
-				return;
-			}
-
-			await currentAttempt;
-		}
 	}
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {

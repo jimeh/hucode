@@ -28,6 +28,7 @@ import {
 	CreateWorktreeOptions,
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
+	ProjectRecord,
 	StoredProjectManagerState,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
@@ -2335,6 +2336,92 @@ suite('ProjectManagerMainService', () => {
 		);
 	});
 
+	test('superseded refresh waits for the winning initial attempt', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+		const supersededDiscovery =
+			new DeferredPromise<readonly WorktreeRecord[]>();
+		const winningDiscovery =
+			new DeferredPromise<readonly WorktreeRecord[]>();
+		let discovery = 0;
+		gitWorktreeService.listWorktreesHandler = async () => {
+			discovery++;
+			return discovery === 1
+				? supersededDiscovery.p
+				: winningDiscovery.p;
+		};
+
+		let supersededSettled = false;
+		const supersededRefresh = service.refresh(project.id);
+		void supersededRefresh.then(() => supersededSettled = true);
+		await timeout(0);
+		const winningRefresh = service.refresh(project.id);
+		supersededDiscovery.complete([
+			createMainWorktree('/repo', 'superseded'),
+		]);
+		await timeout(0);
+		assert.strictEqual(supersededSettled, false);
+
+		winningDiscovery.complete([
+			createMainWorktree('/repo', 'winner'),
+			createLinkedWorktree('/repo.worktrees/winner', 'winner'),
+		]);
+		const [superseded, winner] = await Promise.all([
+			supersededRefresh,
+			winningRefresh,
+		]);
+
+		for (const projects of [superseded, winner]) {
+			assert.deepStrictEqual(
+				projects[0].worktrees.map(worktree => worktree.branch),
+				['winner', 'winner']
+			);
+		}
+	});
+
+	test('superseded refresh does not duplicate the winner retry chain',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const retry = new TestRetryDelay();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{ retryDelay: retry.delay }
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			const supersededDiscovery =
+				new DeferredPromise<readonly WorktreeRecord[]>();
+			let discovery = 0;
+			gitWorktreeService.listWorktreesHandler = async () => {
+				discovery++;
+				if (discovery === 1) {
+					return supersededDiscovery.p;
+				}
+				throw new Error('winning discovery failed');
+			};
+
+			const supersededRefresh = service.refresh(project.id);
+			await timeout(0);
+			const winnerRefresh = service.refresh(project.id);
+			await winnerRefresh;
+			supersededDiscovery.complete([
+				createMainWorktree('/repo', 'superseded'),
+			]);
+			await supersededRefresh;
+
+			assert.deepStrictEqual(retry.delays, [1000]);
+		});
+
 	test('refresh preserves metadata edits made while Git discovery is pending',
 		async () => {
 			const stateService = new TestStateService();
@@ -2701,6 +2788,133 @@ suite('ProjectManagerMainService', () => {
 			);
 			assert.strictEqual(new Set(retry.tokens).size, 1);
 		});
+
+	test('watcher retries publish and persist every committed discovery',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const metadataWatcher = new TestProjectMetadataWatcher();
+			const retry = new TestRetryDelay();
+			const alphaPath = '/repo.worktrees/alpha';
+			const bravoPath = '/repo.worktrees/bravo';
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree(alphaPath, 'alpha'),
+				createLinkedWorktree(bravoPath, 'bravo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{
+					metadataWatcher,
+					retryDelay: retry.delay,
+				}
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			await service.renameWorktree(project.id, alphaPath, 'Alpha');
+			await service.renameWorktree(project.id, bravoPath, 'Bravo');
+			await service.setWorktreePinned(project.id, alphaPath, true);
+			await service.setWorktreePinned(project.id, bravoPath, true);
+			metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+			const events: (readonly ProjectRecord[])[] = [];
+			disposables.add(service.onDidChangeProjects(projects =>
+				events.push(projects)
+			));
+			await service.refresh(project.id);
+			events.length = 0;
+
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree(alphaPath, 'updated-alpha'),
+			]);
+			retry.releaseNext();
+			await timeout(0);
+			await timeout(0);
+
+			assert.strictEqual(events.length, 1);
+			assert.strictEqual(events[0][0].worktreeState, 'current');
+			assert.deepStrictEqual(
+				events[0][0].worktrees.map(worktree => worktree.branch),
+				['main', 'updated-alpha']
+			);
+			let stored = stateService.getItem<StoredProjectManagerState>(
+				PROJECT_MANAGER_STORAGE_KEY
+			);
+			assert.deepStrictEqual(
+				stored?.projects[0].pinnedWorktreePaths,
+				[alphaPath]
+			);
+			assert.deepStrictEqual(stored?.projects[0].worktreeLabels, [{
+				path: alphaPath,
+				label: 'Alpha',
+			}]);
+
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			retry.releaseNext();
+			await timeout(0);
+			await timeout(0);
+
+			assert.strictEqual(events.length, 2);
+			assert.deepStrictEqual(
+				events[1][0].worktrees.map(worktree => worktree.branch),
+				['main']
+			);
+			stored = stateService.getItem<StoredProjectManagerState>(
+				PROJECT_MANAGER_STORAGE_KEY
+			);
+			assert.strictEqual(
+				stored?.projects[0].pinnedWorktreePaths,
+				undefined
+			);
+			assert.strictEqual(stored?.projects[0].worktreeLabels, undefined);
+			assert.deepStrictEqual(
+				retry.delays,
+				[1000, 2000, 5000]
+			);
+		});
+
+	test('retry Git failure publishes a stale transition', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		const retry = new TestRetryDelay();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				retryDelay: retry.delay,
+			}
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+		await service.refresh(project.id);
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('Git failed during watcher retry');
+		};
+
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'stale');
+		assert.deepStrictEqual(events[0][0].worktrees, [
+			createMainWorktree('/repo'),
+		]);
+		assert.deepStrictEqual(retry.delays, [1000, 2000]);
+	});
 
 	test('cancels retry ownership when a project is removed', async () => {
 		const stateService = new TestStateService();

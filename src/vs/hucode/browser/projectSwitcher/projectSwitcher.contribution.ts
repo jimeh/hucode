@@ -99,6 +99,8 @@ import {
 	RENAME_WORKTREE_COMMAND_ID,
 	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcherCommon.js';
+import { toggleProjectTreeItemCollapsed } from
+	'./projectSwitcherCollapse.js';
 import {
 	openProjectSwitcherTarget,
 	setLastActiveWorktreeBestEffort,
@@ -1642,15 +1644,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		const collapsed = this.tree.isCollapsed(item);
-		if (collapsed) {
-			this.tree.expand(item);
-			this.setProjectCollapsed(item, false);
-			return;
-		}
-
-		this.tree.collapse(item);
-		this.setProjectCollapsed(item, true);
+		toggleProjectTreeItemCollapsed(
+			this.tree,
+			item,
+			collapsed => this.setProjectCollapsed(item, collapsed)
+		);
 	}
 
 	private toggleOmniSectionCollapsed(
