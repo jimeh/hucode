@@ -17,3 +17,11 @@ its shutdown listeners still run, as they always have on the browser's own
 unload path, and a few of those do not reset themselves — and a successful
 unload shuts the workbench down exactly once, however many requests raced for
 it.
+
+The two phases also fail in opposite directions. Nothing is committed while
+preparation is outstanding, so an unanswered preparation keeps the workbench;
+once the commit has been sent it cannot be taken back, so an unanswered commit
+removes the workbench rather than leave the page wrapping one that has already
+shut down. Requests that race for the same workbench now agree on a single
+outcome instead of applying their own in arrival order, so closing a workbench
+no longer leaves a dormant entry offering to restore it.

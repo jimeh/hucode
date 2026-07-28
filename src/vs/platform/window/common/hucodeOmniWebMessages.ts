@@ -43,11 +43,31 @@ export interface IHucodeOmniWebPortMessage {
 }
 
 /**
+ * Version of the hosted-workbench half of the Omni web protocol.
+ *
+ * 1. `prepareUnload` performs the whole shutdown; there is no commit phase.
+ * 2. unload is the two-phase `prepareUnload`/`commitUnload` handshake.
+ *
+ * A workbench announces this when it signals ready, and a shell must assume
+ * version 1 when a workbench announces nothing. The pairing is reachable:
+ * `reloadWorkspace` reloads a single hosted iframe without touching the shell
+ * document, so a long-lived shell whose server was rolled back can find
+ * itself driving an older workbench.
+ */
+export const HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION = 2;
+
+/**
  * Message sent by a hosted iframe when its workbench is ready.
  */
 export interface IHucodeOmniWebReadyMessage {
 	readonly type: HucodeOmniWebChildMessageType.Ready;
 	readonly instanceId: string;
+
+	/**
+	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows
+	 * it. Absent from workbenches built before the unload handshake split.
+	 */
+	readonly protocolVersion?: number;
 }
 
 /**
@@ -94,10 +114,9 @@ export interface IHucodeOmniWebWorkbenchClient {
 	 * is the irreversible half of the handshake. Resolves false when no
 	 * prepared unload was outstanding, leaving the workbench alive.
 	 *
-	 * This needs no capability negotiation with older workbenches. Hosted
-	 * iframes are children of the shell document, so a shell that reloads
-	 * recreates every workbench from the server; a shell can never end up
-	 * driving a workbench built before this call existed.
+	 * Only workbenches announcing {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION}
+	 * 2 or later have this. A shell must read the version a workbench sent
+	 * with its ready message before it decides how to unload it.
 	 */
 	commitUnload(): Promise<boolean>;
 }

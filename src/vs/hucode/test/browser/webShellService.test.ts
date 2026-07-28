@@ -31,6 +31,7 @@ import { HucodeHostedOmniWebUnloadCoordinator } from
 import {
 	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HucodeOmniWebChildMessageType,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
@@ -119,11 +120,13 @@ suite('WebHucodeShellService', () => {
 		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
 		persistence?: IWebHucodeShellPersistenceAdapter,
 		restorePolicy: 'active' | 'all' | 'none' = 'active',
-		folderAccess?: IWebHucodeShellFolderAccess
+		folderAccess?: IWebHucodeShellFolderAccess,
+		logService: RecordingLogService = new RecordingLogService()
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
 		readonly browser: FakeBrowserAdapter;
+		readonly logService: RecordingLogService;
 	} {
 		const surface = document.createElement('div');
 		document.body.append(surface);
@@ -147,9 +150,10 @@ suite('WebHucodeShellService', () => {
 			browser,
 			persistence,
 			restorePolicy,
-			folderAccess
+			folderAccess,
+			logService
 		));
-		return { service, surface, browser };
+		return { service, surface, browser, logService };
 	}
 
 	function postMessage(
@@ -169,10 +173,13 @@ suite('WebHucodeShellService', () => {
 	function markReady(
 		browser: FakeBrowserAdapter,
 		surface: HTMLElement,
-		instanceId: string
+		instanceId: string,
+		protocolVersion: number | undefined =
+			HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION
 	): void {
 		postMessage(browser, surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
+			...(protocolVersion === undefined ? {} : { protocolVersion }),
 		});
 	}
 
@@ -220,6 +227,35 @@ suite('WebHucodeShellService', () => {
 			client.getChannel(HUCODE_OMNI_WEB_SHELL_CHANNEL)
 		);
 		return { workbench, shell, shellWindowId: posted.windowId };
+	}
+
+	/**
+	 * Connects a child built before the unload handshake was split: it
+	 * announces no protocol version and its `prepareUnload` is the whole
+	 * shutdown, with no commit phase to call.
+	 */
+	function connectLegacyChild(
+		browser: FakeBrowserAdapter,
+		surface: HTMLElement,
+		instanceId: string
+	): { readonly workbench: LegacyHostedWorkbench } {
+		markReady(browser, surface, instanceId, undefined);
+
+		const posted = browser.portMessages.at(-1);
+		assert.ok(posted, 'expected a transferred shell port');
+		const client = disposables.add(new MessagePortClient(
+			posted.port,
+			`test-legacy-child-${instanceId}`
+		));
+		const workbench = new LegacyHostedWorkbench();
+		client.registerChannel(
+			HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+			ProxyChannel.fromService(
+				workbench,
+				disposables.add(new DisposableStore())
+			)
+		);
+		return { workbench };
 	}
 
 	interface IChildLifecycleEvents {
@@ -288,6 +324,20 @@ suite('WebHucodeShellService', () => {
 			events,
 			shellWindowId: posted.windowId,
 		};
+	}
+
+	/**
+	 * Waits for something that must happen, bounded so that a failure shows
+	 * up as a failed assertion instead of a hung test.
+	 */
+	async function waitFor(
+		predicate: () => boolean,
+		message: string
+	): Promise<void> {
+		for (let attempt = 0; attempt < 200 && !predicate(); attempt++) {
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+		}
+		assert.ok(predicate(), message);
 	}
 
 	async function waitForInstanceState(
@@ -621,6 +671,237 @@ suite('WebHucodeShellService', () => {
 			});
 		});
 
+	test('removes the hosted iframe when the unload commit connection fails',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			// A lost reply says nothing about whether the workbench shut
+			// down, and the commit is irreversible and already sent.
+			child.workbench.commitUnloadRejects = true;
+
+			const closedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: closedState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [],
+				iframeConnected: false,
+				commitCalls: 1,
+			});
+		});
+
+	test('keeps the hosted iframe when the unload preparation connection fails',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			// Nothing is committed yet, so an unknown answer must protect
+			// the workbench rather than discard it.
+			child.workbench.prepareUnloadRejects = true;
+
+			const keptState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: keptState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				commitCalls: 0,
+			});
+		});
+
+	test('removes a legacy hosted workbench that has no commit phase',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLegacyChild(browser, surface, instanceId);
+
+			const closedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual({
+				instanceIds: closedState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+				shutDown: child.workbench.shutDown,
+			}, {
+				instanceIds: [],
+				iframeConnected: false,
+				prepareCalls: 1,
+				shutDown: true,
+			});
+		});
+
+	test('keeps a workbench whose preparation lands after its timeout',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			browser.collapseTimeouts = true;
+			const { service, surface, logService } = createService(browser);
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			const preparation = new DeferredPromise<boolean>();
+			child.workbench.prepareUnloadResult = preparation.p;
+
+			const timedOutState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			// The preparation cannot be cancelled, so it lands late having
+			// already run the child's shutdown listeners. It must not read
+			// as permission to remove a workbench the shell decided to keep.
+			await preparation.complete(true);
+			await waitFor(
+				() => logService.warnings.some(
+					warning => warning.includes('after the shell gave up')
+				),
+				'expected the late preparation to be reported'
+			);
+			const settledState = await service.getWindowState(windowId);
+
+			assert.deepStrictEqual({
+				timedOut: timedOutState.instances.map(
+					instance => instance.instanceId
+				),
+				settled: settledState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				commitCalls: child.workbench.commitUnloadCalls,
+				lateWarnings: logService.warnings.filter(
+					warning => warning.includes('after the shell gave up')
+				).length,
+			}, {
+				timedOut: [instanceId],
+				settled: [instanceId],
+				iframeConnected: true,
+				commitCalls: 0,
+				lateWarnings: 1,
+			});
+		});
+
+	test('does not leave a dormant record when a close joins a suspend',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const opened = await service.retainAndOpenWorkbench(
+				windowId,
+				URI.file('/tmp/race-suspend-first').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			// The suspend owns the handshake and the close joins it, so the
+			// weaker request is the one holding the claim.
+			const suspending = service.suspendWorkspace(windowId, instanceId);
+			await child.workbench.prepareUnloadStarted.p;
+			const closing = service.closeWorkspace(windowId, instanceId);
+			await prepareGate.complete();
+			await Promise.all([suspending, closing]);
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instanceStates: finalState.instances.map(
+					instance => instance.state
+				),
+				desiredState: finalState.retainedWorkbenches?.[0].desiredState,
+				beforeShutdown: child.events.beforeShutdown,
+			}, {
+				instanceStates: [],
+				desiredState: 'unloaded',
+				beforeShutdown: 1,
+			});
+		});
+
+	test('does not leave a dormant record when a suspend joins a dismiss',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const opened = await service.retainAndOpenWorkbench(
+				windowId,
+				URI.file('/tmp/race-dismiss-first').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectLifecycleBackedChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			const dismissing = service.dismissRetainedWorkbench(
+				windowId,
+				workbenchId
+			);
+			await child.workbench.prepareUnloadStarted.p;
+			const suspending = service.suspendWorkspace(windowId, instanceId);
+			await prepareGate.complete();
+			await Promise.all([dismissing, suspending]);
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instanceStates: finalState.instances.map(
+					instance => instance.state
+				),
+				retained: finalState.retainedWorkbenches?.length,
+				beforeShutdown: child.events.beforeShutdown,
+			}, {
+				instanceStates: [],
+				retained: 0,
+				beforeShutdown: 1,
+			});
+		});
+
 	test('shares one unload handshake across concurrent close requests',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -676,21 +957,15 @@ suite('WebHucodeShellService', () => {
 				surface,
 				instanceId
 			);
-			const commitGate = new DeferredPromise<void>();
-			child.workbench.commitUnloadGate = commitGate.p;
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
 
-			// Park the close inside its commit, so the suspend runs its
-			// checks while the instance is still registered and only removes
-			// it afterwards. That ordering is what turns two unloads into a
-			// dormant record for a workbench the user closed.
+			// The close owns the handshake and the suspend joins it while
+			// the workbench is still registered.
 			const closing = service.closeWorkspace(windowId, instanceId);
-			await child.workbench.commitUnloadStarted.p;
+			await child.workbench.prepareUnloadStarted.p;
 			const suspending = service.suspendWorkspace(windowId, instanceId);
-			// A second handshake only exists while the two unloads are
-			// unaware of each other; once they share one there is nothing
-			// here to wait for.
-			await raceTimeout(child.workbench.repeatPrepareUnloadStarted.p, 50);
-			await commitGate.complete();
+			await prepareGate.complete();
 			await Promise.all([closing, suspending]);
 
 			const finalState = await service.getWindowState(windowId);
@@ -2199,9 +2474,11 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	openFilesResult = true;
 	prepareUnloadResult: boolean | Promise<boolean> = true;
 	prepareUnloadCalls = 0;
+	prepareUnloadRejects = false;
 	onPrepareUnload: (() => void) | undefined;
 	commitUnloadResult: boolean | Promise<boolean> = true;
 	commitUnloadCalls = 0;
+	commitUnloadRejects = false;
 	readonly commands: {
 		readonly commandId: string;
 		readonly args: readonly unknown[];
@@ -2222,12 +2499,56 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
 		this.onPrepareUnload?.();
+		if (this.prepareUnloadRejects) {
+			throw new Error('hosted workbench connection lost');
+		}
 		return this.prepareUnloadResult;
 	}
 
 	async commitUnload(): Promise<boolean> {
 		this.commitUnloadCalls++;
+		if (this.commitUnloadRejects) {
+			throw new Error('hosted workbench connection lost');
+		}
 		return this.commitUnloadResult;
+	}
+}
+
+/**
+ * Workbench as it existed before the unload handshake was split in two:
+ * `prepareUnload` shuts the workbench down and there is no commit phase, so
+ * calling one rejects the way any unknown channel command does.
+ */
+class LegacyHostedWorkbench {
+	prepareUnloadCalls = 0;
+	shutDown = false;
+
+	async runCommand(): Promise<boolean> {
+		return !this.shutDown;
+	}
+
+	async openFiles(): Promise<boolean> {
+		return true;
+	}
+
+	async prepareUnload(): Promise<boolean> {
+		this.prepareUnloadCalls++;
+		this.shutDown = true;
+		return true;
+	}
+}
+
+/** Records what the shell logged, so lossy paths can be asserted on. */
+class RecordingLogService {
+	readonly infos: string[] = [];
+	readonly warnings: string[] = [];
+
+	info(message: string): void {
+		this.infos.push(message);
+	}
+
+	warn(message: string): void {
+		this.warnings.push(message);
 	}
 }
 

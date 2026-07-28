@@ -543,12 +543,32 @@ human-facing guides rather than replacing them.
   the workbench, though: `onBeforeShutdown` listeners run for real, and some
   do not reset themselves when the shutdown is abandoned.
 - The two unload phases fail in opposite directions, deliberately. Preparation
-  fails closed — a veto or a silent workbench keeps the workbench, because it
-  is still running and there is state to protect. The commit fails open — the
-  request is irreversible and already in flight, so a silent workbench is
-  removed anyway; keeping its iframe would leave the page wrapping a workbench
-  that has already gone. An *answered* refusal is not a timeout and still
-  keeps the workbench.
+  fails closed — a veto, a lost answer or a silent workbench all keep the
+  workbench, because it is still running and there is state to protect. The
+  commit fails open — the request is irreversible and already sent, so a
+  silence or a lost reply removes the workbench anyway; keeping its iframe
+  would leave the page wrapping a workbench that has already gone. An
+  *answered* refusal is not a silence and still keeps the workbench. Timeouts
+  never cancel the phase they gave up on, which is why neither budget can be
+  tight: a preparation that lands late has already run shutdown listeners on a
+  workbench the shell kept.
+- Concurrent unload requests for one hosted workbench share a single handshake
+  and a single outcome. Each caller declares a disposition — `suspend`,
+  `unload`, `dismiss`, or `shutdown` for page teardown — and the strongest one
+  requested is applied once, centrally, after the handshake. Do not give call
+  sites their own follow-up after the await: the commit sits between the
+  shell's checks and the removal, so two callers otherwise each apply their own
+  outcome and the result depends on arrival order, typically leaving a dormant
+  record offering to restore a workbench the user closed.
+- Hosted workbenches announce `HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` in
+  their ready message, and a workbench that announces nothing is from before
+  the unload split, where `prepareUnload` *was* the whole shutdown. This
+  pairing is reachable: `reloadWorkspace` reloads one hosted iframe without
+  touching the shell document, so a long-lived shell whose server rolled back
+  can drive an older workbench. For those the shell treats a successful
+  preparation as already committed — it neither commits nor re-checks
+  supersession, because the workbench is already gone and abandoning it there
+  would strand a dead iframe.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child

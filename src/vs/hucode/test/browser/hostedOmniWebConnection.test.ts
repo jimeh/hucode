@@ -9,6 +9,7 @@ import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
+	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
@@ -112,10 +113,14 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		service.signalReady();
 		service.notifyFocus(false);
 
+		// The shell decides how to unload a workbench from the version it
+		// announces here, so a ready signal without one reads as a workbench
+		// built before the unload handshake was split.
 		assert.deepStrictEqual(browser.postedMessages, [
 			{
 				type: HucodeOmniWebChildMessageType.Ready,
 				instanceId: INSTANCE_ID,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 			},
 			{
 				type: HucodeOmniWebChildMessageType.Focus,
