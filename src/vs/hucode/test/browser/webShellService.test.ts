@@ -170,16 +170,21 @@ suite('WebHucodeShellService', () => {
 		);
 	}
 
+	/**
+	 * `'none'` rather than `undefined` for a workbench that announces no
+	 * version: passing `undefined` would silently take the default and
+	 * announce the current protocol instead.
+	 */
 	function markReady(
 		browser: FakeBrowserAdapter,
 		surface: HTMLElement,
 		instanceId: string,
-		protocolVersion: number | undefined =
+		protocolVersion: number | 'none' =
 			HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION
 	): void {
 		postMessage(browser, surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
-			...(protocolVersion === undefined ? {} : { protocolVersion }),
+			...(protocolVersion === 'none' ? {} : { protocolVersion }),
 		});
 	}
 
@@ -239,7 +244,7 @@ suite('WebHucodeShellService', () => {
 		surface: HTMLElement,
 		instanceId: string
 	): { readonly workbench: LegacyHostedWorkbench } {
-		markReady(browser, surface, instanceId, undefined);
+		markReady(browser, surface, instanceId, 'none');
 
 		const posted = browser.portMessages.at(-1);
 		assert.ok(posted, 'expected a transferred shell port');
@@ -331,13 +336,13 @@ suite('WebHucodeShellService', () => {
 	 * up as a failed assertion instead of a hung test.
 	 */
 	async function waitFor(
-		predicate: () => boolean,
+		predicate: () => boolean | Promise<boolean>,
 		message: string
 	): Promise<void> {
-		for (let attempt = 0; attempt < 200 && !predicate(); attempt++) {
+		for (let attempt = 0; attempt < 200 && !await predicate(); attempt++) {
 			await new Promise<void>(resolve => setTimeout(resolve, 0));
 		}
-		assert.ok(predicate(), message);
+		assert.ok(await predicate(), message);
 	}
 
 	async function waitForInstanceState(
@@ -703,6 +708,9 @@ suite('WebHucodeShellService', () => {
 			});
 		});
 
+	// Characterization, not regression: this held before the commit phase
+	// learned to fail open, and its job is to fail if the two phases are ever
+	// made to agree.
 	test('keeps the hosted iframe when the unload preparation connection fails',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -732,6 +740,63 @@ suite('WebHucodeShellService', () => {
 				instanceIds: [instanceId],
 				iframeConnected: true,
 				commitCalls: 0,
+			});
+		});
+
+	test('does not park a dormant record over a live replacement workbench',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const opened = await service.openWorkspace(
+				windowId,
+				'/tmp/replaced-mid-unload',
+				'project'
+			);
+			const instanceId = opened.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			const commitGate = new DeferredPromise<boolean>();
+			child.workbench.commitUnloadResult = commitGate.p;
+
+			const suspending = service.suspendWorkspace(windowId, instanceId);
+			await waitFor(
+				() => child.workbench.commitUnloadCalls === 1,
+				'expected the unload commit to be in flight'
+			);
+
+			// The workbench crashes and is reopened while its commit is
+			// still outstanding, so a live replacement owns the path by the
+			// time the suspend gets its answer.
+			child.workbench.runCommandResult = false;
+			await service.reloadWorkspace(windowId);
+			await waitFor(
+				async () => (await service.getWindowState(windowId)).instances
+					.some(entry => entry.instanceId === instanceId &&
+						entry.state === 'crashed'),
+				'expected the workbench to crash'
+			);
+			const reopened = await service.openWorkspace(
+				windowId,
+				'/tmp/replaced-mid-unload',
+				'project'
+			);
+			const replacementId = reopened.activeInstanceId;
+			assert.ok(replacementId);
+			assert.notStrictEqual(replacementId, instanceId);
+
+			await commitGate.complete(true);
+			await suspending;
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instanceIds: finalState.instances.map(
+					instance => instance.instanceId
+				),
+				replacementConnected: isIframeConnected(surface, replacementId),
+				iframes: surface.querySelectorAll('iframe').length,
+			}, {
+				instanceIds: [replacementId],
+				replacementConnected: true,
+				iframes: 1,
 			});
 		});
 
@@ -899,6 +964,48 @@ suite('WebHucodeShellService', () => {
 				instanceStates: [],
 				retained: 0,
 				beforeShutdown: 1,
+			});
+		});
+
+	test('removes a superseded legacy workbench that already shut itself down',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/legacy-superseded',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectLegacyChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			const closing = service.closeWorkspace(windowId, instanceId);
+			await child.workbench.prepareUnloadStarted.p;
+			// Reactivating a two-phase workbench here abandons the unload and
+			// leaves it running. A workbench of this vintage has already shut
+			// down inside its preparation and cannot be brought back, so the
+			// same reactivation must not strand its dead iframe.
+			await service.openWorkspace(
+				windowId,
+				'/tmp/legacy-superseded',
+				'project'
+			);
+			await prepareGate.complete();
+			await closing;
+
+			const finalState = await service.getWindowState(windowId);
+			assert.deepStrictEqual({
+				instanceIds: finalState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				shutDown: child.workbench.shutDown,
+			}, {
+				instanceIds: [],
+				iframeConnected: false,
+				shutDown: true,
 			});
 		});
 
@@ -2522,6 +2629,8 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 class LegacyHostedWorkbench {
 	prepareUnloadCalls = 0;
 	shutDown = false;
+	prepareUnloadGate: Promise<unknown> | undefined;
+	readonly prepareUnloadStarted = new DeferredPromise<void>();
 
 	async runCommand(): Promise<boolean> {
 		return !this.shutDown;
@@ -2533,6 +2642,12 @@ class LegacyHostedWorkbench {
 
 	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
+		if (!this.prepareUnloadStarted.isSettled) {
+			await this.prepareUnloadStarted.complete();
+		}
+		await this.prepareUnloadGate;
+		// A workbench of this vintage shuts down inside its preparation:
+		// there is no second call and no way back from this point.
 		this.shutDown = true;
 		return true;
 	}

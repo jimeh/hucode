@@ -560,6 +560,17 @@ human-facing guides rather than replacing them.
   shell's checks and the removal, so two callers otherwise each apply their own
   outcome and the result depends on arrival order, typically leaving a dormant
   record offering to restore a workbench the user closed.
+- Removing an unloaded workbench and applying its disposition are separate
+  decisions with separate rules. Removal after a successful commit is
+  unconditional — the workbench is shut down, and refusing to remove it strands
+  a dead iframe. Applying the disposition first re-checks that the instance
+  still owns its path, because the commit is awaited and a crash-and-reopen can
+  put a live replacement there in the meantime; parking a dormant placeholder
+  over it would evict a live workbench from the model and leave its iframe
+  orphaned in the page. For the same reason a terminal disposition resolves its
+  retained record by the id the caller captured, not by path: a record that has
+  since been dismissed must be a no-op rather than a hit on whatever record
+  holds the folder now.
 - Hosted workbenches announce `HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` in
   their ready message, and a workbench that announces nothing is from before
   the unload split, where `prepareUnload` *was* the whole shutdown. This

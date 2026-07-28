@@ -685,7 +685,11 @@ export class WebHucodeShellController extends Disposable
 				await this.unloadAndRemoveInstance(instance, 'unload');
 				return;
 			}
-			this.applyTerminalUnloadDisposition(worktreePath, 'unload');
+			this.applyTerminalUnloadDisposition(
+				worktreePath,
+				'unload',
+				workbenchId
+			);
 		});
 		return this.getState();
 	}
@@ -709,7 +713,11 @@ export class WebHucodeShellController extends Disposable
 				await this.unloadAndRemoveInstance(instance, 'dismiss');
 				return;
 			}
-			this.applyTerminalUnloadDisposition(worktreePath, 'dismiss');
+			this.applyTerminalUnloadDisposition(
+				worktreePath,
+				'dismiss',
+				workbenchId
+			);
 		});
 		return this.getState();
 	}
@@ -1344,7 +1352,11 @@ export class WebHucodeShellController extends Disposable
 
 		instance.pendingUnloadDisposition = disposition;
 		const unload = this.runUnloadHandshake(instance).finally(() => {
-			instance.pendingUnload = undefined;
+			// A failed handshake still holds the claim, and a later request
+			// may already have replaced it.
+			if (instance.pendingUnload === unload) {
+				instance.pendingUnload = undefined;
+			}
 		});
 		instance.pendingUnload = unload;
 		return unload;
@@ -1368,7 +1380,10 @@ export class WebHucodeShellController extends Disposable
 			: undefined;
 		// A workbench from before the handshake was split shuts itself down
 		// during preparation, so for those there is nothing left to decide
-		// afterwards and nothing to commit.
+		// afterwards and nothing to commit. Skipping the supersession
+		// re-check also gives up the guarantee it provides the disposition
+		// step — that this instance still owns its path — which is why the
+		// disposition is applied under its own identity check below.
 		const singlePhase = (instance.protocolVersion ?? 1) <
 			HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION;
 		if (
@@ -1394,9 +1409,24 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
+		// Removal is unconditional: the workbench is shut down and its iframe
+		// has to go. Applying its disposition is a separate decision, and it
+		// needs an identity this old the checks above no longer vouch for —
+		// a replacement created during the commit owns the path now, and
+		// parking a dormant placeholder over it would evict a live workbench
+		// from the model while leaving its iframe running in the page.
 		const disposition = instance.pendingUnloadDisposition ?? 'shutdown';
+		const ownsPath =
+			this.getInstanceByPath(instance.worktreePath) === instance;
+		// Release the claim before removing rather than in the `finally`
+		// that follows this method: a request arriving from here on gets its
+		// own handshake, which these same checks turn into a no-op, instead
+		// of joining one whose outcome is already decided.
+		instance.pendingUnload = undefined;
 		this.removeInstance(instance);
-		this.applyUnloadDisposition(instance, disposition);
+		if (ownsPath) {
+			this.applyUnloadDisposition(instance, disposition);
+		}
 		return true;
 	}
 
@@ -1429,7 +1459,11 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
-		this.applyTerminalUnloadDisposition(instance.worktreePath, disposition);
+		this.applyTerminalUnloadDisposition(
+			instance.worktreePath,
+			disposition,
+			instance.retainedWorkbenchId
+		);
 	}
 
 	/**
@@ -1439,15 +1473,21 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private applyTerminalUnloadDisposition(
 		worktreePath: string,
-		disposition: 'unload' | 'dismiss'
+		disposition: 'unload' | 'dismiss',
+		retainedWorkbenchId?: string
 	): void {
 		const dormant = this.getInstanceByPath(worktreePath);
 		if (dormant?.state === 'dormant') {
 			this.hostedWorkspaces.removeInstance(dormant);
 		}
-		const retained = this.retainedWorkbenches.getByUri(
-			URI.file(worktreePath)
-		);
+		// Resolve the record the caller meant, not whichever record holds
+		// this path by the time the handshake ends. A record that has since
+		// been dismissed leaves nothing to act on, which is the safe answer;
+		// acting by path would instead unload or dismiss a record somebody
+		// created for the same folder in the meantime.
+		const retained = retainedWorkbenchId
+			? this.retainedWorkbenches.getById(retainedWorkbenchId)
+			: this.retainedWorkbenches.getByUri(URI.file(worktreePath));
 		if (retained) {
 			if (disposition === 'dismiss') {
 				this.retainedWorkbenches.dismiss(retained.id);
