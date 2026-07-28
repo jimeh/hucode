@@ -32,6 +32,7 @@ suite('HucodeOmniOpen', () => {
 		rootUri: URI.file(`/projects/${id}`),
 		pinned: false,
 		order: 0,
+		worktreeState: 'current',
 		worktrees
 	});
 

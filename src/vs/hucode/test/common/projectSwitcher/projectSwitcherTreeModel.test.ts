@@ -27,6 +27,8 @@ import {
 	isWorktreeItem,
 	MAIN_WORKTREE_CONTEXT_VALUE,
 	MISSING_WORKTREE_CONTEXT_VALUE,
+	PINNED_PROJECT_CONTEXT_VALUE,
+	PROJECT_CONTEXT_VALUE,
 	ProjectSwitcherTreeElement,
 	WORKTREE_CONTEXT_VALUE,
 } from '../../../common/projectSwitcher/projectSwitcherTreeModel.js';
@@ -258,6 +260,124 @@ suite('ProjectSwitcherTreeModel', () => {
 				'other',
 			]
 		);
+	});
+
+	test('keeps stale worktrees visible with an explicit warning', () => {
+		const worktreePath = '/repos/stale';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'stale',
+				worktreeState: 'stale',
+				worktrees: [createWorktree(worktreePath, { isMain: true })],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `path:${path}`,
+			isOmniWindow: false,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		const project = model.roots[0];
+		assert.strictEqual(project.collapsible, true);
+		assert.strictEqual(project.children?.length, 1);
+		assert.strictEqual(project.element.contextValue, PROJECT_CONTEXT_VALUE);
+		assert.strictEqual(
+			project.element.description,
+			'Worktrees out of date · path:/repos/stale'
+		);
+		assert.strictEqual(
+			project.element.tooltip,
+			'Worktrees out of date · path:/repos/stale'
+		);
+		assert.deepStrictEqual(
+			ThemeIcon.asClassNameArray(project.element.themeIcon!),
+			['codicon', 'codicon-warning']
+		);
+	});
+
+	test('shows unavailable projects without collapsible children', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				createProject({
+					id: 'pinned',
+					pinned: true,
+					worktreeState: 'unavailable',
+					worktrees: [],
+				}),
+				createProject({
+					id: 'regular',
+					worktreeState: 'unavailable',
+					worktrees: [],
+				}),
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `path:${path}`,
+			isOmniWindow: false,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.deepStrictEqual(
+			model.roots.map(root => root.element.label),
+			['Pinned', 'pinned', 'Unpinned', 'regular']
+		);
+		for (const project of model.roots.filter(root =>
+			isProjectItem(root.element)
+		)) {
+			assert.strictEqual(project.collapsible, false);
+			assert.deepStrictEqual(project.children, []);
+			assert.strictEqual(
+				project.element.description,
+				`Worktrees unavailable · path:/repos/${project.element.label}`
+			);
+			assert.strictEqual(
+				project.element.tooltip,
+				`Worktrees unavailable · path:/repos/${project.element.label}`
+			);
+			assert.deepStrictEqual(
+				ThemeIcon.asClassNameArray(project.element.themeIcon!),
+				['codicon', 'codicon-warning']
+			);
+			assert.strictEqual(
+				project.element.contextValue,
+				project.element.label === 'pinned'
+					? PINNED_PROJECT_CONTEXT_VALUE
+					: PROJECT_CONTEXT_VALUE
+			);
+		}
+	});
+
+	test('keeps hosted workbenches under unavailable Omni projects', () => {
+		const hostedPath = '/repos/unavailable.worktrees/hosted';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'unavailable',
+				worktreeState: 'unavailable',
+				worktrees: [],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: createHostedState({
+				instances: [{
+					instanceId: 'hosted-instance',
+					projectId: 'unavailable',
+					worktreePath: hostedPath,
+					state: 'loaded',
+					visible: false,
+					focused: false,
+				}],
+			}),
+		});
+
+		const project = flatten(model.roots).find(root =>
+			isProjectItem(root.element)
+		);
+		assert.ok(project);
+		assert.strictEqual(project.collapsible, true);
+		assert.strictEqual(project.children?.length, 1);
+		const hosted = getWorktree(model.roots, hostedPath);
+		assert.strictEqual(hosted.hostedWorkbenchInstanceId, 'hosted-instance');
+		assert.strictEqual(hosted.missingGitWorktree, true);
+		assert.strictEqual(hosted.contextValue, MISSING_WORKTREE_CONTEXT_VALUE);
 	});
 
 	test('marks active, loaded, loading, and unloaded worktree UI state', () => {
@@ -781,6 +901,7 @@ function createProject(options: {
 	readonly id: string;
 	readonly label?: string;
 	readonly pinned?: boolean;
+	readonly worktreeState?: ProjectRecord['worktreeState'];
 	readonly worktrees: readonly WorktreeRecord[];
 }): ProjectRecord {
 	return {
@@ -789,6 +910,7 @@ function createProject(options: {
 		rootUri: URI.file(`/repos/${options.id}`),
 		pinned: options.pinned ?? false,
 		order: 0,
+		worktreeState: options.worktreeState ?? 'current',
 		worktrees: options.worktrees,
 	};
 }
