@@ -1146,7 +1146,7 @@ export class ProjectManagerMainService extends Disposable
 		if (worktrees) {
 			return worktrees;
 		}
-		if (!this.projectWorktreeStates.has(project.id)) {
+		if (this.needsProjectHydration(project.id)) {
 			await this.hydrateProjectWorktrees(project);
 		}
 
@@ -1160,7 +1160,7 @@ export class ProjectManagerMainService extends Disposable
 		if (existing) {
 			return existing;
 		}
-		if (this.projectWorktreeStates.has(project.id)) {
+		if (!this.needsProjectHydration(project.id)) {
 			return Promise.resolve();
 		}
 
@@ -1177,7 +1177,7 @@ export class ProjectManagerMainService extends Disposable
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
 		const missing = this.storedProjects.filter(
-			project => !this.projectWorktreeStates.has(project.id)
+			project => this.needsProjectHydration(project.id)
 		);
 		if (missing.length === 0) {
 			return;
@@ -1190,5 +1190,12 @@ export class ProjectManagerMainService extends Disposable
 			this.hydrateProjectWorktrees(project)
 		));
 		this.saveState();
+	}
+
+	private needsProjectHydration(projectId: string): boolean {
+		const state = this.projectWorktreeStates.get(projectId);
+		return state === undefined ||
+			state === 'unavailable' &&
+			!this.projectRefreshOwners.has(projectId);
 	}
 }

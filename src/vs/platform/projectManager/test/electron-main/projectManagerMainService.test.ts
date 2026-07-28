@@ -2356,6 +2356,61 @@ suite('ProjectManagerMainService', () => {
 		assert.strictEqual(retryToken.isCancellationRequested, false);
 	});
 
+	test('unavailable hydration restarts after retry ownership ends', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		let retryToken: CancellationToken | undefined;
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [{
+				id: 'project-1',
+				label: 'Repo',
+				rootPath: '/repo',
+				pinned: false,
+				order: 1,
+			}],
+		} satisfies StoredProjectManagerState);
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('Git unavailable at startup');
+		};
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				retryDelay: async (_milliseconds, token) => {
+					retryToken = token;
+					throw new Error('delay failed');
+				},
+			}
+		);
+
+		const unavailable = (await service.getProjects())[0];
+		await timeout(0);
+		assert.strictEqual(unavailable.worktreeState, 'unavailable');
+		assert.ok(retryToken);
+		assert.strictEqual(retryToken.isCancellationRequested, false);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			1
+		);
+
+		gitWorktreeService.listWorktreesHandler = undefined;
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const recovered = (await service.getProjects())[0];
+
+		assert.strictEqual(recovered.worktreeState, 'current');
+		assert.deepStrictEqual(recovered.worktrees, [
+			createMainWorktree('/repo'),
+		]);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			2
+		);
+	});
+
 	test('recovers an initially unavailable project through retry', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();

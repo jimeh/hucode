@@ -329,6 +329,14 @@ suite('ProjectSwitcherTreeModel', () => {
 				`Worktrees unavailable · path:/repos/${project.element.label}`
 			);
 			assert.strictEqual(
+				project.element.tooltip,
+				`Worktrees unavailable · path:/repos/${project.element.label}`
+			);
+			assert.deepStrictEqual(
+				ThemeIcon.asClassNameArray(project.element.themeIcon!),
+				['codicon', 'codicon-warning']
+			);
+			assert.strictEqual(
 				project.element.contextValue,
 				project.element.label === 'pinned'
 					? PINNED_PROJECT_CONTEXT_VALUE
