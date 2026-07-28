@@ -404,6 +404,60 @@ suite('GitWorktreeService', () => {
 		assert.ok(boundedError.stderr.startsWith('STDERR-FIRST'));
 		assert.ok(boundedError.stderr.endsWith('STDERR-LAST'));
 		assert.ok(boundedError.stderr.includes('diagnostic output omitted'));
+
+		const emoji = '🧪';
+		const boundaryValue = (first: string, last: string): string => {
+			const head = first + 'h'.repeat(
+				4_078 - Buffer.byteLength(first)
+			);
+			const tail = 't'.repeat(
+				4_077 - Buffer.byteLength(last)
+			) + last;
+			return head + emoji + 'm'.repeat(64) + emoji + tail;
+		};
+		const utf8Message = boundaryValue(
+			`${emoji}MESSAGE-FIRST-`,
+			`-MESSAGE-LAST${emoji}`
+		);
+		const utf8Stderr = boundaryValue(
+			`${emoji}STDERR-FIRST-`,
+			`-STDERR-LAST${emoji}`
+		);
+		const boundedUtf8Error = new GitCommandError(utf8Message, {
+			kind: 'exit',
+			operation: 'listRefs',
+			command: 'git for-each-ref',
+			stderr: utf8Stderr,
+		});
+
+		assert.strictEqual(
+			Buffer.byteLength(boundedUtf8Error.message),
+			8_190
+		);
+		assert.ok(boundedUtf8Error.message.startsWith(
+			`${emoji}MESSAGE-FIRST-`
+		));
+		assert.ok(boundedUtf8Error.message.endsWith(
+			`-MESSAGE-LAST${emoji}`
+		));
+		assert.ok(boundedUtf8Error.message.includes(
+			'diagnostic output omitted'
+		));
+		assert.strictEqual(boundedUtf8Error.message.includes('\uFFFD'), false);
+		assert.strictEqual(
+			Buffer.byteLength(boundedUtf8Error.stderr),
+			8_190
+		);
+		assert.ok(boundedUtf8Error.stderr.startsWith(
+			`${emoji}STDERR-FIRST-`
+		));
+		assert.ok(boundedUtf8Error.stderr.endsWith(
+			`-STDERR-LAST${emoji}`
+		));
+		assert.ok(boundedUtf8Error.stderr.includes(
+			'diagnostic output omitted'
+		));
+		assert.strictEqual(boundedUtf8Error.stderr.includes('\uFFFD'), false);
 	});
 
 	test('parseWorktreeList sorts main first and extracts branches', () => {
