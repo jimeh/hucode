@@ -17,6 +17,7 @@ import {
 	IDisposable,
 	toDisposable,
 } from '../../../base/common/lifecycle.js';
+import { equals } from '../../../base/common/objects.js';
 import { basename, join } from '../../../base/common/path.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { URI } from '../../../base/common/uri.js';
@@ -71,7 +72,7 @@ interface ProjectRefreshOwner {
 type ProjectRefreshAttemptResult =
 	| { readonly kind: 'canceled' }
 	| { readonly kind: 'failed'; readonly stateChanged: boolean }
-	| { readonly kind: 'committed-retry' }
+	| { readonly kind: 'committed-retry'; readonly stateChanged: boolean }
 	| { readonly kind: 'complete' };
 
 /**
@@ -657,7 +658,8 @@ export class ProjectManagerMainService extends Disposable
 
 	private async tryRefreshProject(
 		project: StoredProjectRecord,
-		owner: ProjectRefreshOwner
+		owner: ProjectRefreshOwner,
+		retainOwnerOnComplete: boolean = false
 	): Promise<ProjectRefreshAttemptResult> {
 		const token = owner.source.token;
 		try {
@@ -723,6 +725,10 @@ export class ProjectManagerMainService extends Disposable
 				stagedProject.lastActiveWorktreePath = undefined;
 			}
 
+			const stateChanged =
+				this.projectWorktreeStates.get(project.id) !== 'current' ||
+				!equals(project, stagedProject) ||
+				!equals(this.projectWorktrees.get(project.id), worktrees);
 			Object.assign(project, stagedProject);
 			this.projectWorktrees.set(project.id, worktrees);
 			this.projectWorktreeStates.set(project.id, 'current');
@@ -730,11 +736,13 @@ export class ProjectManagerMainService extends Disposable
 				this.projectWatchers.set(project.id, watchers);
 			}
 			if (watchers !== null) {
-				this.finishProjectRefresh(project.id, owner);
+				if (!retainOwnerOnComplete) {
+					this.finishProjectRefresh(project.id, owner);
+				}
 				return { kind: 'complete' };
 			}
 
-			return { kind: 'committed-retry' };
+			return { kind: 'committed-retry', stateChanged };
 		} catch (error) {
 			if (isCancellationError(error) ||
 				token.isCancellationRequested ||
@@ -818,6 +826,7 @@ export class ProjectManagerMainService extends Disposable
 		owner: ProjectRefreshOwner
 	): Promise<void> {
 		let publicationPending = false;
+		let publicationOnly = false;
 		for (let retry = 0;
 			this.isCurrentRefreshOwner(project.id, owner);
 			retry++
@@ -841,13 +850,28 @@ export class ProjectManagerMainService extends Disposable
 			if (!this.isCurrentRefreshOwner(project.id, owner)) {
 				return;
 			}
-			const result = await this.tryRefreshProject(project, owner);
+			if (publicationOnly) {
+				try {
+					this.saveState();
+					this.emitChange();
+					this.finishProjectRefresh(project.id, owner);
+					return;
+				} catch (error) {
+					this.logService.warn(
+						`[ProjectManagerMainService] Failed to publish retry ` +
+						`refresh ${project.rootPath}: ${error}`
+					);
+					continue;
+				}
+			}
+
+			const result = await this.tryRefreshProject(project, owner, true);
 			if (result.kind === 'canceled') {
 				return;
 			}
 			if (
 				result.kind === 'complete' ||
-				result.kind === 'committed-retry' ||
+				result.kind === 'committed-retry' && result.stateChanged ||
 				result.kind === 'failed' && result.stateChanged ||
 				publicationPending
 			) {
@@ -862,11 +886,15 @@ export class ProjectManagerMainService extends Disposable
 						`refresh ${project.rootPath}: ${error}`
 					);
 					if (result.kind === 'complete') {
-						return;
+						publicationOnly = true;
 					}
 				}
 			}
 			if (result.kind === 'complete') {
+				if (publicationOnly) {
+					continue;
+				}
+				this.finishProjectRefresh(project.id, owner);
 				return;
 			}
 		}
@@ -1147,21 +1175,26 @@ export class ProjectManagerMainService extends Disposable
 			return worktrees;
 		}
 		if (this.needsProjectHydration(project.id)) {
-			await this.hydrateProjectWorktrees(project);
+			const initiated = await this.hydrateProjectWorktrees(project);
+			if (initiated) {
+				this.saveState();
+				this.emitChange();
+			}
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
 	}
 
-	private hydrateProjectWorktrees(
+	private async hydrateProjectWorktrees(
 		project: StoredProjectRecord
-	): Promise<void> {
+	): Promise<boolean> {
 		const existing = this.projectHydrations.get(project.id);
 		if (existing) {
-			return existing;
+			await existing;
+			return false;
 		}
 		if (!this.needsProjectHydration(project.id)) {
-			return Promise.resolve();
+			return false;
 		}
 
 		const hydration = this.refreshProject(project)
@@ -1172,7 +1205,8 @@ export class ProjectManagerMainService extends Disposable
 				}
 			});
 		this.projectHydrations.set(project.id, hydration);
-		return hydration;
+		await hydration;
+		return true;
 	}
 
 	private async hydrateMissingProjectWorktrees(): Promise<void> {
@@ -1186,10 +1220,13 @@ export class ProjectManagerMainService extends Disposable
 		// Projects are independent (per-project-keyed state), so refresh them
 		// concurrently: the first getProjects() after start otherwise pays each
 		// project's git subprocesses in series.
-		await Promise.all(missing.map(project =>
+		const initiated = await Promise.all(missing.map(project =>
 			this.hydrateProjectWorktrees(project)
 		));
-		this.saveState();
+		if (initiated.some(Boolean)) {
+			this.saveState();
+			this.emitChange();
+		}
 	}
 
 	private needsProjectHydration(projectId: string): boolean {

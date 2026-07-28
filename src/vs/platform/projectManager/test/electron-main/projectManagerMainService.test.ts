@@ -50,6 +50,7 @@ class TestStateService implements IStateService {
 
 	private readonly items = new Map<string, unknown>();
 	setItemError: Error | undefined;
+	setItemCalls = 0;
 
 	getItem<T>(key: string, defaultValue: T): T;
 	getItem<T>(key: string, defaultValue?: T): T | undefined;
@@ -63,6 +64,7 @@ class TestStateService implements IStateService {
 		key: string,
 		data?: object | string | number | boolean | undefined | null
 	): void {
+		this.setItemCalls++;
 		if (this.setItemError) {
 			throw this.setItemError;
 		}
@@ -1988,6 +1990,39 @@ suite('ProjectManagerMainService', () => {
 		assert.strictEqual(gitWorktreeService.listWorktreesCalls.length, 1);
 	});
 
+	test('concurrent hydration followers publish one shared result', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const discovery =
+			new DeferredPromise<readonly WorktreeRecord[]>();
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [{
+				id: 'project-1',
+				label: 'Repo',
+				rootPath: '/repo',
+				pinned: false,
+				order: 1,
+			}],
+		} satisfies StoredProjectManagerState);
+		gitWorktreeService.listWorktreesHandler = async () => discovery.p;
+		const service = createService(stateService, gitWorktreeService);
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
+
+		const firstGet = service.getProjects();
+		const secondGet = service.getProjects();
+		await timeout(0);
+		discovery.complete([createMainWorktree('/repo')]);
+		await Promise.all([firstGet, secondGet]);
+
+		assert.strictEqual(gitWorktreeService.listWorktreesCalls.length, 1);
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'current');
+	});
+
 	test('startup hydration observes an explicitly superseding refresh',
 		async () => {
 			const stateService = new TestStateService();
@@ -2184,7 +2219,7 @@ suite('ProjectManagerMainService', () => {
 			assert.strictEqual(new Set(retry.tokens).size, 1);
 		});
 
-	test('logs completed retry persistence failures', async () => {
+	test('completed retry republishes without rerunning Git', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
 		const retry = new TestRetryDelay();
@@ -2206,6 +2241,10 @@ suite('ProjectManagerMainService', () => {
 		await service.refresh(project.id);
 
 		gitWorktreeService.listWorktreesHandler = undefined;
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
 		stateService.setItemError = new Error('state save failed');
 		retry.releaseNext();
 		await timeout(0);
@@ -2215,6 +2254,25 @@ suite('ProjectManagerMainService', () => {
 			String(warning).includes('Failed to publish retry refresh /repo:') &&
 			String(warning).includes('state save failed')
 		));
+		assert.deepStrictEqual(retry.delays, [1000, 2000]);
+		assert.strictEqual(events.length, 0);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			3
+		);
+
+		stateService.setItemError = undefined;
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'current');
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			3
+		);
+		assert.strictEqual(new Set(retry.tokens).size, 1);
 	});
 
 	test('watcher retry continues after persistence failure', async () => {
@@ -2241,6 +2299,10 @@ suite('ProjectManagerMainService', () => {
 		await service.addProject(URI.file('/repo'));
 		const retryToken = retry.tokens[0];
 		stateService.setItemError = new Error('state save failed');
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/new', 'feature/new'),
+		]);
 		retry.releaseNext();
 		await timeout(0);
 		await timeout(0);
@@ -2399,6 +2461,10 @@ suite('ProjectManagerMainService', () => {
 		gitWorktreeService.worktrees.set('/repo', [
 			createMainWorktree('/repo'),
 		]);
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
 		const recovered = (await service.getProjects())[0];
 
 		assert.strictEqual(recovered.worktreeState, 'current');
@@ -2409,6 +2475,58 @@ suite('ProjectManagerMainService', () => {
 			gitWorktreeService.listWorktreesCalls.length,
 			2
 		);
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'current');
+	});
+
+	test('direct worktree reads publish unavailable recovery', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [{
+				id: 'project-1',
+				label: 'Repo',
+				rootPath: '/repo',
+				pinned: false,
+				order: 1,
+			}],
+		} satisfies StoredProjectManagerState);
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('Git unavailable at startup');
+		};
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				retryDelay: async () => {
+					throw new Error('delay failed');
+				},
+			}
+		);
+
+		const unavailable = (await service.getProjects())[0];
+		await timeout(0);
+		assert.strictEqual(unavailable.worktreeState, 'unavailable');
+
+		gitWorktreeService.listWorktreesHandler = undefined;
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
+
+		await service.getWorktreeRefs('project-1');
+
+		assert.deepStrictEqual(
+			gitWorktreeService.listRefsCalls[0].worktrees,
+			[createMainWorktree('/repo')]
+		);
+		assert.strictEqual(events.length, 1);
+		assert.strictEqual(events[0][0].worktreeState, 'current');
 	});
 
 	test('recovers an initially unavailable project through retry', async () => {
@@ -2896,6 +3014,48 @@ suite('ProjectManagerMainService', () => {
 			);
 			assert.strictEqual(new Set(retry.tokens).size, 1);
 		});
+
+	test('unchanged watcher retries do not publish or persist', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		const retry = new TestRetryDelay();
+		metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				retryDelay: retry.delay,
+			}
+		);
+		await service.addProject(URI.file('/repo'));
+		const savedBeforeRetries = stateService.setItemCalls;
+		const events: (readonly ProjectRecord[])[] = [];
+		disposables.add(service.onDidChangeProjects(projects =>
+			events.push(projects)
+		));
+
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		assert.strictEqual(events.length, 0);
+		assert.strictEqual(stateService.setItemCalls, savedBeforeRetries);
+		assert.deepStrictEqual(retry.delays, [1000, 2000, 5000]);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			3
+		);
+		assert.strictEqual(new Set(retry.tokens).size, 1);
+	});
 
 	test('mid-set watcher failure retains old watchers until retry recovery',
 		async () => {
