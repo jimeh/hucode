@@ -4,7 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import type * as cp from 'child_process';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 import { timeout } from '../../../../base/common/async.js';
+import {
+	CancellationToken,
+	CancellationTokenSource,
+} from '../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
 import { isLinux } from '../../../../base/common/platform.js';
@@ -24,6 +32,7 @@ import {
 } from '../../common/projectManager.js';
 import {
 	GitCommandError,
+	GitCommandPolicy,
 	GitWorktreeService
 } from '../../node/gitWorktreeService.js';
 import {
@@ -248,6 +257,96 @@ function createDetachedWorktree(worktreePath: string): WorktreeRecord {
 	};
 }
 
+class TestGitChild extends EventEmitter {
+	readonly stdout = new PassThrough();
+	readonly stderr = new PassThrough();
+	readonly pid = 1234;
+	readonly killSignals: (NodeJS.Signals | number | undefined)[] = [];
+
+	kill(signal?: NodeJS.Signals | number): boolean {
+		this.killSignals.push(signal);
+		return true;
+	}
+
+	close(
+		code: number | null = 0,
+		signal: NodeJS.Signals | null = null
+	): void {
+		this.stdout.end();
+		this.stderr.end();
+		this.emit('close', code, signal);
+	}
+}
+
+class TestGitTimer {
+	private callback: (() => void) | undefined;
+	readonly delays: number[] = [];
+	clearCalls = 0;
+
+	readonly setTimeout = (
+		callback: () => void,
+		delay: number
+	): NodeJS.Timeout => {
+		this.callback = callback;
+		this.delays.push(delay);
+		return {} as NodeJS.Timeout;
+	};
+
+	readonly clearTimeout = (_handle: NodeJS.Timeout): void => {
+		this.clearCalls++;
+		this.callback = undefined;
+	};
+
+	fire(): void {
+		const callback = this.callback;
+		this.callback = undefined;
+		callback?.();
+	}
+}
+
+function runTestGitChild(
+	child: TestGitChild,
+	policy: GitCommandPolicy = {
+		operation: 'listRefs',
+		timeoutMs: 30_000,
+		maxOutputBytes: 32 * 1024 * 1024,
+	},
+	token: CancellationToken = CancellationToken.None,
+	overrides: {
+		killTree?: (pid: number, forceful: boolean) => Promise<void>;
+		timer?: TestGitTimer;
+		env?: NodeJS.ProcessEnv;
+		warnings?: string[];
+		spawn?: (
+			command: string,
+			args: readonly string[],
+			options: cp.SpawnOptions
+		) => cp.ChildProcess;
+	} = {}
+) {
+	const timer = overrides.timer ?? new TestGitTimer();
+	const warnings = overrides.warnings ?? [];
+	const spawn = overrides.spawn ?? (() => child as unknown as cp.ChildProcess);
+	return {
+		promise: GitWorktreeService.execGit(
+			['for-each-ref', 'refs/heads'],
+			'/repo',
+			policy,
+			token,
+			{
+				spawn,
+				killTree: overrides.killTree ?? (async () => { }),
+				setTimeout: timer.setTimeout,
+				clearTimeout: timer.clearTimeout,
+				env: overrides.env ?? {},
+				warn: message => warnings.push(message),
+			}
+		),
+		timer,
+		warnings,
+	};
+}
+
 suite('GitWorktreeService', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -435,6 +534,454 @@ suite('GitWorktreeService', () => {
 		assert.strictEqual(mutableCalls[1].includes('--sort'), false);
 	});
 
+	test('uses CancellationToken.None when no token is supplied', async () => {
+		let receivedToken: CancellationToken | undefined;
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (_args, _cwd, _policy, token) => {
+				receivedToken = token;
+				return { stdout: '', stderr: '' };
+			},
+			async () => false,
+			async () => { },
+		);
+
+		await service.listWorktrees('/repo');
+
+		assert.strictEqual(receivedToken, CancellationToken.None);
+	});
+
+	test('forwards per-operation policy and cancellation token', async () => {
+		const calls: {
+			args: readonly string[];
+			policy: GitCommandPolicy;
+			token: CancellationToken;
+		}[] = [];
+		const source = new CancellationTokenSource();
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async (args, _cwd, policy, token) => {
+				calls.push({ args, policy, token });
+				const stdout = args.includes('--show-toplevel')
+					? '/repo\n'
+					: args.includes('--git-common-dir')
+						? '/repo/.git\n'
+						: '';
+				return { stdout, stderr: '' };
+			},
+			async () => false,
+			async () => { },
+		);
+
+		await service.resolveProjectRoot('/repo/subdir', source.token);
+		await service.getGitCommonDir('/repo', source.token);
+		await service.listWorktrees('/repo', source.token);
+		await service.listRefs('/repo', [], {}, source.token);
+		await service.isValidBranchName('/repo', 'feature/one', source.token);
+		await service.createWorktree(
+			'/repo',
+			{ branchName: 'feature/one' },
+			[],
+			source.token
+		);
+		await service.removeWorktree(
+			'/repo',
+			'/repo.worktrees/feature-one',
+			source.token
+		);
+
+		assert.deepStrictEqual(
+			calls.map(call => call.policy),
+			[
+				{
+					operation: 'resolveProjectRoot',
+					timeoutMs: 5_000,
+					maxOutputBytes: 1024 * 1024,
+				},
+				{
+					operation: 'resolveProjectRoot',
+					timeoutMs: 5_000,
+					maxOutputBytes: 1024 * 1024,
+				},
+				{
+					operation: 'getGitCommonDir',
+					timeoutMs: 5_000,
+					maxOutputBytes: 1024 * 1024,
+				},
+				{
+					operation: 'listWorktrees',
+					timeoutMs: 5_000,
+					maxOutputBytes: 8 * 1024 * 1024,
+				},
+				{
+					operation: 'listRefs',
+					timeoutMs: 30_000,
+					maxOutputBytes: 32 * 1024 * 1024,
+				},
+				{
+					operation: 'isValidBranchName',
+					timeoutMs: 5_000,
+					maxOutputBytes: 1024 * 1024,
+				},
+				{
+					operation: 'createWorktree',
+					timeoutMs: 180_000,
+					maxOutputBytes: 8 * 1024 * 1024,
+				},
+				{
+					operation: 'removeWorktree',
+					timeoutMs: 60_000,
+					maxOutputBytes: 8 * 1024 * 1024,
+				},
+			]
+		);
+		assert.ok(calls.every(call => call.token === source.token));
+		source.dispose();
+	});
+
+	test('spawn runner collects chunks and waits for close', async () => {
+		const child = new TestGitChild();
+		const { promise } = runTestGitChild(child);
+		let settled = false;
+		void promise.finally(() => settled = true);
+
+		child.stdout.write(Buffer.from('first'));
+		child.stdout.write(Buffer.from('-second'));
+		child.stderr.write(Buffer.from('warning'));
+		child.emit('exit', 0, null);
+		await Promise.resolve();
+		assert.strictEqual(settled, false);
+
+		child.close();
+		assert.deepStrictEqual(await promise, {
+			stdout: 'first-second',
+			stderr: 'warning',
+		});
+	});
+
+	test('spawn runner uses non-interactive environment without mutating input', async () => {
+		const child = new TestGitChild();
+		const inheritedEnv = {
+			KEEP_ME: 'yes',
+			GIT_ASKPASS: '/tmp/git-askpass',
+			SSH_ASKPASS: '/tmp/ssh-askpass',
+			VSCODE_GIT_ASKPASS_NODE: '/tmp/node',
+			VSCODE_GIT_ASKPASS_MAIN: '/tmp/main.js',
+			VSCODE_GIT_ASKPASS_EXTRA_ARGS: '--ms-enable-electron-run-as-node',
+			VSCODE_GIT_IPC_HANDLE: '/tmp/socket',
+			GIT_TERMINAL_PROMPT: '1',
+			GCM_INTERACTIVE: 'Always',
+			SSH_ASKPASS_REQUIRE: 'force',
+		};
+		let spawnOptions: cp.SpawnOptions | undefined;
+		const { promise } = runTestGitChild(child, undefined, undefined, {
+			env: inheritedEnv,
+			spawn: (_command, _args, options) => {
+				spawnOptions = options;
+				return child as unknown as cp.ChildProcess;
+			},
+		});
+		child.close();
+		await promise;
+
+		assert.deepStrictEqual(inheritedEnv, {
+			KEEP_ME: 'yes',
+			GIT_ASKPASS: '/tmp/git-askpass',
+			SSH_ASKPASS: '/tmp/ssh-askpass',
+			VSCODE_GIT_ASKPASS_NODE: '/tmp/node',
+			VSCODE_GIT_ASKPASS_MAIN: '/tmp/main.js',
+			VSCODE_GIT_ASKPASS_EXTRA_ARGS: '--ms-enable-electron-run-as-node',
+			VSCODE_GIT_IPC_HANDLE: '/tmp/socket',
+			GIT_TERMINAL_PROMPT: '1',
+			GCM_INTERACTIVE: 'Always',
+			SSH_ASKPASS_REQUIRE: 'force',
+		});
+		assert.deepStrictEqual(spawnOptions?.stdio, ['ignore', 'pipe', 'pipe']);
+		assert.strictEqual(spawnOptions?.windowsHide, true);
+		assert.strictEqual(spawnOptions?.cwd, '/repo');
+		assert.deepStrictEqual(spawnOptions?.env, {
+			KEEP_ME: 'yes',
+			GIT_TERMINAL_PROMPT: '0',
+			GCM_INTERACTIVE: 'Never',
+			SSH_ASKPASS_REQUIRE: 'never',
+		});
+	});
+
+	test('spawn runner accepts the exact aggregate byte limit', async () => {
+		const child = new TestGitChild();
+		const { promise } = runTestGitChild(child, {
+			operation: 'listRefs',
+			timeoutMs: 30_000,
+			maxOutputBytes: 6,
+		});
+		child.stdout.write(Buffer.from('four'));
+		child.stderr.write(Buffer.from('!!'));
+		child.close();
+
+		assert.deepStrictEqual(await promise, {
+			stdout: 'four',
+			stderr: '!!',
+		});
+	});
+
+	test('spawn runner rejects one byte beyond the aggregate limit', async () => {
+		const child = new TestGitChild();
+		const killCalls: [number, boolean][] = [];
+		const { promise } = runTestGitChild(child, {
+			operation: 'listRefs',
+			timeoutMs: 30_000,
+			maxOutputBytes: 6,
+		}, undefined, {
+			killTree: async (pid, forceful) => {
+				killCalls.push([pid, forceful]);
+			},
+		});
+		child.stdout.write(Buffer.from('four'));
+		child.stderr.write(Buffer.from('!!!'));
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'output-limit');
+			assert.strictEqual(error.operation, 'listRefs');
+			assert.strictEqual(error.maxOutputBytes, 6);
+			return true;
+		});
+		assert.deepStrictEqual(killCalls, [[1234, true]]);
+	});
+
+	test('spawn runner counts multibyte output in bytes', async () => {
+		const child = new TestGitChild();
+		const { promise } = runTestGitChild(child, {
+			operation: 'listRefs',
+			timeoutMs: 30_000,
+			maxOutputBytes: 2,
+		});
+		child.stdout.write('€');
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, (error: GitCommandError) =>
+			error.kind === 'output-limit'
+		);
+	});
+
+	test('listRefs parses 10,001 refs through the 32 MiB runner buffer', async () => {
+		const child = new TestGitChild();
+		const longSubject = 'subject-'.padEnd(96, 'x');
+		const output = Array.from({ length: 10_001 }, (_, index) => [
+			`refs/heads/branch-${index}`,
+			'1234567',
+			'',
+			'1 day ago',
+			'Author',
+			'',
+			longSubject,
+		].join('\0')).join('\n');
+		assert.ok(Buffer.byteLength(output) > 1024 * 1024);
+
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			(args, cwd, policy, token) =>
+				GitWorktreeService.execGit(args, cwd, policy, token, {
+					spawn: () => child as unknown as cp.ChildProcess,
+					killTree: async () => { },
+					env: {},
+				}),
+			async () => false,
+			async () => { },
+		);
+		const refsPromise = service.listRefs('/repo', []);
+		child.stdout.write(Buffer.from(output));
+		child.close();
+		const refs = await refsPromise;
+
+		assert.strictEqual(refs.length, 10_001);
+		assert.strictEqual(refs[10_000].name, 'branch-10000');
+	});
+
+	test('timeout kills the process tree, logs, and stays typed', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const killCalls: [number, boolean][] = [];
+		const warnings: string[] = [];
+		const { promise } = runTestGitChild(child, {
+			operation: 'createWorktree',
+			timeoutMs: 180_000,
+			maxOutputBytes: 8 * 1024 * 1024,
+		}, undefined, {
+			timer,
+			warnings,
+			killTree: async (pid, forceful) => {
+				killCalls.push([pid, forceful]);
+			},
+		});
+		timer.fire();
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'timeout');
+			assert.strictEqual(error.operation, 'createWorktree');
+			assert.strictEqual(error.timeoutMs, 180_000);
+			return true;
+		});
+		assert.deepStrictEqual(killCalls, [[1234, true]]);
+		assert.ok(warnings.some(message =>
+			message.includes('createWorktree') &&
+			message.includes('180000ms')
+		));
+	});
+
+	test('pre-spawn cancellation rejects without spawning', async () => {
+		const child = new TestGitChild();
+		const source = new CancellationTokenSource();
+		source.cancel();
+		let spawnCalls = 0;
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			source.token,
+			{
+				spawn: () => {
+					spawnCalls++;
+					return child as unknown as cp.ChildProcess;
+				},
+			}
+		);
+
+		await assert.rejects(promise, error => error instanceof CancellationError);
+		assert.strictEqual(spawnCalls, 0);
+		source.dispose();
+	});
+
+	test('post-spawn cancellation kills and rejects with CancellationError', async () => {
+		const child = new TestGitChild();
+		const source = new CancellationTokenSource();
+		const killCalls: [number, boolean][] = [];
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			source.token,
+			{
+				killTree: async (pid, forceful) => {
+					killCalls.push([pid, forceful]);
+				},
+			}
+		);
+		source.cancel();
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, error => error instanceof CancellationError);
+		assert.deepStrictEqual(killCalls, [[1234, true]]);
+		source.dispose();
+	});
+
+	test('classifies exit, spawn, and signal failures', async () => {
+		const exitChild = new TestGitChild();
+		const exitRun = runTestGitChild(exitChild);
+		exitChild.stderr.write('bad ref');
+		exitChild.close(2);
+		await assert.rejects(exitRun.promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'exit');
+			assert.strictEqual(error.code, 2);
+			assert.strictEqual(error.stderr, 'bad ref');
+			assert.ok(error.command.length <= 512);
+			return true;
+		});
+
+		const spawnChild = new TestGitChild();
+		const spawnRun = runTestGitChild(spawnChild);
+		const spawnCause = new Error('spawn ENOENT');
+		spawnChild.emit('error', spawnCause);
+		spawnChild.close(-2);
+		await assert.rejects(spawnRun.promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'spawn');
+			assert.strictEqual(error.cause, spawnCause);
+			return true;
+		});
+
+		const signalChild = new TestGitChild();
+		const signalRun = runTestGitChild(signalChild);
+		signalChild.close(null, 'SIGTERM');
+		await assert.rejects(signalRun.promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'signal');
+			assert.strictEqual(error.signal, 'SIGTERM');
+			return true;
+		});
+	});
+
+	test('falls back to child SIGKILL when killTree fails', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const warnings: string[] = [];
+		const { promise } = runTestGitChild(child, undefined, undefined, {
+			timer,
+			warnings,
+			killTree: async () => {
+				throw new Error('tree kill failed');
+			},
+		});
+		timer.fire();
+		await Promise.resolve();
+		await Promise.resolve();
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, (error: GitCommandError) =>
+			error.kind === 'timeout'
+		);
+		assert.deepStrictEqual(child.killSignals, ['SIGKILL']);
+		assert.ok(warnings.some(message => message.includes('tree kill failed')));
+	});
+
+	test('keeps the first policy failure when outcomes race', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const source = new CancellationTokenSource();
+		const { promise } = runTestGitChild(child, {
+			operation: 'listRefs',
+			timeoutMs: 30_000,
+			maxOutputBytes: 1,
+		}, source.token, { timer });
+		child.stdout.write('too large');
+		source.cancel();
+		timer.fire();
+		child.close(null, 'SIGKILL');
+
+		await assert.rejects(promise, (error: GitCommandError) =>
+			error.kind === 'output-limit'
+		);
+		source.dispose();
+	});
+
+	test('close clears policy hooks and prevents late kills', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const source = new CancellationTokenSource();
+		const killCalls: [number, boolean][] = [];
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			source.token,
+			{
+				timer,
+				killTree: async (pid, forceful) => {
+					killCalls.push([pid, forceful]);
+				},
+			}
+		);
+		child.close();
+		await promise;
+		source.cancel();
+		timer.fire();
+
+		assert.strictEqual(timer.clearCalls, 1);
+		assert.deepStrictEqual(killCalls, []);
+		source.dispose();
+	});
+
 	test('createWorktree can add either a new branch or an existing ref', async () => {
 		const calls: { args: readonly string[]; cwd: string }[] = [];
 		const service = new GitWorktreeService(
@@ -596,7 +1143,13 @@ suite('GitWorktreeService', () => {
 		const service = new GitWorktreeService(
 			new NullLogService(),
 			async () => {
-				throw new GitCommandError('invalid branch name', '');
+				throw new GitCommandError('invalid branch name', {
+					kind: 'exit',
+					operation: 'isValidBranchName',
+					command: 'git check-ref-format --branch feature/two',
+					stderr: '',
+					code: 1,
+				});
 			},
 			async () => false,
 			async () => { },
@@ -606,6 +1159,40 @@ suite('GitWorktreeService', () => {
 			await service.isValidBranchName('/repo', 'feature two'),
 			false
 		);
+	});
+
+	test('isValidBranchName propagates policy failures', async () => {
+		for (const kind of [
+			'timeout',
+			'output-limit',
+			'spawn',
+			'signal',
+		] as const) {
+			const failure = new GitCommandError(`git ${kind}`, {
+				kind,
+				operation: 'isValidBranchName',
+				command: 'git check-ref-format --branch feature/two',
+				stderr: '',
+				timeoutMs: kind === 'timeout' ? 5_000 : undefined,
+				maxOutputBytes: kind === 'output-limit'
+					? 1024 * 1024
+					: undefined,
+				signal: kind === 'signal' ? 'SIGKILL' : undefined,
+			});
+			const service = new GitWorktreeService(
+				new NullLogService(),
+				async () => {
+					throw failure;
+				},
+				async () => false,
+				async () => { },
+			);
+
+			await assert.rejects(
+				service.isValidBranchName('/repo', 'feature/two'),
+				error => error === failure
+			);
+		}
 	});
 
 	test('parseWorktreeList matches the main worktree with platform casing rules', () => {

@@ -6,6 +6,10 @@
 import * as cp from 'child_process';
 import { promises as fs } from 'fs';
 import {
+	CancellationToken,
+} from '../../../base/common/cancellation.js';
+import { CancellationError } from '../../../base/common/errors.js';
+import {
 	basename,
 	dirname,
 	isAbsolute,
@@ -14,6 +18,7 @@ import {
 } from '../../../base/common/path.js';
 import { isEqual } from '../../../base/common/extpath.js';
 import { isLinux } from '../../../base/common/platform.js';
+import { killTree } from '../../../base/node/processes.js';
 import { ILogService } from '../../log/common/log.js';
 import {
 	WorktreeRecord,
@@ -26,22 +31,144 @@ type ExecGitResult = {
 	readonly stderr: string;
 };
 
+export type GitOperation =
+	'resolveProjectRoot' |
+	'getGitCommonDir' |
+	'listWorktrees' |
+	'listRefs' |
+	'isValidBranchName' |
+	'createWorktree' |
+	'removeWorktree';
+
+/**
+ * Resource limits attached to one project-manager Git operation.
+ */
+export interface GitCommandPolicy {
+	readonly operation: GitOperation;
+	readonly timeoutMs: number;
+	readonly maxOutputBytes: number;
+}
+
 export type ExecGitFn = (
 	args: readonly string[],
-	cwd: string
+	cwd: string,
+	policy: GitCommandPolicy,
+	token: CancellationToken
 ) => Promise<ExecGitResult>;
 
 export type PathExistsFn = (path: string) => Promise<boolean>;
 export type EnsureDirFn = (path: string) => Promise<void>;
 
+export type GitCommandErrorKind =
+	'exit' |
+	'timeout' |
+	'output-limit' |
+	'spawn' |
+	'signal';
+
+interface GitCommandErrorOptions {
+	readonly kind: GitCommandErrorKind;
+	readonly operation: GitOperation;
+	readonly command: string;
+	readonly stderr: string;
+	readonly code?: number | null;
+	readonly signal?: NodeJS.Signals | null;
+	readonly timeoutMs?: number;
+	readonly maxOutputBytes?: number;
+	readonly cause?: unknown;
+}
+
+/**
+ * A bounded, classified failure from a project-manager Git subprocess.
+ */
 export class GitCommandError extends Error {
+	readonly kind: GitCommandErrorKind;
+	readonly operation: GitOperation;
+	readonly command: string;
+	readonly stderr: string;
+	readonly code?: number | null;
+	readonly signal?: NodeJS.Signals | null;
+	readonly timeoutMs?: number;
+	readonly maxOutputBytes?: number;
+	override readonly cause?: unknown;
+
 	constructor(
 		message: string,
-		readonly stderr: string
+		options: GitCommandErrorOptions
 	) {
 		super(message);
+		this.name = 'GitCommandError';
+		this.kind = options.kind;
+		this.operation = options.operation;
+		this.command = options.command;
+		this.stderr = options.stderr;
+		this.code = options.code;
+		this.signal = options.signal;
+		this.timeoutMs = options.timeoutMs;
+		this.maxOutputBytes = options.maxOutputBytes;
+		this.cause = options.cause;
 	}
 }
+
+/**
+ * Injectable process boundaries used by the Git subprocess runner.
+ */
+export interface GitProcessRunnerDependencies {
+	readonly spawn: (
+		command: string,
+		args: readonly string[],
+		options: cp.SpawnOptions
+	) => cp.ChildProcess;
+	readonly killTree: (pid: number, forceful: boolean) => Promise<void>;
+	readonly setTimeout: (
+		callback: () => void,
+		delay: number
+	) => NodeJS.Timeout;
+	readonly clearTimeout: (handle: NodeJS.Timeout) => void;
+	readonly env: NodeJS.ProcessEnv;
+	readonly warn: (message: string) => void;
+}
+
+const KIB = 1024;
+const MIB = KIB * KIB;
+const GIT_COMMAND_SUMMARY_LIMIT = 512;
+const GIT_POLICIES: Readonly<Record<GitOperation, GitCommandPolicy>> = {
+	resolveProjectRoot: {
+		operation: 'resolveProjectRoot',
+		timeoutMs: 5_000,
+		maxOutputBytes: MIB,
+	},
+	getGitCommonDir: {
+		operation: 'getGitCommonDir',
+		timeoutMs: 5_000,
+		maxOutputBytes: MIB,
+	},
+	listWorktrees: {
+		operation: 'listWorktrees',
+		timeoutMs: 5_000,
+		maxOutputBytes: 8 * MIB,
+	},
+	listRefs: {
+		operation: 'listRefs',
+		timeoutMs: 30_000,
+		maxOutputBytes: 32 * MIB,
+	},
+	isValidBranchName: {
+		operation: 'isValidBranchName',
+		timeoutMs: 5_000,
+		maxOutputBytes: MIB,
+	},
+	createWorktree: {
+		operation: 'createWorktree',
+		timeoutMs: 180_000,
+		maxOutputBytes: 8 * MIB,
+	},
+	removeWorktree: {
+		operation: 'removeWorktree',
+		timeoutMs: 60_000,
+		maxOutputBytes: 8 * MIB,
+	},
+};
 
 /**
  * Thin main-process git wrapper for Hucode project/worktree flows.
@@ -50,8 +177,22 @@ export class GitWorktreeService {
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
-		private readonly execGit: ExecGitFn = (args, cwd) =>
-			GitWorktreeService.execGit(args, cwd),
+		private readonly execGit: ExecGitFn = (args, cwd, policy, token) =>
+			GitWorktreeService.execGit(
+				args,
+				cwd,
+				policy,
+				token,
+				{
+					spawn: (command, spawnArgs, options) =>
+						cp.spawn(command, [...spawnArgs], options),
+					killTree,
+					setTimeout,
+					clearTimeout,
+					env: process.env,
+					warn: message => this.logService.warn(message),
+				}
+			),
 		private readonly pathExists: PathExistsFn = path =>
 			GitWorktreeService.pathExists(path),
 		private readonly ensureDir: EnsureDirFn = path =>
@@ -59,14 +200,21 @@ export class GitWorktreeService {
 	) {
 	}
 
-	async resolveProjectRoot(cwd: string): Promise<string> {
+	async resolveProjectRoot(
+		cwd: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<string> {
 		const topLevel = (await this.runGit(
 			['rev-parse', '--show-toplevel'],
-			cwd
+			cwd,
+			GIT_POLICIES.resolveProjectRoot,
+			token
 		)).stdout.trim();
 		const commonDir = (await this.runGit(
 			['rev-parse', '--path-format=absolute', '--git-common-dir'],
-			cwd
+			cwd,
+			GIT_POLICIES.resolveProjectRoot,
+			token
 		)).stdout.trim();
 
 		if (basename(commonDir) === '.git') {
@@ -79,10 +227,15 @@ export class GitWorktreeService {
 	/**
 	 * Returns Git's absolute common metadata directory for a project root.
 	 */
-	async getGitCommonDir(projectRoot: string): Promise<string> {
+	async getGitCommonDir(
+		projectRoot: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<string> {
 		return (await this.runGit(
 			['rev-parse', '--path-format=absolute', '--git-common-dir'],
-			projectRoot
+			projectRoot,
+			GIT_POLICIES.getGitCommonDir,
+			token
 		)).stdout.trim();
 	}
 
@@ -112,10 +265,15 @@ export class GitWorktreeService {
 		}
 	}
 
-	async listWorktrees(projectRoot: string): Promise<readonly WorktreeRecord[]> {
+	async listWorktrees(
+		projectRoot: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<readonly WorktreeRecord[]> {
 		const result = await this.runGit(
 			['worktree', 'list', '--porcelain'],
-			projectRoot
+			projectRoot,
+			GIT_POLICIES.listWorktrees,
+			token
 		);
 
 		return GitWorktreeService.parseWorktreeList(
@@ -127,7 +285,8 @@ export class GitWorktreeService {
 	async listRefs(
 		projectRoot: string,
 		worktrees: readonly WorktreeRecord[],
-		options: WorktreeRefQueryOptions = {}
+		options: WorktreeRefQueryOptions = {},
+		token: CancellationToken = CancellationToken.None
 	): Promise<readonly WorktreeRefRecord[]> {
 		const sort = options.sort ?? 'committerdate';
 		const args = [
@@ -143,7 +302,9 @@ export class GitWorktreeService {
 
 		const result = await this.runGit(
 			args,
-			projectRoot
+			projectRoot,
+			GIT_POLICIES.listRefs,
+			token
 		);
 
 		return GitWorktreeService.parseRefList(
@@ -162,6 +323,7 @@ export class GitWorktreeService {
 			path?: string;
 		},
 		existingPaths: readonly string[],
+		token: CancellationToken = CancellationToken.None,
 	): Promise<string> {
 		const branchName = options.branchName?.trim();
 		const startPoint = options.startPoint?.trim() || 'HEAD';
@@ -192,23 +354,34 @@ export class GitWorktreeService {
 			args.push('--detach');
 		}
 		args.push(worktreePath, startPoint);
-		await this.runGit(args, projectRoot);
+		await this.runGit(
+			args,
+			projectRoot,
+			GIT_POLICIES.createWorktree,
+			token
+		);
 
 		return worktreePath;
 	}
 
 	async isValidBranchName(
 		projectRoot: string,
-		branchName: string
+		branchName: string,
+		token: CancellationToken = CancellationToken.None
 	): Promise<boolean> {
 		try {
 			await this.runGit(
 				['check-ref-format', '--branch', branchName],
-				projectRoot
+				projectRoot,
+				GIT_POLICIES.isValidBranchName,
+				token
 			);
 			return true;
 		} catch (error) {
-			if (error instanceof GitCommandError) {
+			if (
+				error instanceof GitCommandError &&
+				error.kind === 'exit'
+			) {
 				return false;
 			}
 
@@ -218,11 +391,14 @@ export class GitWorktreeService {
 
 	async removeWorktree(
 		projectRoot: string,
-		worktreePath: string
+		worktreePath: string,
+		token: CancellationToken = CancellationToken.None
 	): Promise<void> {
 		await this.runGit(
 			['worktree', 'remove', worktreePath],
-			projectRoot
+			projectRoot,
+			GIT_POLICIES.removeWorktree,
+			token
 		);
 	}
 
@@ -258,13 +434,15 @@ export class GitWorktreeService {
 
 	private async runGit(
 		args: readonly string[],
-		cwd: string
+		cwd: string,
+		policy: GitCommandPolicy,
+		token: CancellationToken
 	): Promise<ExecGitResult> {
 		this.logService.trace(
 			`[GitWorktreeService] git ${args.join(' ')} (cwd: ${cwd})`
 		);
 
-		return this.execGit(args, cwd);
+		return this.execGit(args, cwd, policy, token);
 	}
 
 	static parseWorktreeList(
@@ -396,25 +574,243 @@ export class GitWorktreeService {
 		return sanitized || 'worktree';
 	}
 
-	private static execGit(
+	/**
+	 * Runs one bounded Git subprocess and settles only after its pipes close.
+	 */
+	static execGit(
 		args: readonly string[],
-		cwd: string
+		cwd: string,
+		policy: GitCommandPolicy,
+		token: CancellationToken = CancellationToken.None,
+		dependencies: Partial<GitProcessRunnerDependencies> = {}
 	): Promise<ExecGitResult> {
-		return new Promise((resolve, reject) => {
-			cp.execFile(
-				'git',
-				[...args],
-				{ cwd, encoding: 'utf8' },
-				(err, stdout, stderr) => {
-					if (err) {
-						const message = stderr.trim() || err.message;
-						reject(new GitCommandError(message, stderr));
-						return;
-					}
+		if (token.isCancellationRequested) {
+			return Promise.reject(new CancellationError());
+		}
 
-					resolve({ stdout, stderr });
+		const command = summarizeGitCommand(args);
+		const runner = {
+			spawn: dependencies.spawn ?? ((
+				spawnCommand: string,
+				spawnArgs: readonly string[],
+				options: cp.SpawnOptions
+			) => cp.spawn(spawnCommand, [...spawnArgs], options)),
+			killTree: dependencies.killTree ?? killTree,
+			setTimeout: dependencies.setTimeout ??
+				((callback, delay) =>
+					setTimeout(callback, delay) as unknown as NodeJS.Timeout),
+			clearTimeout: dependencies.clearTimeout ??
+				(handle => clearTimeout(handle)),
+			env: dependencies.env ?? process.env,
+			warn: dependencies.warn ?? (() => { }),
+		};
+		const env = nonInteractiveGitEnvironment(runner.env);
+		let child: cp.ChildProcess;
+		try {
+			child = runner.spawn('git', args, {
+				cwd,
+				env,
+				stdio: ['ignore', 'pipe', 'pipe'],
+				windowsHide: true,
+			});
+		} catch (cause) {
+			return Promise.reject(new GitCommandError(
+				`${command} failed to start: ${errorMessage(cause)}`,
+				{
+					kind: 'spawn',
+					operation: policy.operation,
+					command,
+					stderr: '',
+					cause,
 				}
-			);
+			));
+		}
+
+		return new Promise((resolve, reject) => {
+			const stdout: Buffer[] = [];
+			const stderr: Buffer[] = [];
+			let bufferedBytes = 0;
+			let failure: Error | undefined;
+			let killStarted = false;
+			let timer: NodeJS.Timeout | undefined;
+
+			const killChild = (): void => {
+				if (killStarted) {
+					return;
+				}
+				killStarted = true;
+
+				void (async () => {
+					try {
+						if (typeof child.pid !== 'number') {
+							throw new Error(
+								'Git subprocess has no process identifier.'
+							);
+						}
+						await runner.killTree(child.pid, true);
+					} catch (error) {
+						runner.warn(
+							`[GitWorktreeService] ${policy.operation} ` +
+							`could not kill the Git process tree: ` +
+							errorMessage(error)
+						);
+						try {
+							if (!child.kill('SIGKILL')) {
+								runner.warn(
+									`[GitWorktreeService] ` +
+									`${policy.operation} fallback SIGKILL ` +
+									`did not reach the Git subprocess.`
+								);
+							}
+						} catch (fallbackError) {
+							runner.warn(
+								`[GitWorktreeService] ` +
+								`${policy.operation} fallback SIGKILL ` +
+								`failed: ${errorMessage(fallbackError)}`
+							);
+						}
+					}
+				})();
+			};
+
+			const setFailure = (
+				error: Error,
+				kill: boolean
+			): void => {
+				if (failure) {
+					return;
+				}
+				failure = error;
+				if (kill) {
+					killChild();
+				}
+			};
+
+			const collect = (
+				value: Buffer | string,
+				chunks: Buffer[]
+			): void => {
+				const chunk = Buffer.isBuffer(value)
+					? value
+					: Buffer.from(value);
+				const remaining = Math.max(
+					0,
+					policy.maxOutputBytes - bufferedBytes
+				);
+				if (remaining > 0) {
+					chunks.push(
+						remaining < chunk.byteLength
+							? chunk.subarray(0, remaining)
+							: chunk
+					);
+				}
+				bufferedBytes += chunk.byteLength;
+				if (bufferedBytes > policy.maxOutputBytes) {
+					setFailure(new GitCommandError(
+						`${command} exceeded its ` +
+						`${policy.maxOutputBytes}-byte output limit.`,
+						{
+							kind: 'output-limit',
+							operation: policy.operation,
+							command,
+							stderr: Buffer.concat(stderr).toString('utf8'),
+							maxOutputBytes: policy.maxOutputBytes,
+						}
+					), true);
+				}
+			};
+
+			const onStdout = (chunk: Buffer | string): void =>
+				collect(chunk, stdout);
+			const onStderr = (chunk: Buffer | string): void =>
+				collect(chunk, stderr);
+			const onError = (cause: Error): void => {
+				setFailure(new GitCommandError(
+					`${command} failed to start: ${cause.message}`,
+					{
+						kind: 'spawn',
+						operation: policy.operation,
+						command,
+						stderr: Buffer.concat(stderr).toString('utf8'),
+						cause,
+					}
+				), false);
+			};
+			const cancellationListener = token.onCancellationRequested(() => {
+				setFailure(new CancellationError(), true);
+			});
+			const onClose = (
+				code: number | null,
+				signal: NodeJS.Signals | null
+			): void => {
+				if (timer) {
+					runner.clearTimeout(timer);
+					timer = undefined;
+				}
+				cancellationListener.dispose();
+				child.stdout?.removeListener('data', onStdout);
+				child.stderr?.removeListener('data', onStderr);
+				child.removeListener('error', onError);
+				child.removeListener('close', onClose);
+
+				const stdoutText = Buffer.concat(stdout).toString('utf8');
+				const stderrText = Buffer.concat(stderr).toString('utf8');
+				if (failure) {
+					reject(failure);
+				} else if (signal) {
+					reject(new GitCommandError(
+						`${command} was terminated by ${signal}.`,
+						{
+							kind: 'signal',
+							operation: policy.operation,
+							command,
+							stderr: stderrText,
+							signal,
+						}
+					));
+				} else if (code !== 0) {
+					reject(new GitCommandError(
+						stderrText.trim() ||
+						`${command} exited with code ${code}.`,
+						{
+							kind: 'exit',
+							operation: policy.operation,
+							command,
+							stderr: stderrText,
+							code,
+						}
+					));
+				} else {
+					resolve({
+						stdout: stdoutText,
+						stderr: stderrText,
+					});
+				}
+			};
+
+			child.stdout?.on('data', onStdout);
+			child.stderr?.on('data', onStderr);
+			child.on('error', onError);
+			child.on('close', onClose);
+			timer = runner.setTimeout(() => {
+				if (failure) {
+					return;
+				}
+				runner.warn(
+					`[GitWorktreeService] ${policy.operation} timed out ` +
+					`after ${policy.timeoutMs}ms; killing ${command}.`
+				);
+				setFailure(new GitCommandError(
+					`${command} timed out after ${policy.timeoutMs}ms.`,
+					{
+						kind: 'timeout',
+						operation: policy.operation,
+						command,
+						stderr: Buffer.concat(stderr).toString('utf8'),
+						timeoutMs: policy.timeoutMs,
+					}
+				), true);
+			}, policy.timeoutMs);
 		});
 	}
 
@@ -460,4 +856,47 @@ function refTypeOrder(type: WorktreeRefRecord['type']): number {
 		case 'tag':
 			return 2;
 	}
+}
+
+function nonInteractiveGitEnvironment(
+	inheritedEnv: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+	const env = { ...inheritedEnv };
+	const removedKeys = new Set([
+		'GIT_ASKPASS',
+		'GIT_TERMINAL_PROMPT',
+		'GCM_INTERACTIVE',
+		'SSH_ASKPASS',
+		'SSH_ASKPASS_REQUIRE',
+		'VSCODE_GIT_IPC_HANDLE',
+	]);
+	for (const key of Object.keys(env)) {
+		const normalizedKey = key.toUpperCase();
+		if (
+			removedKeys.has(normalizedKey) ||
+			normalizedKey.startsWith('VSCODE_GIT_ASKPASS_')
+		) {
+			delete env[key];
+		}
+	}
+
+	env.GIT_TERMINAL_PROMPT = '0';
+	env.GCM_INTERACTIVE = 'Never';
+	env.SSH_ASKPASS_REQUIRE = 'never';
+	return env;
+}
+
+function summarizeGitCommand(args: readonly string[]): string {
+	const summary = `git ${args.map(arg =>
+		/\s/.test(arg) ? JSON.stringify(arg) : arg
+	).join(' ')}`;
+	if (summary.length <= GIT_COMMAND_SUMMARY_LIMIT) {
+		return summary;
+	}
+
+	return `${summary.slice(0, GIT_COMMAND_SUMMARY_LIMIT - 1)}…`;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
