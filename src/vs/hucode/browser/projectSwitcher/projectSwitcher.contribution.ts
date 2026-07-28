@@ -3034,7 +3034,7 @@ registerAction2(class extends Action2 {
 					),
 					detail: localize(
 						'removeProjectDetail',
-						'This only removes the project from the sidebar. Repository files are left untouched.'
+						'Matching workbenches are unloaded where possible. Repository files are left untouched.'
 					),
 				})).confirmed
 			);

@@ -1802,6 +1802,83 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(stateChanges.length, changesBeforeDormantGuard);
 	});
 
+	test('ordinary close preserves a silent workspace after timeout',
+		async () => {
+			const alpha = createWorktree('alpha-close-timeout');
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+				window,
+			} = createController({ beforeUnloadTimeoutMs: 5 });
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const hostedView = viewFactory.views[0];
+			hostedView.rawWebContents.sendHook = () => true;
+
+			await controller.closeWorkspace('instance-1');
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId: 'instance-1', state: 'active' }]
+			);
+			assert.deepStrictEqual(browserWindow.contentView.children, [
+				hostedView,
+			]);
+			assert.deepStrictEqual(hostedView.rawWebContents.closeCalls, []);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[]
+			);
+		}
+	);
+
+	test('ordinary close preserves a workspace when before-unload send fails',
+		async () => {
+			const alpha = createWorktree('alpha-close-send-failure');
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+				window,
+			} = createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const hostedView = viewFactory.views[0];
+			hostedView.rawWebContents.sendHook = channel => {
+				if (channel === 'vscode:onBeforeUnload') {
+					throw new Error('send failed');
+				}
+				return true;
+			};
+
+			await controller.closeWorkspace('instance-1');
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId: 'instance-1', state: 'active' }]
+			);
+			assert.deepStrictEqual(browserWindow.contentView.children, [
+				hostedView,
+			]);
+			assert.deepStrictEqual(hostedView.rawWebContents.closeCalls, []);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[]
+			);
+		}
+	);
+
 	test('does not close a workspace reactivated during unload', async () => {
 		const alpha = createWorktree('alpha-reactivated');
 		const bravo = createWorktree('bravo-reactivated');
@@ -2306,6 +2383,8 @@ suite('ResidentHostedWorkspacesController', () => {
 				`workspace before-unload reply for ${alpha}.`,
 				'[HucodeShellMainService] Timed out waiting for hosted ' +
 				`workspace will-unload reply for ${alpha}.`,
+				'[HucodeShellMainService] Ignoring hosted workspace unload ' +
+				`veto during Omni shutdown for ${alpha}.`,
 			]);
 			assert.deepStrictEqual(
 				browserViewMainService.destroyedHostedWebContentsIds,

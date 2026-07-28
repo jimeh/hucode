@@ -25,10 +25,14 @@ suite('Remove Project', () => {
 
 	test('closes every hosted instance for the project before removal', async () => {
 		const calls: string[] = [];
-		const allClosesStarted = new DeferredPromise<void>();
-		const releaseCloses =
+		const firstNonActiveCloseStarted = new DeferredPromise<void>();
+		const releaseNonActiveCloses =
+			new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const activeCloseStarted = new DeferredPromise<void>();
+		const releaseActiveClose =
 			new DeferredPromise<IHucodeHostedWorkspaceState>();
 		const harness = createHarness({
+			activeInstanceId: 'active',
 			instances: [
 				instance('active', 'project', 'active'),
 				instance('loaded', 'project', 'loaded'),
@@ -38,10 +42,14 @@ suite('Remove Project', () => {
 			],
 			onClose(instanceId) {
 				calls.push(`close:${instanceId}`);
-				if (harness.closed.length === 3) {
-					void allClosesStarted.complete();
+				if (instanceId === 'active') {
+					void activeCloseStarted.complete();
+					return releaseActiveClose.p;
 				}
-				return releaseCloses.p;
+				if (!firstNonActiveCloseStarted.isSettled) {
+					void firstNonActiveCloseStarted.complete();
+				}
+				return releaseNonActiveCloses.p;
 			},
 			onRemove(projectId) {
 				calls.push(`remove:${projectId}`);
@@ -49,18 +57,29 @@ suite('Remove Project', () => {
 		});
 
 		const removing = run(harness);
-		await allClosesStarted.p;
+		await firstNonActiveCloseStarted.p;
+		await Promise.resolve();
 
 		assert.deepStrictEqual(new Set(calls), new Set([
-			'close:active',
 			'close:loaded',
 			'close:dormant',
 		]));
+		assert.ok(!calls.includes('close:active'));
 		assert.ok(!calls.includes('close:other'));
 		assert.ok(!calls.includes('close:arbitrary'));
 		assert.ok(!calls.includes('remove:project'));
 
-		await releaseCloses.complete(emptyState);
+		await releaseNonActiveCloses.complete(emptyState);
+		await activeCloseStarted.p;
+
+		assert.deepStrictEqual(calls, [
+			'close:loaded',
+			'close:dormant',
+			'close:active',
+		]);
+		assert.ok(!calls.includes('remove:project'));
+
+		await releaseActiveClose.complete(emptyState);
 		await removing;
 
 		assert.strictEqual(calls.at(-1), 'remove:project');
@@ -96,6 +115,21 @@ suite('Remove Project', () => {
 			new Set(['vetoed', 'timed-out', 'rejected'])
 		);
 		assert.deepStrictEqual(removed, ['project']);
+	});
+
+	test('removes an Omni project with no matching hosted instances', async () => {
+		const harness = createHarness({
+			instances: [
+				instance('other', 'other-project', 'active'),
+				instance('arbitrary', undefined, 'loaded'),
+			],
+		});
+
+		await run(harness);
+
+		assert.strictEqual(harness.stateReads, 1);
+		assert.deepStrictEqual(harness.closed, []);
+		assert.deepStrictEqual(harness.removed, ['project']);
 	});
 
 	test('does nothing when the project no longer exists', async () => {
@@ -162,6 +196,7 @@ interface IHarness {
 	readonly closed: string[];
 	readonly removed: string[];
 	readonly state: {
+		activeInstanceId?: string;
 		instances: readonly IHucodeHostedWorkbenchInstance[];
 	};
 	readonly stateReads: number;
@@ -169,6 +204,7 @@ interface IHarness {
 
 function createHarness(options: {
 	readonly projects?: readonly ProjectRecord[];
+	readonly activeInstanceId?: string;
 	readonly instances?: readonly IHucodeHostedWorkbenchInstance[];
 	readonly confirm?: boolean;
 	readonly isOmniWindow?: boolean;
@@ -182,6 +218,7 @@ function createHarness(options: {
 	const removed: string[] = [];
 	const mutable = {
 		stateReads: 0,
+		activeInstanceId: options.activeInstanceId,
 		instances: options.instances ?? [],
 	};
 	const projectManagerService = {
@@ -197,7 +234,7 @@ function createHarness(options: {
 		async getWindowState(windowId: number) {
 			assert.strictEqual(windowId, 7);
 			mutable.stateReads++;
-			return state(mutable.instances);
+			return state(mutable.instances, mutable.activeInstanceId);
 		},
 		async closeWorkspace(windowId: number, instanceId?: string) {
 			assert.strictEqual(windowId, 7);
@@ -254,9 +291,11 @@ function instance(
 }
 
 function state(
-	instances: readonly IHucodeHostedWorkbenchInstance[]
+	instances: readonly IHucodeHostedWorkbenchInstance[],
+	activeInstanceId?: string
 ): IHucodeHostedWorkspaceState {
 	return {
+		activeInstanceId,
 		projectsSidebarVisible: true,
 		projectSwitcherCanGoBack: false,
 		projectSwitcherCanGoForward: false,

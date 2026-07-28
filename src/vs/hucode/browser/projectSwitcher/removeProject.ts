@@ -16,7 +16,8 @@ export interface IRemoveProjectRouting {
 
 /**
  * Removes a project after confirming it still exists and the user wants to
- * remove it.
+ * remove it. In the current Omni window, non-active workbenches are closed
+ * concurrently before the snapshot-active workbench is closed last.
  */
 export async function removeProjectWithHostedWorkbenchCleanup(
 	projectId: string,
@@ -39,15 +40,30 @@ export async function removeProjectWithHostedWorkbenchCleanup(
 
 	if (routing.isOmniWindow) {
 		const state = await shellService.getWindowState(routing.windowId);
-		// Workbenches close independently. Start every attempt together so one
-		// slow handshake does not multiply the wait, and let every attempt
-		// settle so one failed close cannot strand its siblings.
-		await Promise.allSettled(state.instances
-			.filter(instance => instance.projectId === projectId)
+		const matches = state.instances.filter(instance =>
+			instance.projectId === projectId
+		);
+		const active = matches.find(instance =>
+			instance.instanceId === state.activeInstanceId
+		);
+		// Non-active workbenches close independently. Start those attempts
+		// together so one slow handshake does not multiply the wait, then close
+		// the snapshot-active workbench last because closing it activates a
+		// sibling and can supersede that sibling's in-flight close.
+		await Promise.allSettled(matches
+			.filter(instance => instance !== active)
 			.map(instance => shellService.closeWorkspace(
 				routing.windowId,
 				instance.instanceId
 			)));
+		if (active) {
+			await Promise.allSettled([
+				shellService.closeWorkspace(
+					routing.windowId,
+					active.instanceId
+				),
+			]);
+		}
 	}
 
 	await projectManagerService.removeProject(projectId);
