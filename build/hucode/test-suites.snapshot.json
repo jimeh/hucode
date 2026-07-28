@@ -10,6 +10,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/createProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/hostedWorkbenchActions.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/openProjectSwitcherTarget.test.ts",
+		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherCollapse.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",

@@ -54,6 +54,19 @@ suite('WebProjectManagerService', () => {
 			.rootUri.fsPath, '/repo');
 	});
 
+	test('preserves worktree freshness through JSON responses', async () => {
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response(JSON.stringify({
+				projects: [rawProject('/repo', 'stale')],
+			}));
+		const service = disposables.add(createService(fakeFetch));
+
+		const projects = await service.getProjects();
+
+		assert.strictEqual(projects[0].worktreeState, 'stale');
+		assert.strictEqual(projects[0].rootUri.fsPath, '/repo');
+	});
+
 	test('uses localized fallback errors for failed requests', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response('not json', { status: 500 });
@@ -87,6 +100,23 @@ suite('WebProjectManagerService', () => {
 
 		assert.strictEqual(events.length, 1);
 		assert.strictEqual(events[0][0].rootUri.fsPath, '/repo');
+		assert.strictEqual(
+			(events[0][0] as { worktreeState?: string }).worktreeState,
+			'current'
+		);
+
+		FakeEventSource.instances[0].emit(
+			'projects',
+			new MessageEvent('projects', {
+				data: JSON.stringify({
+					projects: [rawProject('/repo', 'unavailable')],
+				}),
+			})
+		);
+		assert.strictEqual(
+			(events[1][0] as { worktreeState?: string }).worktreeState,
+			'unavailable'
+		);
 	});
 
 	test('closes project events when disposed', () => {
@@ -108,13 +138,17 @@ suite('WebProjectManagerService', () => {
 	}
 });
 
-function rawProject(path: string): object {
+function rawProject(
+	path: string,
+	worktreeState: 'current' | 'stale' | 'unavailable' = 'current'
+): object {
 	return {
 		id: 'project',
 		label: 'Repo',
 		rootUri: URI.file(path).toJSON(),
 		pinned: false,
 		order: 1,
+		worktreeState,
 		worktrees: [],
 	};
 }

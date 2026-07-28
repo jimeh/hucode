@@ -35,6 +35,11 @@ export interface WorktreeRecord {
 }
 
 /**
+ * Runtime freshness of a project's discovered worktrees.
+ */
+export type ProjectWorktreeState = 'current' | 'stale' | 'unavailable';
+
+/**
  * Runtime project record exposed to the workbench.
  */
 export interface ProjectRecord {
@@ -44,6 +49,7 @@ export interface ProjectRecord {
 	readonly pinned: boolean;
 	readonly order: number;
 	readonly lastActiveWorktreePath?: string;
+	readonly worktreeState: ProjectWorktreeState;
 	readonly worktrees: readonly WorktreeRecord[];
 }
 
