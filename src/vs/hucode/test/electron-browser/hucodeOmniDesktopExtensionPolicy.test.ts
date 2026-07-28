@@ -45,6 +45,32 @@ suite('HucodeOmniDesktopExtensionPolicy', () => {
 		);
 	});
 
+	// `isOmniShellWindow` is what the enablement branch reads, and on desktop
+	// it comes from the main-process window configuration. Nothing else
+	// exercises the native getter, so a broken one would let remotely scanned
+	// built-ins through in the desktop shell — `skipBuiltinExtensions` only
+	// ever covered the local scan.
+	test('the trusted shell flag follows the window configuration', () => {
+		assert.deepStrictEqual({
+			shell: anOmniEnvironmentService({ isOmniWindow: true })
+				.isOmniShellWindow,
+			hostedWorkspace: anOmniEnvironmentService({
+				isOmniWindow: false,
+				isHostedOmniWorkspace: true,
+			}).isOmniShellWindow,
+			shellFlaggedHosted: anOmniEnvironmentService({
+				isOmniWindow: true,
+				isHostedOmniWorkspace: true,
+			}).isOmniShellWindow,
+			ordinaryWindow: anOmniEnvironmentService().isOmniShellWindow,
+		}, {
+			shell: true,
+			hostedWorkspace: false,
+			shellFlaggedHosted: false,
+			ordinaryWindow: false,
+		});
+	});
+
 	// Not covered: that the override preserves `super.skipBuiltinExtensions`.
 	// The base reads `VSCODE_SKIP_BUILTIN_EXTENSIONS` from the process
 	// environment rather than the window configuration, so pinning it would
@@ -52,7 +78,9 @@ suite('HucodeOmniDesktopExtensionPolicy', () => {
 	// would only discard an operator's own env-provided skips, not weaken the
 	// shell filter.
 
-	function anOmniEnvironmentService(): HucodeOmniWorkbenchEnvironmentService {
+	function anOmniEnvironmentService(
+		windowFlags: Partial<INativeWindowConfiguration> = {}
+	): HucodeOmniWorkbenchEnvironmentService {
 		const configuration = {
 			windowId: 1,
 			userEnv: {},
@@ -60,6 +88,7 @@ suite('HucodeOmniDesktopExtensionPolicy', () => {
 			homeDir: '/test/home',
 			tmpDir: '/test/tmp',
 			userDataDir: '/test/user-data',
+			...windowFlags,
 		} as unknown as INativeWindowConfiguration;
 
 		return new HucodeOmniWorkbenchEnvironmentService(

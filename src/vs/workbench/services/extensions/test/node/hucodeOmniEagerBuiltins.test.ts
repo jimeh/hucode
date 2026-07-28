@@ -32,6 +32,20 @@ suite('HucodeOmniEagerBuiltins', () => {
 
 	const intentionallyEagerInShell = new Set<string>([]);
 
+	/**
+	 * Downloaded built-ins, pinned. Their manifests live under
+	 * `.build/builtInExtensions`, which exists only after the download step and
+	 * so is absent wherever unit tests run without it — scanning them alone
+	 * would pass vacuously there. Pinning the inventory means adding one fails
+	 * here instead, and whoever adds it has to check whether it activates on
+	 * `*` or `onStartupFinished` and skip it if so. None of these three do.
+	 */
+	const knownDownloadedBuiltins = [
+		'ms-vscode.js-debug-companion',
+		'ms-vscode.js-debug',
+		'ms-vscode.vscode-js-profile-table',
+	];
+
 	test('every eagerly activating built-in is skipped in the shell', () => {
 		const eager = eagerBuiltinExtensionIds();
 
@@ -70,14 +84,46 @@ suite('HucodeOmniEagerBuiltins', () => {
 		);
 	});
 
+	test('the downloaded built-in inventory has not changed', () => {
+		assert.deepStrictEqual(
+			downloadedBuiltinExtensionIds(),
+			knownDownloadedBuiltins
+		);
+	});
+
+	test('any downloaded built-in present on disk is skipped if eager', () => {
+		// Real coverage where the download step has run; the pinned inventory
+		// is what holds where it has not.
+		const downloadedDir = path.join(
+			repositoryRoot(), '.build', 'builtInExtensions'
+		);
+		if (!fs.existsSync(downloadedDir)) {
+			return;
+		}
+
+		const eager = manifestsIn(downloadedDir)
+			.filter(({ manifest }) => activatesEagerly(manifest))
+			.map(({ id }) => id);
+
+		assert.deepStrictEqual(
+			eager.filter(id =>
+				!hucodeIsOmniShellSkippedBuiltinId(id)
+				&& !intentionallyEagerInShell.has(id.toLowerCase())
+			),
+			[]
+		);
+	});
+
 	function eagerBuiltinExtensionIds(): string[] {
 		return builtinManifests()
-			.filter(({ manifest }) => {
-				const events: unknown = manifest.activationEvents;
-				return Array.isArray(events)
-					&& events.some(e => e === '*' || e === 'onStartupFinished');
-			})
+			.filter(({ manifest }) => activatesEagerly(manifest))
 			.map(({ id }) => id);
+	}
+
+	function activatesEagerly(manifest: any): boolean {
+		const events: unknown = manifest.activationEvents;
+		return Array.isArray(events)
+			&& events.some(e => e === '*' || e === 'onStartupFinished');
 	}
 
 	function downloadedBuiltinExtensionIds(): string[] {
@@ -91,7 +137,10 @@ suite('HucodeOmniEagerBuiltins', () => {
 	}
 
 	function builtinManifests(): { id: string; manifest: any }[] {
-		const extensionsDir = path.join(repositoryRoot(), 'extensions');
+		return manifestsIn(path.join(repositoryRoot(), 'extensions'));
+	}
+
+	function manifestsIn(extensionsDir: string): { id: string; manifest: any }[] {
 		const result: { id: string; manifest: any }[] = [];
 
 		for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
