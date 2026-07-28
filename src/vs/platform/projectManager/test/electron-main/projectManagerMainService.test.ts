@@ -7,7 +7,10 @@ import assert from 'assert';
 import type * as cp from 'child_process';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { timeout } from '../../../../base/common/async.js';
+import {
+	DeferredPromise,
+	timeout,
+} from '../../../../base/common/async.js';
 import {
 	CancellationToken,
 	CancellationTokenSource,
@@ -86,6 +89,14 @@ class TestStateService implements IStateService {
 	}
 }
 
+class TestLogService extends NullLogService {
+	readonly warnings: (string | Error)[] = [];
+
+	override warn(message: string | Error, ..._args: unknown[]): void {
+		this.warnings.push(message);
+	}
+}
+
 class TestGitWorktreeService {
 	readonly commonDirs = new Map<string, string>();
 	readonly commonDirErrors = new Set<string>();
@@ -95,6 +106,12 @@ class TestGitWorktreeService {
 	readonly refs = new Map<string, readonly WorktreeRefRecord[]>();
 	readonly validBranchNames = new Set<string>();
 	readonly listWorktreesCalls: string[] = [];
+	readonly listWorktreesTokens: CancellationToken[] = [];
+	readonly commonDirTokens: CancellationToken[] = [];
+	listWorktreesHandler?: (
+		projectRoot: string,
+		token: CancellationToken
+	) => Promise<readonly WorktreeRecord[]>;
 	readonly listRefsCalls: {
 		projectRoot: string;
 		worktrees: readonly WorktreeRecord[];
@@ -111,7 +128,11 @@ class TestGitWorktreeService {
 		return this.resolvedRoots.get(cwd) ?? cwd;
 	}
 
-	async getGitCommonDir(projectRoot: string): Promise<string> {
+	async getGitCommonDir(
+		projectRoot: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<string> {
+		this.commonDirTokens.push(token);
 		if (this.commonDirErrors.has(projectRoot)) {
 			throw new Error(`No git common dir for ${projectRoot}.`);
 		}
@@ -132,8 +153,15 @@ class TestGitWorktreeService {
 			.map(worktree => basename(worktree.path));
 	}
 
-	async listWorktrees(projectRoot: string): Promise<readonly WorktreeRecord[]> {
+	async listWorktrees(
+		projectRoot: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<readonly WorktreeRecord[]> {
 		this.listWorktreesCalls.push(projectRoot);
+		this.listWorktreesTokens.push(token);
+		if (this.listWorktreesHandler) {
+			return this.listWorktreesHandler(projectRoot, token);
+		}
 		return this.worktrees.get(projectRoot) ?? [];
 	}
 
@@ -194,9 +222,13 @@ class TestGitWorktreeService {
 class TestProjectMetadataWatcher {
 	readonly watchedPaths: string[] = [];
 	readonly disposedPaths: string[] = [];
+	readonly throwPaths = new Set<string>();
 	private readonly listeners = new Map<string, (() => void)[]>();
 
 	watch(path: string, onDidChange: () => void) {
+		if (this.throwPaths.has(path)) {
+			throw new Error(`Cannot watch ${path}.`);
+		}
 		this.watchedPaths.push(path);
 		const listeners = this.listeners.get(path) ?? [];
 		listeners.push(onDidChange);
@@ -218,6 +250,40 @@ class TestProjectMetadataWatcher {
 		for (const listener of this.listeners.get(path) ?? []) {
 			listener();
 		}
+	}
+}
+
+class TestRetryDelay {
+	readonly delays: number[] = [];
+	readonly tokens: CancellationToken[] = [];
+	private readonly pending: {
+		readonly resolve: () => void;
+	}[] = [];
+
+	readonly delay = (
+		milliseconds: number,
+		token: CancellationToken
+	): Promise<void> => {
+		this.delays.push(milliseconds);
+		this.tokens.push(token);
+		return new Promise<void>((resolve, reject) => {
+			const listener = token.onCancellationRequested(() => {
+				listener.dispose();
+				reject(new CancellationError());
+			});
+			this.pending.push({
+				resolve: () => {
+					listener.dispose();
+					resolve();
+				},
+			});
+		});
+	};
+
+	releaseNext(): void {
+		const pending = this.pending.shift();
+		assert.ok(pending, 'Expected a pending retry delay.');
+		pending.resolve();
 	}
 }
 
@@ -1608,11 +1674,12 @@ suite('ProjectManagerMainService', () => {
 		options: Omit<
 			ProjectManagerMainServiceOptions,
 			'gitWorktreeService' | 'now'
-		> = {}
+		> = {},
+		logService: NullLogService = new NullLogService()
 	): ProjectManagerMainService {
 		return disposables.add(new ProjectManagerMainService(
 			stateService,
-			new NullLogService(),
+			logService,
 			{
 				gitWorktreeService,
 				now,
@@ -1893,6 +1960,430 @@ suite('ProjectManagerMainService', () => {
 			],
 			watchedPaths: [],
 		});
+	});
+
+	test('retains stale worktrees, metadata, and watchers before retry recovery',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const metadataWatcher = new TestProjectMetadataWatcher();
+			const retry = new TestRetryDelay();
+			const alphaPath = '/repo.worktrees/alpha';
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree(alphaPath, 'alpha'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				() => 42,
+				{
+					metadataWatcher,
+					retryDelay: retry.delay,
+				}
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			await service.renameWorktree(project.id, alphaPath, 'Custom Alpha');
+			await service.setWorktreePinned(project.id, alphaPath, true);
+			await service.setLastActiveWorktree(project.id, alphaPath);
+			const watchedBeforeFailure = [...metadataWatcher.watchedPaths];
+
+			gitWorktreeService.listWorktreesHandler = async () => {
+				throw new Error('temporary Git failure');
+			};
+			const stale = (await service.refresh(project.id))[0];
+
+			assert.strictEqual(stale.worktreeState, 'stale');
+			assert.deepStrictEqual(stale.worktrees.map(worktree => ({
+				path: worktree.path,
+				customLabel: worktree.customLabel,
+				pinned: worktree.pinned,
+				lastVisitedAt: worktree.lastVisitedAt,
+			})), [{
+				path: '/repo',
+				customLabel: undefined,
+				pinned: undefined,
+				lastVisitedAt: undefined,
+			}, {
+				path: alphaPath,
+				customLabel: 'Custom Alpha',
+				pinned: true,
+				lastVisitedAt: 42,
+			}]);
+			assert.strictEqual(stale.lastActiveWorktreePath, alphaPath);
+			assert.deepStrictEqual(metadataWatcher.watchedPaths, watchedBeforeFailure);
+			assert.deepStrictEqual(metadataWatcher.disposedPaths, []);
+			assert.deepStrictEqual(retry.delays, [1000]);
+
+			gitWorktreeService.listWorktreesHandler = undefined;
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree(alphaPath, 'feature/alpha'),
+			]);
+			retry.releaseNext();
+			await timeout(0);
+			await timeout(0);
+
+			const recovered = (await service.getProjects())[0];
+			assert.strictEqual(recovered.worktreeState, 'current');
+			assert.strictEqual(recovered.worktrees[1].branch, 'feature/alpha');
+			assert.strictEqual(recovered.worktrees[1].customLabel, 'Custom Alpha');
+			assert.strictEqual(recovered.worktrees[1].pinned, true);
+			assert.ok(metadataWatcher.disposedPaths.length > 0);
+		});
+
+	test('caps persistent refresh retries at thirty seconds with one chain',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const retry = new TestRetryDelay();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{ retryDelay: retry.delay }
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			gitWorktreeService.listWorktreesHandler = async () => {
+				throw new Error('still unavailable');
+			};
+
+			await service.refresh(project.id);
+			for (let index = 0; index < 5; index++) {
+				retry.releaseNext();
+				await timeout(0);
+			}
+
+			assert.deepStrictEqual(
+				retry.delays,
+				[1000, 2000, 5000, 10_000, 30_000, 30_000]
+			);
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				7
+			);
+			assert.strictEqual(new Set(retry.tokens).size, 1);
+		});
+
+	test('recovers an initially unavailable project through retry', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const retry = new TestRetryDelay();
+		stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [{
+				id: 'project-1',
+				label: 'Repo',
+				rootPath: '/repo',
+				pinned: false,
+				order: 1,
+			}],
+		} satisfies StoredProjectManagerState);
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('Git unavailable at startup');
+		};
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ retryDelay: retry.delay }
+		);
+
+		const initial = (await service.getProjects())[0];
+		assert.strictEqual(initial.worktreeState, 'unavailable');
+		assert.deepStrictEqual(initial.worktrees, []);
+		const initialCalls = gitWorktreeService.listWorktreesCalls.length;
+		const initialRetryToken = retry.tokens[0];
+
+		const repeated = (await service.getProjects())[0];
+		assert.strictEqual(repeated.worktreeState, 'unavailable');
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesCalls.length,
+			initialCalls
+		);
+		assert.deepStrictEqual(retry.delays, [1000]);
+		assert.strictEqual(initialRetryToken.isCancellationRequested, false);
+
+		gitWorktreeService.listWorktreesHandler = undefined;
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		retry.releaseNext();
+		await timeout(0);
+		await timeout(0);
+
+		const recovered = (await service.getProjects())[0];
+		assert.strictEqual(recovered.worktreeState, 'current');
+		assert.deepStrictEqual(recovered.worktrees, [
+			createMainWorktree('/repo'),
+		]);
+	});
+
+	test('superseded refreshes cannot overwrite newer discovery', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ metadataWatcher }
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		const oldDiscovery =
+			new DeferredPromise<readonly WorktreeRecord[]>();
+		let discovery = 0;
+		gitWorktreeService.listWorktreesHandler = async () => {
+			discovery++;
+			if (discovery === 1) {
+				return oldDiscovery.p;
+			}
+			return [
+				createMainWorktree('/repo', 'new-main'),
+				createLinkedWorktree('/repo.worktrees/new', 'new'),
+			];
+		};
+
+		const oldRefresh = service.refresh(project.id);
+		await timeout(0);
+		const fresh = await service.refresh(project.id);
+		oldDiscovery.complete([
+			createMainWorktree('/repo', 'old-main'),
+			createLinkedWorktree('/repo.worktrees/old', 'old'),
+		]);
+		await oldRefresh;
+
+		assert.deepStrictEqual(
+			fresh[0].worktrees.map(worktree => worktree.branch),
+			['new-main', 'new']
+		);
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(
+				worktree => worktree.branch
+			),
+			['new-main', 'new']
+		);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesTokens[1].isCancellationRequested,
+			true
+		);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesTokens[2].isCancellationRequested,
+			false
+		);
+		assert.strictEqual(
+			gitWorktreeService.commonDirTokens[1].isCancellationRequested,
+			true
+		);
+		assert.strictEqual(
+			gitWorktreeService.commonDirTokens[2].isCancellationRequested,
+			false
+		);
+	});
+
+	test('cancellation is inert and does not warn or change current state',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const logService = new TestLogService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{},
+				logService
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			let discovery = 0;
+			gitWorktreeService.listWorktreesHandler = async (_root, token) => {
+				discovery++;
+				if (discovery === 1) {
+					return new Promise<readonly WorktreeRecord[]>(
+						(_resolve, reject) => {
+							const listener = token.onCancellationRequested(() => {
+								listener.dispose();
+								reject(new CancellationError());
+							});
+						}
+					);
+				}
+				return [
+					createMainWorktree('/repo'),
+					createLinkedWorktree('/repo.worktrees/new', 'new'),
+				];
+			};
+
+			const canceledRefresh = service.refresh(project.id);
+			await timeout(0);
+			const fresh = await service.refresh(project.id);
+			await canceledRefresh;
+
+			assert.strictEqual(fresh[0].worktreeState, 'current');
+			assert.deepStrictEqual(
+				(await service.getProjects())[0].worktrees.map(
+					worktree => worktree.branch
+				),
+				['main', 'new']
+			);
+			assert.deepStrictEqual(logService.warnings, []);
+		});
+
+	test('watcher refresh supersedes an older manual discovery', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const metadataWatcher = new TestProjectMetadataWatcher();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{
+				metadataWatcher,
+				autoRefreshDebounceMs: 0,
+				autoRefreshQuietMs: 0,
+			}
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		const oldDiscovery =
+			new DeferredPromise<readonly WorktreeRecord[]>();
+		let discovery = 0;
+		gitWorktreeService.listWorktreesHandler = async () => {
+			discovery++;
+			return discovery === 1
+				? oldDiscovery.p
+				: [
+					createMainWorktree('/repo'),
+					createLinkedWorktree('/repo.worktrees/watcher', 'watcher'),
+				];
+		};
+
+		const manualRefresh = service.refresh(project.id);
+		await timeout(0);
+		metadataWatcher.fire('/repo/.git/worktrees');
+		await timeout(0);
+		await timeout(0);
+		oldDiscovery.complete([
+			createMainWorktree('/repo'),
+			createLinkedWorktree('/repo.worktrees/old', 'old'),
+		]);
+		await manualRefresh;
+
+		assert.deepStrictEqual(
+			(await service.getProjects())[0].worktrees.map(
+				worktree => worktree.branch
+			),
+			['main', 'watcher']
+		);
+		assert.strictEqual(
+			gitWorktreeService.listWorktreesTokens[1].isCancellationRequested,
+			true
+		);
+	});
+
+	test('watch construction failure keeps prior watchers and current data',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const metadataWatcher = new TestProjectMetadataWatcher();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{
+					metadataWatcher,
+					autoRefreshDebounceMs: 0,
+					autoRefreshQuietMs: 0,
+				}
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			const watchedBefore = [...metadataWatcher.watchedPaths];
+			metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree('/repo.worktrees/new', 'new'),
+			]);
+
+			const refreshed = (await service.refresh(project.id))[0];
+
+			assert.strictEqual(refreshed.worktreeState, 'current');
+			assert.deepStrictEqual(
+				refreshed.worktrees.map(worktree => worktree.branch),
+				['main', 'new']
+			);
+			assert.deepStrictEqual(metadataWatcher.watchedPaths, watchedBefore);
+			assert.deepStrictEqual(metadataWatcher.disposedPaths, []);
+
+			metadataWatcher.fire('/repo/.git/worktrees');
+			await timeout(0);
+			await timeout(0);
+			assert.ok(gitWorktreeService.listWorktreesCalls.length >= 3);
+		});
+
+	test('cancels retry ownership when a project is removed', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const retry = new TestRetryDelay();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ retryDelay: retry.delay }
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('temporary');
+		};
+		await service.refresh(project.id);
+		const retryToken = retry.tokens[0];
+
+		await service.removeProject(project.id);
+		await timeout(0);
+
+		assert.strictEqual(retryToken.isCancellationRequested, true);
+		assert.deepStrictEqual(await service.getProjects(), []);
+	});
+
+	test('cancels retry ownership when the service is disposed', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const retry = new TestRetryDelay();
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+		]);
+		const service = createService(
+			stateService,
+			gitWorktreeService,
+			undefined,
+			{ retryDelay: retry.delay }
+		);
+		const project = await service.addProject(URI.file('/repo'));
+		gitWorktreeService.listWorktreesHandler = async () => {
+			throw new Error('temporary');
+		};
+		await service.refresh(project.id);
+		const retryToken = retry.tokens[0];
+
+		service.dispose();
+		await timeout(0);
+
+		assert.strictEqual(retryToken.isCancellationRequested, true);
 	});
 
 	test('auto-refreshes when watched git metadata changes', async () => {
@@ -2475,6 +2966,11 @@ suite('ProjectManagerMainService', () => {
 			const refreshed = await service.refresh(project.id);
 
 			assert.strictEqual(refreshed[0].lastActiveWorktreePath, undefined);
+			assert.strictEqual(refreshed[0].worktreeState, 'current');
+			assert.deepStrictEqual(
+				refreshed[0].worktrees,
+				[createMainWorktree('/repo')]
+			);
 			await assert.rejects(
 				service.removeWorktree(project.id, '/repo'),
 				/The main worktree cannot be removed\./

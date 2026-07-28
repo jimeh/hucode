@@ -473,7 +473,8 @@ export function buildProjectSwitcherTreeModel(
 			? []
 			: missingHostedInstances;
 
-		if (pinnedWorktrees.length || pinnedMissingInstances.length) {
+		if (pinnedWorktrees.length || pinnedMissingInstances.length ||
+			project.pinned && project.worktreeState === 'unavailable') {
 			pinnedProjectElements.push(toProjectElement(
 				project,
 				pinnedWorktrees,
@@ -483,7 +484,8 @@ export function buildProjectSwitcherTreeModel(
 				itemsById
 			));
 		}
-		if (unpinnedWorktrees.length || unpinnedMissingInstances.length) {
+		if (unpinnedWorktrees.length || unpinnedMissingInstances.length ||
+			!project.pinned && project.worktreeState === 'unavailable') {
 			unpinnedProjectElements.push(toProjectElement(
 				project,
 				unpinnedWorktrees,
@@ -639,6 +641,21 @@ function toProjectElement(
 	const rootPath = rootUri.fsPath;
 	const rootBasename = basename(rootPath);
 	const handle = encodeProjectHandle(project.id, section);
+	const unavailable = project.worktreeState === 'unavailable';
+	const stale = project.worktreeState === 'stale';
+	const stateDescription = unavailable
+		? localize(
+			'projectWorktreesUnavailable',
+			'Worktrees unavailable · {0}',
+			options.getPathLabel(rootPath)
+		)
+		: stale
+			? localize(
+				'projectWorktreesOutOfDate',
+				'Worktrees out of date · {0}',
+				options.getPathLabel(rootPath)
+			)
+			: undefined;
 	const item: ProjectSwitcherProjectItem = {
 		id: handle,
 		handle,
@@ -649,21 +666,21 @@ function toProjectElement(
 		rootPath,
 		hasCustomLabel: project.label !== rootBasename,
 		label: project.label,
-		description: options.getPathLabel(rootPath),
-		tooltip: options.getPathLabel(rootPath),
+		description: stateDescription ?? options.getPathLabel(rootPath),
+		tooltip: stateDescription ?? options.getPathLabel(rootPath),
 		contextValue: project.pinned
 			? PINNED_PROJECT_CONTEXT_VALUE
 			: PROJECT_CONTEXT_VALUE,
-		themeIcon: Codicon.folder,
+		themeIcon: unavailable || stale ? Codicon.warning : Codicon.folder,
 	};
 	itemsById.set(item.handle, item);
 
 	return {
 		element: item,
-		collapsible: true,
+		collapsible: !unavailable,
 		collapsed: options.collapsedProjectIds.has(item.id) ||
 			options.collapsedProjectIds.has(project.id),
-		children: [
+		children: unavailable ? [] : [
 			...worktrees.map(worktree =>
 				toWorktreeElement(project, worktree, section, options, itemsById)
 			),
