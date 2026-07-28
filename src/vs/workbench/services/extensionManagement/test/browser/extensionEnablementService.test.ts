@@ -1446,6 +1446,29 @@ suite('ExtensionEnablementService Test', () => {
 		});
 	});
 
+	test('test the shell wins over an extension enabled on the command line', async () => {
+		// `_isEnabledInEnv` is consulted after the shell branch and only when
+		// the extension is otherwise disabled, so both halves are needed to
+		// exercise the ordering: disabled by the user, then re-enabled with
+		// --enable-extension. Moving the shell branch below that one turns
+		// this into EnabledByEnvironment, and vscode.git loads in the shell.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.DisabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, {
+			isOmniShellWindow: true,
+			enableExtensions: <readonly string[]>['vscode.git'],
+		});
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.strictEqual(
+			testObject.getEnablementState(git),
+			EnablementState.DisabledByEnvironment
+		);
+	});
+
 	test('test the shell branch runs whatever the user enablement is', async () => {
 		// Pins that the branch is reached without an `isEnabled` guard. Adding
 		// one would leave this reporting DisabledGlobally: still disabled, so

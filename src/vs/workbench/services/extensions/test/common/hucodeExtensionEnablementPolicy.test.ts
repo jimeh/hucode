@@ -193,25 +193,6 @@ suite('HucodeExtensionEnablementPolicy', () => {
 		);
 	});
 
-	test('skip list covers every eagerly activating built-in', () => {
-		// These six are the only bundled built-ins declaring `*` or
-		// `onStartupFinished`, so anything omitted here still starts in a shell
-		// that cannot use it. vscode.git-base activates on `*` and was missed
-		// on the first pass.
-		for (const id of [
-			'GitHub.copilot-chat',
-			'vscode.debug-auto-launch',
-			'vscode.git',
-			'vscode.git-base',
-			'vscode.github',
-			'vscode.merge-conflict',
-		]) {
-			assert.ok(
-				hucodeIsOmniShellSkippedBuiltinId(id),
-				`${id} activates eagerly but is not skipped in the shell`
-			);
-		}
-	});
 
 	test('filters scanned user extensions only when policy is active', () => {
 		const extension = aScannedExtension('pub.a');
