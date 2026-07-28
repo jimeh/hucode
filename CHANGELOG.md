@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.59 - 2026-07-28
+
+### Bug Fixes
+
+- **omni:** apply the desktop extension policy to the web shell (#119)
+
 ## 0.0.58 - 2026-07-27
 
 ### Features
