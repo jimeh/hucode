@@ -25,8 +25,11 @@ suite('Remove Project', () => {
 
 	test('closes every hosted instance for the project before removal', async () => {
 		const calls: string[] = [];
-		const firstNonActiveCloseStarted = new DeferredPromise<void>();
-		const releaseNonActiveCloses =
+		const loadedCloseStarted = new DeferredPromise<void>();
+		const dormantCloseStarted = new DeferredPromise<void>();
+		const releaseLoadedClose =
+			new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const releaseDormantClose =
 			new DeferredPromise<IHucodeHostedWorkspaceState>();
 		const activeCloseStarted = new DeferredPromise<void>();
 		const releaseActiveClose =
@@ -46,10 +49,13 @@ suite('Remove Project', () => {
 					void activeCloseStarted.complete();
 					return releaseActiveClose.p;
 				}
-				if (!firstNonActiveCloseStarted.isSettled) {
-					void firstNonActiveCloseStarted.complete();
+				if (instanceId === 'loaded') {
+					void loadedCloseStarted.complete();
+					return releaseLoadedClose.p;
 				}
-				return releaseNonActiveCloses.p;
+				assert.strictEqual(instanceId, 'dormant');
+				void dormantCloseStarted.complete();
+				return releaseDormantClose.p;
 			},
 			onRemove(projectId) {
 				calls.push(`remove:${projectId}`);
@@ -57,9 +63,10 @@ suite('Remove Project', () => {
 		});
 
 		const removing = run(harness);
-		await firstNonActiveCloseStarted.p;
+		await loadedCloseStarted.p;
 		await Promise.resolve();
 
+		assert.strictEqual(dormantCloseStarted.isSettled, true);
 		assert.deepStrictEqual(new Set(calls), new Set([
 			'close:loaded',
 			'close:dormant',
@@ -69,9 +76,22 @@ suite('Remove Project', () => {
 		assert.ok(!calls.includes('close:arbitrary'));
 		assert.ok(!calls.includes('remove:project'));
 
-		await releaseNonActiveCloses.complete(emptyState);
-		await activeCloseStarted.p;
+		await releaseLoadedClose.complete(emptyState);
+		await Promise.resolve();
+		await Promise.resolve();
 
+		assert.strictEqual(activeCloseStarted.isSettled, false);
+		assert.deepStrictEqual(calls, [
+			'close:loaded',
+			'close:dormant',
+		]);
+		assert.ok(!calls.includes('remove:project'));
+
+		await releaseDormantClose.complete(emptyState);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		assert.strictEqual(activeCloseStarted.isSettled, true);
 		assert.deepStrictEqual(calls, [
 			'close:loaded',
 			'close:dormant',
@@ -79,7 +99,7 @@ suite('Remove Project', () => {
 		]);
 		assert.ok(!calls.includes('remove:project'));
 
-		await releaseActiveClose.complete(emptyState);
+		await releaseActiveClose.error(new Error('active close failed'));
 		await removing;
 
 		assert.strictEqual(calls.at(-1), 'remove:project');
