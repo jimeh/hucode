@@ -162,6 +162,16 @@ export class NativeWorkbenchEnvironmentService extends AbstractNativeEnvironment
 		return !!this.configuration.isHostedOmniWorkspace;
 	}
 
+	/**
+	 * The window configuration comes from the main process, so unlike web
+	 * these flags cannot be set by the page itself.
+	 */
+	@memoize
+	get isOmniShellWindow(): boolean {
+		return !!this.configuration.isOmniWindow
+			&& !this.configuration.isHostedOmniWorkspace;
+	}
+
 	@memoize
 	get hostedWebContentsId(): number | undefined {
 		return this.configuration.hostedWebContentsId;

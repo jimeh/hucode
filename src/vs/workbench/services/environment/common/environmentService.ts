@@ -42,6 +42,19 @@ export interface IWorkbenchEnvironmentService extends IEnvironmentService {
 	readonly isSessionsWindow: boolean;
 	readonly isOmniWindow: boolean;
 	readonly isHostedOmniWorkspace?: boolean;
+
+	/**
+	 * Whether this window is the Omni shell itself, from trusted configuration
+	 * only.
+	 *
+	 * `isOmniWindow` and `isHostedOmniWorkspace` are both settable from the web
+	 * client's `payload` URL parameter, which is fine for the UI routing that
+	 * reads them but not for deciding which extensions may load. This is
+	 * derived from the server-injected page configuration on web and from the
+	 * main-process window configuration on desktop, so a crafted URL cannot
+	 * move a window in or out of the shell's extension policy.
+	 */
+	readonly isOmniShellWindow: boolean;
 	readonly hostedWebContentsId?: number;
 	readonly hostedInstanceId?: string;
 	readonly webviewExternalEndpoint: string;

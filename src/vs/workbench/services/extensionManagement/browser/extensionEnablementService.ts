@@ -37,6 +37,8 @@ import { ChatEntitlementService, IChatEntitlementService } from '../../chat/comm
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
 import {
 	hucodeIsExtensionDisabledByPolicy,
+	hucodeIsExtensionSkippedInOmniShell,
+	hucodeIsOmniShellSkippedBuiltinId,
 } from '../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 const SOURCE = 'IWorkbenchExtensionEnablementService';
@@ -155,7 +157,11 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 	}
 
 	private ensureChatExtensionInitialDisabledState(): void {
-		if (!this._chatExtensionId || this.environmentService.isSessionsWindow || this.environmentService.skipBuiltinExtensions?.some(id => id.toLowerCase() === this._chatExtensionId)) {
+		// The Omni shell reaches this with `skipBuiltinExtensions` unset on web,
+		// because that filter is a native scanner setting. Without the shell
+		// check the migration would run there and write profile-scoped chat
+		// enablement that every other window inherits.
+		if (!this._chatExtensionId || this.environmentService.isSessionsWindow || this.environmentService.skipBuiltinExtensions?.some(id => id.toLowerCase() === this._chatExtensionId) || (this.environmentService.isOmniShellWindow && hucodeIsOmniShellSkippedBuiltinId(this._chatExtensionId))) {
 			return;
 		}
 
@@ -499,6 +505,10 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 			enablementState = EnablementState.DisabledByEnvironment;
 		}
 
+		else if (this._isDisabledByOmniShell(extension)) {
+			enablementState = EnablementState.DisabledByEnvironment;
+		}
+
 		else if (isEnabled && this._isDisabledByExtensionDependency(extension, extensions, workspaceType, computedEnablementStates)) {
 			enablementState = EnablementState.DisabledByExtensionDependency;
 		}
@@ -700,6 +710,22 @@ export class ExtensionEnablementService extends Disposable implements IWorkbench
 		}
 
 		return !this.extensionManifestPropertiesService.canExecuteOnSessionsWindow(extension.manifest);
+	}
+
+	/**
+	 * Deliberately `isOmniShellWindow` and not `isOmniWindow`: the latter can be
+	 * set from the web client's `payload` URL parameter, so trusting it here
+	 * would let `/workbench?payload=[["isOmniWindow","true"]]` strip a normal
+	 * workbench's extensions, and let the shell opt back into loading them.
+	 * Hosted workbenches run inside the shell but are ordinary workbenches and
+	 * keep normal extension behavior.
+	 */
+	private _isDisabledByOmniShell(extension: IExtension): boolean {
+		if (!this.environmentService.isOmniShellWindow) {
+			return false;
+		}
+
+		return hucodeIsExtensionSkippedInOmniShell(extension);
 	}
 
 	private _enableExtension(identifier: IExtensionIdentifier): Promise<boolean> {

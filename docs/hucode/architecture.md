@@ -232,6 +232,34 @@ management. Hucode filters user extensions for the shell through
 Keep this policy centralized so upstream extension scanner and enablement
 service changes stay thin during VS Code upgrades.
 
+Two filters apply, and the platforms enforce them at different points:
+
+| Filter | Desktop | Web |
+| --- | --- | --- |
+| Theme-only user extensions | `hucodeExtensionEnablementPolicy` | same |
+| Shell-irrelevant built-ins | `skipBuiltinExtensions`, at scan | enablement |
+
+`skipBuiltinExtensions` is an `INativeEnvironmentService` setting read by
+`extensionsScannerService`, which under `serve-web` runs on the server with no
+per-route flag. Web therefore cannot skip the scan and disables at enablement
+instead, which is enough: `abstractExtensionService` filters by enablement
+before the registry delta, so a disabled extension never reaches an extension
+host and never activates. The web shell is still *sent* these extensions; it
+simply never registers them.
+
+The route distinction is the safety property. `/` and `/omni` are the shell;
+`/workbench` and the `/omni/workbench` hosted iframes are ordinary workbenches
+and keep normal extension behavior.
+
+Both filters gate on `isOmniShellWindow`, **not** on
+`isOmniWindow && !isHostedOmniWorkspace`. Those two flags are readable from the
+web client's `payload` URL parameter, which is fine for the UI routing that
+consumes them but would let `/workbench?payload=[["isOmniWindow","true"]]` strip
+a workbench's extensions and let the shell opt back into loading them.
+`isOmniShellWindow` is derived from the server-injected page configuration on
+web and from the main-process window configuration on desktop, so the page
+cannot set it.
+
 ## Product Identity
 
 Hucode product identity is applied through the tracked mixin overlay under

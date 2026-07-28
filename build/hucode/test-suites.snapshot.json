@@ -12,6 +12,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",
+		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
 		"src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
 		"src/vs/hucode/test/electron-main/omniFileOpen.test.ts",
 		"src/vs/hucode/test/electron-main/omniOpenPlan.test.ts",
@@ -27,6 +28,7 @@
 		"src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
 		"src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
 		"src/vs/workbench/services/clipboard/test/browser/hucodeClipboardService.test.ts",
+		"src/vs/workbench/services/environment/test/browser/hucodeOmniEnvironmentService.test.ts",
 		"src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts",
 		"src/vs/workbench/services/host/test/browser/hucodeOmniBrowserOpen.test.ts",
 		"src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts",
@@ -61,6 +63,8 @@
 		"src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts",
 		"src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
 		"src/vs/workbench/services/extensions/test/common/hucodeExtensionEnablementPolicy.test.ts",
+		"src/vs/workbench/services/extensions/test/common/hucodeOmniExtensionFiltering.test.ts",
+		"src/vs/workbench/services/extensions/test/node/hucodeOmniEagerBuiltins.test.ts",
 		"src/vs/workbench/test/node/hucodeWebviewPreCsp.test.ts",
 		"src/vs/workbench/test/node/hucodeWebviewResourceConcurrency.test.ts"
 	]
