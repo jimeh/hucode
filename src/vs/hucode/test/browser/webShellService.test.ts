@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
+import { basename } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
 import {
 	DisposableStore,
@@ -50,6 +51,11 @@ import {
 	IWebHucodeShellPersistenceAdapter,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
+import {
+	IHostedWorkspaceContractState,
+	IHostedWorkspaceLifecycleContractAdapter,
+	registerHostedWorkspaceLifecycleContract,
+} from '../common/hostedWorkspaceLifecycleContract.js';
 
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -437,6 +443,259 @@ suite('WebHucodeShellService', () => {
 	): boolean {
 		return findIframe(surface, instanceId)?.isConnected === true;
 	}
+
+	function createLifecycleContractAdapter():
+		IHostedWorkspaceLifecycleContractAdapter {
+		const toContractState = async (
+			service: WebHucodeShellController,
+			browser: FakeBrowserAdapter
+		): Promise<IHostedWorkspaceContractState> => {
+			const state = await service.getWindowState(browser.windowId);
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId
+			);
+			return {
+				activePath: active && basename(active.worktreePath),
+				instances: state.instances.map(instance => ({
+					path: basename(instance.worktreePath),
+					state: instance.state,
+				})),
+			};
+		};
+		const readyChild = async (
+			harness: ReturnType<typeof createService>,
+			instanceId: string
+		): Promise<FakeHostedWorkbench> => {
+			const child = connectChild(
+				harness.browser,
+				harness.surface,
+				instanceId
+			);
+			await waitForInstanceState(
+				harness.service,
+				harness.browser.windowId,
+				instanceId,
+				'active'
+			);
+			return child.workbench;
+		};
+
+		return {
+			async generationGuard() {
+				const harness = createService();
+				const alphaState = await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/alpha',
+					'project-alpha'
+				);
+				const alphaId = alphaState.activeInstanceId;
+				assert.ok(alphaId);
+				const alphaChild = await readyChild(harness, alphaId);
+				const betaState = await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/beta',
+					'project-beta'
+				);
+				const betaId = betaState.activeInstanceId;
+				assert.ok(betaId);
+				await readyChild(harness, betaId);
+
+				const prepareStarted = new DeferredPromise<void>();
+				const prepareGate = new DeferredPromise<void>();
+				alphaChild.onPrepareUnload = () => {
+					if (!prepareStarted.isSettled) {
+						void prepareStarted.complete();
+					}
+				};
+				alphaChild.prepareUnloadResult =
+					prepareGate.p.then(() => true);
+				const closing = harness.service.closeWorkspace(
+					harness.browser.windowId,
+					alphaId
+				);
+				await prepareStarted.p;
+				await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/alpha',
+					'project-alpha'
+				);
+				await prepareGate.complete();
+				await closing;
+
+				return {
+					state: await toContractState(
+						harness.service,
+						harness.browser
+					),
+					commitCount: alphaChild.commitUnloadCalls,
+				};
+			},
+			async coherentRetainedClose() {
+				const persistence = new FakePersistence();
+				const harness = createService(
+					new FakeBrowserAdapter(),
+					persistence
+				);
+				const opened = await harness.service.retainAndOpenWorkbench(
+					harness.browser.windowId,
+					URI.file('/tmp/scratch').toJSON()
+				);
+				const instanceId = opened.activeInstanceId;
+				assert.ok(instanceId);
+				await readyChild(harness, instanceId);
+				let emissionCount = 0;
+				disposables.add(harness.service.onDidChangeWindowState(() => {
+					emissionCount++;
+				}));
+
+				const closed = await harness.service.closeWorkspace(
+					harness.browser.windowId,
+					instanceId
+				);
+
+				return {
+					state: await toContractState(
+						harness.service,
+						harness.browser
+					),
+					emissionCount,
+					retainedDesiredState:
+						closed.retainedWorkbenches?.[0].desiredState,
+				};
+			},
+			async restoreActiveOnly() {
+				const persistence = new FakePersistence({
+					retainedWorkbenches: [],
+					residentWorkspaces: [{
+						projectId: 'project-alpha',
+						worktreePath: '/tmp/alpha',
+						lastActiveAt: 20,
+					}, {
+						projectId: 'project-beta',
+						worktreePath: '/tmp/beta',
+						lastActiveAt: 10,
+					}],
+					activeWorktreePath: '/tmp/alpha',
+				});
+				const harness = createService(
+					new FakeBrowserAdapter(),
+					persistence,
+					'active',
+					{ exists: async () => true }
+				);
+				const beforeReady = await toContractState(
+					harness.service,
+					harness.browser
+				);
+				const state = await harness.service.getWindowState(
+					harness.browser.windowId
+				);
+				const alpha = state.instances.find(instance =>
+					instance.worktreePath === '/tmp/alpha'
+				);
+				assert.ok(alpha);
+				await readyChild(harness, alpha.instanceId);
+
+				return {
+					beforeReady,
+					afterReady: await toContractState(
+						harness.service,
+						harness.browser
+					),
+					createdHosts:
+						harness.surface.querySelectorAll('iframe').length,
+				};
+			},
+			async closeActiveAndPromoteNext() {
+				const harness = createService();
+				const alphaState = await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/alpha',
+					'project-alpha'
+				);
+				const alphaId = alphaState.activeInstanceId;
+				assert.ok(alphaId);
+				await readyChild(harness, alphaId);
+				const betaState = await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/beta',
+					'project-beta'
+				);
+				const betaId = betaState.activeInstanceId;
+				assert.ok(betaId);
+				const betaChild = await readyChild(harness, betaId);
+
+				await harness.service.closeWorkspace(
+					harness.browser.windowId,
+					betaId
+				);
+
+				return {
+					state: await toContractState(
+						harness.service,
+						harness.browser
+					),
+					unloadPhases: betaChild.unloadPhases,
+				};
+			},
+			async vetoThenShutdown() {
+				const persistence = new FakePersistence();
+				const harness = createService(
+					new FakeBrowserAdapter(),
+					persistence
+				);
+				const opened = await harness.service.openWorkspace(
+					harness.browser.windowId,
+					'/tmp/alpha',
+					'project-alpha'
+				);
+				const instanceId = opened.activeInstanceId;
+				assert.ok(instanceId);
+				const child = await readyChild(harness, instanceId);
+				child.prepareUnloadResult = false;
+
+				await harness.service.closeWorkspace(
+					harness.browser.windowId,
+					instanceId
+				);
+				const closeState = await toContractState(
+					harness.service,
+					harness.browser
+				);
+				const closePhases = [...child.unloadPhases];
+				const restorePathsBeforeShutdown =
+					persistence.state?.residentWorkspaces.map(entry =>
+						basename(entry.worktreePath)
+					) ?? [];
+				child.prepareUnloadResult = true;
+				child.unloadPhases.length = 0;
+
+				await harness.service.shutdownWindowWorkspaces(
+					harness.browser.windowId,
+					1
+				);
+
+				return {
+					closeState,
+					closePhases,
+					shutdownState: await toContractState(
+						harness.service,
+						harness.browser
+					),
+					shutdownPhases: child.unloadPhases,
+					restorePathsBeforeShutdown,
+					restorePathsAfterShutdown:
+						persistence.state?.residentWorkspaces.map(entry =>
+							basename(entry.worktreePath)
+						) ?? [],
+				};
+			},
+		};
+	}
+
+	registerHostedWorkspaceLifecycleContract(
+		createLifecycleContractAdapter
+	);
 
 	test('loads hosted iframes through the hosted workbench route', async () => {
 		const { service, surface, browser } = createService();
@@ -2586,6 +2845,7 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	commitUnloadResult: boolean | Promise<boolean> = true;
 	commitUnloadCalls = 0;
 	commitUnloadRejects = false;
+	readonly unloadPhases: string[] = [];
 	readonly commands: {
 		readonly commandId: string;
 		readonly args: readonly unknown[];
@@ -2605,6 +2865,7 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 	async prepareUnload(): Promise<boolean> {
 		this.prepareUnloadCalls++;
+		this.unloadPhases.push('prepare');
 		this.onPrepareUnload?.();
 		if (this.prepareUnloadRejects) {
 			throw new Error('hosted workbench connection lost');
@@ -2614,6 +2875,7 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 	async commitUnload(): Promise<boolean> {
 		this.commitUnloadCalls++;
+		this.unloadPhases.push('commit');
 		if (this.commitUnloadRejects) {
 			throw new Error('hosted workbench connection lost');
 		}

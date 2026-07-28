@@ -8,7 +8,7 @@ import { EventEmitter } from 'events';
 import { mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise } from '../../../base/common/async.js';
-import { join } from '../../../base/common/path.js';
+import { basename, join } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IEnvironmentMainService } from '../../../platform/environment/electron-main/environmentMainService.js';
@@ -25,6 +25,11 @@ import {
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
+import {
+	IHostedWorkspaceContractState,
+	IHostedWorkspaceLifecycleContractAdapter,
+	registerHostedWorkspaceLifecycleContract,
+} from '../common/hostedWorkspaceLifecycleContract.js';
 
 class TestWebContents extends EventEmitter {
 	readonly id: number;
@@ -409,6 +414,206 @@ suite('ResidentHostedWorkspacesController', () => {
 			window,
 		};
 	}
+
+	function createLifecycleContractAdapter():
+		IHostedWorkspaceLifecycleContractAdapter {
+		const toContractState = (
+			controller: ResidentHostedWorkspacesController
+		): IHostedWorkspaceContractState => {
+			const state = controller.getState();
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId
+			);
+			return {
+				activePath: active && basename(active.worktreePath),
+				instances: state.instances.map(instance => ({
+					path: basename(instance.worktreePath),
+					state: instance.state,
+				})),
+			};
+		};
+		const configureUnload = (
+			harness: ReturnType<typeof createController>,
+			viewIndex: number,
+			phases: string[],
+			reply: 'ready' | 'veto',
+			prepareStarted?: DeferredPromise<void>,
+			prepareGate?: DeferredPromise<void>
+		): void => {
+			harness.viewFactory.views[viewIndex].rawWebContents.sendHook =
+				(channel, request) => {
+					if (channel === 'vscode:onBeforeUnload') {
+						phases.push('prepare');
+						if (prepareStarted && !prepareStarted.isSettled) {
+							void prepareStarted.complete();
+						}
+						const replyToPreparation = () => {
+							const { okChannel, cancelChannel } = request as {
+								okChannel: string;
+								cancelChannel: string;
+							};
+							harness.ipcMain.emitReply(
+								reply === 'ready' ? okChannel : cancelChannel
+							);
+						};
+						if (prepareGate) {
+							void prepareGate.p.then(replyToPreparation);
+						} else {
+							setTimeout(replyToPreparation, 0);
+						}
+						return true;
+					}
+					if (channel === 'vscode:onWillUnload') {
+						phases.push('commit');
+						const { replyChannel } = request as {
+							replyChannel: string;
+						};
+						setTimeout(() =>
+							harness.ipcMain.emitReply(replyChannel), 0
+						);
+						return true;
+					}
+					return false;
+				};
+		};
+
+		return {
+			async generationGuard() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const harness = createController();
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				await harness.controller.openWorkspace(beta, 'project-beta');
+				harness.controller.notifyHostedWorkspaceReady('instance-2');
+
+				const phases: string[] = [];
+				const prepareStarted = new DeferredPromise<void>();
+				const prepareGate = new DeferredPromise<void>();
+				configureUnload(
+					harness,
+					0,
+					phases,
+					'ready',
+					prepareStarted,
+					prepareGate
+				);
+				const closing = harness.controller.closeWorkspace('instance-1');
+				await prepareStarted.p;
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				await prepareGate.complete();
+				await closing;
+
+				return {
+					state: toContractState(harness.controller),
+					commitCount: phases.filter(phase => phase === 'commit').length,
+				};
+			},
+			async coherentRetainedClose() {
+				const scratch = createWorktree('scratch');
+				const harness = createController();
+				await harness.controller.retainAndOpenWorkbench(URI.file(scratch));
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				const beforeClose = harness.stateChanges.length;
+
+				await harness.controller.closeWorkspace();
+
+				return {
+					state: toContractState(harness.controller),
+					emissionCount: harness.stateChanges.length - beforeClose,
+					retainedDesiredState: harness.controller.getState()
+						.retainedWorkbenches?.[0].desiredState,
+				};
+			},
+			async restoreActiveOnly() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const harness = createController({
+					activeWorktreePath: alpha,
+					restoreEntries: [{
+						projectId: 'project-alpha',
+						worktreePath: alpha,
+						state: 'active',
+					}, {
+						projectId: 'project-beta',
+						worktreePath: beta,
+						state: 'loaded',
+					}],
+				});
+
+				await harness.controller.ensureRestored();
+				const beforeReady = toContractState(harness.controller);
+				const alphaInstance = harness.controller.getState().instances.find(
+					instance => instance.worktreePath === alpha
+				);
+				assert.ok(alphaInstance);
+				harness.controller.notifyHostedWorkspaceReady(
+					alphaInstance.instanceId
+				);
+
+				return {
+					beforeReady,
+					afterReady: toContractState(harness.controller),
+					createdHosts: harness.viewFactory.views.length,
+				};
+			},
+			async closeActiveAndPromoteNext() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const harness = createController();
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				await harness.controller.openWorkspace(beta, 'project-beta');
+				harness.controller.notifyHostedWorkspaceReady('instance-2');
+				const phases: string[] = [];
+				configureUnload(harness, 1, phases, 'ready');
+
+				await harness.controller.closeWorkspace('instance-2');
+
+				return {
+					state: toContractState(harness.controller),
+					unloadPhases: phases,
+				};
+			},
+			async vetoThenShutdown() {
+				const alpha = createWorktree('alpha');
+				const harness = createController();
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				const closePhases: string[] = [];
+				configureUnload(harness, 0, closePhases, 'veto');
+
+				await harness.controller.closeWorkspace('instance-1');
+				const closeState = toContractState(harness.controller);
+				const restorePathsBeforeShutdown =
+					harness.window.config?.omniResidentWorkspaces?.map(
+						entry => basename(entry.worktreePath)
+					) ?? [];
+				const shutdownPhases: string[] = [];
+				configureUnload(harness, 0, shutdownPhases, 'ready');
+
+				await harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				);
+
+				return {
+					closeState,
+					closePhases,
+					shutdownState: toContractState(harness.controller),
+					shutdownPhases,
+					restorePathsBeforeShutdown,
+					restorePathsAfterShutdown:
+						harness.window.config?.omniResidentWorkspaces?.map(
+							entry => basename(entry.worktreePath)
+						) ?? [],
+				};
+			},
+		};
+	}
+
+	registerHostedWorkspaceLifecycleContract(
+		createLifecycleContractAdapter
+	);
 
 	test('unload retains arbitrary workbench until explicit dismissal', async () => {
 		const scratch = createWorktree('scratch');
