@@ -279,7 +279,7 @@ class TestGitChild extends EventEmitter {
 }
 
 class TestGitTimer {
-	private callback: (() => void) | undefined;
+	private readonly callbacks = new Map<NodeJS.Timeout, () => void>();
 	readonly delays: number[] = [];
 	clearCalls = 0;
 
@@ -287,19 +287,24 @@ class TestGitTimer {
 		callback: () => void,
 		delay: number
 	): NodeJS.Timeout => {
-		this.callback = callback;
+		const handle = {} as NodeJS.Timeout;
+		this.callbacks.set(handle, callback);
 		this.delays.push(delay);
-		return {} as NodeJS.Timeout;
+		return handle;
 	};
 
-	readonly clearTimeout = (_handle: NodeJS.Timeout): void => {
+	readonly clearTimeout = (handle: NodeJS.Timeout): void => {
 		this.clearCalls++;
-		this.callback = undefined;
+		this.callbacks.delete(handle);
 	};
 
 	fire(): void {
-		const callback = this.callback;
-		this.callback = undefined;
+		const entry = this.callbacks.entries().next().value;
+		if (!entry) {
+			return;
+		}
+		const [handle, callback] = entry;
+		this.callbacks.delete(handle);
 		callback?.();
 	}
 }
@@ -836,12 +841,14 @@ suite('GitWorktreeService', () => {
 	test('timeout rejects when descendants keep pipes open and cleanup hangs', async () => {
 		const child = new TestGitChild();
 		const timer = new TestGitTimer();
+		const warnings: string[] = [];
 		const { promise } = runTestGitChild(
 			child,
 			undefined,
 			undefined,
 			{
 				timer,
+				warnings,
 				killTree: () => new Promise<void>(() => { }),
 			}
 		);
@@ -875,6 +882,43 @@ suite('GitWorktreeService', () => {
 		}
 		assert.strictEqual(child.stdout.destroyed, true);
 		assert.strictEqual(child.stderr.destroyed, true);
+		assert.doesNotThrow(() => {
+			child.emit('error', new Error('late child error'));
+		});
+		timer.fire();
+		assert.deepStrictEqual(child.killSignals, ['SIGKILL']);
+		assert.deepStrictEqual(timer.delays, [30_000, 1_000]);
+		assert.ok(warnings.some(message =>
+			message.includes('did not settle within 1000ms')
+		));
+	});
+
+	test('cleanup watchdog falls back only once when killTree rejects late', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		let rejectCleanup: ((error: Error) => void) | undefined;
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				timer,
+				killTree: () => new Promise<void>((_resolve, reject) => {
+					rejectCleanup = reject;
+				}),
+			}
+		);
+
+		timer.fire();
+		await assert.rejects(promise, (error: GitCommandError) =>
+			error.kind === 'timeout'
+		);
+		timer.fire();
+		rejectCleanup?.(new Error('late tree-kill failure'));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		assert.deepStrictEqual(child.killSignals, ['SIGKILL']);
 	});
 
 	test('pre-spawn cancellation rejects without spawning', async () => {

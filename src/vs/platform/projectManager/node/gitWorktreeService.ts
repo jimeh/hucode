@@ -132,6 +132,8 @@ export interface GitProcessRunnerDependencies {
 const KIB = 1024;
 const MIB = KIB * KIB;
 const GIT_COMMAND_SUMMARY_LIMIT = 512;
+// Tree-kill is best-effort, so bound it before falling back to the root process.
+const GIT_PROCESS_CLEANUP_WATCHDOG_MS = 1_000;
 const GIT_POLICIES: Readonly<Record<GitOperation, GitCommandPolicy>> = {
 	resolveProjectRoot: {
 		operation: 'resolveProjectRoot',
@@ -632,9 +634,33 @@ export class GitWorktreeService {
 			let bufferedBytes = 0;
 			let failure: Error | undefined;
 			let killStarted = false;
+			let fallbackKillStarted = false;
 			let timer: NodeJS.Timeout | undefined;
 			let cancellationListener: { dispose(): void } | undefined;
 			let settled = false;
+
+			const fallbackKillChild = (): void => {
+				if (fallbackKillStarted) {
+					return;
+				}
+				fallbackKillStarted = true;
+
+				try {
+					if (!child.kill('SIGKILL')) {
+						runner.warn(
+							`[GitWorktreeService] ` +
+							`${policy.operation} fallback SIGKILL ` +
+							`did not reach the Git subprocess.`
+						);
+					}
+				} catch (fallbackError) {
+					runner.warn(
+						`[GitWorktreeService] ` +
+						`${policy.operation} fallback SIGKILL ` +
+						`failed: ${errorMessage(fallbackError)}`
+					);
+				}
+			};
 
 			const killChild = (): void => {
 				if (killStarted) {
@@ -642,37 +668,70 @@ export class GitWorktreeService {
 				}
 				killStarted = true;
 
-				void (async () => {
-					try {
-						if (typeof child.pid !== 'number') {
-							throw new Error(
-								'Git subprocess has no process identifier.'
-							);
-						}
-						await runner.killTree(child.pid, true);
-					} catch (error) {
-						runner.warn(
-							`[GitWorktreeService] ${policy.operation} ` +
-							`could not kill the Git process tree: ` +
-							errorMessage(error)
-						);
-						try {
-							if (!child.kill('SIGKILL')) {
-								runner.warn(
-									`[GitWorktreeService] ` +
-									`${policy.operation} fallback SIGKILL ` +
-									`did not reach the Git subprocess.`
-								);
-							}
-						} catch (fallbackError) {
-							runner.warn(
-								`[GitWorktreeService] ` +
-								`${policy.operation} fallback SIGKILL ` +
-								`failed: ${errorMessage(fallbackError)}`
-							);
-						}
+				if (typeof child.pid !== 'number') {
+					runner.warn(
+						`[GitWorktreeService] ${policy.operation} ` +
+						`could not kill the Git process tree: ` +
+						'Git subprocess has no process identifier.'
+					);
+					fallbackKillChild();
+					return;
+				}
+
+				let cleanupSettled = false;
+				let cleanupWatchdog: NodeJS.Timeout | undefined;
+				const clearCleanupWatchdog = (): void => {
+					if (cleanupWatchdog) {
+						runner.clearTimeout(cleanupWatchdog);
+						cleanupWatchdog = undefined;
 					}
-				})();
+				};
+				const cleanupFailed = (error: unknown): void => {
+					if (cleanupSettled) {
+						return;
+					}
+					cleanupSettled = true;
+					clearCleanupWatchdog();
+					runner.warn(
+						`[GitWorktreeService] ${policy.operation} ` +
+						`could not kill the Git process tree: ` +
+						errorMessage(error)
+					);
+					fallbackKillChild();
+				};
+
+				cleanupWatchdog = runner.setTimeout(() => {
+					if (cleanupSettled) {
+						return;
+					}
+					cleanupSettled = true;
+					cleanupWatchdog = undefined;
+					runner.warn(
+						`[GitWorktreeService] ${policy.operation} ` +
+						`process-tree cleanup did not settle within ` +
+						`${GIT_PROCESS_CLEANUP_WATCHDOG_MS}ms; ` +
+						'falling back to direct SIGKILL.'
+					);
+					fallbackKillChild();
+				}, GIT_PROCESS_CLEANUP_WATCHDOG_MS);
+
+				let cleanup: Promise<void>;
+				try {
+					cleanup = runner.killTree(child.pid, true);
+				} catch (error) {
+					cleanupFailed(error);
+					return;
+				}
+				void cleanup.then(
+					() => {
+						if (cleanupSettled) {
+							return;
+						}
+						cleanupSettled = true;
+						clearCleanupWatchdog();
+					},
+					cleanupFailed
+				);
 			};
 
 			const clearPolicyHooks = (destroyPipes: boolean): void => {
