@@ -632,7 +632,6 @@ export class GitWorktreeService {
 			const stdout: Buffer[] = [];
 			const stderr: Buffer[] = [];
 			let bufferedBytes = 0;
-			let failure: Error | undefined;
 			let killStarted = false;
 			let fallbackKillStarted = false;
 			let exitedCleanupWarned = false;
@@ -775,16 +774,20 @@ export class GitWorktreeService {
 				}
 			};
 
-			const abort = (error: Error): void => {
-				if (failure || settled) {
+			const abort = (
+				error: Error,
+				cleanupProcess: boolean = true
+			): void => {
+				if (settled) {
 					return;
 				}
 
-				failure = error;
 				settled = true;
 				clearPolicyHooks(true);
 				reject(error);
-				killChild();
+				if (cleanupProcess) {
+					killChild();
+				}
 			};
 
 			const collect = (
@@ -826,11 +829,7 @@ export class GitWorktreeService {
 			const onStderr = (chunk: Buffer | string): void =>
 				collect(chunk, stderr);
 			const onError = (cause: Error): void => {
-				if (failure || settled) {
-					return;
-				}
-
-				failure = new GitCommandError(
+				abort(new GitCommandError(
 					`${command} failed to start: ${cause.message}`,
 					{
 						kind: 'spawn',
@@ -839,7 +838,7 @@ export class GitWorktreeService {
 						stderr: Buffer.concat(stderr).toString('utf8'),
 						cause,
 					}
-				);
+				), false);
 			};
 			cancellationListener = token.onCancellationRequested(() => {
 				abort(new CancellationError());
@@ -858,9 +857,7 @@ export class GitWorktreeService {
 				settled = true;
 				const stdoutText = Buffer.concat(stdout).toString('utf8');
 				const stderrText = Buffer.concat(stderr).toString('utf8');
-				if (failure) {
-					reject(failure);
-				} else if (signal) {
+				if (signal) {
 					reject(new GitCommandError(
 						`${command} was terminated by ${signal}.`,
 						{
@@ -896,7 +893,7 @@ export class GitWorktreeService {
 			child.on('error', onError);
 			child.on('close', onClose);
 			timer = runner.setTimeout(() => {
-				if (failure || settled) {
+				if (settled) {
 					return;
 				}
 				runner.warn(

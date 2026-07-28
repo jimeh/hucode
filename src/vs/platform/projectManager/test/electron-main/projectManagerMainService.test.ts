@@ -686,10 +686,13 @@ suite('GitWorktreeService', () => {
 		const inheritedEnv = {
 			KEEP_ME: 'yes',
 			GIT_ASKPASS: '/tmp/git-askpass',
+			git_askpass: '/tmp/lower-git-askpass',
 			SSH_ASKPASS: '/tmp/ssh-askpass',
+			ssh_askpass: '/tmp/lower-ssh-askpass',
 			VSCODE_GIT_ASKPASS_NODE: '/tmp/node',
 			VSCODE_GIT_ASKPASS_MAIN: '/tmp/main.js',
 			VSCODE_GIT_ASKPASS_EXTRA_ARGS: '--ms-enable-electron-run-as-node',
+			VsCoDe_GiT_AskPaSs_Helper: '/tmp/mixed-helper',
 			VSCODE_GIT_IPC_HANDLE: '/tmp/socket',
 			GIT_TERMINAL_PROMPT: '1',
 			GCM_INTERACTIVE: 'Always',
@@ -709,10 +712,13 @@ suite('GitWorktreeService', () => {
 		assert.deepStrictEqual(inheritedEnv, {
 			KEEP_ME: 'yes',
 			GIT_ASKPASS: '/tmp/git-askpass',
+			git_askpass: '/tmp/lower-git-askpass',
 			SSH_ASKPASS: '/tmp/ssh-askpass',
+			ssh_askpass: '/tmp/lower-ssh-askpass',
 			VSCODE_GIT_ASKPASS_NODE: '/tmp/node',
 			VSCODE_GIT_ASKPASS_MAIN: '/tmp/main.js',
 			VSCODE_GIT_ASKPASS_EXTRA_ARGS: '--ms-enable-electron-run-as-node',
+			VsCoDe_GiT_AskPaSs_Helper: '/tmp/mixed-helper',
 			VSCODE_GIT_IPC_HANDLE: '/tmp/socket',
 			GIT_TERMINAL_PROMPT: '1',
 			GCM_INTERACTIVE: 'Always',
@@ -976,6 +982,87 @@ suite('GitWorktreeService', () => {
 		await Promise.resolve();
 
 		assert.deepStrictEqual(child.killSignals, ['SIGKILL']);
+	});
+
+	test('emitted spawn error rejects promptly without process cleanup', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const killCalls: [number, boolean][] = [];
+		const cause = new Error('spawn ENOENT');
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				timer,
+				killTree: async (pid, forceful) => {
+					killCalls.push([pid, forceful]);
+				},
+			}
+		);
+
+		child.emit('error', cause);
+
+		let guard: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await assert.rejects(
+				Promise.race([
+					promise,
+					new Promise<never>((_resolve, reject) => {
+						guard = setTimeout(() => {
+							reject(new Error(
+								'Spawn error did not settle promptly.'
+							));
+						}, 100);
+					}),
+				]),
+				error => {
+					assert.ok(error instanceof GitCommandError);
+					assert.strictEqual(error.kind, 'spawn');
+					assert.strictEqual(error.cause, cause);
+					return true;
+				}
+			);
+		} finally {
+			if (guard !== undefined) {
+				clearTimeout(guard);
+			}
+		}
+
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
+		assert.strictEqual(timer.pendingCount, 0);
+		assert.strictEqual(timer.clearCalls, 1);
+		assert.deepStrictEqual(killCalls, []);
+		assert.deepStrictEqual(child.killSignals, []);
+		assert.doesNotThrow(() => {
+			child.emit('error', new Error('later spawn error'));
+		});
+	});
+
+	test('synchronous spawn throw rejects without installing policy hooks', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const cause = new Error('synchronous spawn failure');
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				timer,
+				spawn: () => {
+					throw cause;
+				},
+			}
+		);
+
+		await assert.rejects(promise, error => {
+			assert.ok(error instanceof GitCommandError);
+			assert.strictEqual(error.kind, 'spawn');
+			assert.strictEqual(error.cause, cause);
+			return true;
+		});
+		assert.strictEqual(timer.pendingCount, 0);
 	});
 
 	test('pre-spawn cancellation rejects without spawning', async () => {
