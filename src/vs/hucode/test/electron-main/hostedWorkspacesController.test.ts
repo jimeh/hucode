@@ -2573,16 +2573,21 @@ suite('ResidentHostedWorkspacesController', () => {
 		] as const) {
 			const alpha = createWorktree(`${suffix}-alpha`);
 			const bravo = createWorktree(`${suffix}-bravo`);
-			const { controller, viewFactory } = createController();
+			const charlie = createWorktree(`${suffix}-charlie`);
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+			} = createController();
 			await controller.openWorkspace(alpha, `project-${suffix}-alpha`);
 			controller.notifyHostedWorkspaceReady('instance-1');
 
-			const shutdown = controller.shutdownAllWorkspaces(reason);
+			const firstShutdown = controller.shutdownAllWorkspaces(reason);
 			assert.strictEqual(
 				controller.shutdownAllWorkspaces(reason),
-				shutdown
+				firstShutdown
 			);
-			await shutdown;
+			await firstShutdown;
 			await controller.openWorkspace(bravo, `project-${suffix}-bravo`);
 			controller.notifyHostedWorkspaceReady('instance-2');
 
@@ -2594,28 +2599,37 @@ suite('ResidentHostedWorkspacesController', () => {
 				'active'
 			);
 
-			if (reason === UnloadReason.RELOAD) {
-				const charlie = createWorktree('reload-charlie');
-				const secondShutdown =
-					controller.shutdownAllWorkspaces(UnloadReason.RELOAD);
-				assert.strictEqual(
-					controller.shutdownAllWorkspaces(UnloadReason.RELOAD),
-					secondShutdown
-				);
-				await secondShutdown;
-				await controller.openWorkspace(
-					charlie,
-					'project-reload-charlie'
-				);
-				controller.notifyHostedWorkspaceReady('instance-3');
-				assert.strictEqual(viewFactory.views.length, 3);
-				assert.strictEqual(
-					controller.getState().instances.find(instance =>
-						instance.worktreePath === charlie
-					)?.state,
-					'active'
-				);
-			}
+			const secondShutdown = controller.shutdownAllWorkspaces(reason);
+			assert.notStrictEqual(secondShutdown, firstShutdown);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(reason),
+				secondShutdown
+			);
+			await secondShutdown;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1, 2]
+			);
+			assert.strictEqual(
+				viewFactory.views[1].rawWebContents.isDestroyed(),
+				true
+			);
+			assert.strictEqual(
+				controller.getState().instances.find(instance =>
+					instance.worktreePath === bravo
+				)?.state,
+				'unloaded'
+			);
+
+			await controller.openWorkspace(charlie, `project-${suffix}-charlie`);
+			controller.notifyHostedWorkspaceReady('instance-3');
+			assert.strictEqual(viewFactory.views.length, 3);
+			assert.strictEqual(
+				controller.getState().instances.find(instance =>
+					instance.worktreePath === charlie
+				)?.state,
+				'active'
+			);
 		}
 	});
 
@@ -2781,6 +2795,62 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 		assert.strictEqual(stateChanges.length, frozenStateChangeCount);
 	});
+
+	test('held attach settlement after reload preserves frozen state',
+		async () => {
+			for (const outcome of ['fulfilled', 'rejected'] as const) {
+				const alpha = createWorktree(`reload-held-${outcome}`);
+				const heldLoad = new DeferredPromise<void>();
+				const loadError = new Error(`${outcome} held load failed`);
+				const {
+					controller,
+					stateChanges,
+					viewFactory,
+				} = createController({
+					loadUrlErrors: outcome === 'rejected' ? [loadError] : [],
+					loadUrlPromises: [heldLoad.p],
+				});
+
+				const open = controller.openWorkspace(
+					alpha,
+					`project-${outcome}`
+				);
+				for (let attempt = 0;
+					attempt < 20 && viewFactory.views.length < 1;
+					attempt++
+				) {
+					await Promise.resolve();
+				}
+				assert.strictEqual(viewFactory.views.length, 1);
+				await controller.shutdownAllWorkspaces(UnloadReason.RELOAD);
+				const frozenState = structuredClone(controller.getState());
+				const frozenActiveInstanceId =
+					controller.getState().activeInstanceId;
+				const frozenStateChangeCount = stateChanges.length;
+				const frozenViewCount = viewFactory.views.length;
+				const settlement = outcome === 'rejected'
+					? assert.rejects(open, error => {
+						assert.strictEqual(error, loadError);
+						return true;
+					})
+					: open;
+
+				heldLoad.complete();
+				await settlement;
+
+				assert.deepStrictEqual(controller.getState(), frozenState);
+				assert.strictEqual(
+					controller.getState().activeInstanceId,
+					frozenActiveInstanceId
+				);
+				assert.strictEqual(
+					stateChanges.length,
+					frozenStateChangeCount
+				);
+				assert.strictEqual(viewFactory.views.length, frozenViewCount);
+			}
+		}
+	);
 
 	test('shutdown preserves the resident workspace restore snapshot', async () => {
 		const alpha = createWorktree('alpha');
