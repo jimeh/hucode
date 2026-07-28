@@ -787,7 +787,7 @@ suite('WebHucodeShellService', () => {
 						.filter(([, child]) => child.prepareUnloadCalls === 1)
 						.map(([path]) => path);
 				let secondCallResolvedBeforeRelease = false;
-				const secondShutdown = harness.service.shutdownWindowWorkspaces(
+				void harness.service.shutdownWindowWorkspaces(
 					browser.windowId,
 					1
 				).then(() => {
@@ -802,7 +802,10 @@ suite('WebHucodeShellService', () => {
 					'expected the successful workbench to enter commit'
 				);
 				browser.expireTimeouts(5000);
-				await Promise.all([firstShutdown, secondShutdown]);
+				await firstShutdown;
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+				const secondCallResolvedAfterRelease =
+					secondCallResolvedBeforeRelease;
 
 				const shutdownState = await toContractState(
 					harness.service,
@@ -831,6 +834,7 @@ suite('WebHucodeShellService', () => {
 				return {
 					failurePolicy: 'retain',
 					preparationsStartedBeforeRelease,
+					secondCallResolvedAfterRelease,
 					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
 					phasesByPath,
 					shutdownState,
@@ -850,6 +854,7 @@ suite('WebHucodeShellService', () => {
 	}
 
 	registerHostedWorkspaceLifecycleContract(
+		'retain',
 		createLifecycleContractAdapter
 	);
 

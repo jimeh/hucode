@@ -151,11 +151,17 @@ class TestWebContents extends EventEmitter {
 
 class TestHostedWorkspaceIpcMain extends EventEmitter
 	implements IHostedWorkspaceIpcMain {
+	private onceRegistrationFailure: Error | undefined;
 
 	override once(
 		channel: string,
 		listener: (event: Electron.IpcMainEvent, ...args: unknown[]) => void
 	): this {
+		if (this.onceRegistrationFailure) {
+			const failure = this.onceRegistrationFailure;
+			this.onceRegistrationFailure = undefined;
+			throw failure;
+		}
 		super.once(channel, listener);
 		return this;
 	}
@@ -173,6 +179,10 @@ class TestHostedWorkspaceIpcMain extends EventEmitter
 			channel,
 			{ senderFrame: undefined } as unknown as Electron.IpcMainEvent
 		);
+	}
+
+	failNextOnceRegistration(error: Error): void {
+		this.onceRegistrationFailure = error;
 	}
 }
 
@@ -293,7 +303,10 @@ class TestBrowserWindow extends EventEmitter {
 class TestBrowserViewMainService {
 	readonly visibleCalls: { id: number; visible: boolean }[] = [];
 	readonly frontCalls: number[] = [];
+	readonly destroyHostedWebContentsAttempts: number[] = [];
 	readonly destroyedHostedWebContentsIds: number[] = [];
+	private readonly destroyHostedWebContentsFailures =
+		new Map<number, Error>();
 
 	setHostedWebContentsVisible(id: number, visible: boolean): void {
 		this.visibleCalls.push({ id, visible });
@@ -304,7 +317,17 @@ class TestBrowserViewMainService {
 	}
 
 	destroyBrowserViewsForHostedWebContents(id: number): void {
+		this.destroyHostedWebContentsAttempts.push(id);
+		const failure = this.destroyHostedWebContentsFailures.get(id);
+		if (failure) {
+			this.destroyHostedWebContentsFailures.delete(id);
+			throw failure;
+		}
 		this.destroyedHostedWebContentsIds.push(id);
+	}
+
+	failNextDestroyHostedWebContents(id: number, error: Error): void {
+		this.destroyHostedWebContentsFailures.set(id, error);
 	}
 }
 
@@ -740,7 +763,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				).filter(([, phases]) => phases[0] === 'prepare')
 					.map(([path]) => path);
 				let secondCallResolvedBeforeRelease = false;
-				const secondShutdown = harness.controller.shutdownAllWorkspaces(
+				void harness.controller.shutdownAllWorkspaces(
 					UnloadReason.QUIT
 				).then(() => {
 					secondCallResolvedBeforeRelease = true;
@@ -756,7 +779,10 @@ suite('ResidentHostedWorkspacesController', () => {
 						.destroyedHostedWebContentsIds];
 				assert.ok(releaseCharlieCommit);
 				releaseCharlieCommit();
-				await Promise.all([firstShutdown, secondShutdown]);
+				await firstShutdown;
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+				const secondCallResolvedAfterRelease =
+					secondCallResolvedBeforeRelease;
 				const pathByWebContentsId = new Map([
 					[1, 'alpha'],
 					[2, 'bravo'],
@@ -773,6 +799,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				return {
 					failurePolicy: 'force',
 					preparationsStartedBeforeRelease,
+					secondCallResolvedAfterRelease,
 					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
 					phasesByPath,
 					shutdownState: toContractState(harness.controller),
@@ -787,6 +814,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	}
 
 	registerHostedWorkspaceLifecycleContract(
+		'force',
 		createLifecycleContractAdapter
 	);
 
@@ -2279,6 +2307,261 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		}
 	);
+
+	test('failed shutdown settles the batch and retries partial native cleanup',
+		async () => {
+			const paths = [
+				createWorktree('alpha'),
+				createWorktree('bravo'),
+				createWorktree('charlie'),
+			];
+			const {
+				browserViewMainService,
+				controller,
+				ipcMain,
+				viewFactory,
+			} = createController();
+			const phasesByWebContentsId = new Map<number, string[]>();
+			for (const [index, path] of paths.entries()) {
+				await controller.openWorkspace(path, `project-${index + 1}`);
+				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
+				const view = viewFactory.views[index].rawWebContents;
+				const phases: string[] = [];
+				phasesByWebContentsId.set(view.id, phases);
+				view.sendHook = (channel, request) => {
+					if (channel === 'vscode:onBeforeUnload') {
+						phases.push('prepare');
+						const { okChannel } = request as { okChannel: string };
+						ipcMain.emitReply(okChannel);
+						return true;
+					}
+					if (channel === 'vscode:onWillUnload') {
+						phases.push('commit');
+						const { replyChannel } = request as {
+							replyChannel: string;
+						};
+						ipcMain.emitReply(replyChannel);
+						return true;
+					}
+					return false;
+				};
+			}
+
+			const failure = new Error('alpha native teardown failed');
+			browserViewMainService.failNextDestroyHostedWebContents(1, failure);
+			const firstShutdown = controller.shutdownAllWorkspaces(
+				UnloadReason.QUIT
+			);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(UnloadReason.QUIT),
+				firstShutdown
+			);
+			await assert.rejects(firstShutdown, error => {
+				assert.strictEqual(error, failure);
+				return true;
+			});
+
+			assert.deepStrictEqual(
+				[...phasesByWebContentsId.values()],
+				[
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+				]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[2, 3]
+			);
+
+			const retry = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.notStrictEqual(retry, firstShutdown);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(UnloadReason.QUIT),
+				retry
+			);
+			await retry;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3, 1]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[2, 3, 1]
+			);
+			assert.deepStrictEqual(
+				[...phasesByWebContentsId.values()],
+				[
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+				]
+			);
+
+			const cached = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.strictEqual(cached, retry);
+			await cached;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3, 1]
+			);
+		}
+	);
+
+	test('shutdown isolates a renderer handshake registration failure',
+		async () => {
+			const paths = [
+				createWorktree('alpha'),
+				createWorktree('bravo'),
+				createWorktree('charlie'),
+			];
+			const {
+				browserViewMainService,
+				controller,
+				ipcMain,
+				viewFactory,
+			} = createController();
+			for (const [index, path] of paths.entries()) {
+				await controller.openWorkspace(path, `project-${index + 1}`);
+				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
+			}
+
+			const failure = new Error('reply registration failed');
+			ipcMain.failNextOnceRegistration(failure);
+			const shutdown = controller.shutdownAllWorkspaces(
+				UnloadReason.QUIT
+			);
+			await assert.rejects(shutdown, error => {
+				assert.strictEqual(error, failure);
+				return true;
+			});
+
+			assert.deepStrictEqual(
+				viewFactory.views.map(view =>
+					view.rawWebContents.sent.map(item => item.channel)),
+				[
+					[],
+					['vscode:onBeforeUnload', 'vscode:onWillUnload'],
+					['vscode:onBeforeUnload', 'vscode:onWillUnload'],
+				]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1, 2, 3]
+			);
+
+			const retry = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.notStrictEqual(retry, shutdown);
+			await retry;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+		}
+	);
+
+	test('shutdown prevents a late public workspace open', async () => {
+		const alpha = createWorktree('alpha');
+		const late = createWorktree('late');
+		const {
+			controller,
+			ipcMain,
+			stateChanges,
+			viewFactory,
+		} = createController();
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		let releasePreparation: (() => void) | undefined;
+		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
+			if (channel !== 'vscode:onBeforeUnload') {
+				return false;
+			}
+			const { okChannel } = request as { okChannel: string };
+			releasePreparation = () => ipcMain.emitReply(okChannel);
+			return true;
+		};
+
+		const shutdown = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+		for (let attempt = 0;
+			attempt < 20 && !releasePreparation;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.ok(releasePreparation);
+		const stateBeforeLateOpen = structuredClone(controller.getState());
+		const stateChangeCountBeforeLateOpen = stateChanges.length;
+		const viewCountBeforeLateOpen = viewFactory.views.length;
+
+		await controller.openWorkspace(late, 'project-late');
+
+		assert.deepStrictEqual(controller.getState(), stateBeforeLateOpen);
+		assert.strictEqual(
+			stateChanges.length,
+			stateChangeCountBeforeLateOpen
+		);
+		assert.strictEqual(viewFactory.views.length, viewCountBeforeLateOpen);
+
+		releasePreparation();
+		await shutdown;
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.worktreePath === late
+			),
+			false
+		);
+	});
+
+	test('shutdown prevents a held restore from resuming attachment', async () => {
+		const alpha = createWorktree('restore-alpha');
+		const bravo = createWorktree('restore-bravo');
+		const heldLoad = new DeferredPromise<void>();
+		const { controller, viewFactory } = createController({
+			activeWorktreePath: alpha,
+			loadUrlPromises: [heldLoad.p],
+			restoreEntries: [{
+				projectId: 'project-alpha',
+				worktreePath: alpha,
+				state: 'active',
+			}, {
+				projectId: 'project-bravo',
+				worktreePath: bravo,
+				state: 'loaded',
+			}],
+			restorePolicy: 'all',
+		});
+
+		const restore = controller.ensureRestored();
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 1;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(viewFactory.views.length, 1);
+		await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+		const stateAfterShutdown = structuredClone(controller.getState());
+
+		heldLoad.complete();
+		await restore;
+
+		assert.strictEqual(viewFactory.views.length, 1);
+		assert.deepStrictEqual(controller.getState(), stateAfterShutdown);
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.state !== 'unloaded'
+			),
+			false
+		);
+	});
 
 	test('shutdown preserves the resident workspace restore snapshot', async () => {
 		const alpha = createWorktree('alpha');

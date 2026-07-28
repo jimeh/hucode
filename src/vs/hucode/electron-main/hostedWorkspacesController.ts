@@ -834,7 +834,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		worktreePath: string,
 		projectId?: string
 	): Promise<void> {
+		if (this.shuttingDown) {
+			return;
+		}
+
 		await this.ensureRestored();
+		if (this.shuttingDown) {
+			return;
+		}
+
 		const activationIntent = ++this.activationIntentGeneration;
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
@@ -1081,6 +1089,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		makeActive: boolean,
 		activationIntent?: number
 	): Promise<IHostedWorkbenchInstance | undefined> {
+		if (this.shuttingDown) {
+			return undefined;
+		}
+
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
@@ -1151,6 +1163,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		try {
 			await this.attachInstance(instance, makeActive, workspaceFolderStat);
+			if (this.shuttingDown) {
+				return undefined;
+			}
+
 			this.traceRestore(
 				`instance:attached makeActive=${makeActive} state=${instance.state}`,
 				instance
@@ -1593,23 +1609,38 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.updateWindowRestoreState();
 		this.shuttingDown = true;
 		const instances = Array.from(this.instancesById.values())
-			.filter(instance => !instance.disposed);
-		this.shutdownPromise = Promise.resolve().then(
+			.filter(instance => !instance.disposed ||
+				!!instance.view ||
+				!!instance.configObjectUrl);
+		const shutdown = Promise.resolve().then(
 			() => this.runShutdown(instances, reason)
 		);
-		return this.shutdownPromise;
+		this.shutdownPromise = shutdown;
+		void shutdown.catch(() => {
+			if (this.shutdownPromise === shutdown) {
+				this.shutdownPromise = undefined;
+			}
+		});
+		return shutdown;
 	}
 
 	private async runShutdown(
 		instances: readonly IHostedWorkbenchInstance[],
 		reason: UnloadReason
 	): Promise<void> {
-		const unloadResults = await Promise.all(instances.map(instance =>
-			this.unloadInRenderer(instance, reason, true)
-		));
-		for (let index = 0; index < instances.length; index++) {
-			if (unloadResults[index] === 'vetoed') {
-				this.logIgnoredShutdownUnloadVeto(instances[index]);
+		const unloadInstances = instances.filter(instance => !instance.disposed);
+		const unloadResults = await Promise.allSettled(
+			unloadInstances.map(instance =>
+				this.unloadInRenderer(instance, reason, true)
+			)
+		);
+		let firstFailure: { readonly error: unknown } | undefined;
+		for (let index = 0; index < unloadInstances.length; index++) {
+			const unloadResult = unloadResults[index];
+			if (unloadResult.status === 'rejected') {
+				firstFailure ??= { error: unloadResult.reason };
+			} else if (unloadResult.value === 'vetoed') {
+				this.logIgnoredShutdownUnloadVeto(unloadInstances[index]);
 			}
 		}
 
@@ -1617,11 +1648,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		// handshakes above are independent and can consume their budgets
 		// concurrently.
 		for (const instance of instances) {
-			if (instance.disposed) {
+			if (
+				instance.disposed &&
+				!instance.view &&
+				!instance.configObjectUrl
+			) {
 				continue;
 			}
 
-			await this.destroyInstance(instance, false, false);
+			try {
+				await this.destroyInstance(instance, false, false);
+			} catch (error) {
+				firstFailure ??= { error };
+			}
+		}
+
+		if (firstFailure) {
+			throw firstFailure.error;
 		}
 	}
 

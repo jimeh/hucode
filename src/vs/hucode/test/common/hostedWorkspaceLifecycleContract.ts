@@ -64,6 +64,7 @@ export type HostedWorkspaceShutdownFailurePolicy = 'force' | 'retain';
 export interface IHostedWorkspaceConcurrentShutdownResult {
 	readonly failurePolicy: HostedWorkspaceShutdownFailurePolicy;
 	readonly preparationsStartedBeforeRelease: readonly string[];
+	readonly secondCallResolvedAfterRelease: boolean;
 	readonly secondCallResolvedBeforeRelease: boolean;
 	readonly phasesByPath: Readonly<Record<string, readonly string[]>>;
 	readonly shutdownState: IHostedWorkspaceContractState;
@@ -96,6 +97,7 @@ export interface IHostedWorkspaceLifecycleContractAdapter {
  * suites while their native host mechanics remain separate.
  */
 export function registerHostedWorkspaceLifecycleContract(
+	expectedFailurePolicy: HostedWorkspaceShutdownFailurePolicy,
 	createAdapter: () => IHostedWorkspaceLifecycleContractAdapter
 ): void {
 	suite('hosted workspace lifecycle contract', () => {
@@ -199,8 +201,16 @@ export function registerHostedWorkspaceLifecycleContract(
 					result.secondCallResolvedBeforeRelease,
 					false
 				);
+				assert.strictEqual(
+					result.secondCallResolvedAfterRelease,
+					true
+				);
+				assert.strictEqual(
+					result.failurePolicy,
+					expectedFailurePolicy
+				);
 
-				if (result.failurePolicy === 'force') {
+				if (expectedFailurePolicy === 'force') {
 					assertPhases(result.phasesByPath, {
 						alpha: ['prepare', 'commit'],
 						bravo: ['prepare', 'commit'],
