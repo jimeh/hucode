@@ -635,15 +635,36 @@ export class GitWorktreeService {
 			let failure: Error | undefined;
 			let killStarted = false;
 			let fallbackKillStarted = false;
+			let exitedCleanupWarned = false;
 			let timer: NodeJS.Timeout | undefined;
 			let cancellationListener: { dispose(): void } | undefined;
 			let settled = false;
+
+			const childHasExited = (): boolean =>
+				child.exitCode !== null || child.signalCode !== null;
+			const skipExitedChildCleanup = (): boolean => {
+				if (!childHasExited()) {
+					return false;
+				}
+				if (!exitedCleanupWarned) {
+					exitedCleanupWarned = true;
+					runner.warn(
+						`[GitWorktreeService] ${policy.operation} ` +
+						'process-tree cleanup is unsafe for an ' +
+						'already-exited Git subprocess; skipping cleanup.'
+					);
+				}
+				return true;
+			};
 
 			const fallbackKillChild = (): void => {
 				if (fallbackKillStarted) {
 					return;
 				}
 				fallbackKillStarted = true;
+				if (skipExitedChildCleanup()) {
+					return;
+				}
 
 				try {
 					if (!child.kill('SIGKILL')) {
@@ -668,6 +689,11 @@ export class GitWorktreeService {
 				}
 				killStarted = true;
 
+				// Node offers no atomic process-state check plus numeric-PID
+				// tree kill, but checking here narrows the PID-reuse window.
+				if (skipExitedChildCleanup()) {
+					return;
+				}
 				if (typeof child.pid !== 'number') {
 					runner.warn(
 						`[GitWorktreeService] ${policy.operation} ` +

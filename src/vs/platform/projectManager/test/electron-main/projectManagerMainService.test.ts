@@ -262,16 +262,29 @@ class TestGitChild extends EventEmitter {
 	readonly stderr = new PassThrough();
 	readonly pid = 1234;
 	readonly killSignals: (NodeJS.Signals | number | undefined)[] = [];
+	exitCode: number | null = null;
+	signalCode: NodeJS.Signals | null = null;
 
 	kill(signal?: NodeJS.Signals | number): boolean {
 		this.killSignals.push(signal);
 		return true;
 	}
 
+	exit(
+		code: number | null = 0,
+		signal: NodeJS.Signals | null = null
+	): void {
+		this.exitCode = code;
+		this.signalCode = signal;
+		this.emit('exit', code, signal);
+	}
+
 	close(
 		code: number | null = 0,
 		signal: NodeJS.Signals | null = null
 	): void {
+		this.exitCode = code;
+		this.signalCode = signal;
 		this.stdout.end();
 		this.stderr.end();
 		this.emit('close', code, signal);
@@ -306,6 +319,10 @@ class TestGitTimer {
 		const [handle, callback] = entry;
 		this.callbacks.delete(handle);
 		callback?.();
+	}
+
+	get pendingCount(): number {
+		return this.callbacks.size;
 	}
 }
 
@@ -836,9 +853,50 @@ suite('GitWorktreeService', () => {
 			message.includes('createWorktree') &&
 			message.includes('180000ms')
 		));
+		await Promise.resolve();
+		assert.strictEqual(timer.pendingCount, 0);
+		timer.fire();
+		assert.deepStrictEqual(child.killSignals, []);
+		assert.strictEqual(warnings.some(message =>
+			message.includes('process-tree cleanup did not settle')
+		), false);
 	});
 
-	test('timeout rejects when descendants keep pipes open and cleanup hangs', async () => {
+	test('timeout skips process cleanup after the root exits', async () => {
+		const child = new TestGitChild();
+		const timer = new TestGitTimer();
+		const killCalls: [number, boolean][] = [];
+		const warnings: string[] = [];
+		const { promise } = runTestGitChild(
+			child,
+			undefined,
+			undefined,
+			{
+				timer,
+				warnings,
+				killTree: async (pid, forceful) => {
+					killCalls.push([pid, forceful]);
+				},
+			}
+		);
+
+		child.exit();
+		timer.fire();
+
+		await assert.rejects(promise, (error: GitCommandError) =>
+			error.kind === 'timeout'
+		);
+		assert.strictEqual(child.stdout.destroyed, true);
+		assert.strictEqual(child.stderr.destroyed, true);
+		assert.deepStrictEqual(killCalls, []);
+		assert.deepStrictEqual(child.killSignals, []);
+		assert.deepStrictEqual(timer.delays, [30_000]);
+		assert.ok(warnings.some(message =>
+			message.includes('already-exited Git subprocess')
+		));
+	});
+
+	test('timeout rejects while live-root process-tree cleanup hangs', async () => {
 		const child = new TestGitChild();
 		const timer = new TestGitTimer();
 		const warnings: string[] = [];
@@ -853,7 +911,6 @@ suite('GitWorktreeService', () => {
 			}
 		);
 
-		child.emit('exit', 0, null);
 		timer.fire();
 
 		let guard: ReturnType<typeof setTimeout> | undefined;
