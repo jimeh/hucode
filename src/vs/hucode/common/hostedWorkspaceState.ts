@@ -70,6 +70,14 @@ export class HostedWorkspaceStateModel<T extends IHostedWorkspaceStateEntry> {
 
 	/**
 	 * Removes a hosted workspace from the indexed state.
+	 *
+	 * Every lookup is dropped only when it still points at this instance. That
+	 * is what makes removing a superseded instance safe: a replacement added
+	 * for the same path keeps its own entries, so removing the workspace it
+	 * replaced cannot leave it live in the page yet unreachable by path. The
+	 * web shell removes unconditionally once a workbench has committed its
+	 * unload and relies on this; dropping either guard would turn that into a
+	 * live orphan.
 	 */
 	removeInstance(instance: T): void {
 		this.instancesById.delete(instance.instanceId);

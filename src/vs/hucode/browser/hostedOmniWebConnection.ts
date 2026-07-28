@@ -17,6 +17,7 @@ import { registerSingleton } from
 import { SyncDescriptor } from
 	'../../platform/instantiation/common/descriptors.js';
 import {
+	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
@@ -176,6 +177,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		this.postToShell({
 			type: HucodeOmniWebChildMessageType.Ready,
 			instanceId: this.instanceId,
+			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 		});
 	}
 

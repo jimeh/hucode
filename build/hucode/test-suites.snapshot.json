@@ -2,6 +2,7 @@
 	"electron": [
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
+		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
 		"src/vs/hucode/test/browser/omniConfigurationService.test.ts",
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",
@@ -33,6 +34,7 @@
 		"src/vs/workbench/services/host/test/browser/hucodeOmniBrowserOpen.test.ts",
 		"src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts",
 		"src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts",
+		"src/vs/workbench/services/lifecycle/test/browser/hucodeBrowserLifecycleService.test.ts",
 		"src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts",
 		"src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts",
 		"src/vs/workbench/test/electron-browser/hucodeOmniWindowAction.test.ts"
