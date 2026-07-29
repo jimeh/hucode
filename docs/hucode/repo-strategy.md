@@ -96,12 +96,38 @@ level, an upgrade is:
 2. Curate and verify its tree-equivalent replay branch.
 3. Fetch only the selected upstream release tag.
 4. Create and publish the clean `upstream-<new-version>` baseline.
-5. Create `series-<new-version>` locally at that baseline.
-6. Run `npm install` for the new upstream dependency set.
-7. Cherry-pick the previous curated patch series and resolve each conflict
+5. Compare the new baseline with the fork provenance inventory.
+6. Create `series-<new-version>` locally at that baseline.
+7. Run `npm install` for the new upstream dependency set.
+8. Cherry-pick the previous curated patch series and resolve each conflict
    against the new upstream API.
-8. Run Hucode compile, validation, tests, and a manual launch smoke test.
-9. Push the completed series and move the GitHub default branch to it.
+9. Run Hucode compile, validation, tests, and a manual launch smoke test.
+10. Push the completed series and move the GitHub default branch to it.
+
+Fork and upstream-patch provenance lives in
+`build/hucode/upstream-provenance.json`. The ordinary
+`npm run hucode:check-upstream-provenance` check validates that inventory
+without requiring an upstream branch, so it also works in shallow pull-request
+checkouts. During an upgrade, compare the recorded source blobs with the new
+clean baseline explicitly:
+
+```sh
+npm run hucode:check-upstream-provenance -- \
+  --upstream-ref upstream-<new-version>
+```
+
+A changed source is an upgrade tripwire, not metadata to refresh blindly.
+Reconcile the Hucode fork or patch with the new upstream source first, then
+update its `lastSyncedBaseline` and `blob` and rerun the check. New workbench
+or shell Part forks need their own provenance entry; the normal CI check fails
+when one is missing.
+
+The upgrade also has one manual Electron seam: the hosted-workspace request
+filters read an optional, untyped `webContentsId` from Electron request
+details. It supplements the tracked renderer process id and therefore fails
+closed if Electron removes it. After a baseline bump, verify the field still
+identifies hosted renderer requests and keep both trust checks narrow; do not
+replace it with a broader window or frame heuristic.
 
 Do not update Hucode release metadata until the replay is coherent. Keep root
 `package.json` `version` aligned with upstream and store the Hucode release

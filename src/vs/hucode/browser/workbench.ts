@@ -1009,6 +1009,9 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	setPartHidden(hidden: boolean, part: Parts): void {
+		// Showing the panel or auxiliary bar deliberately becomes a no-op in
+		// Omni: hosted workbenches own those surfaces, while the shell only
+		// implements their broad IWorkbenchLayoutService contract.
 		switch (part) {
 			case Parts.SIDEBAR_PART:
 				this.setSideBarHidden(hidden);
