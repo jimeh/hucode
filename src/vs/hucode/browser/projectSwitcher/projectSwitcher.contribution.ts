@@ -284,7 +284,10 @@ async function runRetainedWorkbenchQuickInput<T>(
 	}
 }
 
-class ProjectSwitcherAccessibilityProvider
+/**
+ * Supplies accessible labels for Project Switcher rows.
+ */
+export class ProjectSwitcherAccessibilityProvider
 	implements IListAccessibilityProvider<ProjectSwitcherItem> {
 
 	getWidgetAriaLabel(): string {
@@ -376,7 +379,10 @@ interface ProjectSwitcherActionTemplate {
 	currentAction?: () => void;
 }
 
-class ProjectSwitcherRenderer
+/**
+ * Renders reusable Project Switcher tree rows and their inline actions.
+ */
+export class ProjectSwitcherRenderer
 	implements ITreeRenderer<ProjectSwitcherItem, void, ProjectSwitcherTemplate> {
 
 	static readonly ID = 'hucodeProjectSwitcherItem';
@@ -728,7 +734,10 @@ class ProjectSwitcherRenderer
 	}
 }
 
-class ProjectSwitcherDragAndDrop
+/**
+ * Applies Project Switcher drag-and-drop validation and ordering.
+ */
+export class ProjectSwitcherDragAndDrop
 	implements ITreeDragAndDrop<ProjectSwitcherItem> {
 
 	constructor(
@@ -998,12 +1007,15 @@ class ProjectSwitcherDragAndDrop
 		const siblings = project.worktrees.filter(worktree =>
 			!worktree.isMain && !pathsEqual(worktree.path, source.worktreePath)
 		);
+		const targetIndex = siblings.findIndex(worktree =>
+			pathsEqual(worktree.path, target.worktreePath)
+		);
+		if (targetIndex < 0) {
+			return;
+		}
 		const beforeWorktreePath = isBeforeDropPosition(targetSector)
 			? target.worktreePath
-			: siblings.find((worktree, index) =>
-				pathsEqual(worktree.path, target.worktreePath) &&
-				index + 1 < siblings.length
-			)?.path;
+			: siblings[targetIndex + 1]?.path;
 		await this.projectManagerService.moveWorktree(
 			source.projectId,
 			source.worktreePath,
