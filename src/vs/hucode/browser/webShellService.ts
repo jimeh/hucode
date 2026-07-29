@@ -1847,7 +1847,11 @@ export class WebHucodeShellController extends Disposable
 			HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION;
 		if (
 			workbench &&
-			await this.prepareUnload(instance, workbench) !== 'ready'
+			await this.prepareUnload(
+				instance,
+				workbench,
+				singlePhase
+			) !== 'ready'
 		) {
 			return false;
 		}
@@ -1968,9 +1972,14 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private async prepareUnload(
 		instance: IHostedIframeInstance,
-		workbench: IHucodeOmniWebWorkbenchClient
+		workbench: IHucodeOmniWebWorkbenchClient,
+		singlePhase: boolean,
 	): Promise<HostedUnloadResult> {
-		const answer = workbench.prepareUnload().then(
+		const answer = (
+			singlePhase
+				? workbench.prepareUnload()
+				: workbench.prepareUnloadForCommit()
+		).then(
 			ready => ready ? 'ready' as const : 'vetoed' as const,
 			() => 'prepare-failed' as const
 		);

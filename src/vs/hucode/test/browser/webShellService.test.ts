@@ -1883,6 +1883,42 @@ suite('WebHucodeShellService', () => {
 			});
 		});
 
+	test('routes current workbenches through distinct prepare and commit calls',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/current-protocol-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+
+			const closedState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+
+			assert.deepStrictEqual({
+				instanceIds: closedState.instances.map(
+					instance => instance.instanceId
+				),
+				legacyPrepareCalls:
+					child.workbench.legacyPrepareUnloadCalls,
+				prepareForCommitCalls:
+					child.workbench.prepareUnloadCalls,
+				commitCalls: child.workbench.commitUnloadCalls,
+				phases: child.workbench.unloadPhases,
+			}, {
+				instanceIds: [],
+				legacyPrepareCalls: 0,
+				prepareForCommitCalls: 1,
+				commitCalls: 1,
+				phases: ['prepare', 'commit'],
+			});
+		});
+
 	test('keeps a workbench whose preparation lands after its timeout',
 		async () => {
 			const browser = new CollapsibleTimeoutBrowserAdapter();
@@ -4246,6 +4282,7 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	openFilesResult = true;
 	prepareUnloadResult: boolean | Promise<boolean> = true;
 	prepareUnloadCalls = 0;
+	legacyPrepareUnloadCalls = 0;
 	prepareUnloadRejects = false;
 	onPrepareUnload: (() => void) | undefined;
 	commitUnloadResult: boolean | Promise<boolean> = true;
@@ -4273,6 +4310,15 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	}
 
 	async prepareUnload(): Promise<boolean> {
+		this.legacyPrepareUnloadCalls++;
+		this.unloadPhases.push('legacy-prepare');
+		if (this.prepareUnloadRejects) {
+			throw new Error('hosted workbench connection lost');
+		}
+		return this.prepareUnloadResult;
+	}
+
+	async prepareUnloadForCommit(): Promise<boolean> {
 		this.prepareUnloadCalls++;
 		this.unloadPhases.push('prepare');
 		this.onPrepareUnload?.();
@@ -4346,6 +4392,7 @@ class RecordingLogService {
  */
 class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	prepareUnloadCalls = 0;
+	legacyPrepareUnloadCalls = 0;
 	commitUnloadCalls = 0;
 	prepareUnloadGate: Promise<unknown> | undefined;
 	commitUnloadGate: Promise<unknown> | undefined;
@@ -4385,8 +4432,19 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 	}
 
 	async prepareUnload(): Promise<boolean> {
+		this.legacyPrepareUnloadCalls++;
+		await this.beginPreparation();
+		return this.coordinator.prepareUnload();
+	}
+
+	async prepareUnloadForCommit(): Promise<boolean> {
 		this.prepareUnloadCalls++;
 		this.onPrepareUnload?.();
+		await this.beginPreparation();
+		return this.coordinator.prepareUnloadForCommit();
+	}
+
+	private async beginPreparation(): Promise<void> {
 		if (this.prepareUnloadStarted.isSettled) {
 			if (!this.repeatPrepareUnloadStarted.isSettled) {
 				await this.repeatPrepareUnloadStarted.complete();
@@ -4395,7 +4453,6 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 			await this.prepareUnloadStarted.complete();
 		}
 		await this.prepareUnloadGate;
-		return this.coordinator.prepareUnload();
 	}
 
 	async commitUnload(): Promise<boolean> {
