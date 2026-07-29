@@ -35,6 +35,8 @@
 		"src/vs/platform/windows/test/electron-main/hucodeWindowsStateHandler.test.ts",
 		"src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
 		"src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+		"src/vs/workbench/contrib/debug/test/browser/hucodeDebugMemoryShutdown.test.ts",
+		"src/vs/workbench/contrib/terminal/test/browser/hucodeTerminalShutdown.test.ts",
 		"src/vs/workbench/services/clipboard/test/browser/hucodeClipboardService.test.ts",
 		"src/vs/workbench/services/environment/test/browser/hucodeOmniEnvironmentService.test.ts",
 		"src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts",

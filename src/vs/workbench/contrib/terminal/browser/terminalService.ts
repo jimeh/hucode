@@ -621,7 +621,6 @@ export class TerminalService extends Disposable implements ITerminalService {
 		// Never veto on web as this would block all windows from being closed. This disables
 		// process revive as we can't handle it on shutdown.
 		if (isWeb) {
-			this._isShuttingDown = true;
 			return false;
 		}
 		return this._onBeforeShutdownAsync(reason);
@@ -666,8 +665,6 @@ export class TerminalService extends Disposable implements ITerminalService {
 			this._logService.warn('Exception occurred during terminal shutdown', err);
 		}
 
-		this._isShuttingDown = true;
-
 		return false;
 	}
 
@@ -694,15 +691,12 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	private async _onBeforeShutdownConfirmation(reason: ShutdownReason): Promise<boolean> {
 		// veto if configured to show confirmation and the user chose not to exit
-		const veto = await this._showTerminalCloseConfirmation();
-		if (!veto) {
-			this._isShuttingDown = true;
-		}
-
-		return veto;
+		return this._showTerminalCloseConfirmation();
 	}
 
 	private _onWillShutdown(e: WillShutdownEvent): void {
+		this._isShuttingDown = true;
+
 		// Don't touch processes if the shutdown was a result of reload as they will be reattached
 		const shouldPersistTerminals = this._terminalConfigurationService.config.enablePersistentSessions && e.reason === ShutdownReason.RELOAD;
 
