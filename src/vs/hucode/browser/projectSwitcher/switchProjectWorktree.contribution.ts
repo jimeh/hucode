@@ -286,14 +286,15 @@ async function getOmniHostedWorkspaceState(
 		return undefined;
 	}
 	const windowId = dom.getWindowId(mainWindow);
-	await shellService.reconcileRetainedWorkbenches(
+	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId,
-		projects.flatMap(project => project.worktrees.map(worktree => ({
+		projects.map(project => ({
 			projectId: project.id,
-			folderUri: URI.file(worktree.path).toJSON(),
-		})))
+			folderUris: project.worktrees.map(worktree =>
+				URI.file(worktree.path).toJSON()
+			),
+		}))
 	);
-	return shellService.getWindowState(windowId);
 }
 
 function getCombinedSwitchWorkbenchPicks(

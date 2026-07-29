@@ -28,8 +28,10 @@ import {
 import { IWindowsMainService, OpenContext } from
 	'../../platform/windows/electron-main/windows.js';
 import {
+	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceState,
 	IHucodeHostedWorkspaceOwner,
+	IHucodeProjectFolderPromotion,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
 import { ProjectSwitcherOmniSection } from
@@ -251,15 +253,28 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
-	async reconcileRetainedWorkbenches(
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[]
+		projects: readonly IHucodeCompleteProjectCatalogEntry[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		await controller.reconcileRetainedWorkbenches(
+		await controller.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+			projects.map(project => ({
+				projectId: project.projectId,
+				folderUris: project.folderUris.map(folderUri =>
+					URI.revive(folderUri)!
+				),
+			}))
+		);
+		return controller.getState();
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.promoteRetainedWorkbenchProjectFolders(
 			projectFolders.map(folder => ({
 				projectId: folder.projectId,
 				folderUri: URI.revive(folder.folderUri),
