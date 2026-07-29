@@ -1479,8 +1479,7 @@ suite('WebHucodeShellService', () => {
 			const { service, surface, browser } = createService();
 			const state = await service.openWorkspace(
 				browser.windowId,
-				'/tmp/hucode-worktree',
-				'project'
+				'/tmp/hucode-worktree'
 			);
 			const instanceId = state.activeInstanceId;
 			assert.ok(instanceId);
