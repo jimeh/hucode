@@ -565,12 +565,14 @@ interface HucodeProjectAdmissionEntry {
  */
 class HucodeProjectAdmissionQueue extends Disposable {
 	private readonly pending: HucodeProjectAdmissionEntry[] = [];
+	private readonly idleCallbacks: Array<() => void> = [];
 	private active = 0;
 	private unavailable = false;
 
 	constructor(
 		private readonly concurrency: number,
-		private readonly pendingLimit: number
+		private readonly pendingLimit: number,
+		private readonly acquireActiveLease?: () => IDisposable
 	) {
 		super();
 	}
@@ -626,8 +628,11 @@ class HucodeProjectAdmissionQueue extends Disposable {
 			const entry = this.pending.shift()!;
 			entry.cancellation.dispose();
 			this.active++;
+			let activeLease = Disposable.None;
 			let operation: Promise<unknown>;
 			try {
+				activeLease =
+					this.acquireActiveLease?.() ?? Disposable.None;
 				operation = entry.factory();
 			} catch (error) {
 				operation = Promise.reject(error);
@@ -635,20 +640,37 @@ class HucodeProjectAdmissionQueue extends Disposable {
 			void operation.then(
 				value => {
 					entry.resolve(value);
-					this.complete();
+					this.complete(activeLease);
 				},
 				error => {
 					entry.reject(error);
-					this.complete();
+					this.complete(activeLease);
 				}
 			);
 		}
 	}
 
-	private complete(): void {
-		this.active--;
-		if (!this.unavailable) {
-			this.consume();
+	runWhenIdle(callback: () => void): void {
+		if (this.active === 0) {
+			callback();
+		} else {
+			this.idleCallbacks.push(callback);
+		}
+	}
+
+	private complete(activeLease: IDisposable): void {
+		try {
+			this.active--;
+			if (!this.unavailable) {
+				this.consume();
+			}
+			if (this.active === 0) {
+				for (const callback of this.idleCallbacks.splice(0)) {
+					callback();
+				}
+			}
+		} finally {
+			activeLease.dispose();
 		}
 	}
 
@@ -695,6 +717,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly enabled: boolean;
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
+			readonly acquireMutationLease?: () => IDisposable;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventClientLimit?: number;
 			/** Internal test override; this is not a serve-web setting. */
@@ -722,7 +745,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			DEFAULT_PROJECT_REQUEST_PENDING_LIMIT
 		);
 		this.mutationQueue = this._register(
-			new HucodeProjectAdmissionQueue(1, requestPendingLimit)
+			new HucodeProjectAdmissionQueue(
+				1,
+				requestPendingLimit,
+				options.acquireMutationLease
+			)
 		);
 		this.gitReadLimiter = this._register(new HucodeProjectAdmissionQueue(
 			Math.max(
@@ -743,11 +770,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				options.fileSystem ?? defaultProjectStateFileSystem,
 				options.acquireStateWriteLease
 			);
-		this.service = this._register(new ProjectManagerMainService(
+		this.service = new ProjectManagerMainService(
 			this.stateService,
 			logService,
 			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher(logService) },
-		));
+		);
 		this._register(this.service.onDidChangeProjects(projects => {
 			this.queueProjectsPublication(projects);
 		}));
@@ -882,6 +909,21 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return;
 		}
 		this.disposed = true;
+		this.mutationQueue.dispose();
+		this.gitReadLimiter.dispose();
+		const service = this.service;
+		if (service) {
+			this.mutationQueue.runWhenIdle(() => {
+				try {
+					service.dispose();
+				} catch (error) {
+					this.logService.error(
+						'[Hucode Projects] Failed to dispose project manager.',
+						error
+					);
+				}
+			});
+		}
 		this.pendingProjectPublication = undefined;
 		for (const client of Array.from(this.eventClients)) {
 			this.removeEventClient(client);

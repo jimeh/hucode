@@ -1014,6 +1014,119 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('keeps an active read slot until canceled work actually settles',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const activeStarted = new DeferredPromise<void>();
+			const releaseActive = new DeferredPromise<void>();
+			let calls = 0;
+			service.getWorktreeRefs = async () => {
+				calls++;
+				if (calls === 1) {
+					await activeStarted.complete();
+					await releaseActive.p;
+				}
+				return [];
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+			const active = startHandle(server, 'POST', route, {});
+			await activeStarted.p;
+
+			active.abortRequest();
+			await active.completion;
+			const successor = startHandle(server, 'POST', route, {});
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 2 ||
+				calls === 2
+			);
+			const callsBeforeRelease = calls;
+			await releaseActive.complete();
+			await successor.completion;
+
+			assert.deepStrictEqual(active.response.writeHeadCalls, []);
+			assert.strictEqual(callsBeforeRelease, 1);
+			assert.strictEqual(successor.response.statusCode, 200);
+			assert.strictEqual(calls, 2);
+		}
+	);
+
+	test('releases a read slot after the admitted operation rejects',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const activeStarted = new DeferredPromise<void>();
+			const releaseActive = new DeferredPromise<void>();
+			let calls = 0;
+			service.getWorktreeRefs = async () => {
+				calls++;
+				if (calls === 1) {
+					await activeStarted.complete();
+					await releaseActive.p;
+					throw new Error('admitted read failed');
+				}
+				return [];
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+			const active = startHandle(server, 'POST', route, {});
+			await activeStarted.p;
+			const successor = startHandle(server, 'POST', route, {});
+			await releaseActive.complete();
+			await active.completion;
+			const successorSettled = await raceTimeout(
+				successor.completion.then(() => true),
+				50
+			);
+			if (!successorSettled) {
+				successor.close();
+				await successor.completion;
+			}
+
+			assert.strictEqual(active.response.statusCode, 500);
+			assert.strictEqual(successorSettled, true);
+			assert.strictEqual(successor.response.statusCode, 200);
+			assert.strictEqual(calls, 2);
+		}
+	);
+
 	test('caps queued Git reads and reuses a canceled waiting slot',
 		async () => {
 			const server = createServer(
@@ -1331,6 +1444,135 @@ suite('HucodeWebProjectManagerServer', function () {
 			});
 			assert.strictEqual(active.response.statusCode, 200);
 			assert.strictEqual(calls, 1);
+		}
+	);
+
+	test('defers manager disposal through an admitted worktree refresh',
+		async () => {
+			const lifetimeEvents: string[] = [];
+			let activeLeases = 0;
+			let nextLeaseId = 0;
+			const acquireLifetimeLease = () => {
+				const id = ++nextLeaseId;
+				activeLeases++;
+				lifetimeEvents.push(`acquire:${id}`);
+				return toDisposable(() => {
+					activeLeases--;
+					lifetimeEvents.push(`release:${id}`);
+				});
+			};
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				acquireLifetimeLease,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				acquireLifetimeLease
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			assert.strictEqual(activeLeases, 0);
+			lifetimeEvents.length = 0;
+
+			const service = (server as unknown as {
+				service: {
+					dispose(): void;
+					gitWorktreeService: {
+						listWorktrees(
+							rootPath: string,
+							token: CancellationToken
+						): Promise<readonly unknown[]>;
+					};
+				};
+			}).service;
+			const originalDispose = service.dispose.bind(service);
+			let serviceDisposeCalls = 0;
+			service.dispose = () => {
+				serviceDisposeCalls++;
+				lifetimeEvents.push('service-disposed');
+				originalDispose();
+			};
+			const originalListWorktrees =
+				service.gitWorktreeService.listWorktrees.bind(
+					service.gitWorktreeService
+				);
+			const refreshStarted =
+				new DeferredPromise<CancellationToken>();
+			const releaseRefresh = new DeferredPromise<void>();
+			let blocked = false;
+			service.gitWorktreeService.listWorktrees =
+				async (rootPath, token) => {
+					if (!blocked) {
+						blocked = true;
+						await refreshStarted.complete(token);
+						await releaseRefresh.p;
+					}
+					return originalListWorktrees(rootPath, token);
+				};
+
+			const createRoute = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees`;
+			const active = startHandle(server, 'POST', createRoute, {
+				options: {
+					branchName: 'dispose-active-refresh',
+					path: join(serverDataPath, 'dispose-active-refresh'),
+				},
+			});
+			const refreshToken = await refreshStarted.p;
+			const mutationLeaseId = nextLeaseId;
+			const queued = startHandle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/pinned`,
+				{ pinned: true }
+			);
+			await waitFor(() => requestQueueSize(
+				server,
+				'mutationQueue'
+			) === 2);
+
+			server.dispose();
+			const tokenCanceledAtDispose =
+				refreshToken.isCancellationRequested;
+			const leasesAtDispose = activeLeases;
+			const serviceDisposedAtDispose = serviceDisposeCalls;
+			const queuedSettled = await raceTimeout(
+				queued.completion.then(() => true),
+				50
+			);
+			if (!queuedSettled) {
+				queued.close();
+			}
+			await releaseRefresh.complete();
+			await Promise.all([active.completion, queued.completion]);
+			const activeBody = JSON.parse(active.response.body);
+
+			assert.strictEqual(tokenCanceledAtDispose, false);
+			assert.strictEqual(leasesAtDispose, 1);
+			assert.strictEqual(serviceDisposedAtDispose, 0);
+			assert.strictEqual(queuedSettled, true);
+			assert.strictEqual(queued.response.statusCode, 503);
+			assert.strictEqual(active.response.statusCode, 201);
+			assert.strictEqual(activeBody.projects[0].worktrees.length, 2);
+			assert.strictEqual(activeLeases, 0);
+			assert.strictEqual(serviceDisposeCalls, 1);
+			assert.strictEqual(
+				lifetimeEvents[lifetimeEvents.length - 2],
+				'service-disposed'
+			);
+			assert.strictEqual(
+				lifetimeEvents[lifetimeEvents.length - 1],
+				`release:${mutationLeaseId}`
+			);
 		}
 	);
 
@@ -2713,12 +2955,14 @@ function createServer(
 	eventClientLimit?: number,
 	gitReadConcurrency?: number,
 	eventHeartbeatIntervalMs?: number,
-	eventBackpressureTimeoutMs?: number
+	eventBackpressureTimeoutMs?: number,
+	acquireMutationLease?: () => ReturnType<typeof toDisposable>
 ): HucodeWebProjectManagerServer {
 	const options = {
 		enabled: true,
 		fileSystem,
 		acquireStateWriteLease,
+		acquireMutationLease,
 		eventClientLimit,
 		gitReadConcurrency,
 		eventHeartbeatIntervalMs,

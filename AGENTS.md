@@ -170,6 +170,9 @@ as the required Hucode instruction set for work in this fork.
   Node's `IncomingMessage` `close` event also fires after normal request
   completion; use request `aborted` or response `close` before
   `writableFinished` to detect a real disconnect.
+  Server disposal must reject waiting work immediately but keep the project
+  manager and a server-lifetime consumer alive until every admitted mutation
+  has settled; dispose the manager before releasing the final mutation lease.
   The shared `Limiter` and `Queue` retain canceled waiting factories, and their
   disposal clears waiting work without settling its returned promises; do not
   use them for request admission that must release canceled or disposed work.
