@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { IDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
@@ -84,6 +84,26 @@ suite('ShellControllerStore', () => {
 		assert.strictEqual(first.disposeCount, 1);
 		assert.strictEqual(replacement.disposeCount, 1);
 	});
+
+	test('window close and later destruction release a controller exactly once',
+		() => {
+			const closed = disposables.add(new Emitter<void>());
+			const destroyed = disposables.add(new Emitter<number>());
+			const store = disposables.add(createTestStore(
+				windowId => new TestController(windowId),
+				destroyed,
+				windowId => testHost(windowId, true, closed.event)
+			));
+			const controller = store.getOrCreate(5);
+
+			closed.fire();
+
+			assert.strictEqual(controller.disposeCount, 1);
+			assert.strictEqual(store.get(5), undefined);
+
+			destroyed.fire(5);
+			assert.strictEqual(controller.disposeCount, 1);
+		});
 
 	test('destruction of an absent window remains non-creating', () => {
 		const created: number[] = [];
@@ -189,6 +209,7 @@ suite('ShellControllerStore', () => {
 interface TestHost {
 	readonly windowId: number;
 	readonly isOmniWindow?: boolean;
+	readonly onDidClose?: Event<void>;
 }
 
 class TestController implements IDisposable {
@@ -201,8 +222,12 @@ class TestController implements IDisposable {
 	}
 }
 
-function testHost(windowId: number, isOmniWindow = true): TestHost {
-	return { windowId, isOmniWindow };
+function testHost(
+	windowId: number,
+	isOmniWindow = true,
+	onDidClose: Event<void> = Event.None
+): TestHost {
+	return { windowId, isOmniWindow, onDidClose };
 }
 
 function createTestStore(

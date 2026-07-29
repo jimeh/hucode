@@ -36,8 +36,10 @@ import {
 	INativeRunKeybindingInWindowRequest,
 	IRectangle,
 } from '../../platform/window/common/window.js';
-import { FOCUS_PROJECT_PANE_COMMAND_ID } from
-	'../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	isHucodeOmniShellAction,
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserWorkbenchEnvironmentService } from
@@ -317,6 +319,31 @@ type IWebHucodeShellHostSurfaceService = Pick<
 >;
 
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
+const COMMAND_DELIVERY_UNKNOWN =
+	Symbol('hucodeOmniWebCommandDeliveryUnknown');
+const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
+	'editor.action.clipboardCopyAction',
+	'editor.action.clipboardCutAction',
+]);
+
+type IHucodeHostedWebShellConnectionFacade = Pick<
+	IHucodeShellService,
+	| 'onDidChangeWindowState'
+	| 'getWindowState'
+	| 'findHostedWorkspaceByPath'
+	| 'focusHostedWorkspaceByPath'
+	| 'focusNormalWindowByPath'
+	| 'openWorkspace'
+	| 'openFilesInWorkspace'
+	| 'openFilesInActiveWorkspace'
+	| 'closeWorkspace'
+	| 'reopenWorkspaceInNormalWindow'
+	| 'notifyHostedWorkspaceReady'
+	| 'focusWorkspace'
+	| 'focusShell'
+	| 'runActionInShell'
+	| 'reloadWorkspace'
+>;
 
 /**
  * Server routing configuration the web shell needs to build workbench URLs.
@@ -417,6 +444,7 @@ export class WebHucodeShellController extends Disposable
 	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 	private readonly initialization: Promise<void>;
+	private initializationCancelled = false;
 	private shuttingDown = false;
 	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
@@ -1147,11 +1175,27 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
-		return this.runCommandInInstance(
+		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
 			request.args ?? []
 		);
+		if (result !== COMMAND_DELIVERY_UNKNOWN) {
+			return result;
+		}
+
+		if (!HUCODE_OMNI_CLIPBOARD_COMMANDS.has(request.id)) {
+			return false;
+		}
+		// A timed-out request may still execute in the child after this point.
+		// Treat clipboard delivery as consumed: retrying copy/cut locally can
+		// duplicate a destructive cut. The tradeoff is that an actually lost
+		// request leaves the clipboard operation unapplied.
+		this.logService.warn(
+			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
+			'delivery is unconfirmed, so it will not be retried locally.'
+		);
+		return true;
 	}
 
 	async runKeybindingInWorkspace(
@@ -1182,6 +1226,10 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
+		this.reloadInstance(instance);
+	}
+
+	private reloadInstance(instance: IHostedIframeInstance): void {
 		instance.state = 'loading';
 		void this.runCommandInInstance(
 			instance,
@@ -1227,11 +1275,14 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		_reason: ShutdownReason
 	): Promise<void> {
-		await this.initialization;
 		if (windowId !== this.windowId) {
 			return;
 		}
 
+		// Page teardown must not wait forever for a slow remote folder stat.
+		// Restore checks cancellation after every asynchronous preflight, so
+		// no iframe can be attached after this shutdown snapshots its batch.
+		this.initializationCancelled = true;
 		if (this.shutdownPromise) {
 			await this.shutdownPromise;
 			return;
@@ -1381,7 +1432,11 @@ export class WebHucodeShellController extends Disposable
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
-					this.activateInstance(instance);
+					if (this.activeInstanceId === instance.instanceId) {
+						this.emitState();
+					} else {
+						this.activateInstance(instance);
+					}
 				} else {
 					this.emitState();
 				}
@@ -1405,7 +1460,10 @@ export class WebHucodeShellController extends Disposable
 		));
 		client.registerChannel(
 			HUCODE_OMNI_WEB_SHELL_CHANNEL,
-			ProxyChannel.fromService(this, disposables)
+			ProxyChannel.fromService(
+				this.createHostedConnectionFacade(instance),
+				disposables
+			)
 		);
 		instance.connection = {
 			workbench: ProxyChannel.toService<IHucodeOmniWebWorkbenchClient>(
@@ -1421,6 +1479,92 @@ export class WebHucodeShellController extends Disposable
 			instanceId: instance.instanceId,
 			windowId: this.windowId,
 		}, channel.port2);
+	}
+
+	/**
+	 * Creates the only shell operations callable over one hosted workbench's
+	 * connection. Legacy wire signatures are retained, but caller-supplied
+	 * window and instance identifiers are ignored in favour of the identities
+	 * established by the trusted MessagePort handshake.
+	 */
+	private createHostedConnectionFacade(
+		instance: IHostedIframeInstance
+	): IHucodeHostedWebShellConnectionFacade {
+		return {
+			onDidChangeWindowState: this.onDidChangeWindowState,
+			getWindowState: _windowId =>
+				this.getWindowState(this.windowId),
+			findHostedWorkspaceByPath: worktreePath =>
+				this.findHostedWorkspaceByPath(worktreePath),
+			focusHostedWorkspaceByPath: (worktreePath, projectId) =>
+				this.focusHostedWorkspaceByPath(worktreePath, projectId),
+			focusNormalWindowByPath: worktreePath =>
+				this.focusNormalWindowByPath(worktreePath),
+			openWorkspace: (_windowId, worktreePath, projectId) =>
+				this.openWorkspace(this.windowId, worktreePath, projectId),
+			openFilesInWorkspace: (
+				_windowId,
+				worktreePath,
+				request,
+				projectId
+			) => this.openFilesInWorkspace(
+				this.windowId,
+				worktreePath,
+				request,
+				projectId
+			),
+			openFilesInActiveWorkspace: async (_windowId, request) => {
+				await this.initialization;
+				return this.instancesById.get(instance.instanceId) === instance &&
+					isHostedWorkspaceAvailable(instance)
+					? this.openFilesInInstance(instance, request)
+					: false;
+			},
+			closeWorkspace: _windowId =>
+				this.closeWorkspace(this.windowId, instance.instanceId),
+			reopenWorkspaceInNormalWindow: _windowId =>
+				this.reopenWorkspaceInNormalWindow(
+					this.windowId,
+					instance.instanceId
+				),
+			notifyHostedWorkspaceReady: _windowId =>
+				this.notifyHostedWorkspaceReady(
+					this.windowId,
+					instance.instanceId
+				),
+			focusWorkspace: async _windowId => {
+				await this.initialization;
+				if (
+					this.instancesById.get(instance.instanceId) !== instance ||
+					!isHostedWorkspaceAvailable(instance)
+				) {
+					return;
+				}
+				this.activateInstance(instance);
+				this.focusIframe(instance);
+			},
+			focusShell: _windowId => this.focusShell(this.windowId),
+			runActionInShell: async (_windowId, request) => {
+				if (!isHucodeOmniShellAction(request.id)) {
+					this.logService.warn(
+						'[hucode] Rejected hosted workbench request for ' +
+						`non-shell command ${request.id}.`
+					);
+					return false;
+				}
+				return this.runActionInShell(this.windowId, request);
+			},
+			reloadWorkspace: async _windowId => {
+				await this.initialization;
+				if (
+					this.instancesById.get(instance.instanceId) !== instance ||
+					!isHostedWorkspaceAvailable(instance)
+				) {
+					return;
+				}
+				this.reloadInstance(instance);
+			},
+		};
 	}
 
 	private disposeConnection(instance: IHostedIframeInstance): void {
@@ -1452,7 +1596,7 @@ export class WebHucodeShellController extends Disposable
 	private async restorePersistedWorkbenches(
 		persisted: IWebHucodeShellPersistedState | undefined
 	): Promise<void> {
-		if (!persisted) {
+		if (!persisted || this.initializationCancelled) {
 			return;
 		}
 		const retainedCandidates = this.retainedWorkbenches.all
@@ -1466,6 +1610,9 @@ export class WebHucodeShellController extends Disposable
 			...persisted.residentWorkspaces.filter(entry => !!entry.projectId),
 			...retainedCandidates,
 		]);
+		if (this.initializationCancelled) {
+			return;
+		}
 		const plan = createHostedWorkbenchRestorePlan(
 			availableCandidates,
 			persisted.activeWorktreePath,
@@ -1519,11 +1666,17 @@ export class WebHucodeShellController extends Disposable
 	): Promise<typeof candidates> {
 		const available = [];
 		for (const candidate of candidates) {
+			if (this.initializationCancelled) {
+				break;
+			}
 			let exists: boolean;
 			try {
 				exists = await this.folderAccess.exists(candidate.worktreePath);
 			} catch {
 				continue;
+			}
+			if (this.initializationCancelled) {
+				break;
 			}
 			if (exists) {
 				if (candidate.retainedWorkbenchId) {
@@ -1906,7 +2059,7 @@ export class WebHucodeShellController extends Disposable
 		instance: IHostedIframeInstance,
 		commandId: string,
 		args: readonly unknown[]
-	): Promise<boolean> {
+	): Promise<boolean | typeof COMMAND_DELIVERY_UNKNOWN> {
 		const workbench = instance.connection?.workbench;
 		if (!workbench) {
 			return false;
@@ -1917,7 +2070,7 @@ export class WebHucodeShellController extends Disposable
 			WebHucodeShellController.COMMAND_TIMEOUT_MS
 		);
 		if (result === REQUEST_TIMEOUT) {
-			return false;
+			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
 		if (instance.state === 'loading') {
