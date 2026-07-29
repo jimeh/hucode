@@ -71,6 +71,7 @@ interface HucodeWebProjectEventClient {
 	readonly req: HucodeWebProjectManagerRequest;
 	readonly res: HucodeWebProjectManagerResponse;
 	closed: boolean;
+	ready: boolean;
 	blocked: boolean;
 	pendingFrame: string | undefined;
 	drainListening: boolean;
@@ -463,6 +464,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly mutationQueue = new Queue<void>();
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 	private readonly eventClientLimit: number;
+	private disposed = false;
 
 	constructor(
 		serverDataPath: string,
@@ -529,7 +531,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				.replace(/^\/+/, '');
 
 			if (req.method === 'GET' && relativePath === 'events') {
-				return this.handleEvents(service, req, res);
+				return await this.handleEvents(service, req, res);
 			}
 
 			if (req.method === 'GET' && !relativePath) {
@@ -609,6 +611,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	override dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
 		for (const client of Array.from(this.eventClients)) {
 			this.removeEventClient(client);
 		}
@@ -857,33 +863,24 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		req: HucodeWebProjectManagerRequest,
 		res: HucodeWebProjectManagerResponse
 	): Promise<true> {
+		if (this.disposed) {
+			return this.writeEventClientUnavailableError(res);
+		}
 		if (this.eventClients.size >= this.eventClientLimit) {
 			return this.writeEventClientCapacityError(res);
 		}
 
-		const projects = await service.getProjects();
-
-		// getProjects can yield while another request claims the last slot.
-		if (this.eventClients.size >= this.eventClientLimit) {
-			return this.writeEventClientCapacityError(res);
-		}
-
-		res.writeHead(200, {
-			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-store',
-			Connection: 'keep-alive',
-		});
-
-		const client = {
+		const client: HucodeWebProjectEventClient = {
 			req,
 			res,
 			closed: false,
+			ready: false,
 			blocked: false,
 			pendingFrame: undefined,
 			drainListening: false,
 			onTerminated: () => { },
 			onDrain: () => { },
-		} satisfies HucodeWebProjectEventClient;
+		};
 		client.onTerminated = () => this.removeEventClient(client);
 		client.onDrain = () => this.drainEventClient(client);
 		this.eventClients.add(client);
@@ -891,6 +888,28 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res.on?.('close', client.onTerminated);
 		res.on?.('error', client.onTerminated);
 
+		let projects: readonly ProjectRecord[];
+		try {
+			projects = await service.getProjects();
+		} catch (error) {
+			if (client.closed) {
+				return true;
+			}
+			this.removeEventClient(client, false);
+			throw error;
+		}
+
+		if (client.closed || this.disposed) {
+			this.removeEventClient(client);
+			return true;
+		}
+
+		res.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-store',
+			Connection: 'keep-alive',
+		});
+		client.ready = true;
 		this.writeProjectsEvent(client, projects, ': connected\n\n');
 		return true;
 	}
@@ -906,9 +925,22 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		);
 	}
 
+	private writeEventClientUnavailableError(
+		res: HucodeWebProjectManagerResponse
+	): true {
+		return this.writeJson(
+			res,
+			503,
+			{ error: 'Project event stream is unavailable.' },
+			{ 'Retry-After': '1' }
+		);
+	}
+
 	private broadcastProjects(projects: readonly ProjectRecord[]): void {
 		for (const client of this.eventClients) {
-			this.writeProjectsEvent(client, projects);
+			if (client.ready) {
+				this.writeProjectsEvent(client, projects);
+			}
 		}
 	}
 
@@ -966,7 +998,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 	}
 
-	private removeEventClient(client: HucodeWebProjectEventClient): void {
+	private removeEventClient(
+		client: HucodeWebProjectEventClient,
+		endResponse = true
+	): void {
 		if (client.closed) {
 			return;
 		}
@@ -980,10 +1015,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			client.drainListening = false;
 		}
 		client.pendingFrame = undefined;
-		try {
-			client.res.end();
-		} catch {
-			// The response can already be closed or failed.
+		if (endResponse) {
+			try {
+				client.res.end();
+			} catch {
+				// The response can already be closed or failed.
+			}
 		}
 	}
 }
