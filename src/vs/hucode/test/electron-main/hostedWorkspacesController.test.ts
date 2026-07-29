@@ -2570,6 +2570,23 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(hostedWebContents.closeCalls.length, 1);
 		assert.strictEqual(hostedWebContents.reloadCalls.length, 0);
 		assert.strictEqual(ipcMain.listenerCount(rollback.replyChannel), 0);
+		const recoveredInstance = controller.getState().instances.find(
+			instance => instance.instanceId === 'instance-1'
+		);
+		assert.ok(recoveredInstance);
+		assert.deepStrictEqual({
+			state: recoveredInstance.state,
+			focused: recoveredInstance.focused,
+			visible: recoveredInstance.visible,
+			processId: recoveredInstance.processId,
+			webContentsId: recoveredInstance.webContentsId,
+		}, {
+			state: 'crashed',
+			focused: false,
+			visible: false,
+			processId: undefined,
+			webContentsId: undefined,
+		});
 	});
 
 	test('an older unload cannot roll back a newer preparation', async () => {
