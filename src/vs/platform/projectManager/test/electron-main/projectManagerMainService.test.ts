@@ -124,6 +124,8 @@ class TestGitWorktreeService {
 		worktrees: readonly WorktreeRecord[];
 		options?: WorktreeRefQueryOptions;
 	}[] = [];
+	readonly listRefsTokens: CancellationToken[] = [];
+	readonly branchNameTokens: CancellationToken[] = [];
 	readonly createdCalls: {
 		projectRoot: string;
 		options: CreateWorktreeOptions;
@@ -175,16 +177,20 @@ class TestGitWorktreeService {
 	async listRefs(
 		projectRoot: string,
 		worktrees: readonly WorktreeRecord[],
-		options?: WorktreeRefQueryOptions
+		options?: WorktreeRefQueryOptions,
+		token: CancellationToken = CancellationToken.None
 	): Promise<readonly WorktreeRefRecord[]> {
 		this.listRefsCalls.push({ projectRoot, worktrees, options });
+		this.listRefsTokens.push(token);
 		return this.refs.get(projectRoot) ?? [];
 	}
 
 	async isValidBranchName(
 		_projectRoot: string,
-		branchName: string
+		branchName: string,
+		token: CancellationToken = CancellationToken.None
 	): Promise<boolean> {
+		this.branchNameTokens.push(token);
 		return this.validBranchNames.has(branchName);
 	}
 
@@ -2849,6 +2855,234 @@ suite('ProjectManagerMainService', () => {
 		assert.strictEqual(events[0][0].worktreeState, 'current');
 	});
 
+	test('forwards caller cancellation to ref and branch-name Git reads',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			gitWorktreeService.validBranchNames.add('feature/one');
+			const service = createService(stateService, gitWorktreeService);
+			const project = await service.addProject(URI.file('/repo'));
+			const source = new CancellationTokenSource();
+
+			await service.getWorktreeRefs(
+				project.id,
+				undefined,
+				source.token
+			);
+			await service.isValidBranchName(
+				project.id,
+				'feature/one',
+				source.token
+			);
+
+			assert.strictEqual(
+				gitWorktreeService.listRefsTokens.at(-1),
+				source.token
+			);
+			assert.strictEqual(
+				gitWorktreeService.branchNameTokens.at(-1),
+				source.token
+			);
+			source.dispose();
+		}
+	);
+
+	test('cancels request-owned ref hydration with its caller token',
+		async () => {
+			const stateService = new TestStateService();
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: [{
+					id: 'project-1',
+					label: 'Repo',
+					rootPath: '/repo',
+					pinned: false,
+					order: 1,
+				}],
+			} satisfies StoredProjectManagerState);
+			const gitWorktreeService = new TestGitWorktreeService();
+			const discoveryStarted = new DeferredPromise<CancellationToken>();
+			gitWorktreeService.listWorktreesHandler =
+				async (_projectRoot, token) => {
+					await discoveryStarted.complete(token);
+					await new Promise<void>((_resolve, reject) => {
+						const listener = token.onCancellationRequested(() => {
+							listener.dispose();
+							reject(new CancellationError());
+						});
+					});
+					return [];
+				};
+			const service = createService(stateService, gitWorktreeService);
+			const source = new CancellationTokenSource();
+
+			const refs = service.getWorktreeRefs(
+				'project-1',
+				undefined,
+				source.token
+			);
+			const hydrationToken = await discoveryStarted.p;
+			source.cancel();
+			await refs;
+
+			assert.strictEqual(hydrationToken.isCancellationRequested, true);
+			assert.strictEqual(
+				gitWorktreeService.listRefsTokens.at(-1),
+				source.token
+			);
+			gitWorktreeService.listWorktreesHandler = undefined;
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const recoveredRefs = await service.getWorktreeRefs('project-1');
+			assert.deepStrictEqual(recoveredRefs, []);
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				2
+			);
+			source.dispose();
+		}
+	);
+
+	test('retries canceled shared hydration for a live ref follower',
+		async () => {
+			const stateService = new TestStateService();
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: [{
+					id: 'project-1',
+					label: 'Repo',
+					rootPath: '/repo',
+					pinned: false,
+					order: 1,
+				}],
+			} satisfies StoredProjectManagerState);
+			const gitWorktreeService = new TestGitWorktreeService();
+			const firstDiscoveryStarted =
+				new DeferredPromise<CancellationToken>();
+			let discoveries = 0;
+			gitWorktreeService.listWorktreesHandler =
+				async (_projectRoot, token) => {
+					if (++discoveries === 1) {
+						await firstDiscoveryStarted.complete(token);
+						await new Promise<void>((_resolve, reject) => {
+							const listener =
+								token.onCancellationRequested(() => {
+									listener.dispose();
+									reject(new CancellationError());
+								});
+						});
+					}
+					return [
+						createMainWorktree('/repo'),
+						createLinkedWorktree('/repo.worktrees/feature', 'feature'),
+					];
+				};
+			gitWorktreeService.refs.set('/repo', [{
+				name: 'feature',
+				type: 'head',
+				checkedOutPath: '/repo.worktrees/feature',
+			}]);
+			const service = createService(stateService, gitWorktreeService);
+			const firstSource = new CancellationTokenSource();
+
+			const first = service.getWorktreeRefs(
+				'project-1',
+				undefined,
+				firstSource.token
+			);
+			await firstDiscoveryStarted.p;
+			const follower = service.getWorktreeRefs('project-1');
+			await timeout(0);
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				1
+			);
+
+			firstSource.cancel();
+			const [, followerRefs] = await Promise.all([first, follower]);
+
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				2
+			);
+			assert.deepStrictEqual(
+				gitWorktreeService.listRefsCalls.at(-1)?.worktrees,
+				[
+					createMainWorktree('/repo'),
+					createLinkedWorktree('/repo.worktrees/feature', 'feature'),
+				]
+			);
+			assert.deepStrictEqual(followerRefs, [{
+				name: 'feature',
+				type: 'head',
+				checkedOutPath: '/repo.worktrees/feature',
+			}]);
+			firstSource.dispose();
+		}
+	);
+
+	test('keeps committed watcher recovery after its ref request cancels',
+		async () => {
+			const stateService = new TestStateService();
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: [{
+					id: 'project-1',
+					label: 'Repo',
+					rootPath: '/repo',
+					pinned: false,
+					order: 1,
+				}],
+			} satisfies StoredProjectManagerState);
+			const gitWorktreeService = new TestGitWorktreeService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const metadataWatcher = new TestProjectMetadataWatcher();
+			metadataWatcher.throwPaths.add('/repo/.git/HEAD');
+			const retry = new TestRetryDelay();
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{
+					metadataWatcher,
+					retryDelay: retry.delay,
+				}
+			);
+			const source = new CancellationTokenSource();
+
+			await service.getWorktreeRefs(
+				'project-1',
+				undefined,
+				source.token
+			);
+			assert.deepStrictEqual(retry.delays, [1000]);
+			const retryToken = retry.tokens[0];
+
+			source.cancel();
+			assert.strictEqual(retryToken.isCancellationRequested, false);
+			metadataWatcher.throwPaths.clear();
+			retry.releaseNext();
+			await timeout(0);
+			await timeout(0);
+
+			assert.strictEqual(
+				metadataWatcher.activeListenerCount('/repo/.git/HEAD'),
+				1
+			);
+			assert.strictEqual(
+				metadataWatcher.activeListenerCount('/repo/.git/worktrees'),
+				1
+			);
+			source.dispose();
+		}
+	);
+
 	test('recovers an initially unavailable project through retry', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
@@ -4269,6 +4503,142 @@ suite('ProjectManagerMainService', () => {
 				removedPaths: ['/repo.worktrees/feature-two'],
 				worktrees: [createMainWorktree('/repo')],
 			});
+		}
+	);
+
+	test('returns a stale created worktree when post-add refresh fails',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const retry = new TestRetryDelay();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{ retryDelay: retry.delay }
+			);
+			const project = await service.addProject(URI.file('/repo'));
+			gitWorktreeService.listWorktreesHandler = async () => {
+				throw new Error('refresh failed after git worktree add');
+			};
+
+			const created = await service.createWorktree(project.id, {
+				branchName: 'feature/recovery',
+				path: '/repo.worktrees/feature-recovery',
+			});
+			const stale = (await service.getProjects())[0];
+
+			assert.deepStrictEqual(created, createLinkedWorktree(
+				'/repo.worktrees/feature-recovery',
+				'feature/recovery'
+			));
+			assert.strictEqual(stale.worktreeState, 'stale');
+			assert.ok(stale.worktrees.some(worktree =>
+				worktree.path === created.path
+			));
+			assert.deepStrictEqual(retry.delays, [1000]);
+
+			gitWorktreeService.listWorktreesHandler = undefined;
+			retry.releaseNext();
+			await timeout(0);
+			await timeout(0);
+
+			const recovered = (await service.getProjects())[0];
+			assert.strictEqual(recovered.worktreeState, 'current');
+			assert.deepStrictEqual(
+				recovered.worktrees,
+				[
+					createMainWorktree('/repo'),
+					createLinkedWorktree(
+						'/repo.worktrees/feature-recovery',
+						'feature/recovery'
+					),
+				]
+			);
+		}
+	);
+
+	test('returns the canonical created worktree without a duplicate fallback',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(stateService, gitWorktreeService);
+			const project = await service.addProject(URI.file('/repo'));
+			const canonical = createLinkedWorktree(
+				'/canonical/repo.worktrees/feature',
+				'feature/canonical'
+			);
+			gitWorktreeService.createWorktree = async () => {
+				gitWorktreeService.worktrees.set('/repo', [
+					createMainWorktree('/repo'),
+					canonical,
+				]);
+				return '/alias/repo.worktrees/feature';
+			};
+
+			const created = await service.createWorktree(project.id, {
+				branchName: 'feature/canonical',
+				path: '/alias/repo.worktrees/feature',
+			});
+			const refreshed = (await service.getProjects())[0];
+
+			assert.deepStrictEqual(created, canonical);
+			assert.strictEqual(refreshed.worktreeState, 'current');
+			assert.deepStrictEqual(refreshed.worktrees, [
+				createMainWorktree('/repo'),
+				canonical,
+			]);
+		}
+	);
+
+	test('does not cache a provisional worktree after uncorrelated discovery',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(stateService, gitWorktreeService);
+			const project = await service.addProject(URI.file('/repo'));
+			const discovered = [
+				createLinkedWorktree(
+					'/canonical/repo.worktrees/first',
+					'feature/first'
+				),
+				createLinkedWorktree(
+					'/canonical/repo.worktrees/second',
+					'feature/second'
+				),
+			];
+			gitWorktreeService.createWorktree = async () => {
+				gitWorktreeService.worktrees.set('/repo', [
+					createMainWorktree('/repo'),
+					...discovered,
+				]);
+				return '/alias/repo.worktrees/requested';
+			};
+
+			const created = await service.createWorktree(project.id, {
+				branchName: 'feature/requested',
+				path: '/alias/repo.worktrees/requested',
+			});
+			const refreshed = (await service.getProjects())[0];
+
+			assert.deepStrictEqual(created, createLinkedWorktree(
+				'/alias/repo.worktrees/requested',
+				'feature/requested'
+			));
+			assert.strictEqual(refreshed.worktreeState, 'current');
+			assert.deepStrictEqual(refreshed.worktrees, [
+				createMainWorktree('/repo'),
+				...discovered,
+			]);
 		}
 	);
 

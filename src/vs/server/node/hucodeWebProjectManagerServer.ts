@@ -5,7 +5,16 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
-import { Queue } from '../../base/common/async.js';
+import {
+	Limiter,
+	Queue,
+	raceCancellationError,
+} from '../../base/common/async.js';
+import {
+	CancellationToken,
+	CancellationTokenSource,
+} from '../../base/common/cancellation.js';
+import { CancellationError, isCancellationError } from '../../base/common/errors.js';
 import {
 	Disposable,
 	DisposableStore,
@@ -34,6 +43,10 @@ import { IStateService } from '../../platform/state/node/state.js';
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_EVENT_CLIENT_LIMIT = 64;
+const DEFAULT_GIT_READ_CONCURRENCY = 4;
+const EVENT_RETRY_MS = 1000;
+const DEFAULT_EVENT_HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS = 30_000;
 
 /**
  * Returns whether a request path targets the Hucode serve-web Projects API.
@@ -49,11 +62,13 @@ interface HucodeWebProjectManagerRequest
 	extends AsyncIterable<Buffer | string | Uint8Array> {
 	readonly method?: string;
 	readonly headers?: http.IncomingHttpHeaders;
-	on?(event: 'close', listener: () => void): unknown;
-	removeListener?(event: 'close', listener: () => void): unknown;
+	readonly aborted?: boolean;
+	on?(event: 'aborted', listener: () => void): unknown;
+	removeListener?(event: 'aborted', listener: () => void): unknown;
 }
 
 interface HucodeWebProjectManagerResponse {
+	readonly writableFinished?: boolean;
 	writeHead(status: number, headers?: http.OutgoingHttpHeaders): unknown;
 	write?(data: string): unknown;
 	end(data?: string): unknown;
@@ -76,6 +91,8 @@ interface HucodeWebProjectEventClient {
 	blocked: boolean;
 	pendingFrame: string | undefined;
 	drainListening: boolean;
+	heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+	backpressureTimer: ReturnType<typeof setTimeout> | undefined;
 	onTerminated: () => void;
 	onDrain: () => void;
 }
@@ -125,8 +142,12 @@ export class HucodeProjectFileStateService implements IStateService {
 	private stateVersion = 0;
 	private persistedVersion = 0;
 	private writeGeneration = 0;
-	private latestWriteGeneration = 0;
-	private latestWrite: Promise<void> = Promise.resolve();
+	private lastSuccessfulWriteGeneration = 0;
+	private readonly pendingWrites = new Map<number, Promise<void>>();
+	private failedWrite:
+		| { readonly generation: number; readonly error: unknown }
+		| undefined;
+	private dirtyRetry: Promise<void> | undefined;
 	private dirtyWriteError: unknown;
 
 	constructor(
@@ -196,7 +217,46 @@ export class HucodeProjectFileStateService implements IStateService {
 		if (!this.isDirty) {
 			return;
 		}
-		await this.queueStateWrite(this.state, this.stateVersion);
+		if (this.dirtyRetry) {
+			await this.dirtyRetry;
+			return;
+		}
+
+		const inFlight = this.pendingWrites.get(this.writeGeneration);
+		if (inFlight) {
+			try {
+				await inFlight;
+			} catch {
+				// A settled failure is retried below using the latest state.
+			}
+			if (!this.isDirty) {
+				return;
+			}
+			if (this.dirtyRetry) {
+				await this.dirtyRetry;
+				return;
+			}
+		}
+
+		if (this.dirtyWriteError === undefined) {
+			return;
+		}
+		const write = this.queueStateWrite(this.state, this.stateVersion);
+		const retry = write.then(
+			() => {
+				if (this.dirtyRetry === retry) {
+					this.dirtyRetry = undefined;
+				}
+			},
+			error => {
+				if (this.dirtyRetry === retry) {
+					this.dirtyRetry = undefined;
+				}
+				throw error;
+			}
+		);
+		this.dirtyRetry = retry;
+		await retry;
 	}
 
 	get currentWriteGeneration(): number {
@@ -204,8 +264,25 @@ export class HucodeProjectFileStateService implements IStateService {
 	}
 
 	async flushWritesAfter(generation: number): Promise<void> {
-		if (this.latestWriteGeneration > generation) {
-			await this.latestWrite;
+		const targetGeneration = this.writeGeneration;
+		if (targetGeneration > generation) {
+			await this.flushWritesThrough(targetGeneration);
+		}
+	}
+
+	async flushWritesThrough(generation: number): Promise<void> {
+		if (generation <= this.lastSuccessfulWriteGeneration) {
+			return;
+		}
+		const pendingWrite = this.pendingWrites.get(generation);
+		if (pendingWrite) {
+			await pendingWrite;
+			return;
+		}
+		if (this.failedWrite &&
+			generation <= this.failedWrite.generation &&
+			generation > this.lastSuccessfulWriteGeneration) {
+			throw this.failedWrite.error;
 		}
 	}
 
@@ -313,12 +390,31 @@ export class HucodeProjectFileStateService implements IStateService {
 			lease?.dispose();
 			throw error;
 		}
-		this.latestWriteGeneration = generation;
-		this.latestWrite = write;
+		const trackedWrite = write.then(
+			() => {
+				this.pendingWrites.delete(generation);
+				this.lastSuccessfulWriteGeneration = Math.max(
+					this.lastSuccessfulWriteGeneration,
+					generation
+				);
+				if (this.failedWrite &&
+					this.failedWrite.generation <= generation) {
+					this.failedWrite = undefined;
+				}
+			},
+			error => {
+				this.pendingWrites.delete(generation);
+				if (generation > this.lastSuccessfulWriteGeneration) {
+					this.failedWrite = { generation, error };
+				}
+				throw error;
+			}
+		);
+		this.pendingWrites.set(generation, trackedWrite);
 		// setItem cannot return the write promise. Attach a rejection handler
 		// immediately; flushWritesAfter and close still report the stored error.
-		void write.catch(() => { });
-		return write;
+		void trackedWrite.catch(() => { });
+		return trackedWrite;
 	}
 
 	private get isDirty(): boolean {
@@ -463,24 +559,53 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly service: ProjectManagerMainService | undefined;
 	private readonly stateService: HucodeProjectFileStateService | undefined;
 	private readonly mutationQueue = new Queue<void>();
+	private readonly gitReadLimiter: Limiter<unknown>;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 	private readonly eventClientLimit: number;
+	private readonly eventHeartbeatIntervalMs: number;
+	private readonly eventBackpressureTimeoutMs: number;
+	private pendingProjectPublication:
+		| {
+			readonly id: number;
+			readonly generation: number;
+			readonly projects: readonly ProjectRecord[];
+		}
+		| undefined;
+	private nextProjectPublicationId = 0;
 	private disposed = false;
 
 	constructor(
 		serverDataPath: string,
-		logService: ILogService,
+		private readonly logService: ILogService,
 		options: {
 			readonly enabled: boolean;
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventClientLimit?: number;
+			/** Internal test override; this is not a serve-web setting. */
+			readonly gitReadConcurrency?: number;
+			/** Internal test override; this is not a serve-web setting. */
+			readonly eventHeartbeatIntervalMs?: number;
+			/** Internal test override; this is not a serve-web setting. */
+			readonly eventBackpressureTimeoutMs?: number;
 		} = { enabled: true },
 	) {
 		super();
 		this.eventClientLimit =
 			options.eventClientLimit ?? DEFAULT_EVENT_CLIENT_LIMIT;
+		this.eventHeartbeatIntervalMs =
+			options.eventHeartbeatIntervalMs ??
+			DEFAULT_EVENT_HEARTBEAT_INTERVAL_MS;
+		this.eventBackpressureTimeoutMs =
+			options.eventBackpressureTimeoutMs ??
+			DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS;
+		this.gitReadLimiter = this._register(new Limiter<unknown>(
+			Math.max(
+				1,
+				options.gitReadConcurrency ?? DEFAULT_GIT_READ_CONCURRENCY
+			)
+		));
 
 		if (!options.enabled) {
 			return;
@@ -499,7 +624,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher(logService) },
 		));
 		this._register(this.service.onDidChangeProjects(projects => {
-			this.broadcastProjects(projects);
+			this.queueProjectsPublication(projects);
 		}));
 	}
 
@@ -526,15 +651,30 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			});
 		}
 
-		try {
-			const relativePath = pathname
-				.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
-				.replace(/^\/+/, '');
-
-			if (req.method === 'GET' && relativePath === 'events') {
+		const relativePath = pathname
+			.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
+			.replace(/^\/+/, '');
+		if (req.method === 'GET' && relativePath === 'events') {
+			try {
 				return await this.handleEvents(service, req, res);
+			} catch (error) {
+				return this.writeRequestError(res, error);
 			}
+		}
 
+		const requestCancellation = new CancellationTokenSource();
+		const onRequestAborted = () => requestCancellation.cancel();
+		const onResponseClose = () => {
+			if (!res.writableFinished) {
+				requestCancellation.cancel();
+			}
+		};
+		req.on?.('aborted', onRequestAborted);
+		res.on?.('close', onResponseClose);
+		if (req.aborted) {
+			requestCancellation.cancel();
+		}
+		try {
 			if (req.method === 'GET' && !relativePath) {
 				return this.writeProjects(res, 200, await service.getProjects());
 			}
@@ -549,7 +689,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						project,
 						projects: await service.getProjects(),
 					};
-				});
+				}, requestCancellation.token);
 				return this.writeJson(res, 201, {
 					project: result.project,
 					projects: result.projects,
@@ -565,7 +705,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						await service.removeProject(projectId);
 					}
 					return service.getProjects();
-				});
+				}, requestCancellation.token);
 				return this.writeProjects(res, 200, projects);
 			}
 
@@ -578,7 +718,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					service,
 					res,
 					relativePath,
-					await this.readJson(req)
+					await this.readJson(req),
+					requestCancellation.token
 				);
 			}
 
@@ -586,15 +727,15 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				error: `Unsupported method ${req.method}`,
 			});
 		} catch (error) {
-			if (error instanceof ProjectStateUnavailableError) {
-				return this.writeJson(res, 503, {
-					error: error.message,
-					code: error.code,
-				});
+			if (isCancellationError(error) &&
+				requestCancellation.token.isCancellationRequested) {
+				return true;
 			}
-			const message = error instanceof Error ? error.message : String(error);
-			const status = error instanceof BadRequestError ? 400 : 500;
-			return this.writeJson(res, status, { error: message });
+			return this.writeRequestError(res, error);
+		} finally {
+			req.removeListener?.('aborted', onRequestAborted);
+			res.removeListener?.('close', onResponseClose);
+			requestCancellation.dispose();
 		}
 	}
 
@@ -616,6 +757,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return;
 		}
 		this.disposed = true;
+		this.pendingProjectPublication = undefined;
 		for (const client of Array.from(this.eventClients)) {
 			this.removeEventClient(client);
 		}
@@ -627,6 +769,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res: HucodeWebProjectManagerResponse,
 		relativePath: string,
 		body: unknown,
+		token: CancellationToken,
 	): Promise<boolean> {
 		const [projectId, ...parts] = relativePath
 			.split('/')
@@ -635,7 +778,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 		if (relativePath === 'refresh') {
 			const projects = await this.runDurableMutation(
-				() => service.refresh()
+				() => service.refresh(),
+				token
 			);
 			return this.writeProjects(res, 200, projects);
 		}
@@ -648,7 +792,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			case 'refresh':
 				{
 					const projects = await this.runDurableMutation(
-						() => service.refresh(projectId)
+						() => service.refresh(projectId),
+						token
 					);
 					return this.writeProjects(res, 200, projects);
 				}
@@ -660,7 +805,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireString(body, 'label'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'label/reset':
@@ -668,7 +813,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					const projects = await this.runDurableMutation(async () => {
 						await service.resetProjectLabel(projectId);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'pinned':
@@ -679,7 +824,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireBoolean(body, 'pinned')
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'move':
@@ -690,23 +835,29 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							optionalString(body, 'beforeProjectId'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/refs':
 				return this.writeJson(res, 200, {
-					refs: await service.getWorktreeRefs(
-						projectId,
-						optionalObject(body, 'options') as
-						| WorktreeRefQueryOptions
-						| undefined,
+					refs: await this.runGitRead(token, () =>
+						service.getWorktreeRefs(
+							projectId,
+							optionalObject(body, 'options') as
+							| WorktreeRefQueryOptions
+							| undefined,
+							token
+						)
 					),
 				});
 			case 'worktrees/branch-name':
 				return this.writeJson(res, 200, {
-					valid: await service.isValidBranchName(
-						projectId,
-						requireString(body, 'branchName'),
+					valid: await this.runGitRead(token, () =>
+						service.isValidBranchName(
+							projectId,
+							requireString(body, 'branchName'),
+							token
+						)
 					),
 				});
 			case 'worktrees':
@@ -717,7 +868,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							readCreateWorktreeOptions(body),
 						),
 						projects: await service.getProjects(),
-					}));
+					}), token);
 					return this.writeJson(res, 201, result);
 				}
 			case 'worktrees/remove':
@@ -728,7 +879,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireString(body, 'worktreePath'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/move':
@@ -740,7 +891,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							optionalString(body, 'beforeWorktreePath'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/label':
@@ -752,7 +903,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireString(body, 'label'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/label/reset':
@@ -763,7 +914,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireString(body, 'worktreePath'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/pinned':
@@ -775,7 +926,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireBoolean(body, 'pinned'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 			case 'worktrees/last-active':
@@ -786,7 +937,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							requireString(body, 'worktreePath'),
 						);
 						return service.getProjects();
-					});
+					}, token);
 					return this.writeProjects(res, 200, projects);
 				}
 		}
@@ -795,17 +946,46 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	private async runDurableMutation<T>(
-		mutation: () => Promise<T>
+		mutation: () => Promise<T>,
+		token: CancellationToken
 	): Promise<T> {
 		let result: T | undefined;
 		await this.mutationQueue.queue(async () => {
+			this.throwIfCanceled(token);
 			await this.stateService?.retryDirtyState();
-			const writeGeneration =
-				this.stateService?.currentWriteGeneration ?? 0;
-			result = await mutation();
-			await this.stateService?.flushWritesAfter(writeGeneration);
+			try {
+				this.throwIfCanceled(token);
+				const writeGeneration =
+					this.stateService?.currentWriteGeneration ?? 0;
+				// Once the mutation starts, it is intentionally detached from
+				// the request token. Git create/remove and the state flush must
+				// finish even when the browser disconnects.
+				result = await mutation();
+				await this.stateService?.flushWritesAfter(writeGeneration);
+			} finally {
+				this.retryPendingProjectPublication();
+			}
 		});
+		this.throwIfCanceled(token);
 		return result!;
+	}
+
+	private async runGitRead<T>(
+		token: CancellationToken,
+		read: () => Promise<T>
+	): Promise<T> {
+		this.throwIfCanceled(token);
+		const queued = this.gitReadLimiter.queue(async () => {
+			this.throwIfCanceled(token);
+			return read();
+		}) as Promise<T>;
+		return raceCancellationError(queued, token);
+	}
+
+	private throwIfCanceled(token: CancellationToken): void {
+		if (token.isCancellationRequested) {
+			throw new CancellationError();
+		}
 	}
 
 	private async readJson(
@@ -859,6 +1039,21 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		return true;
 	}
 
+	private writeRequestError(
+		res: HucodeWebProjectManagerResponse,
+		error: unknown
+	): true {
+		if (error instanceof ProjectStateUnavailableError) {
+			return this.writeJson(res, 503, {
+				error: error.message,
+				code: error.code,
+			});
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		const status = error instanceof BadRequestError ? 400 : 500;
+		return this.writeJson(res, status, { error: message });
+	}
+
 	private async handleEvents(
 		service: ProjectManagerMainService,
 		req: HucodeWebProjectManagerRequest,
@@ -880,19 +1075,26 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			blocked: false,
 			pendingFrame: undefined,
 			drainListening: false,
+			heartbeatTimer: undefined,
+			backpressureTimer: undefined,
 			onTerminated: () => { },
 			onDrain: () => { },
 		};
 		client.onTerminated = () => this.removeEventClient(client);
 		client.onDrain = () => this.drainEventClient(client);
 		this.eventClients.add(client);
-		req.on?.('close', client.onTerminated);
+		req.on?.('aborted', client.onTerminated);
 		res.on?.('close', client.onTerminated);
 		res.on?.('error', client.onTerminated);
 
 		let projects: readonly ProjectRecord[];
 		try {
 			projects = await service.getProjects();
+			const writeGeneration =
+				this.stateService?.currentWriteGeneration ?? 0;
+			await this.stateService?.retryDirtyState();
+			this.retryPendingProjectPublication();
+			await this.stateService?.flushWritesThrough(writeGeneration);
 		} catch (error) {
 			if (client.closed) {
 				return true;
@@ -914,7 +1116,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const initialProjects = client.pendingInitialProjects ?? projects;
 		client.pendingInitialProjects = undefined;
 		client.ready = true;
-		this.writeProjectsEvent(client, initialProjects, ': connected\n\n');
+		this.writeProjectsEvent(
+			client,
+			initialProjects,
+			`: connected\n\nretry: ${EVENT_RETRY_MS}\n\n`
+		);
+		if (!client.closed) {
+			client.heartbeatTimer = setInterval(() => {
+				this.writeEventFrame(client, ': heartbeat\n\n', false);
+			}, this.eventHeartbeatIntervalMs);
+		}
 		return true;
 	}
 
@@ -938,6 +1149,59 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			{ error: 'Project event stream is unavailable.' },
 			{ 'Retry-After': '1' }
 		);
+	}
+
+	private queueProjectsPublication(
+		projects: readonly ProjectRecord[]
+	): void {
+		const publication = {
+			id: ++this.nextProjectPublicationId,
+			generation: this.stateService?.currentWriteGeneration ?? 0,
+			projects,
+		};
+		this.pendingProjectPublication = publication;
+		void this.publishProjectsWhenDurable(publication);
+	}
+
+	private async publishProjectsWhenDurable(
+		publication: NonNullable<
+			HucodeWebProjectManagerServer['pendingProjectPublication']
+		>
+	): Promise<void> {
+		try {
+			await this.stateService?.flushWritesThrough(
+				publication.generation
+			);
+		} catch (error) {
+			this.logService.warn(
+				`[Hucode Projects] Deferred project event publication: ${error}`
+			);
+			return;
+		}
+		if (this.disposed ||
+			this.pendingProjectPublication?.id !== publication.id) {
+			return;
+		}
+		this.pendingProjectPublication = undefined;
+		this.broadcastProjects(publication.projects);
+	}
+
+	private retryPendingProjectPublication(): void {
+		const publication = this.pendingProjectPublication;
+		if (!publication) {
+			return;
+		}
+		const generation =
+			this.stateService?.currentWriteGeneration ?? 0;
+		const retry = publication.generation === generation
+			? publication
+			: {
+				id: ++this.nextProjectPublicationId,
+				generation,
+				projects: publication.projects,
+			};
+		this.pendingProjectPublication = retry;
+		void this.publishProjectsWhenDurable(retry);
 	}
 
 	private broadcastProjects(projects: readonly ProjectRecord[]): void {
@@ -964,19 +1228,28 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 	private writeEventFrame(
 		client: HucodeWebProjectEventClient,
-		frame: string
+		frame: string,
+		coalesce = true
 	): void {
 		if (client.closed) {
 			return;
 		}
 		if (client.blocked) {
-			client.pendingFrame = frame;
+			if (coalesce) {
+				client.pendingFrame = frame;
+			}
 			return;
 		}
 
 		try {
 			if (client.res.write?.(frame) === false) {
 				client.blocked = true;
+				client.backpressureTimer ??= setTimeout(() => {
+					client.backpressureTimer = undefined;
+					if (client.blocked) {
+						this.removeEventClient(client);
+					}
+				}, this.eventBackpressureTimeoutMs);
 				if (!client.drainListening) {
 					client.drainListening = true;
 					client.res.on?.('drain', client.onDrain);
@@ -996,6 +1269,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			client.drainListening = false;
 		}
 		client.blocked = false;
+		if (client.backpressureTimer) {
+			clearTimeout(client.backpressureTimer);
+			client.backpressureTimer = undefined;
+		}
 
 		const pendingFrame = client.pendingFrame;
 		client.pendingFrame = undefined;
@@ -1013,7 +1290,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		client.closed = true;
 		this.eventClients.delete(client);
-		client.req.removeListener?.('close', client.onTerminated);
+		client.req.removeListener?.('aborted', client.onTerminated);
 		client.res.removeListener?.('close', client.onTerminated);
 		client.res.removeListener?.('error', client.onTerminated);
 		if (client.drainListening) {
@@ -1022,6 +1299,14 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		client.pendingInitialProjects = undefined;
 		client.pendingFrame = undefined;
+		if (client.heartbeatTimer) {
+			clearInterval(client.heartbeatTimer);
+			client.heartbeatTimer = undefined;
+		}
+		if (client.backpressureTimer) {
+			clearTimeout(client.backpressureTimer);
+			client.backpressureTimer = undefined;
+		}
 		if (endResponse) {
 			try {
 				client.res.end();

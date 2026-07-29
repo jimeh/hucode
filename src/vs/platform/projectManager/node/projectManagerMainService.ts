@@ -65,7 +65,8 @@ const PROJECT_REFRESH_RETRY_DELAYS_MS = [
 ] as const;
 
 interface ProjectRefreshOwner {
-	readonly source: CancellationTokenSource;
+	source: CancellationTokenSource;
+	requestScoped: boolean;
 	initialAttempt?: Promise<ProjectRefreshAttemptResult>;
 }
 
@@ -444,28 +445,32 @@ export class ProjectManagerMainService extends Disposable
 
 	async getWorktreeRefs(
 		projectId: string,
-		options?: WorktreeRefQueryOptions
+		options?: WorktreeRefQueryOptions,
+		token: CancellationToken = CancellationToken.None
 	): Promise<readonly WorktreeRefRecord[]> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
-		const worktrees = await this.getProjectWorktrees(project);
+		const worktrees = await this.getProjectWorktrees(project, token);
 
 		return this.gitWorktreeService.listRefs(
 			project.rootPath,
 			worktrees,
-			options
+			options,
+			token
 		);
 	}
 
 	async isValidBranchName(
 		projectId: string,
-		branchName: string
+		branchName: string,
+		token: CancellationToken = CancellationToken.None
 	): Promise<boolean> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
 		return this.gitWorktreeService.isValidBranchName(
 			project.rootPath,
-			branchName
+			branchName,
+			token
 		);
 	}
 
@@ -489,11 +494,49 @@ export class ProjectManagerMainService extends Disposable
 		const worktree = worktrees.find(entry =>
 			this.pathsEqual(entry.path, worktreePath)
 		);
-		if (!worktree) {
-			throw new Error(`Created worktree "${worktreePath}" was not found.`);
+		if (worktree) {
+			return worktree;
 		}
 
-		return worktree;
+		if (this.projectWorktreeStates.get(project.id) === 'current') {
+			const newWorktrees = worktrees.filter(entry =>
+				!existingWorktrees.some(existing =>
+					this.pathsEqual(existing.path, entry.path)
+				)
+			);
+			const branch = options.branchName?.trim();
+			const canonicalWorktree = newWorktrees.length === 1
+				? newWorktrees[0]
+				: newWorktrees.find(entry =>
+					branch !== undefined && entry.branch === branch
+				);
+			if (canonicalWorktree) {
+				return canonicalWorktree;
+			}
+		}
+
+		const branch = options.branchName?.trim() || undefined;
+		const fallback: WorktreeRecord = {
+			path: worktreePath,
+			label: branch ?? basename(worktreePath),
+			branch,
+			isMain: false,
+			isDetached: !branch && options.detached === true,
+		};
+		if (this.projectWorktreeStates.get(project.id) === 'current') {
+			// Successful discovery is authoritative even when its canonical
+			// path cannot be correlated unambiguously with Git's input path.
+			return fallback;
+		}
+
+		// Git successfully created the worktree, but its follow-up discovery can
+		// fail independently. Preserve that irreversible success for the caller
+		// and in the stale snapshot while refreshProject's retry recovers the
+		// authoritative Git metadata.
+		this.projectWorktrees.set(project.id, [...worktrees, fallback]);
+		this.saveState();
+		this.emitChange();
+		return fallback;
 	}
 
 	async removeWorktree(
@@ -733,6 +776,7 @@ export class ProjectManagerMainService extends Disposable
 				return { kind: 'complete', stateChanged };
 			}
 
+			this.detachProjectRefreshOwnerFromRequest(project.id, owner);
 			return { kind: 'committed-retry', stateChanged };
 		} catch (error) {
 			if (isCancellationError(error) ||
@@ -914,10 +958,14 @@ export class ProjectManagerMainService extends Disposable
 		);
 	}
 
-	private replaceProjectRefreshOwner(projectId: string): ProjectRefreshOwner {
+	private replaceProjectRefreshOwner(
+		projectId: string,
+		token: CancellationToken = CancellationToken.None
+	): ProjectRefreshOwner {
 		this.cancelProjectRefresh(projectId);
 		const owner: ProjectRefreshOwner = {
-			source: new CancellationTokenSource(),
+			source: new CancellationTokenSource(token),
+			requestScoped: token !== CancellationToken.None,
 		};
 		this.projectRefreshOwners.set(projectId, owner);
 		return owner;
@@ -931,6 +979,21 @@ export class ProjectManagerMainService extends Disposable
 
 		this.projectRefreshOwners.delete(projectId);
 		owner.source.dispose(true);
+	}
+
+	private detachProjectRefreshOwnerFromRequest(
+		projectId: string,
+		owner: ProjectRefreshOwner
+	): void {
+		if (!owner.requestScoped ||
+			!this.isCurrentRefreshOwner(projectId, owner)) {
+			return;
+		}
+
+		const requestSource = owner.source;
+		owner.source = new CancellationTokenSource();
+		owner.requestScoped = false;
+		requestSource.dispose();
 	}
 
 	private finishProjectRefresh(
@@ -1182,25 +1245,31 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	private async getProjectWorktrees(
-		project: StoredProjectRecord
+		project: StoredProjectRecord,
+		token: CancellationToken = CancellationToken.None
 	): Promise<readonly WorktreeRecord[]> {
 		const worktrees = this.projectWorktrees.get(project.id);
 		if (worktrees) {
 			return worktrees;
 		}
 		if (this.needsProjectHydration(project.id)) {
-			await this.hydrateProjectWorktrees(project);
+			await this.hydrateProjectWorktrees(project, token);
 		}
 
 		return this.projectWorktrees.get(project.id) ?? [];
 	}
 
 	private async hydrateProjectWorktrees(
-		project: StoredProjectRecord
+		project: StoredProjectRecord,
+		token: CancellationToken = CancellationToken.None
 	): Promise<void> {
 		const existing = this.projectHydrations.get(project.id);
 		if (existing) {
 			await existing;
+			if (!token.isCancellationRequested &&
+				this.needsProjectHydration(project.id)) {
+				await this.hydrateProjectWorktrees(project, token);
+			}
 			return;
 		}
 		if (!this.needsProjectHydration(project.id)) {
@@ -1211,7 +1280,7 @@ export class ProjectManagerMainService extends Disposable
 		const activeAttempt = activeOwner?.initialAttempt;
 		const owner = activeOwner && activeAttempt
 			? activeOwner
-			: this.replaceProjectRefreshOwner(project.id);
+			: this.replaceProjectRefreshOwner(project.id, token);
 		const ownsOwner = owner !== activeOwner;
 		const initialAttempt = activeAttempt ??
 			this.tryRefreshProject(project, owner, true);
@@ -1244,8 +1313,11 @@ export class ProjectManagerMainService extends Disposable
 		);
 		if (!ownsOwner ||
 			completed.owner !== owner ||
-			completed.result.kind === 'canceled' ||
 			!this.isCurrentRefreshOwner(project.id, owner)) {
+			return;
+		}
+		if (completed.result.kind === 'canceled') {
+			this.finishProjectRefresh(project.id, owner);
 			return;
 		}
 
