@@ -6,7 +6,7 @@
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
-import { Disposable, DisposableMap } from '../../base/common/lifecycle.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { isLinux } from '../../base/common/platform.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
@@ -52,6 +52,7 @@ import {
 	HucodeHostedWorkbenchRestorePolicy,
 } from
 	'../common/retainedWorkbench.js';
+import { ShellControllerStore } from '../common/shellControllerStore.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -66,18 +67,9 @@ export class HucodeShellMainService extends Disposable
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
 	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
 
-	/**
-	 * Per-window hosted workspace controllers.
-	 *
-	 * A `DisposableMap` rather than a plain `Map` plus `_register`: a
-	 * `DisposableStore` keeps every entry until it is cleared or disposed, so
-	 * registering each controller there would retain one disposed controller
-	 * per closed Omni-window for the lifetime of the main process.
-	 */
-	private readonly controllers = this._register(new DisposableMap<
-		number,
-		ResidentHostedWorkspacesController
-	>());
+	private readonly controllers = this._register(
+		new ShellControllerStore(windowId => this.createController(windowId))
+	);
 	private readonly trustedHostedWorkspaceProcessIds = new Map<number, number>();
 	private readonly trustedHostedWorkspaceWebContentsIds =
 		new Map<number, number>();
@@ -480,11 +472,12 @@ export class HucodeShellMainService extends Disposable
 	private getOrCreateController(
 		windowId: number
 	): ResidentHostedWorkspacesController {
-		const existing = this.controllers.get(windowId);
-		if (existing) {
-			return existing;
-		}
+		return this.controllers.getOrCreate(windowId);
+	}
 
+	private createController(
+		windowId: number
+	): ResidentHostedWorkspacesController {
 		const window = this.windowsMainService.getWindowById(windowId);
 		if (!window?.isOmniWindow) {
 			throw new Error(`Window ${windowId} is not a Hucode Omni-window.`);
@@ -527,7 +520,6 @@ export class HucodeShellMainService extends Disposable
 						'active',
 				}
 			);
-		this.controllers.set(windowId, controller);
 		return controller;
 	}
 
