@@ -564,9 +564,10 @@ human-facing guides rather than replacing them.
   instances concurrently and wait before closing the snapshot-active instance.
   Closing the active instance promotes a sibling and bumps its lifecycle
   generation, which can supersede that sibling's in-flight close.
-- Desktop before-unload timeout or send failure must preserve an ordinary close
-  as a veto. Terminal shutdown deliberately overrides that veto, still runs the
-  will-unload phase, and destroys the native view.
+- Desktop before-unload timeout or send failure aborts an ordinary close. The
+  shell rolls back any late preparation and reloads the workbench when rollback
+  cannot be confirmed. Terminal shutdown continues through an explicit veto or
+  preparation failure, still runs will-unload, and destroys the native view.
 - Removing an unloaded workbench and applying its disposition are separate
   decisions with separate rules. Removal after a successful commit is
   unconditional — the workbench is shut down, and refusing to remove it strands
