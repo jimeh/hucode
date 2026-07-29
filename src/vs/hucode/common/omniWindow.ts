@@ -85,6 +85,18 @@ export interface IHucodeHostedWorkspaceOwner {
 	readonly worktreePath: string;
 }
 
+/** One entry in the complete live project catalog known by the workbench. */
+export interface IHucodeCompleteProjectCatalogEntry {
+	readonly projectId: string;
+	readonly folderUris: readonly UriComponents[];
+}
+
+/** One authoritative project-folder ownership used for partial promotion. */
+export interface IHucodeProjectFolderPromotion {
+	readonly projectId: string;
+	readonly folderUri: UriComponents;
+}
+
 export const IHucodeShellService =
 	createDecorator<IHucodeShellService>('hucodeShellService');
 
@@ -146,13 +158,23 @@ export interface IHucodeShellService {
 		workbenchId: string,
 		label: string | undefined,
 	): Promise<IHucodeHostedWorkspaceState>;
-	/** Removes arbitrary records that are now authoritative project worktrees. */
-	reconcileRetainedWorkbenches(
+	/**
+	 * Reconciles hosted workbenches against the complete live project catalog.
+	 *
+	 * Every live project must be present, including projects with no currently
+	 * known worktrees, so absence can safely identify removed projects.
+	 */
+	reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[],
+		projects: readonly IHucodeCompleteProjectCatalogEntry[],
+	): Promise<IHucodeHostedWorkspaceState>;
+	/**
+	 * Promotes only the supplied project folders without treating omitted
+	 * projects as removed. Safe for partial results such as Add Project.
+	 */
+	promoteRetainedWorkbenchProjectFolders(
+		windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[],
 	): Promise<IHucodeHostedWorkspaceState>;
 	/** Configures which desired-loaded workbenches are eager on startup. */
 	setHostedWorkbenchRestorePolicy(

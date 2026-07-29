@@ -214,6 +214,46 @@ suite('ProjectSwitcherTreeModel', () => {
 		}]);
 	});
 
+	test('shows an adopted orphan when its former project is absent', () => {
+		const orphanPath = '/repos/orphan';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState({
+					activeInstanceId: 'orphan-instance',
+					instances: [{
+						instanceId: 'orphan-instance',
+						worktreePath: orphanPath,
+						state: 'active',
+						visible: true,
+						focused: true,
+					}],
+				}),
+				retainedWorkbenches: [{
+					id: 'orphan-retained',
+					folderUri: URI.file(orphanPath).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+			},
+		});
+
+		const workbenches = model.roots[0].children?.map(child => child.element)
+			.filter(isRetainedWorkbenchItem) ?? [];
+		assert.deepStrictEqual(workbenches.map(item => ({
+			path: item.worktreePath,
+			state: item.hostedWorkbenchState,
+			isActive: item.isActive,
+		})), [{
+			path: orphanPath,
+			state: 'active',
+			isActive: true,
+		}]);
+	});
+
 	test('orders pinned projects and pinned worktrees in visible sections', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
