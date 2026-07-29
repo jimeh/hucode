@@ -212,6 +212,25 @@ tag:
 
 ```sh
 git fetch "$VSCODE_REMOTE" tag <new-version>
+```
+
+While the replay checkout still contains Hucode's build tooling, compare every
+tracked upstream source with the fetched clean tag:
+
+```sh
+npm run hucode:check-upstream-provenance -- \
+  --upstream-ref <new-version>
+```
+
+This command is expected to fail when a tracked source changed. Record each
+reported path as an upgrade reconciliation item; do not update
+`build/hucode/upstream-provenance.json` just to silence it. The check must run
+here, before switching to the clean upstream tree where the Hucode script does
+not exist.
+
+Create and publish the clean baseline only after recording that result:
+
+```sh
 git switch --create upstream-<new-version> <new-version>
 git push -u origin upstream-<new-version>
 ```
@@ -222,22 +241,11 @@ Create the new series branch locally:
 git switch --create series-<new-version> upstream-<new-version>
 ```
 
-Before replaying Hucode, compare every tracked upstream source with the new
-clean baseline:
-
-```sh
-npm run hucode:check-upstream-provenance -- \
-  --upstream-ref upstream-<new-version>
-```
-
-This command is expected to fail when a tracked source changed. Treat each
-reported path as an upgrade reconciliation item; do not update
-`build/hucode/upstream-provenance.json` just to silence it. After adapting the
-corresponding Hucode fork or patch to the new upstream source, update that
-entry's `lastSyncedBaseline` and `blob`, then rerun the command. It must pass
-before the upgraded series is complete. The plain command, without
-`--upstream-ref`, only validates schema, fork completeness, and suite ownership
-and is safe in shallow CI checkouts.
+After adapting each reported Hucode fork or patch to the new upstream source,
+update that entry's `lastSyncedBaseline` and `blob`, then rerun the command
+against `upstream-<new-version>`. It must pass before the upgraded series is
+complete. The plain command, without `--upstream-ref`, only validates schema,
+fork completeness, and suite ownership and is safe in shallow CI checkouts.
 
 Do not push the new series branch yet. At this point it is still an unmodified
 upstream VS Code branch, so GitHub would run the regular upstream VS Code CI

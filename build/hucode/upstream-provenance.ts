@@ -14,7 +14,6 @@ const execFileAsync = promisify(execFile);
 const FORK_ROOT = 'src/vs/hucode/browser';
 const FORK_UPSTREAM_ROOT = 'src/vs/sessions/browser';
 const MICROSOFT_NOTICE = 'Copyright (c) Microsoft Corporation';
-const HUCODE_NOTICE = 'Copyright (c) Hucode contributors';
 
 /**
  * The ways Hucode can own a surface outside its normal source namespace.
@@ -246,8 +245,7 @@ async function isDeliberateFork(
 			fs.readFile(path.join(repoRoot, target), 'utf8'),
 			fs.access(upstream),
 		]);
-		return source.includes(MICROSOFT_NOTICE)
-			&& source.includes(HUCODE_NOTICE);
+		return source.includes(MICROSOFT_NOTICE);
 	} catch {
 		return false;
 	}

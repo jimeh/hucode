@@ -25,6 +25,10 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(
 	fileURLToPath(new URL('../../../', import.meta.url))
 );
+const upgradeSkillPath = path.join(
+	repoRoot,
+	'.agents/skills/hucode-upgrade-vscode/SKILL.md'
+);
 
 function copyProvenance(): UpstreamProvenance {
 	return structuredClone(UPSTREAM_PROVENANCE);
@@ -50,6 +54,82 @@ suite('Hucode upstream provenance', () => {
 				'src/vs/hucode/browser/parts/titlebarPart.ts',
 				'src/vs/hucode/browser/workbench.ts',
 			]
+		);
+	});
+
+	test('discovers a Microsoft-only copied Part', async t => {
+		const fixture = await fs.mkdtemp(
+			path.join(os.tmpdir(), 'hucode-fork-discovery-')
+		);
+		t.after(() => fs.rm(fixture, { recursive: true, force: true }));
+		const target = 'src/vs/hucode/browser/parts/copiedPart.ts';
+		const upstream = 'src/vs/sessions/browser/parts/copiedPart.ts';
+		await fs.mkdir(path.dirname(path.join(fixture, target)), {
+			recursive: true,
+		});
+		await fs.mkdir(path.dirname(path.join(fixture, upstream)), {
+			recursive: true,
+		});
+		const source = [
+			'/*',
+			' * Copyright (c) Microsoft Corporation. All rights reserved.',
+			' */',
+			'export class CopiedPart { }',
+			'',
+		].join('\n');
+		await fs.writeFile(path.join(fixture, target), source);
+		await fs.writeFile(path.join(fixture, upstream), source);
+
+		assert.deepStrictEqual(
+			await discoverForkedFiles(fixture),
+			[target]
+		);
+	});
+
+	test('runs drift detection before switching to the clean upstream tree', async () => {
+		const skill = await fs.readFile(upgradeSkillPath, 'utf8');
+		const section = skill.slice(
+			skill.indexOf('## Create The New Baseline'),
+			skill.indexOf('## Replay Onto The New Series')
+		);
+		const fetchTag = section.indexOf(
+			'git fetch "$VSCODE_REMOTE" tag <new-version>'
+		);
+		const driftCheck = section.indexOf(
+			'npm run hucode:check-upstream-provenance'
+		);
+		const switchUpstream = section.indexOf(
+			'git switch --create upstream-<new-version> <new-version>'
+		);
+		const publishUpstream = section.indexOf(
+			'git push -u origin upstream-<new-version>'
+		);
+		const switchSeries = section.indexOf(
+			'git switch --create series-<new-version> '
+				+ 'upstream-<new-version>'
+		);
+
+		assert.ok(fetchTag >= 0, 'upgrade workflow must fetch the new tag');
+		assert.ok(driftCheck >= 0, 'upgrade workflow must run drift detection');
+		assert.ok(
+			switchUpstream >= 0,
+			'upgrade workflow must create the clean upstream branch'
+		);
+		assert.ok(
+			publishUpstream >= 0,
+			'upgrade workflow must publish the clean upstream branch'
+		);
+		assert.ok(
+			switchSeries >= 0,
+			'upgrade workflow must create the local series branch'
+		);
+		assert.ok(
+			fetchTag < driftCheck
+				&& driftCheck < switchUpstream
+				&& switchUpstream < publishUpstream
+				&& publishUpstream < switchSeries,
+			'workflow must check drift from the Hucode checkout, then create '
+				+ 'and publish the clean upstream branch before the series'
 		);
 	});
 
@@ -141,12 +221,34 @@ suite('Hucode upstream provenance', () => {
 	test('derives all upstream-named suites and reasons from provenance', () => {
 		const suites = upstreamSuitesFromProvenance(UPSTREAM_PROVENANCE);
 
-		assert.strictEqual(suites.length, 11);
-		assert.strictEqual(new Set(suites.map(entry => entry.file)).size, 11);
+		assert.deepStrictEqual(
+			suites.map(entry => entry.file),
+			[
+				'src/vs/platform/browserView/test/common/'
+					+ 'browserViewLayout.test.ts',
+				'src/vs/platform/browserView/test/electron-main/'
+					+ 'browserViewHostedWebContents.test.ts',
+				'src/vs/platform/browserView/test/electron-main/'
+					+ 'browserViewNativeHost.test.ts',
+				'src/vs/platform/extensionManagement/test/node/'
+					+ 'extensionSignatureVerificationService.test.ts',
+				'src/vs/platform/projectManager/test/common/'
+					+ 'projectManagerState.test.ts',
+				'src/vs/platform/projectManager/test/electron-main/'
+					+ 'projectManagerMainService.test.ts',
+				'src/vs/platform/utilityProcess/test/electron-main/'
+					+ 'utilityProcess.test.ts',
+				'src/vs/platform/windows/test/electron-main/'
+					+ 'windowsFinder.test.ts',
+				'src/vs/workbench/contrib/browserView/test/common/'
+					+ 'browserViewOwnership.test.ts',
+				'src/vs/workbench/contrib/browserView/test/electron-browser/'
+					+ 'overlayManager.test.ts',
+				'src/vs/workbench/services/extensionManagement/test/browser/'
+					+ 'extensionEnablementService.test.ts',
+			]
+		);
 		assert.ok(suites.every(entry => entry.reason.length > 10));
-		assert.ok(suites.some(entry =>
-			entry.file.endsWith('extensionEnablementService.test.ts')
-		));
 	});
 
 	test('records baseline blobs for every fork and the E1 seam', () => {

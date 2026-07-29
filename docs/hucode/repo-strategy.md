@@ -95,8 +95,9 @@ level, an upgrade is:
 1. Verify the current series is clean and buildable.
 2. Curate and verify its tree-equivalent replay branch.
 3. Fetch only the selected upstream release tag.
-4. Create and publish the clean `upstream-<new-version>` baseline.
-5. Compare the new baseline with the fork provenance inventory.
+4. From that Hucode replay checkout, compare the fetched tag with the fork
+   provenance inventory.
+5. Create and publish the clean `upstream-<new-version>` baseline.
 6. Create `series-<new-version>` locally at that baseline.
 7. Run `npm install` for the new upstream dependency set.
 8. Cherry-pick the previous curated patch series and resolve each conflict
@@ -108,19 +109,19 @@ Fork and upstream-patch provenance lives in
 `build/hucode/upstream-provenance.json`. The ordinary
 `npm run hucode:check-upstream-provenance` check validates that inventory
 without requiring an upstream branch, so it also works in shallow pull-request
-checkouts. During an upgrade, compare the recorded source blobs with the new
-clean baseline explicitly:
+checkouts. During an upgrade, compare the recorded source blobs with the
+fetched clean tag before switching away from the Hucode replay checkout:
 
 ```sh
 npm run hucode:check-upstream-provenance -- \
-  --upstream-ref upstream-<new-version>
+  --upstream-ref <new-version>
 ```
 
 A changed source is an upgrade tripwire, not metadata to refresh blindly.
 Reconcile the Hucode fork or patch with the new upstream source first, then
-update its `lastSyncedBaseline` and `blob` and rerun the check. New workbench
-or shell Part forks need their own provenance entry; the normal CI check fails
-when one is missing.
+update its `lastSyncedBaseline` and `blob` and rerun the check against the
+created `upstream-<new-version>` branch. New workbench or shell Part forks need
+their own provenance entry; the normal CI check fails when one is missing.
 
 The upgrade also has one manual Electron seam: the hosted-workspace request
 filters read an optional, untyped `webContentsId` from Electron request
