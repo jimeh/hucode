@@ -56,6 +56,10 @@ suite('Hucode release workflow contract', () => {
 		);
 
 		assert.match(job, /uses: actions\/checkout@/);
+		assert.match(
+			job,
+			/- name: Checkout repository[\s\S]*?persist-credentials: false/
+		);
 		assert.match(job, /uses: actions\/setup-node@/);
 		assert.match(
 			job,

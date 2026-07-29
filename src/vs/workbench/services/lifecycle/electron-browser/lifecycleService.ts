@@ -95,9 +95,7 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 				reason: ShutdownReason;
 			};
 			this.logService.trace(`[lifecycle] onWillUnload (reason: ${reply.reason})`);
-			if (reply.preparationId === this.shutdownPreparationId) {
-				this.shutdownPreparationId = undefined;
-			}
+			this.commitShutdownPreparation();
 
 			// trigger onWillShutdown events and joining
 			await this.handleWillShutdown(reply.reason);
@@ -112,6 +110,10 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 
 	protected beginShutdownPreparation(preparationId: string): void {
 		this.shutdownPreparationId = preparationId;
+	}
+
+	protected commitShutdownPreparation(): void {
+		this.shutdownPreparationId = undefined;
 	}
 
 	protected handleShutdownPreparationAbandoned(

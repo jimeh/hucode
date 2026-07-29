@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '../../../base/common/event.js';
+import { CancellationToken } from '../../../base/common/cancellation.js';
+import { CancellationError } from '../../../base/common/errors.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
 import { mainWindow } from '../../../base/browser/window.js';
@@ -174,21 +176,25 @@ export class WebProjectManagerClient extends Disposable
 
 	async getWorktreeRefs(
 		projectId: string,
-		options?: WorktreeRefQueryOptions
+		options?: WorktreeRefQueryOptions,
+		token: CancellationToken = CancellationToken.None
 	): Promise<readonly WorktreeRefRecord[]> {
 		return (await this.request<WorktreeRefsResponse>(
 			`${projectId}/worktrees/refs`,
-			{ method: 'POST', body: { options } }
+			{ method: 'POST', body: { options } },
+			token
 		)).refs;
 	}
 
 	async isValidBranchName(
 		projectId: string,
-		branchName: string
+		branchName: string,
+		token: CancellationToken = CancellationToken.None
 	): Promise<boolean> {
 		return (await this.request<BranchNameResponse>(
 			`${projectId}/worktrees/branch-name`,
-			{ method: 'POST', body: { branchName } }
+			{ method: 'POST', body: { branchName } },
+			token
 		)).valid;
 	}
 
@@ -270,33 +276,55 @@ export class WebProjectManagerClient extends Disposable
 
 	private async request<T>(
 		path: string,
-		options: { method: string; body?: unknown }
+		options: { method: string; body?: unknown },
+		token: CancellationToken = CancellationToken.None
 	): Promise<T> {
-		const response = await this.transport.fetch(this.toApiUrl(path), {
-			method: options.method,
-			credentials: 'include',
-			headers: options.body === undefined
-				? undefined
-				: { 'Content-Type': 'application/json' },
-			body: options.body === undefined
-				? undefined
-				: JSON.stringify(options.body),
-		});
-		const body = await response.json().catch(() => undefined) as
-			{ error?: string } | T | undefined;
-		if (!response.ok) {
-			const error = getErrorMessage(body);
-			throw new Error(
-				error ||
-				localize(
-					'projectManagerRequestFailed',
-					'Project manager request failed: {0}',
-					response.status
-				)
-			);
+		if (token.isCancellationRequested) {
+			throw new CancellationError();
 		}
 
-		return body as T;
+		const controller = new AbortController();
+		const cancellation = token.onCancellationRequested(() =>
+			controller.abort()
+		);
+		try {
+			const response = await this.transport.fetch(this.toApiUrl(path), {
+				method: options.method,
+				credentials: 'include',
+				headers: options.body === undefined
+					? undefined
+					: { 'Content-Type': 'application/json' },
+				body: options.body === undefined
+					? undefined
+					: JSON.stringify(options.body),
+				signal: controller.signal,
+			});
+			const body = await response.json().catch(() => undefined) as
+				{ error?: string } | T | undefined;
+			if (token.isCancellationRequested) {
+				throw new CancellationError();
+			}
+			if (!response.ok) {
+				const error = getErrorMessage(body);
+				throw new Error(
+					error ||
+					localize(
+						'projectManagerRequestFailed',
+						'Project manager request failed: {0}',
+						response.status
+					)
+				);
+			}
+
+			return body as T;
+		} catch (error) {
+			if (token.isCancellationRequested) {
+				throw new CancellationError();
+			}
+			throw error;
+		} finally {
+			cancellation.dispose();
+		}
 	}
 
 	private toApiUrl(path: string): string {

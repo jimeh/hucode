@@ -4,12 +4,33 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { isWeb } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
+import type { IConfigurationService } from
+	'../../../../platform/configuration/common/configuration.js';
+import type { INotificationService } from
+	'../../../../platform/notification/common/notification.js';
+import type { IProjectManagerService } from
+	'../../../../platform/projectManager/common/projectManager.js';
+import type {
+	IInputOptions,
+	IQuickInputService,
+} from '../../../../platform/quickinput/common/quickInput.js';
 import type { INativeRunActionInWindowRequest } from
 	'../../../../platform/window/common/window.js';
+import type { IWorkbenchEnvironmentService } from
+	'../../../../workbench/services/environment/common/environmentService.js';
 import type { IHucodeShellService } from
 	'../../../common/omniWindow.js';
+import {
+	WebProjectManagerClient,
+	WebProjectManagerFetch,
+} from '../../../browser/projectManager/webProjectManagerService.js';
+import {
+	pickCreateWorktreeBranchName,
+	pickCreateWorktreeOptions,
+} from '../../../browser/projectSwitcher/createProjectWorktree.contribution.js';
 import { CREATE_WORKTREE_COMMAND_ID } from
 	'../../../browser/projectSwitcher/projectSwitcherCommon.js';
 import { tryForwardShellCreateWorktreeCommand } from
@@ -76,6 +97,200 @@ suite('CreateProjectWorktreeRouting', () => {
 			7
 		), false);
 		assert.deepStrictEqual(calls, []);
+	});
+
+	test('cancels ref loading when the picker is dismissed', async () => {
+		let requestSignal: AbortSignal | undefined;
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener(
+					'abort',
+					() => reject(requestSignal?.reason),
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
+		const quickInputService = {
+			pick(picks: Promise<unknown>) {
+				void picks.catch(() => undefined);
+				return Promise.resolve(undefined);
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		try {
+			const result = await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService,
+				true
+			);
+
+			assert.strictEqual(result, undefined);
+			assert.strictEqual(requestSignal?.aborted, true);
+		} finally {
+			projectManagerService.dispose();
+		}
+	});
+
+	test('uses the platform request-cancellation contract',
+		async () => {
+			const argumentCounts: number[] = [];
+			const projectManagerService = {
+				getWorktreeRefs(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve([]);
+				},
+				isValidBranchName(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve(true);
+				},
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				async pick(picks: Promise<unknown>) {
+					await picks;
+					return undefined;
+				},
+				async input(options: IInputOptions) {
+					await options.validateInput?.('branch');
+					return undefined;
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+
+			await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService
+			);
+			await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService
+			);
+
+			assert.deepStrictEqual(
+				argumentCounts,
+				isWeb ? [3, 3] : [2, 2]
+			);
+		});
+
+	test('does not accept a branch from superseded validation', async () => {
+		const requestSignals: AbortSignal[] = [];
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			const signal = init?.signal;
+			assert.ok(signal);
+			requestSignals.push(signal);
+			return new Promise<Response>((_resolve, reject) => {
+				signal.addEventListener(
+					'abort',
+					() => reject(signal.reason),
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
+		let staleAccepted = false;
+		let dismissedValidation: Promise<unknown> | undefined;
+		const quickInputService = {
+			async input(options: IInputOptions) {
+				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
+				dismissedValidation = options.validateInput?.('second');
+				await staleAcceptance;
+				return undefined;
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		try {
+			const result = await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService,
+				true
+			);
+
+			assert.strictEqual(result, undefined);
+			assert.ok(await dismissedValidation);
+			assert.strictEqual(staleAccepted, false);
+			assert.strictEqual(requestSignals.length, 2);
+			assert.strictEqual(
+				requestSignals.every(signal => signal.aborted),
+				true
+			);
+		} finally {
+			projectManagerService.dispose();
+		}
+	});
+
+	test('does not accept late native validation after supersession', async () => {
+		const validations: ((valid: boolean) => void)[] = [];
+		const projectManagerService = {
+			isValidBranchName() {
+				return new Promise<boolean>(resolve => {
+					validations.push(resolve);
+				});
+			},
+		} as Partial<IProjectManagerService> as IProjectManagerService;
+		let staleAccepted = false;
+		let dismissedValidation: Promise<unknown> | undefined;
+		const quickInputService = {
+			async input(options: IInputOptions) {
+				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
+				dismissedValidation = options.validateInput?.('second');
+				validations[0](true);
+				await staleAcceptance;
+				return undefined;
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		const result = await pickCreateWorktreeBranchName(
+			'project',
+			[],
+			projectManagerService,
+			quickInputService,
+			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+			{} as IHucodeShellService,
+			false
+		);
+		validations[1](true);
+
+		assert.strictEqual(result, undefined);
+		assert.ok(await dismissedValidation);
+		assert.strictEqual(staleAccepted, false);
 	});
 });
 

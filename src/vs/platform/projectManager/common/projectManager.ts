@@ -167,7 +167,10 @@ export interface IProjectManagerService {
 		projectId: string,
 		options?: WorktreeRefQueryOptions
 	): Promise<readonly WorktreeRefRecord[]>;
-	isValidBranchName(projectId: string, branchName: string): Promise<boolean>;
+	isValidBranchName(
+		projectId: string,
+		branchName: string
+	): Promise<boolean>;
 	createWorktree(
 		projectId: string,
 		options: CreateWorktreeOptions

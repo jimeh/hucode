@@ -731,7 +731,10 @@ suite('ProjectSwitcherContribution', () => {
 
 	test('keeps history position and reports a failed navigation', async () => {
 		const errors: string[] = [];
-		const contexts: Array<{ back: boolean; forward: boolean }> = [];
+		const contexts: Array<{
+			readonly key: 'back' | 'forward';
+			readonly value: boolean;
+		}> = [];
 		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
 			worktreeNavigationHistory: [
 				{ projectId: 'project-1', worktreePath: '/repo/previous' },
@@ -759,12 +762,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			canGoBackContext: {
 				set: (back: boolean) => {
-					contexts.push({ back, forward: false });
+					contexts.push({ key: 'back', value: back });
 				},
 			},
 			canGoForwardContext: {
 				set: (forward: boolean) => {
-					contexts[contexts.length - 1].forward = forward;
+					contexts.push({ key: 'forward', value: forward });
 				},
 			},
 		});
@@ -784,13 +787,19 @@ suite('ProjectSwitcherContribution', () => {
 			index: 1,
 			navigating: false,
 			errors: ['Error: open failed'],
-			contexts: [{ back: true, forward: false }],
+			contexts: [
+				{ key: 'back', value: true },
+				{ key: 'forward', value: false },
+			],
 		});
 	});
 
 	test('advances history after a successful navigation', async () => {
 		const opens: string[] = [];
-		const contexts: Array<{ back: boolean; forward: boolean }> = [];
+		const contexts: Array<{
+			readonly key: 'back' | 'forward';
+			readonly value: boolean;
+		}> = [];
 		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
 			worktreeNavigationHistory: [
 				{ projectId: 'project-1', worktreePath: '/repo/previous' },
@@ -822,12 +831,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			canGoBackContext: {
 				set: (back: boolean) => {
-					contexts.push({ back, forward: false });
+					contexts.push({ key: 'back', value: back });
 				},
 			},
 			canGoForwardContext: {
 				set: (forward: boolean) => {
-					contexts[contexts.length - 1].forward = forward;
+					contexts.push({ key: 'forward', value: forward });
 				},
 			},
 		});
@@ -847,7 +856,10 @@ suite('ProjectSwitcherContribution', () => {
 			index: 0,
 			navigating: false,
 			opens: ['/repo/previous'],
-			contexts: [{ back: false, forward: true }],
+			contexts: [
+				{ key: 'back', value: false },
+				{ key: 'forward', value: true },
+			],
 		});
 	});
 

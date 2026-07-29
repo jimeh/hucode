@@ -6,8 +6,8 @@
 interface IProjectSwitcherCollapseTree<T> {
 	isCollapsible(item: T): boolean;
 	isCollapsed(item: T): boolean;
-	expand(item: T): unknown;
-	collapse(item: T): unknown;
+	expand(item: T): void;
+	collapse(item: T): void;
 }
 
 /**

@@ -329,6 +329,29 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('rejects unsupported worktree ref sort options', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const added = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${added.body.project.id}/worktrees/refs`,
+			{ options: { sort: 'recently-used' } }
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'Invalid options.sort.' },
+		});
+	});
+
 	test('removes projects by id', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
