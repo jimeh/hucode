@@ -56,6 +56,7 @@
 		"src/vs/hucode/test/common/projectSwitcher/projectSwitcherViewState.test.ts",
 		"src/vs/hucode/test/common/projectSwitcher/switchProjectWorktreeModel.test.ts",
 		"src/vs/hucode/test/common/retainedWorkbench.test.ts",
+		"src/vs/hucode/test/common/shellControllerStore.test.ts",
 		"src/vs/platform/browserView/test/common/browserViewLayout.test.ts",
 		"src/vs/platform/environment/test/common/hucodeWebConfiguration.test.ts",
 		"src/vs/platform/environment/test/node/hucodeUserDataPath.test.ts",
