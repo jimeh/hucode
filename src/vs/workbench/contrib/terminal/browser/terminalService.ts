@@ -74,6 +74,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private readonly _terminalShellTypeContextKey: IContextKey<string>;
 
 	private _isShuttingDown: boolean = false;
+	private _isShutdownPrepared: boolean = false;
+	private _shutdownPreparationGeneration = 0;
 	private readonly _platformIsWeb = isWeb;
 	private _backgroundedTerminalInstances: IBackgroundTerminal[] = [];
 	private _backgroundedTerminalDisposables: Map<number, IDisposable[]> = new Map();
@@ -227,6 +229,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 		this._terminalCountContextKey = TerminalContextKeys.count.bindTo(this._contextKeyService);
 
 		this._register(_lifecycleService.onBeforeShutdown(async e => e.veto(this._onBeforeShutdown(e.reason), 'veto.terminal')));
+		this._register(_lifecycleService.onShutdownVeto(() => this._cancelShutdownPreparation()));
+		this._register(_lifecycleService.onBeforeShutdownError(() => this._cancelShutdownPreparation()));
 		this._register(_lifecycleService.onWillShutdown(e => this._onWillShutdown(e)));
 
 		this._initializePrimaryBackend();
@@ -622,7 +626,15 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private _onBeforeShutdown(reason: ShutdownReason): MaybePromise<boolean> {
 		// Never veto on web as this would block all windows from being closed. This disables
 		// process revive as we can't handle it on shutdown.
-		return prepareTerminalShutdown(this._platformIsWeb, () => this._onBeforeShutdownAsync(reason));
+		return prepareTerminalShutdown(this._platformIsWeb, async () => {
+			const preparationGeneration = ++this._shutdownPreparationGeneration;
+			this._isShutdownPrepared = false;
+			const veto = await this._onBeforeShutdownAsync(reason);
+			if (preparationGeneration === this._shutdownPreparationGeneration) {
+				this._isShutdownPrepared = !veto;
+			}
+			return veto;
+		});
 	}
 
 	private async _onBeforeShutdownAsync(reason: ShutdownReason): Promise<boolean> {
@@ -693,7 +705,13 @@ export class TerminalService extends Disposable implements ITerminalService {
 		return this._showTerminalCloseConfirmation();
 	}
 
+	private _cancelShutdownPreparation(): void {
+		this._shutdownPreparationGeneration++;
+		this._isShutdownPrepared = false;
+	}
+
 	private _onWillShutdown(e: WillShutdownEvent): void {
+		this._cancelShutdownPreparation();
 		this._isShuttingDown = true;
 
 		// Don't touch processes if the shutdown was a result of reload as they will be reattached
@@ -716,7 +734,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 	@debounce(500)
 	private _saveState(): void {
 		// Avoid saving state when shutting down as that would override process state to be revived
-		if (this._isShuttingDown) {
+		if (this._isShutdownPrepared || this._isShuttingDown) {
 			return;
 		}
 		if (!this._terminalConfigurationService.config.enablePersistentSessions) {

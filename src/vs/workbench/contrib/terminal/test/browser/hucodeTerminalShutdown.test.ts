@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
 import { runWithFakedTimers } from
 	'../../../../../base/test/common/timeTravelScheduler.js';
@@ -91,7 +91,7 @@ suite('Terminal hosted shutdown', () => {
 		Reflect.set(terminalGroupService, 'instances', [createPersistentTerminal()]);
 	});
 
-	test('wires the web platform into terminal shutdown preparation', () => {
+	test('keeps web preparation side-effect free', async () => {
 		Reflect.set(terminalService, '_platformIsWeb', true);
 
 		assert.strictEqual(
@@ -99,7 +99,39 @@ suite('Terminal hosted shutdown', () => {
 			false
 		);
 		assert.strictEqual(dialogService.confirmCount, 0);
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+
+		assert.deepStrictEqual(backend.layoutUpdates, [{
+			tabs: [],
+			background: [13],
+		}]);
 	});
+
+	test('suppresses persistence after preparation until shutdown commits',
+		async () => {
+			assert.strictEqual(await prepareShutdown(lifecycleService), false);
+			assert.strictEqual(dialogService.confirmCount, 1);
+
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+		});
+
+	test('does not suppress persistence after confirmation refuses shutdown',
+		async () => {
+			dialogService.setConfirmResult({ confirmed: false });
+
+			assert.strictEqual(
+				await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
+				true
+			);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [13],
+			}]);
+		});
 
 	test('keeps persistence active when shutdown preparation is vetoed',
 		async () => {
@@ -119,12 +151,72 @@ suite('Terminal hosted shutdown', () => {
 			}]);
 		});
 
-	test('stops persistence only when shutdown commits', async () => {
-		lifecycleService.fireShutdown();
-		assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+	test('resumes persistence after a later external veto', async () => {
+		const externalVeto = new DeferredPromise<boolean>();
+		disposables.add(lifecycleService.onBeforeShutdown(event => {
+			event.veto(externalVeto.p, 'test.laterVeto');
+		}));
+
+		const preparation = prepareShutdown(lifecycleService);
+		await Promise.resolve();
+		await Promise.resolve();
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+		assert.deepStrictEqual(backend.layoutUpdates, []);
+
+		externalVeto.complete(true);
+		assert.strictEqual(await preparation, true);
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 
-		assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+		assert.deepStrictEqual(backend.layoutUpdates, [{
+			tabs: [],
+			background: [13],
+		}]);
+	});
+
+	test('resumes persistence when shutdown preparation errors', async () => {
+		const preparation = invokeBeforeShutdown(
+			terminalService,
+			ShutdownReason.QUIT
+		);
+		fireBeforeShutdownError(lifecycleService);
+		assert.strictEqual(
+			await preparation,
+			false
+		);
+
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+
+		assert.deepStrictEqual(backend.layoutUpdates, [{
+			tabs: [],
+			background: [13],
+		}]);
+	});
+
+	test('transitions prepared persistence suppression to committed shutdown',
+		async () => {
+			assert.strictEqual(await prepareShutdown(lifecycleService), false);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+
+			lifecycleService.fireShutdown();
+			assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+
+			assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+		});
+
+	test('preserves reload process revival through prepare and commit', async () => {
+		assert.strictEqual(
+			await invokeBeforeShutdown(terminalService, ShutdownReason.RELOAD),
+			false
+		);
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+		assert.deepStrictEqual(backend.layoutUpdates, []);
+
+		lifecycleService.fireShutdown(ShutdownReason.RELOAD);
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+
+		assert.deepStrictEqual(backend.layoutUpdates, []);
 	});
 });
 
@@ -179,5 +271,30 @@ async function prepareShutdown(lifecycleService: TestLifecycleService): Promise<
 		finalVeto: value => vetoes.push(value()),
 	});
 
-	return (await Promise.all(vetoes)).some(Boolean);
+	const immediateVeto = vetoes.some(veto => veto === true);
+	if (immediateVeto) {
+		fireShutdownVeto(lifecycleService);
+	}
+	const veto = (await Promise.all(vetoes)).some(Boolean);
+	if (veto && !immediateVeto) {
+		fireShutdownVeto(lifecycleService);
+	}
+	return veto;
+}
+
+function fireShutdownVeto(lifecycleService: TestLifecycleService): void {
+	const emitter = Reflect.get(lifecycleService, '_onShutdownVeto') as {
+		fire(): void;
+	};
+	emitter.fire();
+}
+
+function fireBeforeShutdownError(lifecycleService: TestLifecycleService): void {
+	const emitter = Reflect.get(lifecycleService, '_onBeforeShutdownError') as {
+		fire(event: { reason: ShutdownReason; error: Error }): void;
+	};
+	emitter.fire({
+		reason: ShutdownReason.QUIT,
+		error: new Error('test shutdown error'),
+	});
 }
