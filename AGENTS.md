@@ -159,6 +159,12 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- Serve-web project SSE snapshots must wait for the corresponding project-state
+  write generation, including hydration and background refresh. A disconnected
+  request may cancel queued work and active read-only Git commands, but once a
+  worktree create/remove starts, finish that irreversible mutation and its
+  state flush. If post-create discovery fails, return a stale record for the
+  created path while the normal refresh retry recovers authoritative metadata.
 - `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
   needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
   `serve-web` therefore runs with Copilot Chat entirely absent, which silently

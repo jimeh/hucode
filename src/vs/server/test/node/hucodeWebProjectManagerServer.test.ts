@@ -11,6 +11,8 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import { promisify } from 'util';
 import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
+import { CancellationToken } from '../../../base/common/cancellation.js';
+import { CancellationError } from '../../../base/common/errors.js';
 import { toDisposable } from '../../../base/common/lifecycle.js';
 import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
@@ -330,6 +332,323 @@ suite('HucodeWebProjectManagerServer', function () {
 		events.close();
 	});
 
+	test('publishes project events only after the matching state write',
+		async () => {
+			const writeStarted = new DeferredPromise<void>();
+			const releaseWrite = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				async writeFile(path, data) {
+					await writeStarted.complete();
+					await releaseWrite.p;
+					await fs.writeFile(path, data);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const events = await handleEvents(server);
+			const add = startHandle(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await writeStarted.p;
+
+			const eventsBeforeWrite = readProjectEvents(events.body);
+			await releaseWrite.complete();
+			await add.completion;
+
+			assert.deepStrictEqual(eventsBeforeWrite, [
+				{ projects: [] },
+			]);
+			assert.strictEqual(readProjectEvents(events.body).length, 2);
+			events.close();
+		}
+	);
+
+	test('waits for startup hydration state before publishing its snapshot',
+		async () => {
+			const storagePath = join(
+				serverDataPath,
+				'hucode',
+				'projects.json'
+			);
+			await fs.mkdir(join(serverDataPath, 'hucode'), {
+				recursive: true,
+			});
+			await fs.writeFile(storagePath, serializeStoredProjects([{
+				id: 'stored-project',
+				label: 'example',
+				rootPath: projectPath,
+			}]));
+			const writeStarted = new DeferredPromise<void>();
+			const releaseWrite = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				async writeFile(path, data) {
+					await writeStarted.complete();
+					await releaseWrite.p;
+					await fs.writeFile(path, data);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+
+			const events = startEvents(server);
+			await writeStarted.p;
+			const responseBeforeWrite = events.response.writeHeadCalls.slice();
+			await releaseWrite.complete();
+			await events.completion;
+
+			assert.deepStrictEqual(responseBeforeWrite, []);
+			assert.strictEqual(events.statusCode, 200);
+			const snapshots = readProjectEvents(events.body) as {
+				readonly projects: readonly unknown[];
+			}[];
+			assert.strictEqual(snapshots.length, 1);
+			assert.strictEqual(snapshots[0].projects.length, 1);
+			events.close();
+		}
+	);
+
+	test('waits for background refresh state before publishing its snapshot',
+		async () => {
+			const writeStarted = new DeferredPromise<void>();
+			const releaseWrite = new DeferredPromise<void>();
+			let blockWrites = false;
+			const fileSystem = new TestProjectStateFileSystem({
+				async writeFile(path, data) {
+					if (blockWrites) {
+						await writeStarted.complete();
+						await releaseWrite.p;
+					}
+					await fs.writeFile(path, data);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const events = await handleEvents(server);
+			const eventCountBeforeRefresh =
+				readProjectEvents(events.body).length;
+			const service = (server as unknown as {
+				service: {
+					refreshDelay: (milliseconds: number) => Promise<void>;
+					runScheduledProjectRefresh(
+						projectId: string
+					): Promise<void>;
+				};
+			}).service;
+			service.refreshDelay = async () => { };
+			blockWrites = true;
+
+			const refresh = service.runScheduledProjectRefresh(
+				add.body.project.id
+			);
+			await writeStarted.p;
+			const eventsBeforeWrite = readProjectEvents(events.body);
+			await releaseWrite.complete();
+			await refresh;
+			await waitFor(() =>
+				readProjectEvents(events.body).length >
+				eventCountBeforeRefresh
+			);
+
+			assert.strictEqual(
+				eventsBeforeWrite.length,
+				eventCountBeforeRefresh
+			);
+			events.close();
+		}
+	);
+
+	test('coalesces durable events across a failed and superseding write',
+		async () => {
+			const firstWriteStarted = new DeferredPromise<void>();
+			const releaseFirstWrite = new DeferredPromise<void>();
+			let renameCount = 0;
+			const fileSystem = new TestProjectStateFileSystem({
+				async rename(source, target) {
+					if (++renameCount === 1) {
+						await firstWriteStarted.complete();
+						await releaseFirstWrite.p;
+						throw new Error('first event write failed');
+					}
+					await fs.rename(source, target);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const events = await handleEvents(server);
+			const first = startHandle(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await firstWriteStarted.p;
+			const secondProjectPath = join(serverDataPath, 'second');
+			await createGitProject(secondProjectPath);
+			const second = startHandle(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: await fs.realpath(secondProjectPath) }
+			);
+
+			await releaseFirstWrite.complete();
+			await Promise.allSettled([first.completion, second.completion]);
+			await server.flushState();
+
+			const snapshots = readProjectEvents(events.body) as {
+				readonly projects: readonly unknown[];
+			}[];
+			assert.strictEqual(snapshots.length, 2);
+			assert.strictEqual(snapshots.at(-1)!.projects.length, 2);
+			events.close();
+		}
+	);
+
+	test('bounds Git reads and cancels active and queued disconnected work',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(
+						projectId: string,
+						options: unknown,
+						token: CancellationToken
+					): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const started = new DeferredPromise<CancellationToken>();
+			let calls = 0;
+			service.getWorktreeRefs = async (_projectId, _options, token) => {
+				calls++;
+				await started.complete(token);
+				await new Promise<void>((_resolve, reject) => {
+					const listener = token.onCancellationRequested(() => {
+						listener.dispose();
+						reject(new CancellationError());
+					});
+				});
+				return [];
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+			const active = startHandle(server, 'POST', route, {});
+			const activeToken = await started.p;
+			const queued = startHandle(server, 'POST', route, {});
+
+			queued.close();
+			active.close();
+			await Promise.all([active.completion, queued.completion]);
+
+			assert.strictEqual(activeToken.isCancellationRequested, true);
+			assert.strictEqual(calls, 1);
+			assert.deepStrictEqual(active.response.writeHeadCalls, []);
+			assert.deepStrictEqual(queued.response.writeHeadCalls, []);
+		}
+	);
+
+	test('finishes an active worktree mutation after its request disconnects',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					createWorktree(
+						projectId: string,
+						options: {
+							readonly branchName: string;
+							readonly path: string;
+						}
+					): Promise<unknown>;
+				};
+			}).service;
+			const originalCreate = service.createWorktree.bind(service);
+			const mutationStarted = new DeferredPromise<void>();
+			const releaseMutation = new DeferredPromise<void>();
+			let calls = 0;
+			service.createWorktree = async (projectId, options) => {
+				calls++;
+				await mutationStarted.complete();
+				await releaseMutation.p;
+				return originalCreate(projectId, options);
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees`;
+			const active = startHandle(server, 'POST', route, {
+				options: {
+					branchName: 'active-disconnect',
+					path: join(serverDataPath, 'active-disconnect'),
+				},
+			});
+			await mutationStarted.p;
+			const queued = startHandle(server, 'POST', route, {
+				options: {
+					branchName: 'queued-disconnect',
+					path: join(serverDataPath, 'queued-disconnect'),
+				},
+			});
+			active.close();
+			queued.close();
+			await releaseMutation.complete();
+			await Promise.all([active.completion, queued.completion]);
+
+			assert.strictEqual(calls, 1);
+			assert.strictEqual(await countGitWorktrees(projectPath), 2);
+			assert.deepStrictEqual(active.response.writeHeadCalls, []);
+			assert.deepStrictEqual(queued.response.writeHeadCalls, []);
+			assert.ok(
+				await pathExists(join(serverDataPath, 'hucode', 'projects.json'))
+			);
+		}
+	);
+
 	test('caps event clients exactly and accepts a replacement', async () => {
 		const server = createServer(
 			serverDataPath,
@@ -636,6 +955,49 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		slow.close();
 		healthy.close();
+	});
+
+	test('sends retry guidance and heartbeat comments', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			5
+		);
+		const events = await handleEvents(server);
+
+		assert.ok(events.body.includes('retry: 1000\n\n'));
+		await waitFor(() => events.body.includes(': heartbeat\n\n'));
+
+		events.close();
+	});
+
+	test('evicts persistently backpressured event clients', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			1,
+			undefined,
+			5,
+			15
+		);
+		const slow = await handleEvents(server, {
+			blockProjectWrites: 1,
+		});
+
+		await waitFor(() => slow.response.endCalls === 1);
+		assert.strictEqual(slow.request.listenerCount('close'), 0);
+		assert.strictEqual(slow.response.listenerCount('drain'), 0);
+		const replacement = await handleEvents(server);
+		assert.strictEqual(replacement.statusCode, 200);
+		replacement.close();
 	});
 
 	test('re-registers drain while replay remains backpressured', async () => {
@@ -1596,13 +1958,19 @@ function createServer(
 	servers: HucodeWebProjectManagerServer[],
 	fileSystem?: HucodeProjectStateFileSystem,
 	acquireStateWriteLease?: () => ReturnType<typeof toDisposable>,
-	eventClientLimit?: number
+	eventClientLimit?: number,
+	gitReadConcurrency?: number,
+	eventHeartbeatIntervalMs?: number,
+	eventBackpressureTimeoutMs?: number
 ): HucodeWebProjectManagerServer {
 	const options = {
 		enabled: true,
 		fileSystem,
 		acquireStateWriteLease,
 		eventClientLimit,
+		gitReadConcurrency,
+		eventHeartbeatIntervalMs,
+		eventBackpressureTimeoutMs,
 	};
 	const server = disposables.add(new HucodeWebProjectManagerServer(
 		serverDataPath,
@@ -1796,6 +2164,40 @@ function startEvents(
 	};
 }
 
+function startHandle(
+	server: HucodeWebProjectManagerServer,
+	method: string,
+	pathname: string,
+	body?: unknown
+): {
+	readonly request: EventEmitter;
+	readonly response: TestProjectManagerEventResponse;
+	readonly completion: Promise<void>;
+	close(): void;
+} {
+	const request = Object.assign(new EventEmitter(), {
+		method,
+		headers: { 'content-type': 'application/json' },
+		async *[Symbol.asyncIterator]() {
+			if (body !== undefined) {
+				yield Buffer.from(JSON.stringify(body));
+			}
+		},
+	});
+	const response = new TestProjectManagerEventResponse(0, 0);
+	const completion = server.handle(request, response, pathname).then(result => {
+		assert.strictEqual(result, true);
+	});
+	return {
+		request,
+		response,
+		completion,
+		close() {
+			request.emit('close');
+		},
+	};
+}
+
 class TestProjectManagerEventResponse extends EventEmitter {
 	statusCode = 0;
 	headers: Record<string, unknown> = {};
@@ -1917,4 +2319,17 @@ function readProjectEvents(body: string): unknown[] {
 		.map(chunk => chunk.split('\n').find(line => line.startsWith('data: ')))
 		.filter(line => !!line)
 		.map(line => JSON.parse(line!.substring('data: '.length)));
+}
+
+async function waitFor(
+	predicate: () => boolean,
+	timeoutMs = 1000
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			throw new Error('Timed out waiting for test condition.');
+		}
+		await new Promise(resolve => setTimeout(resolve, 5));
+	}
 }
