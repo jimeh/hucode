@@ -150,7 +150,11 @@ suite('CreateProjectWorktreeRouting', () => {
 			}
 		};
 		const quickInputService = {
-			pick(_picks: Promise<unknown>) {
+			pick(picks: Promise<unknown>) {
+				// QuickInputController separately derives this promise from
+				// lazy picks without attaching a rejection handler.
+				void Promise.all([picks, Promise.resolve(undefined)])
+					.then(() => undefined);
 				return Promise.resolve(undefined);
 			},
 		} as Partial<IQuickInputService> as IQuickInputService;
@@ -185,6 +189,40 @@ suite('CreateProjectWorktreeRouting', () => {
 			projectManagerService.dispose();
 		}
 	});
+
+	test('rethrows a genuine ref-loading failure after dismissing the picker',
+		async () => {
+			const failure = new Error('ref loading failed');
+			const projectManagerService = {
+				getWorktreeRefs: async () => {
+					throw failure;
+				},
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				pick(picks: Promise<unknown>) {
+					void Promise.all([picks, Promise.resolve(undefined)])
+						.then(() => undefined);
+					return Promise.resolve(undefined);
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+
+			await assert.rejects(
+				pickCreateWorktreeOptions(
+					'project',
+					projectManagerService,
+					quickInputService,
+					{} as INotificationService,
+					{
+						getValue: () => 'committerdate',
+					} as Partial<IConfigurationService> as
+					IConfigurationService,
+					{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+					{} as IHucodeShellService,
+					false
+				),
+				error => error === failure
+			);
+		});
 
 	test('uses the platform request-cancellation contract',
 		async () => {

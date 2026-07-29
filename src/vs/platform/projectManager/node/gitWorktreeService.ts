@@ -358,7 +358,7 @@ export class GitWorktreeService {
 		} else if (options.detached) {
 			args.push('--detach');
 		}
-		args.push(worktreePath, startPoint);
+		args.push('--', worktreePath, startPoint);
 		await this.runGit(
 			args,
 			projectRoot,
@@ -400,7 +400,7 @@ export class GitWorktreeService {
 		token: CancellationToken = CancellationToken.None
 	): Promise<void> {
 		await this.runGit(
-			['worktree', 'remove', worktreePath],
+			['worktree', 'remove', '--', worktreePath],
 			projectRoot,
 			GIT_POLICIES.removeWorktree,
 			token

@@ -832,6 +832,40 @@ suite('GitWorktreeService', () => {
 		source.dispose();
 	});
 
+	test('separates worktree paths and refs from git options', async () => {
+		const calls: string[][] = [];
+		const service = new GitWorktreeService(
+			new NullLogService(),
+			async args => {
+				calls.push([...args]);
+				return { stdout: '', stderr: '' };
+			},
+			async () => false,
+			async () => { },
+		);
+
+		await service.createWorktree(
+			'/repo',
+			{
+				startPoint: '--force',
+				path: '/repo.worktrees/option-shaped-ref',
+			},
+			[]
+		);
+		await service.removeWorktree('/repo', '--option-shaped-path');
+
+		assert.deepStrictEqual(calls, [
+			[
+				'worktree',
+				'add',
+				'--',
+				'/repo.worktrees/option-shaped-ref',
+				'--force',
+			],
+			['worktree', 'remove', '--', '--option-shaped-path'],
+		]);
+	});
+
 	test('spawn runner collects chunks and waits for close', async () => {
 		const child = new TestGitChild();
 		const { promise } = runTestGitChild(child);
@@ -1488,6 +1522,7 @@ suite('GitWorktreeService', () => {
 					'add',
 					'-b',
 					'feature/one',
+					'--',
 					'/repo.worktrees/feature-one',
 					'HEAD',
 				],
@@ -1497,6 +1532,7 @@ suite('GitWorktreeService', () => {
 				args: [
 					'worktree',
 					'add',
+					'--',
 					'/repo.worktrees/feature-two',
 					'feature/two',
 				],
@@ -1508,6 +1544,7 @@ suite('GitWorktreeService', () => {
 					'add',
 					'-b',
 					'feature/three',
+					'--',
 					'/repo.worktrees/feature-three',
 					'origin/main',
 				],
@@ -1518,6 +1555,7 @@ suite('GitWorktreeService', () => {
 					'worktree',
 					'add',
 					'--detach',
+					'--',
 					'/repo.worktrees/feature-four',
 					'feature/four',
 				],
@@ -1564,6 +1602,7 @@ suite('GitWorktreeService', () => {
 				args: [
 					'worktree',
 					'add',
+					'--',
 					'/workspace/custom/feature',
 					'origin/main',
 				],

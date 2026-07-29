@@ -102,6 +102,7 @@ import {
 import { toggleProjectTreeItemCollapsed } from
 	'./projectSwitcherCollapse.js';
 import {
+	getOmniHostedWorkspaceState,
 	openProjectSwitcherTarget,
 	setLastActiveWorktreeBestEffort,
 	type IProjectSwitcherSelectionTarget,
@@ -1438,20 +1439,12 @@ export class ProjectSwitcherWidget extends Disposable {
 	): Promise<void> {
 		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
-		let reconciledHostedWorkspaceState:
-			IHucodeHostedWorkspaceState | undefined;
-		if (this.environmentService.isOmniWindow) {
-			reconciledHostedWorkspaceState = await this.shellService
-				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-					this.windowId,
-					projects.map(project => ({
-						projectId: project.id,
-						folderUris: project.worktrees.map(worktree =>
-							URI.file(worktree.path).toJSON()
-						),
-					}))
-				);
-		}
+		const reconciledHostedWorkspaceState =
+			await getOmniHostedWorkspaceState(
+				this.environmentService,
+				this.shellService,
+				projects
+			);
 		if (this.projects !== projects) {
 			return;
 		}
@@ -2385,7 +2378,7 @@ registerAction2(class extends Action2 {
 			}
 
 			const project = await projectManagerService.addProject(folder[0]);
-			if (environmentService.isOmniWindow) {
+			if (environmentService.isOmniShellWindow) {
 				await shellService.promoteRetainedWorkbenchProjectFolders(
 					dom.getWindowId(mainWindow),
 					project.worktrees.map(worktree => ({
