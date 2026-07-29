@@ -356,7 +356,6 @@ suite('Files - FileEditorInput', () => {
 		const inputWithPreferredResourceDeserialized = editorSerializer.deserialize(instantiationService, inputWithPreferredResourceSerialized) as FileEditorInput;
 		assert.strictEqual(inputWithPreferredResource.resource.toString(), inputWithPreferredResourceDeserialized.resource.toString());
 		assert.strictEqual(inputWithPreferredResource.preferredResource.toString(), inputWithPreferredResourceDeserialized.preferredResource.toString());
-
 	});
 
 	test('preferred name/description', async function () {

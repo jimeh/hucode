@@ -74,6 +74,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private readonly _terminalShellTypeContextKey: IContextKey<string>;
 
 	private _isShuttingDown: boolean = false;
+	private readonly _platformIsWeb = isWeb;
 	private _backgroundedTerminalInstances: IBackgroundTerminal[] = [];
 	private _backgroundedTerminalDisposables: Map<number, IDisposable[]> = new Map();
 	private _processSupportContextKey: IContextKey<boolean>;
@@ -621,7 +622,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private _onBeforeShutdown(reason: ShutdownReason): MaybePromise<boolean> {
 		// Never veto on web as this would block all windows from being closed. This disables
 		// process revive as we can't handle it on shutdown.
-		return prepareTerminalShutdown(isWeb, () => this._onBeforeShutdownAsync(reason));
+		return prepareTerminalShutdown(this._platformIsWeb, () => this._onBeforeShutdownAsync(reason));
 	}
 
 	private async _onBeforeShutdownAsync(reason: ShutdownReason): Promise<boolean> {

@@ -19,12 +19,12 @@ export const enum PersistentTaskAction {
  * reconnection bookkeeping in the still-running workbench.
  */
 export class TaskShutdownState extends Disposable {
-	private willRestart = false;
+	private shutdownReason: ShutdownReason | undefined;
 
-	constructor(lifecycleService: ILifecycleService) {
+	constructor(private readonly lifecycleService: ILifecycleService) {
 		super();
-		this._register(lifecycleService.onWillShutdown(event => {
-			this.willRestart = event.reason !== ShutdownReason.RELOAD;
+		this._register(lifecycleService.onBeforeShutdown(event => {
+			this.shutdownReason = event.reason;
 		}));
 	}
 
@@ -33,9 +33,11 @@ export class TaskShutdownState extends Disposable {
 		exitReason: TerminalExitReason | undefined,
 		hasTaskId: boolean
 	): PersistentTaskAction {
+		const willRestart = this.lifecycleService.willShutdown &&
+			this.shutdownReason !== ShutdownReason.RELOAD;
 		if (
 			hasTaskId &&
-			(this.willRestart ||
+			(willRestart ||
 				(kind === TaskEventKind.Terminated &&
 					exitReason === TerminalExitReason.User))
 		) {

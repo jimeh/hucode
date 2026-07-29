@@ -64,6 +64,12 @@ suite('Task shutdown persistence', () => {
 		const reloadState = disposables.add(new TaskShutdownState(reloadLifecycle));
 		const reloadTasks = new Set(['task']);
 
+		reloadLifecycle.fireBeforeShutdown({
+			reason: ShutdownReason.RELOAD,
+			veto: () => { },
+			finalVeto: () => { },
+		});
+		reloadLifecycle.willShutdown = true;
 		reloadLifecycle.fireShutdown(ShutdownReason.RELOAD);
 		applyAction(reloadTasks, 'task', reloadState.getPersistentTaskAction(
 			TaskEventKind.Terminated,
@@ -71,6 +77,36 @@ suite('Task shutdown persistence', () => {
 			true
 		));
 		assert.deepStrictEqual([...reloadTasks], ['task']);
+	});
+
+	test('removes task metadata before earlier committed shutdown listeners run', () => {
+		for (const reason of [
+			ShutdownReason.QUIT,
+			ShutdownReason.CLOSE,
+			ShutdownReason.LOAD,
+		]) {
+			const lifecycleService = disposables.add(new TestLifecycleService());
+			const persistentTasks = new Set(['task']);
+			const onWillShutdown = () => {
+				applyAction(persistentTasks, 'task', shutdownState.getPersistentTaskAction(
+					TaskEventKind.Terminated,
+					undefined,
+					true
+				));
+			};
+			disposables.add(lifecycleService.onWillShutdown(onWillShutdown));
+			const shutdownState = disposables.add(new TaskShutdownState(lifecycleService));
+
+			lifecycleService.fireBeforeShutdown({
+				reason,
+				veto: () => { },
+				finalVeto: () => { },
+			});
+			lifecycleService.willShutdown = true;
+			lifecycleService.fireShutdown(reason);
+
+			assert.deepStrictEqual([...persistentTasks], [], `reason ${reason}`);
+		}
 	});
 
 	test('removes metadata for a user-terminated task outside shutdown', () => {

@@ -34,8 +34,6 @@ import {
 import { TerminalService } from '../../browser/terminalService.js';
 import { IRemoteAgentService } from
 	'../../../../services/remote/common/remoteAgentService.js';
-import { prepareTerminalShutdown } from
-	'../../browser/hucodeTerminalShutdown.js';
 
 suite('Terminal hosted shutdown', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -93,14 +91,14 @@ suite('Terminal hosted shutdown', () => {
 		Reflect.set(terminalGroupService, 'instances', [createPersistentTerminal()]);
 	});
 
-	test('returns synchronously without desktop preparation on web', () => {
-		let desktopPrepareCount = 0;
+	test('wires the web platform into terminal shutdown preparation', () => {
+		Reflect.set(terminalService, '_platformIsWeb', true);
 
-		assert.strictEqual(prepareTerminalShutdown(true, () => {
-			desktopPrepareCount++;
-			return false;
-		}), false);
-		assert.strictEqual(desktopPrepareCount, 0);
+		assert.strictEqual(
+			invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
+			false
+		);
+		assert.strictEqual(dialogService.confirmCount, 0);
 	});
 
 	test('keeps persistence active when shutdown preparation is vetoed',
@@ -161,6 +159,16 @@ function createPersistentTerminal(): ITerminalInstance {
 function saveState(terminalService: TerminalService): void {
 	const fn = Reflect.get(terminalService, '_saveState') as () => void;
 	fn.call(terminalService);
+}
+
+function invokeBeforeShutdown(
+	terminalService: TerminalService,
+	reason: ShutdownReason
+): boolean | Promise<boolean> {
+	const fn = Reflect.get(terminalService, '_onBeforeShutdown') as (
+		reason: ShutdownReason
+	) => boolean | Promise<boolean>;
+	return fn.call(terminalService, reason);
 }
 
 async function prepareShutdown(lifecycleService: TestLifecycleService): Promise<boolean> {
