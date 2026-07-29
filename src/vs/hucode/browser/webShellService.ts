@@ -107,6 +107,11 @@ interface IHostedIframeConnection {
 	readonly disposables: DisposableStore;
 }
 
+interface ITimedOutLegacyUnloadClaim {
+	readonly workbench: IHucodeOmniWebWorkbenchClient;
+	disposition: HostedUnloadDisposition;
+}
+
 interface IHostedIframeInstance {
 	instanceId: string;
 	projectId?: string;
@@ -122,6 +127,7 @@ interface IHostedIframeInstance {
 	protocolVersion?: number;
 	pendingUnload?: Promise<boolean>;
 	pendingUnloadDisposition?: HostedUnloadDisposition;
+	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
 }
 
 interface IProjectCatalogSnapshot {
@@ -1590,6 +1596,11 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
+		if (
+			instance.timedOutLegacyUnload?.workbench === connection.workbench
+		) {
+			instance.timedOutLegacyUnload = undefined;
+		}
 		instance.connection = undefined;
 		// Closing a workspace over its own shell channel must not close the
 		// port before the pending response has been flushed to the iframe.
@@ -1801,6 +1812,23 @@ export class WebHucodeShellController extends Disposable
 			return pending;
 		}
 
+		const timedOutLegacyUnload = instance.timedOutLegacyUnload;
+		if (timedOutLegacyUnload) {
+			if (
+				this.instancesById.get(instance.instanceId) === instance &&
+				instance.connection?.workbench ===
+				timedOutLegacyUnload.workbench
+			) {
+				timedOutLegacyUnload.disposition =
+					strongestUnloadDisposition(
+						timedOutLegacyUnload.disposition,
+						disposition
+					);
+				return Promise.resolve(false);
+			}
+			instance.timedOutLegacyUnload = undefined;
+		}
+
 		instance.pendingUnloadDisposition = disposition;
 		const unload = this.runUnloadHandshake(instance).finally(() => {
 			// A failed handshake still holds the claim, and a later request
@@ -1864,7 +1892,7 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
-		return this.removeUnloadedInstance(instance, true);
+		return this.removeUnloadedInstance(instance);
 	}
 
 	/**
@@ -1873,33 +1901,20 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private removeUnloadedInstance(
 		instance: IHostedIframeInstance,
-		releasePendingUnload: boolean,
-		priorDisposition?: HostedUnloadDisposition
+		disposition =
+			instance.pendingUnloadDisposition ?? 'shutdown'
 	): boolean {
-		if (this.instancesById.get(instance.instanceId) !== instance) {
-			return false;
-		}
-
 		// Applying the disposition needs an identity this old the checks above
 		// no longer vouch for: a replacement created during the handshake owns
 		// the path now, and parking a dormant placeholder over it would evict a
 		// live workbench from the model while leaving its iframe running.
-		const currentDisposition =
-			instance.pendingUnloadDisposition ?? 'shutdown';
-		const disposition = priorDisposition
-			? strongestUnloadDisposition(
-				currentDisposition,
-				priorDisposition
-			)
-			: currentDisposition;
 		const ownsPath =
 			this.getInstanceByPath(instance.worktreePath) === instance;
-		if (releasePendingUnload) {
-			// Release the claim before removing rather than in the `finally`
-			// that follows the handshake: a request arriving from here on gets
-			// its own handshake, which the identity guard turns into a no-op.
-			instance.pendingUnload = undefined;
-		}
+		// Release the claim before removing rather than in the `finally` that
+		// follows the handshake: a request arriving from here on gets its own
+		// handshake. Once a current-protocol workbench commits, removal is
+		// unconditional; the workbench has already shut down irreversibly.
+		instance.pendingUnload = undefined;
 		this.removeInstance(instance);
 		if (ownsPath) {
 			this.applyUnloadDisposition(instance, disposition);
@@ -2002,8 +2017,17 @@ export class WebHucodeShellController extends Disposable
 			WebHucodeShellController.PREPARE_UNLOAD_TIMEOUT_MS
 		);
 		if (result === REQUEST_TIMEOUT) {
-			const timedOutDisposition =
-				instance.pendingUnloadDisposition ?? 'shutdown';
+			const legacyClaim: ITimedOutLegacyUnloadClaim | undefined =
+				singlePhase
+					? {
+						workbench,
+						disposition:
+							instance.pendingUnloadDisposition ?? 'shutdown',
+					}
+					: undefined;
+			if (legacyClaim) {
+				instance.timedOutLegacyUnload = legacyClaim;
+			}
 			this.logService.warn(
 				'[hucode] Hosted workbench did not answer the unload ' +
 				`preparation for ${instance.worktreePath}; keeping it.`
@@ -2024,15 +2048,21 @@ export class WebHucodeShellController extends Disposable
 				// connection's delayed answer. Do not release a newer unload
 				// claim that may now own the same instance.
 				if (
-					singlePhase &&
-					late === 'ready' &&
-					instance.connection?.workbench === workbench
+					legacyClaim &&
+					instance.timedOutLegacyUnload === legacyClaim
 				) {
-					this.removeUnloadedInstance(
-						instance,
-						false,
-						timedOutDisposition
-					);
+					instance.timedOutLegacyUnload = undefined;
+					if (
+						late === 'ready' &&
+						this.instancesById.get(instance.instanceId) ===
+						instance &&
+						instance.connection?.workbench === workbench
+					) {
+						this.removeUnloadedInstance(
+							instance,
+							legacyClaim.disposition
+						);
+					}
 				}
 			});
 			return 'prepare-timeout';

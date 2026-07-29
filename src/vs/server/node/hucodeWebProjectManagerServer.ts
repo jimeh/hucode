@@ -1637,6 +1637,9 @@ function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 	}
 
 	const branchName = readOptionalWorktreeString(value, 'branchName');
+	if (branchName?.trim().startsWith('-')) {
+		throw new BadRequestError('Invalid options.branchName.');
+	}
 	const path = readOptionalWorktreeString(value, 'path');
 	const startPointValue = readProperty(value, 'startPoint');
 	let startPoint: string | undefined;
@@ -1645,7 +1648,7 @@ function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 			throw new BadRequestError('Invalid options.startPoint.');
 		}
 		startPoint = startPointValue.trim();
-		if (!startPoint || startPoint.startsWith('-')) {
+		if (!startPoint) {
 			throw new BadRequestError('Invalid options.startPoint.');
 		}
 	}

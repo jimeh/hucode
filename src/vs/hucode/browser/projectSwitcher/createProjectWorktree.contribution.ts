@@ -131,6 +131,8 @@ export async function pickCreateWorktreeOptions(
 			'$(debug-disconnect)'
 		),
 	};
+	let refLoadFailure: unknown;
+	let hasRefLoadFailure = false;
 	const picks = refsPromise.then(refs => [
 		createBranchPick,
 		createBranchFromPick,
@@ -142,7 +144,11 @@ export async function pickCreateWorktreeOptions(
 	], error => {
 		// QuickInputController creates a derived Promise.all for lazy picks.
 		// Keep the promise it receives fulfilled, dismiss the picker, and let
-		// the original request below preserve the actual failure for callers.
+		// the captured failure below preserve the actual error for callers.
+		if (!isCancellationError(error)) {
+			refLoadFailure = error;
+			hasRefLoadFailure = true;
+		}
 		cancellation.cancel();
 		return [] as CreateWorktreeQuickPick[];
 	});
@@ -169,13 +175,8 @@ export async function pickCreateWorktreeOptions(
 		cancellation.dispose(true);
 	}
 	if (!choice) {
-		try {
-			await refsPromise;
-		} catch (error) {
-			if (isCancellationError(error)) {
-				return undefined;
-			}
-			throw error;
+		if (hasRefLoadFailure) {
+			throw refLoadFailure;
 		}
 		return undefined;
 	}

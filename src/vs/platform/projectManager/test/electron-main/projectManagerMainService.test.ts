@@ -866,6 +866,48 @@ suite('GitWorktreeService', () => {
 		]);
 	});
 
+	test('rejects option-like branch names before filesystem or Git work',
+		async () => {
+			let gitCalls = 0;
+			let pathChecks = 0;
+			let directoryCreates = 0;
+			const service = new GitWorktreeService(
+				new NullLogService(),
+				async () => {
+					gitCalls++;
+					return { stdout: '', stderr: '' };
+				},
+				async () => {
+					pathChecks++;
+					return false;
+				},
+				async () => {
+					directoryCreates++;
+				},
+			);
+
+			for (const branchName of ['-D', '--force', '  --force  ']) {
+				await assert.rejects(
+					service.createWorktree(
+						'/repo',
+						{ branchName },
+						[]
+					),
+					/Invalid branch name\./
+				);
+			}
+
+			assert.deepStrictEqual({
+				gitCalls,
+				pathChecks,
+				directoryCreates,
+			}, {
+				gitCalls: 0,
+				pathChecks: 0,
+				directoryCreates: 0,
+			});
+		});
+
 	test('spawn runner collects chunks and waits for close', async () => {
 		const child = new TestGitChild();
 		const { promise } = runTestGitChild(child);

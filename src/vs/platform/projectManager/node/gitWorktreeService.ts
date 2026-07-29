@@ -331,6 +331,9 @@ export class GitWorktreeService {
 		token: CancellationToken = CancellationToken.None,
 	): Promise<string> {
 		const branchName = options.branchName?.trim();
+		if (branchName?.startsWith('-')) {
+			throw new Error('Invalid branch name.');
+		}
 		const startPoint = options.startPoint?.trim() || 'HEAD';
 		const branchSlug = GitWorktreeService.sanitizeBranchName(
 			branchName || startPoint

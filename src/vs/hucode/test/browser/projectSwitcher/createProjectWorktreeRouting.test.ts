@@ -224,6 +224,51 @@ suite('CreateProjectWorktreeRouting', () => {
 			);
 		});
 
+	test('dismisses a desktop picker without waiting for ref loading',
+		async () => {
+			const projectManagerService = {
+				getWorktreeRefs: () => new Promise(() => { }),
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				pick() {
+					return Promise.resolve(undefined);
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+			let timeoutHandle: number | undefined;
+			const timeout = new Promise<'timeout'>(resolve => {
+				timeoutHandle = mainWindow.setTimeout(
+					() => resolve('timeout'),
+					100
+				);
+			});
+
+			try {
+				const result = await Promise.race([
+					pickCreateWorktreeOptions(
+						'project',
+						projectManagerService,
+						quickInputService,
+						{} as INotificationService,
+						{
+							getValue: () => 'committerdate',
+						} as Partial<IConfigurationService> as
+						IConfigurationService,
+						{ isOmniWindow: false } as
+						IWorkbenchEnvironmentService,
+						{} as IHucodeShellService,
+						false
+					),
+					timeout,
+				]);
+
+				assert.strictEqual(result, undefined);
+			} finally {
+				if (timeoutHandle !== undefined) {
+					mainWindow.clearTimeout(timeoutHandle);
+				}
+			}
+		});
+
 	test('uses the platform request-cancellation contract',
 		async () => {
 			const argumentCounts: number[] = [];

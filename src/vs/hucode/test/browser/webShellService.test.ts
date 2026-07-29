@@ -2061,10 +2061,64 @@ suite('WebHucodeShellService', () => {
 				desiredState:
 					settled.retainedWorkbenches?.[0].desiredState,
 				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
 			}, {
 				instanceIds: [],
 				desiredState: 'unloaded',
 				iframeConnected: false,
+				prepareCalls: 1,
+			});
+		});
+
+	test('serializes timed-out legacy unloads and keeps the strongest request',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			browser.collapseTimeouts = true;
+			const { service, surface } = createService(browser);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/late-legacy-strongest-middle').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectLegacyChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			await service.closeWorkspace(browser.windowId, instanceId);
+			await child.workbench.prepareUnloadStarted.p;
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			await service.suspendWorkspace(browser.windowId, instanceId);
+
+			assert.strictEqual(child.workbench.prepareUnloadCalls, 1);
+
+			await prepareGate.complete();
+			await waitFor(
+				async () => !(await service.getWindowState(browser.windowId))
+					.instances.some(instance =>
+						instance.instanceId === instanceId
+					),
+				'expected the serialized legacy shutdown to remove its iframe'
+			);
+			const settled = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instanceIds: settled.instances.map(
+					instance => instance.instanceId
+				),
+				retained: settled.retainedWorkbenches?.length,
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+			}, {
+				instanceIds: [],
+				retained: 0,
+				iframeConnected: false,
+				prepareCalls: 1,
 			});
 		});
 
