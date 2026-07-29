@@ -589,6 +589,8 @@ suite('HucodeWebProjectManagerServer', function () {
 					if (renameCount === 3) {
 						await retryWriteStarted.complete();
 						await releaseRetryWrite.p;
+					} else if (renameCount > 3) {
+						throw new Error('redundant event recovery write');
 					}
 					await fs.rename(source, target);
 				},
@@ -617,35 +619,59 @@ suite('HucodeWebProjectManagerServer', function () {
 				statusCode: 500,
 				body: { error: 'settled event state write failed' },
 			});
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const getProjects = service.getProjects.bind(service);
+			let projectReads = 0;
+			service.getProjects = async () => {
+				projectReads++;
+				return getProjects();
+			};
 
-			const events = startEvents(server);
+			const firstEvents = startEvents(server);
+			const secondEvents = startEvents(server);
 			const retryObserved = await raceTimeout(
 				retryWriteStarted.p.then(() => true),
 				50
 			);
-			const headersBeforeRetry =
-				events.response.writeHeadCalls.slice();
+			await waitFor(() => projectReads === 2);
+			const headersBeforeRetry = [
+				...firstEvents.response.writeHeadCalls,
+				...secondEvents.response.writeHeadCalls,
+			];
 			await releaseRetryWrite.complete();
-			await events.completion;
+			await Promise.all([
+				firstEvents.completion,
+				secondEvents.completion,
+			]);
 			const stored = JSON.parse(await fs.readFile(
 				join(serverDataPath, 'hucode', 'projects.json'),
 				'utf8'
 			)) as {
 				readonly projects: readonly { readonly pinned: boolean }[];
 			};
-			const snapshots = readProjectEvents(events.body) as {
-				readonly projects: readonly {
-					readonly pinned: boolean;
-				}[];
-			}[];
 
 			assert.strictEqual(retryObserved, true);
 			assert.deepStrictEqual(headersBeforeRetry, []);
-			assert.strictEqual(events.statusCode, 200);
+			assert.strictEqual(renameCount, 3);
+			assert.deepStrictEqual([
+				firstEvents.statusCode,
+				secondEvents.statusCode,
+			], [200, 200]);
 			assert.strictEqual(stored.projects[0].pinned, true);
-			assert.deepStrictEqual(snapshots.map(snapshot =>
-				snapshot.projects[0].pinned
-			), [true]);
+			for (const events of [firstEvents, secondEvents]) {
+				const snapshots = readProjectEvents(events.body) as {
+					readonly projects: readonly {
+						readonly pinned: boolean;
+					}[];
+				}[];
+				assert.deepStrictEqual(snapshots.map(snapshot =>
+					snapshot.projects[0].pinned
+				), [true]);
+			}
 			assert.deepStrictEqual(readProjectEvents(existingEvents.body).map(
 				snapshot => (
 					snapshot as {
@@ -656,7 +682,8 @@ suite('HucodeWebProjectManagerServer', function () {
 				).projects[0].pinned
 			), [false, true]);
 			existingEvents.close();
-			events.close();
+			firstEvents.close();
+			secondEvents.close();
 		}
 	);
 
