@@ -60,10 +60,9 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 	 * lifecycle service has not shut down and the shell keeps the workbench
 	 * alive.
 	 *
-	 * The shutdown listeners themselves do run, and some are not idempotent:
-	 * the web terminal service, for one, latches itself into a shutting-down
-	 * state that stops it persisting layout. An abandoned preparation leaves
-	 * a usable workbench, not an untouched one.
+	 * The shutdown listeners themselves do run, and not all are idempotent or
+	 * conditional on the shutdown actually happening. An abandoned preparation
+	 * leaves a usable workbench, not necessarily an untouched one.
 	 */
 	async prepareUnload(): Promise<boolean> {
 		if (this.committed) {
