@@ -190,6 +190,10 @@ as the required Hucode instruction set for work in this fork.
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves
   nothing.
+- Native `IProjectManagerService` calls cross a generic `ProxyChannel`, which
+  does not support `CancellationToken` method arguments. Keep request tokens
+  web-only, or replace the generic proxy with a cancellation-aware channel
+  before adding them to the shared service contract.
 - `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
   trusted** on web. `WorkspaceProvider.create` parses the `payload` query
   parameter straight out of the page URL, so any page can set either flag.

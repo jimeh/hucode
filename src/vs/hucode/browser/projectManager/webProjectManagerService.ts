@@ -301,6 +301,9 @@ export class WebProjectManagerClient extends Disposable
 			});
 			const body = await response.json().catch(() => undefined) as
 				{ error?: string } | T | undefined;
+			if (token.isCancellationRequested) {
+				throw new CancellationError();
+			}
 			if (!response.ok) {
 				const error = getErrorMessage(body);
 				throw new Error(

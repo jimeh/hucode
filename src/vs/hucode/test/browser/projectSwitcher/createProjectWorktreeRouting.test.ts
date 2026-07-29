@@ -4,10 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { CancellationToken } from
-	'../../../../base/common/cancellation.js';
-import { CancellationError } from
-	'../../../../base/common/errors.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import type { IConfigurationService } from
@@ -26,6 +22,10 @@ import type { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
 import type { IHucodeShellService } from
 	'../../../common/omniWindow.js';
+import {
+	WebProjectManagerClient,
+	WebProjectManagerFetch,
+} from '../../../browser/projectManager/webProjectManagerService.js';
 import {
 	pickCreateWorktreeBranchName,
 	pickCreateWorktreeOptions,
@@ -99,22 +99,21 @@ suite('CreateProjectWorktreeRouting', () => {
 	});
 
 	test('cancels ref loading when the picker is dismissed', async () => {
-		let refsToken = CancellationToken.None;
-		const projectManagerService = {
-			getWorktreeRefs(
-				_projectId: string,
-				_options: unknown,
-				token: CancellationToken
-			) {
-				refsToken = token;
-				return new Promise<never>((_resolve, reject) => {
-					const cancellation = token.onCancellationRequested(() => {
-						cancellation.dispose();
-						reject(new CancellationError());
-					});
-				});
-			},
-		} as Partial<IProjectManagerService> as IProjectManagerService;
+		let requestSignal: AbortSignal | undefined;
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener(
+					'abort',
+					() => reject(requestSignal?.reason),
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
 		const quickInputService = {
 			pick(picks: Promise<unknown>) {
 				void picks.catch(() => undefined);
@@ -122,65 +121,130 @@ suite('CreateProjectWorktreeRouting', () => {
 			},
 		} as Partial<IQuickInputService> as IQuickInputService;
 
-		const result = await pickCreateWorktreeOptions(
-			'project',
-			projectManagerService,
-			quickInputService,
-			{} as INotificationService,
-			{
-				getValue: () => 'committerdate',
-			} as Partial<IConfigurationService> as IConfigurationService,
-			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-			{} as IHucodeShellService
-		);
+		try {
+			const result = await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService,
+				true
+			);
 
-		assert.strictEqual(result, undefined);
-		assert.strictEqual(refsToken.isCancellationRequested, true);
+			assert.strictEqual(result, undefined);
+			assert.strictEqual(requestSignal?.aborted, true);
+		} finally {
+			projectManagerService.dispose();
+		}
 	});
 
-	test('cancels stale and dismissed branch validation', async () => {
-		const validationTokens: CancellationToken[] = [];
-		const projectManagerService = {
-			isValidBranchName(
-				_projectId: string,
-				_branchName: string,
-				token: CancellationToken
-			) {
-				validationTokens.push(token);
-				return new Promise<never>((_resolve, reject) => {
-					const cancellation = token.onCancellationRequested(() => {
-						cancellation.dispose();
-						reject(new CancellationError());
-					});
-				});
-			},
-		} as Partial<IProjectManagerService> as IProjectManagerService;
+	test('does not pass cancellation tokens to generic project services',
+		async () => {
+			const argumentCounts: number[] = [];
+			const projectManagerService = {
+				getWorktreeRefs(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve([]);
+				},
+				isValidBranchName(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve(true);
+				},
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				async pick(picks: Promise<unknown>) {
+					await picks;
+					return undefined;
+				},
+				async input(options: IInputOptions) {
+					await options.validateInput?.('branch');
+					return undefined;
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+
+			await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService
+			);
+			await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService
+			);
+
+			assert.deepStrictEqual(argumentCounts, [2, 2]);
+		});
+
+	test('does not accept a branch from superseded validation', async () => {
+		const requestSignals: AbortSignal[] = [];
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			const signal = init?.signal;
+			assert.ok(signal);
+			requestSignals.push(signal);
+			return new Promise<Response>((_resolve, reject) => {
+				signal.addEventListener(
+					'abort',
+					() => reject(signal.reason),
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
+		let staleAccepted = false;
 		let dismissedValidation: Promise<unknown> | undefined;
 		const quickInputService = {
 			async input(options: IInputOptions) {
 				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
 				dismissedValidation = options.validateInput?.('second');
-				assert.strictEqual(await staleValidation, undefined);
+				await staleAcceptance;
 				return undefined;
 			},
 		} as Partial<IQuickInputService> as IQuickInputService;
 
-		const result = await pickCreateWorktreeBranchName(
-			'project',
-			[],
-			projectManagerService,
-			quickInputService,
-			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-			{} as IHucodeShellService
-		);
+		try {
+			const result = await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellService,
+				true
+			);
 
-		assert.strictEqual(result, undefined);
-		assert.strictEqual(await dismissedValidation, undefined);
-		assert.strictEqual(validationTokens.length, 2);
-		assert.strictEqual(
-			validationTokens.every(token => token.isCancellationRequested),
-			true
-		);
+			assert.strictEqual(result, undefined);
+			assert.ok(await dismissedValidation);
+			assert.strictEqual(staleAccepted, false);
+			assert.strictEqual(requestSignals.length, 2);
+			assert.strictEqual(
+				requestSignals.every(signal => signal.aborted),
+				true
+			);
+		} finally {
+			projectManagerService.dispose();
+		}
 	});
 });
 

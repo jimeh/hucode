@@ -52,6 +52,19 @@ type CreateWorktreeQuickPick = IQuickPickItem & (
 	| CreateWorktreeRefQuickPick
 );
 
+type CancellableProjectManagerService = IProjectManagerService & {
+	getWorktreeRefs(
+		projectId: string,
+		options: { readonly sort: WorktreeRefSortOrder },
+		token: CancellationToken
+	): Promise<readonly WorktreeRefRecord[]>;
+	isValidBranchName(
+		projectId: string,
+		branchName: string,
+		token: CancellationToken
+	): Promise<boolean>;
+};
+
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
 		return undefined;
@@ -82,14 +95,15 @@ export async function pickCreateWorktreeOptions(
 	notificationService: INotificationService,
 	configurationService: IConfigurationService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellService,
+	supportsRequestCancellation = isWeb
 ): Promise<CreateWorktreeOptions | undefined> {
 	const cancellation = new CancellationTokenSource();
-	const refsPromise = projectManagerService.getWorktreeRefs(
-		projectId,
-		{ sort: getGitBranchSortOrder(configurationService) },
-		cancellation.token
-	);
+	const refOptions = { sort: getGitBranchSortOrder(configurationService) };
+	const refsPromise = supportsRequestCancellation
+		? (projectManagerService as CancellableProjectManagerService)
+			.getWorktreeRefs(projectId, refOptions, cancellation.token)
+		: projectManagerService.getWorktreeRefs(projectId, refOptions);
 	const createBranchPick: CreateWorktreeQuickPick = {
 		kind: 'createBranch',
 		label: localize(
@@ -157,7 +171,8 @@ export async function pickCreateWorktreeOptions(
 			projectManagerService,
 			quickInputService,
 			environmentService,
-			shellService
+			shellService,
+			supportsRequestCancellation
 		);
 		return branchName ? { branchName } : undefined;
 	}
@@ -188,7 +203,8 @@ export async function pickCreateWorktreeOptions(
 			projectManagerService,
 			quickInputService,
 			environmentService,
-			shellService
+			shellService,
+			supportsRequestCancellation
 		);
 		return branchName
 			? { branchName, startPoint: startPoint.ref.name }
@@ -247,7 +263,8 @@ export async function pickCreateWorktreeBranchName(
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellService,
+	supportsRequestCancellation = isWeb
 ): Promise<string | undefined> {
 	const cancellation = new CancellationTokenSource();
 	let validationCancellation: CancellationTokenSource | undefined;
@@ -268,11 +285,15 @@ export async function pickCreateWorktreeBranchName(
 							value,
 							refs,
 							projectManagerService,
-							validationCancellation.token
+							validationCancellation.token,
+							supportsRequestCancellation
 						);
 					} catch (error) {
 						if (isCancellationError(error)) {
-							return undefined;
+							return localize(
+								'createWorktreeBranchValidationSuperseded',
+								'Branch name validation was superseded.'
+							);
 						}
 						throw error;
 					}
@@ -336,7 +357,8 @@ async function validateCreateWorktreeBranchName(
 	value: string,
 	refs: readonly WorktreeRefRecord[],
 	projectManagerService: IProjectManagerService,
-	token: CancellationToken
+	token: CancellationToken,
+	supportsRequestCancellation: boolean
 ): Promise<string | undefined> {
 	const branchName = value.trim();
 	if (!branchName) {
@@ -358,11 +380,11 @@ async function validateCreateWorktreeBranchName(
 			branchName
 		);
 	}
-	if (!(await projectManagerService.isValidBranchName(
-		projectId,
-		branchName,
-		token
-	))) {
+	const isValid = supportsRequestCancellation
+		? await (projectManagerService as CancellableProjectManagerService)
+			.isValidBranchName(projectId, branchName, token)
+		: await projectManagerService.isValidBranchName(projectId, branchName);
+	if (!isValid) {
 		return localize(
 			'createWorktreeBranchInvalidValidate',
 			'Branch name is not valid.'

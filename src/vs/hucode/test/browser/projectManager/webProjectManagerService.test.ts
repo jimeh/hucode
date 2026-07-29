@@ -127,6 +127,44 @@ suite('WebProjectManagerService', () => {
 		assert.strictEqual(fetchCalls, 0);
 	});
 
+	test('reports cancellation while reading a response body', async () => {
+		let requestSignal: AbortSignal | undefined;
+		let bodyReadStarted!: () => void;
+		const readingBody = new Promise<void>(resolve => {
+			bodyReadStarted = resolve;
+		});
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return {
+				ok: true,
+				status: 200,
+				json() {
+					bodyReadStarted();
+					return new Promise<never>((_resolve, reject) => {
+						requestSignal?.addEventListener(
+							'abort',
+							() => reject(requestSignal?.reason),
+							{ once: true }
+						);
+					});
+				},
+			} as unknown as Response;
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+
+		const refs = service.getWorktreeRefs(
+			'project',
+			undefined,
+			cancellation.token
+		);
+		await readingBody;
+		cancellation.cancel();
+
+		await assert.rejects(refs, error => error instanceof CancellationError);
+		assert.strictEqual(requestSignal?.aborted, true);
+	});
+
 	test('emits revived project updates from server-sent events', () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({ projects: [] }));
