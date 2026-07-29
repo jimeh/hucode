@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { mainWindow } from '../../../../base/browser/window.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -101,12 +102,28 @@ suite('CreateProjectWorktreeRouting', () => {
 
 	test('cancels ref loading when the picker is dismissed', async () => {
 		let requestSignal: AbortSignal | undefined;
+		let resolveRequestAbort: (() => void) | undefined;
+		const requestAborted = new Promise<void>(resolve => {
+			resolveRequestAbort = resolve;
+		});
+		const unhandledRejections: unknown[] = [];
+		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+			unhandledRejections.push(event.reason);
+			event.preventDefault();
+		};
+		mainWindow.addEventListener(
+			'unhandledrejection',
+			onUnhandledRejection
+		);
 		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
 			requestSignal = init?.signal ?? undefined;
 			return new Promise<Response>((_resolve, reject) => {
 				requestSignal?.addEventListener(
 					'abort',
-					() => reject(requestSignal?.reason),
+					() => {
+						reject(requestSignal?.reason);
+						resolveRequestAbort?.();
+					},
 					{ once: true }
 				);
 			});
@@ -116,8 +133,7 @@ suite('CreateProjectWorktreeRouting', () => {
 			{ fetch: fakeFetch }
 		);
 		const quickInputService = {
-			pick(picks: Promise<unknown>) {
-				void picks.catch(() => undefined);
+			pick(_picks: Promise<unknown>) {
 				return Promise.resolve(undefined);
 			},
 		} as Partial<IQuickInputService> as IQuickInputService;
@@ -138,7 +154,17 @@ suite('CreateProjectWorktreeRouting', () => {
 
 			assert.strictEqual(result, undefined);
 			assert.strictEqual(requestSignal?.aborted, true);
+			await requestAborted;
+			await Promise.resolve();
+			for (let turn = 0; turn < 5; turn++) {
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+			}
+			assert.deepStrictEqual(unhandledRejections, []);
 		} finally {
+			mainWindow.removeEventListener(
+				'unhandledrejection',
+				onUnhandledRejection
+			);
 			projectManagerService.dispose();
 		}
 	});

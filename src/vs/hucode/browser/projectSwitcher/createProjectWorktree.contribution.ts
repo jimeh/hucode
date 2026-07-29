@@ -140,6 +140,10 @@ export async function pickCreateWorktreeOptions(
 		...toCreateWorktreeRefPicks(refs, 'remote'),
 		...toCreateWorktreeRefPicks(refs, 'tag'),
 	]);
+	// Quick Input may dismiss without awaiting its lazy picks. Keep the shared
+	// promise's rejection observable to awaiters while preventing cancellation
+	// from becoming an unhandled rejection.
+	void picks.catch(() => undefined);
 	let choice: CreateWorktreeQuickPick | undefined;
 	try {
 		choice = await runCreateWorktreeQuickInput(

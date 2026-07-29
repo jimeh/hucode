@@ -38,11 +38,10 @@ export function supportsTwoPhaseShutdown(
 /**
  * Workbench half of the hosted Omni web unload protocol.
  *
- * The shell only knows whether a hosted workbench is really going away after
- * it has seen the veto answer and re-checked that nothing superseded the
- * request, so the handshake is two calls: {@link prepareUnload} answers the
- * question without shutting anything down, and {@link commitUnload} performs
- * the shutdown the shell has by then committed to.
+ * Version 1 shells call {@link prepareUnload}, which completes the whole
+ * shutdown before it answers. Version 2 shells call
+ * {@link prepareUnloadForCommit}, re-check that the request still owns the
+ * workbench, and then call {@link commitUnload}.
  */
 export class HucodeHostedOmniWebUnloadCoordinator {
 
@@ -55,7 +54,27 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 	) { }
 
 	/**
-	 * Runs the veto-capable half of the handshake. Resolves false when a
+	 * Preserves the version 1 single-phase contract for an older shell driving
+	 * this workbench. A true answer means shutdown has reached the irreversible
+	 * commit, even if that commit failed before it could confirm completion.
+	 */
+	async prepareUnload(): Promise<boolean> {
+		if (!await this.prepareUnloadForCommit()) {
+			return false;
+		}
+
+		try {
+			return await this.commitUnload();
+		} catch {
+			// The old shell has no separate fail-open commit phase. Once commit
+			// starts, keeping the iframe could retain a workbench that already
+			// shut down, so report the request as removal-ready.
+			return true;
+		}
+	}
+
+	/**
+	 * Runs the veto-capable half of the version 2 handshake. Resolves false when a
 	 * shutdown listener vetoed or the attempt failed; either way the
 	 * lifecycle service has not shut down and the shell keeps the workbench
 	 * alive.
@@ -64,7 +83,7 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 	 * conditional on the shutdown actually happening. An abandoned preparation
 	 * leaves a usable workbench, not necessarily an untouched one.
 	 */
-	async prepareUnload(): Promise<boolean> {
+	async prepareUnloadForCommit(): Promise<boolean> {
 		if (this.committed) {
 			return true; // already shut down, nothing left to veto
 		}

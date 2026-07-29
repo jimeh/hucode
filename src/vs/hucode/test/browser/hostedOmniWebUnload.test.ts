@@ -61,6 +61,40 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		);
 	}
 
+	test('preserves the legacy single-phase shutdown contract', async () => {
+		const { lifecycleService, counts } = createLifecycleService();
+		const coordinator = createCoordinator(lifecycleService);
+
+		const prepared = await coordinator.prepareUnload();
+
+		assert.deepStrictEqual({
+			prepared,
+			willShutdown: lifecycleService.willShutdown,
+			counts,
+		}, {
+			prepared: true,
+			willShutdown: true,
+			counts: { beforeShutdown: 1, willShutdown: 1, didShutdown: 1 },
+		});
+	});
+
+	test('leaves lifecycle uncommitted after version 2 preparation', async () => {
+		const { lifecycleService, counts } = createLifecycleService();
+		const coordinator = createCoordinator(lifecycleService);
+
+		const prepared = await coordinator.prepareUnloadForCommit();
+
+		assert.deepStrictEqual({
+			prepared,
+			willShutdown: lifecycleService.willShutdown,
+			counts,
+		}, {
+			prepared: true,
+			willShutdown: false,
+			counts: { beforeShutdown: 1, willShutdown: 0, didShutdown: 0 },
+		});
+	});
+
 	test('reports a veto without shutting the workbench down', async () => {
 		const { lifecycleService, counts } = createLifecycleService();
 		disposables.add(lifecycleService.onBeforeShutdown(event => {
@@ -89,9 +123,9 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		}));
 		const coordinator = createCoordinator(lifecycleService);
 
-		const firstAttempt = await coordinator.prepareUnload();
+		const firstAttempt = await coordinator.prepareUnloadForCommit();
 		veto = false;
-		const secondAttempt = await coordinator.prepareUnload();
+		const secondAttempt = await coordinator.prepareUnloadForCommit();
 
 		assert.deepStrictEqual({
 			firstAttempt,
@@ -125,7 +159,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		}));
 		const coordinator = createCoordinator(lifecycleService);
 
-		await coordinator.prepareUnload();
+		await coordinator.prepareUnloadForCommit();
 		const committed = await coordinator.commitUnload();
 
 		assert.deepStrictEqual({
@@ -143,7 +177,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		const { lifecycleService, counts } = createLifecycleService();
 		const coordinator = createCoordinator(lifecycleService);
 
-		const prepared = await coordinator.prepareUnload();
+		const prepared = await coordinator.prepareUnloadForCommit();
 		const committed = await coordinator.commitUnload();
 		const recommitted = await coordinator.commitUnload();
 
@@ -166,7 +200,10 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		const coordinator = createCoordinator(lifecycleService);
 		const commitError = new Error('storage flush failed');
 
-		assert.strictEqual(await coordinator.prepareUnload(), true);
+		assert.strictEqual(
+			await coordinator.prepareUnloadForCommit(),
+			true
+		);
 		storageService.flush = async () => {
 			throw commitError;
 		};
@@ -179,14 +216,35 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		});
 	});
 
+	test('legacy unload stays removal-ready after commit failure', async () => {
+		const { lifecycleService, counts, storageService } =
+			createLifecycleService();
+		const coordinator = createCoordinator(lifecycleService);
+		let flushes = 0;
+		storageService.flush = async () => {
+			// Preparation awaits one flush and fireBeforeShutdown starts a
+			// second optimistic flush. The third belongs to commitShutdown.
+			if (++flushes === 3) {
+				throw new Error('storage flush failed');
+			}
+		};
+
+		const prepared = await coordinator.prepareUnload();
+
+		assert.deepStrictEqual({ prepared, counts }, {
+			prepared: true,
+			counts: { beforeShutdown: 1, willShutdown: 0, didShutdown: 0 },
+		});
+	});
+
 	test('does not re-ask a workbench it has already shut down', async () => {
 		const { lifecycleService, counts } = createLifecycleService();
 		const coordinator = createCoordinator(lifecycleService);
 
-		await coordinator.prepareUnload();
+		await coordinator.prepareUnloadForCommit();
 		await coordinator.commitUnload();
 		// The shell retries an unload whose commit it never saw confirmed.
-		const prepared = await coordinator.prepareUnload();
+		const prepared = await coordinator.prepareUnloadForCommit();
 		const committed = await coordinator.commitUnload();
 
 		assert.deepStrictEqual({ prepared, committed, counts }, {
@@ -206,7 +264,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 			}));
 			const coordinator = createCoordinator(lifecycleService);
 
-			const prepared = await coordinator.prepareUnload();
+			const prepared = await coordinator.prepareUnloadForCommit();
 
 			// "Still usable" is the claim, not "untouched": listeners that
 			// latch state have already latched it by the time a veto comes
@@ -234,7 +292,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		const coordinator = createCoordinator(lifecycleService);
 
 		assert.deepStrictEqual({
-			prepared: await coordinator.prepareUnload(),
+			prepared: await coordinator.prepareUnloadForCommit(),
 			committed: await coordinator.commitUnload(),
 			shutdowns,
 		}, {

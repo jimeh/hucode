@@ -536,12 +536,15 @@ human-facing guides rather than replacing them.
   collects every `onBeforeShutdown` veto and drops it, and unloads regardless.
   The veto-capable half is `prepareShutdown()`, which changes no
   lifecycle-service state, and `commitShutdown()` is the irreversible half;
-  the hosted iframe protocol exposes them as `prepareUnload`/`commitUnload` in
+  the hosted iframe protocol exposes them as
+  `prepareUnloadForCommit`/`commitUnload` in
   `src/vs/hucode/browser/hostedOmniWebUnload.ts`. Keep the shell's generation
   and path checks between the two, or an unload the shell aborts leaves a
-  workbench that looks live but is shut down. Preparation is not a no-op for
-  the workbench, though: `onBeforeShutdown` listeners run for real, and some
-  do not reset themselves when the shutdown is abandoned.
+  workbench that looks live but is shut down. `prepareUnload` remains the
+  complete single-phase compatibility method for old shells driving new
+  children. Preparation is not a no-op for the workbench, though:
+  `onBeforeShutdown` listeners run for real, and some do not reset themselves
+  when the shutdown is abandoned.
 - The two unload phases fail in opposite directions, deliberately. Preparation
   fails closed — a veto, a lost answer or a silent workbench all keep the
   workbench, because it is still running and there is state to protect. The
@@ -587,7 +590,10 @@ human-facing guides rather than replacing them.
   can drive an older workbench. For those the shell treats a successful
   preparation as already committed — it neither commits nor re-checks
   supersession, because the workbench is already gone and abandoning it there
-  would strand a dead iframe.
+  would strand a dead iframe. The reverse pairing is reachable after a server
+  upgrade: a long-lived old shell can load a new child. Keep the child's
+  `prepareUnload` method single-phase while newer shells use the distinct
+  `prepareUnloadForCommit` method.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child

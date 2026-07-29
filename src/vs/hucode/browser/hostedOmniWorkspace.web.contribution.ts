@@ -136,6 +136,10 @@ class HostedOmniWebBridgeContribution extends Disposable
 		return this.unloadCoordinator.prepareUnload();
 	}
 
+	prepareUnloadForCommit(): Promise<boolean> {
+		return this.unloadCoordinator.prepareUnloadForCommit();
+	}
+
 	commitUnload(): Promise<boolean> {
 		return this.unloadCoordinator.commitUnload();
 	}
