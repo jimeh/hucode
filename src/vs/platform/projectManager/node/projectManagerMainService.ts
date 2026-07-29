@@ -1225,6 +1225,10 @@ export class ProjectManagerMainService extends Disposable
 		const existing = this.projectHydrations.get(project.id);
 		if (existing) {
 			await existing;
+			if (!token.isCancellationRequested &&
+				this.needsProjectHydration(project.id)) {
+				await this.hydrateProjectWorktrees(project, token);
+			}
 			return;
 		}
 		if (!this.needsProjectHydration(project.id)) {

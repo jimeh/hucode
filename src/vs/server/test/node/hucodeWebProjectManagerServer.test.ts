@@ -8,6 +8,7 @@ import * as cp from 'child_process';
 import { EventEmitter } from 'events';
 import * as nodeFs from 'fs';
 import * as fs from 'fs/promises';
+import type { ClientRequest } from 'http';
 import * as os from 'os';
 import { promisify } from 'util';
 import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
@@ -260,6 +261,74 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.deepStrictEqual(second.body.projects, [first.body.project]);
 	});
 
+	test('keeps a normal Node HTTP request live after its body completes',
+		async () => {
+			const http = await import('http');
+			const server = createServer(serverDataPath, disposables, servers);
+			const added = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					isValidBranchName(
+						projectId: string,
+						branchName: string,
+						token: CancellationToken
+					): Promise<boolean>;
+				};
+			}).service;
+			let readTokenCanceled: boolean | undefined;
+			service.isValidBranchName =
+				async (_projectId, _branchName, token) => {
+					readTokenCanceled = token.isCancellationRequested;
+					return true;
+				};
+			const httpServer = http.createServer((req, res) => {
+				void server.handle(
+					req,
+					res,
+					new URL(req.url ?? '/', 'http://localhost').pathname
+				).catch(error => res.destroy(error as Error));
+			});
+			await new Promise<void>((resolve, reject) => {
+				httpServer.once('error', reject);
+				httpServer.listen(0, '127.0.0.1', () => {
+					httpServer.removeListener('error', reject);
+					resolve();
+				});
+			});
+			const address = httpServer.address();
+			assert.ok(address && typeof address !== 'string');
+			const request = requestJsonOverHttp(
+				http,
+				address.port,
+				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${added.body.project.id}/worktrees/branch-name`,
+				{ branchName: 'feature/normal-close' }
+			);
+			try {
+				const response = await raceTimeout(request.completion, 1000);
+				if (!response) {
+					request.request.destroy();
+				}
+
+				assert.deepStrictEqual(response, {
+					statusCode: 200,
+					body: { valid: true },
+				});
+				assert.strictEqual(readTokenCanceled, false);
+			} finally {
+				httpServer.closeAllConnections();
+				await new Promise<void>((resolve, reject) => {
+					httpServer.close(error => error ? reject(error) : resolve());
+				});
+			}
+		}
+	);
+
 	test('removes projects by id', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
@@ -418,6 +487,49 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('waits for an already-running state write before initial events',
+		async () => {
+			const writeStarted = new DeferredPromise<void>();
+			const releaseWrite = new DeferredPromise<void>();
+			const fileSystem = new TestProjectStateFileSystem({
+				async writeFile(path, data) {
+					await writeStarted.complete();
+					await releaseWrite.p;
+					await fs.writeFile(path, data);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const add = startHandle(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await writeStarted.p;
+
+			const events = startEvents(server);
+			const completedBeforeWrite = await raceTimeout(
+				events.completion.then(() => true),
+				20
+			);
+			const headersBeforeWrite =
+				events.response.writeHeadCalls.slice();
+			await releaseWrite.complete();
+			await Promise.all([add.completion, events.completion]);
+
+			assert.strictEqual(completedBeforeWrite, undefined);
+			assert.deepStrictEqual(headersBeforeWrite, []);
+			assert.strictEqual(events.statusCode, 200);
+			assert.strictEqual(readProjectEvents(events.body).length, 1);
+			events.close();
+		}
+	);
+
 	test('waits for background refresh state before publishing its snapshot',
 		async () => {
 			const writeStarted = new DeferredPromise<void>();
@@ -529,7 +641,7 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
-	test('bounds Git reads and cancels active and queued disconnected work',
+	test('settles a queued disconnected Git read before the active slot',
 		async () => {
 			const server = createServer(
 				serverDataPath,
@@ -575,8 +687,14 @@ suite('HucodeWebProjectManagerServer', function () {
 			const queued = startHandle(server, 'POST', route, {});
 
 			queued.close();
+			const queuedSettled = await raceTimeout(
+				queued.completion.then(() => true),
+				50
+			);
+			assert.strictEqual(queuedSettled, true);
+			assert.strictEqual(calls, 1);
 			active.close();
-			await Promise.all([active.completion, queued.completion]);
+			await active.completion;
 
 			assert.strictEqual(activeToken.isCancellationRequested, true);
 			assert.strictEqual(calls, 1);
@@ -790,7 +908,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			}).service;
 			const getProjects = service.getProjects.bind(service);
 			const terminations: readonly ['request' | 'response', string][] = [
-				['request', 'close'],
+				['request', 'aborted'],
 				['response', 'close'],
 				['response', 'error'],
 			];
@@ -812,7 +930,10 @@ suite('HucodeWebProjectManagerServer', function () {
 					disconnected.response.emit(event, new Error('expected'));
 				}
 				assert.strictEqual(disconnected.response.endCalls, 1);
-				assert.strictEqual(disconnected.request.listenerCount('close'), 0);
+				assert.strictEqual(
+					disconnected.request.listenerCount('aborted'),
+					0
+				);
 				assert.strictEqual(disconnected.response.listenerCount('close'), 0);
 				assert.strictEqual(disconnected.response.listenerCount('error'), 0);
 
@@ -858,7 +979,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			const pending = startEvents(server);
 			server.dispose();
 			assert.strictEqual(pending.response.endCalls, 1);
-			assert.strictEqual(pending.request.listenerCount('close'), 0);
+			assert.strictEqual(pending.request.listenerCount('aborted'), 0);
 			assert.strictEqual(pending.response.listenerCount('close'), 0);
 			assert.strictEqual(pending.response.listenerCount('error'), 0);
 
@@ -993,7 +1114,7 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 
 		await waitFor(() => slow.response.endCalls === 1);
-		assert.strictEqual(slow.request.listenerCount('close'), 0);
+		assert.strictEqual(slow.request.listenerCount('aborted'), 0);
 		assert.strictEqual(slow.response.listenerCount('drain'), 0);
 		const replacement = await handleEvents(server);
 		assert.strictEqual(replacement.statusCode, 200);
@@ -1063,7 +1184,7 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		assert.strictEqual(failed.statusCode, 200);
 		assert.strictEqual(failed.response.endCalls, 1);
-		assert.strictEqual(failed.request.listenerCount('close'), 0);
+		assert.strictEqual(failed.request.listenerCount('aborted'), 0);
 		assert.strictEqual(failed.response.listenerCount('close'), 0);
 		assert.strictEqual(failed.response.listenerCount('error'), 0);
 		assert.strictEqual(failed.response.listenerCount('drain'), 0);
@@ -1083,7 +1204,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			1
 		);
 		const terminations: readonly ['request' | 'response', string][] = [
-			['request', 'close'],
+			['request', 'aborted'],
 			['response', 'close'],
 			['response', 'error'],
 		];
@@ -1099,7 +1220,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			}
 
 			assert.strictEqual(client.response.endCalls, 1);
-			assert.strictEqual(client.request.listenerCount('close'), 0);
+			assert.strictEqual(client.request.listenerCount('aborted'), 0);
 			assert.strictEqual(client.response.listenerCount('close'), 0);
 			assert.strictEqual(client.response.listenerCount('error'), 0);
 			assert.strictEqual(client.response.listenerCount('drain'), 0);
@@ -1121,7 +1242,7 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		for (const client of [slow, healthy]) {
 			assert.strictEqual(client.response.endCalls, 1);
-			assert.strictEqual(client.request.listenerCount('close'), 0);
+			assert.strictEqual(client.request.listenerCount('aborted'), 0);
 			assert.strictEqual(client.response.listenerCount('close'), 0);
 			assert.strictEqual(client.response.listenerCount('error'), 0);
 			assert.strictEqual(client.response.listenerCount('drain'), 0);
@@ -1426,6 +1547,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			HUCODE_WEB_PROJECTS_API_PATH,
 			{ rootPath: projectPath }
 		);
+		const events = await handleEvents(server);
 		const pinnedPath = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
 			`${added.body.project.id}/pinned`;
 		fileSystem.renameError = new Error('pinned write failed');
@@ -1446,16 +1568,24 @@ suite('HucodeWebProjectManagerServer', function () {
 			pinnedPath,
 			{ pinned: true }
 		);
+		await new Promise(resolve => setTimeout(resolve, 0));
 		const stored = JSON.parse(
 			await fs.readFile(storagePath, 'utf8')
 		) as {
 			readonly projects: readonly { readonly pinned: boolean }[];
 		};
+		const snapshots = readProjectEvents(events.body) as {
+			readonly projects: readonly {
+				readonly pinned: boolean;
+			}[];
+		}[];
 
 		assert.deepStrictEqual({
 			failed,
 			retriedStatus: retried.statusCode,
 			storedPinned: stored.projects[0].pinned,
+			eventCount: snapshots.length,
+			eventPinned: snapshots.at(-1)?.projects[0].pinned,
 		}, {
 			failed: {
 				statusCode: 500,
@@ -1463,7 +1593,10 @@ suite('HucodeWebProjectManagerServer', function () {
 			},
 			retriedStatus: 200,
 			storedPinned: true,
+			eventCount: 2,
+			eventPinned: true,
 		});
+		events.close();
 		await server.flushState();
 		await server.flushState();
 	});
@@ -2158,7 +2291,7 @@ function startEvents(
 		request: req,
 		response: res,
 		close() {
-			req.emit('close');
+			res.emit('close');
 		},
 		completion,
 	};
@@ -2193,7 +2326,7 @@ function startHandle(
 		response,
 		completion,
 		close() {
-			request.emit('close');
+			response.emit('close');
 		},
 	};
 }
@@ -2203,6 +2336,7 @@ class TestProjectManagerEventResponse extends EventEmitter {
 	headers: Record<string, unknown> = {};
 	body = '';
 	endCalls = 0;
+	writableFinished = false;
 	readonly writeHeadCalls: {
 		readonly status: number;
 		readonly headers: Record<string, unknown>;
@@ -2252,7 +2386,50 @@ class TestProjectManagerEventResponse extends EventEmitter {
 	end(data?: string): void {
 		this.endCalls++;
 		this.body += data ?? '';
+		this.writableFinished = true;
 	}
+}
+
+function requestJsonOverHttp(
+	http: typeof import('http'),
+	port: number,
+	pathname: string,
+	body: unknown
+): {
+	readonly request: ClientRequest;
+	readonly completion: Promise<ProjectManagerResponse>;
+} {
+	const serializedBody = JSON.stringify(body);
+	let request: ClientRequest;
+	const completion = new Promise<ProjectManagerResponse>((resolve, reject) => {
+		request = http.request({
+			hostname: '127.0.0.1',
+			port,
+			path: pathname,
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				'content-length': Buffer.byteLength(serializedBody),
+			},
+		}, response => {
+			const chunks: Buffer[] = [];
+			response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+			response.on('end', () => {
+				resolve({
+					statusCode: response.statusCode ?? 0,
+					body: JSON.parse(
+						Buffer.concat(chunks).toString('utf8')
+					) as unknown,
+				});
+			});
+		});
+		request.on('error', reject);
+		request.end(serializedBody);
+	});
+	return {
+		request: request!,
+		completion,
+	};
 }
 
 async function handle(

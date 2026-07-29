@@ -2947,6 +2947,84 @@ suite('ProjectManagerMainService', () => {
 		}
 	);
 
+	test('retries canceled shared hydration for a live ref follower',
+		async () => {
+			const stateService = new TestStateService();
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: [{
+					id: 'project-1',
+					label: 'Repo',
+					rootPath: '/repo',
+					pinned: false,
+					order: 1,
+				}],
+			} satisfies StoredProjectManagerState);
+			const gitWorktreeService = new TestGitWorktreeService();
+			const firstDiscoveryStarted =
+				new DeferredPromise<CancellationToken>();
+			let discoveries = 0;
+			gitWorktreeService.listWorktreesHandler =
+				async (_projectRoot, token) => {
+					if (++discoveries === 1) {
+						await firstDiscoveryStarted.complete(token);
+						await new Promise<void>((_resolve, reject) => {
+							const listener =
+								token.onCancellationRequested(() => {
+									listener.dispose();
+									reject(new CancellationError());
+								});
+						});
+					}
+					return [
+						createMainWorktree('/repo'),
+						createLinkedWorktree('/repo.worktrees/feature', 'feature'),
+					];
+				};
+			gitWorktreeService.refs.set('/repo', [{
+				name: 'feature',
+				type: 'head',
+				checkedOutPath: '/repo.worktrees/feature',
+			}]);
+			const service = createService(stateService, gitWorktreeService);
+			const firstSource = new CancellationTokenSource();
+
+			const first = service.getWorktreeRefs(
+				'project-1',
+				undefined,
+				firstSource.token
+			);
+			await firstDiscoveryStarted.p;
+			const follower = service.getWorktreeRefs('project-1');
+			await timeout(0);
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				1
+			);
+
+			firstSource.cancel();
+			const [, followerRefs] = await Promise.all([first, follower]);
+
+			assert.strictEqual(
+				gitWorktreeService.listWorktreesCalls.length,
+				2
+			);
+			assert.deepStrictEqual(
+				gitWorktreeService.listRefsCalls.at(-1)?.worktrees,
+				[
+					createMainWorktree('/repo'),
+					createLinkedWorktree('/repo.worktrees/feature', 'feature'),
+				]
+			);
+			assert.deepStrictEqual(followerRefs, [{
+				name: 'feature',
+				type: 'head',
+				checkedOutPath: '/repo.worktrees/feature',
+			}]);
+			firstSource.dispose();
+		}
+	);
+
 	test('recovers an initially unavailable project through retry', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();

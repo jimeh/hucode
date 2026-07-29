@@ -5,7 +5,11 @@
 
 import * as fs from 'fs';
 import type * as http from 'http';
-import { Limiter, Queue } from '../../base/common/async.js';
+import {
+	Limiter,
+	Queue,
+	raceCancellationError,
+} from '../../base/common/async.js';
 import {
 	CancellationToken,
 	CancellationTokenSource,
@@ -58,11 +62,13 @@ interface HucodeWebProjectManagerRequest
 	extends AsyncIterable<Buffer | string | Uint8Array> {
 	readonly method?: string;
 	readonly headers?: http.IncomingHttpHeaders;
-	on?(event: 'close', listener: () => void): unknown;
-	removeListener?(event: 'close', listener: () => void): unknown;
+	readonly aborted?: boolean;
+	on?(event: 'aborted', listener: () => void): unknown;
+	removeListener?(event: 'aborted', listener: () => void): unknown;
 }
 
 interface HucodeWebProjectManagerResponse {
+	readonly writableFinished?: boolean;
 	writeHead(status: number, headers?: http.OutgoingHttpHeaders): unknown;
 	write?(data: string): unknown;
 	end(data?: string): unknown;
@@ -216,6 +222,12 @@ export class HucodeProjectFileStateService implements IStateService {
 
 	async flushWritesAfter(generation: number): Promise<void> {
 		if (this.latestWriteGeneration > generation) {
+			await this.latestWrite;
+		}
+	}
+
+	async flushWritesThrough(generation: number): Promise<void> {
+		if (this.latestWriteGeneration >= generation) {
 			await this.latestWrite;
 		}
 	}
@@ -578,8 +590,17 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 
 		const requestCancellation = new CancellationTokenSource();
-		const onRequestClose = () => requestCancellation.cancel();
-		req.on?.('close', onRequestClose);
+		const onRequestAborted = () => requestCancellation.cancel();
+		const onResponseClose = () => {
+			if (!res.writableFinished) {
+				requestCancellation.cancel();
+			}
+		};
+		req.on?.('aborted', onRequestAborted);
+		res.on?.('close', onResponseClose);
+		if (req.aborted) {
+			requestCancellation.cancel();
+		}
 		try {
 			if (req.method === 'GET' && !relativePath) {
 				return this.writeProjects(res, 200, await service.getProjects());
@@ -639,7 +660,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			}
 			return this.writeRequestError(res, error);
 		} finally {
-			req.removeListener?.('close', onRequestClose);
+			req.removeListener?.('aborted', onRequestAborted);
+			res.removeListener?.('close', onResponseClose);
 			requestCancellation.dispose();
 		}
 	}
@@ -858,14 +880,18 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		await this.mutationQueue.queue(async () => {
 			this.throwIfCanceled(token);
 			await this.stateService?.retryDirtyState();
-			this.throwIfCanceled(token);
-			const writeGeneration =
-				this.stateService?.currentWriteGeneration ?? 0;
-			// Once the mutation starts, it is intentionally detached from the
-			// request token. Git create/remove and the state flush must finish
-			// even when the browser disconnects.
-			result = await mutation();
-			await this.stateService?.flushWritesAfter(writeGeneration);
+			try {
+				this.throwIfCanceled(token);
+				const writeGeneration =
+					this.stateService?.currentWriteGeneration ?? 0;
+				// Once the mutation starts, it is intentionally detached from
+				// the request token. Git create/remove and the state flush must
+				// finish even when the browser disconnects.
+				result = await mutation();
+				await this.stateService?.flushWritesAfter(writeGeneration);
+			} finally {
+				this.retryPendingProjectPublication();
+			}
 		});
 		this.throwIfCanceled(token);
 		return result!;
@@ -875,10 +901,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		token: CancellationToken,
 		read: () => Promise<T>
 	): Promise<T> {
-		return this.gitReadLimiter.queue(async () => {
+		this.throwIfCanceled(token);
+		const queued = this.gitReadLimiter.queue(async () => {
 			this.throwIfCanceled(token);
 			return read();
 		}) as Promise<T>;
+		return raceCancellationError(queued, token);
 	}
 
 	private throwIfCanceled(token: CancellationToken): void {
@@ -982,7 +1010,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		client.onTerminated = () => this.removeEventClient(client);
 		client.onDrain = () => this.drainEventClient(client);
 		this.eventClients.add(client);
-		req.on?.('close', client.onTerminated);
+		req.on?.('aborted', client.onTerminated);
 		res.on?.('close', client.onTerminated);
 		res.on?.('error', client.onTerminated);
 
@@ -991,7 +1019,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			const writeGeneration =
 				this.stateService?.currentWriteGeneration ?? 0;
 			projects = await service.getProjects();
-			await this.stateService?.flushWritesAfter(writeGeneration);
+			await this.stateService?.flushWritesThrough(writeGeneration);
 		} catch (error) {
 			if (client.closed) {
 				return true;
@@ -1066,8 +1094,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		>
 	): Promise<void> {
 		try {
-			await this.stateService?.flushWritesAfter(
-				Math.max(0, publication.generation - 1)
+			await this.stateService?.flushWritesThrough(
+				publication.generation
 			);
 		} catch (error) {
 			this.logService.warn(
@@ -1081,6 +1109,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		this.pendingProjectPublication = undefined;
 		this.broadcastProjects(publication.projects);
+	}
+
+	private retryPendingProjectPublication(): void {
+		const publication = this.pendingProjectPublication;
+		if (publication) {
+			void this.publishProjectsWhenDurable(publication);
+		}
 	}
 
 	private broadcastProjects(projects: readonly ProjectRecord[]): void {
@@ -1169,7 +1204,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		client.closed = true;
 		this.eventClients.delete(client);
-		client.req.removeListener?.('close', client.onTerminated);
+		client.req.removeListener?.('aborted', client.onTerminated);
 		client.res.removeListener?.('close', client.onTerminated);
 		client.res.removeListener?.('error', client.onTerminated);
 		if (client.drainListening) {

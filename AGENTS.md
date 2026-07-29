@@ -165,6 +165,9 @@ as the required Hucode instruction set for work in this fork.
   worktree create/remove starts, finish that irreversible mutation and its
   state flush. If post-create discovery fails, return a stale record for the
   created path while the normal refresh retry recovers authoritative metadata.
+  Node's `IncomingMessage` `close` event also fires after normal request
+  completion; use request `aborted` or response `close` before
+  `writableFinished` to detect a real disconnect.
 - `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
   needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
   `serve-web` therefore runs with Copilot Chat entirely absent, which silently
