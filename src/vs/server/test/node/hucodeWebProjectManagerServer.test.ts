@@ -530,6 +530,51 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('joins a healthy in-flight write without queuing an SSE retry',
+		async () => {
+			const firstWriteStarted = new DeferredPromise<void>();
+			const releaseFirstWrite = new DeferredPromise<void>();
+			let renameCount = 0;
+			const fileSystem = new TestProjectStateFileSystem({
+				async rename(source, target) {
+					renameCount++;
+					if (renameCount === 1) {
+						await firstWriteStarted.complete();
+						await releaseFirstWrite.p;
+					} else {
+						throw new Error('redundant SSE retry failed');
+					}
+					await fs.rename(source, target);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const add = startHandle(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await firstWriteStarted.p;
+
+			const events = startEvents(server);
+			const headersBeforeWrite =
+				events.response.writeHeadCalls.slice();
+			await releaseFirstWrite.complete();
+			await Promise.all([add.completion, events.completion]);
+
+			assert.deepStrictEqual(headersBeforeWrite, []);
+			assert.strictEqual(renameCount, 1);
+			assert.strictEqual(events.statusCode, 200);
+			assert.strictEqual(readProjectEvents(events.body).length, 1);
+			events.close();
+		}
+	);
+
 	test('recovers settled dirty state before admitting an event client',
 		async () => {
 			const retryWriteStarted = new DeferredPromise<void>();
@@ -560,6 +605,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				HUCODE_WEB_PROJECTS_API_PATH,
 				{ rootPath: projectPath }
 			);
+			const existingEvents = await handleEvents(server);
 			const failed = await handle<ErrorResponseBody>(
 				server,
 				'POST',
@@ -600,6 +646,16 @@ suite('HucodeWebProjectManagerServer', function () {
 			assert.deepStrictEqual(snapshots.map(snapshot =>
 				snapshot.projects[0].pinned
 			), [true]);
+			assert.deepStrictEqual(readProjectEvents(existingEvents.body).map(
+				snapshot => (
+					snapshot as {
+						readonly projects: readonly {
+							readonly pinned: boolean;
+						}[];
+					}
+				).projects[0].pinned
+			), [false, true]);
+			existingEvents.close();
 			events.close();
 		}
 	);
@@ -823,6 +879,50 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('rejects an already-aborted non-SSE request before Git admission',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			let calls = 0;
+			service.getWorktreeRefs = async () => {
+				calls++;
+				return [];
+			};
+			const request = Object.assign(new EventEmitter(), {
+				method: 'POST',
+				aborted: true,
+				headers: { 'content-type': 'application/json' },
+				async *[Symbol.asyncIterator]() {
+					yield Buffer.from('{}');
+				},
+			});
+			const response = new TestProjectManagerEventResponse(0, 0);
+
+			assert.strictEqual(await server.handle(
+				request,
+				response,
+				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`
+			), true);
+			assert.strictEqual(calls, 0);
+			assert.deepStrictEqual(response.writeHeadCalls, []);
+		}
+	);
+
 	test('finishes an active worktree mutation after its request disconnects',
 		async () => {
 			const server = createServer(
@@ -970,7 +1070,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			};
 
 			const firstPending = startEvents(server);
-			await Promise.resolve();
+			await waitFor(() => projectReads === 1);
 			assert.strictEqual(projectReads, 1);
 			const rejected = await handleEvents(server);
 			assert.strictEqual(rejected.statusCode, 503);
@@ -1044,7 +1144,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				};
 
 				const disconnected = startEvents(server);
-				await Promise.resolve();
+				await waitFor(() => projectReads === 1);
 				assert.strictEqual(projectReads, 1);
 				if (target === 'request') {
 					disconnected.request.emit(event);
@@ -1060,7 +1160,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				assert.strictEqual(disconnected.response.listenerCount('error'), 0);
 
 				const replacement = startEvents(server);
-				await Promise.resolve();
+				await waitFor(() => projectReads === 2);
 				assert.strictEqual(projectReads, 2);
 				await releaseProjects.complete();
 				await Promise.all([
@@ -1809,6 +1909,55 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 		await assert.rejects(flushPromise, /gated write failed/);
 	});
+
+	test('flushes an exact generation without inheriting a later failure',
+		async () => {
+			const firstWriteStarted = new DeferredPromise<void>();
+			const releaseFirstWrite = new DeferredPromise<void>();
+			let renameCount = 0;
+			const fileSystem = new TestProjectStateFileSystem({
+				async rename(source, target) {
+					renameCount++;
+					if (renameCount === 1) {
+						await firstWriteStarted.complete();
+						await releaseFirstWrite.p;
+						await fs.rename(source, target);
+						return;
+					}
+					throw new Error('later write failed');
+				},
+			});
+			const stateService = new HucodeProjectFileStateService(
+				serverDataPath,
+				new NullLogService(),
+				fileSystem
+			);
+			const firstState = JSON.parse(serializeStoredProjects([{
+				id: 'first',
+				label: 'first',
+				rootPath: projectPath,
+			}]));
+			const secondState = JSON.parse(serializeStoredProjects([{
+				id: 'second',
+				label: 'second',
+				rootPath: projectPath,
+			}]));
+
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, firstState);
+			await firstWriteStarted.p;
+			const firstGeneration = stateService.currentWriteGeneration;
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, secondState);
+			const firstFlush = stateService.flushWritesThrough(firstGeneration);
+			await releaseFirstWrite.complete();
+
+			await assert.doesNotReject(firstFlush);
+			await assert.doesNotReject(
+				stateService.flushWritesThrough(firstGeneration)
+			);
+			await assert.rejects(stateService.close(), /later write failed/);
+			assert.strictEqual(renameCount, 2);
+		}
+	);
 
 	for (const outcome of ['success', 'failure'] as const) {
 		test(`holds a server lifetime lease through write ${outcome}`, async () => {

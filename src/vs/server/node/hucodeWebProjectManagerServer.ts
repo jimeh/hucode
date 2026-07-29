@@ -142,8 +142,12 @@ export class HucodeProjectFileStateService implements IStateService {
 	private stateVersion = 0;
 	private persistedVersion = 0;
 	private writeGeneration = 0;
-	private latestWriteGeneration = 0;
-	private latestWrite: Promise<void> = Promise.resolve();
+	private lastSuccessfulWriteGeneration = 0;
+	private readonly pendingWrites = new Map<number, Promise<void>>();
+	private failedWrite:
+		| { readonly generation: number; readonly error: unknown }
+		| undefined;
+	private dirtyRetry: Promise<void> | undefined;
 	private dirtyWriteError: unknown;
 
 	constructor(
@@ -213,7 +217,46 @@ export class HucodeProjectFileStateService implements IStateService {
 		if (!this.isDirty) {
 			return;
 		}
-		await this.queueStateWrite(this.state, this.stateVersion);
+		if (this.dirtyRetry) {
+			await this.dirtyRetry;
+			return;
+		}
+
+		const inFlight = this.pendingWrites.get(this.writeGeneration);
+		if (inFlight) {
+			try {
+				await inFlight;
+			} catch {
+				// A settled failure is retried below using the latest state.
+			}
+			if (!this.isDirty) {
+				return;
+			}
+			if (this.dirtyRetry) {
+				await this.dirtyRetry;
+				return;
+			}
+		}
+
+		if (this.dirtyWriteError === undefined) {
+			return;
+		}
+		const write = this.queueStateWrite(this.state, this.stateVersion);
+		const retry = write.then(
+			() => {
+				if (this.dirtyRetry === retry) {
+					this.dirtyRetry = undefined;
+				}
+			},
+			error => {
+				if (this.dirtyRetry === retry) {
+					this.dirtyRetry = undefined;
+				}
+				throw error;
+			}
+		);
+		this.dirtyRetry = retry;
+		await retry;
 	}
 
 	get currentWriteGeneration(): number {
@@ -221,17 +264,25 @@ export class HucodeProjectFileStateService implements IStateService {
 	}
 
 	async flushWritesAfter(generation: number): Promise<void> {
-		if (this.latestWriteGeneration > generation) {
-			await this.latestWrite;
+		const targetGeneration = this.writeGeneration;
+		if (targetGeneration > generation) {
+			await this.flushWritesThrough(targetGeneration);
 		}
 	}
 
 	async flushWritesThrough(generation: number): Promise<void> {
-		// Only the latest queued write promise is retained. Waiting for it can
-		// conservatively include generations newer than the requested one, but
-		// the serialized queue guarantees the requested generation settled too.
-		if (this.latestWriteGeneration >= generation) {
-			await this.latestWrite;
+		if (generation <= this.lastSuccessfulWriteGeneration) {
+			return;
+		}
+		const pendingWrite = this.pendingWrites.get(generation);
+		if (pendingWrite) {
+			await pendingWrite;
+			return;
+		}
+		if (this.failedWrite &&
+			generation <= this.failedWrite.generation &&
+			generation > this.lastSuccessfulWriteGeneration) {
+			throw this.failedWrite.error;
 		}
 	}
 
@@ -339,12 +390,31 @@ export class HucodeProjectFileStateService implements IStateService {
 			lease?.dispose();
 			throw error;
 		}
-		this.latestWriteGeneration = generation;
-		this.latestWrite = write;
+		const trackedWrite = write.then(
+			() => {
+				this.pendingWrites.delete(generation);
+				this.lastSuccessfulWriteGeneration = Math.max(
+					this.lastSuccessfulWriteGeneration,
+					generation
+				);
+				if (this.failedWrite &&
+					this.failedWrite.generation <= generation) {
+					this.failedWrite = undefined;
+				}
+			},
+			error => {
+				this.pendingWrites.delete(generation);
+				if (generation > this.lastSuccessfulWriteGeneration) {
+					this.failedWrite = { generation, error };
+				}
+				throw error;
+			}
+		);
+		this.pendingWrites.set(generation, trackedWrite);
 		// setItem cannot return the write promise. Attach a rejection handler
 		// immediately; flushWritesAfter and close still report the stored error.
-		void write.catch(() => { });
-		return write;
+		void trackedWrite.catch(() => { });
+		return trackedWrite;
 	}
 
 	private get isDirty(): boolean {
@@ -1019,11 +1089,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 		let projects: readonly ProjectRecord[];
 		try {
-			await this.stateService?.retryDirtyState();
-			this.retryPendingProjectPublication();
+			projects = await service.getProjects();
 			const writeGeneration =
 				this.stateService?.currentWriteGeneration ?? 0;
-			projects = await service.getProjects();
+			await this.stateService?.retryDirtyState();
+			this.retryPendingProjectPublication();
 			await this.stateService?.flushWritesThrough(writeGeneration);
 		} catch (error) {
 			if (client.closed) {
@@ -1118,9 +1188,20 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 	private retryPendingProjectPublication(): void {
 		const publication = this.pendingProjectPublication;
-		if (publication) {
-			void this.publishProjectsWhenDurable(publication);
+		if (!publication) {
+			return;
 		}
+		const generation =
+			this.stateService?.currentWriteGeneration ?? 0;
+		const retry = publication.generation === generation
+			? publication
+			: {
+				id: ++this.nextProjectPublicationId,
+				generation,
+				projects: publication.projects,
+			};
+		this.pendingProjectPublication = retry;
+		void this.publishProjectsWhenDurable(retry);
 	}
 
 	private broadcastProjects(projects: readonly ProjectRecord[]): void {

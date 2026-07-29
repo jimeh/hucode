@@ -4597,6 +4597,51 @@ suite('ProjectManagerMainService', () => {
 		}
 	);
 
+	test('does not cache a provisional worktree after uncorrelated discovery',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+			]);
+			const service = createService(stateService, gitWorktreeService);
+			const project = await service.addProject(URI.file('/repo'));
+			const discovered = [
+				createLinkedWorktree(
+					'/canonical/repo.worktrees/first',
+					'feature/first'
+				),
+				createLinkedWorktree(
+					'/canonical/repo.worktrees/second',
+					'feature/second'
+				),
+			];
+			gitWorktreeService.createWorktree = async () => {
+				gitWorktreeService.worktrees.set('/repo', [
+					createMainWorktree('/repo'),
+					...discovered,
+				]);
+				return '/alias/repo.worktrees/requested';
+			};
+
+			const created = await service.createWorktree(project.id, {
+				branchName: 'feature/requested',
+				path: '/alias/repo.worktrees/requested',
+			});
+			const refreshed = (await service.getProjects())[0];
+
+			assert.deepStrictEqual(created, createLinkedWorktree(
+				'/alias/repo.worktrees/requested',
+				'feature/requested'
+			));
+			assert.strictEqual(refreshed.worktreeState, 'current');
+			assert.deepStrictEqual(refreshed.worktrees, [
+				createMainWorktree('/repo'),
+				...discovered,
+			]);
+		}
+	);
+
 	test('refresh prunes stale pinned worktree paths', async () => {
 		const stateService = new TestStateService();
 		const gitWorktreeService = new TestGitWorktreeService();
