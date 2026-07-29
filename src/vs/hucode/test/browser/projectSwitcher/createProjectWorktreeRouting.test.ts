@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { isWeb } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import type { IConfigurationService } from
@@ -142,7 +143,7 @@ suite('CreateProjectWorktreeRouting', () => {
 		}
 	});
 
-	test('does not pass cancellation tokens to generic project services',
+	test('uses the platform request-cancellation contract',
 		async () => {
 			const argumentCounts: number[] = [];
 			const projectManagerService = {
@@ -186,7 +187,10 @@ suite('CreateProjectWorktreeRouting', () => {
 				{} as IHucodeShellService
 			);
 
-			assert.deepStrictEqual(argumentCounts, [2, 2]);
+			assert.deepStrictEqual(
+				argumentCounts,
+				isWeb ? [3, 3] : [2, 2]
+			);
 		});
 
 	test('does not accept a branch from superseded validation', async () => {
@@ -245,6 +249,48 @@ suite('CreateProjectWorktreeRouting', () => {
 		} finally {
 			projectManagerService.dispose();
 		}
+	});
+
+	test('does not accept late native validation after supersession', async () => {
+		const validations: ((valid: boolean) => void)[] = [];
+		const projectManagerService = {
+			isValidBranchName() {
+				return new Promise<boolean>(resolve => {
+					validations.push(resolve);
+				});
+			},
+		} as Partial<IProjectManagerService> as IProjectManagerService;
+		let staleAccepted = false;
+		let dismissedValidation: Promise<unknown> | undefined;
+		const quickInputService = {
+			async input(options: IInputOptions) {
+				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
+				dismissedValidation = options.validateInput?.('second');
+				validations[0](true);
+				await staleAcceptance;
+				return undefined;
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		const result = await pickCreateWorktreeBranchName(
+			'project',
+			[],
+			projectManagerService,
+			quickInputService,
+			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+			{} as IHucodeShellService,
+			false
+		);
+		validations[1](true);
+
+		assert.strictEqual(result, undefined);
+		assert.ok(await dismissedValidation);
+		assert.strictEqual(staleAccepted, false);
 	});
 });
 

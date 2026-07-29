@@ -9,7 +9,10 @@ import {
 	CancellationToken,
 	CancellationTokenSource,
 } from '../../../base/common/cancellation.js';
-import { isCancellationError } from '../../../base/common/errors.js';
+import {
+	CancellationError,
+	isCancellationError,
+} from '../../../base/common/errors.js';
 import { isWeb } from '../../../base/common/platform.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
@@ -384,6 +387,9 @@ async function validateCreateWorktreeBranchName(
 		? await (projectManagerService as CancellableProjectManagerService)
 			.isValidBranchName(projectId, branchName, token)
 		: await projectManagerService.isValidBranchName(projectId, branchName);
+	if (token.isCancellationRequested) {
+		throw new CancellationError();
+	}
 	if (!isValid) {
 		return localize(
 			'createWorktreeBranchInvalidValidate',
