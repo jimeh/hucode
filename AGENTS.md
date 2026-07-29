@@ -175,6 +175,10 @@ as the required Hucode instruction set for work in this fork.
   mutation has settled; join both admission queues and dispose the manager
   before releasing the final lease. A canceled read response can settle before
   its admitted Git operation, so tests must join the read queue before teardown.
+  Route project-list GETs and initial SSE hydration through that same read
+  admission path. Operation leases end when the underlying work settles, while
+  response leases remain through response `finish`, premature `close`, or
+  `error`; long-lived SSE responses retain theirs until disconnect.
   The shared `Limiter` and `Queue` retain canceled waiting factories, and their
   disposal clears waiting work without settling its returned promises; do not
   use them for request admission that must release canceled or disposed work.
