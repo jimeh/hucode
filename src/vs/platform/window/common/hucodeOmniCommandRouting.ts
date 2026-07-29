@@ -7,6 +7,7 @@ import {
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 } from './window.js';
+import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
 	'hucode.projectSwitcher.',
@@ -65,7 +66,60 @@ export const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
 	'[contenteditable="true"]',
 ].join(', ');
 
-let hucodeOmniShellCommandForwardingDisabled = 0;
+export const IHucodeOmniCommandForwardingContext =
+	createDecorator<IHucodeOmniCommandForwardingContext>(
+		'hucodeOmniCommandForwardingContext'
+	);
+
+/**
+ * Synchronous invocation context shared by the renderer's forwarding surfaces.
+ * Each surface owns a distinct scope created by this service.
+ */
+export interface IHucodeOmniCommandForwardingContext {
+	readonly _serviceBrand: undefined;
+	readonly isForwardingDisabled: boolean;
+	createScope(): IHucodeOmniCommandForwardingScope;
+}
+
+export interface IHucodeOmniCommandForwardingScope {
+	readonly isForwardingDisabled: boolean;
+	runWithForwardingDisabled<T>(
+		callback: () => T
+	): T;
+}
+
+export class HucodeOmniCommandForwardingContext
+	implements IHucodeOmniCommandForwardingContext {
+
+	declare readonly _serviceBrand: undefined;
+
+	private readonly activeScopes: symbol[] = [];
+
+	get isForwardingDisabled(): boolean {
+		return this.activeScopes.length > 0;
+	}
+
+	createScope(): IHucodeOmniCommandForwardingScope {
+		const context = this;
+		const token = Symbol('hucodeOmniCommandForwardingScope');
+
+		return {
+			get isForwardingDisabled(): boolean {
+				return context.activeScopes.includes(token);
+			},
+			runWithForwardingDisabled<T>(callback: () => T): T {
+				context.activeScopes.push(token);
+				try {
+					// Do not await promises returned by the callback. Consumers
+					// inspect this context synchronously before their first await.
+					return callback();
+				} finally {
+					context.activeScopes.pop();
+				}
+			},
+		};
+	}
+}
 
 /**
  * Returns whether a command is owned by the Omni Projects shell.
@@ -93,25 +147,4 @@ export function isHucodeForwardedFromOmniShell(
 		| INativeRunKeybindingInWindowRequest
 ): boolean {
 	return request.hucodeForwardedFromOmniShell === true;
-}
-
-/**
- * Runs work without the Omni shell command forwarder re-forwarding commands.
- */
-export async function withHucodeOmniShellCommandForwardingDisabled<T>(
-	callback: () => T | Promise<T>
-): Promise<T> {
-	hucodeOmniShellCommandForwardingDisabled++;
-	try {
-		return await callback();
-	} finally {
-		hucodeOmniShellCommandForwardingDisabled--;
-	}
-}
-
-/**
- * Returns whether Omni shell command forwarding is temporarily disabled.
- */
-export function isHucodeOmniShellCommandForwardingDisabled(): boolean {
-	return hucodeOmniShellCommandForwardingDisabled > 0;
 }
