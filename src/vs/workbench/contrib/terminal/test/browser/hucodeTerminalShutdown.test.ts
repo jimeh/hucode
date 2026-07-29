@@ -169,6 +169,49 @@ suite('Terminal hosted shutdown', () => {
 			}]);
 		});
 
+	test('replays suppressed persistence when confirmation rejects',
+		async () => {
+			enableProcessRevival(terminalService);
+			const warnings: unknown[][] = [];
+			Reflect.set(terminalService, '_logService', {
+				warn: (...args: unknown[]) => warnings.push(args),
+			});
+			const confirmation = dialogService.deferConfirmation();
+			let preparation!: boolean | Promise<boolean>;
+			await runWithFakedTimers({}, async () => {
+				preparation = invokeBeforeShutdown(
+					terminalService,
+					ShutdownReason.QUIT
+				);
+				await dialogService.whenConfirmationRequested;
+			});
+			assert.strictEqual(backend.persistTerminalStateCalls, 1);
+
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			setBackgroundedTerminal(terminalService, 21);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+
+			await runWithFakedTimers({}, async () => {
+				await confirmation.error(new Error('test confirmation failure'));
+				assert.strictEqual(await preparation, false);
+			});
+
+			assert.strictEqual(warnings.length, 1);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+
+			await runWithFakedTimers({}, async () =>
+				fireShutdownVeto(lifecycleService)
+			);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+		});
+
 	test('keeps persistence active when shutdown preparation is vetoed',
 		async () => {
 			disposables.add(lifecycleService.onBeforeShutdown(event => {
@@ -330,18 +373,27 @@ suite('Terminal hosted shutdown', () => {
 		});
 
 	test('preserves reload process revival through prepare and commit', async () => {
-		const lifecycleCalls = { detach: 0, dispose: 0 };
+		const lifecycleCalls: TerminalLifecycleCalls = {
+			detached: [],
+			disposed: [],
+		};
 		const terminalGroupService = Reflect.get(
 			terminalService,
 			'_terminalGroupService'
 		) as ITerminalGroupService;
 		Reflect.set(terminalGroupService, 'instances', [
-			createPersistentTerminal({ shouldPersist: true, lifecycleCalls }),
+			createPersistentTerminal({
+				persistentProcessId: 13,
+				shouldPersist: true,
+				lifecycleCalls,
+			}),
+			createPersistentTerminal({
+				persistentProcessId: 21,
+				shouldPersist: false,
+				lifecycleCalls,
+			}),
 		]);
-		setBackgroundedTerminal(terminalService, 21, {
-			shouldPersist: true,
-			lifecycleCalls,
-		});
+		Reflect.set(terminalService, '_backgroundedTerminalInstances', []);
 
 		assert.strictEqual(
 			await invokeBeforeShutdown(terminalService, ShutdownReason.RELOAD),
@@ -354,7 +406,10 @@ suite('Terminal hosted shutdown', () => {
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 
 		assert.deepStrictEqual(backend.layoutUpdates, []);
-		assert.deepStrictEqual(lifecycleCalls, { detach: 2, dispose: 0 });
+		assert.deepStrictEqual(lifecycleCalls, {
+			detached: [13],
+			disposed: [21],
+		});
 	});
 });
 
@@ -399,23 +454,30 @@ class TestPersistentTerminalBackend implements Partial<ITerminalBackend> {
 	}
 }
 
+interface TerminalLifecycleCalls {
+	detached: number[];
+	disposed: number[];
+}
+
 function createPersistentTerminal(options?: {
+	persistentProcessId?: number;
 	shouldPersist?: boolean;
-	lifecycleCalls?: { detach: number; dispose: number };
+	lifecycleCalls?: TerminalLifecycleCalls;
 }): ITerminalInstance {
+	const persistentProcessId = options?.persistentProcessId ?? 13;
 	return {
-		persistentProcessId: 13,
+		persistentProcessId,
 		isDisposed: false,
 		shouldPersist: options?.shouldPersist ?? false,
 		onIconChanged: Event.None,
 		dispose: () => {
 			if (options?.lifecycleCalls) {
-				options.lifecycleCalls.dispose++;
+				options.lifecycleCalls.disposed.push(persistentProcessId);
 			}
 		},
 		detachProcessAndDispose: async () => {
 			if (options?.lifecycleCalls) {
-				options.lifecycleCalls.detach++;
+				options.lifecycleCalls.detached.push(persistentProcessId);
 			}
 		},
 		shellLaunchConfig: { forcePersist: true },
@@ -427,7 +489,7 @@ function setBackgroundedTerminal(
 	persistentProcessId: number,
 	options?: {
 		shouldPersist?: boolean;
-		lifecycleCalls?: { detach: number; dispose: number };
+		lifecycleCalls?: TerminalLifecycleCalls;
 	}
 ): void {
 	Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
