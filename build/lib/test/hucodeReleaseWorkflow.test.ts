@@ -50,6 +50,23 @@ suite('Hucode release workflow contract', () => {
 		assert.match(job, /needs:\n      - package\n      - linux-package-smoke/);
 	});
 
+	test('delegates update refresh retries to the build helper', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  refresh-update-service:')
+		);
+
+		assert.match(job, /uses: actions\/checkout@/);
+		assert.match(job, /uses: actions\/setup-node@/);
+		assert.match(
+			job,
+			/run: node build\/hucode\/dispatch-update-service\.ts/
+		);
+		assert.match(job, /GH_TOKEN: \$\{\{ steps\.release-bot-token\.outputs\.token \}\}/);
+		assert.match(job, /TAG_NAME: \$\{\{ github\.ref_name \}\}/);
+		assert.match(job, /COMMIT_SHA: \$\{\{ github\.sha \}\}/);
+		assert.doesNotMatch(job, /\bgh api\b/);
+	});
+
 	test('smokes clean DEB and RPM installs for public architectures', () => {
 		assert.deepStrictEqual({
 			publicArchitecturesOnly:

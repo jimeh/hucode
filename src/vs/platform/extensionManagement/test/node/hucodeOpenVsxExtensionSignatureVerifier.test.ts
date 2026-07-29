@@ -65,22 +65,27 @@ suite('HucodeOpenVsxExtensionSignatureVerifier', () => {
 		);
 	});
 
-	test('maps OpenVSX invalid signature errors', () => {
+	test('preserves structured signature manifest errors independently of prose', () => {
 		const testObject = new TestHucodeOpenVsxExtensionSignatureVerifier();
 
-		const result = testObject.toVerificationResult(
-			new TestOvsxSignError(
-				'SignatureManifestIsInvalid',
-				true,
-				'The signature is not valid'
-			)
-		);
+		for (const output of [
+			'The signature is not valid',
+			'Unrelated diagnostic prose',
+		]) {
+			const result = testObject.toVerificationResult(
+				new TestOvsxSignError(
+					'SignatureManifestIsInvalid',
+					true,
+					output
+				)
+			);
 
-		assert.strictEqual(
-			result.code,
-			ExtensionSignatureVerificationCode.SignatureIsInvalid
-		);
-		assert.strictEqual(result.didExecute, true);
+			assert.strictEqual(
+				result.code,
+				ExtensionSignatureVerificationCode.SignatureManifestIsInvalid
+			);
+			assert.strictEqual(result.didExecute, true);
+		}
 	});
 
 	test('maps OpenVSX extension manifest errors to package integrity failures', () => {
@@ -118,7 +123,7 @@ suite('HucodeOpenVsxExtensionSignatureVerifier', () => {
 		);
 	});
 
-	test('detects OpenVSX gallery service URLs', () => {
+	test('uses the canonical OpenVSX host by default', () => {
 		assert.strictEqual(
 			useHucodeOpenVsxSignatureVerifier(
 				'https://open-vsx.org/vscode/gallery'
@@ -131,8 +136,65 @@ suite('HucodeOpenVsxExtensionSignatureVerifier', () => {
 			),
 			false
 		);
-		assert.strictEqual(useHucodeOpenVsxSignatureVerifier('not a url'), false);
-		assert.strictEqual(useHucodeOpenVsxSignatureVerifier(undefined), false);
+	});
+
+	test('uses configured mirror hosts case-insensitively with whitespace', () => {
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://signatures.example.test/vscode/gallery',
+				['  SIGNATURES.EXAMPLE.TEST  ']
+			),
+			true
+		);
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://OPEN-VSX.ORG/vscode/gallery',
+				['  OPEN-VSX.ORG  ']
+			),
+			true
+		);
+	});
+
+	test('ignores malformed configured host entries individually', () => {
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://signatures.example.test/vscode/gallery',
+				[
+					42,
+					null,
+					' signatures.example.test ',
+				] as unknown as string[]
+			),
+			true
+		);
+	});
+
+	test('supports disabling and rejects nonmatching or malformed URLs', () => {
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://open-vsx.org/vscode/gallery',
+				[]
+			),
+			false
+		);
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://other.example.test/vscode/gallery',
+				['signatures.example.test']
+			),
+			false
+		);
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'not a url',
+				['not a url']
+			),
+			false
+		);
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(undefined, ['open-vsx.org']),
+			false
+		);
 	});
 });
 

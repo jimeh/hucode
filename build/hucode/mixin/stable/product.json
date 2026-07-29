@@ -63,7 +63,10 @@
 		"controlUrl": "",
 		"recommendationsUrl": "",
 		"nlsBaseUrl": "",
-		"publisherUrl": ""
+		"publisherUrl": "",
+		"openVsxSignatureVerificationHosts": [
+			"open-vsx.org"
+		]
 	},
 	"linkProtectionTrustedDomains": [
 		"https://open-vsx.org"
