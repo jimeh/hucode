@@ -1109,6 +1109,9 @@ suite('HucodeWebProjectManagerServer', function () {
 			const active = startHandle(server, 'POST', route, {});
 			await activeStarted.p;
 			const successor = startHandle(server, 'POST', route, {});
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 2
+			);
 			await releaseActive.complete();
 			await active.completion;
 			const successorSettled = await raceTimeout(
@@ -1124,6 +1127,10 @@ suite('HucodeWebProjectManagerServer', function () {
 			assert.strictEqual(successorSettled, true);
 			assert.strictEqual(successor.response.statusCode, 200);
 			assert.strictEqual(calls, 2);
+			assert.strictEqual(
+				requestQueueSize(server, 'gitReadLimiter'),
+				0
+			);
 		}
 	);
 
