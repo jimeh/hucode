@@ -73,11 +73,11 @@ interface HucodeWebProjectManagerResponse {
 	write?(data: string): unknown;
 	end(data?: string): unknown;
 	on?(
-		event: 'close' | 'drain' | 'error',
+		event: 'close' | 'drain' | 'error' | 'finish',
 		listener: () => void
 	): unknown;
 	removeListener?(
-		event: 'close' | 'drain' | 'error',
+		event: 'close' | 'drain' | 'error' | 'finish',
 		listener: () => void
 	): unknown;
 }
@@ -696,6 +696,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly stateService: HucodeProjectFileStateService | undefined;
 	private readonly mutationQueue: HucodeProjectAdmissionQueue;
 	private readonly gitReadLimiter: HucodeProjectAdmissionQueue;
+	private readonly acquireResponseLease:
+		| (() => IDisposable)
+		| undefined;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 	private readonly eventClientLimit: number;
 	private readonly eventHeartbeatIntervalMs: number;
@@ -718,6 +721,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
 			readonly acquireMutationLease?: () => IDisposable;
+			readonly acquireReadLease?: () => IDisposable;
+			readonly acquireResponseLease?: () => IDisposable;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventClientLimit?: number;
 			/** Internal test override; this is not a serve-web setting. */
@@ -739,6 +744,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.eventBackpressureTimeoutMs =
 			options.eventBackpressureTimeoutMs ??
 			DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS;
+		this.acquireResponseLease = options.acquireResponseLease;
 		const requestPendingLimit = Math.max(
 			0,
 			options.requestPendingLimit ??
@@ -756,7 +762,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				1,
 				options.gitReadConcurrency ?? DEFAULT_GIT_READ_CONCURRENCY
 			),
-			requestPendingLimit
+			requestPendingLimit,
+			options.acquireReadLease
 		));
 
 		if (!options.enabled) {
@@ -790,109 +797,168 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return false;
 		}
 
-		// The Projects API mutates local state and runs git commands, so
-		// browser requests must come from the serving origin even when the
-		// server runs without a connection token.
-		const originError = getCrossOriginRequestError(req.headers);
-		if (originError) {
-			return this.writeJson(res, 403, { error: originError });
-		}
-		if (req.method === 'POST' && !hasJsonContentType(req.headers)) {
-			return this.writeJson(res, 415, {
-				error: 'Content-Type must be application/json.',
-			});
-		}
-
 		const relativePath = pathname
 			.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
 			.replace(/^\/+/, '');
-		if (req.method === 'GET' && relativePath === 'events') {
-			try {
-				return await this.handleEvents(service, req, res);
-			} catch (error) {
-				return this.writeRequestError(res, error);
-			}
+		if (this.disposed) {
+			return req.method === 'GET' && relativePath === 'events'
+				? this.writeEventClientUnavailableError(res)
+				: this.writeRequestError(
+					res,
+					new ProjectRequestUnavailableError()
+				);
 		}
 
-		const requestCancellation = new CancellationTokenSource();
-		const onRequestAborted = () => requestCancellation.cancel();
-		const onResponseClose = () => {
-			if (!res.writableFinished) {
-				requestCancellation.cancel();
+		const responseLease = this.acquireResponseLease?.();
+		let responseLeaseReleaseScheduled = false;
+		let responseLeaseReleased = false;
+		const releaseResponseLease = () => {
+			if (responseLeaseReleased) {
+				return;
 			}
+			responseLeaseReleased = true;
+			res.removeListener?.('finish', scheduleResponseLeaseRelease);
+			res.removeListener?.('close', scheduleResponseLeaseRelease);
+			res.removeListener?.('error', scheduleResponseLeaseRelease);
+			responseLease?.dispose();
 		};
-		req.on?.('aborted', onRequestAborted);
-		res.on?.('close', onResponseClose);
-		if (req.aborted) {
-			requestCancellation.cancel();
-		}
-		try {
-			if (req.method === 'GET' && !relativePath) {
-				return this.writeProjects(res, 200, await service.getProjects());
+		const scheduleResponseLeaseRelease = () => {
+			if (responseLeaseReleaseScheduled) {
+				return;
 			}
+			responseLeaseReleaseScheduled = true;
+			res.removeListener?.('finish', scheduleResponseLeaseRelease);
+			res.removeListener?.('close', scheduleResponseLeaseRelease);
+			res.removeListener?.('error', scheduleResponseLeaseRelease);
+			queueMicrotask(releaseResponseLease);
+		};
+		const tracksResponseSettlement = !!responseLease && !!res.on;
+		if (tracksResponseSettlement) {
+			res.on?.('finish', scheduleResponseLeaseRelease);
+			res.on?.('close', scheduleResponseLeaseRelease);
+			res.on?.('error', scheduleResponseLeaseRelease);
+		}
 
-			if (req.method === 'POST' && !relativePath) {
-				const body = await this.readJson(req);
-				const result = await this.runDurableMutation(async () => {
-					const project = await service.addProject(
-						URI.file(requireString(body, 'rootPath')),
-					);
-					return {
-						project,
-						projects: await service.getProjects(),
-					};
-				}, requestCancellation.token);
-				return this.writeJson(res, 201, {
-					project: result.project,
-					projects: result.projects,
+		try {
+			// The Projects API mutates local state and runs git commands, so
+			// browser requests must come from the serving origin even when the
+			// server runs without a connection token.
+			const originError = getCrossOriginRequestError(req.headers);
+			if (originError) {
+				return this.writeJson(res, 403, { error: originError });
+			}
+			if (req.method === 'POST' && !hasJsonContentType(req.headers)) {
+				return this.writeJson(res, 415, {
+					error: 'Content-Type must be application/json.',
 				});
 			}
 
-			if (req.method === 'DELETE' && isSinglePathSegment(relativePath)) {
-				const projects = await this.runDurableMutation(async () => {
-					const projectId = decodeURIComponent(relativePath);
-					if ((await service.getProjects()).some(
-						project => project.id === projectId
-					)) {
-						await service.removeProject(projectId);
-					}
-					return service.getProjects();
-				}, requestCancellation.token);
-				return this.writeProjects(res, 200, projects);
+			const requestCancellation = new CancellationTokenSource();
+			const onRequestAborted = () => requestCancellation.cancel();
+			const onResponseClose = () => {
+				if (!res.writableFinished) {
+					requestCancellation.cancel();
+				}
+			};
+			const onResponseError = () => requestCancellation.cancel();
+			req.on?.('aborted', onRequestAborted);
+			res.on?.('close', onResponseClose);
+			res.on?.('error', onResponseError);
+			if (req.aborted) {
+				requestCancellation.cancel();
 			}
+			try {
+				if (req.method === 'GET' && relativePath === 'events') {
+					return await this.handleEvents(
+						service,
+						req,
+						res,
+						requestCancellation.token
+					);
+				}
 
-			if (req.method === 'DELETE') {
-				return this.writeJson(res, 404, { error: 'Not found.' });
-			}
+				if (req.method === 'GET' && !relativePath) {
+					return this.writeProjects(
+						res,
+						200,
+						await this.runGitRead(
+							requestCancellation.token,
+							() => service.getProjects()
+						)
+					);
+				}
 
-			if (req.method === 'POST') {
-				return await this.handlePost(
-					service,
-					res,
-					relativePath,
-					await this.readJson(req),
-					requestCancellation.token
-				);
-			}
+				if (req.method === 'POST' && !relativePath) {
+					const body = await this.readJson(req);
+					const result = await this.runDurableMutation(async () => {
+						const project = await service.addProject(
+							URI.file(requireString(body, 'rootPath')),
+						);
+						return {
+							project,
+							projects: await service.getProjects(),
+						};
+					}, requestCancellation.token);
+					return this.writeJson(res, 201, {
+						project: result.project,
+						projects: result.projects,
+					});
+				}
 
-			return this.writeJson(res, 405, {
-				error: `Unsupported method ${req.method}`,
-			});
-		} catch (error) {
-			if (isCancellationError(error) &&
-				requestCancellation.token.isCancellationRequested) {
-				return true;
+				if (req.method === 'DELETE' &&
+					isSinglePathSegment(relativePath)) {
+					const projects = await this.runDurableMutation(async () => {
+						const projectId = decodeURIComponent(relativePath);
+						if ((await service.getProjects()).some(
+							project => project.id === projectId
+						)) {
+							await service.removeProject(projectId);
+						}
+						return service.getProjects();
+					}, requestCancellation.token);
+					return this.writeProjects(res, 200, projects);
+				}
+
+				if (req.method === 'DELETE') {
+					return this.writeJson(res, 404, { error: 'Not found.' });
+				}
+
+				if (req.method === 'POST') {
+					return await this.handlePost(
+						service,
+						res,
+						relativePath,
+						await this.readJson(req),
+						requestCancellation.token
+					);
+				}
+
+				return this.writeJson(res, 405, {
+					error: `Unsupported method ${req.method}`,
+				});
+			} catch (error) {
+				if (isCancellationError(error) &&
+					requestCancellation.token.isCancellationRequested) {
+					return true;
+				}
+				return this.writeRequestError(res, error);
+			} finally {
+				req.removeListener?.('aborted', onRequestAborted);
+				res.removeListener?.('close', onResponseClose);
+				res.removeListener?.('error', onResponseError);
+				requestCancellation.dispose();
 			}
-			return this.writeRequestError(res, error);
 		} finally {
-			req.removeListener?.('aborted', onRequestAborted);
-			res.removeListener?.('close', onResponseClose);
-			requestCancellation.dispose();
+			if (!tracksResponseSettlement) {
+				releaseResponseLease();
+			}
 		}
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
-		return this.service ? this.service.getProjects() : [];
+		return !this.disposed && this.service
+			? this.service.getProjects()
+			: [];
 	}
 
 	/**
@@ -913,7 +979,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.gitReadLimiter.dispose();
 		const service = this.service;
 		if (service) {
-			this.mutationQueue.runWhenIdle(() => {
+			let remainingAdmissionQueues = 2;
+			const disposeServiceWhenIdle = () => {
+				remainingAdmissionQueues--;
+				if (remainingAdmissionQueues !== 0) {
+					return;
+				}
 				try {
 					service.dispose();
 				} catch (error) {
@@ -922,7 +993,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						error
 					);
 				}
-			});
+			};
+			this.mutationQueue.runWhenIdle(disposeServiceWhenIdle);
+			this.gitReadLimiter.runWhenIdle(disposeServiceWhenIdle);
 		}
 		this.pendingProjectPublication = undefined;
 		for (const client of Array.from(this.eventClients)) {
@@ -1232,7 +1305,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	private async handleEvents(
 		service: ProjectManagerMainService,
 		req: HucodeWebProjectManagerRequest,
-		res: HucodeWebProjectManagerResponse
+		res: HucodeWebProjectManagerResponse,
+		token: CancellationToken
 	): Promise<true> {
 		if (this.disposed) {
 			return this.writeEventClientUnavailableError(res);
@@ -1264,12 +1338,15 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 		let projects: readonly ProjectRecord[];
 		try {
-			projects = await service.getProjects();
-			const writeGeneration =
-				this.stateService?.currentWriteGeneration ?? 0;
-			await this.stateService?.retryDirtyState();
-			this.retryPendingProjectPublication();
-			await this.stateService?.flushWritesThrough(writeGeneration);
+			projects = await this.runGitRead(token, async () => {
+				const nextProjects = await service.getProjects();
+				const writeGeneration =
+					this.stateService?.currentWriteGeneration ?? 0;
+				await this.stateService?.retryDirtyState();
+				this.retryPendingProjectPublication();
+				await this.stateService?.flushWritesThrough(writeGeneration);
+				return nextProjects;
+			});
 		} catch (error) {
 			if (client.closed) {
 				return true;

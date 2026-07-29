@@ -160,6 +160,14 @@ export class WebClientServer extends Disposable {
 						this._serverLifetimeService.active(
 							'hucode-project-mutation'
 						),
+					acquireReadLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-read'
+						),
+					acquireResponseLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-response'
+						),
 				}
 			));
 	}
