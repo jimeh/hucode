@@ -12,7 +12,11 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from
 	'../../../../../platform/configuration/test/common/testConfigurationService.js';
-import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import {
+	IConfirmation,
+	IConfirmationResult,
+	IDialogService,
+} from '../../../../../platform/dialogs/common/dialogs.js';
 import { TestDialogService } from
 	'../../../../../platform/dialogs/test/common/testDialogService.js';
 import { ITerminalBackend } from
@@ -39,6 +43,7 @@ suite('Terminal hosted shutdown', () => {
 	let terminalService: TerminalService;
 	let lifecycleService: TestLifecycleService;
 	let backend: TestPersistentTerminalBackend;
+	let dialogService: CountingDialogService;
 
 	setup(async () => {
 		const instantiationService = workbenchInstantiationService({
@@ -53,9 +58,10 @@ suite('Terminal hosted shutdown', () => {
 				},
 			}),
 		}, disposables);
-		instantiationService.stub(IDialogService, new TestDialogService({
+		dialogService = new CountingDialogService({
 			confirmed: true,
-		}));
+		});
+		instantiationService.stub(IDialogService, dialogService);
 		instantiationService.stub(
 			ITerminalInstanceService,
 			'getBackend',
@@ -104,6 +110,7 @@ suite('Terminal hosted shutdown', () => {
 			}));
 
 			assert.strictEqual(await prepareShutdown(lifecycleService), true);
+			assert.strictEqual(dialogService.confirmCount, 1);
 			await Promise.resolve();
 			await Promise.resolve();
 			await runWithFakedTimers({}, async () => saveState(terminalService));
@@ -122,6 +129,15 @@ suite('Terminal hosted shutdown', () => {
 		assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
 	});
 });
+
+class CountingDialogService extends TestDialogService {
+	confirmCount = 0;
+
+	override async confirm(confirmation: IConfirmation): Promise<IConfirmationResult> {
+		this.confirmCount++;
+		return super.confirm(confirmation);
+	}
+}
 
 class TestPersistentTerminalBackend implements Partial<ITerminalBackend> {
 	readonly layoutUpdates: Parameters<ITerminalBackend['setTerminalLayoutInfo']>[0][] = [];
