@@ -60,6 +60,42 @@ suite('Hucode update service dispatch', () => {
 		assert.match(harness.summaries[0], /0123456789abcdef/);
 	});
 
+	test('preserves the dispatch failure when the step summary write also fails', async () => {
+		const harness = createHarness(
+			Number.POSITIVE_INFINITY,
+			new Error('summary write failed')
+		);
+
+		await assert.rejects(
+			dispatchUpdateServiceRefresh(release, harness.dependencies),
+			(error: Error) => {
+				assert.match(
+					error.message,
+					/failed after 4 attempts.*dispatch 4 failed/s
+				);
+				assert.doesNotMatch(error.message, /summary write failed/);
+				return true;
+			}
+		);
+
+		assert.strictEqual(harness.attempts.length, 4);
+		assert.deepStrictEqual(harness.delays, [5_000, 10_000, 20_000]);
+		assert.strictEqual(harness.errors.length, 1);
+		assert.match(
+			harness.errors[0],
+			/^::error::Update service dispatch failed after 4 attempts: dispatch 4 failed$/
+		);
+		assert.strictEqual(harness.summaries.length, 1);
+		assert.strictEqual(harness.warnings.length, 4);
+		const summaryWarnings = harness.warnings.filter(warning =>
+			warning.startsWith(
+				'::warning::Failed to append the update dispatch failure'
+			)
+		);
+		assert.strictEqual(summaryWarnings.length, 1);
+		assert.match(summaryWarnings[0], /summary write failed/);
+	});
+
 	test('preserves the repository dispatch payload and GH_TOKEN environment', async () => {
 		const harness = createHarness();
 
@@ -93,7 +129,10 @@ const environment: NodeJS.ProcessEnv = {
 	GH_TOKEN: 'release-bot-token',
 };
 
-function createHarness(failures = 0): {
+function createHarness(
+	failures = 0,
+	summaryFailure?: Error
+): {
 	readonly attempts: Array<{
 		readonly args: readonly string[];
 		readonly environment: NodeJS.ProcessEnv;
@@ -137,6 +176,9 @@ function createHarness(failures = 0): {
 			error: message => errors.push(message),
 			appendSummary: async message => {
 				summaries.push(message);
+				if (summaryFailure) {
+					throw summaryFailure;
+				}
 			},
 		},
 	};
