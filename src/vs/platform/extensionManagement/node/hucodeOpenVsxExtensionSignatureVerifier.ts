@@ -123,14 +123,6 @@ export class HucodeOpenVsxExtensionSignatureVerifier {
 		const code = typeof ovsxSignError?.code === 'string'
 			? ovsxSignError.code
 			: undefined;
-		const output = this.getOvsxSignOutput(error);
-
-		if (
-			code === ExtensionSignatureVerificationCode.SignatureManifestIsInvalid
-			&& output.includes('signature is not valid')
-		) {
-			return ExtensionSignatureVerificationCode.SignatureIsInvalid;
-		}
 
 		if (code === 'ExtensionManifestIsInvalid') {
 			return ExtensionSignatureVerificationCode.PackageIntegrityCheckFailed;
@@ -168,14 +160,19 @@ export class HucodeOpenVsxExtensionSignatureVerifier {
  * Determines if the configured extension gallery uses OpenVSX signatures.
  */
 export function useHucodeOpenVsxSignatureVerifier(
-	serviceUrl: string | undefined
+	serviceUrl: string | undefined,
+	configuredHosts?: readonly string[]
 ): boolean {
 	if (!serviceUrl) {
 		return false;
 	}
 
 	try {
-		return new URL(serviceUrl).hostname === 'open-vsx.org';
+		const hosts = configuredHosts ?? ['open-vsx.org'];
+		const normalizedHosts = new Set(hosts.map(host =>
+			host.trim().toLowerCase()
+		).filter(Boolean));
+		return normalizedHosts.has(new URL(serviceUrl).hostname.toLowerCase());
 	} catch {
 		return false;
 	}

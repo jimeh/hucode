@@ -260,6 +260,10 @@ export async function validateMixin(quality = 'stable') {
 		generated.extensionsGallery.serviceUrl,
 		'https://open-vsx.org/vscode/gallery'
 	);
+	assert.deepStrictEqual(
+		generated.extensionsGallery.openVsxSignatureVerificationHosts,
+		['open-vsx.org']
+	);
 	assert.ok(Array.isArray(generated.builtInExtensions));
 	assert.ok(generated.defaultChatAgent);
 	assert.strictEqual(
