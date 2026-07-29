@@ -1710,11 +1710,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					) !== instance
 				)
 			);
-			if (unloadResult === 'superseded-after-will-unload') {
+			if (unloadResult === 'reload-required') {
 				this.reloadInstanceAfterInterruptedUnload(instance);
 				return false;
 			}
 			if (unloadResult === 'superseded') {
+				return false;
+			}
+			if (unloadResult === 'before-unload-failed') {
+				this.logService.trace(
+					'[HucodeShellMainService] Hosted workspace unload ' +
+					`preparation failed for ${instance.worktreePath}.`
+				);
 				return false;
 			}
 			if (unloadResult === 'vetoed') {
@@ -1888,8 +1895,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		ignoreBeforeUnloadVeto: boolean = false,
 		isSuperseded: () => boolean = () => false
 	): Promise<
-		'ready' | 'vetoed' | 'superseded' |
-		'superseded-after-will-unload'
+		'ready' | 'vetoed' | 'before-unload-failed' |
+		'superseded' | 'reload-required'
 	> {
 		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
@@ -1901,7 +1908,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			instance,
 			reason
 		);
-		if (preparation.veto) {
+		if (preparation.outcome === 'vetoed') {
 			if (ignoreBeforeUnloadVeto) {
 				await this.onWillUnloadInRenderer(
 					webContents,
@@ -1912,6 +1919,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 			return 'vetoed';
 		}
+		if (preparation.outcome === 'failed') {
+			if (ignoreBeforeUnloadVeto) {
+				await this.onWillUnloadInRenderer(
+					webContents,
+					instance,
+					reason,
+					preparation.preparationId
+				);
+				return 'ready';
+			}
+
+			const rollbackDisposition =
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			if (!rollbackDisposition) {
+				return 'reload-required';
+			}
+			return isSuperseded()
+				? 'superseded'
+				: 'before-unload-failed';
+		}
 		if (isSuperseded()) {
 			const rollbackDisposition =
 				await this.notifyShutdownPreparationAbandonedInRenderer(
@@ -1920,7 +1951,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					preparation.preparationId
 				);
 			if (!rollbackDisposition) {
-				return 'superseded-after-will-unload';
+				return 'reload-required';
 			}
 			return 'superseded';
 		}
@@ -1932,7 +1963,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			preparation.preparationId
 		);
 		if (isSuperseded()) {
-			return 'superseded-after-will-unload';
+			return 'reload-required';
 		}
 		return 'ready';
 	}
@@ -2018,7 +2049,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		reason: UnloadReason
 	): Promise<{
 		readonly preparationId: string;
-		readonly veto: boolean;
+		readonly outcome: 'ready' | 'vetoed' | 'failed';
 	}> {
 		return new Promise(resolve => {
 			const oneTimeEventToken = this.createOneTimeEventToken(instance);
@@ -2028,11 +2059,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			let settled = false;
 
-			const handleOk = () => complete(false);
-			const handleCancel = () => complete(true);
-			const handleDestroyed = () => complete(false);
+			const handleOk = () => complete('ready');
+			const handleCancel = () => complete('vetoed');
+			const handleDestroyed = () => complete('failed');
 
-			const complete = (veto: boolean) => {
+			const complete = (
+				outcome: 'ready' | 'vetoed' | 'failed'
+			) => {
 				if (settled) {
 					return;
 				}
@@ -2046,7 +2079,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.ipcMain.removeListener(cancelChannel, handleCancel);
 				webContents.removeListener('destroyed', handleDestroyed);
 
-				resolve({ preparationId, veto });
+				resolve({ preparationId, outcome });
 			};
 
 			this.ipcMain.once(okChannel, handleOk);
@@ -2057,7 +2090,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace before-unload reply for ${instance.worktreePath}.`
 				);
-				complete(true);
+				complete('failed');
 			}, this.beforeUnloadTimeoutMs);
 
 			try {
@@ -2072,7 +2105,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Failed to send hosted workspace ' +
 					`before-unload for ${instance.worktreePath}: ${error}`
 				);
-				complete(true);
+				complete('failed');
 			}
 		});
 	}

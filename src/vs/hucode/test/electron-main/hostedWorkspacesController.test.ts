@@ -2159,11 +2159,15 @@ suite('ResidentHostedWorkspacesController', () => {
 				state: controller.getState().instances[0].state,
 				desiredState:
 					controller.getState().retainedWorkbenches?.[0].desiredState,
+				sent: viewFactory.views[0].rawWebContents.sent.map(
+					message => message.channel
+				),
 				closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
 			}, {
 				activeInstanceId: instanceId,
 				state: 'active',
 				desiredState: 'loaded',
+				sent: ['vscode:onBeforeUnload'],
 				closeCalls: [],
 			});
 		}
@@ -2209,6 +2213,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const {
 				browserViewMainService,
 				controller,
+				ipcMain,
 				viewFactory,
 				window,
 			} = createController({ beforeUnloadTimeoutMs: 5 });
@@ -2217,9 +2222,25 @@ suite('ResidentHostedWorkspacesController', () => {
 			await controller.openWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const hostedView = viewFactory.views[0];
-			hostedView.rawWebContents.sendHook = () => true;
+			let beforeUnload: {
+				okChannel: string;
+				preparationId: string;
+			} | undefined;
+			hostedView.rawWebContents.sendHook = (channel, request) => {
+				if (channel === 'vscode:onBeforeUnload') {
+					beforeUnload = request as {
+						okChannel: string;
+						preparationId: string;
+					};
+					return true;
+				}
+				return false;
+			};
 
 			await controller.closeWorkspace('instance-1');
+			assert.ok(beforeUnload);
+			ipcMain.emitReply(beforeUnload.okChannel);
+			await Promise.resolve();
 
 			assert.deepStrictEqual(
 				controller.getState().instances.map(instance => ({
@@ -2235,6 +2256,21 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.deepStrictEqual(
 				browserViewMainService.destroyedHostedWebContentsIds,
 				[]
+			);
+			assert.deepStrictEqual(
+				hostedView.rawWebContents.sent.map(message => message.channel),
+				[
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				]
+			);
+			assert.strictEqual(
+				(
+					hostedView.rawWebContents.sent[1].request as {
+						preparationId: string;
+					}
+				).preparationId,
+				beforeUnload.preparationId
 			);
 		}
 	);
@@ -2257,7 +2293,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				if (channel === 'vscode:onBeforeUnload') {
 					throw new Error('send failed');
 				}
-				return true;
+				return false;
 			};
 
 			await controller.closeWorkspace('instance-1');
@@ -2277,6 +2313,14 @@ suite('ResidentHostedWorkspacesController', () => {
 				browserViewMainService.destroyedHostedWebContentsIds,
 				[]
 			);
+			assert.deepStrictEqual(
+				hostedView.rawWebContents.sent.map(message => message.channel),
+				[
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				]
+			);
+			assert.strictEqual(hostedView.rawWebContents.reloadCalls.length, 0);
 		}
 	);
 
@@ -2414,6 +2458,78 @@ suite('ResidentHostedWorkspacesController', () => {
 			'loading'
 		);
 	});
+
+	for (const invalidReply of [
+		{
+			name: 'wrong preparation token',
+			createReply: (preparationId: string) => ({
+				preparationId: `${preparationId}:wrong`,
+				disposition: 'applied',
+			}),
+		},
+		{
+			name: 'invalid disposition',
+			createReply: (preparationId: string) => ({
+				preparationId,
+				disposition: 'invalid',
+			}),
+		},
+	]) {
+		test(`reloads after rollback reply with ${invalidReply.name}`,
+			async () => {
+				const alpha = createWorktree(
+					`alpha-rollback-${invalidReply.name}`
+				);
+				const bravo = createWorktree(
+					`bravo-rollback-${invalidReply.name}`
+				);
+				const { controller, ipcMain, viewFactory } = createController();
+
+				await controller.openWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				await controller.openWorkspace(bravo, 'project-bravo');
+				controller.notifyHostedWorkspaceReady('instance-2');
+				await controller.openWorkspace(alpha, 'project-alpha');
+				const hostedWebContents = viewFactory.views[0].rawWebContents;
+				hostedWebContents.autoBeforeUnloadReply = false;
+				hostedWebContents.autoPreparationRollbackReply = false;
+				hostedWebContents.sendHook = (channel, request) => {
+					if (channel !==
+						'vscode:onShutdownPreparationAbandoned') {
+						return false;
+					}
+
+					const rollback = request as {
+						preparationId: string;
+						replyChannel: string;
+					};
+					setTimeout(() => ipcMain.emitReply(
+						rollback.replyChannel,
+						invalidReply.createReply(rollback.preparationId)
+					), 0);
+					return true;
+				};
+
+				const closing = controller.closeWorkspace('instance-1');
+				await Promise.resolve();
+				const beforeUnload = hostedWebContents.sent[0].request as {
+					okChannel: string;
+				};
+				await controller.openWorkspace(bravo, 'project-bravo');
+				await controller.openWorkspace(alpha, 'project-alpha');
+				ipcMain.emitReply(beforeUnload.okChannel);
+				await closing;
+
+				assert.strictEqual(hostedWebContents.reloadCalls.length, 1);
+				assert.strictEqual(
+					controller.getState().instances.find(instance =>
+						instance.instanceId === 'instance-1'
+					)?.state,
+					'loading'
+				);
+			}
+		);
+	}
 
 	test('settles rollback when the renderer is destroyed', async () => {
 		const alpha = createWorktree('alpha-rollback-destroyed');
@@ -3012,8 +3128,6 @@ suite('ResidentHostedWorkspacesController', () => {
 				`workspace before-unload reply for ${alpha}.`,
 				'[HucodeShellMainService] Timed out waiting for hosted ' +
 				`workspace will-unload reply for ${alpha}.`,
-				'[HucodeShellMainService] Ignoring hosted workspace unload ' +
-				`veto during Omni shutdown for ${alpha}.`,
 			]);
 			assert.deepStrictEqual(
 				browserViewMainService.destroyedHostedWebContentsIds,
