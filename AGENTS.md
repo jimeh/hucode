@@ -229,6 +229,10 @@ as the required Hucode instruction set for work in this fork.
   cut as consumed after the request starts rather than retrying locally: this
   preserves at-most-once behavior, with a documented risk that a genuinely lost
   request leaves the operation unapplied.
+- Native terminal shutdown preparation can finish before other lifecycle vetoes
+  settle. Keep persistence suppression reversible until `onWillShutdown`,
+  invalidate late preparation completions on `onShutdownVeto` and
+  `onBeforeShutdownError`, and leave the web preflight side-effect free.
 - A hosted web unload commit is already irreversible from the shell's
   perspective. Internal commit failures must reject so the shell takes its
   remove-anyway path; `false` is reserved for an explicit protocol refusal
