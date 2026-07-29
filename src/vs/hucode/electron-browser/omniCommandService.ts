@@ -8,7 +8,7 @@ import { InstantiationType, registerSingleton } from '../../platform/instantiati
 import { IInstantiationService } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
-	IHucodeOmniCommandForwardingScope,
+	IHucodeOmniCommandForwardingContext,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
@@ -22,7 +22,7 @@ import { CommandService } from '../../workbench/services/commands/common/command
 import { INativeWorkbenchEnvironmentService } from '../../workbench/services/environment/electron-browser/environmentService.js';
 import { IExtensionService } from '../../workbench/services/extensions/common/extensions.js';
 
-class OmniCommandService extends CommandService {
+export class OmniCommandService extends CommandService {
 
 	constructor(
 		@IInstantiationService instantiationService: IInstantiationService,
@@ -33,9 +33,9 @@ class OmniCommandService extends CommandService {
 			INativeWorkbenchEnvironmentService,
 		@IHucodeShellService
 		private readonly shellService: IHucodeShellService,
-		@IHucodeOmniCommandForwardingScope
-		private readonly commandForwardingScope:
-			IHucodeOmniCommandForwardingScope
+		@IHucodeOmniCommandForwardingContext
+		private readonly commandForwardingContext:
+			IHucodeOmniCommandForwardingContext
 	) {
 		super(instantiationService, extensionService, omniLogService);
 	}
@@ -45,7 +45,7 @@ class OmniCommandService extends CommandService {
 			!this.nativeEnvironmentService.isOmniWindow ||
 			!isHucodeOmniProjectsFocus() ||
 			isHucodeOmniLocalInputFocus() ||
-			this.commandForwardingScope.isForwardingDisabled ||
+			this.commandForwardingContext.isForwardingDisabled ||
 			isHucodeOmniShellAction(id)
 		) {
 			return super.executeCommand(id, ...args);

@@ -66,43 +66,58 @@ export const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
 	'[contenteditable="true"]',
 ].join(', ');
 
-export const IHucodeOmniCommandForwardingScope =
-	createDecorator<IHucodeOmniCommandForwardingScope>(
-		'hucodeOmniCommandForwardingScope'
+export const IHucodeOmniCommandForwardingContext =
+	createDecorator<IHucodeOmniCommandForwardingContext>(
+		'hucodeOmniCommandForwardingContext'
 	);
 
 /**
- * Per-renderer state used to prevent shell-originated commands from being
- * forwarded back to their source.
+ * Synchronous invocation context shared by the renderer's forwarding surfaces.
+ * Each surface owns a distinct scope created by this service.
  */
-export interface IHucodeOmniCommandForwardingScope {
+export interface IHucodeOmniCommandForwardingContext {
 	readonly _serviceBrand: undefined;
 	readonly isForwardingDisabled: boolean;
-	runWithForwardingDisabled<T>(
-		callback: () => T | Promise<T>
-	): Promise<T>;
+	createScope(): IHucodeOmniCommandForwardingScope;
 }
 
-export class HucodeOmniCommandForwardingScope
-	implements IHucodeOmniCommandForwardingScope {
+export interface IHucodeOmniCommandForwardingScope {
+	readonly isForwardingDisabled: boolean;
+	runWithForwardingDisabled<T>(
+		callback: () => T
+	): T;
+}
+
+export class HucodeOmniCommandForwardingContext
+	implements IHucodeOmniCommandForwardingContext {
 
 	declare readonly _serviceBrand: undefined;
 
-	private forwardingDisabled = 0;
+	private readonly activeScopes: symbol[] = [];
 
 	get isForwardingDisabled(): boolean {
-		return this.forwardingDisabled > 0;
+		return this.activeScopes.length > 0;
 	}
 
-	async runWithForwardingDisabled<T>(
-		callback: () => T | Promise<T>
-	): Promise<T> {
-		this.forwardingDisabled++;
-		try {
-			return await callback();
-		} finally {
-			this.forwardingDisabled--;
-		}
+	createScope(): IHucodeOmniCommandForwardingScope {
+		const context = this;
+		const token = Symbol('hucodeOmniCommandForwardingScope');
+
+		return {
+			get isForwardingDisabled(): boolean {
+				return context.activeScopes.includes(token);
+			},
+			runWithForwardingDisabled<T>(callback: () => T): T {
+				context.activeScopes.push(token);
+				try {
+					// Do not await promises returned by the callback. Consumers
+					// inspect this context synchronously before their first await.
+					return callback();
+				} finally {
+					context.activeScopes.pop();
+				}
+			},
+		};
 	}
 }
 

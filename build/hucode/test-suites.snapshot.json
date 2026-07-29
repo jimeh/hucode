@@ -20,6 +20,7 @@
 		"src/vs/hucode/test/browser/webShellService.test.ts",
 		"src/vs/hucode/test/browser/workbench.test.ts",
 		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
+		"src/vs/hucode/test/electron-browser/omniCommandService.test.ts",
 		"src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
 		"src/vs/hucode/test/electron-main/omniFileOpen.test.ts",
 		"src/vs/hucode/test/electron-main/omniOpenPlan.test.ts",

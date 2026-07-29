@@ -15,7 +15,7 @@ import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
 	FOCUS_WORKSPACE_COMMAND_ID,
-	HucodeOmniCommandForwardingScope,
+	HucodeOmniCommandForwardingContext,
 	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
@@ -223,32 +223,64 @@ suite('HucodeOmniCommandForwarding', () => {
 	});
 
 	test('suppresses only the forwarding surface handling a shell request', async () => {
-		const firstFixture = createFixture({ isOmniWindow: true });
-		const secondFixture = createFixture({ isOmniWindow: true });
+		const commandForwardingContext =
+			new HucodeOmniCommandForwardingContext();
+		const firstFixture = createFixture({
+			isOmniWindow: true,
+			commandForwardingContext
+		});
+		const secondFixture = createFixture({
+			isOmniWindow: true,
+			commandForwardingContext
+		});
 		const request: INativeRunActionInWindowRequest = {
 			id: 'workbench.action.files.save',
 			from: 'keybinding',
 			hucodeForwardedFromOmniShell: true
 		};
+		let resolveFirst!: () => void;
+		const firstPending = new Promise<void>(resolve => {
+			resolveFirst = resolve;
+		});
 
-		await firstFixture.forwarding.runWithForwardingDisabledIfNeeded(
-			request,
-			() => {
-				assert.strictEqual(
-					firstFixture.commandForwardingScope.isForwardingDisabled,
-					true
-				);
-				assert.strictEqual(
-					secondFixture.commandForwardingScope.isForwardingDisabled,
-					false
-				);
-			}
-		);
+		const firstRun =
+			firstFixture.forwarding.runWithForwardingDisabledIfNeeded(
+				request,
+				() => {
+					assert.strictEqual(
+						firstFixture.commandForwardingScope.isForwardingDisabled,
+						true
+					);
+					assert.strictEqual(
+						secondFixture.commandForwardingScope.isForwardingDisabled,
+						false
+					);
+					return firstPending;
+				}
+			);
 
 		assert.strictEqual(
 			firstFixture.commandForwardingScope.isForwardingDisabled,
 			false
 		);
+		assert.strictEqual(commandForwardingContext.isForwardingDisabled, false);
+
+		await secondFixture.forwarding.runWithForwardingDisabledIfNeeded(
+			request,
+			() => {
+				assert.strictEqual(
+					firstFixture.commandForwardingScope.isForwardingDisabled,
+					false
+				);
+				assert.strictEqual(
+					secondFixture.commandForwardingScope.isForwardingDisabled,
+					true
+				);
+			}
+		);
+
+		resolveFirst();
+		await firstRun;
 	});
 
 	test('forwards clipboard events from the Omni shell', async () => {
@@ -297,6 +329,45 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.strictEqual(event.defaultPrevented, false);
 		assert.deepStrictEqual(fixture.channel.calls, []);
 		assert.deepStrictEqual(fixture.commandCalls, []);
+	});
+
+	test('cancels registered clipboard events before deferred forwarding settles', async () => {
+		let resolveChannel!: (forwarded: boolean) => void;
+		const channelResponse = new Promise<boolean>(resolve => {
+			resolveChannel = resolve;
+		});
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelResponse
+		});
+		const listener = fixture.forwarding.registerClipboardListeners(
+			mainWindow.document,
+			fixture.handlers
+		);
+		disposables.add(listener);
+		const event = new mainWindow.Event('copy', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		try {
+			mainWindow.document.dispatchEvent(event);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.commandCalls, []);
+
+			resolveChannel(false);
+			await fixture.commandExecuted;
+
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.commandCalls, [{
+				commandId: 'editor.action.clipboardCopyAction',
+				args: []
+			}]);
+		} finally {
+			resolveChannel(false);
+		}
 	});
 
 	test('runs clipboard commands locally when forwarding declines', async () => {
@@ -435,18 +506,22 @@ type IpcRendererListener = Parameters<typeof ipcRenderer.on>[1];
 
 function createFixture(options: {
 	readonly isOmniWindow: boolean;
-	readonly channelResponse?: boolean;
+	readonly channelResponse?: boolean | Promise<boolean>;
 	readonly channelError?: Error;
 	readonly activeEditorResource?: URI;
 	readonly executeCommandError?: Error;
+	readonly commandForwardingContext?:
+	HucodeOmniCommandForwardingContext;
 }) {
 	const windowId = 42;
 	const channel = new TestChannel(
 		options.channelResponse ?? false,
 		options.channelError
 	);
+	const commandForwardingContext = options.commandForwardingContext ??
+		new HucodeOmniCommandForwardingContext();
 	const commandForwardingScope =
-		new HucodeOmniCommandForwardingScope();
+		commandForwardingContext.createScope();
 	const mainProcessService = {
 		getChannel(channelName: string): IChannel {
 			assert.strictEqual(channelName, 'hucodeShell');
@@ -459,6 +534,10 @@ function createFixture(options: {
 	} as Partial<INativeWorkbenchEnvironmentService> as INativeWorkbenchEnvironmentService;
 
 	const commandCalls: { commandId: string; args: unknown[] }[] = [];
+	let resolveCommandExecuted!: () => void;
+	const commandExecuted = new Promise<void>(resolve => {
+		resolveCommandExecuted = resolve;
+	});
 	const commandSuppressionStates: boolean[] = [];
 	const keybindingCalls: {
 		userSettingsLabel: string;
@@ -472,6 +551,7 @@ function createFixture(options: {
 		getActiveEditorResource: () => options.activeEditorResource,
 		async executeCommand(commandId: string, ...args: unknown[]) {
 			commandCalls.push({ commandId, args });
+			resolveCommandExecuted();
 			commandSuppressionStates.push(
 				commandForwardingScope.isForwardingDisabled
 			);
@@ -495,7 +575,9 @@ function createFixture(options: {
 		actionExecutedCalls,
 		channel,
 		commandCalls,
+		commandExecuted,
 		commandSuppressionStates,
+		commandForwardingContext,
 		commandForwardingScope,
 		forwarding: new HucodeOmniCommandForwarding(
 			environmentService,
@@ -514,7 +596,7 @@ class TestChannel implements IChannel {
 	readonly calls: { command: string; arg?: unknown }[] = [];
 
 	constructor(
-		private readonly response: boolean,
+		private readonly response: boolean | Promise<boolean>,
 		private readonly error?: Error
 	) { }
 
@@ -523,7 +605,7 @@ class TestChannel implements IChannel {
 		if (this.error) {
 			throw this.error;
 		}
-		return this.response as T;
+		return await this.response as T;
 	}
 
 	listen<T>(): Event<T> {

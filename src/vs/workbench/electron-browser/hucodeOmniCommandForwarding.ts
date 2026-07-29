@@ -10,9 +10,10 @@ import { ILogService } from '../../platform/log/common/log.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { ipcRenderer } from '../../base/parts/sandbox/electron-browser/globals.js';
 import {
-	HucodeOmniCommandForwardingScope,
+	HucodeOmniCommandForwardingContext,
 	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
 	HUCODE_OMNI_PROJECTS_SELECTOR,
+	IHucodeOmniCommandForwardingContext,
 	IHucodeOmniCommandForwardingScope,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
@@ -338,7 +339,7 @@ export class HucodeOmniCommandForwarding {
 }
 
 registerSingleton(
-	IHucodeOmniCommandForwardingScope,
-	HucodeOmniCommandForwardingScope,
+	IHucodeOmniCommandForwardingContext,
+	HucodeOmniCommandForwardingContext,
 	InstantiationType.Delayed
 );

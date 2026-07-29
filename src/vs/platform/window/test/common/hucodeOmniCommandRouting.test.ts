@@ -9,7 +9,7 @@ import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	FOCUS_WORKSPACE_COMMAND_ID,
-	HucodeOmniCommandForwardingScope,
+	HucodeOmniCommandForwardingContext,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
@@ -79,13 +79,14 @@ suite('HucodeOmniCommandRouting', () => {
 		);
 	});
 
-	test('scopes forwarding suppression to the callback', async () => {
-		const scope = new HucodeOmniCommandForwardingScope();
+	test('scopes forwarding suppression to the synchronous callback', () => {
+		const context = new HucodeOmniCommandForwardingContext();
+		const scope = context.createScope();
 		assert.strictEqual(scope.isForwardingDisabled, false);
 
-		await scope.runWithForwardingDisabled(async () => {
+		scope.runWithForwardingDisabled(() => {
 			assert.strictEqual(scope.isForwardingDisabled, true);
-			await scope.runWithForwardingDisabled(() => {
+			scope.runWithForwardingDisabled(() => {
 				assert.strictEqual(scope.isForwardingDisabled, true);
 			});
 			assert.strictEqual(scope.isForwardingDisabled, true);
@@ -94,11 +95,12 @@ suite('HucodeOmniCommandRouting', () => {
 		assert.strictEqual(scope.isForwardingDisabled, false);
 	});
 
-	test('isolates forwarding suppression between owners', async () => {
-		const firstScope = new HucodeOmniCommandForwardingScope();
-		const secondScope = new HucodeOmniCommandForwardingScope();
+	test('isolates forwarding suppression between owners', () => {
+		const context = new HucodeOmniCommandForwardingContext();
+		const firstScope = context.createScope();
+		const secondScope = context.createScope();
 
-		await firstScope.runWithForwardingDisabled(() => {
+		firstScope.runWithForwardingDisabled(() => {
 			assert.strictEqual(firstScope.isForwardingDisabled, true);
 			assert.strictEqual(secondScope.isForwardingDisabled, false);
 		});
@@ -107,14 +109,31 @@ suite('HucodeOmniCommandRouting', () => {
 		assert.strictEqual(secondScope.isForwardingDisabled, false);
 	});
 
-	test('restores forwarding suppression after callback errors', async () => {
-		const scope = new HucodeOmniCommandForwardingScope();
-		await assert.rejects(
-			scope.runWithForwardingDisabled(() => {
+	test('restores forwarding suppression after callback errors', () => {
+		const scope =
+			new HucodeOmniCommandForwardingContext().createScope();
+		assert.throws(
+			() => scope.runWithForwardingDisabled(() => {
 				throw new Error('expected');
 			}),
 			/expected/
 		);
 		assert.strictEqual(scope.isForwardingDisabled, false);
+	});
+
+	test('does not retain suppression while returned promises are pending', async () => {
+		const context = new HucodeOmniCommandForwardingContext();
+		const scope = context.createScope();
+		let resolvePending!: () => void;
+		const pending = new Promise<void>(resolve => {
+			resolvePending = resolve;
+		});
+
+		const result = scope.runWithForwardingDisabled(() => pending);
+
+		assert.strictEqual(scope.isForwardingDisabled, false);
+		assert.strictEqual(context.isForwardingDisabled, false);
+		resolvePending();
+		await result;
 	});
 });
