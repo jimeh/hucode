@@ -88,10 +88,11 @@ suite('Hucode upstream provenance', () => {
 
 	test('runs drift detection before switching to the clean upstream tree', async () => {
 		const skill = await fs.readFile(upgradeSkillPath, 'utf8');
-		const section = skill.slice(
-			skill.indexOf('## Create The New Baseline'),
-			skill.indexOf('## Replay Onto The New Series')
-		);
+		const sectionStart = skill.indexOf('## Create The New Baseline');
+		const sectionEnd = skill.indexOf('## Replay Onto The New Series');
+		assert.ok(sectionStart >= 0, 'baseline section must exist');
+		assert.ok(sectionEnd > sectionStart, 'replay section must follow it');
+		const section = skill.slice(sectionStart, sectionEnd);
 		const fetchTag = section.indexOf(
 			'git fetch "$VSCODE_REMOTE" tag <new-version>'
 		);

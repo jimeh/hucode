@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../base/common/uri.js';
+import { CancellationToken } from '../../../base/common/cancellation.js';
 import { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
@@ -165,9 +166,14 @@ export interface IProjectManagerService {
 	refresh(id?: string): Promise<readonly ProjectRecord[]>;
 	getWorktreeRefs(
 		projectId: string,
-		options?: WorktreeRefQueryOptions
+		options?: WorktreeRefQueryOptions,
+		token?: CancellationToken
 	): Promise<readonly WorktreeRefRecord[]>;
-	isValidBranchName(projectId: string, branchName: string): Promise<boolean>;
+	isValidBranchName(
+		projectId: string,
+		branchName: string,
+		token?: CancellationToken
+	): Promise<boolean>;
 	createWorktree(
 		projectId: string,
 		options: CreateWorktreeOptions

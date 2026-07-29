@@ -21,6 +21,10 @@ suite('Hucode lifecycle preparation rollback', () => {
 		abandonPreparation(preparationId: string): boolean {
 			return super.handleShutdownPreparationAbandoned(preparationId);
 		}
+
+		commitPreparation(): void {
+			super.commitShutdownPreparation();
+		}
 	}
 
 	setup(() => {
@@ -60,6 +64,19 @@ suite('Hucode lifecycle preparation rollback', () => {
 			lifecycleService.abandonPreparation('preparation-2');
 		assert.strictEqual(applied, true);
 		assert.strictEqual(vetoEvents, 1);
+	});
+
+	test('ignores abandonment after shutdown commits', () => {
+		let vetoEvents = 0;
+		disposables.add(lifecycleService.onShutdownVeto(() => vetoEvents++));
+		lifecycleService.beginPreparation('preparation-1');
+
+		lifecycleService.commitPreparation();
+		const stale =
+			lifecycleService.abandonPreparation('preparation-1');
+
+		assert.strictEqual(stale, false);
+		assert.strictEqual(vetoEvents, 0);
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();

@@ -1083,9 +1083,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					refs: await this.runGitRead(token, () =>
 						service.getWorktreeRefs(
 							projectId,
-							optionalObject(body, 'options') as
-							| WorktreeRefQueryOptions
-							| undefined,
+							readWorktreeRefQueryOptions(body),
 							token
 						)
 					),
@@ -1629,11 +1627,6 @@ function requireBoolean(body: unknown, key: string): boolean {
 	return value;
 }
 
-function optionalObject(body: unknown, key: string): object | undefined {
-	const value = readProperty(body, key);
-	return value && typeof value === 'object' ? value : undefined;
-}
-
 function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 	const value = readProperty(body, 'options');
 	if (value === undefined) {
@@ -1668,6 +1661,29 @@ function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 		...(detachedValue !== undefined ? { detached: detachedValue } : {}),
 		...(path !== undefined ? { path } : {}),
 	};
+}
+
+function readWorktreeRefQueryOptions(
+	body: unknown
+): WorktreeRefQueryOptions | undefined {
+	const value = readProperty(body, 'options');
+	if (value === undefined) {
+		return undefined;
+	}
+	if (!isRecord(value)) {
+		throw new BadRequestError('Invalid options.');
+	}
+
+	const sort = readProperty(value, 'sort');
+	if (
+		sort !== undefined &&
+		sort !== 'alphabetically' &&
+		sort !== 'committerdate'
+	) {
+		throw new BadRequestError('Invalid options.sort.');
+	}
+
+	return sort === undefined ? {} : { sort };
 }
 
 function readOptionalWorktreeString(

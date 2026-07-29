@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -76,6 +78,53 @@ suite('WebProjectManagerService', () => {
 			service.getProjects(),
 			/Project manager request failed: 500/
 		);
+	});
+
+	test('cancels worktree ref requests through the browser transport', async () => {
+		let requestSignal: AbortSignal | undefined;
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener(
+					'abort',
+					() => reject(requestSignal?.reason),
+					{ once: true }
+				);
+			});
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+
+		const refs = service.getWorktreeRefs(
+			'project',
+			undefined,
+			cancellation.token
+		);
+		cancellation.cancel();
+
+		await assert.rejects(refs, error => error instanceof CancellationError);
+		assert.strictEqual(requestSignal?.aborted, true);
+	});
+
+	test('does not start an already-canceled worktree ref request', async () => {
+		let fetchCalls = 0;
+		const fakeFetch: WebProjectManagerFetch = async () => {
+			fetchCalls++;
+			return new Response(JSON.stringify({ refs: [] }));
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+		cancellation.cancel();
+
+		await assert.rejects(
+			service.getWorktreeRefs(
+				'project',
+				undefined,
+				cancellation.token
+			),
+			error => error instanceof CancellationError
+		);
+		assert.strictEqual(fetchCalls, 0);
 	});
 
 	test('emits revived project updates from server-sent events', () => {
