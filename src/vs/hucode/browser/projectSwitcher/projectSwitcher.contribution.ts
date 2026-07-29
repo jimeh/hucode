@@ -1007,12 +1007,15 @@ export class ProjectSwitcherDragAndDrop
 		const siblings = project.worktrees.filter(worktree =>
 			!worktree.isMain && !pathsEqual(worktree.path, source.worktreePath)
 		);
+		const targetIndex = siblings.findIndex(worktree =>
+			pathsEqual(worktree.path, target.worktreePath)
+		);
+		if (targetIndex < 0) {
+			return;
+		}
 		const beforeWorktreePath = isBeforeDropPosition(targetSector)
 			? target.worktreePath
-			: siblings.find((worktree, index) =>
-				pathsEqual(worktree.path, target.worktreePath) &&
-				index + 1 < siblings.length
-			)?.path;
+			: siblings[targetIndex + 1]?.path;
 		await this.projectManagerService.moveWorktree(
 			source.projectId,
 			source.worktreePath,

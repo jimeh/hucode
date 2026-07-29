@@ -337,7 +337,6 @@ suite('ProjectSwitcherContribution', () => {
 			ariaLabel: treeOptions?.accessibilityProvider
 				.getWidgetAriaLabel(),
 			treeLayouts,
-			subscriptions,
 			commands,
 		}, {
 			containerClass: 'hucode-project-switcher-view',
@@ -348,17 +347,17 @@ suite('ProjectSwitcherContribution', () => {
 			treeDnd: true,
 			ariaLabel: 'Workbenches and Projects',
 			treeLayouts: [{ height: 260, width: 420 }],
-			subscriptions: [
-				'projects',
-				'folders',
-				'workspace-state',
-				'configuration',
-				'focus',
-				'shell-state',
-				'configuration',
-			],
 			commands: ['hucode.projectSwitcher.addProject'],
 		});
+		assert.deepStrictEqual(subscriptions.toSorted(), [
+			'configuration',
+			'configuration',
+			'focus',
+			'folders',
+			'projects',
+			'shell-state',
+			'workspace-state',
+		]);
 	});
 
 	test('accepts only valid project and worktree reorder boundaries', () => {
@@ -515,6 +514,100 @@ suite('ProjectSwitcherContribution', () => {
 		}]);
 	});
 
+	test('moves a worktree after a middle drop target', async () => {
+		const moves: Array<{
+			projectId: string;
+			source: string;
+			before: string | undefined;
+		}> = [];
+		const source = worktreeItem();
+		const target = worktreeItem({
+			id: 'worktree:project-1:%2Frepo%2Fmiddle',
+			handle: 'worktree:project-1:%2Frepo%2Fmiddle',
+			worktreePath: '/repo/middle',
+			label: 'middle',
+		});
+		const dragAndDrop = createDragAndDrop({
+			projects: [projectRecord({
+				worktrees: [
+					worktreeRecord('/repo', 'repo', true),
+					worktreeRecord(source.worktreePath, source.label),
+					worktreeRecord(target.worktreePath, target.label),
+					worktreeRecord('/repo/next', 'next'),
+					worktreeRecord('/repo/last', 'last'),
+				],
+			})],
+			moveWorktree: async (projectId, sourcePath, beforePath) => {
+				moves.push({
+					projectId,
+					source: sourcePath,
+					before: beforePath,
+				});
+			},
+		});
+
+		await dragAndDrop.drop(
+			new ElementsDragAndDropData([source]),
+			target,
+			undefined,
+			ListViewTargetSector.BOTTOM,
+			new DragEvent('drop')
+		);
+
+		assert.deepStrictEqual(moves, [{
+			projectId: 'project-1',
+			source: '/repo/feature',
+			before: '/repo/next',
+		}]);
+	});
+
+	test('moves a worktree after the final drop target', async () => {
+		const moves: Array<{
+			projectId: string;
+			source: string;
+			before: string | undefined;
+		}> = [];
+		const source = worktreeItem();
+		const target = worktreeItem({
+			id: 'worktree:project-1:%2Frepo%2Flast',
+			handle: 'worktree:project-1:%2Frepo%2Flast',
+			worktreePath: '/repo/last',
+			label: 'last',
+		});
+		const dragAndDrop = createDragAndDrop({
+			projects: [projectRecord({
+				worktrees: [
+					worktreeRecord('/repo', 'repo', true),
+					worktreeRecord(source.worktreePath, source.label),
+					worktreeRecord('/repo/middle', 'middle'),
+					worktreeRecord('/repo/next', 'next'),
+					worktreeRecord(target.worktreePath, target.label),
+				],
+			})],
+			moveWorktree: async (projectId, sourcePath, beforePath) => {
+				moves.push({
+					projectId,
+					source: sourcePath,
+					before: beforePath,
+				});
+			},
+		});
+
+		await dragAndDrop.drop(
+			new ElementsDragAndDropData([source]),
+			target,
+			undefined,
+			ListViewTargetSector.BOTTOM,
+			new DragEvent('drop')
+		);
+
+		assert.deepStrictEqual(moves, [{
+			projectId: 'project-1',
+			source: '/repo/feature',
+			before: undefined,
+		}]);
+	});
+
 	test('splices a retained workbench around its target ordering', async () => {
 		const reorderings: string[][] = [];
 		const source = retainedWorkbenchItem({
@@ -554,7 +647,18 @@ suite('ProjectSwitcherContribution', () => {
 			new DragEvent('drop')
 		);
 
-		assert.deepStrictEqual(reorderings, [['c', 'a', 'b']]);
+		await dragAndDrop.drop(
+			new ElementsDragAndDropData([source]),
+			target,
+			undefined,
+			ListViewTargetSector.BOTTOM,
+			new DragEvent('drop')
+		);
+
+		assert.deepStrictEqual(reorderings, [
+			['c', 'a', 'b'],
+			['a', 'c', 'b'],
+		]);
 	});
 
 	test('prefers keyboard focus over stale tree selection', () => {
