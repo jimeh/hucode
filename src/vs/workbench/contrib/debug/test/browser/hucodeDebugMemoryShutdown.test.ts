@@ -16,6 +16,16 @@ import { BrowserLifecycleService } from
 import { DEBUG_MEMORY_SCHEME } from '../../common/debug.js';
 import { registerDebugMemoryEditorShutdown } from
 	'../../browser/hucodeDebugMemoryShutdown.js';
+import { CustomEditorInput } from
+	'../../../customEditor/browser/customEditorInput.js';
+import { CustomEditorInputSerializer } from
+	'../../../customEditor/browser/customEditorInputFactory.js';
+import { IWebviewWorkbenchService } from
+	'../../../webviewPanel/browser/webviewWorkbenchService.js';
+import { IInstantiationService } from
+	'../../../../../platform/instantiation/common/instantiation.js';
+import { IWebviewService } from
+	'../../../webview/browser/webview.js';
 
 suite('Debug memory hosted shutdown', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -34,7 +44,8 @@ suite('Debug memory hosted shutdown', () => {
 			const regularEditor = createEditor('file');
 			disposables.add(registerDebugMemoryEditorShutdown(
 				lifecycleService,
-				{ editors: [debugEditor, regularEditor] }
+				{ editors: [debugEditor, regularEditor] },
+				() => { }
 			));
 			disposables.add(lifecycleService.onBeforeShutdown(event => {
 				event.veto(true, 'test.dirtyEditor');
@@ -50,13 +61,37 @@ suite('Debug memory hosted shutdown', () => {
 			});
 		});
 
+	test('excludes custom debug-memory editors from persisted layouts', () => {
+		let persistChecks = 0;
+		const serializer = new CustomEditorInputSerializer(
+			{
+				shouldPersist: () => {
+					persistChecks++;
+					return true;
+				}
+			} as Partial<IWebviewWorkbenchService> as IWebviewWorkbenchService,
+			{} as IInstantiationService,
+			{} as IWebviewService
+		);
+		const debugMemoryInput = createCustomEditorInput(DEBUG_MEMORY_SCHEME);
+		const regularCustomInput = createCustomEditorInput('file');
+
+		assert.ok(debugMemoryInput instanceof CustomEditorInput);
+		assert.strictEqual(debugMemoryInput.editorId, 'hexEditor.hexedit');
+		assert.strictEqual(serializer.canSerialize(debugMemoryInput), false);
+		assert.strictEqual(serializer.serialize(debugMemoryInput), undefined);
+		assert.strictEqual(serializer.canSerialize(regularCustomInput), true);
+		assert.strictEqual(persistChecks, 1);
+	});
+
 	test('disposes debug-memory editors only when shutdown commits', async () => {
 		const lifecycleService = createLifecycleService();
 		const debugEditor = createEditor(DEBUG_MEMORY_SCHEME);
 		const regularEditor = createEditor('file');
 		disposables.add(registerDebugMemoryEditorShutdown(
 			lifecycleService,
-			{ editors: [debugEditor, regularEditor] }
+			{ editors: [debugEditor, regularEditor] },
+			() => { }
 		));
 
 		assert.strictEqual(await lifecycleService.prepareShutdown(), false);
@@ -115,4 +150,11 @@ function createEditor(scheme: string, onDispose?: () => void): {
 			onDispose?.();
 		},
 	};
+}
+
+function createCustomEditorInput(scheme: string): CustomEditorInput {
+	const input = Object.create(CustomEditorInput.prototype) as CustomEditorInput;
+	Reflect.set(input, '_editorResource', URI.from({ scheme, path: '/memory' }));
+	Reflect.set(input, 'viewType', 'hexEditor.hexedit');
+	return input;
 }

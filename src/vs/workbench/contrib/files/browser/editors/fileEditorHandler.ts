@@ -15,7 +15,6 @@ import { IWorkingCopyIdentifier, NO_TYPE_ID } from '../../../../services/working
 import { IWorkingCopyEditorHandler, IWorkingCopyEditorService } from '../../../../services/workingCopy/common/workingCopyEditorService.js';
 import { FileEditorInput } from './fileEditorInput.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { Schemas } from '../../../../../base/common/network.js';
 
 interface ISerializedFileEditorInput {
 	resourceJSON: UriComponents;
@@ -29,7 +28,7 @@ interface ISerializedFileEditorInput {
 export class FileEditorInputSerializer implements IEditorSerializer {
 
 	canSerialize(editorInput: EditorInput): boolean {
-		return editorInput.resource?.scheme !== Schemas.vscodeDebugMemory;
+		return true;
 	}
 
 	serialize(editorInput: EditorInput): string {

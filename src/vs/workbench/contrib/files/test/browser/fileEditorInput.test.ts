@@ -22,8 +22,6 @@ import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { FileEditorInputSerializer } from '../../browser/editors/fileEditorHandler.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TextEditorService } from '../../../../services/textfile/common/textEditorService.js';
-import { DEBUG_MEMORY_SCHEME } from '../../../debug/common/debug.js';
-import { EditorGroupModel } from '../../../../common/editor/editorGroupModel.js';
 
 suite('Files - FileEditorInput', () => {
 
@@ -359,22 +357,6 @@ suite('Files - FileEditorInput', () => {
 		assert.strictEqual(inputWithPreferredResource.resource.toString(), inputWithPreferredResourceDeserialized.resource.toString());
 		assert.strictEqual(inputWithPreferredResource.preferredResource.toString(), inputWithPreferredResourceDeserialized.preferredResource.toString());
 
-		const debugMemoryInput = createFileInput(URI.from({
-			scheme: DEBUG_MEMORY_SCHEME,
-			path: '/memory'
-		}));
-		assert.strictEqual(editorSerializer.canSerialize(debugMemoryInput), false);
-
-		const group = disposables.add(instantiationService.createInstance(EditorGroupModel, undefined));
-		group.openEditor(input, { pinned: true, active: true });
-		group.openEditor(debugMemoryInput, { pinned: true, active: true });
-
-		assert.strictEqual(group.count, 2);
-		assert.deepStrictEqual(group.serialize().editors, [{
-			id: input.typeId,
-			value: inputSerialized
-		}]);
-		assert.strictEqual(group.count, 2);
 	});
 
 	test('preferred name/description', async function () {
