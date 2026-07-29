@@ -23,7 +23,7 @@ suite('Hucode update service dispatch', () => {
 		assert.deepStrictEqual(harness.summaries, []);
 	});
 
-	test('retries transient failures with bounded exponential backoff', async () => {
+	test('retries failed attempts with bounded exponential backoff', async () => {
 		const harness = createHarness(2);
 
 		await dispatchUpdateServiceRefresh(release, harness.dependencies);
@@ -46,6 +46,10 @@ suite('Hucode update service dispatch', () => {
 		);
 
 		assert.strictEqual(harness.attempts.length, 4);
+		assert.deepStrictEqual(
+			harness.attempts.map(attempt => attempt.timeoutMs),
+			[60_000, 60_000, 60_000, 60_000]
+		);
 		assert.deepStrictEqual(harness.delays, [5_000, 10_000, 20_000]);
 		assert.strictEqual(harness.warnings.length, 3);
 		assert.strictEqual(harness.errors.length, 1);
@@ -96,6 +100,30 @@ suite('Hucode update service dispatch', () => {
 		assert.match(summaryWarnings[0], /summary write failed/);
 	});
 
+	test('keeps multiline diagnostics safe in annotations and the step summary', async () => {
+		const harness = createHarness(
+			Number.POSITIVE_INFINITY,
+			undefined,
+			new Error('dispatch % failed\r\nwith more\ncontext')
+		);
+
+		await assert.rejects(
+			dispatchUpdateServiceRefresh(release, harness.dependencies),
+			/dispatch % failed with more context/
+		);
+
+		for (const annotation of [...harness.warnings, ...harness.errors]) {
+			assert.strictEqual(annotation.split(/\r?\n/).length, 1);
+			assert.match(annotation, /dispatch %25 failed with more context/);
+		}
+		assert.deepStrictEqual(
+			harness.summaries[0]
+				.split('\n')
+				.filter(line => line.startsWith('- Error: ')),
+			['- Error: dispatch % failed with more context']
+		);
+	});
+
 	test('preserves the repository dispatch payload and GH_TOKEN environment', async () => {
 		const harness = createHarness();
 
@@ -131,11 +159,13 @@ const environment: NodeJS.ProcessEnv = {
 
 function createHarness(
 	failures = 0,
-	summaryFailure?: Error
+	summaryFailure?: Error,
+	dispatchFailure?: Error
 ): {
 	readonly attempts: Array<{
 		readonly args: readonly string[];
 		readonly environment: NodeJS.ProcessEnv;
+		readonly timeoutMs: number;
 	}>;
 	readonly delays: number[];
 	readonly warnings: string[];
@@ -146,6 +176,7 @@ function createHarness(
 	const attempts: Array<{
 		readonly args: readonly string[];
 		readonly environment: NodeJS.ProcessEnv;
+		readonly timeoutMs: number;
 	}> = [];
 	const delays: number[] = [];
 	const warnings: string[] = [];
@@ -160,13 +191,15 @@ function createHarness(
 		summaries,
 		dependencies: {
 			environment,
-			runGh: async (args, commandEnvironment) => {
+			runGh: async (args, commandEnvironment, timeoutMs) => {
 				attempts.push({
 					args: [...args],
 					environment: commandEnvironment,
+					timeoutMs,
 				});
 				if (attempts.length <= failures) {
-					throw new Error(`dispatch ${attempts.length} failed`);
+					throw dispatchFailure ??
+					new Error(`dispatch ${attempts.length} failed`);
 				}
 			},
 			sleep: async delay => {

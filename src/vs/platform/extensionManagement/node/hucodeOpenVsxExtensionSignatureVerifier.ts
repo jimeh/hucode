@@ -169,9 +169,10 @@ export function useHucodeOpenVsxSignatureVerifier(
 
 	try {
 		const hosts = configuredHosts ?? ['open-vsx.org'];
-		const normalizedHosts = new Set(hosts.map(host =>
-			host.trim().toLowerCase()
-		).filter(Boolean));
+		const normalizedHosts = new Set(hosts
+			.filter((host): host is string => typeof host === 'string')
+			.map(host => host.trim().toLowerCase())
+			.filter(Boolean));
 		return normalizedHosts.has(new URL(serviceUrl).hostname.toLowerCase());
 	} catch {
 		return false;

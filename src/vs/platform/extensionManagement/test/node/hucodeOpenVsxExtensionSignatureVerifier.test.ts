@@ -155,6 +155,20 @@ suite('HucodeOpenVsxExtensionSignatureVerifier', () => {
 		);
 	});
 
+	test('ignores malformed configured host entries individually', () => {
+		assert.strictEqual(
+			useHucodeOpenVsxSignatureVerifier(
+				'https://signatures.example.test/vscode/gallery',
+				[
+					42,
+					null,
+					' signatures.example.test ',
+				] as unknown as string[]
+			),
+			true
+		);
+	});
+
 	test('supports disabling and rejects nonmatching or malformed URLs', () => {
 		assert.strictEqual(
 			useHucodeOpenVsxSignatureVerifier(

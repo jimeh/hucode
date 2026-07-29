@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 const execFileAsync = promisify(execFile);
 const MAX_ATTEMPTS = 4;
 const INITIAL_RETRY_DELAY_MS = 5_000;
+const GH_ATTEMPT_TIMEOUT_MS = 60_000;
 
 export interface IUpdateServiceRelease {
 	readonly tagName: string;
@@ -21,7 +22,8 @@ export interface IUpdateServiceDispatchDependencies {
 	readonly environment: NodeJS.ProcessEnv;
 	readonly runGh: (
 		args: readonly string[],
-		environment: NodeJS.ProcessEnv
+		environment: NodeJS.ProcessEnv,
+		timeoutMs: number
 	) => Promise<void>;
 	readonly sleep: (milliseconds: number) => Promise<void>;
 	readonly warning: (message: string) => void;
@@ -53,15 +55,21 @@ export async function dispatchUpdateServiceRefresh(
 
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 		try {
-			await dependencies.runGh(args, dependencies.environment);
+			await dependencies.runGh(
+				args,
+				dependencies.environment,
+				GH_ATTEMPT_TIMEOUT_MS
+			);
 			return;
 		} catch (error) {
-			const errorMessage = getErrorMessage(error);
+			const errorMessage = getDiagnosticErrorMessage(error);
 			if (attempt === MAX_ATTEMPTS) {
 				const message =
 					`Update service dispatch failed after ${MAX_ATTEMPTS} attempts: ` +
 					errorMessage;
-				dependencies.error(`::error::${message}`);
+				dependencies.error(
+					`::error::${escapeWorkflowCommandData(message)}`
+				);
 				try {
 					await dependencies.appendSummary([
 						'### Update metadata refresh failed',
@@ -75,8 +83,11 @@ export async function dispatchUpdateServiceRefresh(
 					].join('\n'));
 				} catch (summaryError) {
 					dependencies.warning(
-						'::warning::Failed to append the update dispatch failure ' +
-						`to GITHUB_STEP_SUMMARY: ${getErrorMessage(summaryError)}`
+						'::warning::' + escapeWorkflowCommandData(
+							'Failed to append the update dispatch failure ' +
+							'to GITHUB_STEP_SUMMARY: ' +
+							getDiagnosticErrorMessage(summaryError)
+						)
 					);
 				}
 				throw new ReportedUpdateServiceDispatchError(message);
@@ -84,9 +95,11 @@ export async function dispatchUpdateServiceRefresh(
 
 			const delay = INITIAL_RETRY_DELAY_MS * 2 ** (attempt - 1);
 			dependencies.warning(
-				`::warning::Update service dispatch attempt ${attempt} of ` +
-				`${MAX_ATTEMPTS} failed; retrying in ${delay / 1_000}s: ` +
-				errorMessage
+				'::warning::' + escapeWorkflowCommandData(
+					`Update service dispatch attempt ${attempt} of ` +
+					`${MAX_ATTEMPTS} failed; retrying in ${delay / 1_000}s: ` +
+					errorMessage
+				)
 			);
 			await dependencies.sleep(delay);
 		}
@@ -95,6 +108,17 @@ export async function dispatchUpdateServiceRefresh(
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function getDiagnosticErrorMessage(error: unknown): string {
+	return getErrorMessage(error).replace(/\r\n|\r|\n/g, ' ').trim();
+}
+
+function escapeWorkflowCommandData(value: string): string {
+	return value
+		.replace(/%/g, '%25')
+		.replace(/\r/g, '%0D')
+		.replace(/\n/g, '%0A');
 }
 
 function requiredEnvironment(
@@ -113,8 +137,12 @@ function createDefaultDependencies(
 ): IUpdateServiceDispatchDependencies {
 	return {
 		environment,
-		runGh: async (args, commandEnvironment) => {
-			await execFileAsync('gh', [...args], { env: commandEnvironment });
+		runGh: async (args, commandEnvironment, timeoutMs) => {
+			await execFileAsync('gh', [...args], {
+				env: commandEnvironment,
+				timeout: timeoutMs,
+				killSignal: 'SIGTERM',
+			});
 		},
 		sleep: milliseconds =>
 			new Promise(resolve => setTimeout(resolve, milliseconds)),
@@ -142,7 +170,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 		await main();
 	} catch (error) {
 		if (!(error instanceof ReportedUpdateServiceDispatchError)) {
-			console.error(`::error::${getErrorMessage(error)}`);
+			console.error(
+				`::error::${escapeWorkflowCommandData(
+					getDiagnosticErrorMessage(error)
+				)}`
+			);
 		}
 		process.exitCode = 1;
 	}
