@@ -72,6 +72,7 @@ interface HucodeWebProjectEventClient {
 	readonly res: HucodeWebProjectManagerResponse;
 	closed: boolean;
 	ready: boolean;
+	pendingInitialProjects: readonly ProjectRecord[] | undefined;
 	blocked: boolean;
 	pendingFrame: string | undefined;
 	drainListening: boolean;
@@ -875,6 +876,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			res,
 			closed: false,
 			ready: false,
+			pendingInitialProjects: undefined,
 			blocked: false,
 			pendingFrame: undefined,
 			drainListening: false,
@@ -909,8 +911,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			'Cache-Control': 'no-store',
 			Connection: 'keep-alive',
 		});
+		const initialProjects = client.pendingInitialProjects ?? projects;
+		client.pendingInitialProjects = undefined;
 		client.ready = true;
-		this.writeProjectsEvent(client, projects, ': connected\n\n');
+		this.writeProjectsEvent(client, initialProjects, ': connected\n\n');
 		return true;
 	}
 
@@ -940,6 +944,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		for (const client of this.eventClients) {
 			if (client.ready) {
 				this.writeProjectsEvent(client, projects);
+			} else {
+				client.pendingInitialProjects = projects;
 			}
 		}
 	}
@@ -1014,6 +1020,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			client.res.removeListener?.('drain', client.onDrain);
 			client.drainListening = false;
 		}
+		client.pendingInitialProjects = undefined;
 		client.pendingFrame = undefined;
 		if (endResponse) {
 			try {

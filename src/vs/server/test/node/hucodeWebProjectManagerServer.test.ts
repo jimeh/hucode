@@ -427,6 +427,33 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('uses a newer broadcast as the initializing client snapshot',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const initialProjects = new DeferredPromise<readonly unknown[]>();
+			service.getProjects = () => initialProjects.p;
+			const staleProjects = [{ id: 'stale' }];
+			const latestProjects = [{ id: 'latest' }];
+
+			const events = startEvents(server);
+			void initialProjects.complete(staleProjects);
+			(server as unknown as {
+				broadcastProjects(projects: readonly unknown[]): void;
+			}).broadcastProjects(latestProjects);
+			await events.completion;
+
+			assert.deepStrictEqual(readProjectEvents(events.body), [
+				{ projects: latestProjects },
+			]);
+			events.close();
+		}
+	);
+
 	test('releases initializing clients on request and response termination',
 		async () => {
 			const server = createServer(
