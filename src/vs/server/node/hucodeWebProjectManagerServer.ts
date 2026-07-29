@@ -33,6 +33,7 @@ import { IStateService } from '../../platform/state/node/state.js';
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const DEFAULT_EVENT_CLIENT_LIMIT = 64;
 
 /**
  * Returns whether a request path targets the Hucode serve-web Projects API.
@@ -49,16 +50,34 @@ interface HucodeWebProjectManagerRequest
 	readonly method?: string;
 	readonly headers?: http.IncomingHttpHeaders;
 	on?(event: 'close', listener: () => void): unknown;
+	removeListener?(event: 'close', listener: () => void): unknown;
 }
 
 interface HucodeWebProjectManagerResponse {
 	writeHead(status: number, headers?: http.OutgoingHttpHeaders): unknown;
 	write?(data: string): unknown;
 	end(data?: string): unknown;
+	on?(
+		event: 'close' | 'drain' | 'error',
+		listener: () => void
+	): unknown;
+	removeListener?(
+		event: 'close' | 'drain' | 'error',
+		listener: () => void
+	): unknown;
 }
 
 interface HucodeWebProjectEventClient {
+	readonly req: HucodeWebProjectManagerRequest;
 	readonly res: HucodeWebProjectManagerResponse;
+	closed: boolean;
+	ready: boolean;
+	pendingInitialProjects: readonly ProjectRecord[] | undefined;
+	blocked: boolean;
+	pendingFrame: string | undefined;
+	drainListening: boolean;
+	onTerminated: () => void;
+	onDrain: () => void;
 }
 
 /**
@@ -445,6 +464,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly stateService: HucodeProjectFileStateService | undefined;
 	private readonly mutationQueue = new Queue<void>();
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
+	private readonly eventClientLimit: number;
+	private disposed = false;
 
 	constructor(
 		serverDataPath: string,
@@ -453,9 +474,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly enabled: boolean;
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
+			/** Internal test override; this is not a serve-web setting. */
+			readonly eventClientLimit?: number;
 		} = { enabled: true },
 	) {
 		super();
+		this.eventClientLimit =
+			options.eventClientLimit ?? DEFAULT_EVENT_CLIENT_LIMIT;
 
 		if (!options.enabled) {
 			return;
@@ -507,7 +532,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				.replace(/^\/+/, '');
 
 			if (req.method === 'GET' && relativePath === 'events') {
-				return this.handleEvents(service, req, res);
+				return await this.handleEvents(service, req, res);
 			}
 
 			if (req.method === 'GET' && !relativePath) {
@@ -587,11 +612,14 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	override dispose(): void {
-		super.dispose();
-		for (const client of this.eventClients) {
-			client.res.end();
+		if (this.disposed) {
+			return;
 		}
-		this.eventClients.clear();
+		this.disposed = true;
+		for (const client of Array.from(this.eventClients)) {
+			this.removeEventClient(client);
+		}
+		super.dispose();
 	}
 
 	private async handlePost(
@@ -820,10 +848,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res: HucodeWebProjectManagerResponse,
 		status: number,
 		body: unknown,
+		headers: http.OutgoingHttpHeaders = {},
 	): true {
 		res.writeHead(status, {
 			'Content-Type': 'application/json',
 			'Cache-Control': 'no-store',
+			...headers,
 		});
 		res.end(JSON.stringify(body));
 		return true;
@@ -834,37 +864,171 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		req: HucodeWebProjectManagerRequest,
 		res: HucodeWebProjectManagerResponse
 	): Promise<true> {
-		const projects = await service.getProjects();
+		if (this.disposed) {
+			return this.writeEventClientUnavailableError(res);
+		}
+		if (this.eventClients.size >= this.eventClientLimit) {
+			return this.writeEventClientCapacityError(res);
+		}
+
+		const client: HucodeWebProjectEventClient = {
+			req,
+			res,
+			closed: false,
+			ready: false,
+			pendingInitialProjects: undefined,
+			blocked: false,
+			pendingFrame: undefined,
+			drainListening: false,
+			onTerminated: () => { },
+			onDrain: () => { },
+		};
+		client.onTerminated = () => this.removeEventClient(client);
+		client.onDrain = () => this.drainEventClient(client);
+		this.eventClients.add(client);
+		req.on?.('close', client.onTerminated);
+		res.on?.('close', client.onTerminated);
+		res.on?.('error', client.onTerminated);
+
+		let projects: readonly ProjectRecord[];
+		try {
+			projects = await service.getProjects();
+		} catch (error) {
+			if (client.closed) {
+				return true;
+			}
+			this.removeEventClient(client, false);
+			throw error;
+		}
+
+		if (client.closed || this.disposed) {
+			this.removeEventClient(client);
+			return true;
+		}
 
 		res.writeHead(200, {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-store',
 			Connection: 'keep-alive',
 		});
-
-		const client: HucodeWebProjectEventClient = { res };
-		this.eventClients.add(client);
-		req.on?.('close', () => {
-			this.eventClients.delete(client);
-		});
-
-		res.write?.(': connected\n\n');
-		this.writeProjectsEvent(client, projects);
+		const initialProjects = client.pendingInitialProjects ?? projects;
+		client.pendingInitialProjects = undefined;
+		client.ready = true;
+		this.writeProjectsEvent(client, initialProjects, ': connected\n\n');
 		return true;
+	}
+
+	private writeEventClientCapacityError(
+		res: HucodeWebProjectManagerResponse
+	): true {
+		return this.writeJson(
+			res,
+			503,
+			{ error: 'Project event stream capacity reached.' },
+			{ 'Retry-After': '1' }
+		);
+	}
+
+	private writeEventClientUnavailableError(
+		res: HucodeWebProjectManagerResponse
+	): true {
+		return this.writeJson(
+			res,
+			503,
+			{ error: 'Project event stream is unavailable.' },
+			{ 'Retry-After': '1' }
+		);
 	}
 
 	private broadcastProjects(projects: readonly ProjectRecord[]): void {
 		for (const client of this.eventClients) {
-			this.writeProjectsEvent(client, projects);
+			if (client.ready) {
+				this.writeProjectsEvent(client, projects);
+			} else {
+				client.pendingInitialProjects = projects;
+			}
 		}
 	}
 
 	private writeProjectsEvent(
 		client: HucodeWebProjectEventClient,
-		projects: readonly ProjectRecord[]
+		projects: readonly ProjectRecord[],
+		prefix = ''
 	): void {
-		client.res.write?.(`event: projects\n`);
-		client.res.write?.(`data: ${JSON.stringify({ projects })}\n\n`);
+		this.writeEventFrame(
+			client,
+			`${prefix}event: projects\n` +
+			`data: ${JSON.stringify({ projects })}\n\n`
+		);
+	}
+
+	private writeEventFrame(
+		client: HucodeWebProjectEventClient,
+		frame: string
+	): void {
+		if (client.closed) {
+			return;
+		}
+		if (client.blocked) {
+			client.pendingFrame = frame;
+			return;
+		}
+
+		try {
+			if (client.res.write?.(frame) === false) {
+				client.blocked = true;
+				if (!client.drainListening) {
+					client.drainListening = true;
+					client.res.on?.('drain', client.onDrain);
+				}
+			}
+		} catch {
+			this.removeEventClient(client);
+		}
+	}
+
+	private drainEventClient(client: HucodeWebProjectEventClient): void {
+		if (client.closed) {
+			return;
+		}
+		if (client.drainListening) {
+			client.res.removeListener?.('drain', client.onDrain);
+			client.drainListening = false;
+		}
+		client.blocked = false;
+
+		const pendingFrame = client.pendingFrame;
+		client.pendingFrame = undefined;
+		if (pendingFrame !== undefined) {
+			this.writeEventFrame(client, pendingFrame);
+		}
+	}
+
+	private removeEventClient(
+		client: HucodeWebProjectEventClient,
+		endResponse = true
+	): void {
+		if (client.closed) {
+			return;
+		}
+		client.closed = true;
+		this.eventClients.delete(client);
+		client.req.removeListener?.('close', client.onTerminated);
+		client.res.removeListener?.('close', client.onTerminated);
+		client.res.removeListener?.('error', client.onTerminated);
+		if (client.drainListening) {
+			client.res.removeListener?.('drain', client.onDrain);
+			client.drainListening = false;
+		}
+		client.pendingInitialProjects = undefined;
+		client.pendingFrame = undefined;
+		if (endResponse) {
+			try {
+				client.res.end();
+			} catch {
+				// The response can already be closed or failed.
+			}
+		}
 	}
 }
 
