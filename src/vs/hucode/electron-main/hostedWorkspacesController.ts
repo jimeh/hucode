@@ -127,6 +127,11 @@ interface IHostedWorkbenchInstance {
 	disposed: boolean;
 }
 
+interface IProjectCatalogSnapshot {
+	readonly liveProjectIds: ReadonlySet<string> | undefined;
+	readonly projectIdsByPath: ReadonlyMap<string, string>;
+}
+
 type OmniFocusedSurface = 'shell' | 'workspace';
 
 const defaultHostedWorkbenchViewFactory: IHostedWorkbenchViewFactory = {
@@ -173,6 +178,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
+	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
 	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
@@ -846,19 +852,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		const activationIntent = ++this.activationIntentGeneration;
+		const existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? existing?.projectId
+		);
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
-		if (projectId && retained) {
+		if (effectiveProjectId && retained) {
 			this.retainedWorkbenches.dismiss(retained.id);
-		} else if (!projectId) {
+		} else if (!effectiveProjectId) {
 			this.retainedWorkbenches.retain(
 				URI.file(worktreePath),
 				'loaded'
 			);
 		}
 
-		const existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		if (existing) {
 			if (
 				!existing.disposed &&
@@ -866,7 +876,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				existing.state !== 'unloaded' &&
 				existing.state !== 'dormant'
 			) {
-				existing.projectId = projectId ?? existing.projectId;
+				existing.projectId = effectiveProjectId;
 				this.activateInstance(existing);
 				return;
 			}
@@ -878,7 +888,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		await this.createOrRestoreInstance(
 			worktreePath,
-			projectId,
+			effectiveProjectId,
 			true,
 			activationIntent
 		);
@@ -1044,6 +1054,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			),
 			folder.projectId,
 		]));
+		this.projectCatalogSnapshot = {
+			liveProjectIds,
+			projectIdsByPath,
+		};
 		let changed = false;
 		for (const instance of this.instancesById.values()) {
 			const claimedProjectId = projectIdsByPath.get(
@@ -1090,6 +1104,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}[]
 	): Promise<void> {
 		await this.ensureRestored();
+		this.recordProjectFolderPromotions(projectFolders);
 		if (this.applyProjectFolderPromotions(projectFolders)) {
 			this.emitState();
 		}
@@ -1115,6 +1130,56 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			changed = true;
 		}
 		return changed;
+	}
+
+	private recordProjectFolderPromotions(projectFolders: readonly {
+		readonly projectId: string;
+		readonly folderUri: URI;
+	}[]): void {
+		if (projectFolders.length === 0) {
+			return;
+		}
+		const current = this.projectCatalogSnapshot;
+		const liveProjectIds = current?.liveProjectIds
+			? new Set(current.liveProjectIds)
+			: undefined;
+		const projectIdsByPath = new Map(current?.projectIdsByPath);
+		for (const projectFolder of projectFolders) {
+			liveProjectIds?.add(projectFolder.projectId);
+			projectIdsByPath.set(
+				getProjectManagerPathComparisonKey(
+					projectFolder.folderUri.fsPath,
+					isLinux
+				),
+				projectFolder.projectId
+			);
+		}
+		this.projectCatalogSnapshot = {
+			liveProjectIds,
+			projectIdsByPath,
+		};
+	}
+
+	private resolveProjectIdAgainstCatalog(
+		worktreePath: string,
+		projectId: string | undefined
+	): string | undefined {
+		const catalog = this.projectCatalogSnapshot;
+		if (!catalog) {
+			return projectId;
+		}
+		const claimedProjectId = catalog.projectIdsByPath.get(
+			getProjectManagerPathComparisonKey(worktreePath, isLinux)
+		);
+		if (claimedProjectId) {
+			return claimedProjectId;
+		}
+		if (!catalog.liveProjectIds) {
+			return projectId;
+		}
+		return projectId && catalog.liveProjectIds.has(projectId)
+			? projectId
+			: undefined;
 	}
 
 	async openFilesInWorkspace(

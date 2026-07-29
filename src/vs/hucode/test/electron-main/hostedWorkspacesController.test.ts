@@ -1050,16 +1050,47 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
 	});
 
+	test('keeps adopted ownership when reopened with a stale project ID',
+		async () => {
+			const adoptedPath = createWorktree('stale-reopen');
+			const { controller, window } = createController();
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+		}
+	);
+
 	test('promotes a live retained workbench and persists project ownership',
 		async () => {
 			const promotedPath = createWorktree('promoted-live');
 			const { controller, window } = createController();
 			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
 
 			await controller.promoteRetainedWorkbenchProjectFolders([{
 				projectId: 'project',
 				folderUri: URI.file(promotedPath),
 			}]);
+			await controller.openWorkspace(promotedPath, 'project');
 
 			const state = controller.getState();
 			assert.strictEqual(state.instances[0].projectId, 'project');
