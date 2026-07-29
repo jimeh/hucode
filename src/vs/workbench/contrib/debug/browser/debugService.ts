@@ -141,7 +141,6 @@ export class DebugService implements IDebugService {
 		this.taskRunner = this.instantiationService.createInstance(DebugTaskRunner);
 
 		this.disposables.add(this.fileService.onDidFilesChange(e => this.onFileChanges(e)));
-		this.disposables.add(this.lifecycleService.onWillShutdown(this.dispose, this));
 
 		this.disposables.add(this.extensionHostDebugService.onAttachSession(event => {
 			const session = this.model.getSession(event.sessionId, true);
@@ -199,7 +198,8 @@ export class DebugService implements IDebugService {
 
 		this.disposables.add(registerDebugMemoryEditorShutdown(
 			this.lifecycleService,
-			editorService
+			editorService,
+			() => this.dispose()
 		));
 
 		this.disposables.add(extensionService.onWillStop(evt => {

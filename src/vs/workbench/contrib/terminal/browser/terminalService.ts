@@ -57,6 +57,7 @@ import { isAuxiliaryWindow, mainWindow } from '../../../../base/browser/window.j
 import { GroupIdentifier } from '../../../common/editor.js';
 import { getActiveWindow } from '../../../../base/browser/dom.js';
 import { hasKey, isString } from '../../../../base/common/types.js';
+import { prepareTerminalShutdown } from './hucodeTerminalShutdown.js';
 
 interface IBackgroundTerminal {
 	instance: ITerminalInstance;
@@ -620,10 +621,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private _onBeforeShutdown(reason: ShutdownReason): MaybePromise<boolean> {
 		// Never veto on web as this would block all windows from being closed. This disables
 		// process revive as we can't handle it on shutdown.
-		if (isWeb) {
-			return false;
-		}
-		return this._onBeforeShutdownAsync(reason);
+		return prepareTerminalShutdown(isWeb, () => this._onBeforeShutdownAsync(reason));
 	}
 
 	private async _onBeforeShutdownAsync(reason: ShutdownReason): Promise<boolean> {

@@ -21,7 +21,8 @@ interface IDebugMemoryEditorService {
  */
 export function registerDebugMemoryEditorShutdown(
 	lifecycleService: ILifecycleService,
-	editorService: IDebugMemoryEditorService
+	editorService: IDebugMemoryEditorService,
+	disposeDebugService?: () => void
 ): IDisposable {
 	return lifecycleService.onWillShutdown(() => {
 		for (const editor of editorService.editors) {
@@ -30,5 +31,7 @@ export function registerDebugMemoryEditorShutdown(
 				editor.dispose();
 			}
 		}
+
+		disposeDebugService?.();
 	});
 }

@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
+import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -71,9 +72,37 @@ suite('Debug memory hosted shutdown', () => {
 			regularDisposeCount: 0,
 		});
 	});
+
+	test('runs debug-memory cleanup before debug service disposal', async () => {
+		const lifecycleService = createLifecycleService();
+		const debugServiceDisposables = disposables.add(new DisposableStore());
+		const shutdownOrder: string[] = [];
+		const debugEditor = createEditor(DEBUG_MEMORY_SCHEME, () => {
+			shutdownOrder.push('debug-memory-editor');
+		});
+		disposables.add(registerDebugMemoryEditorShutdown(
+			lifecycleService,
+			{ editors: [debugEditor] },
+			() => {
+				shutdownOrder.push('debug-service');
+				debugServiceDisposables.dispose();
+			}
+		));
+		debugServiceDisposables.add(lifecycleService.onWillShutdown(() => {
+			assert.fail('debug service disposal should unregister later listeners');
+		}));
+
+		await lifecycleService.commitShutdown();
+
+		assert.strictEqual(debugEditor.disposeCount, 1);
+		assert.deepStrictEqual(shutdownOrder, [
+			'debug-memory-editor',
+			'debug-service',
+		]);
+	});
 });
 
-function createEditor(scheme: string): {
+function createEditor(scheme: string, onDispose?: () => void): {
 	readonly resource: URI;
 	disposeCount: number;
 	dispose(): void;
@@ -83,6 +112,7 @@ function createEditor(scheme: string): {
 		disposeCount: 0,
 		dispose() {
 			this.disposeCount++;
+			onDispose?.();
 		},
 	};
 }

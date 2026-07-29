@@ -15,31 +15,29 @@ import { TestConfigurationService } from
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { TestDialogService } from
 	'../../../../../platform/dialogs/test/common/testDialogService.js';
-import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { InMemoryStorageService } from
-	'../../../../../platform/storage/common/storage.js';
 import { ITerminalBackend } from
 	'../../../../../platform/terminal/common/terminal.js';
-import { BrowserLifecycleService } from
-	'../../../../services/lifecycle/browser/lifecycleService.js';
-import { ILifecycleService } from
+import { ILifecycleService, ShutdownReason } from
 	'../../../../services/lifecycle/common/lifecycle.js';
-import { workbenchInstantiationService } from
+import { TestLifecycleService, workbenchInstantiationService } from
 	'../../../../test/browser/workbenchTestServices.js';
 import {
 	ITerminalInstanceService,
 	ITerminalInstance,
+	ITerminalGroupService,
 	ITerminalService,
 } from '../../browser/terminal.js';
 import { TerminalService } from '../../browser/terminalService.js';
 import { IRemoteAgentService } from
 	'../../../../services/remote/common/remoteAgentService.js';
+import { prepareTerminalShutdown } from
+	'../../browser/hucodeTerminalShutdown.js';
 
 suite('Terminal hosted shutdown', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let terminalService: TerminalService;
-	let lifecycleService: BrowserLifecycleService;
+	let lifecycleService: TestLifecycleService;
 	let backend: TestPersistentTerminalBackend;
 
 	setup(async () => {
@@ -49,13 +47,15 @@ suite('Terminal hosted shutdown', () => {
 				terminal: {
 					integrated: {
 						confirmOnKill: 'never',
-						confirmOnExit: 'never',
+						confirmOnExit: 'always',
 						enablePersistentSessions: true,
 					},
 				},
 			}),
 		}, disposables);
-		instantiationService.stub(IDialogService, new TestDialogService());
+		instantiationService.stub(IDialogService, new TestDialogService({
+			confirmed: true,
+		}));
 		instantiationService.stub(
 			ITerminalInstanceService,
 			'getBackend',
@@ -67,10 +67,7 @@ suite('Terminal hosted shutdown', () => {
 			[]
 		);
 		instantiationService.stub(IRemoteAgentService, 'getConnection', null);
-		lifecycleService = disposables.add(new BrowserLifecycleService(
-			new NullLogService(),
-			disposables.add(new InMemoryStorageService())
-		));
+		lifecycleService = disposables.add(new TestLifecycleService());
 		instantiationService.stub(ILifecycleService, lifecycleService);
 
 		terminalService = disposables.add(
@@ -83,6 +80,21 @@ suite('Terminal hosted shutdown', () => {
 		Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
 			instance: createPersistentTerminal(),
 		}]);
+		const terminalGroupService = Reflect.get(
+			terminalService,
+			'_terminalGroupService'
+		) as ITerminalGroupService;
+		Reflect.set(terminalGroupService, 'instances', [createPersistentTerminal()]);
+	});
+
+	test('returns synchronously without desktop preparation on web', () => {
+		let desktopPrepareCount = 0;
+
+		assert.strictEqual(prepareTerminalShutdown(true, () => {
+			desktopPrepareCount++;
+			return false;
+		}), false);
+		assert.strictEqual(desktopPrepareCount, 0);
 	});
 
 	test('keeps persistence active when shutdown preparation is vetoed',
@@ -91,28 +103,31 @@ suite('Terminal hosted shutdown', () => {
 				event.veto(true, 'test.dirtyEditor');
 			}));
 
-			assert.strictEqual(await lifecycleService.prepareShutdown(), true);
+			assert.strictEqual(await prepareShutdown(lifecycleService), true);
 			await Promise.resolve();
 			await Promise.resolve();
 			await runWithFakedTimers({}, async () => saveState(terminalService));
 
-			assert.strictEqual(backend.layoutUpdateCount, 1);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [13],
+			}]);
 		});
 
 	test('stops persistence only when shutdown commits', async () => {
-		await lifecycleService.commitShutdown();
-		assert.strictEqual(backend.layoutUpdateCount, 1);
+		lifecycleService.fireShutdown();
+		assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 
-		assert.strictEqual(backend.layoutUpdateCount, 1);
+		assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
 	});
 });
 
 class TestPersistentTerminalBackend implements Partial<ITerminalBackend> {
-	layoutUpdateCount = 0;
+	readonly layoutUpdates: Parameters<ITerminalBackend['setTerminalLayoutInfo']>[0][] = [];
 
-	async setTerminalLayoutInfo(): Promise<void> {
-		this.layoutUpdateCount++;
+	async setTerminalLayoutInfo(layout: Parameters<ITerminalBackend['setTerminalLayoutInfo']>[0]): Promise<void> {
+		this.layoutUpdates.push(layout);
 	}
 }
 
@@ -130,4 +145,15 @@ function createPersistentTerminal(): ITerminalInstance {
 function saveState(terminalService: TerminalService): void {
 	const fn = Reflect.get(terminalService, '_saveState') as () => void;
 	fn.call(terminalService);
+}
+
+async function prepareShutdown(lifecycleService: TestLifecycleService): Promise<boolean> {
+	const vetoes: (boolean | Promise<boolean>)[] = [];
+	lifecycleService.fireBeforeShutdown({
+		reason: ShutdownReason.QUIT,
+		veto: value => vetoes.push(value),
+		finalVeto: value => vetoes.push(value()),
+	});
+
+	return (await Promise.all(vetoes)).some(Boolean);
 }
