@@ -8,8 +8,8 @@ import { InstantiationType, registerSingleton } from '../../platform/instantiati
 import { IInstantiationService } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
+	IHucodeOmniCommandForwardingScope,
 	isHucodeOmniShellAction,
-	isHucodeOmniShellCommandForwardingDisabled,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { INativeRunActionInWindowRequest } from '../../platform/window/common/window.js';
@@ -32,7 +32,10 @@ class OmniCommandService extends CommandService {
 		private readonly nativeEnvironmentService:
 			INativeWorkbenchEnvironmentService,
 		@IHucodeShellService
-		private readonly shellService: IHucodeShellService
+		private readonly shellService: IHucodeShellService,
+		@IHucodeOmniCommandForwardingScope
+		private readonly commandForwardingScope:
+			IHucodeOmniCommandForwardingScope
 	) {
 		super(instantiationService, extensionService, omniLogService);
 	}
@@ -42,7 +45,7 @@ class OmniCommandService extends CommandService {
 			!this.nativeEnvironmentService.isOmniWindow ||
 			!isHucodeOmniProjectsFocus() ||
 			isHucodeOmniLocalInputFocus() ||
-			isHucodeOmniShellCommandForwardingDisabled() ||
+			this.commandForwardingScope.isForwardingDisabled ||
 			isHucodeOmniShellAction(id)
 		) {
 			return super.executeCommand(id, ...args);

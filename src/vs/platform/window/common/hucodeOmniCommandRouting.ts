@@ -7,6 +7,7 @@ import {
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 } from './window.js';
+import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
 	'hucode.projectSwitcher.',
@@ -65,7 +66,45 @@ export const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
 	'[contenteditable="true"]',
 ].join(', ');
 
-let hucodeOmniShellCommandForwardingDisabled = 0;
+export const IHucodeOmniCommandForwardingScope =
+	createDecorator<IHucodeOmniCommandForwardingScope>(
+		'hucodeOmniCommandForwardingScope'
+	);
+
+/**
+ * Per-renderer state used to prevent shell-originated commands from being
+ * forwarded back to their source.
+ */
+export interface IHucodeOmniCommandForwardingScope {
+	readonly _serviceBrand: undefined;
+	readonly isForwardingDisabled: boolean;
+	runWithForwardingDisabled<T>(
+		callback: () => T | Promise<T>
+	): Promise<T>;
+}
+
+export class HucodeOmniCommandForwardingScope
+	implements IHucodeOmniCommandForwardingScope {
+
+	declare readonly _serviceBrand: undefined;
+
+	private forwardingDisabled = 0;
+
+	get isForwardingDisabled(): boolean {
+		return this.forwardingDisabled > 0;
+	}
+
+	async runWithForwardingDisabled<T>(
+		callback: () => T | Promise<T>
+	): Promise<T> {
+		this.forwardingDisabled++;
+		try {
+			return await callback();
+		} finally {
+			this.forwardingDisabled--;
+		}
+	}
+}
 
 /**
  * Returns whether a command is owned by the Omni Projects shell.
@@ -93,25 +132,4 @@ export function isHucodeForwardedFromOmniShell(
 		| INativeRunKeybindingInWindowRequest
 ): boolean {
 	return request.hucodeForwardedFromOmniShell === true;
-}
-
-/**
- * Runs work without the Omni shell command forwarder re-forwarding commands.
- */
-export async function withHucodeOmniShellCommandForwardingDisabled<T>(
-	callback: () => T | Promise<T>
-): Promise<T> {
-	hucodeOmniShellCommandForwardingDisabled++;
-	try {
-		return await callback();
-	} finally {
-		hucodeOmniShellCommandForwardingDisabled--;
-	}
-}
-
-/**
- * Returns whether Omni shell command forwarding is temporarily disabled.
- */
-export function isHucodeOmniShellCommandForwardingDisabled(): boolean {
-	return hucodeOmniShellCommandForwardingDisabled > 0;
 }

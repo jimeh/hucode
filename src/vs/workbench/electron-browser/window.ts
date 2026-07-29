@@ -88,6 +88,7 @@ import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
+import { IHucodeOmniCommandForwardingScope } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 
 export class NativeWindow extends BaseWindow {
 
@@ -140,6 +141,8 @@ export class NativeWindow extends BaseWindow {
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
 		@IMainProcessService mainProcessService: IMainProcessService,
+		@IHucodeOmniCommandForwardingScope
+		commandForwardingScope: IHucodeOmniCommandForwardingScope,
 	) {
 		super(mainWindow, undefined, hostService, nativeEnvironmentService, contextMenuService, layoutService);
 
@@ -147,6 +150,7 @@ export class NativeWindow extends BaseWindow {
 			nativeEnvironmentService,
 			mainProcessService,
 			logService,
+			commandForwardingScope,
 		);
 		this.configuredWindowZoomLevel = this.resolveConfiguredWindowZoomLevel();
 
