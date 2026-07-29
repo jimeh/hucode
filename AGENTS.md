@@ -179,6 +179,19 @@ as the required Hucode instruction set for work in this fork.
   is the third — a same-origin `MessagePort` handshake in
   `hostedOmniWebConnection.ts`. Anything deciding what a window is *allowed* to
   do needs one of those two, not the flags.
+- A trusted hosted-workbench `MessagePort` authenticates the connection, not
+  caller-supplied method arguments. Expose an explicit least-authority channel
+  facade, bind window and instance identity to the port server-side, and use a
+  closed hosted-action allowlist rather than the broad
+  `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
+  only for version-skew compatibility.
+- Web shell restoration can block on remote folder checks. Page shutdown must
+  cancel restoration without awaiting initialization, and restoration must
+  check cancellation after each asynchronous preflight before attaching an
+  iframe.
+- Shell controller ownership ends when its host fires `onDidClose`, even if a
+  later global window-destroy event also arrives. Release on both signals
+  idempotently so a closed host cannot retain controller state.
 - Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
   CDP. Identify them through
   `window.vscode.context.resolveConfiguration()` — their URLs are identical.
@@ -189,6 +202,10 @@ as the required Hucode instruction set for work in this fork.
 - Editor copy and cut commands synchronously emit nested document clipboard
   events. Local Omni clipboard fallback must keep those nested events inside the
   per-window forwarding-disabled scope or it can cancel and re-forward itself.
+- A timed-out hosted clipboard request has ambiguous delivery. Treat copy and
+  cut as consumed after the request starts rather than retrying locally: this
+  preserves at-most-once behavior, with a documented risk that a genuinely lost
+  request leaves the operation unapplied.
 - A hosted web unload commit is already irreversible from the shell's
   perspective. Internal commit failures must reject so the shell takes its
   remove-anyway path; `false` is reserved for an explicit protocol refusal

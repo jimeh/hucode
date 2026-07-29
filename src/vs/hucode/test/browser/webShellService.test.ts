@@ -15,7 +15,10 @@ import {
 } from '../../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../../base/parts/ipc/browser/ipc.mp.js';
-import { ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
+import {
+	IChannel,
+	ProxyChannel,
+} from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -36,6 +39,10 @@ import {
 	HucodeOmniWebChildMessageType,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
+import {
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+} from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { INativeOpenFileRequest } from
 	'../../../platform/window/common/window.js';
 import {
@@ -56,6 +63,13 @@ import {
 	IHostedWorkspaceLifecycleContractAdapter,
 	registerHostedWorkspaceLifecycleContract,
 } from '../common/hostedWorkspaceLifecycleContract.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from '../../browser/projectSwitcher/projectSwitcherCommon.js';
 
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -127,7 +141,13 @@ suite('WebHucodeShellService', () => {
 		persistence?: IWebHucodeShellPersistenceAdapter,
 		restorePolicy: 'active' | 'all' | 'none' = 'active',
 		folderAccess?: IWebHucodeShellFolderAccess,
-		logService: RecordingLogService = new RecordingLogService()
+		logService: RecordingLogService = new RecordingLogService(),
+		commandService: {
+			executeCommand<T = unknown>(
+				commandId: string,
+				...args: unknown[]
+			): Promise<T>;
+		} = { async executeCommand<T>() { return undefined as T; } }
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -144,9 +164,7 @@ suite('WebHucodeShellService', () => {
 				hostedWorkbenchRoute: '/omni/workbench',
 				serverPathCaseSensitive: true,
 			},
-			{
-				async executeCommand() { },
-			},
+			commandService,
 			{
 				onDidChangeSurface: Event.None,
 				getSurface() {
@@ -208,6 +226,7 @@ suite('WebHucodeShellService', () => {
 	interface IConnectedChild {
 		readonly workbench: FakeHostedWorkbench;
 		readonly shell: IHucodeShellService;
+		readonly shellChannel: IChannel;
 		readonly shellWindowId: number;
 	}
 
@@ -234,10 +253,14 @@ suite('WebHucodeShellService', () => {
 				disposables.add(new DisposableStore())
 			)
 		);
-		const shell = ProxyChannel.toService<IHucodeShellService>(
-			client.getChannel(HUCODE_OMNI_WEB_SHELL_CHANNEL)
-		);
-		return { workbench, shell, shellWindowId: posted.windowId };
+		const shellChannel = client.getChannel(HUCODE_OMNI_WEB_SHELL_CHANNEL);
+		const shell = ProxyChannel.toService<IHucodeShellService>(shellChannel);
+		return {
+			workbench,
+			shell,
+			shellChannel,
+			shellWindowId: posted.windowId,
+		};
 	}
 
 	/**
@@ -1401,6 +1424,132 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(change?.state.projectSwitcherCanGoBack, true);
 	});
 
+	test('binds the hosted shell channel to its window and instance', async () => {
+		const { service, surface, browser } = createService();
+		const firstState = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/hucode-worktree-one',
+			'project'
+		);
+		const firstInstanceId = firstState.activeInstanceId;
+		assert.ok(firstInstanceId);
+		const firstChild = connectChild(browser, surface, firstInstanceId);
+		const secondState = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/hucode-worktree-two',
+			'project'
+		);
+		const secondInstanceId = secondState.activeInstanceId;
+		assert.ok(secondInstanceId);
+
+		const boundState = await firstChild.shell.getWindowState(999);
+		assert.strictEqual(boundState.instances.length, 2);
+
+		await firstChild.shell.closeWorkspace(
+			firstChild.shellWindowId,
+			secondInstanceId
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.deepStrictEqual(
+			state.instances.map(instance => instance.instanceId),
+			[secondInstanceId]
+		);
+	});
+
+	test('rejects private methods on the hosted shell channel', async () => {
+		const { service, surface, browser } = createService();
+		const state = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.activeInstanceId;
+		assert.ok(instanceId);
+		const child = connectChild(browser, surface, instanceId);
+
+		await assert.rejects(
+			child.shellChannel.call('getState'),
+			/Method not found|Unknown channel command|getState/
+		);
+	});
+
+	test('reconciles the complete project catalog through the hosted shell channel',
+		async () => {
+			const { service, surface, browser } = createService();
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree'
+			);
+			const instanceId = state.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+
+			const reconciled = await child.shell
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					999,
+					[{
+						projectId: 'project',
+						folderUris: [URI.file('/tmp/hucode-worktree').toJSON()],
+					}]
+				);
+
+			assert.strictEqual(reconciled.instances[0].projectId, 'project');
+		});
+
+	test('allows registered shell actions and rejects lookalike commands',
+		async () => {
+			const commandCalls: string[] = [];
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				new RecordingLogService(),
+				{
+					async executeCommand<T = unknown>(commandId: string) {
+						commandCalls.push(commandId);
+						return undefined as T;
+					},
+				}
+			);
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+
+			assert.strictEqual(await child.shell.runActionInShell(999, {
+				id: 'hucode.unregistered',
+				from: 'menu',
+			}), false);
+			assert.strictEqual(await child.shell.runActionInShell(999, {
+				id: 'hucode.projectSwitcher.dismissWorkbench',
+				from: 'menu',
+				args: [{ $treeItemHandle: 'workbench:unrelated' }],
+			}), false);
+			const allowedCommands = [
+				FOCUS_PROJECT_PANE_COMMAND_ID,
+				TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+				ADD_PROJECT_COMMAND_ID,
+				REFRESH_PROJECTS_COMMAND_ID,
+				COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+				GO_BACK_WORKTREE_COMMAND_ID,
+				GO_FORWARD_WORKTREE_COMMAND_ID,
+			];
+			for (const id of allowedCommands) {
+				assert.strictEqual(await child.shell.runActionInShell(999, {
+					id,
+					from: 'menu',
+				}), true);
+			}
+
+			assert.deepStrictEqual(commandCalls, allowedCommands);
+		});
+
 	test('closes the requested instance through the shell channel', async () => {
 		const { service, surface, browser } = createService();
 		const windowId = browser.windowId;
@@ -2119,6 +2268,47 @@ suite('WebHucodeShellService', () => {
 			});
 		});
 
+	test('does not supersede a prepared unload on routine active iframe focus',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/routine-focus',
+				'project'
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+			const prepareStarted = new DeferredPromise<void>();
+			const releasePreparation = new DeferredPromise<boolean>();
+			child.workbench.onPrepareUnload = () => {
+				if (!prepareStarted.isSettled) {
+					void prepareStarted.complete();
+				}
+			};
+			child.workbench.prepareUnloadResult = releasePreparation.p;
+
+			const closing = service.closeWorkspace(
+				browser.windowId,
+				instanceId
+			);
+			await prepareStarted.p;
+			markFocused(browser, surface, instanceId);
+			await releasePreparation.complete(true);
+			await closing;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				instanceIds: state.instances.map(instance =>
+					instance.instanceId
+				),
+				commitCalls: child.workbench.commitUnloadCalls,
+			}, {
+				instanceIds: [],
+				commitCalls: 1,
+			});
+		});
+
 	test('shuts a hosted workbench down exactly once on a successful unload',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -2365,6 +2555,75 @@ suite('WebHucodeShellService', () => {
 			ran: true,
 			commands: [{ commandId: 'test.command', args: ['payload'] }],
 		});
+	});
+
+	test('does not retry clipboard commands after ambiguous delivery timeout',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const logService = new RecordingLogService();
+			const { service, surface } = createService(
+				browser,
+				undefined,
+				'active',
+				undefined,
+				logService
+			);
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+			const commandResult = new DeferredPromise<boolean>();
+			child.workbench.runCommandResult = commandResult.p;
+
+			const forwarding = service.runActionInWorkspace(browser.windowId, {
+				id: 'editor.action.clipboardCutAction',
+				from: 'menu',
+			});
+			await waitFor(
+				() => child.workbench.commands.length === 1,
+				'expected clipboard command delivery to start'
+			);
+			browser.expireTimeouts(5000);
+
+			assert.strictEqual(await forwarding, true);
+			assert.ok(logService.warnings.some(message =>
+				message.includes('delivery is unconfirmed')
+			));
+			await commandResult.complete(false);
+		});
+
+	test('declines clipboard forwarding on definitive failure', async () => {
+		const { service, surface, browser } = createService();
+		const state = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/hucode-worktree',
+			'project'
+		);
+		const instanceId = state.activeInstanceId;
+		assert.ok(instanceId);
+		const child = connectChild(browser, surface, instanceId);
+		child.workbench.runCommandResult = false;
+
+		assert.strictEqual(await service.runActionInWorkspace(
+			browser.windowId,
+			{
+				id: 'editor.action.clipboardCopyAction',
+				from: 'menu',
+			}
+		), false);
+
+		child.workbench.runCommandRejects = true;
+		assert.strictEqual(await service.runActionInWorkspace(
+			browser.windowId,
+			{
+				id: 'editor.action.clipboardCutAction',
+				from: 'menu',
+			}
+		), false);
 	});
 
 	test('recreates a crashed iframe when reopening the same worktree', async () => {
@@ -3907,6 +4166,52 @@ suite('WebHucodeShellService', () => {
 			beforeShutdown
 		);
 	});
+
+	test('page shutdown cancels a stalled restore before its teardown batch',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				residentWorkspaces: [{
+					projectId: 'project',
+					worktreePath: '/tmp/stalled-restore',
+				}],
+				activeWorktreePath: '/tmp/stalled-restore',
+			});
+			const restoreStarted = new DeferredPromise<void>();
+			const releaseRestore = new DeferredPromise<boolean>();
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				{
+					async exists() {
+						if (!restoreStarted.isSettled) {
+							await restoreStarted.complete();
+						}
+						return releaseRestore.p;
+					},
+				}
+			);
+			await restoreStarted.p;
+
+			const shutdown = service.shutdownWindowWorkspaces(
+				browser.windowId,
+				1
+			);
+			const settledBeforeRestore = await raceTimeout(
+				shutdown.then(() => true),
+				100
+			);
+			if (!settledBeforeRestore) {
+				await releaseRestore.complete(true);
+				await shutdown;
+			}
+			assert.strictEqual(settledBeforeRestore, true);
+
+			await releaseRestore.complete(true);
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(state.instances, []);
+		});
 });
 
 class FakePersistence implements IWebHucodeShellPersistenceAdapter {
@@ -3936,7 +4241,8 @@ class ThrowOncePersistence extends FakePersistence {
 }
 
 class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
-	runCommandResult = true;
+	runCommandResult: boolean | Promise<boolean> = true;
+	runCommandRejects = false;
 	openFilesResult = true;
 	prepareUnloadResult: boolean | Promise<boolean> = true;
 	prepareUnloadCalls = 0;
@@ -3956,6 +4262,9 @@ class FakeHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 		args: readonly unknown[]
 	): Promise<boolean> {
 		this.commands.push({ commandId, args });
+		if (this.runCommandRejects) {
+			throw new Error('hosted workbench connection lost');
+		}
 		return this.runCommandResult;
 	}
 

@@ -12,6 +12,7 @@ import {
 
 export interface IShellControllerHost {
 	readonly isOmniWindow?: boolean;
+	readonly onDidClose?: Event<void>;
 }
 
 /**
@@ -26,6 +27,9 @@ export class ShellControllerStore<
 	private readonly controllers = this._register(
 		new DisposableMap<number, T>()
 	);
+	private readonly closeListeners = this._register(
+		new DisposableMap<number>()
+	);
 
 	constructor(
 		private readonly getWindowById: (
@@ -39,9 +43,7 @@ export class ShellControllerStore<
 	) {
 		super();
 
-		this._register(onDidDestroyWindow(windowId => {
-			this.controllers.deleteAndDispose(windowId);
-		}));
+		this._register(onDidDestroyWindow(windowId => this.release(windowId)));
 	}
 
 	get(windowId: number): T | undefined {
@@ -61,7 +63,18 @@ export class ShellControllerStore<
 
 		const controller = this.createController(windowId, host);
 		this.controllers.set(windowId, controller);
+		if (host.onDidClose) {
+			this.closeListeners.set(
+				windowId,
+				host.onDidClose(() => this.release(windowId))
+			);
+		}
 		return controller;
+	}
+
+	private release(windowId: number): void {
+		this.closeListeners.deleteAndDispose(windowId);
+		this.controllers.deleteAndDispose(windowId);
 	}
 
 }
