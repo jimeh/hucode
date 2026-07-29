@@ -1122,6 +1122,49 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('keeps newer ownership when crashed reopen installs a replacement',
+		async () => {
+			const replacedPath = createWorktree('crashed-replacement');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.openWorkspace(replacedPath, 'project-old');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let replacementOpen: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				replacementOpen = controller.openWorkspace(
+					replacedPath,
+					'project-new'
+				);
+			};
+			const staleReopen = controller.openWorkspace(
+				replacedPath,
+				'project-old'
+			);
+			await teardownStarted.p;
+			assert.ok(replacementOpen);
+			await Promise.all([replacementOpen, staleReopen]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].instanceId, 'instance-2');
+			assert.strictEqual(state.instances[0].projectId, 'project-new');
+			assert.strictEqual(state.activeInstanceId, 'instance-2');
+			assert.strictEqual(state.instances[0].state, 'loading');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project-new', worktreePath: replacedPath }]
+			);
+		}
+	);
+
 	test('promotes a live retained workbench and persists project ownership',
 		async () => {
 			const promotedPath = createWorktree('promoted-live');

@@ -853,6 +853,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		const activationIntent = ++this.activationIntentGeneration;
 		let existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const instanceBeforeTeardown = existing;
 		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
 			worktreePath,
 			projectId ?? existing?.projectId
@@ -889,7 +890,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
 			worktreePath,
-			projectId ?? existing?.projectId
+			existing && existing !== instanceBeforeTeardown
+				? existing.projectId
+				: projectId ?? existing?.projectId
 		);
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
