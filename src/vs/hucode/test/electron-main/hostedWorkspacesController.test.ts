@@ -3565,6 +3565,45 @@ suite('ResidentHostedWorkspacesController', () => {
 						),
 					expectedReasons
 				);
+				const preparationMessages =
+					viewFactory.views[0].rawWebContents.sent.filter(
+						({ channel }) =>
+							channel === 'vscode:onBeforeUnload' ||
+							channel ===
+							'vscode:onShutdownPreparationAbandoned' ||
+							channel === 'vscode:onWillUnload'
+					);
+				if (secondReason === UnloadReason.QUIT) {
+					assert.deepStrictEqual(
+						preparationMessages.map(({ channel }) => channel),
+						[
+							'vscode:onBeforeUnload',
+							'vscode:onShutdownPreparationAbandoned',
+							'vscode:onBeforeUnload',
+							'vscode:onWillUnload'
+						]
+					);
+					assert.strictEqual(
+						(
+							preparationMessages[1].request as {
+								preparationId: string;
+							}
+						).preparationId,
+						(
+							preparationMessages[0].request as {
+								preparationId: string;
+							}
+						).preparationId
+					);
+				} else {
+					assert.deepStrictEqual(
+						preparationMessages.map(({ channel }) => channel),
+						[
+							'vscode:onBeforeUnload',
+							'vscode:onWillUnload'
+						]
+					);
+				}
 				const frozenState = structuredClone(controller.getState());
 				const frozenViewCount = viewFactory.views.length;
 
