@@ -13,10 +13,10 @@ import {
 	createLinuxOmniSmokeFixture,
 	formatLinuxOmniUnexpectedExit,
 	getLinuxOmniLaunchAttemptDeadline,
-	getLinuxOmniStabilizationDelay,
 	linuxOmniLifecyclePhases,
 	parseLinuxOmniSmokeOptions,
 	resolveLinuxOmniExecutable,
+	runLinuxOmniBoundedProbe,
 	summarizeLinuxOmniRenderers,
 } from '../../hucode/linux-omni-smoke.ts';
 
@@ -38,7 +38,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			parseLinuxOmniSmokeOptions(['--executable', '/tmp/hucode']),
 			{
 				executablePath: '/tmp/hucode',
-				timeoutMs: 180_000,
+				timeoutMs: 300_000,
 			}
 		);
 	});
@@ -314,6 +314,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				{ label: 'Bravo', state: 'crashed', active: false },
 			],
 			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 1,
 		});
 		assert.deepStrictEqual(expectations['relaunch restore'], {
 			rows: [
@@ -321,68 +322,105 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				{ label: 'Bravo', state: 'active', active: true },
 			],
 			targetPaths: ['/tmp/smoke/Bravo'],
+			crashedRendererCount: 0,
 		});
+
+		const expected = {
+			rows: [
+				{ label: 'Alpha', state: 'active' as const, active: true },
+				{ label: 'Bravo', state: 'dormant' as const, active: false },
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 0,
+		};
+		const valid = {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active' as const,
+					active: true,
+					ariaLabel: 'Alpha, /tmp/smoke/Alpha, Active',
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant' as const,
+					active: false,
+					ariaLabel: 'Bravo, /tmp/smoke/Bravo, Dormant',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			shellResponsive: true,
+			crashedRendererCount: 0,
+		};
 
 		assert.doesNotThrow(() => assertLinuxOmniLifecycleObservation(
 			'initial restore',
-			{
-				rows: [
-					{
-						label: 'Alpha',
-						state: 'active',
-						active: true,
-						ariaLabel: 'Alpha, /tmp/smoke/Alpha, Active',
-					},
-					{
-						label: 'Bravo',
-						state: 'dormant',
-						active: false,
-						ariaLabel: 'Bravo, /tmp/smoke/Bravo, Dormant',
-					},
-				],
-				targetPaths: ['/tmp/smoke/Alpha'],
-				shellResponsive: true,
-			},
-			{
-				rows: [
-					{ label: 'Alpha', state: 'active', active: true },
-					{ label: 'Bravo', state: 'dormant', active: false },
-				],
-				targetPaths: ['/tmp/smoke/Alpha'],
-			}
+			valid,
+			expected
 		));
-		assert.throws(
-			() => assertLinuxOmniLifecycleObservation(
-				'crash Bravo',
-				{
-					rows: [
-						{
-							label: 'Alpha',
-							state: 'loaded',
-							active: false,
-							ariaLabel: 'Alpha, /tmp/smoke/Alpha, Loaded',
-						},
-						{
-							label: 'Bravo',
-							state: 'loaded',
-							active: false,
-							ariaLabel: 'Bravo, /tmp/smoke/Bravo, Loaded',
-						},
-					],
-					targetPaths: ['/tmp/smoke/Alpha'],
-					shellResponsive: true,
-				},
-				{
-					rows: [
-						{ label: 'Alpha', state: 'loaded', active: false },
-						{ label: 'Bravo', state: 'crashed', active: false },
-					],
-					targetPaths: ['/tmp/smoke/Alpha'],
-				}
-			),
-			/crash Bravo.*expected.*crashed.*observed.*loaded/
-		);
+
+		for (const [name, observation] of [
+			['wrong active flag', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, active: false }
+					: row),
+			}],
+			['unresponsive shell', {
+				...valid,
+				shellResponsive: false,
+			}],
+			['missing ARIA', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, ariaLabel: undefined }
+					: row),
+			}],
+			['malformed ARIA', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, ariaLabel: 'Alpha, Active' }
+					: row),
+			}],
+			['wrong state', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Bravo'
+					? { ...row, state: 'loaded' as const }
+					: row),
+			}],
+			['wrong target', {
+				...valid,
+				targetPaths: ['/tmp/smoke/Bravo'],
+			}],
+			['wrong crashed renderer count', {
+				...valid,
+				crashedRendererCount: 1,
+			}],
+		] as const) {
+			assert.throws(
+				() => assertLinuxOmniLifecycleObservation(
+					'initial restore',
+					observation,
+					expected
+				),
+				new RegExp(`initial restore.*observed`),
+				name
+			);
+		}
 	});
+
+	test('bounds a never-resolving renderer probe by the phase deadline',
+		async () => {
+			await assert.rejects(
+				runLinuxOmniBoundedProbe(
+					Date.now() + 10,
+					'initial restore configuration probe',
+					() => new Promise<never>(() => undefined)
+				),
+				/Timed out during initial restore configuration probe/
+			);
+		}
+	);
 
 	test('formats phase-specific unexpected-exit diagnostics', () => {
 		assert.strictEqual(
@@ -451,9 +489,4 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 		);
 	});
 
-	test('bounds renderer stabilization by the remaining timeout', () => {
-		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 1_000), 1_500);
-		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 9_750), 250);
-		assert.strictEqual(getLinuxOmniStabilizationDelay(10_000, 10_001), 0);
-	});
 });

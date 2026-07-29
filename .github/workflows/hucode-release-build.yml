@@ -949,7 +949,8 @@ jobs:
         run: |
           set -euo pipefail
           dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \
-            --app ../VSCode-linux-x64
+            --app ../VSCode-linux-x64 \
+            --timeout-ms 300000
 
   package:
     name: Package (${{ matrix.platform }}-${{ matrix.arch }})

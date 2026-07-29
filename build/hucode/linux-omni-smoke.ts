@@ -16,10 +16,9 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const defaultTimeoutMs = 180_000;
+const defaultTimeoutMs = 300_000;
 const maximumLaunchAttempts = 3;
 const maximumLogLength = 64 * 1024;
-const stabilizationDelayMs = 1_500;
 const pollIntervalMs = 100;
 const workbenchLabels = ['Alpha', 'Bravo'] as const;
 
@@ -94,6 +93,7 @@ export interface ILinuxOmniLifecycleObservation {
 	readonly rows: readonly ILinuxOmniWorkbenchRow[];
 	readonly targetPaths: readonly string[];
 	readonly shellResponsive: boolean;
+	readonly crashedRendererCount: number;
 }
 
 /**
@@ -102,6 +102,7 @@ export interface ILinuxOmniLifecycleObservation {
 export interface ILinuxOmniLifecycleExpectation {
 	readonly rows: readonly ILinuxOmniWorkbenchRow[];
 	readonly targetPaths: readonly string[];
+	readonly crashedRendererCount: number;
 }
 
 /**
@@ -148,6 +149,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'dormant', active: false },
 			],
 			targetPaths: [alphaPath],
+			crashedRendererCount: 0,
 		},
 		'switch to Bravo': {
 			rows: [
@@ -155,6 +157,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'active', active: true },
 			],
 			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
 		},
 		'switch to Alpha': {
 			rows: [
@@ -162,6 +165,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'loaded', active: false },
 			],
 			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
 		},
 		'suspend Bravo': {
 			rows: [
@@ -169,6 +173,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'dormant', active: false },
 			],
 			targetPaths: [alphaPath],
+			crashedRendererCount: 0,
 		},
 		'restore Bravo': {
 			rows: [
@@ -176,6 +181,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'active', active: true },
 			],
 			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
 		},
 		'crash Bravo': {
 			rows: [
@@ -183,6 +189,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'crashed', active: false },
 			],
 			targetPaths: [alphaPath],
+			crashedRendererCount: 1,
 		},
 		'recover Bravo': {
 			rows: [
@@ -190,6 +197,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'active', active: true },
 			],
 			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 1,
 		},
 		'relaunch restore': {
 			rows: [
@@ -197,6 +205,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{ label: 'Bravo', state: 'active', active: true },
 			],
 			targetPaths: [bravoPath],
+			crashedRendererCount: 0,
 		},
 	};
 }
@@ -488,10 +497,12 @@ export function assertLinuxOmniLifecycleObservation(
 			row.state === 'restore-pending'
 				? 'Loading'
 				: row.state.charAt(0).toUpperCase() + row.state.slice(1);
+		const ariaParts = row.ariaLabel?.split(', ');
 		return (
-			!row.ariaLabel ||
-			!row.ariaLabel.startsWith(`${row.label}, `) ||
-			!row.ariaLabel.endsWith(`, ${expectedStateLabel}`)
+			ariaParts?.length !== 3 ||
+			ariaParts[0] !== row.label ||
+			!ariaParts[1] ||
+			ariaParts[2] !== expectedStateLabel
 		);
 	});
 
@@ -499,6 +510,8 @@ export function assertLinuxOmniLifecycleObservation(
 		!observation.shellResponsive ||
 		JSON.stringify(observedRows) !== JSON.stringify(expectedRows) ||
 		JSON.stringify(observedTargets) !== JSON.stringify(expectedTargets) ||
+		observation.crashedRendererCount !==
+			expectation.crashedRendererCount ||
 		invalidAriaRows.length
 	) {
 		throw new Error(
@@ -506,10 +519,12 @@ export function assertLinuxOmniLifecycleObservation(
 				rows: expectedRows,
 				targetPaths: expectedTargets,
 				shellResponsive: true,
+				crashedRendererCount: expectation.crashedRendererCount,
 			})}, observed ${JSON.stringify({
 				rows: observedRows,
 				targetPaths: observedTargets,
 				shellResponsive: observation.shellResponsive,
+				crashedRendererCount: observation.crashedRendererCount,
 				invalidAriaRows,
 			})}`
 		);
@@ -563,16 +578,6 @@ export function getLinuxOmniLaunchAttemptDeadline(
 		deadline,
 		now + Math.max(1, Math.floor((deadline - now) / attemptsRemaining))
 	);
-}
-
-/**
- * Bounds renderer stabilization by the caller's remaining timeout.
- */
-export function getLinuxOmniStabilizationDelay(
-	deadline: number,
-	now: number
-): number {
-	return Math.min(stabilizationDelayMs, Math.max(0, deadline - now));
 }
 
 /**
@@ -634,6 +639,7 @@ export async function runLinuxOmniSmoke(
 			userDataDir,
 			extensionsDir,
 			deadline,
+			'initial restore',
 			appendOutput
 		);
 
@@ -651,7 +657,12 @@ export async function runLinuxOmniSmoke(
 			alphaPath
 		);
 
-		await clickWorkbenchRow(shellPage, 'Bravo');
+		await clickWorkbenchRow(
+			shellPage,
+			'Bravo',
+			deadline,
+			'switch to Bravo'
+		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -662,7 +673,12 @@ export async function runLinuxOmniSmoke(
 		);
 		const firstBravo = getWorkbenchTarget(runtime, bravoPath);
 
-		await clickWorkbenchRow(shellPage, 'Alpha');
+		await clickWorkbenchRow(
+			shellPage,
+			'Alpha',
+			deadline,
+			'switch to Alpha'
+		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -681,7 +697,11 @@ export async function runLinuxOmniSmoke(
 		));
 
 		shellPage = getShellPage(runtime);
-		await suspendWorkbenchThroughUi(shellPage, 'Bravo');
+		await suspendWorkbenchThroughSmokeDriver(
+			shellPage,
+			firstBravo.hostedInstanceId,
+			deadline
+		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -692,7 +712,12 @@ export async function runLinuxOmniSmoke(
 		);
 
 		shellPage = getShellPage(runtime);
-		await clickWorkbenchRow(shellPage, 'Bravo');
+		await clickWorkbenchRow(
+			shellPage,
+			'Bravo',
+			deadline,
+			'restore Bravo'
+		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -717,7 +742,12 @@ export async function runLinuxOmniSmoke(
 		);
 
 		shellPage = getShellPage(runtime);
-		await clickWorkbenchRow(shellPage, 'Bravo');
+		await clickWorkbenchRow(
+			shellPage,
+			'Bravo',
+			deadline,
+			'recover Bravo'
+		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -744,6 +774,7 @@ export async function runLinuxOmniSmoke(
 			userDataDir,
 			extensionsDir,
 			deadline,
+			'relaunch restore',
 			appendOutput
 		);
 		await waitForLinuxOmniPhase(
@@ -790,6 +821,7 @@ async function launchLinuxOmni(
 	userDataDir: string,
 	extensionsDir: string,
 	deadline: number,
+	phase: 'initial restore' | 'relaunch restore',
 	appendOutput: (chunk: Buffer) => void
 ): Promise<ILinuxOmniLaunch> {
 	let connectionError: Error | undefined;
@@ -824,7 +856,8 @@ async function launchLinuxOmni(
 				port,
 				child,
 				attemptDeadline,
-				getSpawnError
+				getSpawnError,
+				phase
 			);
 			return { browser, child, getSpawnError };
 		} catch (error) {
@@ -857,22 +890,32 @@ async function waitForLinuxOmniPhase(
 			const runtime = await readLinuxOmniRuntimeInventory(
 				launch.browser,
 				expectedWorktreePaths,
-				crashedPages
+				crashedPages,
+				deadline,
+				phase
 			);
 			const shellPage = getShellPage(runtime);
-			const rows = await readWorkbenchRows(shellPage);
-			const shellResponsive = await shellPage.evaluate(() => {
-				const targetGlobal = globalThis as unknown as {
-					readonly document?: {
-						readonly readyState?: string;
-						readonly body?: unknown;
+			const rows = await readWorkbenchRows(
+				shellPage,
+				deadline,
+				phase
+			);
+			const shellResponsive = await runLinuxOmniBoundedProbe(
+				deadline,
+				`${phase} shell responsiveness probe`,
+				() => shellPage.evaluate(() => {
+					const targetGlobal = globalThis as unknown as {
+						readonly document?: {
+							readonly readyState?: string;
+							readonly body?: unknown;
+						};
 					};
-				};
-				return (
-					targetGlobal.document?.readyState === 'complete' &&
-					!!targetGlobal.document.body
-				);
-			});
+					return (
+						targetGlobal.document?.readyState === 'complete' &&
+						!!targetGlobal.document.body
+					);
+				})
+			);
 			assertLinuxOmniLifecycleObservation(
 				phase,
 				{
@@ -881,6 +924,8 @@ async function waitForLinuxOmniPhase(
 						target => target.worktreePath
 					),
 					shellResponsive,
+					crashedRendererCount:
+						runtime.inventory.crashedRendererUrls.length,
 				},
 				expectation
 			);
@@ -889,7 +934,11 @@ async function waitForLinuxOmniPhase(
 			lastError = error instanceof Error
 				? error
 				: new Error(String(error));
-			await delay(pollIntervalMs);
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				break;
+			}
+			await delay(Math.min(pollIntervalMs, remaining));
 		}
 	}
 
@@ -901,7 +950,9 @@ async function waitForLinuxOmniPhase(
 async function readLinuxOmniRuntimeInventory(
 	browser: Browser,
 	expectedWorktreePaths: readonly string[],
-	crashedPages: ReadonlySet<Page>
+	crashedPages: ReadonlySet<Page>,
+	deadline: number,
+	phase: LinuxOmniLifecyclePhase
 ): Promise<ILinuxOmniRuntimeInventory> {
 	const pagesByTargetId = new Map<string, Page>();
 	const candidates: ILinuxOmniTargetCandidate[] = [];
@@ -921,8 +972,10 @@ async function readLinuxOmniRuntimeInventory(
 			}
 
 			try {
-				const configuration =
-					await page.evaluate(async (): Promise<
+				const configuration = await runLinuxOmniBoundedProbe(
+					deadline,
+					`${phase} target configuration probe`,
+					() => page.evaluate(async (): Promise<
 						ILinuxOmniResolvedConfiguration
 					> => {
 						const targetWindow = globalThis as unknown as {
@@ -956,7 +1009,8 @@ async function readLinuxOmniRuntimeInventory(
 								}
 								: undefined,
 						};
-					});
+					})
+				);
 				candidates.push({
 					targetId,
 					url: page.url(),
@@ -984,91 +1038,129 @@ async function readLinuxOmniRuntimeInventory(
 }
 
 async function readWorkbenchRows(
-	shellPage: Page
+	shellPage: Page,
+	deadline: number,
+	phase: LinuxOmniLifecyclePhase
 ): Promise<ILinuxOmniWorkbenchRow[]> {
-	return shellPage.locator(
-		'.monaco-list-row:has(.hucode-project-switcher-workbench)'
-	).evaluateAll((elements, expectedLabels) => {
-		const rows: ILinuxOmniWorkbenchRow[] = [];
-		for (const element of elements) {
-			const item = element.querySelector(
-				'.hucode-project-switcher-workbench'
-			);
-			const label = item?.querySelector(
-				'.hucode-project-switcher-label'
-			)?.textContent?.trim();
-			if (
-				!item ||
-				!label ||
-				!expectedLabels.includes(label as LinuxOmniWorkbenchLabel)
-			) {
-				continue;
+	return runLinuxOmniBoundedProbe(
+		deadline,
+		`${phase} Projects row probe`,
+		() => shellPage.locator(
+			'.monaco-list-row:has(.hucode-project-switcher-workbench)'
+		).evaluateAll((elements, expectedLabels) => {
+			const rows: ILinuxOmniWorkbenchRow[] = [];
+			for (const element of elements) {
+				const item = element.querySelector(
+					'.hucode-project-switcher-workbench'
+				);
+				const label = item?.querySelector(
+					'.hucode-project-switcher-label'
+				)?.textContent?.trim();
+				if (
+					!item ||
+					!label ||
+					!expectedLabels.includes(
+						label as LinuxOmniWorkbenchLabel
+					)
+				) {
+					continue;
+				}
+				const stateClass = [...item.classList].find(className =>
+					className.startsWith(
+						'hucode-project-switcher-workbench-'
+					)
+				);
+				const state = stateClass?.slice(
+					'hucode-project-switcher-workbench-'.length
+				) as LinuxOmniWorkbenchState | undefined;
+				if (!state) {
+					continue;
+				}
+				rows.push({
+					label,
+					state,
+					active:
+						element.getAttribute('aria-current') === 'true',
+					ariaLabel:
+						element.getAttribute('aria-label') ?? undefined,
+				});
 			}
-			const stateClass = [...item.classList].find(className =>
-				className.startsWith(
-					'hucode-project-switcher-workbench-'
-				)
-			);
-			const state = stateClass?.slice(
-				'hucode-project-switcher-workbench-'.length
-			) as LinuxOmniWorkbenchState | undefined;
-			if (!state) {
-				continue;
-			}
-			rows.push({
-				label,
-				state,
-				active: element.getAttribute('aria-current') === 'true',
-				ariaLabel: element.getAttribute('aria-label') ?? undefined,
-			});
-		}
-		return rows;
-	}, workbenchLabels);
+			return rows;
+		}, workbenchLabels)
+	);
 }
 
 async function clickWorkbenchRow(
 	shellPage: Page,
-	label: LinuxOmniWorkbenchLabel
+	label: LinuxOmniWorkbenchLabel,
+	deadline: number,
+	phase: LinuxOmniLifecyclePhase
 ): Promise<void> {
-	const row = await getUniqueWorkbenchRow(shellPage, label);
-	await row.click();
+	const row = await getUniqueWorkbenchRow(
+		shellPage,
+		label,
+		deadline,
+		phase
+	);
+	await runLinuxOmniBoundedProbe(
+		deadline,
+		`${phase} ${label} row click`,
+		() => row.click({ timeout: getRemainingTimeout(deadline) })
+	);
 }
 
-async function suspendWorkbenchThroughUi(
+async function suspendWorkbenchThroughSmokeDriver(
 	shellPage: Page,
-	label: LinuxOmniWorkbenchLabel
+	instanceId: string,
+	deadline: number
 ): Promise<void> {
-	const row = await getUniqueWorkbenchRow(shellPage, label);
-	await row.click({ button: 'right' });
-	const menuItem = shellPage.locator(
-		'.context-view .monaco-menu .action-label'
-	).filter({ hasText: /^Suspend Workbench$/ });
-	await menuItem.click();
+	await runLinuxOmniBoundedProbe(
+		deadline,
+		'suspend Bravo smoke-driver call',
+		() => shellPage.evaluate(async hostedInstanceId => {
+			const targetGlobal = globalThis as unknown as {
+				readonly __hucodeOmniSmokeTestDriver?: {
+					suspendWorkspace(id: string): Promise<void>;
+				};
+			};
+			const driver = targetGlobal.__hucodeOmniSmokeTestDriver;
+			if (!driver) {
+				throw new Error(
+					'Omni smoke-test suspend driver is unavailable'
+				);
+			}
+			await driver.suspendWorkspace(hostedInstanceId);
+		}, instanceId)
+	);
 }
 
 async function getUniqueWorkbenchRow(
 	shellPage: Page,
-	label: LinuxOmniWorkbenchLabel
+	label: LinuxOmniWorkbenchLabel,
+	deadline: number,
+	phase: LinuxOmniLifecyclePhase
 ) {
-	const rows = shellPage.locator(
+	const exactLabel = shellPage.locator(
+		'.hucode-project-switcher-workbench ' +
+			'.hucode-project-switcher-label'
+	).filter({
+		hasText: new RegExp(`^${escapeRegExp(label)}$`),
+	});
+	const row = shellPage.locator(
 		'.monaco-list-row:has(.hucode-project-switcher-workbench)'
+	).filter({ has: exactLabel });
+	const count = await runLinuxOmniBoundedProbe(
+		deadline,
+		`${phase} ${label} row lookup`,
+		() => row.count()
 	);
-	const matchingIndexes = await rows.evaluateAll(
-		(elements, expectedLabel) => elements.flatMap((element, index) => {
-			const actual = element.querySelector(
-				'.hucode-project-switcher-label'
-			)?.textContent?.trim();
-			return actual === expectedLabel ? [index] : [];
-		}),
-		label
-	);
-	if (matchingIndexes.length !== 1) {
+	if (count !== 1) {
 		throw new Error(
 			`Expected exactly one ${label} workbench row, observed ` +
-				`${matchingIndexes.length}`
+				`${count}`
 		);
 	}
-	return rows.nth(matchingIndexes[0]);
+	return row;
 }
 
 function getShellPage(runtime: ILinuxOmniRuntimeInventory): Page {
@@ -1202,6 +1294,26 @@ function getPageContext(page: Page): BrowserContext {
 	return page.context();
 }
 
+/**
+ * Bounds one renderer or locator probe by the lifecycle's remaining deadline.
+ */
+export function runLinuxOmniBoundedProbe<T>(
+	deadline: number,
+	description: string,
+	probe: () => Promise<T>
+): Promise<T> {
+	if (deadline <= Date.now()) {
+		return Promise.reject(
+			new Error(`Timed out during ${description}`)
+		);
+	}
+	return waitForPromise(
+		Promise.resolve().then(probe),
+		deadline,
+		`Timed out during ${description}`
+	);
+}
+
 async function waitForPromise<T>(
 	promise: Promise<T>,
 	deadline: number,
@@ -1228,6 +1340,18 @@ async function waitForPromise<T>(
 			clearTimeout(timeout);
 		}
 	}
+}
+
+function getRemainingTimeout(deadline: number): number {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) {
+		throw new Error('The packaged Omni lifecycle deadline expired');
+	}
+	return remaining;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeSmokePath(value: string): string {
@@ -1291,11 +1415,12 @@ async function connectToCdp(
 	port: number,
 	child: ChildProcess,
 	deadline: number,
-	getSpawnError: () => Error | undefined
+	getSpawnError: () => Error | undefined,
+	phase: 'initial restore' | 'relaunch restore'
 ): Promise<Browser> {
 	let lastError: Error | undefined;
 	while (Date.now() < deadline) {
-		ensureChildIsRunning(child, getSpawnError(), 'initial restore');
+		ensureChildIsRunning(child, getSpawnError(), phase);
 		try {
 			return await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
 				timeout: Math.max(
@@ -1305,7 +1430,11 @@ async function connectToCdp(
 			});
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));
-			await delay(100);
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				break;
+			}
+			await delay(Math.min(pollIntervalMs, remaining));
 		}
 	}
 

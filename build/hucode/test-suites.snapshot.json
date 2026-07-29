@@ -6,6 +6,7 @@
 		"src/vs/hucode/test/browser/omniConfigurationService.test.ts",
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",
+		"src/vs/hucode/test/browser/omniSmokeTestDriver.test.ts",
 		"src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/createProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/hostedWorkbenchActions.test.ts",

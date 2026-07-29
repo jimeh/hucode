@@ -227,7 +227,7 @@ suite('Hucode release workflow contract', () => {
 			// leaving the `--app` line behind stops npm forwarding the path.
 			assert.match(
 				launchStep,
-				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64/
+				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64 \\\n\s+--timeout-ms 300000/
 			);
 		});
 
