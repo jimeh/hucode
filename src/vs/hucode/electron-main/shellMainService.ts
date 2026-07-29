@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../base/common/buffer.js';
-import { Emitter } from '../../base/common/event.js';
+import { Emitter, Event } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isLinux } from '../../base/common/platform.js';
@@ -18,7 +18,10 @@ import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
-import { UnloadReason } from '../../platform/window/electron-main/window.js';
+import {
+	ICodeWindow,
+	UnloadReason,
+} from '../../platform/window/electron-main/window.js';
 import {
 	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
@@ -67,9 +70,10 @@ export class HucodeShellMainService extends Disposable
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
 	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
 
-	private readonly controllers = this._register(
-		new ShellControllerStore(windowId => this.createController(windowId))
-	);
+	private readonly controllers: ShellControllerStore<
+		ICodeWindow,
+		ResidentHostedWorkspacesController
+	>;
 	private readonly trustedHostedWorkspaceProcessIds = new Map<number, number>();
 	private readonly trustedHostedWorkspaceWebContentsIds =
 		new Map<number, number>();
@@ -91,9 +95,14 @@ export class HucodeShellMainService extends Disposable
 	) {
 		super();
 
-		this._register(this.windowsMainService.onDidDestroyWindow(window => {
-			this.controllers.deleteAndDispose(window.id);
-		}));
+		this.controllers = this._register(new ShellControllerStore(
+			windowId => this.windowsMainService.getWindowById(windowId),
+			(windowId, window) => this.createController(windowId, window),
+			Event.map(
+				this.windowsMainService.onDidDestroyWindow,
+				window => window.id
+			)
+		));
 	}
 
 	isTrustedHostedWorkspaceRequest(
@@ -476,13 +485,9 @@ export class HucodeShellMainService extends Disposable
 	}
 
 	private createController(
-		windowId: number
+		windowId: number,
+		window: ICodeWindow
 	): ResidentHostedWorkspacesController {
-		const window = this.windowsMainService.getWindowById(windowId);
-		if (!window?.isOmniWindow) {
-			throw new Error(`Window ${windowId} is not a Hucode Omni-window.`);
-		}
-
 		const controller =
 			new ResidentHostedWorkspacesController(
 				this.protocolMainService,
