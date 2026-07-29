@@ -65,7 +65,8 @@ const PROJECT_REFRESH_RETRY_DELAYS_MS = [
 ] as const;
 
 interface ProjectRefreshOwner {
-	readonly source: CancellationTokenSource;
+	source: CancellationTokenSource;
+	requestScoped: boolean;
 	initialAttempt?: Promise<ProjectRefreshAttemptResult>;
 }
 
@@ -497,10 +498,23 @@ export class ProjectManagerMainService extends Disposable
 			return worktree;
 		}
 
-		// Git successfully created the worktree, but its follow-up discovery can
-		// fail independently. Preserve that irreversible success for the caller
-		// and in the stale snapshot while refreshProject's retry recovers the
-		// authoritative Git metadata.
+		if (this.projectWorktreeStates.get(project.id) === 'current') {
+			const newWorktrees = worktrees.filter(entry =>
+				!existingWorktrees.some(existing =>
+					this.pathsEqual(existing.path, entry.path)
+				)
+			);
+			const branch = options.branchName?.trim();
+			const canonicalWorktree = newWorktrees.length === 1
+				? newWorktrees[0]
+				: newWorktrees.find(entry =>
+					branch !== undefined && entry.branch === branch
+				);
+			if (canonicalWorktree) {
+				return canonicalWorktree;
+			}
+		}
+
 		const branch = options.branchName?.trim() || undefined;
 		const fallback: WorktreeRecord = {
 			path: worktreePath,
@@ -509,6 +523,16 @@ export class ProjectManagerMainService extends Disposable
 			isMain: false,
 			isDetached: !branch && options.detached === true,
 		};
+		if (this.projectWorktreeStates.get(project.id) === 'current') {
+			// Successful discovery is authoritative even when its canonical
+			// path cannot be correlated unambiguously with Git's input path.
+			return fallback;
+		}
+
+		// Git successfully created the worktree, but its follow-up discovery can
+		// fail independently. Preserve that irreversible success for the caller
+		// and in the stale snapshot while refreshProject's retry recovers the
+		// authoritative Git metadata.
 		this.projectWorktrees.set(project.id, [...worktrees, fallback]);
 		this.saveState();
 		this.emitChange();
@@ -752,6 +776,7 @@ export class ProjectManagerMainService extends Disposable
 				return { kind: 'complete', stateChanged };
 			}
 
+			this.detachProjectRefreshOwnerFromRequest(project.id, owner);
 			return { kind: 'committed-retry', stateChanged };
 		} catch (error) {
 			if (isCancellationError(error) ||
@@ -940,6 +965,7 @@ export class ProjectManagerMainService extends Disposable
 		this.cancelProjectRefresh(projectId);
 		const owner: ProjectRefreshOwner = {
 			source: new CancellationTokenSource(token),
+			requestScoped: token !== CancellationToken.None,
 		};
 		this.projectRefreshOwners.set(projectId, owner);
 		return owner;
@@ -953,6 +979,21 @@ export class ProjectManagerMainService extends Disposable
 
 		this.projectRefreshOwners.delete(projectId);
 		owner.source.dispose(true);
+	}
+
+	private detachProjectRefreshOwnerFromRequest(
+		projectId: string,
+		owner: ProjectRefreshOwner
+	): void {
+		if (!owner.requestScoped ||
+			!this.isCurrentRefreshOwner(projectId, owner)) {
+			return;
+		}
+
+		const requestSource = owner.source;
+		owner.source = new CancellationTokenSource();
+		owner.requestScoped = false;
+		requestSource.dispose();
 	}
 
 	private finishProjectRefresh(

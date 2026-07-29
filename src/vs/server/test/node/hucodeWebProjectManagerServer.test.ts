@@ -530,6 +530,80 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('recovers settled dirty state before admitting an event client',
+		async () => {
+			const retryWriteStarted = new DeferredPromise<void>();
+			const releaseRetryWrite = new DeferredPromise<void>();
+			let renameCount = 0;
+			const fileSystem = new TestProjectStateFileSystem({
+				async rename(source, target) {
+					renameCount++;
+					if (renameCount === 2) {
+						throw new Error('settled event state write failed');
+					}
+					if (renameCount === 3) {
+						await retryWriteStarted.complete();
+						await releaseRetryWrite.p;
+					}
+					await fs.rename(source, target);
+				},
+			});
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+			const added = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const failed = await handle<ErrorResponseBody>(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${added.body.project.id}/pinned`,
+				{ pinned: true }
+			);
+			assert.deepStrictEqual(failed, {
+				statusCode: 500,
+				body: { error: 'settled event state write failed' },
+			});
+
+			const events = startEvents(server);
+			const retryObserved = await raceTimeout(
+				retryWriteStarted.p.then(() => true),
+				50
+			);
+			const headersBeforeRetry =
+				events.response.writeHeadCalls.slice();
+			await releaseRetryWrite.complete();
+			await events.completion;
+			const stored = JSON.parse(await fs.readFile(
+				join(serverDataPath, 'hucode', 'projects.json'),
+				'utf8'
+			)) as {
+				readonly projects: readonly { readonly pinned: boolean }[];
+			};
+			const snapshots = readProjectEvents(events.body) as {
+				readonly projects: readonly {
+					readonly pinned: boolean;
+				}[];
+			}[];
+
+			assert.strictEqual(retryObserved, true);
+			assert.deepStrictEqual(headersBeforeRetry, []);
+			assert.strictEqual(events.statusCode, 200);
+			assert.strictEqual(stored.projects[0].pinned, true);
+			assert.deepStrictEqual(snapshots.map(snapshot =>
+				snapshot.projects[0].pinned
+			), [true]);
+			events.close();
+		}
+	);
+
 	test('waits for background refresh state before publishing its snapshot',
 		async () => {
 			const writeStarted = new DeferredPromise<void>();
@@ -703,6 +777,52 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('cancels an active Git read when a non-SSE request aborts',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(
+						projectId: string,
+						options: unknown,
+						token: CancellationToken
+					): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const started = new DeferredPromise<CancellationToken>();
+			service.getWorktreeRefs = async (_projectId, _options, token) => {
+				await started.complete(token);
+				await new Promise<void>((_resolve, reject) => {
+					const listener = token.onCancellationRequested(() => {
+						listener.dispose();
+						reject(new CancellationError());
+					});
+				});
+				return [];
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+			const active = startHandle(server, 'POST', route, {});
+			const token = await started.p;
+
+			active.abortRequest();
+			await active.completion;
+
+			assert.strictEqual(token.isCancellationRequested, true);
+			assert.deepStrictEqual(active.response.writeHeadCalls, []);
+		}
+	);
+
 	test('finishes an active worktree mutation after its request disconnects',
 		async () => {
 			const server = createServer(
@@ -850,6 +970,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			};
 
 			const firstPending = startEvents(server);
+			await Promise.resolve();
 			assert.strictEqual(projectReads, 1);
 			const rejected = await handleEvents(server);
 			assert.strictEqual(rejected.statusCode, 503);
@@ -923,6 +1044,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				};
 
 				const disconnected = startEvents(server);
+				await Promise.resolve();
 				assert.strictEqual(projectReads, 1);
 				if (target === 'request') {
 					disconnected.request.emit(event);
@@ -938,6 +1060,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				assert.strictEqual(disconnected.response.listenerCount('error'), 0);
 
 				const replacement = startEvents(server);
+				await Promise.resolve();
 				assert.strictEqual(projectReads, 2);
 				await releaseProjects.complete();
 				await Promise.all([
@@ -2306,6 +2429,7 @@ function startHandle(
 	readonly request: EventEmitter;
 	readonly response: TestProjectManagerEventResponse;
 	readonly completion: Promise<void>;
+	abortRequest(): void;
 	close(): void;
 } {
 	const request = Object.assign(new EventEmitter(), {
@@ -2325,6 +2449,9 @@ function startHandle(
 		request,
 		response,
 		completion,
+		abortRequest() {
+			request.emit('aborted');
+		},
 		close() {
 			response.emit('close');
 		},

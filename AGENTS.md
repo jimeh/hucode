@@ -165,6 +165,8 @@ as the required Hucode instruction set for work in this fork.
   worktree create/remove starts, finish that irreversible mutation and its
   state flush. If post-create discovery fails, return a stale record for the
   created path while the normal refresh retry recovers authoritative metadata.
+  Once discovery commits a current worktree snapshot, any remaining watcher
+  recovery is service-owned and must outlive the initiating request.
   Node's `IncomingMessage` `close` event also fires after normal request
   completion; use request `aborted` or response `close` before
   `writableFinished` to detect a real disconnect.

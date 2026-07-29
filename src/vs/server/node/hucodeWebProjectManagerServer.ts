@@ -227,6 +227,9 @@ export class HucodeProjectFileStateService implements IStateService {
 	}
 
 	async flushWritesThrough(generation: number): Promise<void> {
+		// Only the latest queued write promise is retained. Waiting for it can
+		// conservatively include generations newer than the requested one, but
+		// the serialized queue guarantees the requested generation settled too.
 		if (this.latestWriteGeneration >= generation) {
 			await this.latestWrite;
 		}
@@ -1016,6 +1019,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 		let projects: readonly ProjectRecord[];
 		try {
+			await this.stateService?.retryDirtyState();
+			this.retryPendingProjectPublication();
 			const writeGeneration =
 				this.stateService?.currentWriteGeneration ?? 0;
 			projects = await service.getProjects();
