@@ -890,7 +890,11 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	registerPart(part: Part): IDisposable {
 		const id = part.getId();
 		this.parts.set(id, part);
-		return toDisposable(() => this.parts.delete(id));
+		return toDisposable(() => {
+			if (this.parts.get(id) === part) {
+				this.parts.delete(id);
+			}
+		});
 	}
 
 	getPart(key: Parts): Part {
