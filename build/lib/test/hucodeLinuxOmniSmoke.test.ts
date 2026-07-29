@@ -9,6 +9,7 @@ import {
 	assertLinuxOmniLifecycleObservation,
 	buildLinuxOmniSmokeArguments,
 	classifyLinuxOmniTargets,
+	crashLinuxOmniPage,
 	createLinuxOmniLifecycleExpectations,
 	createLinuxOmniSmokeFixture,
 	formatLinuxOmniUnexpectedExit,
@@ -319,7 +320,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				{
 					label: 'Bravo',
 					state: 'crashed',
-					active: false,
+					active: true,
 					ariaDescription: '/tmp/smoke/Bravo',
 				},
 			],
@@ -463,6 +464,42 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				),
 				/Timed out during initial restore configuration probe/
 			);
+		}
+	);
+
+	test('does not wait for CDP detach after the renderer crash event',
+		async () => {
+			let crashListener: (() => void) | undefined;
+			let detachCalls = 0;
+			const page = {
+				once(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					crashListener = listener;
+				},
+				context() {
+					return {
+						async newCDPSession() {
+							return {
+								async send(method: string): Promise<void> {
+									assert.strictEqual(method, 'Page.crash');
+									crashListener?.();
+								},
+								detach(): Promise<void> {
+									detachCalls++;
+									return new Promise(() => undefined);
+								},
+							};
+						},
+					};
+				},
+			};
+
+			await assert.doesNotReject(runLinuxOmniBoundedProbe(
+				Date.now() + 500,
+				'crashed renderer cleanup',
+				() => crashLinuxOmniPage(page as never, Date.now() + 500)
+			));
+			assert.strictEqual(detachCalls, 0);
 		}
 	);
 

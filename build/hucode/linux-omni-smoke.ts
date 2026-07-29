@@ -254,7 +254,7 @@ export function createLinuxOmniLifecycleExpectations(
 				{
 					label: 'Bravo',
 					state: 'crashed',
-					active: false,
+					active: true,
 					ariaDescription: bravoPath,
 				},
 			],
@@ -1331,21 +1331,24 @@ function assertNewInstance(
 	}
 }
 
-async function crashLinuxOmniPage(
+export async function crashLinuxOmniPage(
 	page: Page,
 	deadline: number
 ): Promise<void> {
 	const crashEvent = new Promise<void>(resolve => {
 		page.once('crash', () => resolve());
 	});
-	const session = await getPageContext(page).newCDPSession(page);
+	const session = await runLinuxOmniBoundedProbe(
+		deadline,
+		'Bravo crash CDP session creation',
+		() => getPageContext(page).newCDPSession(page)
+	);
 	void session.send('Page.crash').catch(() => undefined);
 	await waitForPromise(
 		crashEvent,
 		deadline,
 		'Timed out waiting for the Bravo renderer crash event'
 	);
-	await session.detach().catch(() => undefined);
 }
 
 async function quitLinuxOmniThroughKeyboard(
