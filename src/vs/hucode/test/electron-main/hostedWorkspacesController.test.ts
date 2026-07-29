@@ -55,6 +55,7 @@ class TestWebContents extends EventEmitter {
 	loadUrlPromise: Promise<void> | undefined;
 	autoBeforeUnloadReply = true;
 	sendHook: ((channel: string, request: unknown) => boolean) | undefined;
+	closeHook: (() => void) | undefined;
 
 	constructor(
 		id: number,
@@ -120,6 +121,7 @@ class TestWebContents extends EventEmitter {
 
 	close(options: Electron.CloseOpts): void {
 		this.closeCalls.push(options);
+		this.closeHook?.();
 		this.destroyed = true;
 		this.emit('destroyed');
 	}
@@ -1078,6 +1080,48 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('reconciles stale ownership while reopening a crashed workbench',
+		async () => {
+			const adoptedPath = createWorktree('crashed-stale-reopen');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let catalogUpdate: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				catalogUpdate = controller
+					.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+			};
+			const reopening = controller.openWorkspace(
+				adoptedPath,
+				'removed-project'
+			);
+			await teardownStarted.p;
+			assert.ok(catalogUpdate);
+			await catalogUpdate;
+			await reopening;
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+		}
+	);
+
 	test('promotes a live retained workbench and persists project ownership',
 		async () => {
 			const promotedPath = createWorktree('promoted-live');
@@ -1091,6 +1135,46 @@ suite('ResidentHostedWorkspacesController', () => {
 				folderUri: URI.file(promotedPath),
 			}]);
 			await controller.openWorkspace(promotedPath, 'project');
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, 'project');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project', worktreePath: promotedPath }]
+			);
+		}
+	);
+
+	test('applies promotion while reopening a crashed retained workbench',
+		async () => {
+			const promotedPath = createWorktree('crashed-promotion');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let catalogUpdate: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				catalogUpdate = controller
+					.promoteRetainedWorkbenchProjectFolders([{
+						projectId: 'project',
+						folderUri: URI.file(promotedPath),
+					}]);
+			};
+			const reopening = controller.openWorkspace(promotedPath);
+			await teardownStarted.p;
+			assert.ok(catalogUpdate);
+			await catalogUpdate;
+			await reopening;
 
 			const state = controller.getState();
 			assert.strictEqual(state.instances[0].projectId, 'project');

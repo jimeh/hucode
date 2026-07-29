@@ -852,8 +852,42 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		const activationIntent = ++this.activationIntentGeneration;
-		const existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
-		const effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+		let existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? existing?.projectId
+		);
+
+		if (existing) {
+			if (
+				!existing.disposed &&
+				existing.state !== 'crashed' &&
+				existing.state !== 'unloaded' &&
+				existing.state !== 'dormant'
+			) {
+				const retained = this.retainedWorkbenches.getByUri(
+					URI.file(worktreePath)
+				);
+				if (effectiveProjectId && retained) {
+					this.retainedWorkbenches.dismiss(retained.id);
+				} else if (!effectiveProjectId) {
+					this.retainedWorkbenches.retain(
+						URI.file(worktreePath),
+						'loaded'
+					);
+				}
+				existing.projectId = effectiveProjectId;
+				this.activateInstance(existing);
+				return;
+			}
+
+			if (existing.state !== 'dormant') {
+				await this.destroyInstance(existing, true, false);
+			}
+		}
+
+		existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
 			worktreePath,
 			projectId ?? existing?.projectId
 		);
@@ -868,22 +902,17 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				'loaded'
 			);
 		}
-
-		if (existing) {
-			if (
-				!existing.disposed &&
-				existing.state !== 'crashed' &&
-				existing.state !== 'unloaded' &&
-				existing.state !== 'dormant'
-			) {
-				existing.projectId = effectiveProjectId;
+		if (existing && (
+			!existing.disposed &&
+			existing.state !== 'crashed' &&
+			existing.state !== 'unloaded' &&
+			existing.state !== 'dormant'
+		)) {
+			existing.projectId = effectiveProjectId;
+			if (activationIntent === this.activationIntentGeneration) {
 				this.activateInstance(existing);
-				return;
 			}
-
-			if (existing.state !== 'dormant') {
-				await this.destroyInstance(existing, true, false);
-			}
+			return;
 		}
 
 		await this.createOrRestoreInstance(
