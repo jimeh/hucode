@@ -1474,7 +1474,7 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
-	test('reconciles the complete project catalog through the hosted shell channel',
+	test('rejects hosted catalog reconciliation while exposing window state',
 		async () => {
 			const { service, surface, browser } = createService();
 			const state = await service.openWorkspace(
@@ -1485,16 +1485,25 @@ suite('WebHucodeShellService', () => {
 			assert.ok(instanceId);
 			const child = connectChild(browser, surface, instanceId);
 
-			const reconciled = await child.shell
-				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-					999,
-					[{
-						projectId: 'project',
-						folderUris: [URI.file('/tmp/hucode-worktree').toJSON()],
-					}]
-				);
+			await assert.rejects(
+				child.shell
+					.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+						999,
+						[{
+							projectId: 'project',
+							folderUris: [
+								URI.file('/tmp/hucode-worktree').toJSON(),
+							],
+						}]
+					),
+				/Method not found|Unknown channel command|reconcile/
+			);
+			const available = await child.shell.getWindowState(999);
 
-			assert.strictEqual(reconciled.instances[0].projectId, 'project');
+			assert.deepStrictEqual(
+				available.instances.map(instance => instance.instanceId),
+				[instanceId]
+			);
 		});
 
 	test('allows registered shell actions and rejects lookalike commands',
@@ -1969,6 +1978,202 @@ suite('WebHucodeShellService', () => {
 				iframeConnected: true,
 				commitCalls: 0,
 				lateWarnings: 1,
+			});
+		});
+
+	test('removes a legacy workbench when its shutdown lands after timeout',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			browser.collapseTimeouts = true;
+			const { service, surface } = createService(browser);
+			const windowId = browser.windowId;
+			const opened = await service.openWorkspace(
+				windowId,
+				'/tmp/late-legacy-unload',
+				'project'
+			);
+			const instanceId = opened.instances[0].instanceId;
+			const child = connectLegacyChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			const timedOutState = await service.closeWorkspace(
+				windowId,
+				instanceId
+			);
+			assert.deepStrictEqual(
+				timedOutState.instances.map(instance => instance.instanceId),
+				[instanceId]
+			);
+
+			await prepareGate.complete();
+			await waitFor(
+				async () => !(await service.getWindowState(windowId))
+					.instances.some(instance =>
+						instance.instanceId === instanceId
+					),
+				'expected late legacy shutdown to remove its dead iframe'
+			);
+
+			assert.deepStrictEqual({
+				instanceIds: (await service.getWindowState(windowId)).instances
+					.map(instance => instance.instanceId),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				shutDown: child.workbench.shutDown,
+			}, {
+				instanceIds: [],
+				iframeConnected: false,
+				shutDown: true,
+			});
+		});
+
+	test('keeps a timed-out legacy close stronger than a later suspend',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			browser.collapseTimeouts = true;
+			const { service, surface } = createService(browser);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/late-legacy-close-then-suspend').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectLegacyChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			await service.closeWorkspace(browser.windowId, instanceId);
+			await service.suspendWorkspace(browser.windowId, instanceId);
+			await prepareGate.complete();
+			await waitFor(
+				async () => !(await service.getWindowState(browser.windowId))
+					.instances.some(instance =>
+						instance.instanceId === instanceId
+					),
+				'expected the earlier legacy close disposition to win'
+			);
+			const settled = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instanceIds: settled.instances.map(
+					instance => instance.instanceId
+				),
+				desiredState:
+					settled.retainedWorkbenches?.[0].desiredState,
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+			}, {
+				instanceIds: [],
+				desiredState: 'unloaded',
+				iframeConnected: false,
+				prepareCalls: 1,
+			});
+		});
+
+	test('serializes timed-out legacy unloads and keeps the strongest request',
+		async () => {
+			const browser = new CollapsibleTimeoutBrowserAdapter();
+			browser.collapseTimeouts = true;
+			const { service, surface } = createService(browser);
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/late-legacy-strongest-middle').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			const workbenchId = opened.retainedWorkbenches?.[0].id;
+			assert.ok(instanceId);
+			assert.ok(workbenchId);
+			const child = connectLegacyChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<void>();
+			child.workbench.prepareUnloadGate = prepareGate.p;
+
+			await service.closeWorkspace(browser.windowId, instanceId);
+			await child.workbench.prepareUnloadStarted.p;
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				workbenchId
+			);
+			await service.suspendWorkspace(browser.windowId, instanceId);
+
+			assert.strictEqual(child.workbench.prepareUnloadCalls, 1);
+
+			await prepareGate.complete();
+			await waitFor(
+				async () => !(await service.getWindowState(browser.windowId))
+					.instances.some(instance =>
+						instance.instanceId === instanceId
+					),
+				'expected the serialized legacy shutdown to remove its iframe'
+			);
+			const settled = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instanceIds: settled.instances.map(
+					instance => instance.instanceId
+				),
+				retained: settled.retainedWorkbenches?.length,
+				iframeConnected: isIframeConnected(surface, instanceId),
+				prepareCalls: child.workbench.prepareUnloadCalls,
+			}, {
+				instanceIds: [],
+				retained: 0,
+				iframeConnected: false,
+				prepareCalls: 1,
+			});
+		});
+
+	test('keeps a reconnected workbench after an old legacy shutdown reply',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface, logService } = createService(browser);
+			const windowId = browser.windowId;
+			const opened = await service.openWorkspace(
+				windowId,
+				'/tmp/reconnected-after-legacy-timeout',
+				'project'
+			);
+			const instanceId = opened.instances[0].instanceId;
+			const legacyChild = connectLegacyChild(
+				browser,
+				surface,
+				instanceId
+			);
+			const prepareGate = new DeferredPromise<void>();
+			legacyChild.workbench.prepareUnloadGate = prepareGate.p;
+
+			const closing = service.closeWorkspace(windowId, instanceId);
+			await legacyChild.workbench.prepareUnloadStarted.p;
+			browser.expireTimeouts(5000);
+			await closing;
+
+			const reconnectedChild = connectChild(
+				browser,
+				surface,
+				instanceId
+			);
+			await prepareGate.complete();
+			await waitFor(
+				() => logService.warnings.some(warning =>
+					warning.includes('after the shell gave up')
+				),
+				'expected old legacy shutdown reply to settle'
+			);
+			const settledState = await service.getWindowState(windowId);
+			browser.expireTimeouts(0);
+
+			assert.deepStrictEqual({
+				instanceIds: settledState.instances.map(
+					instance => instance.instanceId
+				),
+				iframeConnected: isIframeConnected(surface, instanceId),
+				legacyShutDown: legacyChild.workbench.shutDown,
+				reconnectedCommands:
+					reconnectedChild.workbench.commands.length,
+			}, {
+				instanceIds: [instanceId],
+				iframeConnected: true,
+				legacyShutDown: true,
+				reconnectedCommands: 0,
 			});
 		});
 
@@ -2506,6 +2711,40 @@ suite('WebHucodeShellService', () => {
 			iframeConnected: true,
 		});
 	});
+
+	test('does not carry a vetoed close disposition into a later suspend',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.retainAndOpenWorkbench(
+				browser.windowId,
+				URI.file('/tmp/suspend-after-vetoed-close').toJSON()
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+			child.workbench.prepareUnloadResult = false;
+
+			await service.closeWorkspace(browser.windowId, instanceId);
+			child.workbench.prepareUnloadResult = true;
+			const suspended = await service.suspendWorkspace(
+				browser.windowId,
+				instanceId
+			);
+
+			assert.deepStrictEqual({
+				instanceState: suspended.instances.find(instance =>
+					instance.worktreePath ===
+					'/tmp/suspend-after-vetoed-close'
+				)?.state,
+				desiredState:
+					suspended.retainedWorkbenches?.[0].desiredState,
+				iframeConnected: isIframeConnected(surface, instanceId),
+			}, {
+				instanceState: 'dormant',
+				desiredState: 'loaded',
+				iframeConnected: false,
+			});
+		});
 
 	test('ignores unknown, loading, and dormant suspension targets', async () => {
 		const { service, surface, browser } = createService();

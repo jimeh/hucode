@@ -3893,7 +3893,7 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 	});
 
-	test('rejects option-like worktree start points before invoking Git', async () => {
+	test('rejects option-like worktree branch names before invoking Git', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
 			server,
@@ -3902,21 +3902,46 @@ suite('HucodeWebProjectManagerServer', function () {
 			{ rootPath: projectPath }
 		);
 
-		for (const startPoint of ['--help', '-C', '  --help']) {
+		for (const branchName of ['--force', '-D', '  --force']) {
 			const response = await handle<ErrorResponseBody>(
 				server,
 				'POST',
 				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
 				`${add.body.project.id}/worktrees`,
-				{ options: { startPoint } }
+				{ options: { branchName } }
 			);
 			assert.deepStrictEqual(response, {
 				statusCode: 400,
-				body: { error: 'Invalid options.startPoint.' },
+				body: { error: 'Invalid options.branchName.' },
 			});
 		}
 
 		assert.strictEqual(await countGitWorktrees(projectPath), 1);
+	});
+
+	test('accepts option-like worktree start points after Git options', async () => {
+		await execFile(
+			'git',
+			['update-ref', 'refs/tags/--help', 'HEAD'],
+			{ cwd: projectPath }
+		);
+		const server = createServer(serverDataPath, disposables, servers);
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const response = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${add.body.project.id}/worktrees`,
+			{ options: { startPoint: '--help' } }
+		);
+
+		assert.strictEqual(response.statusCode, 201);
+		assert.strictEqual(await countGitWorktrees(projectPath), 2);
 	});
 
 	test('validates worktree option field types', async () => {

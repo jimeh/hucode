@@ -62,9 +62,73 @@ import {
 	ProjectSwitcherWidget,
 } from
 	'../../../browser/projectSwitcher/projectSwitcher.contribution.js';
+import { getOmniHostedWorkspaceState } from
+	'../../../browser/projectSwitcher/switchProjectWorktree.contribution.js';
 
 suite('ProjectSwitcherContribution', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('keeps complete project catalog reconciliation in the shell',
+		async () => {
+			const calls: string[] = [];
+			const hosted = hostedState('hosted');
+			const reconciled = hostedState('reconciled');
+			const shellService = {
+				async getWindowState(windowId: number) {
+					calls.push(`get:${windowId}`);
+					return hosted;
+				},
+				async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					windowId: number
+				) {
+					calls.push(`reconcile:${windowId}`);
+					return reconciled;
+				},
+			} as unknown as IHucodeShellService;
+
+			const fromHosted = await getOmniHostedWorkspaceState(
+				{
+					isOmniWindow: true,
+					isHostedOmniWorkspace: true,
+					isOmniShellWindow: true,
+				} as IWorkbenchEnvironmentService,
+				shellService,
+				[projectRecord()]
+			);
+			const fromShell = await getOmniHostedWorkspaceState(
+				{
+					isOmniWindow: true,
+					isHostedOmniWorkspace: false,
+					isOmniShellWindow: true,
+				} as IWorkbenchEnvironmentService,
+				shellService,
+				[projectRecord()]
+			);
+			const fromUntrustedWindow = await getOmniHostedWorkspaceState(
+				{
+					isOmniWindow: true,
+					isHostedOmniWorkspace: false,
+					isOmniShellWindow: false,
+				} as IWorkbenchEnvironmentService,
+				shellService,
+				[projectRecord()]
+			);
+
+			assert.deepStrictEqual({
+				calls,
+				fromHosted: fromHosted?.activeInstanceId,
+				fromShell: fromShell?.activeInstanceId,
+				fromUntrustedWindow,
+			}, {
+				calls: [
+					`get:${getWindowId(mainWindow)}`,
+					`reconcile:${getWindowId(mainWindow)}`,
+				],
+				fromHosted: 'hosted',
+				fromShell: 'reconciled',
+				fromUntrustedWindow: undefined,
+			});
+		});
 
 	test('recycled rows clear active ARIA and actions before rendering a section', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];

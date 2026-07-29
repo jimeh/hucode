@@ -196,13 +196,12 @@ export class HostedOmniWebShellService extends Disposable
 
 	reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		_windowId: number,
-		projects: readonly IHucodeCompleteProjectCatalogEntry[]
+		_projects: readonly IHucodeCompleteProjectCatalogEntry[]
 	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-				windowId,
-				projects
-			));
+		return Promise.reject(new Error(
+			'Complete project catalog reconciliation is restricted to ' +
+			'the Omni shell.'
+		));
 	}
 
 	promoteRetainedWorkbenchProjectFolders(

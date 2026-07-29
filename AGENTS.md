@@ -212,6 +212,9 @@ as the required Hucode instruction set for work in this fork.
   closed hosted-action allowlist rather than the broad
   `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
   only for version-skew compatibility.
+- Complete project-catalog reconciliation is shell authority. Hosted
+  workbenches may read combined state through `getWindowState`, but must not
+  submit a supposedly complete catalog over their connection facade.
 - Web shell restoration can block on remote folder checks. Page shutdown must
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
@@ -241,6 +244,10 @@ as the required Hucode instruction set for work in this fork.
   perspective. Internal commit failures must reject so the shell takes its
   remove-anyway path; `false` is reserved for an explicit protocol refusal
   before the commit begins.
+- A late protocol-v1 hosted unload success means that legacy workbench already
+  shut down. Remove it only when the exact instance still uses the connection
+  captured by the timed-out request, so an old reply cannot remove a reloaded
+  child.
 - Web shell-wide shutdown is currently contract-only and called only by an
   explicit host. Ordinary browser lifecycle shutdown cannot await it and uses
   per-workbench hosted unload instead. Any future awaited shell-close path must
