@@ -79,12 +79,18 @@ export const IHucodeOmniCommandForwardingContext =
 export interface IHucodeOmniCommandForwardingContext {
 	readonly _serviceBrand: undefined;
 	readonly isForwardingDisabled: boolean;
+	isForwardingDisabledFor(actionId: string): boolean;
 	createScope(): IHucodeOmniCommandForwardingScope;
 }
 
 export interface IHucodeOmniCommandForwardingScope {
 	readonly isForwardingDisabled: boolean;
+	isForwardingDisabledFor(actionId: string): boolean;
 	runWithForwardingDisabled<T>(
+		callback: () => T
+	): T;
+	runWithForwardingDisabledFor<T>(
+		actionId: string,
 		callback: () => T
 	): T;
 }
@@ -96,10 +102,17 @@ export class HucodeOmniCommandForwardingContext
 
 	private readonly activeScopes: {
 		readonly owner: symbol;
+		readonly actionId?: string;
 	}[] = [];
 
 	get isForwardingDisabled(): boolean {
 		return this.activeScopes.length > 0;
+	}
+
+	isForwardingDisabledFor(actionId: string): boolean {
+		return this.activeScopes.some(scope =>
+			scope.actionId === undefined || scope.actionId === actionId
+		);
 	}
 
 	createScope(): IHucodeOmniCommandForwardingScope {
@@ -110,31 +123,58 @@ export class HucodeOmniCommandForwardingContext
 			get isForwardingDisabled(): boolean {
 				return context.activeScopes.some(scope => scope.owner === token);
 			},
+			isForwardingDisabledFor(actionId: string): boolean {
+				return context.activeScopes.some(scope =>
+					scope.owner === token &&
+					(scope.actionId === undefined || scope.actionId === actionId)
+				);
+			},
 			runWithForwardingDisabled<T>(callback: () => T): T {
-				const invocation = { owner: token };
-				context.activeScopes.push(invocation);
-				let synchronous = true;
-				const removeInvocation = () => {
-					const index = context.activeScopes.indexOf(invocation);
-					if (index !== -1) {
-						context.activeScopes.splice(index, 1);
-					}
-				};
-				try {
-					const result = callback();
-					if (isThenable(result)) {
-						synchronous = false;
-						return Promise.resolve(result)
-							.finally(removeInvocation) as T;
-					}
-					return result;
-				} finally {
-					if (synchronous) {
-						removeInvocation();
-					}
-				}
+				return context.runWithForwardingDisabled(
+					token,
+					undefined,
+					callback
+				);
+			},
+			runWithForwardingDisabledFor<T>(
+				actionId: string,
+				callback: () => T
+			): T {
+				return context.runWithForwardingDisabled(
+					token,
+					actionId,
+					callback
+				);
 			},
 		};
+	}
+
+	private runWithForwardingDisabled<T>(
+		owner: symbol,
+		actionId: string | undefined,
+		callback: () => T
+	): T {
+		const invocation = { owner, actionId };
+		this.activeScopes.push(invocation);
+		let synchronous = true;
+		const removeInvocation = () => {
+			const index = this.activeScopes.indexOf(invocation);
+			if (index !== -1) {
+				this.activeScopes.splice(index, 1);
+			}
+		};
+		try {
+			const result = callback();
+			if (isThenable(result)) {
+				synchronous = false;
+				return Promise.resolve(result).finally(removeInvocation) as T;
+			}
+			return result;
+		} finally {
+			if (synchronous) {
+				removeInvocation();
+			}
+		}
 	}
 }
 

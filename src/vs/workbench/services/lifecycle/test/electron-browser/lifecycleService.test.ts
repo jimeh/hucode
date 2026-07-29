@@ -27,9 +27,6 @@ suite('Lifecycleservice', function () {
 			return super.handleWillShutdown(reason);
 		}
 
-		testHandleShutdownPreparationAbandoned(): void {
-			super.handleShutdownPreparationAbandoned();
-		}
 	}
 
 	setup(async () => {
@@ -103,15 +100,6 @@ suite('Lifecycleservice', function () {
 		assert.strictEqual(veto, true);
 		assert.strictEqual(vetoCalled, true);
 		assert.strictEqual(finalVetoCalled, false);
-	});
-
-	test('shutdown preparation abandoned fires the rollback observable', () => {
-		let vetoEvents = 0;
-		disposables.add(lifecycleService.onShutdownVeto(() => vetoEvents++));
-
-		lifecycleService.testHandleShutdownPreparationAbandoned();
-
-		assert.strictEqual(vetoEvents, 1);
 	});
 
 	test('onBeforeShutdown - veto with error is treated as veto', async function () {

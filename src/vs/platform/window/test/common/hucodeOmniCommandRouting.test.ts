@@ -166,4 +166,34 @@ suite('HucodeOmniCommandRouting', () => {
 			assert.strictEqual(context.isForwardingDisabled, false);
 		}
 	);
+
+	test('action-specific suppression does not disable unrelated commands',
+		async () => {
+			const context = new HucodeOmniCommandForwardingContext();
+			const scope = context.createScope();
+			let resolvePending!: () => void;
+			const pending = new Promise<void>(resolve => {
+				resolvePending = resolve;
+			});
+
+			const result = scope.runWithForwardingDisabledFor(
+				'editor.action.clipboardCopyAction',
+				() => pending
+			);
+
+			assert.strictEqual(
+				context.isForwardingDisabledFor(
+					'editor.action.clipboardCopyAction'
+				),
+				true
+			);
+			assert.strictEqual(
+				context.isForwardingDisabledFor('workbench.action.files.save'),
+				false
+			);
+			resolvePending();
+			await result;
+			assert.strictEqual(context.isForwardingDisabled, false);
+		}
+	);
 });

@@ -179,8 +179,11 @@ export class HucodeOmniCommandForwarding {
 		await this.runWithForwardingDisabledIfNeeded(request, dispatch);
 	}
 
-	shouldForwardShellInvocation(): boolean {
-		return !this.commandForwardingScope.isForwardingDisabled &&
+	shouldForwardShellInvocation(actionId?: string): boolean {
+		const forwardingDisabled = actionId
+			? this.commandForwardingScope.isForwardingDisabledFor(actionId)
+			: this.commandForwardingScope.isForwardingDisabled;
+		return !forwardingDisabled &&
 			this.nativeEnvironmentService.isOmniWindow &&
 			!this.isActiveElementInside(HUCODE_OMNI_PROJECTS_SELECTOR) &&
 			!this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
@@ -280,7 +283,7 @@ export class HucodeOmniCommandForwarding {
 		actionId: string,
 		handlers: IHucodeOmniCommandForwardingWindowHandlers
 	): Promise<void> {
-		if (!this.shouldForwardShellInvocation()) {
+		if (!this.shouldForwardShellInvocation(actionId)) {
 			return;
 		}
 
@@ -296,8 +299,9 @@ export class HucodeOmniCommandForwarding {
 		}
 
 		try {
-			await this.commandForwardingScope.runWithForwardingDisabled(() =>
-				handlers.executeCommand(actionId)
+			await this.commandForwardingScope.runWithForwardingDisabledFor(
+				actionId,
+				() => handlers.executeCommand(actionId)
 			);
 		} catch (error) {
 			handlers.onActionError(error);
