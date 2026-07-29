@@ -220,14 +220,13 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		const { lifecycleService, counts, storageService } =
 			createLifecycleService();
 		const coordinator = createCoordinator(lifecycleService);
-		let flushes = 0;
-		storageService.flush = async () => {
-			// Preparation awaits one flush and fireBeforeShutdown starts a
-			// second optimistic flush. The third belongs to commitShutdown.
-			if (++flushes === 3) {
+		disposables.add(lifecycleService.onBeforeShutdown(() => {
+			// The optimistic preparation flush has already started. Fail the
+			// next flush independently, when commit begins.
+			storageService.flush = async () => {
 				throw new Error('storage flush failed');
-			}
-		};
+			};
+		}));
 
 		const prepared = await coordinator.prepareUnload();
 

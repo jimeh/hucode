@@ -106,8 +106,12 @@ suite('CreateProjectWorktreeRouting', () => {
 		const requestAborted = new Promise<void>(resolve => {
 			resolveRequestAbort = resolve;
 		});
+		let expectedCancellationReason: unknown;
 		const unhandledRejections: unknown[] = [];
 		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+			if (event.reason !== expectedCancellationReason) {
+				return;
+			}
 			unhandledRejections.push(event.reason);
 			event.preventDefault();
 		};
@@ -132,6 +136,19 @@ suite('CreateProjectWorktreeRouting', () => {
 			'/api/projects',
 			{ fetch: fakeFetch }
 		);
+		const loadRefs = projectManagerService.getWorktreeRefs.bind(
+			projectManagerService
+		);
+		projectManagerService.getWorktreeRefs = async (
+			...args: Parameters<WebProjectManagerClient['getWorktreeRefs']>
+		) => {
+			try {
+				return await loadRefs(...args);
+			} catch (error) {
+				expectedCancellationReason = error;
+				throw error;
+			}
+		};
 		const quickInputService = {
 			pick(_picks: Promise<unknown>) {
 				return Promise.resolve(undefined);

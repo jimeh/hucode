@@ -593,7 +593,9 @@ human-facing guides rather than replacing them.
   would strand a dead iframe. The reverse pairing is reachable after a server
   upgrade: a long-lived old shell can load a new child. Keep the child's
   `prepareUnload` method single-phase while newer shells use the distinct
-  `prepareUnloadForCommit` method.
+  `prepareUnloadForCommit` method. Protocol version 2's RPC set was redefined
+  during unreleased hardening; intermediate version 2 heads are not a deployed
+  compatibility target.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child
