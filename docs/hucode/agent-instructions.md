@@ -563,6 +563,12 @@ human-facing guides rather than replacing them.
   shell's checks and the removal, so two callers otherwise each apply their own
   outcome and the result depends on arrival order, typically leaving a dormant
   record offering to restore a workbench the user closed.
+- Overlapping window shutdown requests can escalate while hosted workbench
+  preparation is still pending. Keep the strongest unload reason and abandon
+  and repeat the preparation when it changes, so `onBeforeShutdown` and
+  `onWillShutdown` consumers agree on task and terminal persistence semantics.
+  Merely latching that a terminal shutdown was requested does not update the
+  renderer's already-prepared reason.
 - When closing several hosted workbenches in one window, close non-active
   instances concurrently and wait before closing the snapshot-active instance.
   Closing the active instance promotes a sibling and bumps its lifecycle

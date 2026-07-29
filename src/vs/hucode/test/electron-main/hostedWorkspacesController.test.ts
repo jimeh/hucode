@@ -3497,9 +3497,23 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	test('terminal shutdown dominates overlapping surviving reasons',
 		async () => {
-			for (const [firstReason, secondReason, suffix] of [
-				[UnloadReason.RELOAD, UnloadReason.QUIT, 'reload-then-quit'],
-				[UnloadReason.CLOSE, UnloadReason.LOAD, 'close-then-load'],
+			for (const [firstReason, secondReason, expectedReasons, suffix] of [
+				[
+					UnloadReason.RELOAD,
+					UnloadReason.QUIT,
+					[
+						UnloadReason.RELOAD,
+						UnloadReason.QUIT,
+						UnloadReason.QUIT
+					],
+					'reload-then-quit'
+				],
+				[
+					UnloadReason.CLOSE,
+					UnloadReason.LOAD,
+					[UnloadReason.CLOSE, UnloadReason.CLOSE],
+					'close-then-load'
+				],
 			] as const) {
 				const alpha = createWorktree(`${suffix}-alpha`);
 				const blocked = createWorktree(`${suffix}-blocked`);
@@ -3511,9 +3525,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				await controller.openWorkspace(alpha, `project-${suffix}`);
 				controller.notifyHostedWorkspaceReady('instance-1');
 				let releasePreparation: (() => void) | undefined;
+				let preparationCount = 0;
 				viewFactory.views[0].rawWebContents.sendHook =
 					(channel, request) => {
 						if (channel !== 'vscode:onBeforeUnload') {
+							return false;
+						}
+						if (preparationCount++ > 0) {
 							return false;
 						}
 						const { okChannel } = request as { okChannel: string };
@@ -3536,6 +3554,17 @@ suite('ResidentHostedWorkspacesController', () => {
 				);
 				releasePreparation();
 				await firstShutdown;
+				assert.deepStrictEqual(
+					viewFactory.views[0].rawWebContents.sent
+						.filter(({ channel }) =>
+							channel === 'vscode:onBeforeUnload' ||
+							channel === 'vscode:onWillUnload'
+						)
+						.map(({ request }) =>
+							(request as { reason: UnloadReason }).reason
+						),
+					expectedReasons
+				);
 				const frozenState = structuredClone(controller.getState());
 				const frozenViewCount = viewFactory.views.length;
 

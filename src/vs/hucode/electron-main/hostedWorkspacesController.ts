@@ -134,6 +134,19 @@ interface IProjectCatalogSnapshot {
 
 type OmniFocusedSurface = 'shell' | 'workspace';
 
+function unloadReasonRank(reason: UnloadReason): number {
+	switch (reason) {
+		case UnloadReason.RELOAD:
+			return 0;
+		case UnloadReason.LOAD:
+			return 1;
+		case UnloadReason.CLOSE:
+			return 2;
+		case UnloadReason.QUIT:
+			return 3;
+	}
+}
+
 const defaultHostedWorkbenchViewFactory: IHostedWorkbenchViewFactory = {
 	createView(configObjectUrl, useCodeCache) {
 		return new electron.WebContentsView({
@@ -174,6 +187,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private restored = false;
 	private shuttingDown = false;
 	private terminalShutdownRequested = false;
+	private shutdownReason: UnloadReason | undefined;
 	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
@@ -1799,6 +1813,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
 		if (
+			this.shutdownReason === undefined ||
+			unloadReasonRank(reason) > unloadReasonRank(this.shutdownReason)
+		) {
+			this.shutdownReason = reason;
+		}
+		if (
 			reason === UnloadReason.CLOSE ||
 			reason === UnloadReason.QUIT
 		) {
@@ -1815,7 +1835,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				!!instance.view ||
 				!!instance.configObjectUrl);
 		const shutdown = Promise.resolve().then(
-			() => this.runShutdown(instances, reason)
+			() => this.runShutdown(
+				instances,
+				() => this.shutdownReason ?? reason
+			)
 		);
 		this.shutdownPromise = shutdown;
 		const releaseShutdown = (failed: boolean) => {
@@ -1824,6 +1847,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					this.shutdownPromise = undefined;
 				}
 				if (!this.terminalShutdownRequested) {
+					this.shutdownReason = undefined;
 					this.shuttingDown = false;
 				}
 			}
@@ -1837,12 +1861,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	private async runShutdown(
 		instances: readonly IHostedWorkbenchInstance[],
-		reason: UnloadReason
+		getReason: () => UnloadReason
 	): Promise<void> {
 		const unloadInstances = instances.filter(instance => !instance.disposed);
 		const unloadResults = await Promise.allSettled(
 			unloadInstances.map(instance =>
-				this.unloadInRenderer(instance, reason, true)
+				this.unloadInRenderer(
+					instance,
+					getReason(),
+					true,
+					undefined,
+					getReason
+				)
 			)
 		);
 		let firstFailure: { readonly error: unknown } | undefined;
@@ -1893,7 +1923,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		instance: IHostedWorkbenchInstance,
 		reason: UnloadReason,
 		ignoreBeforeUnloadVeto: boolean = false,
-		isSuperseded: () => boolean = () => false
+		isSuperseded: () => boolean = () => false,
+		getLatestReason: () => UnloadReason = () => reason
 	): Promise<
 		'ready' | 'vetoed' | 'before-unload-failed' |
 		'superseded' | 'reload-required'
@@ -1908,6 +1939,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			instance,
 			reason
 		);
+		const latestReason = getLatestReason();
+		if (latestReason !== reason) {
+			if (preparation.outcome !== 'vetoed') {
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			}
+			return this.unloadInRenderer(
+				instance,
+				latestReason,
+				ignoreBeforeUnloadVeto,
+				isSuperseded,
+				getLatestReason
+			);
+		}
 		if (preparation.outcome === 'vetoed') {
 			if (ignoreBeforeUnloadVeto) {
 				await this.onWillUnloadInRenderer(
