@@ -97,10 +97,20 @@ export interface ILinuxOmniLifecycleObservation {
 }
 
 /**
+ * One Projects row expected during the lifecycle smoke test.
+ */
+export interface ILinuxOmniExpectedWorkbenchRow {
+	readonly label: string;
+	readonly state: LinuxOmniWorkbenchState;
+	readonly active: boolean;
+	readonly ariaDescription: string;
+}
+
+/**
  * Expected observable shell and target state at one lifecycle phase.
  */
 export interface ILinuxOmniLifecycleExpectation {
-	readonly rows: readonly ILinuxOmniWorkbenchRow[];
+	readonly rows: readonly ILinuxOmniExpectedWorkbenchRow[];
 	readonly targetPaths: readonly string[];
 	readonly crashedRendererCount: number;
 }
@@ -145,64 +155,144 @@ export function createLinuxOmniLifecycleExpectations(
 	return {
 		'initial restore': {
 			rows: [
-				{ label: 'Alpha', state: 'active', active: true },
-				{ label: 'Bravo', state: 'dormant', active: false },
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant',
+					active: false,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath],
 			crashedRendererCount: 0,
 		},
 		'switch to Bravo': {
 			rows: [
-				{ label: 'Alpha', state: 'loaded', active: false },
-				{ label: 'Bravo', state: 'active', active: true },
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath, bravoPath],
 			crashedRendererCount: 0,
 		},
 		'switch to Alpha': {
 			rows: [
-				{ label: 'Alpha', state: 'active', active: true },
-				{ label: 'Bravo', state: 'loaded', active: false },
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'loaded',
+					active: false,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath, bravoPath],
 			crashedRendererCount: 0,
 		},
 		'suspend Bravo': {
 			rows: [
-				{ label: 'Alpha', state: 'active', active: true },
-				{ label: 'Bravo', state: 'dormant', active: false },
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant',
+					active: false,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath],
 			crashedRendererCount: 0,
 		},
 		'restore Bravo': {
 			rows: [
-				{ label: 'Alpha', state: 'loaded', active: false },
-				{ label: 'Bravo', state: 'active', active: true },
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath, bravoPath],
 			crashedRendererCount: 0,
 		},
 		'crash Bravo': {
 			rows: [
-				{ label: 'Alpha', state: 'loaded', active: false },
-				{ label: 'Bravo', state: 'crashed', active: false },
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'crashed',
+					active: false,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath],
 			crashedRendererCount: 1,
 		},
 		'recover Bravo': {
 			rows: [
-				{ label: 'Alpha', state: 'loaded', active: false },
-				{ label: 'Bravo', state: 'active', active: true },
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [alphaPath, bravoPath],
-			crashedRendererCount: 1,
+			crashedRendererCount: 0,
 		},
 		'relaunch restore': {
 			rows: [
-				{ label: 'Alpha', state: 'dormant', active: false },
-				{ label: 'Bravo', state: 'active', active: true },
+				{
+					label: 'Alpha',
+					state: 'dormant',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: bravoPath,
+				},
 			],
 			targetPaths: [bravoPath],
 			crashedRendererCount: 0,
@@ -476,7 +566,10 @@ export function assertLinuxOmniLifecycleObservation(
 	observation: ILinuxOmniLifecycleObservation,
 	expectation: ILinuxOmniLifecycleExpectation
 ): void {
-	const normalizeRows = (rows: readonly ILinuxOmniWorkbenchRow[]) =>
+	const normalizeRows = (rows: readonly Pick<
+		ILinuxOmniWorkbenchRow,
+		'label' | 'state' | 'active'
+	>[]) =>
 		[...rows]
 			.map(row => ({
 				label: row.label,
@@ -493,6 +586,9 @@ export function assertLinuxOmniLifecycleObservation(
 		.map(normalizeSmokePath)
 		.sort();
 	const invalidAriaRows = observation.rows.filter(row => {
+		const expectedRow = expectation.rows.find(
+			candidate => candidate.label === row.label
+		);
 		const expectedStateLabel =
 			row.state === 'restore-pending'
 				? 'Loading'
@@ -501,7 +597,9 @@ export function assertLinuxOmniLifecycleObservation(
 		return (
 			ariaParts?.length !== 3 ||
 			ariaParts[0] !== row.label ||
-			!ariaParts[1] ||
+			!expectedRow ||
+			normalizeSmokePath(ariaParts[1]) !==
+				normalizeSmokePath(expectedRow.ariaDescription) ||
 			ariaParts[2] !== expectedStateLabel
 		);
 	});

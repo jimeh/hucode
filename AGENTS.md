@@ -185,4 +185,4 @@ as the required Hucode instruction set for work in this fork.
   To crash one in a smoke test, subscribe to the page's `crash` event, fire
   `Page.crash` without awaiting its response, and await the event instead; the
   command response never arrives after the target dies, and the crashed page
-  remains in `context.pages()`.
+  remains in `context.pages()` until recovery destroys the crashed view.

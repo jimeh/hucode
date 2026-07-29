@@ -310,16 +310,40 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 		);
 		assert.deepStrictEqual(expectations['crash Bravo'], {
 			rows: [
-				{ label: 'Alpha', state: 'loaded', active: false },
-				{ label: 'Bravo', state: 'crashed', active: false },
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'crashed',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
 			],
 			targetPaths: ['/tmp/smoke/Alpha'],
 			crashedRendererCount: 1,
 		});
+		assert.strictEqual(
+			expectations['recover Bravo']?.crashedRendererCount,
+			0
+		);
 		assert.deepStrictEqual(expectations['relaunch restore'], {
 			rows: [
-				{ label: 'Alpha', state: 'dormant', active: false },
-				{ label: 'Bravo', state: 'active', active: true },
+				{
+					label: 'Alpha',
+					state: 'dormant',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
 			],
 			targetPaths: ['/tmp/smoke/Bravo'],
 			crashedRendererCount: 0,
@@ -327,8 +351,18 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 
 		const expected = {
 			rows: [
-				{ label: 'Alpha', state: 'active' as const, active: true },
-				{ label: 'Bravo', state: 'dormant' as const, active: false },
+				{
+					label: 'Alpha',
+					state: 'active' as const,
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant' as const,
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
 			],
 			targetPaths: ['/tmp/smoke/Alpha'],
 			crashedRendererCount: 0,
@@ -380,6 +414,16 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				...valid,
 				rows: valid.rows.map(row => row.label === 'Alpha'
 					? { ...row, ariaLabel: 'Alpha, Active' }
+					: row),
+			}],
+			['wrong ARIA description', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? {
+						...row,
+						ariaLabel:
+							'Alpha, /tmp/smoke/Wrong, Active',
+					}
 					: row),
 			}],
 			['wrong state', {
