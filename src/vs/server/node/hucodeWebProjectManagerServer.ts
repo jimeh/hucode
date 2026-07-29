@@ -718,6 +718,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
 			readonly acquireMutationLease?: () => IDisposable;
+			readonly acquireReadLease?: () => IDisposable;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventClientLimit?: number;
 			/** Internal test override; this is not a serve-web setting. */
@@ -756,7 +757,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				1,
 				options.gitReadConcurrency ?? DEFAULT_GIT_READ_CONCURRENCY
 			),
-			requestPendingLimit
+			requestPendingLimit,
+			options.acquireReadLease
 		));
 
 		if (!options.enabled) {
@@ -913,7 +915,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.gitReadLimiter.dispose();
 		const service = this.service;
 		if (service) {
-			this.mutationQueue.runWhenIdle(() => {
+			let remainingAdmissionQueues = 2;
+			const disposeServiceWhenIdle = () => {
+				remainingAdmissionQueues--;
+				if (remainingAdmissionQueues !== 0) {
+					return;
+				}
 				try {
 					service.dispose();
 				} catch (error) {
@@ -922,7 +929,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						error
 					);
 				}
-			});
+			};
+			this.mutationQueue.runWhenIdle(disposeServiceWhenIdle);
+			this.gitReadLimiter.runWhenIdle(disposeServiceWhenIdle);
 		}
 		this.pendingProjectPublication = undefined;
 		for (const client of Array.from(this.eventClients)) {

@@ -852,6 +852,9 @@ suite('HucodeWebProjectManagerServer', function () {
 			assert.strictEqual(calls, 1);
 			active.close();
 			await active.completion;
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 0
+			);
 
 			assert.strictEqual(activeToken.isCancellationRequested, true);
 			assert.strictEqual(calls, 1);
@@ -900,6 +903,9 @@ suite('HucodeWebProjectManagerServer', function () {
 
 			active.abortRequest();
 			await active.completion;
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 0
+			);
 
 			assert.strictEqual(token.isCancellationRequested, true);
 			assert.deepStrictEqual(active.response.writeHeadCalls, []);
@@ -1454,6 +1460,155 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('defers manager disposal through active reads sharing hydration',
+		async () => {
+			let activeLeases = 0;
+			let nextLeaseId = 0;
+			const lifetimeEvents: string[] = [];
+			const acquireReadLease = () => {
+				const id = ++nextLeaseId;
+				activeLeases++;
+				lifetimeEvents.push(`acquire:${id}`);
+				return toDisposable(() => {
+					activeLeases--;
+					lifetimeEvents.push(`release:${id}`);
+				});
+			};
+			await fs.mkdir(join(serverDataPath, 'hucode'), {
+				recursive: true,
+			});
+			await fs.writeFile(
+				join(serverDataPath, 'hucode', 'projects.json'),
+				serializeStoredProjects([{
+					id: 'stored-project',
+					label: 'example',
+					rootPath: projectPath,
+				}])
+			);
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				2,
+				undefined,
+				undefined,
+				undefined,
+				acquireReadLease
+			);
+			const service = (server as unknown as {
+				service: {
+					dispose(): void;
+					gitWorktreeService: {
+						listWorktrees(
+							rootPath: string,
+							token: CancellationToken
+						): Promise<readonly unknown[]>;
+					};
+					metadataWatcher: {
+						watch(
+							path: string,
+							onDidChange: () => void
+						): ReturnType<typeof toDisposable>;
+					};
+				};
+			}).service;
+			const originalDispose = service.dispose.bind(service);
+			let serviceDisposeCalls = 0;
+			let activeLeasesAtServiceDispose = -1;
+			service.dispose = () => {
+				serviceDisposeCalls++;
+				activeLeasesAtServiceDispose = activeLeases;
+				lifetimeEvents.push('service-disposed');
+				originalDispose();
+			};
+			service.metadataWatcher.watch = path => {
+				lifetimeEvents.push(`watch:${path}`);
+				return toDisposable(() => {
+					lifetimeEvents.push(`unwatch:${path}`);
+				});
+			};
+			const originalListWorktrees =
+				service.gitWorktreeService.listWorktrees.bind(
+					service.gitWorktreeService
+				);
+			const hydrationStarted =
+				new DeferredPromise<CancellationToken>();
+			const releaseHydration = new DeferredPromise<void>();
+			let listWorktreeCalls = 0;
+			service.gitWorktreeService.listWorktrees =
+				async (rootPath, token) => {
+					listWorktreeCalls++;
+					if (listWorktreeCalls === 1) {
+						await hydrationStarted.complete(token);
+						await releaseHydration.p;
+					}
+					return originalListWorktrees(rootPath, token);
+				};
+
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				'stored-project/worktrees/refs';
+			const owner = startHandle(server, 'POST', route, {});
+			const hydrationToken = await hydrationStarted.p;
+			const follower = startHandle(server, 'POST', route, {});
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 2
+			);
+			const queued = startHandle(server, 'POST', route, {});
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 3
+			);
+
+			server.dispose();
+			const queuedSettled = await raceTimeout(
+				queued.completion.then(() => true),
+				50
+			);
+			const disposalSnapshot = {
+				hydrationCanceled: hydrationToken.isCancellationRequested,
+				serviceDisposeCalls,
+				activeLeases,
+			};
+			if (!queuedSettled) {
+				queued.close();
+			}
+			await releaseHydration.complete();
+			await Promise.all([
+				owner.completion,
+				follower.completion,
+				queued.completion,
+			]);
+
+			const serviceDisposedAt =
+				lifetimeEvents.indexOf('service-disposed');
+			const lastWatchAt = lifetimeEvents.reduce(
+				(last, event, index) =>
+					event.startsWith('watch:') ? index : last,
+				-1
+			);
+			assert.deepStrictEqual(disposalSnapshot, {
+				hydrationCanceled: false,
+				serviceDisposeCalls: 0,
+				activeLeases: 2,
+			});
+			assert.strictEqual(queuedSettled, true);
+			assert.strictEqual(queued.response.statusCode, 503);
+			assert.strictEqual(owner.response.statusCode, 200);
+			assert.strictEqual(follower.response.statusCode, 200);
+			assert.strictEqual(listWorktreeCalls, 1);
+			assert.ok(lastWatchAt >= 0);
+			assert.ok(serviceDisposedAt > lastWatchAt);
+			assert.strictEqual(serviceDisposeCalls, 1);
+			assert.strictEqual(activeLeasesAtServiceDispose, 1);
+			assert.strictEqual(activeLeases, 0);
+			assert.ok(
+				lifetimeEvents[lifetimeEvents.length - 1].startsWith('release:')
+			);
+		}
+	);
+
 	test('rejects new read and mutation work after disposal', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
@@ -1582,6 +1737,125 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.strictEqual(activeLeases, 0);
 		assert.strictEqual(requestQueueSize(server, 'mutationQueue'), 0);
 	});
+
+	test('releases admitted read leases after success, failure, and cancellation',
+		async () => {
+			let acquisitions = 0;
+			let releases = 0;
+			let activeLeases = 0;
+			const acquireReadLease = () => {
+				acquisitions++;
+				activeLeases++;
+				return toDisposable(() => {
+					releases++;
+					activeLeases--;
+				});
+			};
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1,
+				undefined,
+				undefined,
+				undefined,
+				acquireReadLease
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+
+			service.getWorktreeRefs = async () => [];
+			const success = await handle<unknown>(
+				server,
+				'POST',
+				route,
+				{}
+			);
+			assert.strictEqual(success.statusCode, 200);
+			assert.deepStrictEqual({
+				acquisitions,
+				releases,
+				activeLeases,
+			}, {
+				acquisitions: 1,
+				releases: 1,
+				activeLeases: 0,
+			});
+
+			service.getWorktreeRefs = async () => {
+				throw new Error('admitted read failed');
+			};
+			const failure = await handle<ErrorResponseBody>(
+				server,
+				'POST',
+				route,
+				{}
+			);
+			assert.strictEqual(failure.statusCode, 500);
+			assert.deepStrictEqual(failure.body, {
+				error: 'admitted read failed',
+			});
+			assert.deepStrictEqual({
+				acquisitions,
+				releases,
+				activeLeases,
+			}, {
+				acquisitions: 2,
+				releases: 2,
+				activeLeases: 0,
+			});
+
+			const readStarted = new DeferredPromise<void>();
+			const releaseRead = new DeferredPromise<void>();
+			service.getWorktreeRefs = async () => {
+				await readStarted.complete();
+				await releaseRead.p;
+				return [];
+			};
+			const canceled = startHandle(server, 'POST', route, {});
+			await readStarted.p;
+			canceled.abortRequest();
+			await canceled.completion;
+			assert.deepStrictEqual(canceled.response.writeHeadCalls, []);
+			assert.deepStrictEqual({
+				acquisitions,
+				releases,
+				activeLeases,
+			}, {
+				acquisitions: 3,
+				releases: 2,
+				activeLeases: 1,
+			});
+
+			await releaseRead.complete();
+			await waitFor(() =>
+				requestQueueSize(server, 'gitReadLimiter') === 0
+			);
+			assert.deepStrictEqual({
+				acquisitions,
+				releases,
+				activeLeases,
+			}, {
+				acquisitions: 3,
+				releases: 3,
+				activeLeases: 0,
+			});
+		}
+	);
 
 	test('defers manager disposal through an admitted worktree refresh',
 		async () => {
@@ -3092,13 +3366,15 @@ function createServer(
 	gitReadConcurrency?: number,
 	eventHeartbeatIntervalMs?: number,
 	eventBackpressureTimeoutMs?: number,
-	acquireMutationLease?: () => ReturnType<typeof toDisposable>
+	acquireMutationLease?: () => ReturnType<typeof toDisposable>,
+	acquireReadLease?: () => ReturnType<typeof toDisposable>
 ): HucodeWebProjectManagerServer {
 	const options = {
 		enabled: true,
 		fileSystem,
 		acquireStateWriteLease,
 		acquireMutationLease,
+		acquireReadLease,
 		eventClientLimit,
 		gitReadConcurrency,
 		eventHeartbeatIntervalMs,
