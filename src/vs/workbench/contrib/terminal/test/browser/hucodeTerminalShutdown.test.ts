@@ -263,6 +263,34 @@ suite('Terminal hosted shutdown', () => {
 		}]);
 	});
 
+	test('replays pending saves when hosted shutdown preparation is abandoned',
+		async () => {
+			assert.strictEqual(await prepareShutdown(lifecycleService), false);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			setBackgroundedTerminal(terminalService, 21);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+
+			await runWithFakedTimers({}, async () =>
+				fireShutdownVeto(lifecycleService)
+			);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+
+			setBackgroundedTerminal(terminalService, 34);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}, {
+				tabs: [],
+				background: [34],
+			}]);
+		}
+	);
+
 	test('resumes persistence when shutdown preparation errors', async () => {
 		assert.strictEqual(
 			await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),

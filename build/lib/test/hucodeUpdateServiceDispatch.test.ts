@@ -4,10 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { promises as fs } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { suite, test } from 'node:test';
 import {
 	dispatchUpdateServiceRefresh,
 	type IUpdateServiceDispatchDependencies,
+	runGhCommand,
 } from '../../hucode/dispatch-update-service.ts';
 
 suite('Hucode update service dispatch', () => {
@@ -146,6 +150,35 @@ suite('Hucode update service dispatch', () => {
 			harness.attempts[0].environment.GH_TOKEN,
 			'release-bot-token'
 		);
+	});
+
+	test('hard-kills a dispatch process that ignores SIGTERM', async () => {
+		const fixtureDirectory = await fs.mkdtemp(
+			join(tmpdir(), 'hucode-update-dispatch-')
+		);
+		const fixturePath = join(fixtureDirectory, 'ignore-sigterm.js');
+		await fs.writeFile(fixturePath, [
+			'process.on("SIGTERM", () => {});',
+			'setTimeout(() => process.exit(23), 2_000);',
+		].join('\n'));
+		const startedAt = Date.now();
+
+		try {
+			await assert.rejects(
+				runGhCommand(
+					[fixturePath],
+					process.env,
+					50,
+					process.execPath
+				)
+			);
+			assert.ok(
+				Date.now() - startedAt < 1_000,
+				'dispatch subprocess should reject before its safety exit'
+			);
+		} finally {
+			await fs.rm(fixtureDirectory, { recursive: true, force: true });
+		}
 	});
 });
 

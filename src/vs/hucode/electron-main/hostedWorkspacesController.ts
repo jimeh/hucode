@@ -1912,6 +1912,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return 'vetoed';
 		}
 		if (isSuperseded()) {
+			this.notifyShutdownPreparationAbandonedInRenderer(
+				webContents,
+				instance
+			);
 			return 'superseded';
 		}
 
@@ -1920,6 +1924,25 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return 'superseded-after-will-unload';
 		}
 		return 'ready';
+	}
+
+	private notifyShutdownPreparationAbandonedInRenderer(
+		webContents: Electron.WebContents,
+		instance: IHostedWorkbenchInstance
+	): void {
+		if (webContents.isDestroyed()) {
+			return;
+		}
+
+		try {
+			webContents.send('vscode:onShutdownPreparationAbandoned');
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to send hosted workspace ' +
+				`shutdown preparation rollback for ${instance.worktreePath}: ` +
+				`${error}`
+			);
+		}
 	}
 
 	private onBeforeUnloadInRenderer(

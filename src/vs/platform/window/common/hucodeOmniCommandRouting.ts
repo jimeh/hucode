@@ -7,6 +7,7 @@ import {
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 } from './window.js';
+import { isThenable } from '../../../base/common/async.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
@@ -72,7 +73,7 @@ export const IHucodeOmniCommandForwardingContext =
 	);
 
 /**
- * Synchronous invocation context shared by the renderer's forwarding surfaces.
+ * Invocation context shared by the renderer's forwarding surfaces.
  * Each surface owns a distinct scope created by this service.
  */
 export interface IHucodeOmniCommandForwardingContext {
@@ -93,7 +94,9 @@ export class HucodeOmniCommandForwardingContext
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly activeScopes: symbol[] = [];
+	private readonly activeScopes: {
+		readonly owner: symbol;
+	}[] = [];
 
 	get isForwardingDisabled(): boolean {
 		return this.activeScopes.length > 0;
@@ -105,16 +108,30 @@ export class HucodeOmniCommandForwardingContext
 
 		return {
 			get isForwardingDisabled(): boolean {
-				return context.activeScopes.includes(token);
+				return context.activeScopes.some(scope => scope.owner === token);
 			},
 			runWithForwardingDisabled<T>(callback: () => T): T {
-				context.activeScopes.push(token);
+				const invocation = { owner: token };
+				context.activeScopes.push(invocation);
+				let synchronous = true;
+				const removeInvocation = () => {
+					const index = context.activeScopes.indexOf(invocation);
+					if (index !== -1) {
+						context.activeScopes.splice(index, 1);
+					}
+				};
 				try {
-					// Do not await promises returned by the callback. Consumers
-					// inspect this context synchronously before their first await.
-					return callback();
+					const result = callback();
+					if (isThenable(result)) {
+						synchronous = false;
+						return Promise.resolve(result)
+							.finally(removeInvocation) as T;
+					}
+					return result;
 				} finally {
-					context.activeScopes.pop();
+					if (synchronous) {
+						removeInvocation();
+					}
 				}
 			},
 		};

@@ -100,17 +100,21 @@ suite('OmniCommandService', () => {
 			assert.strictEqual(shellCalls.length, 1);
 			assert.strictEqual(
 				commandForwardingContext.isForwardingDisabled,
-				false
+				true
 			);
 			await localCommandStarted;
 			assert.strictEqual(localCommandCalls, 1);
 
+			resolveLocalCommand();
+			await localExecution;
+			assert.strictEqual(
+				commandForwardingContext.isForwardingDisabled,
+				false
+			);
+
 			await service.executeCommand(commandId);
 			assert.strictEqual(shellCalls.length, 2);
 			assert.strictEqual(localCommandCalls, 1);
-
-			resolveLocalCommand();
-			await localExecution;
 			assert.deepStrictEqual(shellCalls, [
 				{
 					windowId: 42,

@@ -222,29 +222,51 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, []);
 	});
 
-	test('suppresses only the forwarding surface handling a shell request', async () => {
-		const commandForwardingContext =
-			new HucodeOmniCommandForwardingContext();
-		const firstFixture = createFixture({
-			isOmniWindow: true,
-			commandForwardingContext
-		});
-		const secondFixture = createFixture({
-			isOmniWindow: true,
-			commandForwardingContext
-		});
-		const request: INativeRunActionInWindowRequest = {
-			id: 'workbench.action.files.save',
-			from: 'keybinding',
-			hucodeForwardedFromOmniShell: true
-		};
-		let resolveFirst!: () => void;
-		const firstPending = new Promise<void>(resolve => {
-			resolveFirst = resolve;
-		});
+	test('keeps overlapping async suppression isolated by forwarding surface',
+		async () => {
+			const commandForwardingContext =
+				new HucodeOmniCommandForwardingContext();
+			const firstFixture = createFixture({
+				isOmniWindow: true,
+				commandForwardingContext
+			});
+			const secondFixture = createFixture({
+				isOmniWindow: true,
+				commandForwardingContext
+			});
+			const request: INativeRunActionInWindowRequest = {
+				id: 'workbench.action.files.save',
+				from: 'keybinding',
+				hucodeForwardedFromOmniShell: true
+			};
+			let resolveFirst!: () => void;
+			const firstPending = new Promise<void>(resolve => {
+				resolveFirst = resolve;
+			});
 
-		const firstRun =
-			firstFixture.forwarding.runWithForwardingDisabledIfNeeded(
+			const firstRun =
+				firstFixture.forwarding.runWithForwardingDisabledIfNeeded(
+					request,
+					() => {
+						assert.strictEqual(
+							firstFixture.commandForwardingScope.isForwardingDisabled,
+							true
+						);
+						assert.strictEqual(
+							secondFixture.commandForwardingScope.isForwardingDisabled,
+							false
+						);
+						return firstPending;
+					}
+				);
+
+			assert.strictEqual(
+				firstFixture.commandForwardingScope.isForwardingDisabled,
+				true
+			);
+			assert.strictEqual(commandForwardingContext.isForwardingDisabled, true);
+
+			await secondFixture.forwarding.runWithForwardingDisabledIfNeeded(
 				request,
 				() => {
 					assert.strictEqual(
@@ -253,35 +275,19 @@ suite('HucodeOmniCommandForwarding', () => {
 					);
 					assert.strictEqual(
 						secondFixture.commandForwardingScope.isForwardingDisabled,
-						false
+						true
 					);
-					return firstPending;
 				}
 			);
 
-		assert.strictEqual(
-			firstFixture.commandForwardingScope.isForwardingDisabled,
-			false
-		);
-		assert.strictEqual(commandForwardingContext.isForwardingDisabled, false);
-
-		await secondFixture.forwarding.runWithForwardingDisabledIfNeeded(
-			request,
-			() => {
-				assert.strictEqual(
-					firstFixture.commandForwardingScope.isForwardingDisabled,
-					false
-				);
-				assert.strictEqual(
-					secondFixture.commandForwardingScope.isForwardingDisabled,
-					true
-				);
-			}
-		);
-
-		resolveFirst();
-		await firstRun;
-	});
+			resolveFirst();
+			await firstRun;
+			assert.strictEqual(
+				firstFixture.commandForwardingScope.isForwardingDisabled,
+				false
+			);
+			assert.strictEqual(commandForwardingContext.isForwardingDisabled, false);
+		});
 
 	test('forwards clipboard events from the Omni shell', async () => {
 		const fixture = createFixture({
@@ -416,6 +422,7 @@ suite('HucodeOmniCommandForwarding', () => {
 				async executeCommand(commandId: string, ...args: unknown[]) {
 					const execution = originalExecuteCommand(commandId, ...args);
 					if (!nestedEvent) {
+						await Promise.resolve();
 						const nextEvent = new mainWindow.Event(eventType, {
 							cancelable: true,
 							bubbles: true

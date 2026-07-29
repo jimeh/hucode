@@ -2294,10 +2294,62 @@ suite('ResidentHostedWorkspacesController', () => {
 		}, {
 			activeInstanceId: 'instance-1',
 			instanceIds: ['instance-1', 'instance-2'],
-			sent: ['vscode:onBeforeUnload'],
+			sent: [
+				'vscode:onBeforeUnload',
+				'vscode:onShutdownPreparationAbandoned',
+			],
 			closeCalls: [],
 		});
 	});
+
+	test('keeps a reactivated workspace when preparation rollback send fails',
+		async () => {
+			const alpha = createWorktree('alpha-reactivated-rollback-failure');
+			const bravo = createWorktree('bravo-reactivated-rollback-failure');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			hostedWebContents.autoBeforeUnloadReply = false;
+			hostedWebContents.sendHook = channel => {
+				if (channel === 'vscode:onShutdownPreparationAbandoned') {
+					throw new Error('rollback send failed');
+				}
+				return false;
+			};
+
+			const closing = controller.closeWorkspace('instance-1');
+			await Promise.resolve();
+			const beforeUnload = hostedWebContents.sent[0].request as {
+				okChannel: string;
+			};
+			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			ipcMain.emitReply(beforeUnload.okChannel);
+			await closing;
+
+			assert.deepStrictEqual({
+				activeInstanceId: controller.getState().activeInstanceId,
+				instanceIds: controller.getState().instances.map(
+					instance => instance.instanceId
+				).toSorted(),
+				sent: hostedWebContents.sent.map(item => item.channel),
+				closeCalls: hostedWebContents.closeCalls,
+			}, {
+				activeInstanceId: 'instance-1',
+				instanceIds: ['instance-1', 'instance-2'],
+				sent: [
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				],
+				closeCalls: [],
+			});
+		}
+	);
 
 	test('reloads a workspace reactivated during will-unload', async () => {
 		const alpha = createWorktree('alpha-reactivated-after-will');
@@ -2333,11 +2385,15 @@ suite('ResidentHostedWorkspacesController', () => {
 			state: controller.getState().instances.find(instance =>
 				instance.instanceId === 'instance-1'
 			)?.state,
+			sent: viewFactory.views[0].rawWebContents.sent.map(
+				item => item.channel
+			),
 			reloadCalls: viewFactory.views[0].rawWebContents.reloadCalls.length,
 			closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
 		}, {
 			activeInstanceId: 'instance-1',
 			state: 'loading',
+			sent: ['vscode:onBeforeUnload', 'vscode:onWillUnload'],
 			reloadCalls: 1,
 			closeCalls: [],
 		});

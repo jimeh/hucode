@@ -60,6 +60,10 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 			}
 		});
 
+		ipcRenderer.on('vscode:onShutdownPreparationAbandoned', () => {
+			this.handleShutdownPreparationAbandoned();
+		});
+
 		// Main side indicates that we will indeed shutdown
 		ipcRenderer.on('vscode:onWillUnload', async (event: unknown, ...args: unknown[]) => {
 			const reply = args[0] as { replyChannel: string; reason: ShutdownReason };
@@ -74,6 +78,12 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 			// acknowledge to main side
 			ipcRenderer.send(reply.replyChannel, windowId);
 		});
+	}
+
+	protected handleShutdownPreparationAbandoned(): void {
+		this.logService.trace('[lifecycle] shutdown preparation abandoned');
+		this.shutdownReason = undefined;
+		this._onShutdownVeto.fire();
 	}
 
 	protected async handleBeforeShutdown(reason: ShutdownReason): Promise<boolean> {

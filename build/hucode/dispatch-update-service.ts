@@ -137,13 +137,7 @@ function createDefaultDependencies(
 ): IUpdateServiceDispatchDependencies {
 	return {
 		environment,
-		runGh: async (args, commandEnvironment, timeoutMs) => {
-			await execFileAsync('gh', [...args], {
-				env: commandEnvironment,
-				timeout: timeoutMs,
-				killSignal: 'SIGTERM',
-			});
-		},
+		runGh: runGhCommand,
 		sleep: milliseconds =>
 			new Promise(resolve => setTimeout(resolve, milliseconds)),
 		warning: message => console.warn(message),
@@ -155,6 +149,22 @@ function createDefaultDependencies(
 			}
 		},
 	};
+}
+
+/**
+ * Runs the GitHub CLI with a hard per-attempt process deadline.
+ */
+export async function runGhCommand(
+	args: readonly string[],
+	environment: NodeJS.ProcessEnv,
+	timeoutMs: number,
+	executable = 'gh'
+): Promise<void> {
+	await execFileAsync(executable, [...args], {
+		env: environment,
+		timeout: timeoutMs,
+		killSignal: 'SIGKILL',
+	});
 }
 
 async function main(): Promise<void> {
