@@ -35,6 +35,10 @@ import {
 	openSelectionInOmniWindow,
 	openSelectionInStandaloneWindow,
 } from './omniSelectionOpen.js';
+import {
+	IHucodeOmniSmokeTestDriverTarget,
+	registerOmniSmokeTestDriver,
+} from './omniSmokeTestDriver.js';
 
 async function openSelectedInOmniWindow(
 	windowId: number,
@@ -100,6 +104,16 @@ class OmniWindowShellContribution extends Disposable
 		if (!this.environmentService.isOmniWindow) {
 			return;
 		}
+
+		this._register(registerOmniSmokeTestDriver({
+			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
+			enableSmokeTestDriver:
+				!!this.environmentService.enableSmokeTestDriver,
+			isOmniWindow: this.environmentService.isOmniWindow,
+			windowId: this.windowId,
+			suspendWorkspace: (windowId, instanceId) =>
+				this.shellService.suspendWorkspace(windowId, instanceId),
+		}));
 
 		this._register(this.omniWindowUIService.registerDelegate({
 			focusProjectPane: () => {

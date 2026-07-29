@@ -857,8 +857,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  linux-omni-smoke:
-    name: Smoke Linux Omni startup (x64)
+  linux-omni-lifecycle-smoke:
+    name: Smoke Linux Omni lifecycle (x64)
     # Consumes the app the release build already produced rather than building
     # one. A packaged app is the only thing this smoke can run against, and
     # rebuilding it outside this workflow means duplicating the app-build
@@ -942,14 +942,15 @@ jobs:
       #
       # On failure the script prints the tail of the app's own output, so the
       # job log carries the diagnostic.
-      - name: Run packaged Omni startup smoke
+      - name: Run packaged Omni lifecycle smoke
         shell: bash
         env:
           ELECTRON_DISABLE_SANDBOX: 1
         run: |
           set -euo pipefail
           dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \
-            --app ../VSCode-linux-x64
+            --app ../VSCode-linux-x64 \
+            --timeout-ms 300000
 
   package:
     name: Package (${{ matrix.platform }}-${{ matrix.arch }})
@@ -1228,7 +1229,7 @@ jobs:
 
   linux-package-smoke:
     name: Smoke Linux package (${{ matrix.arch }} ${{ matrix.format }})
-    # See the note on linux-omni-smoke: without `always()` an upstream skip
+    # See the note on linux-omni-lifecycle-smoke: without `always()` an upstream skip
     # propagates here and this job never runs on a manual dispatch, which is
     # exactly the case it was written for.
     if: >-
