@@ -55,14 +55,31 @@ suite('Omni Workbench', () => {
 		});
 	});
 
-	test('panel cannot be shown by the shell and hiding a focused panel returns focus', () => {
+	test('panel cannot be shown by the shell', () => {
+		const host = createHost({
+			partVisibility: { panel: false },
+		});
+
+		setPanelHidden.call(host, false);
+
+		assert.deepStrictEqual({
+			visible: host.partVisibility.panel,
+			gridVisibility: host.gridVisibility,
+			focusedParts: host.focusedParts,
+		}, {
+			visible: false,
+			gridVisibility: [],
+			focusedParts: [],
+		});
+	});
+
+	test('hiding a focused panel returns focus to the hosted workbench', () => {
 		const host = createHost({
 			partVisibility: { panel: true },
 			activePanel: true,
 		});
 		host.focusedPart = Parts.PANEL_PART;
 
-		setPanelHidden.call(host, false);
 		setPanelHidden.call(host, true);
 		setPanelHidden.call(host, true);
 
@@ -206,6 +223,34 @@ suite('Omni Workbench', () => {
 		}, {
 			whileRegistered: true,
 			afterDispose: false,
+		});
+	});
+
+	test('disposing an older registration preserves its replacement', () => {
+		const parts = new Map<string, Part>();
+		const first = Object.create(Part.prototype) as Part;
+		const replacement = Object.create(Part.prototype) as Part;
+		first.getId = replacement.getId = () => Parts.SIDEBAR_PART;
+		const host = prototypeHost(Workbench.prototype, { parts });
+
+		const firstRegistration = Workbench.prototype.registerPart.call(
+			host,
+			first
+		);
+		const replacementRegistration = Workbench.prototype.registerPart.call(
+			host,
+			replacement
+		);
+		firstRegistration.dispose();
+		const afterOlderDisposal = parts.get(Parts.SIDEBAR_PART);
+		replacementRegistration.dispose();
+
+		assert.deepStrictEqual({
+			afterOlderDisposal: afterOlderDisposal === replacement,
+			afterReplacementDisposal: parts.has(Parts.SIDEBAR_PART),
+		}, {
+			afterOlderDisposal: true,
+			afterReplacementDisposal: false,
 		});
 	});
 });

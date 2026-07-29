@@ -16,6 +16,11 @@ import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
 import { PanelPart } from '../../../browser/parts/panelPart.js';
 import { ProjectsPart } from '../../../browser/parts/projectsPart.js';
 import { TitlebarPart } from '../../../browser/parts/titlebarPart.js';
+import {
+	HucodeHostedWorkbenchLifecycleState,
+	IHucodeHostedWorkbenchInstance,
+	IHucodeHostedWorkspaceState,
+} from '../../../common/omniWindow.js';
 
 suite('Omni Parts', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -31,90 +36,127 @@ suite('Omni Parts', () => {
 		assert.strictEqual(focusCount, 1);
 	});
 
-	test('OmniHostPart renders only a loaded active workbench as active', () => {
-		const emptyState = mainWindow.document.createElement('div');
-		const surface = mainWindow.document.createElement('div');
-		const transitions: string[] = [];
-		const host = prototypeHost(OmniHostPart.prototype, {
-			emptyState,
-			surface,
-			activeInstanceId: 'old',
-			state: {
-				activeInstanceId: 'active',
-				projectsSidebarVisible: true,
-				projectSwitcherCanGoBack: false,
-				projectSwitcherCanGoForward: false,
-				instances: [{
-					instanceId: 'active',
-					worktreePath: '/repo',
-					state: 'active',
-					visible: true,
-				}],
-			},
-			hasLoadedWorkbenchContext: {
-				set: (loaded: boolean) => transitions.push(`loaded:${loaded}`),
-			},
-			layoutService: {
-				isVisible: () => true,
-				setPartHidden: () => transitions.push('show-sidebar'),
-			},
-			setHostEmpty: (empty: boolean) =>
-				transitions.push(`empty:${empty}`),
-			clearScreenshot: () => transitions.push('clear-screenshot'),
-			handleActiveInstanceChanged: () =>
-				transitions.push('active-changed'),
-			updateScreenshotRefresh: () => transitions.push('refresh'),
-			stopScreenshotRefresh: () => transitions.push('stop-refresh'),
-			clearOverlayOcclusion: () => transitions.push('clear-occlusion'),
+	test('OmniHostPart exposes a loaded active workbench', () => {
+		const harness = createOmniHostRenderHarness({
+			activeInstanceId: 'active',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('active', 'active')],
 		});
 		const renderState = Reflect.get(
 			OmniHostPart.prototype,
 			'renderState'
 		) as (this: object) => void;
 
-		renderState.call(host);
+		renderState.call(harness.host);
 
 		assert.deepStrictEqual({
-			activeInstanceId: Reflect.get(host, 'activeInstanceId'),
-			emptyHidden: emptyState.classList.contains('hidden'),
-			surfaceHidden: surface.classList.contains('hidden'),
-			transitions,
+			activeInstanceId: Reflect.get(
+				harness.host,
+				'activeInstanceId'
+			),
+			emptyHidden: harness.emptyState.classList.contains('hidden'),
+			surfaceHidden: harness.surface.classList.contains('hidden'),
+			hostEmpty: harness.mainContainer.classList.contains(
+				'hucode-omni-host-empty'
+			),
+			loadedContexts: harness.loadedContexts,
+			sidebarRequests: harness.sidebarRequests,
 		}, {
 			activeInstanceId: 'active',
 			emptyHidden: true,
 			surfaceHidden: false,
-			transitions: [
-				'loaded:true',
-				'clear-screenshot',
-				'active-changed',
-				'empty:false',
-				'refresh',
-			],
+			hostEmpty: false,
+			loadedContexts: [true],
+			sidebarRequests: [],
 		});
 	});
 
-	test('OmniHostPart rejects a stale screenshot occlusion result', async () => {
+	test('OmniHostPart rejects crashed active state and re-shows an empty sidebar', () => {
+		const harness = createOmniHostRenderHarness({
+			activeInstanceId: 'active',
+			projectsSidebarVisible: false,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('active', 'crashed')],
+		}, false);
+		const renderState = Reflect.get(
+			OmniHostPart.prototype,
+			'renderState'
+		) as (this: object) => void;
+
+		renderState.call(harness.host);
+
+		assert.deepStrictEqual({
+			activeInstanceId: Reflect.get(
+				harness.host,
+				'activeInstanceId'
+			),
+			emptyHidden: harness.emptyState.classList.contains('hidden'),
+			surfaceHidden: harness.surface.classList.contains('hidden'),
+			hostEmpty: harness.mainContainer.classList.contains(
+				'hucode-omni-host-empty'
+			),
+			loadedContexts: harness.loadedContexts,
+			sidebarRequests: harness.sidebarRequests,
+		}, {
+			activeInstanceId: undefined,
+			emptyHidden: false,
+			surfaceHidden: true,
+			hostEmpty: true,
+			loadedContexts: [false],
+			sidebarRequests: [{
+				hidden: false,
+				part: Parts.SIDEBAR_PART,
+			}],
+		});
+	});
+
+	test('OmniHostPart keeps the empty surface when no instance is active', () => {
+		const harness = createOmniHostRenderHarness({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('loaded', 'loaded')],
+		});
+		const renderState = Reflect.get(
+			OmniHostPart.prototype,
+			'renderState'
+		) as (this: object) => void;
+
+		renderState.call(harness.host);
+
+		assert.deepStrictEqual({
+			activeInstanceId: Reflect.get(
+				harness.host,
+				'activeInstanceId'
+			),
+			emptyHidden: harness.emptyState.classList.contains('hidden'),
+			surfaceHidden: harness.surface.classList.contains('hidden'),
+			hostEmpty: harness.mainContainer.classList.contains(
+				'hucode-omni-host-empty'
+			),
+			loadedContexts: harness.loadedContexts,
+		}, {
+			activeInstanceId: undefined,
+			emptyHidden: false,
+			surfaceHidden: true,
+			hostEmpty: false,
+			loadedContexts: [true],
+		});
+	});
+
+	test('OmniHostPart rejects a token-stale screenshot result', async () => {
 		const screenshotReady = new DeferredPromise<boolean>();
 		const transitions: string[] = [];
-		const host = prototypeHost(OmniHostPart.prototype, {
-			overlayOcclusionToken: 0,
-			activeInstanceId: 'active',
-			overlayOccluded: false,
-			mainOverlayOccluded: false,
-			hasOverlappingShellOverlay: () => true,
-			refreshScreenshot: () => screenshotReady.p,
-			updateScreenshotVisibility: () =>
-				transitions.push('show-screenshot'),
-			setMainOverlayOcclusion: () =>
-				transitions.push('occlude-workspace'),
-		});
+		const host = createOcclusionHost(screenshotReady, transitions);
 		const updateOcclusion = Reflect.get(
 			OmniHostPart.prototype,
 			'updateOverlayOcclusion'
 		) as (this: object) => Promise<void>;
 
 		const update = updateOcclusion.call(host);
-		Reflect.set(host, 'activeInstanceId', 'replacement');
 		Reflect.set(host, 'overlayOcclusionToken', 2);
 		screenshotReady.complete(true);
 		await update;
@@ -125,6 +167,113 @@ suite('Omni Parts', () => {
 		}, {
 			overlayOccluded: false,
 			transitions: [],
+		});
+	});
+
+	test('OmniHostPart rejects a result for a replaced active instance', async () => {
+		const screenshotReady = new DeferredPromise<boolean>();
+		const transitions: string[] = [];
+		const host = createOcclusionHost(screenshotReady, transitions);
+		const updateOcclusion = Reflect.get(
+			OmniHostPart.prototype,
+			'updateOverlayOcclusion'
+		) as (this: object) => Promise<void>;
+
+		const update = updateOcclusion.call(host);
+		Reflect.set(host, 'activeInstanceId', 'replacement');
+		screenshotReady.complete(true);
+		await update;
+
+		assert.deepStrictEqual({
+			overlayOccluded: Reflect.get(host, 'overlayOccluded'),
+			transitions,
+		}, {
+			overlayOccluded: false,
+			transitions: [],
+		});
+	});
+
+	test('OmniHostPart rechecks occlusion before the animation-frame handoff', async () => {
+		const screenshotReady = new DeferredPromise<boolean>();
+		const transitions: string[] = [];
+		const host = createOcclusionHost(screenshotReady, transitions);
+		const updateOcclusion = Reflect.get(
+			OmniHostPart.prototype,
+			'updateOverlayOcclusion'
+		) as (this: object) => Promise<void>;
+
+		const update = updateOcclusion.call(host);
+		screenshotReady.complete(true);
+		await update;
+		Reflect.set(host, 'overlayOcclusionToken', 2);
+		await new Promise<void>(resolve =>
+			mainWindow.requestAnimationFrame(() => resolve())
+		);
+
+		assert.deepStrictEqual({
+			overlayOccluded: Reflect.get(host, 'overlayOccluded'),
+			transitions,
+		}, {
+			overlayOccluded: true,
+			transitions: ['show-screenshot'],
+		});
+	});
+
+	test('OmniHostPart shares an in-flight screenshot capture', async () => {
+		const capture = new DeferredPromise<boolean>();
+		let captureCount = 0;
+		const host = prototypeHost(OmniHostPart.prototype, {
+			screenshotCaptureInFlight: undefined,
+			hasScreenshot: false,
+			hasVisibleHostedWorkspace: () => true,
+			doRefreshScreenshot: () => {
+				captureCount++;
+				return capture.p;
+			},
+		});
+		const refreshScreenshot = Reflect.get(
+			OmniHostPart.prototype,
+			'refreshScreenshot'
+		) as (this: object) => Promise<boolean>;
+
+		const first = refreshScreenshot.call(host);
+		const second = refreshScreenshot.call(host);
+		capture.complete(true);
+
+		assert.deepStrictEqual({
+			results: await Promise.all([first, second]),
+			captureCount,
+			inFlight: Reflect.get(host, 'screenshotCaptureInFlight'),
+		}, {
+			results: [true, true],
+			captureCount: 1,
+			inFlight: undefined,
+		});
+	});
+
+	test('OmniHostPart preserves the previous screenshot after capture failure', async () => {
+		let setCount = 0;
+		const host = prototypeHost(OmniHostPart.prototype, {
+			windowId: 7,
+			hasScreenshot: true,
+			shellService: {
+				captureWorkspaceScreenshot: async () => {
+					throw new Error('capture failed');
+				},
+			},
+			setScreenshot: () => setCount++,
+		});
+		const refresh = Reflect.get(
+			OmniHostPart.prototype,
+			'doRefreshScreenshot'
+		) as (this: object) => Promise<boolean>;
+
+		assert.deepStrictEqual({
+			result: await refresh.call(host),
+			setCount,
+		}, {
+			result: true,
+			setCount: 0,
 		});
 	});
 
@@ -194,6 +343,59 @@ suite('Omni Parts', () => {
 				height: Math.max(0, mainWindow.innerHeight),
 			}],
 		});
+	});
+
+	test('OmniHostPart clamps hosted layout width beyond the window edge', async () => {
+		const layouts: Array<{
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}> = [];
+		const surface = mainWindow.document.createElement('div');
+		surface.getBoundingClientRect = () => ({
+			x: mainWindow.innerWidth + 50,
+			y: 0,
+			left: mainWindow.innerWidth + 50,
+			top: 0,
+			right: mainWindow.innerWidth + 100,
+			bottom: 100,
+			width: 50,
+			height: 100,
+			toJSON: () => undefined,
+		});
+		const host = prototypeHost(OmniHostPart.prototype, {
+			surface,
+			windowId: 7,
+			layoutService: { isVisible: () => true },
+			shellService: {
+				layoutWorkspace: async (
+					_windowId: number,
+					bounds: {
+						x: number;
+						y: number;
+						width: number;
+						height: number;
+					}
+				) => layouts.push(bounds),
+			},
+			layoutScreenshot: () => undefined,
+			updateOverlayOcclusion: () => Promise.resolve(),
+			updateScreenshotRefresh: () => undefined,
+		});
+		const layoutHostedWorkspace = Reflect.get(
+			OmniHostPart.prototype,
+			'layoutHostedWorkspace'
+		) as (this: object) => Promise<void>;
+
+		await layoutHostedWorkspace.call(host);
+
+		assert.deepStrictEqual(layouts, [{
+			x: mainWindow.innerWidth + 50,
+			y: 0,
+			width: 0,
+			height: mainWindow.innerHeight,
+		}]);
 	});
 
 	test('shell parts retain their bounded sizing and serialization contracts', () => {
@@ -293,4 +495,78 @@ function prototypeHost<T extends object>(
 	fields: T
 ): T {
 	return Object.assign(Object.create(prototype) as object, fields) as T;
+}
+
+function hostedInstance(
+	instanceId: string,
+	state: HucodeHostedWorkbenchLifecycleState
+): IHucodeHostedWorkbenchInstance {
+	return {
+		instanceId,
+		worktreePath: `/${instanceId}`,
+		state,
+		visible: true,
+		focused: state === 'active',
+	};
+}
+
+function createOmniHostRenderHarness(
+	state: IHucodeHostedWorkspaceState,
+	sidebarVisible = true
+) {
+	const emptyState = mainWindow.document.createElement('div');
+	const surface = mainWindow.document.createElement('div');
+	const mainContainer = mainWindow.document.createElement('div');
+	const loadedContexts: boolean[] = [];
+	const sidebarRequests: Array<{ hidden: boolean; part: Parts }> = [];
+	const host = prototypeHost(OmniHostPart.prototype, {
+		emptyState,
+		surface,
+		mainOverlayOccluded: false,
+		overlayOccluded: false,
+		overlayOcclusionToken: 0,
+		hasScreenshot: false,
+		activeInstanceId: 'old',
+		state,
+		hasLoadedWorkbenchContext: {
+			set: (loaded: boolean) => loadedContexts.push(loaded),
+		},
+		layoutService: {
+			isVisible: (part: Parts) =>
+				part === Parts.SIDEBAR_PART ? sidebarVisible : true,
+			setPartHidden: (hidden: boolean, part: Parts) =>
+				sidebarRequests.push({ hidden, part }),
+			getContainer: () => mainContainer,
+		},
+		shellService: {
+			supportsWorkspaceScreenshotOverlay: false,
+			setWorkspaceOverlayOcclusion: async () => undefined,
+		},
+	});
+	return {
+		host,
+		emptyState,
+		surface,
+		mainContainer,
+		loadedContexts,
+		sidebarRequests,
+	};
+}
+
+function createOcclusionHost(
+	screenshotReady: DeferredPromise<boolean>,
+	transitions: string[]
+) {
+	return prototypeHost(OmniHostPart.prototype, {
+		overlayOcclusionToken: 0,
+		activeInstanceId: 'active',
+		overlayOccluded: false,
+		mainOverlayOccluded: false,
+		hasOverlappingShellOverlay: () => true,
+		refreshScreenshot: () => screenshotReady.p,
+		updateScreenshotVisibility: () =>
+			transitions.push('show-screenshot'),
+		setMainOverlayOcclusion: () =>
+			transitions.push('occlude-workspace'),
+	});
 }
