@@ -38,7 +38,7 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
-	isHucodeOmniShellAction,
+	isHucodeOmniExplicitShellAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
@@ -94,6 +94,13 @@ import { IStorageService, StorageScope, StorageTarget } from
 	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from './projectSwitcher/projectSwitcherCommon.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -325,6 +332,13 @@ const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
 	'editor.action.clipboardCopyAction',
 	'editor.action.clipboardCutAction',
 ]);
+const HUCODE_HOSTED_PROJECT_SHELL_ACTIONS = new Set([
+	ADD_PROJECT_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+]);
 
 type IHucodeHostedWebShellConnectionFacade = Pick<
 	IHucodeShellService,
@@ -333,6 +347,7 @@ type IHucodeHostedWebShellConnectionFacade = Pick<
 	| 'findHostedWorkspaceByPath'
 	| 'focusHostedWorkspaceByPath'
 	| 'focusNormalWindowByPath'
+	| 'reconcileRetainedWorkbenchesWithCompleteProjectCatalog'
 	| 'openWorkspace'
 	| 'openFilesInWorkspace'
 	| 'openFilesInActiveWorkspace'
@@ -1500,6 +1515,13 @@ export class WebHucodeShellController extends Disposable
 				this.focusHostedWorkspaceByPath(worktreePath, projectId),
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
+			reconcileRetainedWorkbenchesWithCompleteProjectCatalog: (
+				_windowId,
+				projects
+			) => this.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+				this.windowId,
+				projects
+			),
 			openWorkspace: (_windowId, worktreePath, projectId) =>
 				this.openWorkspace(this.windowId, worktreePath, projectId),
 			openFilesInWorkspace: (
@@ -1545,7 +1567,10 @@ export class WebHucodeShellController extends Disposable
 			},
 			focusShell: _windowId => this.focusShell(this.windowId),
 			runActionInShell: async (_windowId, request) => {
-				if (!isHucodeOmniShellAction(request.id)) {
+				if (
+					!isHucodeOmniExplicitShellAction(request.id) &&
+					!HUCODE_HOSTED_PROJECT_SHELL_ACTIONS.has(request.id)
+				) {
 					this.logService.warn(
 						'[hucode] Rejected hosted workbench request for ' +
 						`non-shell command ${request.id}.`

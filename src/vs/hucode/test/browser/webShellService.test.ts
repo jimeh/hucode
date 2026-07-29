@@ -39,8 +39,10 @@ import {
 	HucodeOmniWebChildMessageType,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
-import { FOCUS_PROJECT_PANE_COMMAND_ID } from
-	'../../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+} from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { INativeOpenFileRequest } from
 	'../../../platform/window/common/window.js';
 import {
@@ -61,6 +63,13 @@ import {
 	IHostedWorkspaceLifecycleContractAdapter,
 	registerHostedWorkspaceLifecycleContract,
 } from '../common/hostedWorkspaceLifecycleContract.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from '../../browser/projectSwitcher/projectSwitcherCommon.js';
 
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -1465,6 +1474,30 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
+	test('reconciles the complete project catalog through the hosted shell channel',
+		async () => {
+			const { service, surface, browser } = createService();
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+
+			const reconciled = await child.shell
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					999,
+					[{
+						projectId: 'project',
+						folderUris: [URI.file('/tmp/hucode-worktree').toJSON()],
+					}]
+				);
+
+			assert.strictEqual(reconciled.instances[0].projectId, 'project');
+		});
+
 	test('allows registered shell actions and rejects lookalike commands',
 		async () => {
 			const commandCalls: string[] = [];
@@ -1495,11 +1528,27 @@ suite('WebHucodeShellService', () => {
 				from: 'menu',
 			}), false);
 			assert.strictEqual(await child.shell.runActionInShell(999, {
-				id: FOCUS_PROJECT_PANE_COMMAND_ID,
+				id: 'hucode.projectSwitcher.dismissWorkbench',
 				from: 'menu',
-			}), true);
+				args: [{ $treeItemHandle: 'workbench:unrelated' }],
+			}), false);
+			const allowedCommands = [
+				FOCUS_PROJECT_PANE_COMMAND_ID,
+				TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+				ADD_PROJECT_COMMAND_ID,
+				REFRESH_PROJECTS_COMMAND_ID,
+				COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+				GO_BACK_WORKTREE_COMMAND_ID,
+				GO_FORWARD_WORKTREE_COMMAND_ID,
+			];
+			for (const id of allowedCommands) {
+				assert.strictEqual(await child.shell.runActionInShell(999, {
+					id,
+					from: 'menu',
+				}), true);
+			}
 
-			assert.deepStrictEqual(commandCalls, [FOCUS_PROJECT_PANE_COMMAND_ID]);
+			assert.deepStrictEqual(commandCalls, allowedCommands);
 		});
 
 	test('closes the requested instance through the shell channel', async () => {

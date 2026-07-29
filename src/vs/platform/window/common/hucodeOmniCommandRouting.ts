@@ -125,10 +125,18 @@ export class HucodeOmniCommandForwardingContext
  * Returns whether a command is owned by the Omni Projects shell.
  */
 export function isHucodeOmniShellAction(commandId: string): boolean {
-	return HUCODE_OMNI_SHELL_ACTION_IDS.has(commandId) ||
+	return isHucodeOmniExplicitShellAction(commandId) ||
 		HUCODE_OMNI_SHELL_ACTION_PREFIXES.some(prefix =>
 			commandId.startsWith(prefix)
 		);
+}
+
+/**
+ * Returns whether a command is one of the shell's closed, argument-independent
+ * controls rather than a member of a broader routed command namespace.
+ */
+export function isHucodeOmniExplicitShellAction(commandId: string): boolean {
+	return HUCODE_OMNI_SHELL_ACTION_IDS.has(commandId);
 }
 
 /**

@@ -181,8 +181,9 @@ as the required Hucode instruction set for work in this fork.
   do needs one of those two, not the flags.
 - A trusted hosted-workbench `MessagePort` authenticates the connection, not
   caller-supplied method arguments. Expose an explicit least-authority channel
-  facade, bind window and instance identity to the port server-side, and check
-  shell commands with `isHucodeOmniShellAction`; keep legacy wire parameters
+  facade, bind window and instance identity to the port server-side, and use a
+  closed hosted-action allowlist rather than the broad
+  `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
   only for version-skew compatibility.
 - Web shell restoration can block on remote folder checks. Page shutdown must
   cancel restoration without awaiting initialization, and restoration must
