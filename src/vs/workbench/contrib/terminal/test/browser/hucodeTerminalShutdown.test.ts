@@ -81,9 +81,7 @@ suite('Terminal hosted shutdown', () => {
 		await timeout(0);
 		backend = new TestPersistentTerminalBackend();
 		Reflect.set(terminalService, '_primaryBackend', backend);
-		Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
-			instance: createPersistentTerminal(),
-		}]);
+		setBackgroundedTerminal(terminalService, 13);
 		const terminalGroupService = Reflect.get(
 			terminalService,
 			'_terminalGroupService'
@@ -163,26 +161,58 @@ suite('Terminal hosted shutdown', () => {
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 		assert.deepStrictEqual(backend.layoutUpdates, []);
 
-		externalVeto.complete(true);
-		assert.strictEqual(await preparation, true);
+		setBackgroundedTerminal(terminalService, 21);
 		await runWithFakedTimers({}, async () => saveState(terminalService));
+		assert.deepStrictEqual(backend.layoutUpdates, []);
+
+		await runWithFakedTimers({}, async () => {
+			externalVeto.complete(true);
+			assert.strictEqual(await preparation, true);
+		});
 
 		assert.deepStrictEqual(backend.layoutUpdates, [{
 			tabs: [],
-			background: [13],
+			background: [21],
 		}]);
 	});
 
 	test('resumes persistence when shutdown preparation errors', async () => {
+		assert.strictEqual(
+			await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
+			false
+		);
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+		assert.deepStrictEqual(backend.layoutUpdates, []);
+
+		setBackgroundedTerminal(terminalService, 21);
+		await runWithFakedTimers({}, async () => saveState(terminalService));
+		assert.deepStrictEqual(backend.layoutUpdates, []);
+
+		await runWithFakedTimers({}, async () =>
+			fireBeforeShutdownError(lifecycleService)
+		);
+
+		assert.deepStrictEqual(backend.layoutUpdates, [{
+			tabs: [],
+			background: [21],
+		}]);
+
+		await runWithFakedTimers({}, async () =>
+			fireShutdownVeto(lifecycleService)
+		);
+		assert.deepStrictEqual(backend.layoutUpdates, [{
+			tabs: [],
+			background: [21],
+		}]);
+	});
+
+	test('ignores terminal preparation that completes after an error', async () => {
 		const preparation = invokeBeforeShutdown(
 			terminalService,
 			ShutdownReason.QUIT
 		);
 		fireBeforeShutdownError(lifecycleService);
-		assert.strictEqual(
-			await preparation,
-			false
-		);
+		assert.strictEqual(await preparation, false);
 
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 
@@ -198,10 +228,13 @@ suite('Terminal hosted shutdown', () => {
 			await runWithFakedTimers({}, async () => saveState(terminalService));
 			assert.deepStrictEqual(backend.layoutUpdates, []);
 
-			lifecycleService.fireShutdown();
-			assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+			setBackgroundedTerminal(terminalService, 21);
 			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
 
+			await runWithFakedTimers({}, async () =>
+				lifecycleService.fireShutdown()
+			);
 			assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
 		});
 
@@ -246,6 +279,18 @@ function createPersistentTerminal(): ITerminalInstance {
 		detachProcessAndDispose: async () => { },
 		shellLaunchConfig: { forcePersist: true },
 	} satisfies Partial<ITerminalInstance> as unknown as ITerminalInstance;
+}
+
+function setBackgroundedTerminal(
+	terminalService: TerminalService,
+	persistentProcessId: number
+): void {
+	Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
+		instance: {
+			...createPersistentTerminal(),
+			persistentProcessId,
+		},
+	}]);
 }
 
 function saveState(terminalService: TerminalService): void {

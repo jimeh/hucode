@@ -75,6 +75,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	private _isShuttingDown: boolean = false;
 	private _isShutdownPrepared: boolean = false;
+	private _isSaveStatePendingAfterShutdownPreparation = false;
 	private _shutdownPreparationGeneration = 0;
 	private readonly _platformIsWeb = isWeb;
 	private _backgroundedTerminalInstances: IBackgroundTerminal[] = [];
@@ -705,13 +706,19 @@ export class TerminalService extends Disposable implements ITerminalService {
 		return this._showTerminalCloseConfirmation();
 	}
 
-	private _cancelShutdownPreparation(): void {
+	private _cancelShutdownPreparation(replayPendingSave = true): void {
 		this._shutdownPreparationGeneration++;
 		this._isShutdownPrepared = false;
+		if (this._isSaveStatePendingAfterShutdownPreparation) {
+			this._isSaveStatePendingAfterShutdownPreparation = false;
+			if (replayPendingSave) {
+				this._saveState();
+			}
+		}
 	}
 
 	private _onWillShutdown(e: WillShutdownEvent): void {
-		this._cancelShutdownPreparation();
+		this._cancelShutdownPreparation(false);
 		this._isShuttingDown = true;
 
 		// Don't touch processes if the shutdown was a result of reload as they will be reattached
@@ -734,7 +741,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 	@debounce(500)
 	private _saveState(): void {
 		// Avoid saving state when shutting down as that would override process state to be revived
-		if (this._isShutdownPrepared || this._isShuttingDown) {
+		if (this._isShutdownPrepared) {
+			this._isSaveStatePendingAfterShutdownPreparation = true;
+			return;
+		}
+		if (this._isShuttingDown) {
 			return;
 		}
 		if (!this._terminalConfigurationService.config.enablePersistentSessions) {
