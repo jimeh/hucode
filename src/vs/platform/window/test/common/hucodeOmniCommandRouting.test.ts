@@ -121,7 +121,7 @@ suite('HucodeOmniCommandRouting', () => {
 		assert.strictEqual(scope.isForwardingDisabled, false);
 	});
 
-	test('does not retain suppression while returned promises are pending', async () => {
+	test('retains suppression until returned promises settle', async () => {
 		const context = new HucodeOmniCommandForwardingContext();
 		const scope = context.createScope();
 		let resolvePending!: () => void;
@@ -131,9 +131,69 @@ suite('HucodeOmniCommandRouting', () => {
 
 		const result = scope.runWithForwardingDisabled(() => pending);
 
-		assert.strictEqual(scope.isForwardingDisabled, false);
-		assert.strictEqual(context.isForwardingDisabled, false);
+		assert.strictEqual(scope.isForwardingDisabled, true);
+		assert.strictEqual(context.isForwardingDisabled, true);
 		resolvePending();
 		await result;
+		assert.strictEqual(scope.isForwardingDisabled, false);
+		assert.strictEqual(context.isForwardingDisabled, false);
 	});
+
+	test('cleans up rejected and out-of-order async suppression scopes',
+		async () => {
+			const context = new HucodeOmniCommandForwardingContext();
+			const scope = context.createScope();
+			let resolveFirst!: () => void;
+			const firstPending = new Promise<void>(resolve => {
+				resolveFirst = resolve;
+			});
+			let rejectSecond!: (error: Error) => void;
+			const secondPending = new Promise<void>((_resolve, reject) => {
+				rejectSecond = reject;
+			});
+
+			const first = scope.runWithForwardingDisabled(() => firstPending);
+			const second = scope.runWithForwardingDisabled(() => secondPending);
+			assert.strictEqual(scope.isForwardingDisabled, true);
+
+			resolveFirst();
+			await first;
+			assert.strictEqual(scope.isForwardingDisabled, true);
+
+			rejectSecond(new Error('expected rejection'));
+			await assert.rejects(second, /expected rejection/);
+			assert.strictEqual(scope.isForwardingDisabled, false);
+			assert.strictEqual(context.isForwardingDisabled, false);
+		}
+	);
+
+	test('action-specific suppression does not disable unrelated commands',
+		async () => {
+			const context = new HucodeOmniCommandForwardingContext();
+			const scope = context.createScope();
+			let resolvePending!: () => void;
+			const pending = new Promise<void>(resolve => {
+				resolvePending = resolve;
+			});
+
+			const result = scope.runWithForwardingDisabledFor(
+				'editor.action.clipboardCopyAction',
+				() => pending
+			);
+
+			assert.strictEqual(
+				context.isForwardingDisabledFor(
+					'editor.action.clipboardCopyAction'
+				),
+				true
+			);
+			assert.strictEqual(
+				context.isForwardingDisabledFor('workbench.action.files.save'),
+				false
+			);
+			resolvePending();
+			await result;
+			assert.strictEqual(context.isForwardingDisabled, false);
+		}
+	);
 });

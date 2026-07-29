@@ -32,6 +32,8 @@ suite('OmniCommandService', () => {
 	test('keeps surface recovery local without leaking to later commands',
 		async () => {
 			const commandId = 'hucode.test.forwarding-context';
+			const unrelatedCommandId =
+				'hucode.test.unrelated-forwarding-context';
 			const shellCalls: {
 				windowId: number;
 				request: INativeRunActionInWindowRequest;
@@ -80,6 +82,7 @@ suite('OmniCommandService', () => {
 				resolveLocalCommandStarted = resolve;
 			});
 			let localCommandCalls = 0;
+			let unrelatedLocalCommandCalls = 0;
 			disposables.add(CommandsRegistry.registerCommand(
 				commandId,
 				() => {
@@ -88,34 +91,57 @@ suite('OmniCommandService', () => {
 					return localCommandCompletion;
 				}
 			));
+			disposables.add(CommandsRegistry.registerCommand(
+				unrelatedCommandId,
+				() => {
+					unrelatedLocalCommandCalls++;
+				}
+			));
 
 			await service.executeCommand(commandId);
 			assert.strictEqual(shellCalls.length, 1);
 			assert.strictEqual(localCommandCalls, 0);
 
 			const localExecution =
-				commandForwardingScope.runWithForwardingDisabled(
+				commandForwardingScope.runWithForwardingDisabledFor(
+					commandId,
 					() => service.executeCommand(commandId)
 				);
 			assert.strictEqual(shellCalls.length, 1);
 			assert.strictEqual(
 				commandForwardingContext.isForwardingDisabled,
-				false
+				true
 			);
 			await localCommandStarted;
 			assert.strictEqual(localCommandCalls, 1);
 
-			await service.executeCommand(commandId);
+			await service.executeCommand(unrelatedCommandId);
 			assert.strictEqual(shellCalls.length, 2);
-			assert.strictEqual(localCommandCalls, 1);
+			assert.strictEqual(unrelatedLocalCommandCalls, 0);
 
 			resolveLocalCommand();
 			await localExecution;
+			assert.strictEqual(
+				commandForwardingContext.isForwardingDisabled,
+				false
+			);
+
+			await service.executeCommand(commandId);
+			assert.strictEqual(shellCalls.length, 3);
+			assert.strictEqual(localCommandCalls, 1);
 			assert.deepStrictEqual(shellCalls, [
 				{
 					windowId: 42,
 					request: {
 						id: commandId,
+						from: 'keybinding',
+						args: undefined,
+					},
+				},
+				{
+					windowId: 42,
+					request: {
+						id: unrelatedCommandId,
 						from: 'keybinding',
 						args: undefined,
 					},

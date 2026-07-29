@@ -534,6 +534,7 @@ export class ProjectManagerMainService extends Disposable
 		// and in the stale snapshot while refreshProject's retry recovers the
 		// authoritative Git metadata.
 		this.projectWorktrees.set(project.id, [...worktrees, fallback]);
+		this.projectWorktreeStates.set(project.id, 'stale');
 		this.saveState();
 		this.emitChange();
 		return fallback;

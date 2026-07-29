@@ -45,7 +45,7 @@ export class OmniCommandService extends CommandService {
 			!this.nativeEnvironmentService.isOmniWindow ||
 			!isHucodeOmniProjectsFocus() ||
 			isHucodeOmniLocalInputFocus() ||
-			this.commandForwardingContext.isForwardingDisabled ||
+			this.commandForwardingContext.isForwardingDisabledFor(id) ||
 			isHucodeOmniShellAction(id)
 		) {
 			return super.executeCommand(id, ...args);

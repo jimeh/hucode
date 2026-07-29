@@ -1710,11 +1710,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					) !== instance
 				)
 			);
-			if (unloadResult === 'superseded-after-will-unload') {
+			if (unloadResult === 'reload-required') {
 				this.reloadInstanceAfterInterruptedUnload(instance);
 				return false;
 			}
 			if (unloadResult === 'superseded') {
+				return false;
+			}
+			if (unloadResult === 'before-unload-failed') {
+				this.logService.trace(
+					'[HucodeShellMainService] Hosted workspace unload ' +
+					`preparation failed for ${instance.worktreePath}.`
+				);
 				return false;
 			}
 			if (unloadResult === 'vetoed') {
@@ -1780,8 +1787,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		this.logService.trace(
-			'[HucodeShellMainService] Reloading hosted workspace reactivated ' +
-			`during will-unload for ${instance.worktreePath}.`
+			'[HucodeShellMainService] Reloading hosted workspace after an ' +
+			`interrupted unload for ${instance.worktreePath}.`
 		);
 		instance.interruptedUnloadReloadGeneration =
 			instance.lifecycleGeneration;
@@ -1888,57 +1895,177 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		ignoreBeforeUnloadVeto: boolean = false,
 		isSuperseded: () => boolean = () => false
 	): Promise<
-		'ready' | 'vetoed' | 'superseded' |
-		'superseded-after-will-unload'
+		'ready' | 'vetoed' | 'before-unload-failed' |
+		'superseded' | 'reload-required'
 	> {
 		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return isSuperseded() ? 'superseded' : 'ready';
 		}
 
-		const beforeUnloadVeto = await this.onBeforeUnloadInRenderer(
+		const preparation = await this.onBeforeUnloadInRenderer(
 			webContents,
 			instance,
 			reason
 		);
-		if (beforeUnloadVeto) {
+		if (preparation.outcome === 'vetoed') {
 			if (ignoreBeforeUnloadVeto) {
 				await this.onWillUnloadInRenderer(
 					webContents,
 					instance,
-					reason
+					reason,
+					preparation.preparationId
 				);
 			}
 			return 'vetoed';
 		}
+		if (preparation.outcome === 'failed') {
+			if (ignoreBeforeUnloadVeto) {
+				await this.onWillUnloadInRenderer(
+					webContents,
+					instance,
+					reason,
+					preparation.preparationId
+				);
+				return 'ready';
+			}
+
+			const rollbackDisposition =
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			if (!rollbackDisposition) {
+				return 'reload-required';
+			}
+			return isSuperseded()
+				? 'superseded'
+				: 'before-unload-failed';
+		}
 		if (isSuperseded()) {
+			const rollbackDisposition =
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			if (!rollbackDisposition) {
+				return 'reload-required';
+			}
 			return 'superseded';
 		}
 
-		await this.onWillUnloadInRenderer(webContents, instance, reason);
+		await this.onWillUnloadInRenderer(
+			webContents,
+			instance,
+			reason,
+			preparation.preparationId
+		);
 		if (isSuperseded()) {
-			return 'superseded-after-will-unload';
+			return 'reload-required';
 		}
 		return 'ready';
+	}
+
+	private notifyShutdownPreparationAbandonedInRenderer(
+		webContents: Electron.WebContents,
+		instance: IHostedWorkbenchInstance,
+		preparationId: string
+	): Promise<'applied' | 'stale' | undefined> {
+		if (webContents.isDestroyed()) {
+			return Promise.resolve(undefined);
+		}
+
+		return new Promise(resolve => {
+			const oneTimeEventToken = this.createOneTimeEventToken(instance);
+			const replyChannel = `vscode:reply${oneTimeEventToken}`;
+			let settled = false;
+
+			const complete = (
+				disposition: 'applied' | 'stale' | undefined
+			) => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				clearTimeout(timeoutHandle);
+				this.ipcMain.removeListener(replyChannel, handleReply);
+				webContents.removeListener('destroyed', handleDestroyed);
+				resolve(disposition);
+			};
+			const handleReply = (
+				_event: Electron.IpcMainEvent,
+				...args: unknown[]
+			) => {
+				const reply = args[0] as {
+					preparationId?: string;
+					disposition?: string;
+				} | undefined;
+				if (
+					reply?.preparationId !== preparationId ||
+					(reply.disposition !== 'applied' &&
+						reply.disposition !== 'stale')
+				) {
+					complete(undefined);
+					return;
+				}
+
+				complete(reply.disposition);
+			};
+			const handleDestroyed = () => complete(undefined);
+
+			this.ipcMain.once(replyChannel, handleReply);
+			webContents.once('destroyed', handleDestroyed);
+			const timeoutHandle = setTimeout(() => {
+				this.logService.warn(
+					'[HucodeShellMainService] Timed out waiting for hosted ' +
+					`workspace shutdown preparation rollback reply for ` +
+					`${instance.worktreePath}.`
+				);
+				complete(undefined);
+			}, this.beforeUnloadTimeoutMs);
+
+			try {
+				webContents.send('vscode:onShutdownPreparationAbandoned', {
+					preparationId,
+					replyChannel,
+				});
+			} catch (error) {
+				this.logService.warn(
+					'[HucodeShellMainService] Failed to send hosted workspace ' +
+					`shutdown preparation rollback for ` +
+					`${instance.worktreePath}: ${error}`
+				);
+				complete(undefined);
+			}
+		});
 	}
 
 	private onBeforeUnloadInRenderer(
 		webContents: Electron.WebContents,
 		instance: IHostedWorkbenchInstance,
 		reason: UnloadReason
-	): Promise<boolean> {
-		return new Promise<boolean>(resolve => {
+	): Promise<{
+		readonly preparationId: string;
+		readonly outcome: 'ready' | 'vetoed' | 'failed';
+	}> {
+		return new Promise(resolve => {
 			const oneTimeEventToken = this.createOneTimeEventToken(instance);
 			const okChannel = `vscode:ok${oneTimeEventToken}`;
 			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
+			const preparationId = oneTimeEventToken;
 
 			let settled = false;
 
-			const handleOk = () => complete(false);
-			const handleCancel = () => complete(true);
-			const handleDestroyed = () => complete(false);
+			const handleOk = () => complete('ready');
+			const handleCancel = () => complete('vetoed');
+			const handleDestroyed = () => complete('failed');
 
-			const complete = (veto: boolean) => {
+			const complete = (
+				outcome: 'ready' | 'vetoed' | 'failed'
+			) => {
 				if (settled) {
 					return;
 				}
@@ -1952,7 +2079,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.ipcMain.removeListener(cancelChannel, handleCancel);
 				webContents.removeListener('destroyed', handleDestroyed);
 
-				resolve(veto);
+				resolve({ preparationId, outcome });
 			};
 
 			this.ipcMain.once(okChannel, handleOk);
@@ -1963,13 +2090,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace before-unload reply for ${instance.worktreePath}.`
 				);
-				complete(true);
+				complete('failed');
 			}, this.beforeUnloadTimeoutMs);
 
 			try {
 				webContents.send('vscode:onBeforeUnload', {
 					okChannel,
 					cancelChannel,
+					preparationId,
 					reason
 				});
 			} catch (error) {
@@ -1977,7 +2105,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Failed to send hosted workspace ' +
 					`before-unload for ${instance.worktreePath}: ${error}`
 				);
-				complete(true);
+				complete('failed');
 			}
 		});
 	}
@@ -1985,7 +2113,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private onWillUnloadInRenderer(
 		webContents: Electron.WebContents,
 		instance: IHostedWorkbenchInstance,
-		reason: UnloadReason
+		reason: UnloadReason,
+		preparationId: string
 	): Promise<void> {
 		return new Promise<void>(resolve => {
 			const oneTimeEventToken = this.createOneTimeEventToken(instance);
@@ -2025,6 +2154,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			try {
 				webContents.send('vscode:onWillUnload', {
 					replyChannel,
+					preparationId,
 					reason
 				});
 			} catch (error) {

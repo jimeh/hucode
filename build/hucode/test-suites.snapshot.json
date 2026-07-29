@@ -45,6 +45,7 @@
 		"src/vs/workbench/services/host/test/electron-browser/hucodeHostedOmniHost.test.ts",
 		"src/vs/workbench/services/host/test/electron-browser/hucodeOmniOpen.test.ts",
 		"src/vs/workbench/services/lifecycle/test/browser/hucodeBrowserLifecycleService.test.ts",
+		"src/vs/workbench/services/lifecycle/test/electron-browser/hucodeLifecyclePreparationRollback.test.ts",
 		"src/vs/workbench/test/browser/hucodeOpenFilesRequest.test.ts",
 		"src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts",
 		"src/vs/workbench/test/electron-browser/hucodeOmniWindowAction.test.ts"

@@ -4561,6 +4561,63 @@ suite('ProjectManagerMainService', () => {
 		}
 	);
 
+	test('publishes a stale created worktree after initial discovery is unavailable',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const retry = new TestRetryDelay();
+			stateService.setItem(PROJECT_MANAGER_STORAGE_KEY, {
+				version: PROJECT_MANAGER_STORAGE_VERSION,
+				projects: [{
+					id: 'project-1',
+					label: 'Repo',
+					rootPath: '/repo',
+					pinned: false,
+					order: 1,
+				}],
+			} satisfies StoredProjectManagerState);
+			gitWorktreeService.listWorktreesHandler = async () => {
+				throw new Error('Git discovery unavailable');
+			};
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{ retryDelay: retry.delay }
+			);
+			const events: (readonly ProjectRecord[])[] = [];
+			disposables.add(service.onDidChangeProjects(projects =>
+				events.push(projects)
+			));
+
+			const initial = (await service.getProjects())[0];
+			assert.strictEqual(initial.worktreeState, 'unavailable');
+			assert.deepStrictEqual(initial.worktrees, []);
+
+			const created = await service.createWorktree('project-1', {
+				branchName: 'feature/recovery',
+				path: '/repo.worktrees/feature-recovery',
+			});
+			const published = (await service.getProjects())[0];
+
+			assert.deepStrictEqual(created, createLinkedWorktree(
+				'/repo.worktrees/feature-recovery',
+				'feature/recovery'
+			));
+			assert.strictEqual(published.worktreeState, 'stale');
+			assert.deepStrictEqual(published.worktrees, [created]);
+			assert.strictEqual(
+				events.at(-1)?.[0].worktreeState,
+				'stale'
+			);
+			assert.deepStrictEqual(
+				events.at(-1)?.[0].worktrees,
+				[created]
+			);
+			assert.deepStrictEqual(retry.delays, [1000, 1000]);
+		}
+	);
+
 	test('returns the canonical created worktree without a duplicate fallback',
 		async () => {
 			const stateService = new TestStateService();
