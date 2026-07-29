@@ -630,15 +630,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 		return prepareTerminalShutdown(this._platformIsWeb, async () => {
 			const preparationGeneration = ++this._shutdownPreparationGeneration;
 			this._isShutdownPrepared = false;
-			const veto = await this._onBeforeShutdownAsync(reason);
-			if (preparationGeneration === this._shutdownPreparationGeneration) {
-				this._isShutdownPrepared = !veto;
-			}
-			return veto;
+			return this._onBeforeShutdownAsync(reason, preparationGeneration);
 		});
 	}
 
-	private async _onBeforeShutdownAsync(reason: ShutdownReason): Promise<boolean> {
+	private async _onBeforeShutdownAsync(reason: ShutdownReason, preparationGeneration: number): Promise<boolean> {
 		if (this.instances.length === 0) {
 			// No terminal instances, don't veto
 			return false;
@@ -661,6 +657,10 @@ export class TerminalService extends Disposable implements ITerminalService {
 				]);
 			}
 
+			if (preparationGeneration === this._shutdownPreparationGeneration) {
+				this._isShutdownPrepared = true;
+			}
+
 			// Persist terminal _processes_
 			const shouldPersistProcesses = this._terminalConfigurationService.config.enablePersistentSessions && reason === ShutdownReason.RELOAD;
 			if (!shouldPersistProcesses) {
@@ -669,10 +669,17 @@ export class TerminalService extends Disposable implements ITerminalService {
 					(this._terminalConfigurationService.config.confirmOnExit === 'hasChildProcesses' && this.foregroundInstances.some(e => e.hasChildProcesses))
 				);
 				if (hasDirtyInstances) {
-					return this._onBeforeShutdownConfirmation(reason);
+					const veto = await this._onBeforeShutdownConfirmation(reason);
+					if (veto && preparationGeneration === this._shutdownPreparationGeneration) {
+						this._cancelShutdownPreparation();
+					}
+					return veto;
 				}
 			}
 		} catch (err: unknown) {
+			if (preparationGeneration === this._shutdownPreparationGeneration) {
+				this._cancelShutdownPreparation();
+			}
 			// Swallow as exceptions should not cause a veto to prevent shutdown
 			this._logService.warn('Exception occurred during terminal shutdown', err);
 		}

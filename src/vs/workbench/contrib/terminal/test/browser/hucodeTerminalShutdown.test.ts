@@ -115,14 +115,52 @@ suite('Terminal hosted shutdown', () => {
 			assert.deepStrictEqual(backend.layoutUpdates, []);
 		});
 
-	test('does not suppress persistence after confirmation refuses shutdown',
+	test('suppresses persistence while confirmation is pending and replays after refusal',
 		async () => {
-			dialogService.setConfirmResult({ confirmed: false });
+			enableProcessRevival(terminalService);
+			const confirmation = dialogService.deferConfirmation();
+			let preparation!: boolean | Promise<boolean>;
+			await runWithFakedTimers({}, async () => {
+				preparation = invokeBeforeShutdown(
+					terminalService,
+					ShutdownReason.QUIT
+				);
+				await dialogService.whenConfirmationRequested;
+			});
+			assert.strictEqual(backend.persistTerminalStateCalls, 1);
 
-			assert.strictEqual(
-				await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
-				true
-			);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+
+			setBackgroundedTerminal(terminalService, 21);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+
+			await runWithFakedTimers({}, async () => {
+				confirmation.complete({ confirmed: false });
+				assert.strictEqual(await preparation, true);
+			});
+
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+		});
+
+	test('does not suppress persistence when process preparation fails',
+		async () => {
+			enableProcessRevival(terminalService);
+			backend.persistTerminalStateError = new Error('test persist failure');
+
+			await runWithFakedTimers({}, async () => {
+				assert.strictEqual(
+					await invokeBeforeShutdown(
+						terminalService,
+						ShutdownReason.QUIT
+					),
+					false
+				);
+			});
 			await runWithFakedTimers({}, async () => saveState(terminalService));
 
 			assert.deepStrictEqual(backend.layoutUpdates, [{
@@ -150,14 +188,19 @@ suite('Terminal hosted shutdown', () => {
 		});
 
 	test('resumes persistence after a later external veto', async () => {
+		enableProcessRevival(terminalService);
+		const confirmation = dialogService.deferConfirmation();
 		const externalVeto = new DeferredPromise<boolean>();
 		disposables.add(lifecycleService.onBeforeShutdown(event => {
 			event.veto(externalVeto.p, 'test.laterVeto');
 		}));
 
-		const preparation = prepareShutdown(lifecycleService);
-		await Promise.resolve();
-		await Promise.resolve();
+		let preparation!: Promise<boolean>;
+		await runWithFakedTimers({}, async () => {
+			preparation = prepareShutdown(lifecycleService);
+			await dialogService.whenConfirmationRequested;
+		});
+		assert.strictEqual(backend.persistTerminalStateCalls, 1);
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 		assert.deepStrictEqual(backend.layoutUpdates, []);
 
@@ -165,6 +208,7 @@ suite('Terminal hosted shutdown', () => {
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 		assert.deepStrictEqual(backend.layoutUpdates, []);
 
+		confirmation.complete({ confirmed: true });
 		await runWithFakedTimers({}, async () => {
 			externalVeto.complete(true);
 			assert.strictEqual(await preparation, true);
@@ -224,7 +268,14 @@ suite('Terminal hosted shutdown', () => {
 
 	test('transitions prepared persistence suppression to committed shutdown',
 		async () => {
-			assert.strictEqual(await prepareShutdown(lifecycleService), false);
+			enableProcessRevival(terminalService);
+			const confirmation = dialogService.deferConfirmation();
+			let preparation!: Promise<boolean>;
+			await runWithFakedTimers({}, async () => {
+				preparation = prepareShutdown(lifecycleService);
+				await dialogService.whenConfirmationRequested;
+			});
+			assert.strictEqual(backend.persistTerminalStateCalls, 1);
 			await runWithFakedTimers({}, async () => saveState(terminalService));
 			assert.deepStrictEqual(backend.layoutUpdates, []);
 
@@ -232,13 +283,66 @@ suite('Terminal hosted shutdown', () => {
 			await runWithFakedTimers({}, async () => saveState(terminalService));
 			assert.deepStrictEqual(backend.layoutUpdates, []);
 
+			confirmation.complete({ confirmed: true });
+			assert.strictEqual(await preparation, false);
 			await runWithFakedTimers({}, async () =>
 				lifecycleService.fireShutdown()
 			);
-			assert.deepStrictEqual(backend.layoutUpdates, [undefined]);
+			assert.deepStrictEqual(backend.layoutUpdates, []);
+		});
+
+	test('keeps replay state isolated across sequential shutdown attempts',
+		async () => {
+			assert.strictEqual(
+				await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
+				false
+			);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			setBackgroundedTerminal(terminalService, 21);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+
+			await runWithFakedTimers({}, async () =>
+				fireShutdownVeto(lifecycleService)
+			);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+
+			assert.strictEqual(
+				await invokeBeforeShutdown(terminalService, ShutdownReason.QUIT),
+				false
+			);
+			setBackgroundedTerminal(terminalService, 34);
+			await runWithFakedTimers({}, async () => saveState(terminalService));
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}]);
+
+			await runWithFakedTimers({}, async () =>
+				lifecycleService.fireShutdown()
+			);
+			assert.deepStrictEqual(backend.layoutUpdates, [{
+				tabs: [],
+				background: [21],
+			}, undefined]);
 		});
 
 	test('preserves reload process revival through prepare and commit', async () => {
+		const lifecycleCalls = { detach: 0, dispose: 0 };
+		const terminalGroupService = Reflect.get(
+			terminalService,
+			'_terminalGroupService'
+		) as ITerminalGroupService;
+		Reflect.set(terminalGroupService, 'instances', [
+			createPersistentTerminal({ shouldPersist: true, lifecycleCalls }),
+		]);
+		setBackgroundedTerminal(terminalService, 21, {
+			shouldPersist: true,
+			lifecycleCalls,
+		});
+
 		assert.strictEqual(
 			await invokeBeforeShutdown(terminalService, ShutdownReason.RELOAD),
 			false
@@ -250,47 +354,96 @@ suite('Terminal hosted shutdown', () => {
 		await runWithFakedTimers({}, async () => saveState(terminalService));
 
 		assert.deepStrictEqual(backend.layoutUpdates, []);
+		assert.deepStrictEqual(lifecycleCalls, { detach: 2, dispose: 0 });
 	});
 });
 
 class CountingDialogService extends TestDialogService {
 	confirmCount = 0;
+	private readonly _whenConfirmationRequested = new DeferredPromise<void>();
+	private _deferredConfirmation?: DeferredPromise<IConfirmationResult>;
+
+	get whenConfirmationRequested(): Promise<void> {
+		return this._whenConfirmationRequested.p;
+	}
+
+	deferConfirmation(): DeferredPromise<IConfirmationResult> {
+		this._deferredConfirmation = new DeferredPromise<IConfirmationResult>();
+		return this._deferredConfirmation;
+	}
 
 	override async confirm(confirmation: IConfirmation): Promise<IConfirmationResult> {
 		this.confirmCount++;
+		this._whenConfirmationRequested.complete();
+		if (this._deferredConfirmation) {
+			return this._deferredConfirmation.p;
+		}
 		return super.confirm(confirmation);
 	}
 }
 
 class TestPersistentTerminalBackend implements Partial<ITerminalBackend> {
 	readonly layoutUpdates: Parameters<ITerminalBackend['setTerminalLayoutInfo']>[0][] = [];
+	persistTerminalStateCalls = 0;
+	persistTerminalStateError?: Error;
+
+	async persistTerminalState(): Promise<void> {
+		this.persistTerminalStateCalls++;
+		if (this.persistTerminalStateError) {
+			throw this.persistTerminalStateError;
+		}
+	}
 
 	async setTerminalLayoutInfo(layout: Parameters<ITerminalBackend['setTerminalLayoutInfo']>[0]): Promise<void> {
 		this.layoutUpdates.push(layout);
 	}
 }
 
-function createPersistentTerminal(): ITerminalInstance {
+function createPersistentTerminal(options?: {
+	shouldPersist?: boolean;
+	lifecycleCalls?: { detach: number; dispose: number };
+}): ITerminalInstance {
 	return {
 		persistentProcessId: 13,
 		isDisposed: false,
+		shouldPersist: options?.shouldPersist ?? false,
 		onIconChanged: Event.None,
-		dispose: () => { },
-		detachProcessAndDispose: async () => { },
+		dispose: () => {
+			if (options?.lifecycleCalls) {
+				options.lifecycleCalls.dispose++;
+			}
+		},
+		detachProcessAndDispose: async () => {
+			if (options?.lifecycleCalls) {
+				options.lifecycleCalls.detach++;
+			}
+		},
 		shellLaunchConfig: { forcePersist: true },
 	} satisfies Partial<ITerminalInstance> as unknown as ITerminalInstance;
 }
 
 function setBackgroundedTerminal(
 	terminalService: TerminalService,
-	persistentProcessId: number
+	persistentProcessId: number,
+	options?: {
+		shouldPersist?: boolean;
+		lifecycleCalls?: { detach: number; dispose: number };
+	}
 ): void {
 	Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
 		instance: {
-			...createPersistentTerminal(),
+			...createPersistentTerminal(options),
 			persistentProcessId,
 		},
 	}]);
+}
+
+function enableProcessRevival(terminalService: TerminalService): void {
+	const terminalConfigurationService = Reflect.get(
+		terminalService,
+		'_terminalConfigurationService'
+	) as { config: { persistentSessionReviveProcess: string } };
+	terminalConfigurationService.config.persistentSessionReviveProcess = 'onExit';
 }
 
 function saveState(terminalService: TerminalService): void {
