@@ -28,6 +28,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 	function createLifecycleService(): {
 		readonly lifecycleService: BrowserLifecycleService;
 		readonly counts: IShutdownCounts;
+		readonly storageService: InMemoryStorageService;
 	} {
 		const storageService = disposables.add(new InMemoryStorageService());
 		const lifecycleService = disposables.add(new BrowserLifecycleService(
@@ -48,7 +49,7 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 		disposables.add(lifecycleService.onDidShutdown(() => {
 			counts.didShutdown++;
 		}));
-		return { lifecycleService, counts };
+		return { lifecycleService, counts, storageService };
 	}
 
 	function createCoordinator(
@@ -156,6 +157,25 @@ suite('HucodeHostedOmniWebUnloadCoordinator', () => {
 			committed: true,
 			recommitted: true,
 			counts: { beforeShutdown: 1, willShutdown: 1, didShutdown: 1 },
+		});
+	});
+
+	test('propagates commit failure so the shell can fail open', async () => {
+		const { lifecycleService, counts, storageService } =
+			createLifecycleService();
+		const coordinator = createCoordinator(lifecycleService);
+		const commitError = new Error('storage flush failed');
+
+		assert.strictEqual(await coordinator.prepareUnload(), true);
+		storageService.flush = async () => {
+			throw commitError;
+		};
+
+		await assert.rejects(coordinator.commitUnload(), commitError);
+		assert.deepStrictEqual(counts, {
+			beforeShutdown: 1,
+			willShutdown: 0,
+			didShutdown: 0,
 		});
 	});
 

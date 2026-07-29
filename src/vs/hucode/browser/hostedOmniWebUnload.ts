@@ -96,7 +96,8 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 	 * Runs the irreversible half once the shell has decided the workbench is
 	 * going away. Resolves false when no prepared unload is outstanding, so a
 	 * commit the workbench never agreed to leaves it running instead of
-	 * shutting it down behind an undecided handshake.
+	 * shutting it down behind an undecided handshake. Failures after a prepared
+	 * commit reject so the shell takes its fail-open removal path.
 	 */
 	async commitUnload(): Promise<boolean> {
 		if (this.committed) {
@@ -123,7 +124,7 @@ export class HucodeHostedOmniWebUnloadCoordinator {
 			await this.lifecycleService.commitShutdown();
 		} catch (error) {
 			this.logService.error(error);
-			return false;
+			throw error;
 		}
 
 		this.prepared = false;

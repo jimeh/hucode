@@ -180,7 +180,8 @@ export class HucodeOmniCommandForwarding {
 	}
 
 	shouldForwardShellInvocation(): boolean {
-		return this.nativeEnvironmentService.isOmniWindow &&
+		return !this.commandForwardingScope.isForwardingDisabled &&
+			this.nativeEnvironmentService.isOmniWindow &&
 			!this.isActiveElementInside(HUCODE_OMNI_PROJECTS_SELECTOR) &&
 			!this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}

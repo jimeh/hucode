@@ -396,6 +396,66 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.actionErrorCalls, []);
 	});
 
+	test('leaves nested local clipboard fallback events unforwarded', async () => {
+		const cases = [
+			['copy', 'editor.action.clipboardCopyAction'],
+			['cut', 'editor.action.clipboardCutAction'],
+		] as const;
+
+		for (const [eventType, actionId] of cases) {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelResponse: false
+			});
+			const originalExecuteCommand =
+				fixture.handlers.executeCommand.bind(fixture.handlers);
+			let nestedEvent:
+				{ readonly defaultPrevented: boolean } | undefined;
+			const nestedHandlers: IHucodeOmniCommandForwardingWindowHandlers = {
+				...fixture.handlers,
+				async executeCommand(commandId: string, ...args: unknown[]) {
+					const execution = originalExecuteCommand(commandId, ...args);
+					if (!nestedEvent) {
+						const nextEvent = new mainWindow.Event(eventType, {
+							cancelable: true,
+							bubbles: true
+						});
+						nestedEvent = nextEvent;
+						mainWindow.document.dispatchEvent(nextEvent);
+					}
+					await execution;
+				}
+			};
+			const listener = fixture.forwarding.registerClipboardListeners(
+				mainWindow.document,
+				nestedHandlers
+			);
+
+			try {
+				const event = new mainWindow.Event(eventType, {
+					cancelable: true,
+					bubbles: true
+				});
+				await fixture.forwarding.handleClipboardEvent(
+					event,
+					actionId,
+					nestedHandlers
+				);
+				await Promise.resolve();
+
+				assert.strictEqual(event.defaultPrevented, true);
+				assert.strictEqual(nestedEvent?.defaultPrevented, false);
+				assert.strictEqual(fixture.channel.calls.length, 1);
+				assert.deepStrictEqual(fixture.commandCalls, [{
+					commandId: actionId,
+					args: []
+				}]);
+			} finally {
+				listener.dispose();
+			}
+		}
+	});
+
 	test('reports local clipboard fallback failures once', async () => {
 		const fallbackError = new Error('local clipboard failed');
 		const fixture = createFixture({
