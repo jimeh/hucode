@@ -1454,6 +1454,135 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('rejects new read and mutation work after disposal', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const service = (server as unknown as {
+			service: {
+				getWorktreeRefs(): Promise<readonly unknown[]>;
+				setPinned(projectId: string, pinned: boolean): Promise<void>;
+			};
+		}).service;
+		let readCalls = 0;
+		let mutationCalls = 0;
+		service.getWorktreeRefs = async () => {
+			readCalls++;
+			return [];
+		};
+		service.setPinned = async () => {
+			mutationCalls++;
+		};
+
+		server.dispose();
+		const read = startHandle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${add.body.project.id}/worktrees/refs`,
+			{}
+		);
+		const mutation = startHandle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${add.body.project.id}/pinned`,
+			{ pinned: true }
+		);
+		const settled = await Promise.all([
+			raceTimeout(read.completion.then(() => true), 50),
+			raceTimeout(mutation.completion.then(() => true), 50),
+		]);
+		if (!settled[0]) {
+			read.close();
+		}
+		if (!settled[1]) {
+			mutation.close();
+		}
+		await Promise.all([read.completion, mutation.completion]);
+
+		assert.deepStrictEqual(settled, [true, true]);
+		for (const request of [read, mutation]) {
+			assert.strictEqual(request.response.statusCode, 503);
+			assert.strictEqual(
+				headersValue(request.response.headers, 'Retry-After'),
+				'1'
+			);
+			assert.deepStrictEqual(JSON.parse(request.response.body), {
+				error: 'Project request queue is unavailable.',
+				code: 'PROJECT_REQUEST_UNAVAILABLE',
+			});
+		}
+		assert.strictEqual(readCalls, 0);
+		assert.strictEqual(mutationCalls, 0);
+		assert.strictEqual(requestQueueSize(server, 'gitReadLimiter'), 0);
+		assert.strictEqual(requestQueueSize(server, 'mutationQueue'), 0);
+	});
+
+	test('releases an admitted mutation lease after rejection', async () => {
+		let acquisitions = 0;
+		let releases = 0;
+		let activeLeases = 0;
+		const acquireMutationLease = () => {
+			acquisitions++;
+			activeLeases++;
+			return toDisposable(() => {
+				releases++;
+				activeLeases--;
+			});
+		};
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			acquireMutationLease
+		);
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		assert.strictEqual(activeLeases, 0);
+		acquisitions = 0;
+		releases = 0;
+		const service = (server as unknown as {
+			service: {
+				setPinned(projectId: string, pinned: boolean): Promise<void>;
+			};
+		}).service;
+		service.setPinned = async () => {
+			throw new Error('admitted mutation failed');
+		};
+
+		const response = await handle<ErrorResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${add.body.project.id}/pinned`,
+			{ pinned: true }
+		);
+
+		assert.strictEqual(response.statusCode, 500);
+		assert.deepStrictEqual(response.body, {
+			error: 'admitted mutation failed',
+		});
+		assert.strictEqual(acquisitions, 1);
+		assert.strictEqual(releases, 1);
+		assert.strictEqual(activeLeases, 0);
+		assert.strictEqual(requestQueueSize(server, 'mutationQueue'), 0);
+	});
+
 	test('defers manager disposal through an admitted worktree refresh',
 		async () => {
 			const lifetimeEvents: string[] = [];
