@@ -284,7 +284,10 @@ async function runRetainedWorkbenchQuickInput<T>(
 	}
 }
 
-class ProjectSwitcherAccessibilityProvider
+/**
+ * Supplies accessible labels for Project Switcher rows.
+ */
+export class ProjectSwitcherAccessibilityProvider
 	implements IListAccessibilityProvider<ProjectSwitcherItem> {
 
 	getWidgetAriaLabel(): string {
@@ -376,7 +379,10 @@ interface ProjectSwitcherActionTemplate {
 	currentAction?: () => void;
 }
 
-class ProjectSwitcherRenderer
+/**
+ * Renders reusable Project Switcher tree rows and their inline actions.
+ */
+export class ProjectSwitcherRenderer
 	implements ITreeRenderer<ProjectSwitcherItem, void, ProjectSwitcherTemplate> {
 
 	static readonly ID = 'hucodeProjectSwitcherItem';
@@ -728,7 +734,10 @@ class ProjectSwitcherRenderer
 	}
 }
 
-class ProjectSwitcherDragAndDrop
+/**
+ * Applies Project Switcher drag-and-drop validation and ordering.
+ */
+export class ProjectSwitcherDragAndDrop
 	implements ITreeDragAndDrop<ProjectSwitcherItem> {
 
 	constructor(
