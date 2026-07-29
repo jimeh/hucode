@@ -3497,7 +3497,13 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	test('terminal shutdown dominates overlapping surviving reasons',
 		async () => {
-			for (const [firstReason, secondReason, expectedReasons, suffix] of [
+			for (const [
+				firstReason,
+				secondReason,
+				expectedReasons,
+				expectedPreparationChannels,
+				suffix
+			] of [
 				[
 					UnloadReason.RELOAD,
 					UnloadReason.QUIT,
@@ -3506,12 +3512,22 @@ suite('ResidentHostedWorkspacesController', () => {
 						UnloadReason.QUIT,
 						UnloadReason.QUIT
 					],
+					[
+						'vscode:onBeforeUnload',
+						'vscode:onShutdownPreparationAbandoned',
+						'vscode:onBeforeUnload',
+						'vscode:onWillUnload'
+					],
 					'reload-then-quit'
 				],
 				[
 					UnloadReason.CLOSE,
 					UnloadReason.LOAD,
 					[UnloadReason.CLOSE, UnloadReason.CLOSE],
+					[
+						'vscode:onBeforeUnload',
+						'vscode:onWillUnload'
+					],
 					'close-then-load'
 				],
 			] as const) {
@@ -3573,35 +3589,38 @@ suite('ResidentHostedWorkspacesController', () => {
 							'vscode:onShutdownPreparationAbandoned' ||
 							channel === 'vscode:onWillUnload'
 					);
-				if (secondReason === UnloadReason.QUIT) {
-					assert.deepStrictEqual(
-						preparationMessages.map(({ channel }) => channel),
-						[
-							'vscode:onBeforeUnload',
-							'vscode:onShutdownPreparationAbandoned',
-							'vscode:onBeforeUnload',
-							'vscode:onWillUnload'
-						]
-					);
+				assert.deepStrictEqual(
+					preparationMessages.map(({ channel }) => channel),
+					expectedPreparationChannels
+				);
+				const abandonmentIndex = preparationMessages.findIndex(
+					({ channel }) =>
+						channel === 'vscode:onShutdownPreparationAbandoned'
+				);
+				if (abandonmentIndex !== -1) {
 					assert.strictEqual(
 						(
-							preparationMessages[1].request as {
+							preparationMessages[abandonmentIndex].request as {
 								preparationId: string;
 							}
 						).preparationId,
 						(
-							preparationMessages[0].request as {
+							preparationMessages[abandonmentIndex - 1].request as {
 								preparationId: string;
 							}
 						).preparationId
 					);
-				} else {
-					assert.deepStrictEqual(
-						preparationMessages.map(({ channel }) => channel),
-						[
-							'vscode:onBeforeUnload',
-							'vscode:onWillUnload'
-						]
+					assert.notStrictEqual(
+						(
+							preparationMessages[abandonmentIndex + 1].request as {
+								preparationId: string;
+							}
+						).preparationId,
+						(
+							preparationMessages[abandonmentIndex - 1].request as {
+								preparationId: string;
+							}
+						).preparationId
 					);
 				}
 				const frozenState = structuredClone(controller.getState());
