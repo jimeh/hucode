@@ -467,6 +467,29 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 		}
 	);
 
+	test('bounds CDP session creation by the lifecycle deadline',
+		{ timeout: 500 },
+		async () => {
+			const page = {
+				once(event: string): void {
+					assert.strictEqual(event, 'crash');
+				},
+				context() {
+					return {
+						newCDPSession(): Promise<never> {
+							return new Promise(() => undefined);
+						},
+					};
+				},
+			};
+
+			await assert.rejects(
+				crashLinuxOmniPage(page as never, Date.now() + 10),
+				/Timed out during Bravo crash CDP session creation/
+			);
+		}
+	);
+
 	test('does not wait for CDP detach after the renderer crash event',
 		async () => {
 			let crashListener: (() => void) | undefined;
