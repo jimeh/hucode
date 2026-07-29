@@ -16,6 +16,7 @@
     "hucode:compile": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run gulp -- compile-client compile-extensions compile-extension-media",
     "hucode:test-suites": "node build/hucode/test-suites.ts",
     "hucode:check-test-suites": "node build/hucode/test-suites.ts --check",
+    "hucode:check-upstream-provenance": "node build/hucode/upstream-provenance.ts",
     "hucode:smoke:linux-omni": "node build/hucode/linux-omni-smoke.ts",
     "hucode:watch": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run watch",
     "hucode:run": "npm run hucode:prepare && ./scripts/hucode.sh",
