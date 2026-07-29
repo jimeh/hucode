@@ -170,6 +170,9 @@ as the required Hucode instruction set for work in this fork.
   Node's `IncomingMessage` `close` event also fires after normal request
   completion; use request `aborted` or response `close` before
   `writableFinished` to detect a real disconnect.
+  The shared `Limiter` and `Queue` retain canceled waiting factories, and their
+  disposal clears waiting work without settling its returned promises; do not
+  use them for request admission that must release canceled or disposed work.
 - `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
   needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
   `serve-web` therefore runs with Copilot Chat entirely absent, which silently

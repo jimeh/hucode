@@ -1014,6 +1014,326 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('caps queued Git reads and reuses a canceled waiting slot',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1
+			);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					getWorktreeRefs(
+						projectId: string,
+						options: unknown,
+						token: CancellationToken
+					): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const activeStarted = new DeferredPromise<void>();
+			const releaseActive = new DeferredPromise<void>();
+			let calls = 0;
+			service.getWorktreeRefs = async (_projectId, _options, token) => {
+				calls++;
+				if (calls === 1) {
+					await activeStarted.complete();
+					await releaseActive.p;
+				}
+				if (token.isCancellationRequested) {
+					throw new CancellationError();
+				}
+				return [];
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/worktrees/refs`;
+			const active = startHandle(server, 'POST', route, {});
+			await activeStarted.p;
+			const queued = Array.from({ length: 64 }, () =>
+				startHandle(server, 'POST', route, {})
+			);
+			await waitFor(() => requestQueueSize(
+				server,
+				'gitReadLimiter'
+			) === 65);
+
+			const overflow = startHandle(server, 'POST', route, {});
+			const overflowSettled = await raceTimeout(
+				overflow.completion.then(() => true),
+				50
+			);
+			queued[0].close();
+			await queued[0].completion;
+			const replacement = startHandle(server, 'POST', route, {});
+			await waitFor(() => requestQueueSize(
+				server,
+				'gitReadLimiter'
+			) >= 65);
+			const replacementHeadersBeforeRelease =
+				replacement.response.writeHeadCalls.slice();
+
+			for (const pending of queued.slice(1)) {
+				pending.close();
+			}
+			if (!overflowSettled) {
+				overflow.close();
+			}
+			await Promise.all([
+				...queued.slice(1).map(pending => pending.completion),
+				overflow.completion,
+			]);
+			await releaseActive.complete();
+			await Promise.all([active.completion, replacement.completion]);
+
+			assert.strictEqual(overflowSettled, true);
+			assert.strictEqual(overflow.response.statusCode, 503);
+			assert.strictEqual(
+				headersValue(overflow.response.headers, 'Retry-After'),
+				'1'
+			);
+			assert.deepStrictEqual(JSON.parse(overflow.response.body), {
+				error: 'Project request capacity reached.',
+				code: 'PROJECT_REQUEST_CAPACITY',
+			});
+			assert.deepStrictEqual(replacementHeadersBeforeRelease, []);
+			assert.strictEqual(replacement.response.statusCode, 200);
+			assert.strictEqual(calls, 2);
+		}
+	);
+
+	test('caps queued mutations and removes a disconnected waiting request',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					setPinned(projectId: string, pinned: boolean): Promise<void>;
+				};
+			}).service;
+			const activeStarted = new DeferredPromise<void>();
+			const releaseActive = new DeferredPromise<void>();
+			let calls = 0;
+			service.setPinned = async () => {
+				calls++;
+				if (calls === 1) {
+					await activeStarted.complete();
+					await releaseActive.p;
+				}
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/pinned`;
+			const active = startHandle(server, 'POST', route, { pinned: true });
+			await activeStarted.p;
+			const queued = Array.from({ length: 64 }, (_, index) =>
+				startHandle(server, 'POST', route, {
+					pinned: index % 2 === 0,
+				})
+			);
+			await waitFor(() => requestQueueSize(
+				server,
+				'mutationQueue'
+			) === 65);
+
+			const overflow = startHandle(
+				server,
+				'POST',
+				route,
+				{ pinned: false }
+			);
+			const overflowSettled = await raceTimeout(
+				overflow.completion.then(() => true),
+				50
+			);
+			queued[0].close();
+			const canceledSettled = await raceTimeout(
+				queued[0].completion.then(() => true),
+				50
+			);
+			const replacement = startHandle(
+				server,
+				'POST',
+				route,
+				{ pinned: true }
+			);
+			await waitFor(() => requestQueueSize(
+				server,
+				'mutationQueue'
+			) >= 65);
+			const replacementHeadersBeforeRelease =
+				replacement.response.writeHeadCalls.slice();
+
+			for (const pending of queued.slice(1)) {
+				pending.close();
+			}
+			if (!overflowSettled) {
+				overflow.close();
+			}
+			active.close();
+			await releaseActive.complete();
+			await Promise.all([
+				active.completion,
+				...queued.map(pending => pending.completion),
+				overflow.completion,
+				replacement.completion,
+			]);
+
+			assert.strictEqual(overflowSettled, true);
+			assert.strictEqual(overflow.response.statusCode, 503);
+			assert.strictEqual(
+				headersValue(overflow.response.headers, 'Retry-After'),
+				'1'
+			);
+			assert.deepStrictEqual(JSON.parse(overflow.response.body), {
+				error: 'Project request capacity reached.',
+				code: 'PROJECT_REQUEST_CAPACITY',
+			});
+			assert.strictEqual(canceledSettled, true);
+			assert.deepStrictEqual(queued[0].response.writeHeadCalls, []);
+			assert.deepStrictEqual(active.response.writeHeadCalls, []);
+			assert.deepStrictEqual(replacementHeadersBeforeRelease, []);
+			assert.strictEqual(replacement.response.statusCode, 200);
+			assert.strictEqual(calls, 2);
+		}
+	);
+
+	test('settles a queued Git read when the server is disposed', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			undefined,
+			1
+		);
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const service = (server as unknown as {
+			service: {
+				getWorktreeRefs(): Promise<readonly unknown[]>;
+			};
+		}).service;
+		const activeStarted = new DeferredPromise<void>();
+		const releaseActive = new DeferredPromise<void>();
+		let calls = 0;
+		service.getWorktreeRefs = async () => {
+			calls++;
+			if (calls === 1) {
+				await activeStarted.complete();
+				await releaseActive.p;
+			}
+			return [];
+		};
+		const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+			`${add.body.project.id}/worktrees/refs`;
+		const active = startHandle(server, 'POST', route, {});
+		await activeStarted.p;
+		const queued = startHandle(server, 'POST', route, {});
+		await waitFor(() => requestQueueSize(server, 'gitReadLimiter') === 2);
+
+		server.dispose();
+		const queuedSettled = await raceTimeout(
+			queued.completion.then(() => true),
+			50
+		);
+		if (!queuedSettled) {
+			queued.close();
+		}
+		await releaseActive.complete();
+		await Promise.all([active.completion, queued.completion]);
+
+		assert.strictEqual(queuedSettled, true);
+		assert.strictEqual(queued.response.statusCode, 503);
+		assert.strictEqual(
+			headersValue(queued.response.headers, 'Retry-After'),
+			'1'
+		);
+		assert.deepStrictEqual(JSON.parse(queued.response.body), {
+			error: 'Project request queue is unavailable.',
+			code: 'PROJECT_REQUEST_UNAVAILABLE',
+		});
+		assert.strictEqual(active.response.statusCode, 200);
+		assert.strictEqual(calls, 1);
+	});
+
+	test('settles queued mutations on disposal while admitted work finishes',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const add = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					setPinned(projectId: string, pinned: boolean): Promise<void>;
+				};
+			}).service;
+			const activeStarted = new DeferredPromise<void>();
+			const releaseActive = new DeferredPromise<void>();
+			let calls = 0;
+			service.setPinned = async () => {
+				calls++;
+				await activeStarted.complete();
+				await releaseActive.p;
+			};
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${add.body.project.id}/pinned`;
+			const active = startHandle(server, 'POST', route, { pinned: true });
+			await activeStarted.p;
+			const queued = startHandle(
+				server,
+				'POST',
+				route,
+				{ pinned: false }
+			);
+			await waitFor(() => requestQueueSize(server, 'mutationQueue') === 2);
+
+			server.dispose();
+			const queuedSettled = await raceTimeout(
+				queued.completion.then(() => true),
+				50
+			);
+			if (!queuedSettled) {
+				queued.close();
+			}
+			await releaseActive.complete();
+			await Promise.all([active.completion, queued.completion]);
+
+			assert.strictEqual(queuedSettled, true);
+			assert.strictEqual(queued.response.statusCode, 503);
+			assert.strictEqual(
+				headersValue(queued.response.headers, 'Retry-After'),
+				'1'
+			);
+			assert.deepStrictEqual(JSON.parse(queued.response.body), {
+				error: 'Project request queue is unavailable.',
+				code: 'PROJECT_REQUEST_UNAVAILABLE',
+			});
+			assert.strictEqual(active.response.statusCode, 200);
+			assert.strictEqual(calls, 1);
+		}
+	);
+
 	test('caps event clients exactly and accepts a replacement', async () => {
 		const server = createServer(
 			serverDataPath,
@@ -2632,6 +2952,16 @@ function startHandle(
 			response.emit('close');
 		},
 	};
+}
+
+function requestQueueSize(
+	server: HucodeWebProjectManagerServer,
+	queue: 'gitReadLimiter' | 'mutationQueue'
+): number {
+	return (server as unknown as Record<
+		typeof queue,
+		{ readonly size: number }
+	>)[queue].size;
 }
 
 class TestProjectManagerEventResponse extends EventEmitter {
