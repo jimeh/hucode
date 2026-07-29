@@ -34,7 +34,14 @@ interface ProjectManagerEventResponse {
 	readonly statusCode: number;
 	readonly headers: Record<string, unknown>;
 	readonly body: string;
+	readonly request: EventEmitter;
+	readonly response: TestProjectManagerEventResponse;
 	close(): void;
+}
+
+interface PendingProjectManagerEventResponse
+	extends ProjectManagerEventResponse {
+	readonly completion: Promise<void>;
 }
 
 interface ProjectResponseBody {
@@ -321,6 +328,442 @@ suite('HucodeWebProjectManagerServer', function () {
 		);
 
 		events.close();
+	});
+
+	test('caps event clients exactly and accepts a replacement', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			2
+		);
+		const first = await handleEvents(server);
+		const second = await handleEvents(server);
+		const rejected = await handleEvents(server);
+
+		assert.strictEqual(first.statusCode, 200);
+		assert.strictEqual(second.statusCode, 200);
+		assert.strictEqual(rejected.statusCode, 503);
+		assert.strictEqual(
+			headersValue(rejected.headers, 'Content-Type'),
+			'application/json'
+		);
+		assert.strictEqual(
+			headersValue(rejected.headers, 'Retry-After'),
+			'1'
+		);
+		assert.deepStrictEqual(JSON.parse(rejected.body), {
+			error: 'Project event stream capacity reached.',
+		});
+		assert.deepStrictEqual(
+			rejected.response.writeHeadCalls.map(call => call.status),
+			[503]
+		);
+		assert.notStrictEqual(
+			headersValue(rejected.headers, 'Content-Type'),
+			'text/event-stream'
+		);
+
+		first.close();
+		const replacement = await handleEvents(server);
+		assert.strictEqual(replacement.statusCode, 200);
+		second.close();
+		replacement.close();
+	});
+
+	test('defaults to sixty-four event clients', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const clients: ProjectManagerEventResponse[] = [];
+		for (let index = 0; index < 64; index++) {
+			clients.push(await handleEvents(server));
+		}
+
+		const rejected = await handleEvents(server);
+		assert.strictEqual(rejected.statusCode, 503);
+
+		for (const client of clients) {
+			client.close();
+		}
+	});
+
+	test('reserves event-client capacity before loading initial projects',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				1
+			);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const getProjects = service.getProjects.bind(service);
+			const releaseProjects = new DeferredPromise<void>();
+			let projectReads = 0;
+			service.getProjects = async () => {
+				projectReads++;
+				await releaseProjects.p;
+				return getProjects();
+			};
+
+			const firstPending = startEvents(server);
+			assert.strictEqual(projectReads, 1);
+			const rejected = await handleEvents(server);
+			assert.strictEqual(rejected.statusCode, 503);
+			assert.deepStrictEqual(
+				rejected.response.writeHeadCalls.map(call => call.status),
+				[503]
+			);
+			await releaseProjects.complete();
+			await firstPending.completion;
+			assert.strictEqual(firstPending.statusCode, 200);
+			firstPending.close();
+		}
+	);
+
+	test('uses a newer broadcast as the initializing client snapshot',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const initialProjects = new DeferredPromise<readonly unknown[]>();
+			service.getProjects = () => initialProjects.p;
+			const staleProjects = [{ id: 'stale' }];
+			const latestProjects = [{ id: 'latest' }];
+
+			const events = startEvents(server);
+			void initialProjects.complete(staleProjects);
+			(server as unknown as {
+				broadcastProjects(projects: readonly unknown[]): void;
+			}).broadcastProjects(latestProjects);
+			await events.completion;
+
+			assert.deepStrictEqual(readProjectEvents(events.body), [
+				{ projects: latestProjects },
+			]);
+			events.close();
+		}
+	);
+
+	test('releases initializing clients on request and response termination',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				1
+			);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const getProjects = service.getProjects.bind(service);
+			const terminations: readonly ['request' | 'response', string][] = [
+				['request', 'close'],
+				['response', 'close'],
+				['response', 'error'],
+			];
+
+			for (const [target, event] of terminations) {
+				const releaseProjects = new DeferredPromise<void>();
+				let projectReads = 0;
+				service.getProjects = async () => {
+					projectReads++;
+					await releaseProjects.p;
+					return getProjects();
+				};
+
+				const disconnected = startEvents(server);
+				assert.strictEqual(projectReads, 1);
+				if (target === 'request') {
+					disconnected.request.emit(event);
+				} else {
+					disconnected.response.emit(event, new Error('expected'));
+				}
+				assert.strictEqual(disconnected.response.endCalls, 1);
+				assert.strictEqual(disconnected.request.listenerCount('close'), 0);
+				assert.strictEqual(disconnected.response.listenerCount('close'), 0);
+				assert.strictEqual(disconnected.response.listenerCount('error'), 0);
+
+				const replacement = startEvents(server);
+				assert.strictEqual(projectReads, 2);
+				await releaseProjects.complete();
+				await Promise.all([
+					disconnected.completion,
+					replacement.completion,
+				]);
+
+				assert.deepStrictEqual(
+					disconnected.response.writeHeadCalls,
+					[]
+				);
+				assert.strictEqual(replacement.statusCode, 200);
+				replacement.close();
+			}
+		});
+
+	test('does not revive initializing clients after server disposal',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				1
+			);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const getProjects = service.getProjects.bind(service);
+			const releaseProjects = new DeferredPromise<void>();
+			service.getProjects = async () => {
+				await releaseProjects.p;
+				return getProjects();
+			};
+
+			const pending = startEvents(server);
+			server.dispose();
+			assert.strictEqual(pending.response.endCalls, 1);
+			assert.strictEqual(pending.request.listenerCount('close'), 0);
+			assert.strictEqual(pending.response.listenerCount('close'), 0);
+			assert.strictEqual(pending.response.listenerCount('error'), 0);
+
+			await releaseProjects.complete();
+			await pending.completion;
+			assert.deepStrictEqual(pending.response.writeHeadCalls, []);
+			assert.deepStrictEqual(readProjectEvents(pending.body), []);
+
+			const rejected = await handleEvents(server);
+			assert.strictEqual(rejected.statusCode, 503);
+			assert.deepStrictEqual(
+				rejected.response.writeHeadCalls.map(call => call.status),
+				[503]
+			);
+		}
+	);
+
+	test('releases initialization capacity when initial loading fails',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				1
+			);
+			const service = (server as unknown as {
+				service: {
+					getProjects(): Promise<readonly unknown[]>;
+				};
+			}).service;
+			const getProjects = service.getProjects.bind(service);
+			service.getProjects = async () => {
+				throw new Error('initial load failed');
+			};
+
+			const failed = await handleEvents(server);
+			assert.strictEqual(failed.statusCode, 500);
+			assert.deepStrictEqual(JSON.parse(failed.body), {
+				error: 'initial load failed',
+			});
+			assert.deepStrictEqual(
+				failed.response.writeHeadCalls.map(call => call.status),
+				[500]
+			);
+
+			service.getProjects = getProjects;
+			const replacement = await handleEvents(server);
+			assert.strictEqual(replacement.statusCode, 200);
+			replacement.close();
+		}
+	);
+
+	test('coalesces slow clients without delaying healthy clients', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const slow = await handleEvents(server, {
+			blockProjectWrites: 1,
+		});
+		const healthy = await handleEvents(server);
+
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/label`,
+			{ label: 'first' }
+		);
+		const latest = await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/label`,
+			{ label: 'latest' }
+		);
+
+		assert.deepStrictEqual(readProjectEvents(slow.body), [
+			{ projects: [] },
+		]);
+		assert.deepStrictEqual(
+			readProjectEvents(healthy.body).at(-1),
+			{ projects: latest.body.projects }
+		);
+
+		slow.response.emit('drain');
+		assert.deepStrictEqual(readProjectEvents(slow.body), [
+			{ projects: [] },
+			{ projects: latest.body.projects },
+		]);
+
+		slow.close();
+		healthy.close();
+	});
+
+	test('re-registers drain while replay remains backpressured', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const slow = await handleEvents(server, {
+			blockProjectWrites: 2,
+		});
+		const add = await handle<ProjectResponseBody>(
+			server,
+			'POST',
+			HUCODE_WEB_PROJECTS_API_PATH,
+			{ rootPath: projectPath }
+		);
+		const first = await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/label`,
+			{ label: 'first' }
+		);
+
+		slow.response.emit('drain');
+		assert.strictEqual(slow.response.listenerCount('drain'), 1);
+		assert.deepStrictEqual(readProjectEvents(slow.body), [
+			{ projects: [] },
+			{ projects: first.body.projects },
+		]);
+
+		await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/label`,
+			{ label: 'middle' }
+		);
+		const latest = await handle<ProjectsResponseBody>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/${add.body.project.id}/label`,
+			{ label: 'latest' }
+		);
+
+		slow.response.emit('drain');
+		assert.strictEqual(slow.response.listenerCount('drain'), 0);
+		assert.deepStrictEqual(readProjectEvents(slow.body), [
+			{ projects: [] },
+			{ projects: first.body.projects },
+			{ projects: latest.body.projects },
+		]);
+		slow.close();
+	});
+
+	test('cleans up a client whose response write throws', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			1
+		);
+		const failed = await handleEvents(server, {
+			throwProjectWrites: 1,
+		});
+
+		assert.strictEqual(failed.statusCode, 200);
+		assert.strictEqual(failed.response.endCalls, 1);
+		assert.strictEqual(failed.request.listenerCount('close'), 0);
+		assert.strictEqual(failed.response.listenerCount('close'), 0);
+		assert.strictEqual(failed.response.listenerCount('error'), 0);
+		assert.strictEqual(failed.response.listenerCount('drain'), 0);
+
+		const replacement = await handleEvents(server);
+		assert.strictEqual(replacement.statusCode, 200);
+		replacement.close();
+	});
+
+	test('cleans event clients on request and response termination', async () => {
+		const server = createServer(
+			serverDataPath,
+			disposables,
+			servers,
+			undefined,
+			undefined,
+			1
+		);
+		const terminations: readonly ['request' | 'response', string][] = [
+			['request', 'close'],
+			['response', 'close'],
+			['response', 'error'],
+		];
+
+		for (const [target, event] of terminations) {
+			const client = await handleEvents(server, {
+				blockProjectWrites: 1,
+			});
+			if (target === 'request') {
+				client.request.emit(event);
+			} else {
+				client.response.emit(event, new Error('expected'));
+			}
+
+			assert.strictEqual(client.response.endCalls, 1);
+			assert.strictEqual(client.request.listenerCount('close'), 0);
+			assert.strictEqual(client.response.listenerCount('close'), 0);
+			assert.strictEqual(client.response.listenerCount('error'), 0);
+			assert.strictEqual(client.response.listenerCount('drain'), 0);
+
+			const replacement = await handleEvents(server);
+			assert.strictEqual(replacement.statusCode, 200);
+			replacement.close();
+		}
+	});
+
+	test('ends event clients and removes listeners on disposal', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const slow = await handleEvents(server, {
+			blockProjectWrites: 1,
+		});
+		const healthy = await handleEvents(server);
+
+		server.dispose();
+
+		for (const client of [slow, healthy]) {
+			assert.strictEqual(client.response.endCalls, 1);
+			assert.strictEqual(client.request.listenerCount('close'), 0);
+			assert.strictEqual(client.response.listenerCount('close'), 0);
+			assert.strictEqual(client.response.listenerCount('error'), 0);
+			assert.strictEqual(client.response.listenerCount('drain'), 0);
+		}
 	});
 
 	test('returns bad request for malformed JSON', async () => {
@@ -1152,12 +1595,19 @@ function createServer(
 	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>,
 	servers: HucodeWebProjectManagerServer[],
 	fileSystem?: HucodeProjectStateFileSystem,
-	acquireStateWriteLease?: () => ReturnType<typeof toDisposable>
+	acquireStateWriteLease?: () => ReturnType<typeof toDisposable>,
+	eventClientLimit?: number
 ): HucodeWebProjectManagerServer {
+	const options = {
+		enabled: true,
+		fileSystem,
+		acquireStateWriteLease,
+		eventClientLimit,
+	};
 	const server = disposables.add(new HucodeWebProjectManagerServer(
 		serverDataPath,
 		new NullLogService(),
-		{ enabled: true, fileSystem, acquireStateWriteLease }
+		options
 	));
 	servers.push(server);
 	return server;
@@ -1293,48 +1743,114 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function handleEvents(
-	server: HucodeWebProjectManagerServer
+	server: HucodeWebProjectManagerServer,
+	options: {
+		readonly blockProjectWrites?: number;
+		readonly throwProjectWrites?: number;
+	} = {}
 ): Promise<ProjectManagerEventResponse> {
+	const response = startEvents(server, options);
+	await response.completion;
+	return response;
+}
+
+function startEvents(
+	server: HucodeWebProjectManagerServer,
+	options: {
+		readonly blockProjectWrites?: number;
+		readonly throwProjectWrites?: number;
+	} = {}
+): PendingProjectManagerEventResponse {
 	const req = Object.assign(new EventEmitter(), {
 		method: 'GET',
 		async *[Symbol.asyncIterator]() { },
 	});
-
-	let statusCode = 0;
-	let headers: Record<string, unknown> = {};
-	let rawBody = '';
-	const res = {
-		writeHead(status: number, nextHeaders?: Record<string, unknown>) {
-			statusCode = status;
-			headers = nextHeaders ?? {};
-		},
-		write(data: string) {
-			rawBody += data;
-		},
-		end(data?: string) {
-			rawBody += data ?? '';
-		},
-	};
-
-	assert.strictEqual(
-		await server.handle(
-			req,
-			res,
-			`${HUCODE_WEB_PROJECTS_API_PATH}/events`
-		),
-		true
+	const res = new TestProjectManagerEventResponse(
+		options.blockProjectWrites ?? 0,
+		options.throwProjectWrites ?? 0
 	);
+	const completion = server.handle(
+		req,
+		res,
+		`${HUCODE_WEB_PROJECTS_API_PATH}/events`
+	).then(result => {
+		assert.strictEqual(result, true);
+	});
 
 	return {
-		statusCode,
-		headers,
-		get body() {
-			return rawBody;
+		get statusCode() {
+			return res.statusCode;
 		},
+		get headers() {
+			return res.headers;
+		},
+		get body() {
+			return res.body;
+		},
+		request: req,
+		response: res,
 		close() {
 			req.emit('close');
 		},
+		completion,
 	};
+}
+
+class TestProjectManagerEventResponse extends EventEmitter {
+	statusCode = 0;
+	headers: Record<string, unknown> = {};
+	body = '';
+	endCalls = 0;
+	readonly writeHeadCalls: {
+		readonly status: number;
+		readonly headers: Record<string, unknown>;
+	}[] = [];
+
+	constructor(
+		private blockProjectWrites: number,
+		private throwProjectWrites: number
+	) {
+		super();
+	}
+
+	writeHead(
+		status: number,
+		nextHeaders?: Record<string, unknown>
+	): void {
+		if (this.writeHeadCalls.length) {
+			throw new Error('writeHead must not be called more than once');
+		}
+		this.statusCode = status;
+		this.headers = nextHeaders ?? {};
+		this.writeHeadCalls.push({
+			status,
+			headers: this.headers,
+		});
+	}
+
+	write(data: string): boolean {
+		if (
+			data.includes('event: projects\n') &&
+			this.throwProjectWrites > 0
+		) {
+			this.throwProjectWrites--;
+			throw new Error('response write failed');
+		}
+		this.body += data;
+		if (
+			data.includes('event: projects\n') &&
+			this.blockProjectWrites > 0
+		) {
+			this.blockProjectWrites--;
+			return false;
+		}
+		return true;
+	}
+
+	end(data?: string): void {
+		this.endCalls++;
+		this.body += data ?? '';
+	}
 }
 
 async function handle(
