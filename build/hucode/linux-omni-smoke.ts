@@ -3,7 +3,12 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { type Browser, chromium } from 'playwright-core';
+import {
+	type Browser,
+	type BrowserContext,
+	chromium,
+	type Page,
+} from 'playwright-core';
 import { spawn, type ChildProcess } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import { createServer } from 'net';
@@ -11,13 +16,204 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const defaultTimeoutMs = 45_000;
+const defaultTimeoutMs = 180_000;
 const maximumLaunchAttempts = 3;
 const maximumLogLength = 64 * 1024;
 const stabilizationDelayMs = 1_500;
+const pollIntervalMs = 100;
+const workbenchLabels = ['Alpha', 'Bravo'] as const;
+
+type LinuxOmniWorkbenchLabel = typeof workbenchLabels[number];
+type LinuxOmniWorkbenchState =
+	| 'restore-pending'
+	| 'loading'
+	| 'active'
+	| 'loaded'
+	| 'dormant'
+	| 'unloaded'
+	| 'missing'
+	| 'crashed';
+
+interface ILinuxOmniResolvedConfiguration {
+	readonly isOmniWindow?: boolean;
+	readonly isHostedOmniWorkspace?: boolean;
+	readonly hostedInstanceId?: string;
+	readonly workspace?: {
+		readonly uri?: {
+			readonly scheme?: string;
+			readonly path?: string;
+		};
+	};
+}
 
 /**
- * Parsed command-line options for the packaged Linux Omni startup smoke test.
+ * Serializable renderer information used to classify CDP targets.
+ */
+export interface ILinuxOmniTargetCandidate {
+	readonly targetId?: string;
+	readonly url: string;
+	readonly configuration?: ILinuxOmniResolvedConfiguration;
+	readonly configurationError?: string;
+	readonly crashed?: boolean;
+}
+
+/**
+ * One live hosted workbench found through its resolved renderer configuration.
+ */
+export interface ILinuxOmniWorkbenchTarget {
+	readonly targetId?: string;
+	readonly url: string;
+	readonly worktreePath: string;
+	readonly hostedInstanceId: string;
+}
+
+/**
+ * Strictly classified Omni renderer inventory.
+ */
+export interface ILinuxOmniTargetInventory {
+	readonly shellUrl: string;
+	readonly shellTargetId?: string;
+	readonly workbenches: readonly ILinuxOmniWorkbenchTarget[];
+	readonly crashedRendererUrls: readonly string[];
+}
+
+/**
+ * One Projects row observed during the lifecycle smoke test.
+ */
+export interface ILinuxOmniWorkbenchRow {
+	readonly label: string;
+	readonly state: LinuxOmniWorkbenchState;
+	readonly active: boolean;
+	readonly ariaLabel?: string;
+}
+
+/**
+ * Observable shell and target state at one lifecycle phase.
+ */
+export interface ILinuxOmniLifecycleObservation {
+	readonly rows: readonly ILinuxOmniWorkbenchRow[];
+	readonly targetPaths: readonly string[];
+	readonly shellResponsive: boolean;
+}
+
+/**
+ * Expected observable shell and target state at one lifecycle phase.
+ */
+export interface ILinuxOmniLifecycleExpectation {
+	readonly rows: readonly ILinuxOmniWorkbenchRow[];
+	readonly targetPaths: readonly string[];
+}
+
+/**
+ * Deterministic persisted state and settings for the lifecycle scenario.
+ */
+export interface ILinuxOmniSmokeFixture {
+	readonly storage: {
+		readonly windowsState: object;
+	};
+	readonly settings: Readonly<Record<string, string>>;
+}
+
+/**
+ * Named phases emitted in diagnostics by the packaged lifecycle smoke.
+ */
+export const linuxOmniLifecyclePhases = [
+	'initial restore',
+	'switch to Bravo',
+	'switch to Alpha',
+	'suspend Bravo',
+	'restore Bravo',
+	'crash Bravo',
+	'recover Bravo',
+	'quit',
+	'relaunch restore',
+] as const;
+
+type LinuxOmniLifecyclePhase = typeof linuxOmniLifecyclePhases[number];
+
+/**
+ * Expected UI and renderer inventory for every observable lifecycle phase.
+ */
+export function createLinuxOmniLifecycleExpectations(
+	alphaPath: string,
+	bravoPath: string
+): Readonly<Partial<Record<
+	LinuxOmniLifecyclePhase,
+	ILinuxOmniLifecycleExpectation
+>>> {
+	return {
+		'initial restore': {
+			rows: [
+				{ label: 'Alpha', state: 'active', active: true },
+				{ label: 'Bravo', state: 'dormant', active: false },
+			],
+			targetPaths: [alphaPath],
+		},
+		'switch to Bravo': {
+			rows: [
+				{ label: 'Alpha', state: 'loaded', active: false },
+				{ label: 'Bravo', state: 'active', active: true },
+			],
+			targetPaths: [alphaPath, bravoPath],
+		},
+		'switch to Alpha': {
+			rows: [
+				{ label: 'Alpha', state: 'active', active: true },
+				{ label: 'Bravo', state: 'loaded', active: false },
+			],
+			targetPaths: [alphaPath, bravoPath],
+		},
+		'suspend Bravo': {
+			rows: [
+				{ label: 'Alpha', state: 'active', active: true },
+				{ label: 'Bravo', state: 'dormant', active: false },
+			],
+			targetPaths: [alphaPath],
+		},
+		'restore Bravo': {
+			rows: [
+				{ label: 'Alpha', state: 'loaded', active: false },
+				{ label: 'Bravo', state: 'active', active: true },
+			],
+			targetPaths: [alphaPath, bravoPath],
+		},
+		'crash Bravo': {
+			rows: [
+				{ label: 'Alpha', state: 'loaded', active: false },
+				{ label: 'Bravo', state: 'crashed', active: false },
+			],
+			targetPaths: [alphaPath],
+		},
+		'recover Bravo': {
+			rows: [
+				{ label: 'Alpha', state: 'loaded', active: false },
+				{ label: 'Bravo', state: 'active', active: true },
+			],
+			targetPaths: [alphaPath, bravoPath],
+		},
+		'relaunch restore': {
+			rows: [
+				{ label: 'Alpha', state: 'dormant', active: false },
+				{ label: 'Bravo', state: 'active', active: true },
+			],
+			targetPaths: [bravoPath],
+		},
+	};
+}
+
+interface ILinuxOmniLaunch {
+	readonly browser: Browser;
+	readonly child: ChildProcess;
+	readonly getSpawnError: () => Error | undefined;
+}
+
+interface ILinuxOmniRuntimeInventory {
+	readonly inventory: ILinuxOmniTargetInventory;
+	readonly pagesByTargetId: ReadonlyMap<string, Page>;
+}
+
+/**
+ * Parsed command-line options for the packaged Linux Omni lifecycle smoke.
  */
 export interface ILinuxOmniSmokeOptions {
 	readonly executablePath: string;
@@ -34,7 +230,7 @@ export interface ILinuxOmniRendererSummary {
 }
 
 /**
- * Parses the packaged Linux Omni startup smoke command line.
+ * Parses the packaged Linux Omni lifecycle smoke command line.
  */
 export function parseLinuxOmniSmokeOptions(
 	args: readonly string[]
@@ -76,7 +272,7 @@ export function parseLinuxOmniSmokeOptions(
 }
 
 /**
- * Builds arguments for an isolated packaged Hucode startup with CDP enabled.
+ * Builds arguments for an isolated packaged Hucode lifecycle with CDP enabled.
  */
 export function buildLinuxOmniSmokeArguments(
 	userDataDir: string,
@@ -92,7 +288,246 @@ export function buildLinuxOmniSmokeArguments(
 		'--skip-release-notes',
 		'--skip-welcome',
 		'--password-store=basic',
+		'--enable-smoke-test-driver',
 	];
+}
+
+/**
+ * Creates the direct FileStorage payload and user settings for two retained
+ * arbitrary-folder workbenches.
+ */
+export function createLinuxOmniSmokeFixture(
+	alphaPath: string,
+	bravoPath: string
+): ILinuxOmniSmokeFixture {
+	const createRetainedWorkbench = (
+		id: string,
+		label: LinuxOmniWorkbenchLabel,
+		worktreePath: string,
+		order: number,
+		lastActiveAt: number
+	) => ({
+		id,
+		folderUri: {
+			scheme: 'file',
+			path: worktreePath,
+		},
+		label,
+		desiredState: 'loaded',
+		order,
+		lastActiveAt,
+	});
+
+	return {
+		storage: {
+			windowsState: {
+				lastActiveWindow: {
+					windowKind: 'omni',
+					omniActiveWorktreePath: alphaPath,
+					omniRetainedWorkbenches: [
+						createRetainedWorkbench(
+							'smoke-alpha',
+							'Alpha',
+							alphaPath,
+							0,
+							2
+						),
+						createRetainedWorkbench(
+							'smoke-bravo',
+							'Bravo',
+							bravoPath,
+							1,
+							1
+						),
+					],
+					uiState: {
+						width: 1200,
+						height: 800,
+						mode: 0,
+					},
+				},
+				openedWindows: [],
+			},
+		},
+		settings: {
+			'window.restoreWindows': 'one',
+			'window.confirmBeforeClose': 'never',
+			'hucode.omni.restoreHostedWorkbenches': 'active',
+		},
+	};
+}
+
+/**
+ * Classifies application targets by their resolved sandbox configuration.
+ */
+export function classifyLinuxOmniTargets(
+	candidates: readonly ILinuxOmniTargetCandidate[],
+	expectedWorktreePaths: readonly string[]
+): ILinuxOmniTargetInventory {
+	const expectedPaths = new Set(expectedWorktreePaths.map(normalizeSmokePath));
+	const shellCandidates: ILinuxOmniTargetCandidate[] = [];
+	const workbenches: ILinuxOmniWorkbenchTarget[] = [];
+	const crashedRendererUrls: string[] = [];
+
+	for (const candidate of candidates) {
+		if (/^(?:chrome-)?devtools:\/\//.test(candidate.url)) {
+			continue;
+		}
+		if (candidate.crashed) {
+			crashedRendererUrls.push(candidate.url);
+			continue;
+		}
+
+		const configuration = candidate.configuration;
+		if (
+			configuration?.isOmniWindow === true &&
+			configuration.isHostedOmniWorkspace !== true
+		) {
+			shellCandidates.push(candidate);
+			continue;
+		}
+
+		if (configuration?.isHostedOmniWorkspace === true) {
+			const hostedInstanceId = configuration.hostedInstanceId;
+			const workspaceUri = configuration.workspace?.uri;
+			const worktreePath = workspaceUri?.scheme === 'file' &&
+					typeof workspaceUri.path === 'string'
+				? normalizeSmokePath(workspaceUri.path)
+				: undefined;
+			if (
+				!hostedInstanceId ||
+				!worktreePath ||
+				!expectedPaths.has(worktreePath)
+			) {
+				throw new Error(
+					`Observed invalid hosted target ${JSON.stringify(candidate)}`
+				);
+			}
+
+			workbenches.push({
+				...(candidate.targetId === undefined
+					? {}
+					: { targetId: candidate.targetId }),
+				url: candidate.url,
+				worktreePath,
+				hostedInstanceId,
+			});
+			continue;
+		}
+
+		throw new Error(
+			'Unclassified application target ' +
+				JSON.stringify(candidate)
+		);
+	}
+
+	if (shellCandidates.length !== 1) {
+		throw new Error(
+			'Expected exactly one Omni shell target, observed ' +
+				`${shellCandidates.length}: ${JSON.stringify(shellCandidates)}`
+		);
+	}
+
+	for (const worktreePath of expectedPaths) {
+		const matching = workbenches.filter(
+			target => target.worktreePath === worktreePath
+		);
+		if (matching.length > 1) {
+			throw new Error(
+				`Expected at most one live hosted target for ${worktreePath}, ` +
+					`observed ${matching.length}: ${JSON.stringify(matching)}`
+			);
+		}
+	}
+
+	const instanceIds = workbenches.map(target => target.hostedInstanceId);
+	if (new Set(instanceIds).size !== instanceIds.length) {
+		throw new Error(
+			'Hosted target instance IDs are not unique: ' +
+				JSON.stringify(workbenches)
+		);
+	}
+
+	const shell = shellCandidates[0];
+	return {
+		shellUrl: shell.url,
+		...(shell.targetId === undefined
+			? {}
+			: { shellTargetId: shell.targetId }),
+		workbenches,
+		crashedRendererUrls,
+	};
+}
+
+/**
+ * Verifies exact visible lifecycle state without depending on renderer order.
+ */
+export function assertLinuxOmniLifecycleObservation(
+	phase: LinuxOmniLifecyclePhase,
+	observation: ILinuxOmniLifecycleObservation,
+	expectation: ILinuxOmniLifecycleExpectation
+): void {
+	const normalizeRows = (rows: readonly ILinuxOmniWorkbenchRow[]) =>
+		[...rows]
+			.map(row => ({
+				label: row.label,
+				state: row.state,
+				active: row.active,
+			}))
+			.sort((a, b) => a.label.localeCompare(b.label));
+	const expectedRows = normalizeRows(expectation.rows);
+	const observedRows = normalizeRows(observation.rows);
+	const expectedTargets = expectation.targetPaths
+		.map(normalizeSmokePath)
+		.sort();
+	const observedTargets = observation.targetPaths
+		.map(normalizeSmokePath)
+		.sort();
+	const invalidAriaRows = observation.rows.filter(row => {
+		const expectedStateLabel =
+			row.state === 'restore-pending'
+				? 'Loading'
+				: row.state.charAt(0).toUpperCase() + row.state.slice(1);
+		return (
+			!row.ariaLabel ||
+			!row.ariaLabel.startsWith(`${row.label}, `) ||
+			!row.ariaLabel.endsWith(`, ${expectedStateLabel}`)
+		);
+	});
+
+	if (
+		!observation.shellResponsive ||
+		JSON.stringify(observedRows) !== JSON.stringify(expectedRows) ||
+		JSON.stringify(observedTargets) !== JSON.stringify(expectedTargets) ||
+		invalidAriaRows.length
+	) {
+		throw new Error(
+			`${phase}: expected ${JSON.stringify({
+				rows: expectedRows,
+				targetPaths: expectedTargets,
+				shellResponsive: true,
+			})}, observed ${JSON.stringify({
+				rows: observedRows,
+				targetPaths: observedTargets,
+				shellResponsive: observation.shellResponsive,
+				invalidAriaRows,
+			})}`
+		);
+	}
+}
+
+/**
+ * Formats an application exit with the lifecycle phase that observed it.
+ */
+export function formatLinuxOmniUnexpectedExit(
+	phase: LinuxOmniLifecyclePhase,
+	exitCode: number | null,
+	signalCode: NodeJS.Signals | null
+): string {
+	return (
+		`Packaged application exited during ${phase} ` +
+		`(code=${exitCode}, signal=${signalCode})`
+	);
 }
 
 /**
@@ -141,28 +576,52 @@ export function getLinuxOmniStabilizationDelay(
 }
 
 /**
- * Runs the clean-profile startup assertion against a packaged Linux build.
+ * Runs the packaged Linux Omni hosted-workbench lifecycle scenario.
  */
 export async function runLinuxOmniSmoke(
 	options: ILinuxOmniSmokeOptions
 ): Promise<ILinuxOmniRendererSummary> {
 	if (process.platform !== 'linux') {
-		throw new Error('The packaged Omni startup smoke test requires Linux');
+		throw new Error('The packaged Omni lifecycle smoke test requires Linux');
 	}
 
-	const executablePath = await resolveLinuxExecutable(options.executablePath);
+	const executablePath = await resolveLinuxOmniExecutable(
+		options.executablePath
+	);
 	const temporaryRoot = await fs.mkdtemp(
 		path.join(os.tmpdir(), 'hucode-linux-omni-smoke-')
 	);
 	const userDataDir = path.join(temporaryRoot, 'user-data');
 	const extensionsDir = path.join(temporaryRoot, 'extensions');
+	const alphaPath = path.join(temporaryRoot, 'Alpha');
+	const bravoPath = path.join(temporaryRoot, 'Bravo');
+	const fixture = createLinuxOmniSmokeFixture(alphaPath, bravoPath);
 	await Promise.all([
-		fs.mkdir(userDataDir, { recursive: true }),
+		fs.mkdir(path.join(userDataDir, 'User', 'globalStorage'), {
+			recursive: true,
+		}),
 		fs.mkdir(extensionsDir, { recursive: true }),
+		fs.mkdir(alphaPath, { recursive: true }),
+		fs.mkdir(bravoPath, { recursive: true }),
+	]);
+	await Promise.all([
+		fs.writeFile(
+			path.join(userDataDir, 'User', 'globalStorage', 'storage.json'),
+			JSON.stringify(fixture.storage, null, 4)
+		),
+		fs.writeFile(
+			path.join(userDataDir, 'User', 'settings.json'),
+			JSON.stringify(fixture.settings, null, 4)
+		),
 	]);
 
-	let child: ChildProcess | undefined;
-	let browser: Browser | undefined;
+	const expectedPaths = [alphaPath, bravoPath];
+	const lifecycleExpectations = createLinuxOmniLifecycleExpectations(
+		alphaPath,
+		bravoPath
+	);
+	const crashedPages = new Set<Page>();
+	let launch: ILinuxOmniLaunch | undefined;
 	let output = '';
 	const appendOutput = (chunk: Buffer): void => {
 		output = (output + chunk.toString()).slice(-maximumLogLength);
@@ -170,86 +629,153 @@ export async function runLinuxOmniSmoke(
 
 	try {
 		const deadline = Date.now() + options.timeoutMs;
-		let getSpawnError: () => Error | undefined = () => undefined;
-		let connectionError: Error | undefined;
-		for (
-			let attempt = 1;
-			attempt <= maximumLaunchAttempts && Date.now() < deadline;
-			attempt++
-		) {
-			const port = await getAvailablePort();
-			child = spawn(
-				executablePath,
-				buildLinuxOmniSmokeArguments(userDataDir, extensionsDir, port),
-				{
-					detached: true,
-					env: withoutInheritedElectronEnvironment(process.env),
-					stdio: ['ignore', 'pipe', 'pipe'],
-				}
-			);
-			let spawnError: Error | undefined;
-			getSpawnError = () => spawnError;
-			child.stdout?.on('data', appendOutput);
-			child.stderr?.on('data', appendOutput);
-			child.once('error', error => spawnError = error);
+		launch = await launchLinuxOmni(
+			executablePath,
+			userDataDir,
+			extensionsDir,
+			deadline,
+			appendOutput
+		);
 
-			const attemptDeadline = getLinuxOmniLaunchAttemptDeadline(
-				deadline,
-				Date.now(),
-				maximumLaunchAttempts - attempt + 1
-			);
-			try {
-				browser = await connectToCdp(
-					port,
-					child,
-					attemptDeadline,
-					getSpawnError
-				);
-				break;
-			} catch (error) {
-				connectionError = error instanceof Error
-					? error
-					: new Error(String(error));
-				await terminateProcessGroup(child);
-				child = undefined;
-			}
-		}
+		let runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'initial restore',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'initial restore')
+		);
+		let shellPage = getShellPage(runtime);
+		const initialAlpha = getWorkbenchTarget(
+			runtime,
+			alphaPath
+		);
 
-		if (!browser || !child) {
-			throw connectionError ?? new Error('Timed out launching Hucode');
-		}
+		await clickWorkbenchRow(shellPage, 'Bravo');
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'switch to Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'switch to Bravo')
+		);
+		const firstBravo = getWorkbenchTarget(runtime, bravoPath);
 
-		await waitForOmniRenderer(browser, child, deadline, getSpawnError);
+		await clickWorkbenchRow(shellPage, 'Alpha');
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'switch to Alpha',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'switch to Alpha')
+		);
+		assertSameInstance('Alpha', initialAlpha, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		assertSameInstance('Bravo', firstBravo, getWorkbenchTarget(
+			runtime,
+			bravoPath
+		));
 
-		// A late fallback is the regression this smoke test is intended to catch.
-		await delay(getLinuxOmniStabilizationDelay(deadline, Date.now()));
-		const summary = summarizeLinuxOmniRenderers(getRendererUrls(browser));
-		if (
-			summary.applicationRendererCount !== 1 ||
-			summary.omniRendererCount !== 1
-		) {
-			throw new Error(
-				'Expected exactly one Hucode application renderer and one Omni ' +
-				`renderer, observed ${JSON.stringify(summary)}`
-			);
-		}
+		shellPage = getShellPage(runtime);
+		await suspendWorkbenchThroughUi(shellPage, 'Bravo');
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'suspend Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'suspend Bravo')
+		);
 
-		return summary;
+		shellPage = getShellPage(runtime);
+		await clickWorkbenchRow(shellPage, 'Bravo');
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'restore Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'restore Bravo')
+		);
+		const restoredBravo = getWorkbenchTarget(runtime, bravoPath);
+		assertNewInstance('suspend and restore Bravo', firstBravo, restoredBravo);
+
+		const bravoPage = getTargetPage(runtime, restoredBravo);
+		await crashLinuxOmniPage(bravoPage, deadline);
+		crashedPages.add(bravoPage);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'crash Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'crash Bravo')
+		);
+
+		shellPage = getShellPage(runtime);
+		await clickWorkbenchRow(shellPage, 'Bravo');
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'recover Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'recover Bravo')
+		);
+		const recoveredBravo = getWorkbenchTarget(runtime, bravoPath);
+		assertNewInstance('crash recovery for Bravo', restoredBravo, recoveredBravo);
+
+		const quitPage = getTargetPage(runtime, recoveredBravo);
+		await quitLinuxOmniThroughKeyboard(
+			launch,
+			quitPage,
+			deadline,
+			'hosted Bravo target'
+		);
+		await launch.browser.close().catch(() => undefined);
+		launch = undefined;
+
+		launch = await launchLinuxOmni(
+			executablePath,
+			userDataDir,
+			extensionsDir,
+			deadline,
+			appendOutput
+		);
+		await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'relaunch restore',
+			expectedPaths,
+			new Set<Page>(),
+			getLifecycleExpectation(lifecycleExpectations, 'relaunch restore')
+		);
+
+		return summarizeLinuxOmniRenderers(getRendererUrls(launch.browser));
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
 		throw new Error(
 			`${detail}\nPackaged application output:\n${output || '<none>'}`
 		);
 	} finally {
-		await browser?.close().catch(() => undefined);
-		if (child) {
-			await terminateProcessGroup(child);
+		await launch?.browser.close().catch(() => undefined);
+		if (launch) {
+			await terminateProcessGroup(launch.child);
 		}
 		await fs.rm(temporaryRoot, { recursive: true, force: true });
 	}
 }
 
-async function resolveLinuxExecutable(inputPath: string): Promise<string> {
+/**
+ * Resolves a packaged app directory or executable and verifies executability.
+ */
+export async function resolveLinuxOmniExecutable(
+	inputPath: string
+): Promise<string> {
 	const resolvedPath = path.resolve(inputPath);
 	const stat = await fs.stat(resolvedPath);
 	const executablePath = stat.isDirectory()
@@ -257,6 +783,473 @@ async function resolveLinuxExecutable(inputPath: string): Promise<string> {
 		: resolvedPath;
 	await fs.access(executablePath, constants.X_OK);
 	return executablePath;
+}
+
+async function launchLinuxOmni(
+	executablePath: string,
+	userDataDir: string,
+	extensionsDir: string,
+	deadline: number,
+	appendOutput: (chunk: Buffer) => void
+): Promise<ILinuxOmniLaunch> {
+	let connectionError: Error | undefined;
+	for (
+		let attempt = 1;
+		attempt <= maximumLaunchAttempts && Date.now() < deadline;
+		attempt++
+	) {
+		const port = await getAvailablePort();
+		const child = spawn(
+			executablePath,
+			buildLinuxOmniSmokeArguments(userDataDir, extensionsDir, port),
+			{
+				detached: true,
+				env: withoutInheritedElectronEnvironment(process.env),
+				stdio: ['ignore', 'pipe', 'pipe'],
+			}
+		);
+		let spawnError: Error | undefined;
+		const getSpawnError = () => spawnError;
+		child.stdout?.on('data', appendOutput);
+		child.stderr?.on('data', appendOutput);
+		child.once('error', error => spawnError = error);
+
+		const attemptDeadline = getLinuxOmniLaunchAttemptDeadline(
+			deadline,
+			Date.now(),
+			maximumLaunchAttempts - attempt + 1
+		);
+		try {
+			const browser = await connectToCdp(
+				port,
+				child,
+				attemptDeadline,
+				getSpawnError
+			);
+			return { browser, child, getSpawnError };
+		} catch (error) {
+			connectionError = error instanceof Error
+				? error
+				: new Error(String(error));
+			await terminateProcessGroup(child);
+		}
+	}
+
+	throw connectionError ?? new Error('Timed out launching Hucode');
+}
+
+async function waitForLinuxOmniPhase(
+	launch: ILinuxOmniLaunch,
+	deadline: number,
+	phase: LinuxOmniLifecyclePhase,
+	expectedWorktreePaths: readonly string[],
+	crashedPages: ReadonlySet<Page>,
+	expectation: ILinuxOmniLifecycleExpectation
+): Promise<ILinuxOmniRuntimeInventory> {
+	let lastError: Error | undefined;
+	while (Date.now() < deadline) {
+		ensureChildIsRunning(
+			launch.child,
+			launch.getSpawnError(),
+			phase
+		);
+		try {
+			const runtime = await readLinuxOmniRuntimeInventory(
+				launch.browser,
+				expectedWorktreePaths,
+				crashedPages
+			);
+			const shellPage = getShellPage(runtime);
+			const rows = await readWorkbenchRows(shellPage);
+			const shellResponsive = await shellPage.evaluate(() => {
+				const targetGlobal = globalThis as unknown as {
+					readonly document?: {
+						readonly readyState?: string;
+						readonly body?: unknown;
+					};
+				};
+				return (
+					targetGlobal.document?.readyState === 'complete' &&
+					!!targetGlobal.document.body
+				);
+			});
+			assertLinuxOmniLifecycleObservation(
+				phase,
+				{
+					rows,
+					targetPaths: runtime.inventory.workbenches.map(
+						target => target.worktreePath
+					),
+					shellResponsive,
+				},
+				expectation
+			);
+			return runtime;
+		} catch (error) {
+			lastError = error instanceof Error
+				? error
+				: new Error(String(error));
+			await delay(pollIntervalMs);
+		}
+	}
+
+	throw new Error(
+		`Timed out during ${phase}: ${lastError?.message ?? 'no observation'}`
+	);
+}
+
+async function readLinuxOmniRuntimeInventory(
+	browser: Browser,
+	expectedWorktreePaths: readonly string[],
+	crashedPages: ReadonlySet<Page>
+): Promise<ILinuxOmniRuntimeInventory> {
+	const pagesByTargetId = new Map<string, Page>();
+	const candidates: ILinuxOmniTargetCandidate[] = [];
+	let targetIndex = 0;
+
+	for (const context of browser.contexts()) {
+		for (const page of context.pages()) {
+			const targetId = String(targetIndex++);
+			pagesByTargetId.set(targetId, page);
+			if (crashedPages.has(page)) {
+				candidates.push({
+					targetId,
+					url: page.url(),
+					crashed: true,
+				});
+				continue;
+			}
+
+			try {
+				const configuration =
+					await page.evaluate(async (): Promise<
+						ILinuxOmniResolvedConfiguration
+					> => {
+						const targetWindow = globalThis as unknown as {
+							vscode?: {
+								context?: {
+									resolveConfiguration?: () => Promise<unknown>;
+								};
+							};
+						};
+						const resolveConfiguration =
+							targetWindow.vscode?.context?.resolveConfiguration;
+						if (!resolveConfiguration) {
+							throw new Error(
+								'window.vscode.context.resolveConfiguration unavailable'
+							);
+						}
+						const value = await resolveConfiguration.call(
+							targetWindow.vscode?.context
+						) as ILinuxOmniResolvedConfiguration;
+						return {
+							isOmniWindow: value.isOmniWindow,
+							isHostedOmniWorkspace:
+								value.isHostedOmniWorkspace,
+							hostedInstanceId: value.hostedInstanceId,
+							workspace: value.workspace?.uri
+								? {
+									uri: {
+										scheme: value.workspace.uri.scheme,
+										path: value.workspace.uri.path,
+									},
+								}
+								: undefined,
+						};
+					});
+				candidates.push({
+					targetId,
+					url: page.url(),
+					configuration,
+				});
+			} catch (error) {
+				candidates.push({
+					targetId,
+					url: page.url(),
+					configurationError: error instanceof Error
+						? error.message
+						: String(error),
+				});
+			}
+		}
+	}
+
+	return {
+		inventory: classifyLinuxOmniTargets(
+			candidates,
+			expectedWorktreePaths
+		),
+		pagesByTargetId,
+	};
+}
+
+async function readWorkbenchRows(
+	shellPage: Page
+): Promise<ILinuxOmniWorkbenchRow[]> {
+	return shellPage.locator(
+		'.monaco-list-row:has(.hucode-project-switcher-workbench)'
+	).evaluateAll((elements, expectedLabels) => {
+		const rows: ILinuxOmniWorkbenchRow[] = [];
+		for (const element of elements) {
+			const item = element.querySelector(
+				'.hucode-project-switcher-workbench'
+			);
+			const label = item?.querySelector(
+				'.hucode-project-switcher-label'
+			)?.textContent?.trim();
+			if (
+				!item ||
+				!label ||
+				!expectedLabels.includes(label as LinuxOmniWorkbenchLabel)
+			) {
+				continue;
+			}
+			const stateClass = [...item.classList].find(className =>
+				className.startsWith(
+					'hucode-project-switcher-workbench-'
+				)
+			);
+			const state = stateClass?.slice(
+				'hucode-project-switcher-workbench-'.length
+			) as LinuxOmniWorkbenchState | undefined;
+			if (!state) {
+				continue;
+			}
+			rows.push({
+				label,
+				state,
+				active: element.getAttribute('aria-current') === 'true',
+				ariaLabel: element.getAttribute('aria-label') ?? undefined,
+			});
+		}
+		return rows;
+	}, workbenchLabels);
+}
+
+async function clickWorkbenchRow(
+	shellPage: Page,
+	label: LinuxOmniWorkbenchLabel
+): Promise<void> {
+	const row = await getUniqueWorkbenchRow(shellPage, label);
+	await row.click();
+}
+
+async function suspendWorkbenchThroughUi(
+	shellPage: Page,
+	label: LinuxOmniWorkbenchLabel
+): Promise<void> {
+	const row = await getUniqueWorkbenchRow(shellPage, label);
+	await row.click({ button: 'right' });
+	const menuItem = shellPage.locator(
+		'.context-view .monaco-menu .action-label'
+	).filter({ hasText: /^Suspend Workbench$/ });
+	await menuItem.click();
+}
+
+async function getUniqueWorkbenchRow(
+	shellPage: Page,
+	label: LinuxOmniWorkbenchLabel
+) {
+	const rows = shellPage.locator(
+		'.monaco-list-row:has(.hucode-project-switcher-workbench)'
+	);
+	const matchingIndexes = await rows.evaluateAll(
+		(elements, expectedLabel) => elements.flatMap((element, index) => {
+			const actual = element.querySelector(
+				'.hucode-project-switcher-label'
+			)?.textContent?.trim();
+			return actual === expectedLabel ? [index] : [];
+		}),
+		label
+	);
+	if (matchingIndexes.length !== 1) {
+		throw new Error(
+			`Expected exactly one ${label} workbench row, observed ` +
+				`${matchingIndexes.length}`
+		);
+	}
+	return rows.nth(matchingIndexes[0]);
+}
+
+function getShellPage(runtime: ILinuxOmniRuntimeInventory): Page {
+	const targetId = runtime.inventory.shellTargetId;
+	const page = targetId === undefined
+		? undefined
+		: runtime.pagesByTargetId.get(targetId);
+	if (!page) {
+		throw new Error(
+			'Classified Omni shell target has no matching Playwright page'
+		);
+	}
+	return page;
+}
+
+function getWorkbenchTarget(
+	runtime: ILinuxOmniRuntimeInventory,
+	worktreePath: string
+): ILinuxOmniWorkbenchTarget {
+	const normalizedPath = normalizeSmokePath(worktreePath);
+	const matching = runtime.inventory.workbenches.filter(
+		target => target.worktreePath === normalizedPath
+	);
+	if (matching.length !== 1) {
+		throw new Error(
+			`Expected one hosted target for ${normalizedPath}, observed ` +
+				`${matching.length}: ${JSON.stringify(matching)}`
+		);
+	}
+	return matching[0];
+}
+
+function getTargetPage(
+	runtime: ILinuxOmniRuntimeInventory,
+	target: ILinuxOmniWorkbenchTarget
+): Page {
+	const page = target.targetId === undefined
+		? undefined
+		: runtime.pagesByTargetId.get(target.targetId);
+	if (!page) {
+		throw new Error(
+			`Hosted target ${target.hostedInstanceId} has no Playwright page`
+		);
+	}
+	return page;
+}
+
+function assertSameInstance(
+	label: LinuxOmniWorkbenchLabel,
+	before: ILinuxOmniWorkbenchTarget,
+	after: ILinuxOmniWorkbenchTarget
+): void {
+	if (before.hostedInstanceId !== after.hostedInstanceId) {
+		throw new Error(
+			`${label} was recreated while switching: ` +
+				`${before.hostedInstanceId} -> ${after.hostedInstanceId}`
+		);
+	}
+}
+
+function assertNewInstance(
+	operation: string,
+	before: ILinuxOmniWorkbenchTarget,
+	after: ILinuxOmniWorkbenchTarget
+): void {
+	if (before.hostedInstanceId === after.hostedInstanceId) {
+		throw new Error(
+			`${operation} reused hosted instance ${after.hostedInstanceId}`
+		);
+	}
+}
+
+async function crashLinuxOmniPage(
+	page: Page,
+	deadline: number
+): Promise<void> {
+	const crashEvent = new Promise<void>(resolve => {
+		page.once('crash', () => resolve());
+	});
+	const session = await getPageContext(page).newCDPSession(page);
+	void session.send('Page.crash').catch(() => undefined);
+	await waitForPromise(
+		crashEvent,
+		deadline,
+		'Timed out waiting for the Bravo renderer crash event'
+	);
+	await session.detach().catch(() => undefined);
+}
+
+async function quitLinuxOmniThroughKeyboard(
+	launch: ILinuxOmniLaunch,
+	page: Page,
+	deadline: number,
+	focusedTarget: string
+): Promise<void> {
+	const exit = new Promise<{
+		readonly code: number | null;
+		readonly signal: NodeJS.Signals | null;
+	}>(resolve => {
+		if (
+			launch.child.exitCode !== null ||
+			launch.child.signalCode !== null
+		) {
+			resolve({
+				code: launch.child.exitCode,
+				signal: launch.child.signalCode,
+			});
+			return;
+		}
+		launch.child.once('exit', (code, signal) => resolve({ code, signal }));
+	});
+
+	await page.keyboard.press('Control+Q');
+	const result = await waitForPromise(
+		exit,
+		deadline,
+		`Timed out waiting for Ctrl+Q from ${focusedTarget} to exit Hucode`
+	);
+	if (result.code !== 0 || result.signal !== null) {
+		throw new Error(
+			`${formatLinuxOmniUnexpectedExit(
+				'quit',
+				result.code,
+				result.signal
+			)} after Ctrl+Q from ${focusedTarget}`
+		);
+	}
+}
+
+function getPageContext(page: Page): BrowserContext {
+	return page.context();
+}
+
+async function waitForPromise<T>(
+	promise: Promise<T>,
+	deadline: number,
+	timeoutMessage: string
+): Promise<T> {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) {
+		throw new Error(timeoutMessage);
+	}
+
+	let timeout: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error(timeoutMessage)),
+					remaining
+				);
+			}),
+		]);
+	} finally {
+		if (timeout) {
+			clearTimeout(timeout);
+		}
+	}
+}
+
+function normalizeSmokePath(value: string): string {
+	try {
+		return path.normalize(decodeURIComponent(value));
+	} catch {
+		return path.normalize(value);
+	}
+}
+
+function getLifecycleExpectation(
+	expectations: Readonly<Partial<Record<
+		LinuxOmniLifecyclePhase,
+		ILinuxOmniLifecycleExpectation
+	>>>,
+	phase: LinuxOmniLifecyclePhase
+): ILinuxOmniLifecycleExpectation {
+	const expectation = expectations[phase];
+	if (!expectation) {
+		throw new Error(`Missing lifecycle expectation for ${phase}`);
+	}
+	return expectation;
 }
 
 function withoutInheritedElectronEnvironment(
@@ -302,7 +1295,7 @@ async function connectToCdp(
 ): Promise<Browser> {
 	let lastError: Error | undefined;
 	while (Date.now() < deadline) {
-		ensureChildIsRunning(child, getSpawnError());
+		ensureChildIsRunning(child, getSpawnError(), 'initial restore');
 		try {
 			return await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
 				timeout: Math.max(
@@ -319,27 +1312,6 @@ async function connectToCdp(
 	throw new Error(`Timed out connecting to CDP: ${lastError?.message}`);
 }
 
-async function waitForOmniRenderer(
-	browser: Browser,
-	child: ChildProcess,
-	deadline: number,
-	getSpawnError: () => Error | undefined
-): Promise<void> {
-	while (Date.now() < deadline) {
-		ensureChildIsRunning(child, getSpawnError());
-		const summary = summarizeLinuxOmniRenderers(getRendererUrls(browser));
-		if (summary.omniRendererCount > 0) {
-			return;
-		}
-		await delay(100);
-	}
-
-	throw new Error(
-		'Timed out waiting for an Omni renderer; observed ' +
-		JSON.stringify(getRendererUrls(browser))
-	);
-}
-
 function getRendererUrls(browser: Browser): string[] {
 	return browser.contexts().flatMap(context =>
 		context.pages().map(page => page.url())
@@ -348,7 +1320,8 @@ function getRendererUrls(browser: Browser): string[] {
 
 function ensureChildIsRunning(
 	child: ChildProcess,
-	spawnError: Error | undefined
+	spawnError: Error | undefined,
+	phase: LinuxOmniLifecyclePhase
 ): void {
 	if (spawnError) {
 		throw new Error(
@@ -357,8 +1330,11 @@ function ensureChildIsRunning(
 	}
 	if (child.exitCode !== null || child.signalCode !== null) {
 		throw new Error(
-			'Packaged application exited before the Omni renderer was ready ' +
-			`(code=${child.exitCode}, signal=${child.signalCode})`
+			formatLinuxOmniUnexpectedExit(
+				phase,
+				child.exitCode,
+				child.signalCode
+			)
 		);
 	}
 }
@@ -396,7 +1372,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 	runLinuxOmniSmoke(parseLinuxOmniSmokeOptions(process.argv.slice(2))).then(
 		summary => {
 			console.log(
-				'Packaged Linux Omni startup smoke passed: ' +
+				'Packaged Linux Omni lifecycle smoke passed: ' +
 				JSON.stringify(summary)
 			);
 		},

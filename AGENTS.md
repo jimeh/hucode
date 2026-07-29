@@ -179,3 +179,10 @@ as the required Hucode instruction set for work in this fork.
   is the third — a same-origin `MessagePort` handshake in
   `hostedOmniWebConnection.ts`. Anything deciding what a window is *allowed* to
   do needs one of those two, not the flags.
+- Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
+  CDP. Identify them through
+  `window.vscode.context.resolveConfiguration()` — their URLs are identical.
+  To crash one in a smoke test, subscribe to the page's `crash` event, fire
+  `Page.crash` without awaiting its response, and await the event instead; the
+  command response never arrives after the target dies, and the crashed page
+  remains in `context.pages()`.
