@@ -212,6 +212,25 @@ tag:
 
 ```sh
 git fetch "$VSCODE_REMOTE" tag <new-version>
+```
+
+While the replay checkout still contains Hucode's build tooling, compare every
+tracked upstream source with the fetched clean tag:
+
+```sh
+npm run hucode:check-upstream-provenance -- \
+  --upstream-ref <new-version>
+```
+
+This command is expected to fail when a tracked source changed. Record each
+reported path as an upgrade reconciliation item; do not update
+`build/hucode/upstream-provenance.json` just to silence it. The check must run
+here, before switching to the clean upstream tree where the Hucode script does
+not exist.
+
+Create and publish the clean baseline only after recording that result:
+
+```sh
 git switch --create upstream-<new-version> <new-version>
 git push -u origin upstream-<new-version>
 ```
@@ -221,6 +240,12 @@ Create the new series branch locally:
 ```sh
 git switch --create series-<new-version> upstream-<new-version>
 ```
+
+After adapting each reported Hucode fork or patch to the new upstream source,
+update that entry's `lastSyncedBaseline` and `blob`, then rerun the command
+against `upstream-<new-version>`. It must pass before the upgraded series is
+complete. The plain command, without `--upstream-ref`, only validates schema,
+fork completeness, and suite ownership and is safe in shallow CI checkouts.
 
 Do not push the new series branch yet. At this point it is still an unmodified
 upstream VS Code branch, so GitHub would run the regular upstream VS Code CI
@@ -358,6 +383,8 @@ Run at least:
 ```sh
 git log --oneline upstream-<new-version>..series-<new-version>
 git diff --stat upstream-<new-version>..series-<new-version>
+npm run hucode:check-upstream-provenance -- \
+  --upstream-ref upstream-<new-version>
 npm run precommit
 npm run hucode:compile
 ```
@@ -399,6 +426,20 @@ real `ProxyChannel.fromService` and asserts zero eager subscriptions. A
 regression fails that test rather than passing silently, so **do not dismiss it
 as a fixture problem.** If it fails after a bump, read
 `ProxyChannel.fromService` in the new baseline before changing the test.
+
+**Electron request `webContentsId`.** The `vscode-file` and top-level webview
+request filters in `src/vs/code/electron-main/app.ts` read an optional
+`webContentsId` that Electron does not expose in the typed request details.
+Hucode uses it to recognize a tracked hosted-workspace renderer. It supplements
+the separately tracked renderer process id; if Electron stops providing it,
+trust stays fail-closed and hosted resources can stop loading rather than an
+untrusted request becoming allowed.
+
+After an Electron or VS Code baseline upgrade, verify that the request details
+still provide the originating hosted `webContentsId` and that
+`isTrustedHostedWorkspaceRequest` continues to require either the tracked
+process id or the tracked web-contents id. Do not replace that check with a
+broader window or frame heuristic to preserve compatibility.
 
 ### Triage Of Failing Tests
 

@@ -7,6 +7,11 @@ import { promises as fs } from 'fs';
 import minimatch from 'minimatch';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+	UPSTREAM_PROVENANCE,
+	upstreamSuitesFromProvenance,
+	type ProvenanceTestSuite
+} from './upstream-provenance.ts';
 
 /**
  * Path of the Hucode CI workflow, relative to the repository root.
@@ -45,91 +50,17 @@ export const NODE_RUNNER_EXCLUDE_GLOBS = [
 /**
  * An upstream-named suite Hucode runs deliberately.
  */
-export interface UpstreamSuite {
-
-	/** Repository-relative source path. */
-	readonly file: string;
-
-	/** Why Hucode runs an upstream-named suite. */
-	readonly reason: string;
-}
+export type UpstreamSuite = ProvenanceTestSuite;
 
 /**
  * Suites Hucode runs that neither live under `src/vs/hucode/` nor carry a
  * `hucode*` name, so no rule can find them.
  *
- * This list is the residue of the problem: membership is a judgement about
- * which upstream surfaces Hucode has changed, which nothing in the tree
- * records. H1's forked-file provenance map is what would let these be derived
- * rather than remembered — until then, an omission here is still invisible.
+ * Membership is derived from the upstream provenance inventory so a Hucode
+ * surface and the upstream-named coverage it requires cannot drift apart.
  */
-export const UPSTREAM_SUITES: readonly UpstreamSuite[] = [
-	{
-		file: 'src/vs/platform/browserView/test/electron-main/'
-			+ 'browserViewHostedWebContents.test.ts',
-		reason: 'Hucode-authored suite for the integrated browser views that '
-			+ 'hosted Omni workbenches own',
-	},
-	{
-		file: 'src/vs/platform/browserView/test/electron-main/'
-			+ 'browserViewNativeHost.test.ts',
-		reason: 'Hucode-authored suite for browser-view native host routing',
-	},
-	{
-		file: 'src/vs/platform/projectManager/test/electron-main/'
-			+ 'projectManagerMainService.test.ts',
-		reason: 'the project manager service is Hucode-owned throughout',
-	},
-	{
-		file: 'src/vs/platform/utilityProcess/test/electron-main/'
-			+ 'utilityProcess.test.ts',
-		reason: 'Hucode-authored suite; hosted workbenches depend on utility '
-			+ 'process startup routing back to the right renderer',
-	},
-	{
-		file: 'src/vs/platform/windows/test/electron-main/'
-			+ 'windowsFinder.test.ts',
-		reason: 'upstream suite over window resolution, which Hucode changes '
-			+ 'in windowsMainService — rationale predates this list and is '
-			+ 'unrecorded elsewhere',
-	},
-	{
-		file: 'src/vs/workbench/services/extensionManagement/test/browser/'
-			+ 'extensionEnablementService.test.ts',
-		reason: 'Hucode patches the subject for Omni shell extension filtering',
-	},
-	{
-		file: 'src/vs/workbench/contrib/browserView/test/electron-browser/'
-			+ 'overlayManager.test.ts',
-		reason: 'upstream suite in the browser-view contribution Hucode '
-			+ 'extends — rationale predates this list and is unrecorded '
-			+ 'elsewhere',
-	},
-	// The rest sit in layers the Node runner enumerates automatically, so they
-	// need no explicit assignment. They are listed anyway: without them the
-	// snapshot is not the inventory it claims to be, and coverage could be
-	// lost to a future Node exclusion with nothing to show for it.
-	{
-		file: 'src/vs/platform/browserView/test/common/'
-			+ 'browserViewLayout.test.ts',
-		reason: 'Hucode-authored suite for browser-view layout arithmetic',
-	},
-	{
-		file: 'src/vs/platform/extensionManagement/test/node/'
-			+ 'extensionSignatureVerificationService.test.ts',
-		reason: 'Hucode patches the subject to verify OpenVSX signatures',
-	},
-	{
-		file: 'src/vs/platform/projectManager/test/common/'
-			+ 'projectManagerState.test.ts',
-		reason: 'the project manager service is Hucode-owned throughout',
-	},
-	{
-		file: 'src/vs/workbench/contrib/browserView/test/common/'
-			+ 'browserViewOwnership.test.ts',
-		reason: 'Hucode-authored suite for browser-view ownership rules',
-	},
-];
+export const UPSTREAM_SUITES: readonly UpstreamSuite[] =
+	upstreamSuitesFromProvenance(UPSTREAM_PROVENANCE);
 
 /**
  * Suites in a layer the Node runner excludes that Hucode nonetheless runs
