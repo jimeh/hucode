@@ -393,7 +393,10 @@ suite('Terminal hosted shutdown', () => {
 				lifecycleCalls,
 			}),
 		]);
-		Reflect.set(terminalService, '_backgroundedTerminalInstances', []);
+		setBackgroundedTerminal(terminalService, 34, {
+			shouldPersist: true,
+			lifecycleCalls,
+		});
 
 		assert.strictEqual(
 			await invokeBeforeShutdown(terminalService, ShutdownReason.RELOAD),
@@ -407,7 +410,7 @@ suite('Terminal hosted shutdown', () => {
 
 		assert.deepStrictEqual(backend.layoutUpdates, []);
 		assert.deepStrictEqual(lifecycleCalls, {
-			detached: [13],
+			detached: [13, 34],
 			disposed: [21],
 		});
 	});
@@ -493,10 +496,10 @@ function setBackgroundedTerminal(
 	}
 ): void {
 	Reflect.set(terminalService, '_backgroundedTerminalInstances', [{
-		instance: {
-			...createPersistentTerminal(options),
+		instance: createPersistentTerminal({
+			...options,
 			persistentProcessId,
-		},
+		}),
 	}]);
 }
 
