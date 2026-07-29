@@ -10,6 +10,7 @@ import { Color } from '../../../../base/common/color.js';
 import { Event } from '../../../../base/common/event.js';
 import { IJSONSchema, IJSONSchemaSnippet } from '../../../../base/common/jsonSchema.js';
 import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../base/common/network.js';
 import severity from '../../../../base/common/severity.js';
 import { URI, UriComponents, URI as uri } from '../../../../base/common/uri.js';
 import { IPosition, Position } from '../../../../editor/common/core/position.js';
@@ -300,7 +301,7 @@ export interface IErrorMemoryRange extends IMemoryRange {
  */
 export type MemoryRange = IValidMemoryRange | IUnreadableMemoryRange | IErrorMemoryRange;
 
-export const DEBUG_MEMORY_SCHEME = 'vscode-debug-memory';
+export const DEBUG_MEMORY_SCHEME = Schemas.vscodeDebugMemory;
 
 /**
  * An IMemoryRegion corresponds to a contiguous range of memory referred to

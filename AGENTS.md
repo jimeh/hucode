@@ -227,3 +227,8 @@ as the required Hucode instruction set for work in this fork.
   perspective. Internal commit failures must reject so the shell takes its
   remove-anyway path; `false` is reserved for an explicit protocol refusal
   before the commit begins.
+- Web shell-wide shutdown is currently contract-only and called only by an
+  explicit host. Ordinary browser lifecycle shutdown cannot await it and uses
+  per-workbench hosted unload instead. Any future awaited shell-close path must
+  add admission guards that reject workbenches opened after its shutdown
+  snapshot.
