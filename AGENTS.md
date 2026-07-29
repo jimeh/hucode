@@ -186,3 +186,10 @@ as the required Hucode instruction set for work in this fork.
   `Page.crash` without awaiting its response, and await the event instead; the
   command response never arrives after the target dies, and the crashed page
   remains in `context.pages()` until recovery destroys the crashed view.
+- Editor copy and cut commands synchronously emit nested document clipboard
+  events. Local Omni clipboard fallback must keep those nested events inside the
+  per-window forwarding-disabled scope or it can cancel and re-forward itself.
+- A hosted web unload commit is already irreversible from the shell's
+  perspective. Internal commit failures must reject so the shell takes its
+  remove-anyway path; `false` is reserved for an explicit protocol refusal
+  before the commit begins.
