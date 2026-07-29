@@ -6,7 +6,6 @@
 import * as fs from 'fs';
 import type * as http from 'http';
 import {
-	Limiter,
 	Queue,
 	raceCancellationError,
 } from '../../base/common/async.js';
@@ -44,6 +43,7 @@ export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_EVENT_CLIENT_LIMIT = 64;
 const DEFAULT_GIT_READ_CONCURRENCY = 4;
+const DEFAULT_PROJECT_REQUEST_PENDING_LIMIT = 64;
 const EVENT_RETRY_MS = 1000;
 const DEFAULT_EVENT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS = 30_000;
@@ -552,14 +552,150 @@ function nearestExistingAncestor(
 	return undefined;
 }
 
+interface HucodeProjectAdmissionEntry {
+	readonly factory: () => Promise<unknown>;
+	readonly resolve: (value: unknown) => void;
+	readonly reject: (error: unknown) => void;
+	cancellation: IDisposable;
+}
+
+/**
+ * Bounds retained request work while allowing disconnected requests to leave
+ * the waiting set before they acquire an execution slot.
+ */
+class HucodeProjectAdmissionQueue extends Disposable {
+	private readonly pending: HucodeProjectAdmissionEntry[] = [];
+	private readonly idleCallbacks: Array<() => void> = [];
+	private active = 0;
+	private unavailable = false;
+
+	constructor(
+		private readonly concurrency: number,
+		private readonly pendingLimit: number,
+		private readonly acquireActiveLease?: () => IDisposable
+	) {
+		super();
+	}
+
+	get size(): number {
+		return this.active + this.pending.length;
+	}
+
+	queue<T>(
+		factory: () => Promise<T>,
+		token: CancellationToken
+	): Promise<T> {
+		if (token.isCancellationRequested) {
+			return Promise.reject(new CancellationError());
+		}
+		if (this.unavailable) {
+			return Promise.reject(new ProjectRequestUnavailableError());
+		}
+		if (this.active >= this.concurrency &&
+			this.pending.length >= this.pendingLimit) {
+			return Promise.reject(new ProjectRequestCapacityError());
+		}
+
+		return new Promise<T>((resolve, reject) => {
+			const entry: HucodeProjectAdmissionEntry = {
+				factory,
+				resolve: value => resolve(value as T),
+				reject,
+				cancellation: Disposable.None,
+			};
+			entry.cancellation = token.onCancellationRequested(() => {
+				this.cancelPending(entry);
+			});
+			this.pending.push(entry);
+			this.consume();
+		});
+	}
+
+	private cancelPending(entry: HucodeProjectAdmissionEntry): void {
+		const index = this.pending.indexOf(entry);
+		if (index < 0) {
+			return;
+		}
+		this.pending.splice(index, 1);
+		entry.cancellation.dispose();
+		entry.reject(new CancellationError());
+	}
+
+	private consume(): void {
+		while (!this.unavailable &&
+			this.active < this.concurrency &&
+			this.pending.length > 0) {
+			const entry = this.pending.shift()!;
+			entry.cancellation.dispose();
+			this.active++;
+			let activeLease = Disposable.None;
+			let operation: Promise<unknown>;
+			try {
+				activeLease =
+					this.acquireActiveLease?.() ?? Disposable.None;
+				operation = entry.factory();
+			} catch (error) {
+				operation = Promise.reject(error);
+			}
+			void operation.then(
+				value => {
+					entry.resolve(value);
+					this.complete(activeLease);
+				},
+				error => {
+					entry.reject(error);
+					this.complete(activeLease);
+				}
+			);
+		}
+	}
+
+	runWhenIdle(callback: () => void): void {
+		if (this.active === 0) {
+			callback();
+		} else {
+			this.idleCallbacks.push(callback);
+		}
+	}
+
+	private complete(activeLease: IDisposable): void {
+		try {
+			this.active--;
+			if (!this.unavailable) {
+				this.consume();
+			}
+			if (this.active === 0) {
+				for (const callback of this.idleCallbacks.splice(0)) {
+					callback();
+				}
+			}
+		} finally {
+			activeLease.dispose();
+		}
+	}
+
+	override dispose(): void {
+		if (this.unavailable) {
+			return;
+		}
+		this.unavailable = true;
+		const error = new ProjectRequestUnavailableError();
+		for (const entry of this.pending.splice(0)) {
+			entry.cancellation.dispose();
+			entry.reject(error);
+		}
+		super.dispose();
+	}
+}
+
 /**
  * HTTP adapter for the serve-web Project Manager service.
  */
 export class HucodeWebProjectManagerServer extends Disposable {
 	private readonly service: ProjectManagerMainService | undefined;
 	private readonly stateService: HucodeProjectFileStateService | undefined;
-	private readonly mutationQueue = new Queue<void>();
-	private readonly gitReadLimiter: Limiter<unknown>;
+	private readonly mutationQueue: HucodeProjectAdmissionQueue;
+	private readonly gitReadLimiter: HucodeProjectAdmissionQueue;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
 	private readonly eventClientLimit: number;
 	private readonly eventHeartbeatIntervalMs: number;
@@ -581,10 +717,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly enabled: boolean;
 			readonly fileSystem?: HucodeProjectStateFileSystem;
 			readonly acquireStateWriteLease?: () => IDisposable;
+			readonly acquireMutationLease?: () => IDisposable;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventClientLimit?: number;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly gitReadConcurrency?: number;
+			/** Internal test override; this is not a serve-web setting. */
+			readonly requestPendingLimit?: number;
 			/** Internal test override; this is not a serve-web setting. */
 			readonly eventHeartbeatIntervalMs?: number;
 			/** Internal test override; this is not a serve-web setting. */
@@ -600,11 +739,24 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.eventBackpressureTimeoutMs =
 			options.eventBackpressureTimeoutMs ??
 			DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS;
-		this.gitReadLimiter = this._register(new Limiter<unknown>(
+		const requestPendingLimit = Math.max(
+			0,
+			options.requestPendingLimit ??
+			DEFAULT_PROJECT_REQUEST_PENDING_LIMIT
+		);
+		this.mutationQueue = this._register(
+			new HucodeProjectAdmissionQueue(
+				1,
+				requestPendingLimit,
+				options.acquireMutationLease
+			)
+		);
+		this.gitReadLimiter = this._register(new HucodeProjectAdmissionQueue(
 			Math.max(
 				1,
 				options.gitReadConcurrency ?? DEFAULT_GIT_READ_CONCURRENCY
-			)
+			),
+			requestPendingLimit
 		));
 
 		if (!options.enabled) {
@@ -618,11 +770,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				options.fileSystem ?? defaultProjectStateFileSystem,
 				options.acquireStateWriteLease
 			);
-		this.service = this._register(new ProjectManagerMainService(
+		this.service = new ProjectManagerMainService(
 			this.stateService,
 			logService,
 			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher(logService) },
-		));
+		);
 		this._register(this.service.onDidChangeProjects(projects => {
 			this.queueProjectsPublication(projects);
 		}));
@@ -757,6 +909,21 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return;
 		}
 		this.disposed = true;
+		this.mutationQueue.dispose();
+		this.gitReadLimiter.dispose();
+		const service = this.service;
+		if (service) {
+			this.mutationQueue.runWhenIdle(() => {
+				try {
+					service.dispose();
+				} catch (error) {
+					this.logService.error(
+						'[Hucode Projects] Failed to dispose project manager.',
+						error
+					);
+				}
+			});
+		}
 		this.pendingProjectPublication = undefined;
 		for (const client of Array.from(this.eventClients)) {
 			this.removeEventClient(client);
@@ -965,7 +1132,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			} finally {
 				this.retryPendingProjectPublication();
 			}
-		});
+		}, token);
 		this.throwIfCanceled(token);
 		return result!;
 	}
@@ -978,7 +1145,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const queued = this.gitReadLimiter.queue(async () => {
 			this.throwIfCanceled(token);
 			return read();
-		}) as Promise<T>;
+		}, token);
 		return raceCancellationError(queued, token);
 	}
 
@@ -1043,6 +1210,14 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res: HucodeWebProjectManagerResponse,
 		error: unknown
 	): true {
+		if (error instanceof ProjectRequestAdmissionError) {
+			return this.writeJson(
+				res,
+				503,
+				{ error: error.message, code: error.code },
+				{ 'Retry-After': '1' }
+			);
+		}
 		if (error instanceof ProjectStateUnavailableError) {
 			return this.writeJson(res, 503, {
 				error: error.message,
@@ -1318,6 +1493,33 @@ export class HucodeWebProjectManagerServer extends Disposable {
 }
 
 class BadRequestError extends Error { }
+
+class ProjectRequestAdmissionError extends Error {
+	constructor(
+		message: string,
+		readonly code: string
+	) {
+		super(message);
+	}
+}
+
+class ProjectRequestCapacityError extends ProjectRequestAdmissionError {
+	constructor() {
+		super(
+			'Project request capacity reached.',
+			'PROJECT_REQUEST_CAPACITY'
+		);
+	}
+}
+
+class ProjectRequestUnavailableError extends ProjectRequestAdmissionError {
+	constructor() {
+		super(
+			'Project request queue is unavailable.',
+			'PROJECT_REQUEST_UNAVAILABLE'
+		);
+	}
+}
 
 class ProjectStateUnavailableError extends Error {
 	readonly code = 'PROJECT_STATE_UNAVAILABLE';
