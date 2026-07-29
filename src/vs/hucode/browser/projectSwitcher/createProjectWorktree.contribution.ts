@@ -5,6 +5,11 @@
 
 import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
+import {
+	CancellationToken,
+	CancellationTokenSource,
+} from '../../../base/common/cancellation.js';
+import { isCancellationError } from '../../../base/common/errors.js';
 import { isWeb } from '../../../base/common/platform.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
@@ -70,7 +75,7 @@ function getProjectHandle(
 	return arg?.$treeItemHandle;
 }
 
-async function pickCreateWorktreeOptions(
+export async function pickCreateWorktreeOptions(
 	projectId: string,
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
@@ -79,9 +84,12 @@ async function pickCreateWorktreeOptions(
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellService
 ): Promise<CreateWorktreeOptions | undefined> {
-	const refs = await projectManagerService.getWorktreeRefs(projectId, {
-		sort: getGitBranchSortOrder(configurationService),
-	});
+	const cancellation = new CancellationTokenSource();
+	const refsPromise = projectManagerService.getWorktreeRefs(
+		projectId,
+		{ sort: getGitBranchSortOrder(configurationService) },
+		cancellation.token
+	);
 	const createBranchPick: CreateWorktreeQuickPick = {
 		kind: 'createBranch',
 		label: localize(
@@ -106,30 +114,41 @@ async function pickCreateWorktreeOptions(
 			'$(debug-disconnect)'
 		),
 	};
-	const picks: QuickPickInput<CreateWorktreeQuickPick>[] = [
+	const picks = refsPromise.then(refs => [
 		createBranchPick,
 		createBranchFromPick,
 		createDetachedPick,
-		{ type: 'separator' },
+		{ type: 'separator' as const },
 		...toCreateWorktreeRefPicks(refs, 'head'),
 		...toCreateWorktreeRefPicks(refs, 'remote'),
 		...toCreateWorktreeRefPicks(refs, 'tag'),
-	];
-	const choice = await runCreateWorktreeQuickInput(
-		quickInputService,
-		environmentService,
-		shellService,
-		() => quickInputService.pick(picks, {
-			placeHolder: localize(
-				'createWorktreePickRef',
-				'Select a branch or tag to create the new worktree from'
-			),
-			sortByLabel: false,
-		})
-	);
+	]);
+	let choice: CreateWorktreeQuickPick | undefined;
+	try {
+		choice = await runCreateWorktreeQuickInput(
+			quickInputService,
+			environmentService,
+			shellService,
+			() => quickInputService.pick(picks, {
+				placeHolder: localize(
+					'createWorktreePickRef',
+					'Select a branch or tag to create the new worktree from'
+				),
+				sortByLabel: false,
+			}, cancellation.token)
+		);
+	} catch (error) {
+		if (isCancellationError(error)) {
+			return undefined;
+		}
+		throw error;
+	} finally {
+		cancellation.dispose(true);
+	}
 	if (!choice) {
 		return undefined;
 	}
+	const refs = await refsPromise;
 
 	if (choice.kind === 'createBranch') {
 		const branchName = await pickCreateWorktreeBranchName(
@@ -222,7 +241,7 @@ function getGitBranchSortOrder(
 		: 'committerdate';
 }
 
-function pickCreateWorktreeBranchName(
+export async function pickCreateWorktreeBranchName(
 	projectId: string,
 	refs: readonly WorktreeRefRecord[],
 	projectManagerService: IProjectManagerService,
@@ -230,20 +249,40 @@ function pickCreateWorktreeBranchName(
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellService
 ): Promise<string | undefined> {
-	return runCreateWorktreeQuickInput(
-		quickInputService,
-		environmentService,
-		shellService,
-		() => quickInputService.input({
-			prompt: localize('createWorktreeBranch', 'Branch name'),
-			validateInput: value => validateCreateWorktreeBranchName(
-				projectId,
-				value,
-				refs,
-				projectManagerService
-			),
-		})
-	);
+	const cancellation = new CancellationTokenSource();
+	let validationCancellation: CancellationTokenSource | undefined;
+	try {
+		return await runCreateWorktreeQuickInput(
+			quickInputService,
+			environmentService,
+			shellService,
+			() => quickInputService.input({
+				prompt: localize('createWorktreeBranch', 'Branch name'),
+				validateInput: async value => {
+					validationCancellation?.dispose(true);
+					validationCancellation =
+						new CancellationTokenSource(cancellation.token);
+					try {
+						return await validateCreateWorktreeBranchName(
+							projectId,
+							value,
+							refs,
+							projectManagerService,
+							validationCancellation.token
+						);
+					} catch (error) {
+						if (isCancellationError(error)) {
+							return undefined;
+						}
+						throw error;
+					}
+				},
+			}, cancellation.token)
+		);
+	} finally {
+		validationCancellation?.dispose(true);
+		cancellation.dispose(true);
+	}
 }
 
 async function runCreateWorktreeQuickInput<T>(
@@ -296,7 +335,8 @@ async function validateCreateWorktreeBranchName(
 	projectId: string,
 	value: string,
 	refs: readonly WorktreeRefRecord[],
-	projectManagerService: IProjectManagerService
+	projectManagerService: IProjectManagerService,
+	token: CancellationToken
 ): Promise<string | undefined> {
 	const branchName = value.trim();
 	if (!branchName) {
@@ -318,7 +358,11 @@ async function validateCreateWorktreeBranchName(
 			branchName
 		);
 	}
-	if (!(await projectManagerService.isValidBranchName(projectId, branchName))) {
+	if (!(await projectManagerService.isValidBranchName(
+		projectId,
+		branchName,
+		token
+	))) {
 		return localize(
 			'createWorktreeBranchInvalidValidate',
 			'Branch name is not valid.'
@@ -479,7 +523,9 @@ registerAction2(class extends Action2 {
 
 			await projectManagerService.createWorktree(projectId, options);
 		} catch (error) {
-			notificationService.error(String(error));
+			if (!isCancellationError(error)) {
+				notificationService.error(String(error));
+			}
 		}
 	}
 });
