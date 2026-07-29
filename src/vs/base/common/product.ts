@@ -137,6 +137,7 @@ export interface IProductConfiguration {
 		readonly resourceUrlTemplate: string;
 		readonly nlsBaseUrl: string;
 		readonly accessSKUs?: string[];
+		readonly openVsxSignatureVerificationHosts?: string[];
 	};
 
 	readonly agentSdks?: { readonly [packageId: string]: IAgentSdkProductConfig };

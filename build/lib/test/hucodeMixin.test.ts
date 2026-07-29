@@ -53,6 +53,10 @@ suite('Hucode mixin', () => {
 			generated.extensionsGallery.serviceUrl,
 			'https://open-vsx.org/vscode/gallery'
 		);
+		assert.deepStrictEqual(
+			generated.extensionsGallery.openVsxSignatureVerificationHosts,
+			['open-vsx.org']
+		);
 		assert.ok(Array.isArray(generated.builtInExtensions));
 		assert.ok(generated.builtInExtensions.length > 0);
 		assert.ok(generated.defaultChatAgent);
