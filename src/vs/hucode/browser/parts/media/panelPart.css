@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /* Hide the top title border because we draw our own */
-.monaco-workbench .part.panel.bottom .composite.title {
+.monaco-workbench.hucode-omni-workbench .part.panel.bottom .composite.title {
 	border-top-width: 0;
 }
 
