@@ -50,6 +50,27 @@ suite('Hucode release workflow contract', () => {
 		assert.match(job, /needs:\n      - package\n      - linux-package-smoke/);
 	});
 
+	test('delegates update refresh retries to the build helper', () => {
+		const job = workflow.slice(
+			workflow.indexOf('  refresh-update-service:')
+		);
+
+		assert.match(job, /uses: actions\/checkout@/);
+		assert.match(
+			job,
+			/- name: Checkout repository[\s\S]*?persist-credentials: false/
+		);
+		assert.match(job, /uses: actions\/setup-node@/);
+		assert.match(
+			job,
+			/run: node build\/hucode\/dispatch-update-service\.ts/
+		);
+		assert.match(job, /GH_TOKEN: \$\{\{ steps\.release-bot-token\.outputs\.token \}\}/);
+		assert.match(job, /TAG_NAME: \$\{\{ github\.ref_name \}\}/);
+		assert.match(job, /COMMIT_SHA: \$\{\{ github\.sha \}\}/);
+		assert.doesNotMatch(job, /\bgh api\b/);
+	});
+
 	test('smokes clean DEB and RPM installs for public architectures', () => {
 		assert.deepStrictEqual({
 			publicArchitecturesOnly:
@@ -196,9 +217,9 @@ suite('Hucode release workflow contract', () => {
 		});
 	});
 
-	suite('packaged Omni startup smoke', () => {
+	suite('packaged Omni lifecycle smoke', () => {
 		const job = workflow.slice(
-			workflow.indexOf('  linux-omni-smoke:'),
+			workflow.indexOf('  linux-omni-lifecycle-smoke:'),
 			workflow.indexOf('  package:')
 		);
 
@@ -219,7 +240,7 @@ suite('Hucode release workflow contract', () => {
 		// environment drift onto a different step, where the packaged app
 		// never inherits it.
 		const launchStep = job.slice(
-			job.indexOf('- name: Run packaged Omni startup smoke')
+			job.indexOf('- name: Run packaged Omni lifecycle smoke')
 		);
 
 		test('runs the declared smoke script under a display and bus', () => {
@@ -227,7 +248,7 @@ suite('Hucode release workflow contract', () => {
 			// leaving the `--app` line behind stops npm forwarding the path.
 			assert.match(
 				launchStep,
-				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64/
+				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64 \\\n\s+--timeout-ms 300000/
 			);
 		});
 
@@ -296,8 +317,8 @@ suite('Hucode release workflow contract', () => {
 				publish.indexOf('    runs-on:')
 			);
 
-			assert.doesNotMatch(needs, /- linux-omni-smoke/);
-			assert.doesNotMatch(publish, /needs\.linux-omni-smoke/);
+			assert.doesNotMatch(needs, /- linux-omni-lifecycle-smoke/);
+			assert.doesNotMatch(publish, /needs\.linux-omni-lifecycle-smoke/);
 		});
 	});
 

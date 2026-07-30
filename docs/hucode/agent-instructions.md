@@ -371,6 +371,9 @@ human-facing guides rather than replacing them.
   Keep that orchestration in Hucode-owned workflow/script files; running those
   bundles in parallel inside one GitHub-hosted Linux runner can exhaust runner
   resources and surface as a generic "operation was canceled" failure.
+- Keep the Architecture Checks job's 8 GB `NODE_OPTIONS` allowance. The
+  aggregate `valid-layers-check` graph can exhaust V8's default 4 GB heap on
+  GitHub runners even when the exact command passes locally.
 - The split bundle jobs intentionally prepare bundle inputs on each runner
   instead of consuming a prep artifact. `build/next/index.ts bundle` reads
   source-tree-generated inputs such as `src/.../codicon.ttf` in addition to
@@ -531,6 +534,77 @@ human-facing guides rather than replacing them.
   their `WebContentsView` is destroyed. If you tear them down directly from the
   shell main process without sending `vscode:onBeforeUnload` /
   `vscode:onWillUnload`, workspace UI state can reopen from stale storage.
+- Hosted workbench unload is two-phase on web as well as desktop. Never use
+  `ILifecycleService.shutdown()` as a preflight: `BrowserLifecycleService`
+  collects every `onBeforeShutdown` veto and drops it, and unloads regardless.
+  The veto-capable half is `prepareShutdown()`, which changes no
+  lifecycle-service state, and `commitShutdown()` is the irreversible half;
+  the hosted iframe protocol exposes them as
+  `prepareUnloadForCommit`/`commitUnload` in
+  `src/vs/hucode/browser/hostedOmniWebUnload.ts`. Keep the shell's generation
+  and path checks between the two, or an unload the shell aborts leaves a
+  workbench that looks live but is shut down. `prepareUnload` remains the
+  complete single-phase compatibility method for old shells driving new
+  children. Preparation is not a no-op for the workbench, though:
+  `onBeforeShutdown` listeners run for real, and some do not reset themselves
+  when the shutdown is abandoned.
+- The two unload phases fail in opposite directions, deliberately. Preparation
+  fails closed — a veto, a lost answer or a silent workbench all keep the
+  workbench, because it is still running and there is state to protect. The
+  commit fails open — the request is irreversible and already sent, so a
+  silence or a lost reply removes the workbench anyway; keeping its iframe
+  would leave the page wrapping a workbench that has already gone. An
+  *answered* refusal is not a silence and still keeps the workbench. Timeouts
+  never cancel the phase they gave up on, which is why neither budget can be
+  tight: a preparation that lands late has already run shutdown listeners on a
+  workbench the shell kept.
+- Concurrent unload requests for one hosted workbench share a single handshake
+  and a single outcome. Each caller declares a disposition — `suspend`,
+  `unload`, `dismiss`, or `shutdown` for page teardown — and the strongest one
+  requested is applied once, centrally, after the handshake. Do not give call
+  sites their own follow-up after the await: the commit sits between the
+  shell's checks and the removal, so two callers otherwise each apply their own
+  outcome and the result depends on arrival order, typically leaving a dormant
+  record offering to restore a workbench the user closed.
+- Overlapping window shutdown requests can escalate while hosted workbench
+  preparation is still pending. Keep the strongest unload reason and abandon
+  and repeat the preparation when it changes, so `onBeforeShutdown` and
+  `onWillShutdown` consumers agree on task and terminal persistence semantics.
+  Merely latching that a terminal shutdown was requested does not update the
+  renderer's already-prepared reason.
+- When closing several hosted workbenches in one window, close non-active
+  instances concurrently and wait before closing the snapshot-active instance.
+  Closing the active instance promotes a sibling and bumps its lifecycle
+  generation, which can supersede that sibling's in-flight close.
+- Desktop before-unload timeout or send failure aborts an ordinary close. The
+  shell rolls back any late preparation and reloads the workbench when rollback
+  cannot be confirmed. Terminal shutdown continues through an explicit veto or
+  preparation failure, still runs will-unload, and destroys the native view.
+- Removing an unloaded workbench and applying its disposition are separate
+  decisions with separate rules. Removal after a successful commit is
+  unconditional — the workbench is shut down, and refusing to remove it strands
+  a dead iframe. Applying the disposition first re-checks that the instance
+  still owns its path, because the commit is awaited and a crash-and-reopen can
+  put a live replacement there in the meantime; parking a dormant placeholder
+  over it would evict a live workbench from the model and leave its iframe
+  orphaned in the page. For the same reason a terminal disposition resolves its
+  retained record by the id the caller captured, not by path: a record that has
+  since been dismissed must be a no-op rather than a hit on whatever record
+  holds the folder now.
+- Hosted workbenches announce `HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` in
+  their ready message, and a workbench that announces nothing is from before
+  the unload split, where `prepareUnload` *was* the whole shutdown. This
+  pairing is reachable: `reloadWorkspace` reloads one hosted iframe without
+  touching the shell document, so a long-lived shell whose server rolled back
+  can drive an older workbench. For those the shell treats a successful
+  preparation as already committed — it neither commits nor re-checks
+  supersession, because the workbench is already gone and abandoning it there
+  would strand a dead iframe. The reverse pairing is reachable after a server
+  upgrade: a long-lived old shell can load a new child. Keep the child's
+  `prepareUnload` method single-phase while newer shells use the distinct
+  `prepareUnloadForCommit` method. Protocol version 2's RPC set was redefined
+  during unreleased hardening; intermediate version 2 heads are not a deployed
+  compatibility target.
 - Omni window close and app quit need to join hosted-workspace shutdown from
   the shell renderer's own `onWillShutdown` path. If the shell only destroys
   hosted `WebContentsView`s after the window starts going away, the child

@@ -890,7 +890,11 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	registerPart(part: Part): IDisposable {
 		const id = part.getId();
 		this.parts.set(id, part);
-		return toDisposable(() => this.parts.delete(id));
+		return toDisposable(() => {
+			if (this.parts.get(id) === part) {
+				this.parts.delete(id);
+			}
+		});
 	}
 
 	getPart(key: Parts): Part {
@@ -1009,6 +1013,9 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	setPartHidden(hidden: boolean, part: Parts): void {
+		// Showing the panel or auxiliary bar deliberately becomes a no-op in
+		// Omni: hosted workbenches own those surfaces, while the shell only
+		// implements their broad IWorkbenchLayoutService contract.
 		switch (part) {
 			case Parts.SIDEBAR_PART:
 				this.setSideBarHidden(hidden);

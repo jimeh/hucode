@@ -5,6 +5,14 @@
 
 import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
+import {
+	CancellationToken,
+	CancellationTokenSource,
+} from '../../../base/common/cancellation.js';
+import {
+	CancellationError,
+	isCancellationError,
+} from '../../../base/common/errors.js';
 import { isWeb } from '../../../base/common/platform.js';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from
@@ -47,6 +55,19 @@ type CreateWorktreeQuickPick = IQuickPickItem & (
 	| CreateWorktreeRefQuickPick
 );
 
+type CancellableProjectManagerService = IProjectManagerService & {
+	getWorktreeRefs(
+		projectId: string,
+		options: { readonly sort: WorktreeRefSortOrder },
+		token: CancellationToken
+	): Promise<readonly WorktreeRefRecord[]>;
+	isValidBranchName(
+		projectId: string,
+		branchName: string,
+		token: CancellationToken
+	): Promise<boolean>;
+};
+
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
 		return undefined;
@@ -70,18 +91,22 @@ function getProjectHandle(
 	return arg?.$treeItemHandle;
 }
 
-async function pickCreateWorktreeOptions(
+export async function pickCreateWorktreeOptions(
 	projectId: string,
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
 	notificationService: INotificationService,
 	configurationService: IConfigurationService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellService,
+	supportsRequestCancellation = isWeb
 ): Promise<CreateWorktreeOptions | undefined> {
-	const refs = await projectManagerService.getWorktreeRefs(projectId, {
-		sort: getGitBranchSortOrder(configurationService),
-	});
+	const cancellation = new CancellationTokenSource();
+	const refOptions = { sort: getGitBranchSortOrder(configurationService) };
+	const refsPromise = supportsRequestCancellation
+		? (projectManagerService as CancellableProjectManagerService)
+			.getWorktreeRefs(projectId, refOptions, cancellation.token)
+		: projectManagerService.getWorktreeRefs(projectId, refOptions);
 	const createBranchPick: CreateWorktreeQuickPick = {
 		kind: 'createBranch',
 		label: localize(
@@ -106,30 +131,56 @@ async function pickCreateWorktreeOptions(
 			'$(debug-disconnect)'
 		),
 	};
-	const picks: QuickPickInput<CreateWorktreeQuickPick>[] = [
+	let refLoadFailure: unknown;
+	let hasRefLoadFailure = false;
+	const picks = refsPromise.then(refs => [
 		createBranchPick,
 		createBranchFromPick,
 		createDetachedPick,
-		{ type: 'separator' },
+		{ type: 'separator' as const },
 		...toCreateWorktreeRefPicks(refs, 'head'),
 		...toCreateWorktreeRefPicks(refs, 'remote'),
 		...toCreateWorktreeRefPicks(refs, 'tag'),
-	];
-	const choice = await runCreateWorktreeQuickInput(
-		quickInputService,
-		environmentService,
-		shellService,
-		() => quickInputService.pick(picks, {
-			placeHolder: localize(
-				'createWorktreePickRef',
-				'Select a branch or tag to create the new worktree from'
-			),
-			sortByLabel: false,
-		})
-	);
+	], error => {
+		// QuickInputController creates a derived Promise.all for lazy picks.
+		// Keep the promise it receives fulfilled, dismiss the picker, and let
+		// the captured failure below preserve the actual error for callers.
+		if (!isCancellationError(error)) {
+			refLoadFailure = error;
+			hasRefLoadFailure = true;
+		}
+		cancellation.cancel();
+		return [] as CreateWorktreeQuickPick[];
+	});
+	let choice: CreateWorktreeQuickPick | undefined;
+	try {
+		choice = await runCreateWorktreeQuickInput(
+			quickInputService,
+			environmentService,
+			shellService,
+			() => quickInputService.pick(picks, {
+				placeHolder: localize(
+					'createWorktreePickRef',
+					'Select a branch or tag to create the new worktree from'
+				),
+				sortByLabel: false,
+			}, cancellation.token)
+		);
+	} catch (error) {
+		if (isCancellationError(error)) {
+			return undefined;
+		}
+		throw error;
+	} finally {
+		cancellation.dispose(true);
+	}
 	if (!choice) {
+		if (hasRefLoadFailure) {
+			throw refLoadFailure;
+		}
 		return undefined;
 	}
+	const refs = await refsPromise;
 
 	if (choice.kind === 'createBranch') {
 		const branchName = await pickCreateWorktreeBranchName(
@@ -138,7 +189,8 @@ async function pickCreateWorktreeOptions(
 			projectManagerService,
 			quickInputService,
 			environmentService,
-			shellService
+			shellService,
+			supportsRequestCancellation
 		);
 		return branchName ? { branchName } : undefined;
 	}
@@ -169,7 +221,8 @@ async function pickCreateWorktreeOptions(
 			projectManagerService,
 			quickInputService,
 			environmentService,
-			shellService
+			shellService,
+			supportsRequestCancellation
 		);
 		return branchName
 			? { branchName, startPoint: startPoint.ref.name }
@@ -222,28 +275,53 @@ function getGitBranchSortOrder(
 		: 'committerdate';
 }
 
-function pickCreateWorktreeBranchName(
+export async function pickCreateWorktreeBranchName(
 	projectId: string,
 	refs: readonly WorktreeRefRecord[],
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellService,
+	supportsRequestCancellation = isWeb
 ): Promise<string | undefined> {
-	return runCreateWorktreeQuickInput(
-		quickInputService,
-		environmentService,
-		shellService,
-		() => quickInputService.input({
-			prompt: localize('createWorktreeBranch', 'Branch name'),
-			validateInput: value => validateCreateWorktreeBranchName(
-				projectId,
-				value,
-				refs,
-				projectManagerService
-			),
-		})
-	);
+	const cancellation = new CancellationTokenSource();
+	let validationCancellation: CancellationTokenSource | undefined;
+	try {
+		return await runCreateWorktreeQuickInput(
+			quickInputService,
+			environmentService,
+			shellService,
+			() => quickInputService.input({
+				prompt: localize('createWorktreeBranch', 'Branch name'),
+				validateInput: async value => {
+					validationCancellation?.dispose(true);
+					validationCancellation =
+						new CancellationTokenSource(cancellation.token);
+					try {
+						return await validateCreateWorktreeBranchName(
+							projectId,
+							value,
+							refs,
+							projectManagerService,
+							validationCancellation.token,
+							supportsRequestCancellation
+						);
+					} catch (error) {
+						if (isCancellationError(error)) {
+							return localize(
+								'createWorktreeBranchValidationSuperseded',
+								'Branch name validation was superseded.'
+							);
+						}
+						throw error;
+					}
+				},
+			}, cancellation.token)
+		);
+	} finally {
+		validationCancellation?.dispose(true);
+		cancellation.dispose(true);
+	}
 }
 
 async function runCreateWorktreeQuickInput<T>(
@@ -296,7 +374,9 @@ async function validateCreateWorktreeBranchName(
 	projectId: string,
 	value: string,
 	refs: readonly WorktreeRefRecord[],
-	projectManagerService: IProjectManagerService
+	projectManagerService: IProjectManagerService,
+	token: CancellationToken,
+	supportsRequestCancellation: boolean
 ): Promise<string | undefined> {
 	const branchName = value.trim();
 	if (!branchName) {
@@ -318,7 +398,14 @@ async function validateCreateWorktreeBranchName(
 			branchName
 		);
 	}
-	if (!(await projectManagerService.isValidBranchName(projectId, branchName))) {
+	const isValid = supportsRequestCancellation
+		? await (projectManagerService as CancellableProjectManagerService)
+			.isValidBranchName(projectId, branchName, token)
+		: await projectManagerService.isValidBranchName(projectId, branchName);
+	if (token.isCancellationRequested) {
+		throw new CancellationError();
+	}
+	if (!isValid) {
 		return localize(
 			'createWorktreeBranchInvalidValidate',
 			'Branch name is not valid.'
@@ -479,7 +566,9 @@ registerAction2(class extends Action2 {
 
 			await projectManagerService.createWorktree(projectId, options);
 		} catch (error) {
-			notificationService.error(String(error));
+			if (!isCancellationError(error)) {
+				notificationService.error(String(error));
+			}
 		}
 	}
 });

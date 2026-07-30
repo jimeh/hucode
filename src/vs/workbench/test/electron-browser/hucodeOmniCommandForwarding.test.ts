@@ -15,6 +15,7 @@ import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
 	FOCUS_WORKSPACE_COMMAND_ID,
+	HucodeOmniCommandForwardingContext,
 	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
@@ -221,23 +222,90 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, []);
 	});
 
+	test('keeps overlapping async suppression isolated by forwarding surface',
+		async () => {
+			const commandForwardingContext =
+				new HucodeOmniCommandForwardingContext();
+			const firstFixture = createFixture({
+				isOmniWindow: true,
+				commandForwardingContext
+			});
+			const secondFixture = createFixture({
+				isOmniWindow: true,
+				commandForwardingContext
+			});
+			const request: INativeRunActionInWindowRequest = {
+				id: 'workbench.action.files.save',
+				from: 'keybinding',
+				hucodeForwardedFromOmniShell: true
+			};
+			let resolveFirst!: () => void;
+			const firstPending = new Promise<void>(resolve => {
+				resolveFirst = resolve;
+			});
+
+			const firstRun =
+				firstFixture.forwarding.runWithForwardingDisabledIfNeeded(
+					request,
+					() => {
+						assert.strictEqual(
+							firstFixture.commandForwardingScope.isForwardingDisabled,
+							true
+						);
+						assert.strictEqual(
+							secondFixture.commandForwardingScope.isForwardingDisabled,
+							false
+						);
+						return firstPending;
+					}
+				);
+
+			assert.strictEqual(
+				firstFixture.commandForwardingScope.isForwardingDisabled,
+				true
+			);
+			assert.strictEqual(commandForwardingContext.isForwardingDisabled, true);
+
+			await secondFixture.forwarding.runWithForwardingDisabledIfNeeded(
+				request,
+				() => {
+					assert.strictEqual(
+						firstFixture.commandForwardingScope.isForwardingDisabled,
+						true
+					);
+					assert.strictEqual(
+						secondFixture.commandForwardingScope.isForwardingDisabled,
+						true
+					);
+				}
+			);
+
+			resolveFirst();
+			await firstRun;
+			assert.strictEqual(
+				firstFixture.commandForwardingScope.isForwardingDisabled,
+				false
+			);
+			assert.strictEqual(commandForwardingContext.isForwardingDisabled, false);
+		});
+
 	test('forwards clipboard events from the Omni shell', async () => {
 		const fixture = createFixture({
 			isOmniWindow: true,
 			channelResponse: true
 		});
-		const listener = fixture.forwarding.registerClipboardListeners(
-			mainWindow.document
-		);
-		disposables.add(listener);
-
 		const event = new mainWindow.Event('copy', {
 			cancelable: true,
 			bubbles: true
 		});
-		mainWindow.document.dispatchEvent(event);
+		await fixture.forwarding.handleClipboardEvent(
+			event,
+			'editor.action.clipboardCopyAction',
+			fixture.handlers
+		);
 
 		assert.strictEqual(event.defaultPrevented, true);
+		assert.deepStrictEqual(fixture.commandCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
 			arg: [
@@ -248,6 +316,205 @@ suite('HucodeOmniCommandForwarding', () => {
 				}
 			]
 		}]);
+	});
+
+	test('leaves native clipboard handling intact outside forwarding', () => {
+		const fixture = createFixture({ isOmniWindow: false });
+		const listener = fixture.forwarding.registerClipboardListeners(
+			mainWindow.document,
+			fixture.handlers
+		);
+		disposables.add(listener);
+		const event = new mainWindow.Event('copy', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		mainWindow.document.dispatchEvent(event);
+
+		assert.strictEqual(event.defaultPrevented, false);
+		assert.deepStrictEqual(fixture.channel.calls, []);
+		assert.deepStrictEqual(fixture.commandCalls, []);
+	});
+
+	test('cancels registered clipboard events before deferred forwarding settles', async () => {
+		let resolveChannel!: (forwarded: boolean) => void;
+		const channelResponse = new Promise<boolean>(resolve => {
+			resolveChannel = resolve;
+		});
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelResponse
+		});
+		const listener = fixture.forwarding.registerClipboardListeners(
+			mainWindow.document,
+			fixture.handlers
+		);
+		disposables.add(listener);
+		const event = new mainWindow.Event('copy', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		try {
+			mainWindow.document.dispatchEvent(event);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.commandCalls, []);
+
+			resolveChannel(false);
+			await fixture.commandExecuted;
+
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.commandCalls, [{
+				commandId: 'editor.action.clipboardCopyAction',
+				args: []
+			}]);
+		} finally {
+			resolveChannel(false);
+		}
+	});
+
+	test('runs clipboard commands locally when forwarding declines', async () => {
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelResponse: false
+		});
+		const event = new mainWindow.Event('copy', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		await fixture.forwarding.handleClipboardEvent(
+			event,
+			'editor.action.clipboardCopyAction',
+			fixture.handlers
+		);
+
+		assert.strictEqual(event.defaultPrevented, true);
+		assert.deepStrictEqual(fixture.commandCalls, [{
+			commandId: 'editor.action.clipboardCopyAction',
+			args: []
+		}]);
+		assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
+		assert.strictEqual(fixture.channel.calls.length, 1);
+		assert.deepStrictEqual(fixture.actionErrorCalls, []);
+	});
+
+	test('leaves nested local clipboard fallback events unforwarded', async () => {
+		const cases = [
+			['copy', 'editor.action.clipboardCopyAction'],
+			['cut', 'editor.action.clipboardCutAction'],
+		] as const;
+
+		for (const [eventType, actionId] of cases) {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelResponse: false
+			});
+			const originalExecuteCommand =
+				fixture.handlers.executeCommand.bind(fixture.handlers);
+			let nestedEvent:
+				{ readonly defaultPrevented: boolean } | undefined;
+			const nestedHandlers: IHucodeOmniCommandForwardingWindowHandlers = {
+				...fixture.handlers,
+				async executeCommand(commandId: string, ...args: unknown[]) {
+					const execution = originalExecuteCommand(commandId, ...args);
+					if (!nestedEvent) {
+						await Promise.resolve();
+						const nextEvent = new mainWindow.Event(eventType, {
+							cancelable: true,
+							bubbles: true
+						});
+						nestedEvent = nextEvent;
+						mainWindow.document.dispatchEvent(nextEvent);
+					}
+					await execution;
+				}
+			};
+			const listener = fixture.forwarding.registerClipboardListeners(
+				mainWindow.document,
+				nestedHandlers
+			);
+
+			try {
+				const event = new mainWindow.Event(eventType, {
+					cancelable: true,
+					bubbles: true
+				});
+				await fixture.forwarding.handleClipboardEvent(
+					event,
+					actionId,
+					nestedHandlers
+				);
+				await Promise.resolve();
+
+				assert.strictEqual(event.defaultPrevented, true);
+				assert.strictEqual(nestedEvent?.defaultPrevented, false);
+				assert.strictEqual(fixture.channel.calls.length, 1);
+				assert.deepStrictEqual(fixture.commandCalls, [{
+					commandId: actionId,
+					args: []
+				}]);
+			} finally {
+				listener.dispose();
+			}
+		}
+	});
+
+	test('reports local clipboard fallback failures once', async () => {
+		const fallbackError = new Error('local clipboard failed');
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelResponse: false,
+			executeCommandError: fallbackError
+		});
+		const event = new mainWindow.Event('copy', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		await fixture.forwarding.handleClipboardEvent(
+			event,
+			'editor.action.clipboardCopyAction',
+			fixture.handlers
+		);
+
+		assert.strictEqual(event.defaultPrevented, true);
+		assert.strictEqual(fixture.commandCalls.length, 1);
+		assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
+		assert.deepStrictEqual(fixture.actionErrorCalls, [fallbackError]);
+		assert.strictEqual(
+			fixture.commandForwardingScope.isForwardingDisabled,
+			false
+		);
+	});
+
+	test('runs clipboard commands locally when forwarding rejects', async () => {
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelError: new Error('forwarding unavailable')
+		});
+		const event = new mainWindow.Event('cut', {
+			cancelable: true,
+			bubbles: true
+		});
+
+		await fixture.forwarding.handleClipboardEvent(
+			event,
+			'editor.action.clipboardCutAction',
+			fixture.handlers
+		);
+
+		assert.strictEqual(event.defaultPrevented, true);
+		assert.deepStrictEqual(fixture.commandCalls, [{
+			commandId: 'editor.action.clipboardCutAction',
+			args: []
+		}]);
+		assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
+		assert.strictEqual(fixture.channel.calls.length, 1);
+		assert.deepStrictEqual(fixture.actionErrorCalls, []);
 	});
 
 	test('disposes registered window IPC listeners', () => {
@@ -306,11 +573,22 @@ type IpcRendererListener = Parameters<typeof ipcRenderer.on>[1];
 
 function createFixture(options: {
 	readonly isOmniWindow: boolean;
-	readonly channelResponse?: boolean;
+	readonly channelResponse?: boolean | Promise<boolean>;
+	readonly channelError?: Error;
 	readonly activeEditorResource?: URI;
+	readonly executeCommandError?: Error;
+	readonly commandForwardingContext?:
+	HucodeOmniCommandForwardingContext;
 }) {
 	const windowId = 42;
-	const channel = new TestChannel(options.channelResponse ?? false);
+	const channel = new TestChannel(
+		options.channelResponse ?? false,
+		options.channelError
+	);
+	const commandForwardingContext = options.commandForwardingContext ??
+		new HucodeOmniCommandForwardingContext();
+	const commandForwardingScope =
+		commandForwardingContext.createScope();
 	const mainProcessService = {
 		getChannel(channelName: string): IChannel {
 			assert.strictEqual(channelName, 'hucodeShell');
@@ -323,6 +601,11 @@ function createFixture(options: {
 	} as Partial<INativeWorkbenchEnvironmentService> as INativeWorkbenchEnvironmentService;
 
 	const commandCalls: { commandId: string; args: unknown[] }[] = [];
+	let resolveCommandExecuted!: () => void;
+	const commandExecuted = new Promise<void>(resolve => {
+		resolveCommandExecuted = resolve;
+	});
+	const commandSuppressionStates: boolean[] = [];
 	const keybindingCalls: {
 		userSettingsLabel: string;
 		target: Element;
@@ -335,6 +618,13 @@ function createFixture(options: {
 		getActiveEditorResource: () => options.activeEditorResource,
 		async executeCommand(commandId: string, ...args: unknown[]) {
 			commandCalls.push({ commandId, args });
+			resolveCommandExecuted();
+			commandSuppressionStates.push(
+				commandForwardingScope.isForwardingDisabled
+			);
+			if (options.executeCommandError) {
+				throw options.executeCommandError;
+			}
 		},
 		dispatchKeybinding(userSettingsLabel: string, target: Element) {
 			keybindingCalls.push({ userSettingsLabel, target });
@@ -352,10 +642,15 @@ function createFixture(options: {
 		actionExecutedCalls,
 		channel,
 		commandCalls,
+		commandExecuted,
+		commandSuppressionStates,
+		commandForwardingContext,
+		commandForwardingScope,
 		forwarding: new HucodeOmniCommandForwarding(
 			environmentService,
 			mainProcessService,
-			new NullLogService()
+			new NullLogService(),
+			commandForwardingScope
 		),
 		handlers,
 		keybindingCalls,
@@ -367,11 +662,17 @@ class TestChannel implements IChannel {
 
 	readonly calls: { command: string; arg?: unknown }[] = [];
 
-	constructor(private readonly response: boolean) { }
+	constructor(
+		private readonly response: boolean | Promise<boolean>,
+		private readonly error?: Error
+	) { }
 
 	async call<T>(command: string, arg?: unknown): Promise<T> {
 		this.calls.push({ command, arg });
-		return this.response as T;
+		if (this.error) {
+			throw this.error;
+		}
+		return await this.response as T;
 	}
 
 	listen<T>(): Event<T> {

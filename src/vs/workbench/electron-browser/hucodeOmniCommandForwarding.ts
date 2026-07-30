@@ -10,13 +10,16 @@ import { ILogService } from '../../platform/log/common/log.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { ipcRenderer } from '../../base/parts/sandbox/electron-browser/globals.js';
 import {
+	HucodeOmniCommandForwardingContext,
 	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
 	HUCODE_OMNI_PROJECTS_SELECTOR,
+	IHucodeOmniCommandForwardingContext,
+	IHucodeOmniCommandForwardingScope,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
-	withHucodeOmniShellCommandForwardingDisabled,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
 import {
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
@@ -58,6 +61,8 @@ export class HucodeOmniCommandForwarding {
 			INativeWorkbenchEnvironmentService,
 		private readonly mainProcessService: IMainProcessService,
 		private readonly logService: ILogService,
+		private readonly commandForwardingScope:
+			IHucodeOmniCommandForwardingScope,
 	) { }
 
 	/**
@@ -67,7 +72,10 @@ export class HucodeOmniCommandForwarding {
 		handlers: IHucodeOmniCommandForwardingWindowHandlers
 	): IDisposable {
 		const disposables = new DisposableStore();
-		disposables.add(this.registerClipboardListeners(handlers.document));
+		disposables.add(this.registerClipboardListeners(
+			handlers.document,
+			handlers
+		));
 
 		const runActionHandler = (_event: unknown, ...argsRaw: unknown[]) => {
 			const request = argsRaw[0] as INativeRunActionInWindowRequest;
@@ -97,14 +105,19 @@ export class HucodeOmniCommandForwarding {
 	 * Registers clipboard command forwarding from the Omni shell to the hosted
 	 * workspace.
 	 */
-	registerClipboardListeners(targetDocument: Document): IDisposable {
+	registerClipboardListeners(
+		targetDocument: Document,
+		handlers: IHucodeOmniCommandForwardingWindowHandlers
+	): IDisposable {
 		const disposables = new DisposableStore();
 
 		for (const [eventType, actionId] of HUCODE_OMNI_CLIPBOARD_ACTIONS) {
 			disposables.add(addDisposableListener(
 				targetDocument,
 				eventType,
-				e => this.handleClipboardEvent(e, actionId)
+				e => {
+					void this.handleClipboardEvent(e, actionId, handlers);
+				}
 			));
 		}
 
@@ -166,8 +179,12 @@ export class HucodeOmniCommandForwarding {
 		await this.runWithForwardingDisabledIfNeeded(request, dispatch);
 	}
 
-	shouldForwardShellInvocation(): boolean {
-		return this.nativeEnvironmentService.isOmniWindow &&
+	shouldForwardShellInvocation(actionId?: string): boolean {
+		const forwardingDisabled = actionId
+			? this.commandForwardingScope.isForwardingDisabledFor(actionId)
+			: this.commandForwardingScope.isForwardingDisabled;
+		return !forwardingDisabled &&
+			this.nativeEnvironmentService.isOmniWindow &&
 			!this.isActiveElementInside(HUCODE_OMNI_PROJECTS_SELECTOR) &&
 			!this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}
@@ -212,7 +229,8 @@ export class HucodeOmniCommandForwarding {
 		callback: () => T | Promise<T>
 	): Promise<T> {
 		if (isHucodeForwardedFromOmniShell(request)) {
-			return await withHucodeOmniShellCommandForwardingDisabled(callback);
+			return await this.commandForwardingScope
+				.runWithForwardingDisabled(callback);
 		}
 
 		return await callback();
@@ -260,16 +278,34 @@ export class HucodeOmniCommandForwarding {
 			.call<T>(command, args);
 	}
 
-	private handleClipboardEvent(event: Event, actionId: string): void {
-		if (!this.shouldForwardShellInvocation()) {
+	async handleClipboardEvent(
+		event: Event,
+		actionId: string,
+		handlers: IHucodeOmniCommandForwardingWindowHandlers
+	): Promise<void> {
+		if (!this.shouldForwardShellInvocation(actionId)) {
 			return;
 		}
 
+		// Clipboard cancellation must happen during event dispatch. Once this
+		// path is selected, a failed async forward is recovered locally below.
 		EventHelper.stop(event, true);
-		void this.forwardActionToWorkspace({
+		const request: INativeRunActionInWindowRequest = {
 			id: actionId,
 			from: 'menu'
-		});
+		};
+		if (await this.forwardActionToWorkspace(request)) {
+			return;
+		}
+
+		try {
+			await this.commandForwardingScope.runWithForwardingDisabledFor(
+				actionId,
+				() => handlers.executeCommand(actionId)
+			);
+		} catch (error) {
+			handlers.onActionError(error);
+		}
 	}
 
 	private getActionArguments(
@@ -306,3 +342,9 @@ export class HucodeOmniCommandForwarding {
 		return this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}
 }
+
+registerSingleton(
+	IHucodeOmniCommandForwardingContext,
+	HucodeOmniCommandForwardingContext,
+	InstantiationType.Delayed
+);

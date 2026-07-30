@@ -37,6 +37,8 @@ import { IHucodeOmniWebWorkbenchClient } from
 	'../../platform/window/common/hucodeOmniWebMessages.js';
 import { IHucodeHostedOmniWebConnectionService } from
 	'./hostedOmniWebConnection.js';
+import { HucodeHostedOmniWebUnloadCoordinator } from
+	'./hostedOmniWebUnload.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
 import { openHucodeFilesRequest } from
 	'../../workbench/browser/hucodeOpenFilesRequest.js';
@@ -53,6 +55,8 @@ class HostedOmniWebBridgeContribution extends Disposable
 
 	static readonly ID = 'hucode.hostedOmniWebBridge';
 
+	private readonly unloadCoordinator: HucodeHostedOmniWebUnloadCoordinator;
+
 	constructor(
 		@IWorkbenchEnvironmentService
 		environmentService: IWorkbenchEnvironmentService,
@@ -63,10 +67,15 @@ class HostedOmniWebBridgeContribution extends Disposable
 		@IFileService private readonly fileService: IFileService,
 		@IInstantiationService
 		private readonly instantiationService: IInstantiationService,
-		@ILifecycleService private readonly lifecycleService: ILifecycleService,
+		@ILifecycleService lifecycleService: ILifecycleService,
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
+
+		this.unloadCoordinator = new HucodeHostedOmniWebUnloadCoordinator(
+			lifecycleService,
+			logService
+		);
 
 		if (
 			!environmentService.isHostedOmniWorkspace ||
@@ -123,14 +132,16 @@ class HostedOmniWebBridgeContribution extends Disposable
 		}
 	}
 
-	async prepareUnload(): Promise<boolean> {
-		try {
-			await this.lifecycleService.shutdown();
-			return true;
-		} catch (error) {
-			this.logService.error(error);
-			return false;
-		}
+	prepareUnload(): Promise<boolean> {
+		return this.unloadCoordinator.prepareUnload();
+	}
+
+	prepareUnloadForCommit(): Promise<boolean> {
+		return this.unloadCoordinator.prepareUnloadForCommit();
+	}
+
+	commitUnload(): Promise<boolean> {
+		return this.unloadCoordinator.commitUnload();
 	}
 
 	private registerHostedShellCommands(): void {

@@ -29,22 +29,27 @@ import {
 } from '../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
+import { ILogService } from '../../platform/log/common/log.js';
 import {
 	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
 	IRectangle,
 } from '../../platform/window/common/window.js';
-import { FOCUS_PROJECT_PANE_COMMAND_ID } from
-	'../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	isHucodeOmniExplicitShellAction,
+} from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/browser/environmentService.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
+	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceOwner,
 	IHucodeHostedWorkspaceState,
+	IHucodeProjectFolderPromotion,
 	IHucodeShellService,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
@@ -66,6 +71,7 @@ import {
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
+	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import {
@@ -88,10 +94,22 @@ import { IStorageService, StorageScope, StorageTarget } from
 	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from './projectSwitcher/projectSwitcherCommon.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
 	readonly disposables: DisposableStore;
+}
+
+interface ITimedOutLegacyUnloadClaim {
+	readonly workbench: IHucodeOmniWebWorkbenchClient;
+	disposition: HostedUnloadDisposition;
 }
 
 interface IHostedIframeInstance {
@@ -106,6 +124,16 @@ interface IHostedIframeInstance {
 	lastActiveAt?: number;
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
+	protocolVersion?: number;
+	pendingUnload?: Promise<boolean>;
+	pendingUnloadDisposition?: HostedUnloadDisposition;
+	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
+}
+
+interface IProjectCatalogSnapshot {
+	readonly generation: number;
+	readonly liveProjectIds: ReadonlySet<string> | undefined;
+	readonly projectIdsByPath: ReadonlyMap<string, string>;
 }
 
 /** Persisted serve-web catalog and hosted-workbench restore snapshot. */
@@ -206,6 +234,11 @@ const assumeFoldersExist: IWebHucodeShellFolderAccess = {
 	exists: async () => true,
 };
 
+const silentWebShellLog: IWebHucodeShellLogService = {
+	info: () => { },
+	warn: () => { },
+};
+
 const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
 	'hucode.omni.webRetainedWorkbenches';
 
@@ -240,14 +273,97 @@ class StorageServiceWebHucodeShellPersistence
 }
 
 type WebHucodeShellTimer = ReturnType<typeof setTimeout>;
-type HostedUnloadResult = 'ready' | 'vetoed' | 'timeout';
+/**
+ * Outcome of one phase of the hosted unload handshake.
+ *
+ * The two phases fail in opposite directions, so an unknown outcome means
+ * something different in each. Before the commit there is a live workbench to
+ * protect, so `prepare-failed` and `prepare-timeout` keep it. After the commit
+ * has been sent there is not: it is irreversible and preparation already found
+ * no objection, so `commit-failed` and `commit-timeout` remove the workbench
+ * rather than leave the page wrapping one that has gone. Only `refused` is an
+ * answer rather than a silence, and it keeps the workbench.
+ */
+type HostedUnloadResult =
+	| 'ready'
+	| 'vetoed'
+	| 'prepare-failed'
+	| 'prepare-timeout'
+	| 'refused'
+	| 'commit-failed'
+	| 'commit-timeout';
+
+/**
+ * What a caller wants to become of a workbench once its unload succeeds.
+ *
+ * Concurrent requests share one handshake, so they also share one outcome:
+ * the strongest disposition any of them asked for is applied once, centrally,
+ * when the handshake completes. Without that, a workbench somebody closed
+ * comes back as a dormant record because somebody else asked to suspend it at
+ * the same moment, and which of the two wins depends on arrival order.
+ */
+type HostedUnloadDisposition = 'shutdown' | 'suspend' | 'unload' | 'dismiss';
+
+const HOSTED_UNLOAD_DISPOSITION_RANK:
+	Record<HostedUnloadDisposition, number> = {
+	// Page teardown must not rewrite the restore set at all, so it is the
+	// weakest; anything a user asked for outranks it.
+	shutdown: 0,
+	suspend: 1,
+	unload: 2,
+	dismiss: 3,
+};
+
+/** Picks the disposition a shared unload has to honour. */
+function strongestUnloadDisposition(
+	a: HostedUnloadDisposition,
+	b: HostedUnloadDisposition
+): HostedUnloadDisposition {
+	return HOSTED_UNLOAD_DISPOSITION_RANK[a] >= HOSTED_UNLOAD_DISPOSITION_RANK[b]
+		? a
+		: b;
+}
+
 type IWebHucodeShellCommandService = Pick<ICommandService, 'executeCommand'>;
+type IWebHucodeShellLogService = Pick<ILogService, 'info' | 'warn'>;
 type IWebHucodeShellHostSurfaceService = Pick<
 	IHucodeWebOmniHostSurfaceService,
 	'onDidChangeSurface' | 'getSurface'
 >;
 
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
+const COMMAND_DELIVERY_UNKNOWN =
+	Symbol('hucodeOmniWebCommandDeliveryUnknown');
+const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
+	'editor.action.clipboardCopyAction',
+	'editor.action.clipboardCutAction',
+]);
+const HUCODE_HOSTED_PROJECT_SHELL_ACTIONS = new Set([
+	ADD_PROJECT_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+]);
+
+type IHucodeHostedWebShellConnectionFacade = Pick<
+	IHucodeShellService,
+	| 'onDidChangeWindowState'
+	| 'getWindowState'
+	| 'findHostedWorkspaceByPath'
+	| 'focusHostedWorkspaceByPath'
+	| 'focusNormalWindowByPath'
+	| 'openWorkspace'
+	| 'openFilesInWorkspace'
+	| 'openFilesInActiveWorkspace'
+	| 'closeWorkspace'
+	| 'reopenWorkspaceInNormalWindow'
+	| 'notifyHostedWorkspaceReady'
+	| 'focusWorkspace'
+	| 'focusShell'
+	| 'runActionInShell'
+	| 'reloadWorkspace'
+>;
 
 /**
  * Server routing configuration the web shell needs to build workbench URLs.
@@ -327,7 +443,16 @@ export class WebHucodeShellController extends Disposable
 	readonly supportsWorkspaceScreenshotOverlay = false;
 	private static readonly READY_TIMEOUT_MS = 30000;
 	private static readonly COMMAND_TIMEOUT_MS = 5000;
-	private static readonly UNLOAD_TIMEOUT_MS = 1500;
+	// Neither phase can block on the user: the web lifecycle service treats a
+	// pending veto answer as a veto and never awaits one. What both phases do
+	// await is a storage flush against IndexedDB, which under contention is
+	// the only part that takes real time — `onWillShutdown` joiners are
+	// invoked without being awaited, so no budget here has ever protected
+	// them. Neither budget can be tight: a timeout does not cancel the phase
+	// it gave up on, and a preparation that lands late has already run
+	// shutdown listeners that do not all reset themselves.
+	private static readonly PREPARE_UNLOAD_TIMEOUT_MS = 5000;
+	private static readonly COMMIT_UNLOAD_TIMEOUT_MS = 5000;
 
 	private readonly windowId: number;
 	private readonly workbenchRoute: string;
@@ -339,11 +464,14 @@ export class WebHucodeShellController extends Disposable
 	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 	private readonly initialization: Promise<void>;
+	private initializationCancelled = false;
 	private shuttingDown = false;
+	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
 	private lifecycleGeneration = 0;
+	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
 
 	private readonly pendingConnectionDisposals = new Set<DisposableStore>();
 
@@ -362,6 +490,8 @@ export class WebHucodeShellController extends Disposable
 		restorePolicy: HucodeHostedWorkbenchRestorePolicy = 'active',
 		private readonly folderAccess: IWebHucodeShellFolderAccess =
 			assumeFoldersExist,
+		private readonly logService: IWebHucodeShellLogService =
+			silentWebShellLog,
 	) {
 		super();
 
@@ -430,18 +560,39 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
+		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? instance.projectId
+		);
 		if (instance.state === 'dormant') {
 			await this.openWorkspace(
 				this.windowId,
 				worktreePath,
-				projectId ?? instance.projectId
+				effectiveProjectId
 			);
 			instance = this.getAvailableInstanceByPath(worktreePath);
 			if (!instance) {
 				return false;
 			}
 		}
-		instance.projectId = projectId ?? instance.projectId;
+		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? instance.projectId
+		);
+		let retained = this.retainedWorkbenches.getByUri(
+			URI.file(worktreePath)
+		);
+		if (effectiveProjectId && retained) {
+			this.retainedWorkbenches.dismiss(retained.id);
+			retained = undefined;
+		} else if (!effectiveProjectId && !retained) {
+			retained = this.retainedWorkbenches.retain(
+				URI.file(worktreePath),
+				'loaded'
+			);
+		}
+		instance.projectId = effectiveProjectId;
+		instance.retainedWorkbenchId = retained?.id;
 		this.activateInstance(instance);
 		this.focusIframe(instance);
 		return true;
@@ -462,7 +613,13 @@ export class WebHucodeShellController extends Disposable
 		}
 		const activationIntent = ++this.activationIntentGeneration;
 		const existing = this.getInstanceByPath(worktreePath);
-		let effectiveProjectId = projectId ?? existing?.projectId;
+		const projectCatalogGeneration =
+			this.projectCatalogSnapshot?.generation;
+		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? existing?.projectId
+		);
+		const wasProjectBacked = effectiveProjectId !== undefined;
 		let retained = this.retainedWorkbenches.getByUri(
 			URI.file(worktreePath)
 		);
@@ -492,10 +649,22 @@ export class WebHucodeShellController extends Disposable
 		const folderExists = await this.folderAccess.exists(worktreePath);
 		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
 		const currentInstance = this.getInstanceByPath(worktreePath);
-		effectiveProjectId = projectId ?? currentInstance?.projectId;
+		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? currentInstance?.projectId
+		);
+		const invalidatedByNewCatalog =
+			wasProjectBacked &&
+			effectiveProjectId === undefined &&
+			this.projectCatalogSnapshot?.generation !== projectCatalogGeneration;
 		if (effectiveProjectId && retained) {
 			this.retainedWorkbenches.dismiss(retained.id);
 			retained = undefined;
+		} else if (invalidatedByNewCatalog && !retained) {
+			retained = this.retainedWorkbenches.retain(
+				URI.file(worktreePath),
+				'loaded'
+			);
 		}
 		if (currentInstance && isHostedWorkspaceAvailable(currentInstance)) {
 			currentInstance.projectId = effectiveProjectId;
@@ -514,7 +683,7 @@ export class WebHucodeShellController extends Disposable
 			!retained ||
 			retained.id !== retainedWorkbenchId ||
 			retained.desiredState !== 'loaded'
-		)) {
+		) && !invalidatedByNewCatalog) {
 			return this.getState();
 		}
 
@@ -588,23 +757,9 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		await this.deferStateEmission(async () => {
-			if (!await this.unloadAndRemoveInstance(instance)) {
-				return;
-			}
-			this.hostedWorkspaces.addInstance({
-				instanceId: generateUuid(),
-				projectId: instance.projectId,
-				retainedWorkbenchId: instance.retainedWorkbenchId,
-				worktreePath: instance.worktreePath,
-				state: 'dormant',
-				visible: false,
-				focused: false,
-				lastActiveAt: instance.lastActiveAt,
-				lifecycleGeneration: 0,
-			});
-			this.emitState();
-		});
+		await this.deferStateEmission(
+			() => this.unloadAndRemoveInstance(instance, 'suspend')
+		);
 		return this.getState();
 	}
 
@@ -621,21 +776,17 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 		await this.deferStateEmission(async () => {
-			const instance = this.getInstanceByPath(
-				URI.revive(record.folderUri).fsPath
-			);
-			if (instance && instance.state !== 'dormant' &&
-				!await this.unloadAndRemoveInstance(instance)
-			) {
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const instance = this.getInstanceByPath(worktreePath);
+			if (instance && instance.state !== 'dormant') {
+				await this.unloadAndRemoveInstance(instance, 'unload');
 				return;
 			}
-			if (instance?.state === 'dormant') {
-				this.hostedWorkspaces.removeInstance(instance);
-			}
-			this.retainedWorkbenches.update(workbenchId, {
-				desiredState: 'unloaded',
-			});
-			this.emitState();
+			this.applyTerminalUnloadDisposition(
+				worktreePath,
+				'unload',
+				workbenchId
+			);
 		});
 		return this.getState();
 	}
@@ -653,19 +804,17 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 		await this.deferStateEmission(async () => {
-			const instance = this.getInstanceByPath(
-				URI.revive(record.folderUri).fsPath
-			);
-			if (instance && instance.state !== 'dormant' &&
-				!await this.unloadAndRemoveInstance(instance)
-			) {
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const instance = this.getInstanceByPath(worktreePath);
+			if (instance && instance.state !== 'dormant') {
+				await this.unloadAndRemoveInstance(instance, 'dismiss');
 				return;
 			}
-			if (instance?.state === 'dormant') {
-				this.hostedWorkspaces.removeInstance(instance);
-			}
-			this.retainedWorkbenches.dismiss(workbenchId);
-			this.emitState();
+			this.applyTerminalUnloadDisposition(
+				worktreePath,
+				'dismiss',
+				workbenchId
+			);
 		});
 		return this.getState();
 	}
@@ -710,31 +859,161 @@ export class WebHucodeShellController extends Disposable
 		return this.getState();
 	}
 
-	async reconcileRetainedWorkbenches(
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[]
+		projects: readonly IHucodeCompleteProjectCatalogEntry[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
-		for (const projectFolder of projectFolders) {
-			const instance = this.getInstanceByPath(
-				URI.revive(projectFolder.folderUri).fsPath
+		const liveProjectIds = new Set(projects.map(project =>
+			project.projectId
+		));
+		const projectFolders = projects.flatMap(project =>
+			project.folderUris.map(folderUri => ({
+				projectId: project.projectId,
+				folderUri: URI.revive(folderUri),
+			}))
+		);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			this.toPathKey(folder.folderUri.fsPath),
+			folder.projectId,
+		]));
+		this.projectCatalogSnapshot = {
+			generation: (this.projectCatalogSnapshot?.generation ?? 0) + 1,
+			liveProjectIds,
+			projectIdsByPath,
+		};
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				this.toPathKey(instance.worktreePath)
 			);
-			if (instance) {
-				instance.projectId = projectFolder.projectId;
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId ||
+					instance.retainedWorkbenchId !== undefined;
+				instance.projectId = claimedProjectId;
+				instance.retainedWorkbenchId = undefined;
+				continue;
 			}
+			if (
+				!isHostedWorkspaceRestorable(instance) ||
+				!instance.projectId ||
+				liveProjectIds.has(instance.projectId)
+			) {
+				continue;
+			}
+
+			const retained = this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			instance.projectId = undefined;
+			instance.retainedWorkbenchId = retained.id;
+			changed = true;
 		}
 		if (this.retainedWorkbenches.reconcileProjectPaths(
-			projectFolders.map(folder => URI.revive(folder.folderUri))
+			projectFolders.map(folder => folder.folderUri)
 		)) {
+			changed = true;
+		}
+		if (changed) {
 			this.emitState();
 		}
 		return this.getState();
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		await this.initialization;
+		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		const revivedProjectFolders = projectFolders.map(folder => ({
+			projectId: folder.projectId,
+			folderUri: URI.revive(folder.folderUri),
+		}));
+		this.recordProjectFolderPromotions(revivedProjectFolders);
+		if (this.applyProjectFolderPromotions(revivedProjectFolders)) {
+			this.emitState();
+		}
+		return this.getState();
+	}
+
+	private applyProjectFolderPromotions(projectFolders: readonly {
+		readonly projectId: string;
+		readonly folderUri: URI;
+	}[]): boolean {
+		let changed = false;
+		for (const projectFolder of projectFolders) {
+			const instance = this.getInstanceByPath(
+				projectFolder.folderUri.fsPath
+			);
+			if (instance) {
+				changed ||= instance.projectId !== projectFolder.projectId ||
+					instance.retainedWorkbenchId !== undefined;
+				instance.projectId = projectFolder.projectId;
+				instance.retainedWorkbenchId = undefined;
+			}
+		}
+		if (this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		)) {
+			changed = true;
+		}
+		return changed;
+	}
+
+	private recordProjectFolderPromotions(projectFolders: readonly {
+		readonly projectId: string;
+		readonly folderUri: URI;
+	}[]): void {
+		if (projectFolders.length === 0) {
+			return;
+		}
+		const current = this.projectCatalogSnapshot;
+		const liveProjectIds = current?.liveProjectIds
+			? new Set(current.liveProjectIds)
+			: undefined;
+		const projectIdsByPath = new Map(current?.projectIdsByPath);
+		for (const projectFolder of projectFolders) {
+			liveProjectIds?.add(projectFolder.projectId);
+			projectIdsByPath.set(
+				this.toPathKey(projectFolder.folderUri.fsPath),
+				projectFolder.projectId
+			);
+		}
+		this.projectCatalogSnapshot = {
+			generation: (current?.generation ?? 0) + 1,
+			liveProjectIds,
+			projectIdsByPath,
+		};
+	}
+
+	private resolveProjectIdAgainstCatalog(
+		worktreePath: string,
+		projectId: string | undefined
+	): string | undefined {
+		const catalog = this.projectCatalogSnapshot;
+		if (!catalog) {
+			return projectId;
+		}
+		const claimedProjectId = catalog.projectIdsByPath.get(
+			this.toPathKey(worktreePath)
+		);
+		if (claimedProjectId) {
+			return claimedProjectId;
+		}
+		if (!catalog.liveProjectIds) {
+			return projectId;
+		}
+		return projectId && catalog.liveProjectIds.has(projectId)
+			? projectId
+			: undefined;
 	}
 
 	async setHostedWorkbenchRestorePolicy(
@@ -798,21 +1077,9 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		const retained = this.retainedWorkbenches.getByUri(
-			URI.file(instance.worktreePath)
+		await this.deferStateEmission(
+			() => this.unloadAndRemoveInstance(instance, 'unload')
 		);
-		if (!retained) {
-			await this.unloadAndRemoveInstance(instance);
-			return this.getState();
-		}
-		await this.deferStateEmission(async () => {
-			if (await this.unloadAndRemoveInstance(instance)) {
-				this.retainedWorkbenches.update(retained.id, {
-					desiredState: 'unloaded',
-				});
-				this.emitState();
-			}
-		});
 		return this.getState();
 	}
 
@@ -928,11 +1195,27 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
-		return this.runCommandInInstance(
+		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
 			request.args ?? []
 		);
+		if (result !== COMMAND_DELIVERY_UNKNOWN) {
+			return result;
+		}
+
+		if (!HUCODE_OMNI_CLIPBOARD_COMMANDS.has(request.id)) {
+			return false;
+		}
+		// A timed-out request may still execute in the child after this point.
+		// Treat clipboard delivery as consumed: retrying copy/cut locally can
+		// duplicate a destructive cut. The tradeoff is that an actually lost
+		// request leaves the clipboard operation unapplied.
+		this.logService.warn(
+			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
+			'delivery is unconfirmed, so it will not be retried locally.'
+		);
+		return true;
 	}
 
 	async runKeybindingInWorkspace(
@@ -963,6 +1246,10 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
+		this.reloadInstance(instance);
+	}
+
+	private reloadInstance(instance: IHostedIframeInstance): void {
 		instance.state = 'loading';
 		void this.runCommandInInstance(
 			instance,
@@ -1008,15 +1295,120 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		_reason: ShutdownReason
 	): Promise<void> {
-		await this.initialization;
 		if (windowId !== this.windowId) {
 			return;
 		}
 
+		// Page teardown must not wait forever for a slow remote folder stat.
+		// Restore checks cancellation after every asynchronous preflight, so
+		// no iframe can be attached after this shutdown snapshots its batch.
+		this.initializationCancelled = true;
+		if (this.shutdownPromise) {
+			await this.shutdownPromise;
+			return;
+		}
+
+		const shutdown = this.runWindowWorkspaceShutdown();
+		this.shutdownPromise = shutdown;
+		let failed = false;
+		try {
+			await shutdown;
+		} catch (error) {
+			failed = true;
+			throw error;
+		} finally {
+			// Complete teardown keeps the settled promise and frozen restore
+			// snapshot. Recovery or a failed task makes a later request start
+			// a fresh batch, including when persistence failed or no live
+			// workbench survived the task failure.
+			if (
+				(failed || !this.shuttingDown) &&
+				this.shutdownPromise === shutdown
+			) {
+				this.shutdownPromise = undefined;
+			}
+		}
+	}
+
+	private async runWindowWorkspaceShutdown(): Promise<void> {
 		// Teardown must not rewrite the resident set used for the next startup.
 		this.shuttingDown = true;
-		for (const instance of [...this.instancesById.values()]) {
-			await this.unloadAndRemoveInstance(instance);
+		const batch = [...this.instancesById.values()];
+		let taskFailure: { readonly error: unknown } | undefined;
+		let reconciliationFailure: { readonly error: unknown } | undefined;
+		let recoveryFailure: { readonly error: unknown } | undefined;
+		try {
+			await this.deferStateEmission(async () => {
+				const results = await Promise.allSettled(batch.map(instance =>
+					this.unloadAndRemoveInstance(instance, 'shutdown')
+				));
+				const rejected = results.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === 'rejected'
+				);
+				if (rejected) {
+					taskFailure = { error: rejected.reason };
+				}
+
+				const survivors = [...this.instancesById.values()];
+				if (survivors.length === 0) {
+					return;
+				}
+
+				try {
+					this.reconcileRetainedShutdownBatch(batch, survivors);
+					if (!this.getAvailableActiveInstance()) {
+						const next = getMostRecentHostedWorkspace(survivors);
+						if (next) {
+							this.activateInstance(next);
+						}
+					}
+				} catch (error) {
+					reconciliationFailure = { error };
+				} finally {
+					// A retained workbench means page teardown did not finish.
+					// Resume persistence once with the coherent surviving set,
+					// then allow a later shutdown request to start a fresh batch.
+					this.shuttingDown = false;
+					this.emitState();
+				}
+			});
+		} catch (error) {
+			recoveryFailure = { error };
+		}
+
+		if (taskFailure) {
+			throw taskFailure.error;
+		}
+		if (reconciliationFailure) {
+			throw reconciliationFailure.error;
+		}
+		if (recoveryFailure) {
+			throw recoveryFailure.error;
+		}
+	}
+
+	private reconcileRetainedShutdownBatch(
+		batch: readonly IHostedIframeInstance[],
+		survivors: readonly IHostedIframeInstance[]
+	): void {
+		const batchRetainedIds = new Set(batch.flatMap(instance =>
+			instance.retainedWorkbenchId
+				? [instance.retainedWorkbenchId]
+				: []
+		));
+		const survivorRetainedIds = new Set(survivors.flatMap(instance =>
+			instance.retainedWorkbenchId &&
+				isHostedWorkspaceRestorable(instance)
+				? [instance.retainedWorkbenchId]
+				: []
+		));
+		for (const retainedId of batchRetainedIds) {
+			if (!survivorRetainedIds.has(retainedId)) {
+				this.retainedWorkbenches.update(retainedId, {
+					desiredState: 'unloaded',
+				});
+			}
 		}
 	}
 
@@ -1048,6 +1440,9 @@ export class WebHucodeShellController extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebChildMessageType.Ready:
+				// A workbench that announces nothing predates the two-phase
+				// unload handshake.
+				instance.protocolVersion = message.protocolVersion ?? 1;
 				this.connectInstance(instance);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
@@ -1057,7 +1452,11 @@ export class WebHucodeShellController extends Disposable
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
-					this.activateInstance(instance);
+					if (this.activeInstanceId === instance.instanceId) {
+						this.emitState();
+					} else {
+						this.activateInstance(instance);
+					}
 				} else {
 					this.emitState();
 				}
@@ -1081,7 +1480,10 @@ export class WebHucodeShellController extends Disposable
 		));
 		client.registerChannel(
 			HUCODE_OMNI_WEB_SHELL_CHANNEL,
-			ProxyChannel.fromService(this, disposables)
+			ProxyChannel.fromService(
+				this.createHostedConnectionFacade(instance),
+				disposables
+			)
 		);
 		instance.connection = {
 			workbench: ProxyChannel.toService<IHucodeOmniWebWorkbenchClient>(
@@ -1099,12 +1501,106 @@ export class WebHucodeShellController extends Disposable
 		}, channel.port2);
 	}
 
+	/**
+	 * Creates the only shell operations callable over one hosted workbench's
+	 * connection. Legacy wire signatures are retained, but caller-supplied
+	 * window and instance identifiers are ignored in favour of the identities
+	 * established by the trusted MessagePort handshake.
+	 */
+	private createHostedConnectionFacade(
+		instance: IHostedIframeInstance
+	): IHucodeHostedWebShellConnectionFacade {
+		return {
+			onDidChangeWindowState: this.onDidChangeWindowState,
+			getWindowState: _windowId =>
+				this.getWindowState(this.windowId),
+			findHostedWorkspaceByPath: worktreePath =>
+				this.findHostedWorkspaceByPath(worktreePath),
+			focusHostedWorkspaceByPath: (worktreePath, projectId) =>
+				this.focusHostedWorkspaceByPath(worktreePath, projectId),
+			focusNormalWindowByPath: worktreePath =>
+				this.focusNormalWindowByPath(worktreePath),
+			openWorkspace: (_windowId, worktreePath, projectId) =>
+				this.openWorkspace(this.windowId, worktreePath, projectId),
+			openFilesInWorkspace: (
+				_windowId,
+				worktreePath,
+				request,
+				projectId
+			) => this.openFilesInWorkspace(
+				this.windowId,
+				worktreePath,
+				request,
+				projectId
+			),
+			openFilesInActiveWorkspace: async (_windowId, request) => {
+				await this.initialization;
+				return this.instancesById.get(instance.instanceId) === instance &&
+					isHostedWorkspaceAvailable(instance)
+					? this.openFilesInInstance(instance, request)
+					: false;
+			},
+			closeWorkspace: _windowId =>
+				this.closeWorkspace(this.windowId, instance.instanceId),
+			reopenWorkspaceInNormalWindow: _windowId =>
+				this.reopenWorkspaceInNormalWindow(
+					this.windowId,
+					instance.instanceId
+				),
+			notifyHostedWorkspaceReady: _windowId =>
+				this.notifyHostedWorkspaceReady(
+					this.windowId,
+					instance.instanceId
+				),
+			focusWorkspace: async _windowId => {
+				await this.initialization;
+				if (
+					this.instancesById.get(instance.instanceId) !== instance ||
+					!isHostedWorkspaceAvailable(instance)
+				) {
+					return;
+				}
+				this.activateInstance(instance);
+				this.focusIframe(instance);
+			},
+			focusShell: _windowId => this.focusShell(this.windowId),
+			runActionInShell: async (_windowId, request) => {
+				if (
+					!isHucodeOmniExplicitShellAction(request.id) &&
+					!HUCODE_HOSTED_PROJECT_SHELL_ACTIONS.has(request.id)
+				) {
+					this.logService.warn(
+						'[hucode] Rejected hosted workbench request for ' +
+						`non-shell command ${request.id}.`
+					);
+					return false;
+				}
+				return this.runActionInShell(this.windowId, request);
+			},
+			reloadWorkspace: async _windowId => {
+				await this.initialization;
+				if (
+					this.instancesById.get(instance.instanceId) !== instance ||
+					!isHostedWorkspaceAvailable(instance)
+				) {
+					return;
+				}
+				this.reloadInstance(instance);
+			},
+		};
+	}
+
 	private disposeConnection(instance: IHostedIframeInstance): void {
 		const connection = instance.connection;
 		if (!connection) {
 			return;
 		}
 
+		if (
+			instance.timedOutLegacyUnload?.workbench === connection.workbench
+		) {
+			instance.timedOutLegacyUnload = undefined;
+		}
 		instance.connection = undefined;
 		// Closing a workspace over its own shell channel must not close the
 		// port before the pending response has been flushed to the iframe.
@@ -1128,7 +1624,7 @@ export class WebHucodeShellController extends Disposable
 	private async restorePersistedWorkbenches(
 		persisted: IWebHucodeShellPersistedState | undefined
 	): Promise<void> {
-		if (!persisted) {
+		if (!persisted || this.initializationCancelled) {
 			return;
 		}
 		const retainedCandidates = this.retainedWorkbenches.all
@@ -1142,6 +1638,9 @@ export class WebHucodeShellController extends Disposable
 			...persisted.residentWorkspaces.filter(entry => !!entry.projectId),
 			...retainedCandidates,
 		]);
+		if (this.initializationCancelled) {
+			return;
+		}
 		const plan = createHostedWorkbenchRestorePlan(
 			availableCandidates,
 			persisted.activeWorktreePath,
@@ -1195,11 +1694,17 @@ export class WebHucodeShellController extends Disposable
 	): Promise<typeof candidates> {
 		const available = [];
 		for (const candidate of candidates) {
+			if (this.initializationCancelled) {
+				break;
+			}
 			let exists: boolean;
 			try {
 				exists = await this.folderAccess.exists(candidate.worktreePath);
 			} catch {
 				continue;
+			}
+			if (this.initializationCancelled) {
+				break;
 			}
 			if (exists) {
 				if (candidate.retainedWorkbenchId) {
@@ -1273,7 +1778,7 @@ export class WebHucodeShellController extends Disposable
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
-		if (wasActive) {
+		if (wasActive && !this.shuttingDown) {
 			const next = getMostRecentHostedWorkspace(this.instancesById.values());
 			if (next) {
 				this.activateInstance(next);
@@ -1283,7 +1788,60 @@ export class WebHucodeShellController extends Disposable
 		this.emitState();
 	}
 
-	private async unloadAndRemoveInstance(
+	/**
+	 * Unloads a hosted workbench and removes it once removal is certain.
+	 *
+	 * Concurrent requests for the same workbench share one handshake and one
+	 * outcome. The commit sits between the shell's checks and the removal, so
+	 * without sharing two callers both pass the checks, both remove, the
+	 * workbench is asked to shut down twice, and each caller then applies its
+	 * own follow-up to a workbench the other has already disposed of
+	 * differently. The disposition each caller wants is merged here and
+	 * applied once, by the handshake that owns the claim.
+	 */
+	private unloadAndRemoveInstance(
+		instance: IHostedIframeInstance,
+		disposition: HostedUnloadDisposition
+	): Promise<boolean> {
+		const pending = instance.pendingUnload;
+		if (pending) {
+			instance.pendingUnloadDisposition = strongestUnloadDisposition(
+				instance.pendingUnloadDisposition ?? disposition,
+				disposition
+			);
+			return pending;
+		}
+
+		const timedOutLegacyUnload = instance.timedOutLegacyUnload;
+		if (timedOutLegacyUnload) {
+			if (
+				this.instancesById.get(instance.instanceId) === instance &&
+				instance.connection?.workbench ===
+				timedOutLegacyUnload.workbench
+			) {
+				timedOutLegacyUnload.disposition =
+					strongestUnloadDisposition(
+						timedOutLegacyUnload.disposition,
+						disposition
+					);
+				return Promise.resolve(false);
+			}
+			instance.timedOutLegacyUnload = undefined;
+		}
+
+		instance.pendingUnloadDisposition = disposition;
+		const unload = this.runUnloadHandshake(instance).finally(() => {
+			// A failed handshake still holds the claim, and a later request
+			// may already have replaced it.
+			if (instance.pendingUnload === unload) {
+				instance.pendingUnload = undefined;
+			}
+		});
+		instance.pendingUnload = unload;
+		return unload;
+	}
+
+	private async runUnloadHandshake(
 		instance: IHostedIframeInstance
 	): Promise<boolean> {
 		const lifecycleGeneration = instance.lifecycleGeneration;
@@ -1291,40 +1849,273 @@ export class WebHucodeShellController extends Disposable
 		// cannot hold unsaved state and is not listening yet, and a reloading
 		// one is already running its own beforeunload handling, where a
 		// handshake would only hang until the unload timeout.
+		//
+		// Both phases address the connection captured here. A workbench that
+		// connects part-way through would be asked to commit an unload it
+		// never prepared, and would rightly refuse.
+		const workbench = isHostedWorkspaceAvailable(instance) &&
+			!isHostedWorkspacePendingReady(instance)
+			? instance.connection?.workbench
+			: undefined;
+		// A workbench from before the handshake was split shuts itself down
+		// during preparation, so for those there is nothing left to decide
+		// afterwards and nothing to commit. Skipping the supersession
+		// re-check also gives up the guarantee it provides the disposition
+		// step — that this instance still owns its path — which is why the
+		// disposition is applied under its own identity check below.
+		const singlePhase = (instance.protocolVersion ?? 1) <
+			HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION;
 		if (
-			isHostedWorkspaceAvailable(instance) &&
-			!isHostedWorkspacePendingReady(instance) &&
-			await this.requestUnload(instance) !== 'ready'
+			workbench &&
+			await this.prepareUnload(
+				instance,
+				workbench,
+				singlePhase
+			) !== 'ready'
 		) {
 			return false;
 		}
 		if (
-			instance.lifecycleGeneration !== lifecycleGeneration ||
-			this.getInstanceByPath(instance.worktreePath) !== instance
+			!singlePhase && (
+				instance.lifecycleGeneration !== lifecycleGeneration ||
+				this.getInstanceByPath(instance.worktreePath) !== instance
+			)
+		) {
+			return false;
+		}
+		// The workbench shuts down only now that its removal is decided: a
+		// preparation the shell abandons above leaves it running.
+		if (
+			workbench && !singlePhase &&
+			await this.commitUnload(instance, workbench) === 'refused'
 		) {
 			return false;
 		}
 
+		return this.removeUnloadedInstance(instance);
+	}
+
+	/**
+	 * Removes an instance whose workbench has irreversibly shut down and applies
+	 * the strongest disposition requested for it.
+	 */
+	private removeUnloadedInstance(
+		instance: IHostedIframeInstance,
+		disposition =
+			instance.pendingUnloadDisposition ?? 'shutdown'
+	): boolean {
+		// Applying the disposition needs an identity this old the checks above
+		// no longer vouch for: a replacement created during the handshake owns
+		// the path now, and parking a dormant placeholder over it would evict a
+		// live workbench from the model while leaving its iframe running.
+		const ownsPath =
+			this.getInstanceByPath(instance.worktreePath) === instance;
+		// Release the claim before removing rather than in the `finally` that
+		// follows the handshake: a request arriving from here on gets its own
+		// handshake. Once a current-protocol workbench commits, removal is
+		// unconditional; the workbench has already shut down irreversibly.
+		instance.pendingUnload = undefined;
 		this.removeInstance(instance);
+		if (ownsPath) {
+			this.applyUnloadDisposition(instance, disposition);
+		}
 		return true;
 	}
 
-	private async requestUnload(
-		instance: IHostedIframeInstance
-	): Promise<HostedUnloadResult> {
-		const workbench = instance.connection?.workbench;
-		if (!workbench) {
-			return 'ready';
+	/**
+	 * Applies the outcome the callers of a completed unload agreed on. Every
+	 * follow-up lives here so that a workbench several requests raced for
+	 * ends up in one state rather than the last writer's.
+	 */
+	private applyUnloadDisposition(
+		instance: IHostedIframeInstance,
+		disposition: HostedUnloadDisposition
+	): void {
+		if (disposition === 'shutdown') {
+			return; // teardown must not rewrite the restore set
 		}
 
-		const result = await this.raceTimeout(
-			workbench.prepareUnload().then(
-				ready => ready ? 'ready' as const : 'vetoed' as const,
-				() => 'vetoed' as const
-			),
-			WebHucodeShellController.UNLOAD_TIMEOUT_MS
+		if (disposition === 'suspend') {
+			this.hostedWorkspaces.addInstance({
+				instanceId: generateUuid(),
+				projectId: instance.projectId,
+				retainedWorkbenchId: instance.retainedWorkbenchId,
+				worktreePath: instance.worktreePath,
+				state: 'dormant',
+				visible: false,
+				focused: false,
+				lastActiveAt: instance.lastActiveAt,
+				lifecycleGeneration: 0,
+			});
+			this.emitState();
+			return;
+		}
+
+		this.applyTerminalUnloadDisposition(
+			instance.worktreePath,
+			disposition,
+			instance.retainedWorkbenchId
 		);
-		return result === REQUEST_TIMEOUT ? 'timeout' : result;
+	}
+
+	/**
+	 * Applies a disposition that ends a workbench rather than parking it. No
+	 * dormant placeholder may survive one: it would offer to restore a
+	 * workbench the user closed or dismissed.
+	 */
+	private applyTerminalUnloadDisposition(
+		worktreePath: string,
+		disposition: 'unload' | 'dismiss',
+		retainedWorkbenchId?: string
+	): void {
+		const dormant = this.getInstanceByPath(worktreePath);
+		if (dormant?.state === 'dormant') {
+			this.hostedWorkspaces.removeInstance(dormant);
+		}
+		// Resolve the record the caller meant, not whichever record holds
+		// this path by the time the handshake ends. A record that has since
+		// been dismissed leaves nothing to act on, which is the safe answer;
+		// acting by path would instead unload or dismiss a record somebody
+		// created for the same folder in the meantime.
+		const retained = retainedWorkbenchId
+			? this.retainedWorkbenches.getById(retainedWorkbenchId)
+			: this.retainedWorkbenches.getByUri(URI.file(worktreePath));
+		if (retained) {
+			if (disposition === 'dismiss') {
+				this.retainedWorkbenches.dismiss(retained.id);
+			} else {
+				this.retainedWorkbenches.update(retained.id, {
+					desiredState: 'unloaded',
+				});
+			}
+		}
+		this.emitState();
+	}
+
+	/**
+	 * Asks a hosted workbench to prepare for unload. Preparation leaves the
+	 * lifecycle service untouched, so the shell can still abandon the unload
+	 * afterwards, and it fails closed: a veto, a lost answer or a silent
+	 * workbench all keep the workbench. Its shutdown listeners do run, and
+	 * not all of them are idempotent.
+	 */
+	private async prepareUnload(
+		instance: IHostedIframeInstance,
+		workbench: IHucodeOmniWebWorkbenchClient,
+		singlePhase: boolean,
+	): Promise<HostedUnloadResult> {
+		const answer = (
+			singlePhase
+				? workbench.prepareUnload()
+				: workbench.prepareUnloadForCommit()
+		).then(
+			ready => ready ? 'ready' as const : 'vetoed' as const,
+			() => 'prepare-failed' as const
+		);
+		const result = await this.raceTimeout(
+			answer,
+			WebHucodeShellController.PREPARE_UNLOAD_TIMEOUT_MS
+		);
+		if (result === REQUEST_TIMEOUT) {
+			const legacyClaim: ITimedOutLegacyUnloadClaim | undefined =
+				singlePhase
+					? {
+						workbench,
+						disposition:
+							instance.pendingUnloadDisposition ?? 'shutdown',
+					}
+					: undefined;
+			if (legacyClaim) {
+				instance.timedOutLegacyUnload = legacyClaim;
+			}
+			this.logService.warn(
+				'[hucode] Hosted workbench did not answer the unload ' +
+				`preparation for ${instance.worktreePath}; keeping it.`
+			);
+			// The preparation cannot be called off, and the workbench being
+			// kept is not the untouched one the caller assumes: its shutdown
+			// listeners run whenever the answer finally arrives.
+			void answer.then(late => {
+				this.logService.warn(
+					'[hucode] Hosted workbench unload preparation for ' +
+					`${instance.worktreePath} completed (${late}) after the ` +
+					'shell gave up on it; its shutdown listeners have run.'
+				);
+				// Protocol-v1 preparation is the shutdown itself. Once it
+				// eventually succeeds, keeping the iframe would retain a dead
+				// workbench. Only the exact connection asked to shut down may
+				// remove the instance; a reloaded child must survive an old
+				// connection's delayed answer. Do not release a newer unload
+				// claim that may now own the same instance.
+				if (
+					legacyClaim &&
+					instance.timedOutLegacyUnload === legacyClaim
+				) {
+					instance.timedOutLegacyUnload = undefined;
+					if (
+						late === 'ready' &&
+						this.instancesById.get(instance.instanceId) ===
+						instance &&
+						instance.connection?.workbench === workbench
+					) {
+						this.removeUnloadedInstance(
+							instance,
+							legacyClaim.disposition
+						);
+					}
+				}
+			});
+			return 'prepare-timeout';
+		}
+		if (result === 'vetoed') {
+			this.logService.info(
+				'[hucode] Hosted workbench vetoed its unload for ' +
+				`${instance.worktreePath}.`
+			);
+		}
+		if (result === 'prepare-failed') {
+			this.logService.warn(
+				'[hucode] Hosted workbench unload preparation failed for ' +
+				`${instance.worktreePath}; keeping it.`
+			);
+		}
+		return result;
+	}
+
+	/**
+	 * Commits a prepared unload. This phase fails open: the request is
+	 * irreversible and already sent, and preparation established that the
+	 * workbench had no objection, so a silence or a lost reply says nothing
+	 * about whether the workbench survived. Keeping its iframe would leave
+	 * the page holding a workbench that has already gone. An answered
+	 * refusal is different — the workbench is still running and said so.
+	 */
+	private async commitUnload(
+		instance: IHostedIframeInstance,
+		workbench: IHucodeOmniWebWorkbenchClient
+	): Promise<HostedUnloadResult> {
+		const result = await this.raceTimeout(
+			workbench.commitUnload().then(
+				committed => committed ? 'ready' as const : 'refused' as const,
+				() => 'commit-failed' as const
+			),
+			WebHucodeShellController.COMMIT_UNLOAD_TIMEOUT_MS
+		);
+		if (result === REQUEST_TIMEOUT) {
+			this.logService.warn(
+				'[hucode] Hosted workbench did not confirm its unload commit ' +
+				`for ${instance.worktreePath}; removing it anyway.`
+			);
+			return 'commit-timeout';
+		}
+		if (result === 'commit-failed') {
+			this.logService.warn(
+				'[hucode] Hosted workbench lost its connection during the ' +
+				`unload commit for ${instance.worktreePath}; removing it ` +
+				'anyway.'
+			);
+		}
+		return result;
 	}
 
 	private async openFilesInInstance(
@@ -1365,7 +2156,7 @@ export class WebHucodeShellController extends Disposable
 		instance: IHostedIframeInstance,
 		commandId: string,
 		args: readonly unknown[]
-	): Promise<boolean> {
+	): Promise<boolean | typeof COMMAND_DELIVERY_UNKNOWN> {
 		const workbench = instance.connection?.workbench;
 		if (!workbench) {
 			return false;
@@ -1376,7 +2167,7 @@ export class WebHucodeShellController extends Disposable
 			WebHucodeShellController.COMMAND_TIMEOUT_MS
 		);
 		if (result === REQUEST_TIMEOUT) {
-			return false;
+			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
 		if (instance.state === 'loading') {
@@ -1568,6 +2359,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IConfigurationService configurationService: IConfigurationService,
 		@IStorageService storageService: IStorageService,
 		@IFileService fileService: IFileService,
+		@ILogService logService: ILogService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -1586,7 +2378,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			) ?? 'active', createWebHucodeShellFolderAccess(
 				environmentService.remoteAuthority,
 				resource => fileService.stat(resource)
-			));
+			), logService);
 	}
 }
 

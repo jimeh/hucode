@@ -49,6 +49,7 @@ import {
 	getMostRecentHostedWorkspace,
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
+	isHostedWorkspaceRestorable,
 	waitForHostedWorkspaceReady,
 } from '../common/hostedWorkspaceState.js';
 import {
@@ -126,7 +127,25 @@ interface IHostedWorkbenchInstance {
 	disposed: boolean;
 }
 
+interface IProjectCatalogSnapshot {
+	readonly liveProjectIds: ReadonlySet<string> | undefined;
+	readonly projectIdsByPath: ReadonlyMap<string, string>;
+}
+
 type OmniFocusedSurface = 'shell' | 'workspace';
+
+function unloadReasonRank(reason: UnloadReason): number {
+	switch (reason) {
+		case UnloadReason.RELOAD:
+			return 0;
+		case UnloadReason.LOAD:
+			return 1;
+		case UnloadReason.CLOSE:
+			return 2;
+		case UnloadReason.QUIT:
+			return 3;
+	}
+}
 
 const defaultHostedWorkbenchViewFactory: IHostedWorkbenchViewFactory = {
 	createView(configObjectUrl, useCodeCache) {
@@ -167,9 +186,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
 	private restored = false;
 	private shuttingDown = false;
+	private terminalShutdownRequested = false;
+	private shutdownReason: UnloadReason | undefined;
+	private shutdownPromise: Promise<void> | undefined;
 	private stateEmissionDeferrals = 0;
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
+	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
 	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
@@ -833,21 +856,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		worktreePath: string,
 		projectId?: string
 	): Promise<void> {
-		await this.ensureRestored();
-		const activationIntent = ++this.activationIntentGeneration;
-		const retained = this.retainedWorkbenches.getByUri(
-			URI.file(worktreePath)
-		);
-		if (projectId && retained) {
-			this.retainedWorkbenches.dismiss(retained.id);
-		} else if (!projectId) {
-			this.retainedWorkbenches.retain(
-				URI.file(worktreePath),
-				'loaded'
-			);
+		if (this.shuttingDown) {
+			return;
 		}
 
-		const existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		await this.ensureRestored();
+		if (this.shuttingDown) {
+			return;
+		}
+
+		const activationIntent = ++this.activationIntentGeneration;
+		let existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		const instanceBeforeTeardown = existing;
+		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			projectId ?? existing?.projectId
+		);
+
 		if (existing) {
 			if (
 				!existing.disposed &&
@@ -855,7 +880,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				existing.state !== 'unloaded' &&
 				existing.state !== 'dormant'
 			) {
-				existing.projectId = projectId ?? existing.projectId;
+				const retained = this.retainedWorkbenches.getByUri(
+					URI.file(worktreePath)
+				);
+				if (effectiveProjectId && retained) {
+					this.retainedWorkbenches.dismiss(retained.id);
+				} else if (!effectiveProjectId) {
+					this.retainedWorkbenches.retain(
+						URI.file(worktreePath),
+						'loaded'
+					);
+				}
+				existing.projectId = effectiveProjectId;
 				this.activateInstance(existing);
 				return;
 			}
@@ -865,9 +901,40 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 		}
 
+		existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
+		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
+			worktreePath,
+			existing && existing !== instanceBeforeTeardown
+				? existing.projectId
+				: projectId ?? existing?.projectId
+		);
+		const retained = this.retainedWorkbenches.getByUri(
+			URI.file(worktreePath)
+		);
+		if (effectiveProjectId && retained) {
+			this.retainedWorkbenches.dismiss(retained.id);
+		} else if (!effectiveProjectId) {
+			this.retainedWorkbenches.retain(
+				URI.file(worktreePath),
+				'loaded'
+			);
+		}
+		if (existing && (
+			!existing.disposed &&
+			existing.state !== 'crashed' &&
+			existing.state !== 'unloaded' &&
+			existing.state !== 'dormant'
+		)) {
+			existing.projectId = effectiveProjectId;
+			if (activationIntent === this.activationIntentGeneration) {
+				this.activateInstance(existing);
+			}
+			return;
+		}
+
 		await this.createOrRestoreInstance(
 			worktreePath,
-			projectId,
+			effectiveProjectId,
 			true,
 			activationIntent
 		);
@@ -1010,24 +1077,155 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	async reconcileRetainedWorkbenches(projectFolders: readonly {
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+		projects: readonly {
+			readonly projectId: string;
+			readonly folderUris: readonly URI[];
+		}[]
+	): Promise<void> {
+		await this.ensureRestored();
+		const liveProjectIds = new Set(projects.map(project =>
+			project.projectId
+		));
+		const projectFolders = projects.flatMap(project =>
+			project.folderUris.map(folderUri => ({
+				projectId: project.projectId,
+				folderUri,
+			}))
+		);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			getProjectManagerPathComparisonKey(
+				folder.folderUri.fsPath,
+				isLinux
+			),
+			folder.projectId,
+		]));
+		this.projectCatalogSnapshot = {
+			liveProjectIds,
+			projectIdsByPath,
+		};
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				getProjectManagerPathComparisonKey(
+					instance.worktreePath,
+					isLinux
+				)
+			);
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId;
+				instance.projectId = claimedProjectId;
+				continue;
+			}
+			if (
+				!isHostedWorkspaceRestorable(instance) ||
+				!instance.projectId ||
+				liveProjectIds.has(instance.projectId)
+			) {
+				continue;
+			}
+
+			this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			instance.projectId = undefined;
+			changed = true;
+		}
+		if (this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		)) {
+			changed = true;
+		}
+		if (changed) {
+			this.emitState();
+		}
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		projectFolders: readonly {
+			readonly projectId: string;
+			readonly folderUri: URI;
+		}[]
+	): Promise<void> {
+		await this.ensureRestored();
+		this.recordProjectFolderPromotions(projectFolders);
+		if (this.applyProjectFolderPromotions(projectFolders)) {
+			this.emitState();
+		}
+	}
+
+	private applyProjectFolderPromotions(projectFolders: readonly {
 		readonly projectId: string;
 		readonly folderUri: URI;
-	}[]): Promise<void> {
-		await this.ensureRestored();
+	}[]): boolean {
+		let changed = false;
 		for (const projectFolder of projectFolders) {
 			const instance = this.hostedWorkspaces.getInstanceByPath(
 				projectFolder.folderUri.fsPath
 			);
 			if (instance) {
+				changed ||= instance.projectId !== projectFolder.projectId;
 				instance.projectId = projectFolder.projectId;
 			}
 		}
 		if (this.retainedWorkbenches.reconcileProjectPaths(
 			projectFolders.map(folder => folder.folderUri)
 		)) {
-			this.emitState();
+			changed = true;
 		}
+		return changed;
+	}
+
+	private recordProjectFolderPromotions(projectFolders: readonly {
+		readonly projectId: string;
+		readonly folderUri: URI;
+	}[]): void {
+		if (projectFolders.length === 0) {
+			return;
+		}
+		const current = this.projectCatalogSnapshot;
+		const liveProjectIds = current?.liveProjectIds
+			? new Set(current.liveProjectIds)
+			: undefined;
+		const projectIdsByPath = new Map(current?.projectIdsByPath);
+		for (const projectFolder of projectFolders) {
+			liveProjectIds?.add(projectFolder.projectId);
+			projectIdsByPath.set(
+				getProjectManagerPathComparisonKey(
+					projectFolder.folderUri.fsPath,
+					isLinux
+				),
+				projectFolder.projectId
+			);
+		}
+		this.projectCatalogSnapshot = {
+			liveProjectIds,
+			projectIdsByPath,
+		};
+	}
+
+	private resolveProjectIdAgainstCatalog(
+		worktreePath: string,
+		projectId: string | undefined
+	): string | undefined {
+		const catalog = this.projectCatalogSnapshot;
+		if (!catalog) {
+			return projectId;
+		}
+		const claimedProjectId = catalog.projectIdsByPath.get(
+			getProjectManagerPathComparisonKey(worktreePath, isLinux)
+		);
+		if (claimedProjectId) {
+			return claimedProjectId;
+		}
+		if (!catalog.liveProjectIds) {
+			return projectId;
+		}
+		return projectId && catalog.liveProjectIds.has(projectId)
+			? projectId
+			: undefined;
 	}
 
 	async openFilesInWorkspace(
@@ -1080,6 +1278,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		makeActive: boolean,
 		activationIntent?: number
 	): Promise<IHostedWorkbenchInstance | undefined> {
+		if (this.shuttingDown) {
+			return undefined;
+		}
+
 		const pendingInstance =
 			this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
@@ -1150,6 +1352,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		try {
 			await this.attachInstance(instance, makeActive, workspaceFolderStat);
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
+				return undefined;
+			}
+
 			this.traceRestore(
 				`instance:attached makeActive=${makeActive} state=${instance.state}`,
 				instance
@@ -1170,6 +1381,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 			return instance;
 		} catch (error) {
+			if (
+				this.shuttingDown ||
+				instance.disposed ||
+				this.hostedWorkspaces.getInstanceByPath(worktreePath) !==
+				instance
+			) {
+				throw error;
+			}
+
 			await this.deferStateEmission(async () => {
 				this.markRetainedWorkbenchCrashed(instance.worktreePath);
 				await this.destroyInstance(instance, true, false);
@@ -1504,11 +1724,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					) !== instance
 				)
 			);
-			if (unloadResult === 'superseded-after-will-unload') {
+			if (unloadResult === 'reload-required') {
 				this.reloadInstanceAfterInterruptedUnload(instance);
 				return false;
 			}
 			if (unloadResult === 'superseded') {
+				return false;
+			}
+			if (unloadResult === 'before-unload-failed') {
+				this.logService.trace(
+					'[HucodeShellMainService] Hosted workspace unload ' +
+					`preparation failed for ${instance.worktreePath}.`
+				);
 				return false;
 			}
 			if (unloadResult === 'vetoed') {
@@ -1520,11 +1747,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					return false;
 				}
 
-				this.logService.warn(
-					'[HucodeShellMainService] Ignoring hosted workspace ' +
-					`unload veto during Omni shutdown for ` +
-					`${instance.worktreePath}.`
-				);
+				this.logIgnoredShutdownUnloadVeto(instance);
 			}
 		}
 
@@ -1578,8 +1801,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		this.logService.trace(
-			'[HucodeShellMainService] Reloading hosted workspace reactivated ' +
-			`during will-unload for ${instance.worktreePath}.`
+			'[HucodeShellMainService] Reloading hosted workspace after an ' +
+			`interrupted unload for ${instance.worktreePath}.`
 		);
 		instance.interruptedUnloadReloadGeneration =
 			instance.lifecycleGeneration;
@@ -1588,80 +1811,309 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
-	async shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
-		if (this.shuttingDown) {
-			return;
+	shutdownAllWorkspaces(reason: UnloadReason): Promise<void> {
+		if (
+			this.shutdownReason === undefined ||
+			unloadReasonRank(reason) > unloadReasonRank(this.shutdownReason)
+		) {
+			this.shutdownReason = reason;
+		}
+		if (
+			reason === UnloadReason.CLOSE ||
+			reason === UnloadReason.QUIT
+		) {
+			this.terminalShutdownRequested = true;
+		}
+		if (this.shutdownPromise) {
+			return this.shutdownPromise;
 		}
 
 		this.updateWindowRestoreState();
 		this.shuttingDown = true;
-		const instances = Array.from(this.instancesById.values());
+		const instances = Array.from(this.instancesById.values())
+			.filter(instance => !instance.disposed ||
+				!!instance.view ||
+				!!instance.configObjectUrl);
+		const shutdown = Promise.resolve().then(
+			() => this.runShutdown(
+				instances,
+				() => this.shutdownReason ?? reason
+			)
+		);
+		this.shutdownPromise = shutdown;
+		const releaseShutdown = (failed: boolean) => {
+			if (this.shutdownPromise === shutdown) {
+				if (failed || !this.terminalShutdownRequested) {
+					this.shutdownPromise = undefined;
+				}
+				if (!this.terminalShutdownRequested) {
+					this.shutdownReason = undefined;
+					this.shuttingDown = false;
+				}
+			}
+		};
+		void shutdown.then(
+			() => releaseShutdown(false),
+			() => releaseShutdown(true)
+		);
+		return shutdown;
+	}
+
+	private async runShutdown(
+		instances: readonly IHostedWorkbenchInstance[],
+		getReason: () => UnloadReason
+	): Promise<void> {
+		const unloadInstances = instances.filter(instance => !instance.disposed);
+		const unloadResults = await Promise.allSettled(
+			unloadInstances.map(instance =>
+				this.unloadInRenderer(
+					instance,
+					getReason(),
+					true,
+					undefined,
+					getReason
+				)
+			)
+		);
+		let firstFailure: { readonly error: unknown } | undefined;
+		for (let index = 0; index < unloadInstances.length; index++) {
+			const unloadResult = unloadResults[index];
+			if (unloadResult.status === 'rejected') {
+				firstFailure ??= { error: unloadResult.reason };
+			} else if (unloadResult.value === 'vetoed') {
+				this.logIgnoredShutdownUnloadVeto(unloadInstances[index]);
+			}
+		}
+
+		// Native view ownership changes remain ordered even though the renderer
+		// handshakes above are independent and can consume their budgets
+		// concurrently.
 		for (const instance of instances) {
-			if (instance.disposed) {
+			if (
+				instance.disposed &&
+				!instance.view &&
+				!instance.configObjectUrl
+			) {
 				continue;
 			}
 
-			await this.destroyInstance(instance, false, true, reason, true);
+			try {
+				await this.destroyInstance(instance, false, false);
+			} catch (error) {
+				firstFailure ??= { error };
+			}
 		}
+
+		if (firstFailure) {
+			throw firstFailure.error;
+		}
+	}
+
+	private logIgnoredShutdownUnloadVeto(
+		instance: IHostedWorkbenchInstance
+	): void {
+		this.logService.warn(
+			'[HucodeShellMainService] Ignoring hosted workspace ' +
+			`unload veto during Omni shutdown for ` +
+			`${instance.worktreePath}.`
+		);
 	}
 
 	private async unloadInRenderer(
 		instance: IHostedWorkbenchInstance,
 		reason: UnloadReason,
 		ignoreBeforeUnloadVeto: boolean = false,
-		isSuperseded: () => boolean = () => false
+		isSuperseded: () => boolean = () => false,
+		getLatestReason: () => UnloadReason = () => reason
 	): Promise<
-		'ready' | 'vetoed' | 'superseded' |
-		'superseded-after-will-unload'
+		'ready' | 'vetoed' | 'before-unload-failed' |
+		'superseded' | 'reload-required'
 	> {
 		const webContents = instance.view?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return isSuperseded() ? 'superseded' : 'ready';
 		}
 
-		const beforeUnloadVeto = await this.onBeforeUnloadInRenderer(
+		const preparation = await this.onBeforeUnloadInRenderer(
 			webContents,
 			instance,
 			reason
 		);
-		if (beforeUnloadVeto) {
+		const latestReason = getLatestReason();
+		if (latestReason !== reason) {
+			if (preparation.outcome !== 'vetoed') {
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			}
+			return this.unloadInRenderer(
+				instance,
+				latestReason,
+				ignoreBeforeUnloadVeto,
+				isSuperseded,
+				getLatestReason
+			);
+		}
+		if (preparation.outcome === 'vetoed') {
 			if (ignoreBeforeUnloadVeto) {
 				await this.onWillUnloadInRenderer(
 					webContents,
 					instance,
-					reason
+					reason,
+					preparation.preparationId
 				);
 			}
 			return 'vetoed';
 		}
+		if (preparation.outcome === 'failed') {
+			if (ignoreBeforeUnloadVeto) {
+				await this.onWillUnloadInRenderer(
+					webContents,
+					instance,
+					reason,
+					preparation.preparationId
+				);
+				return 'ready';
+			}
+
+			const rollbackDisposition =
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			if (!rollbackDisposition) {
+				return 'reload-required';
+			}
+			return isSuperseded()
+				? 'superseded'
+				: 'before-unload-failed';
+		}
 		if (isSuperseded()) {
+			const rollbackDisposition =
+				await this.notifyShutdownPreparationAbandonedInRenderer(
+					webContents,
+					instance,
+					preparation.preparationId
+				);
+			if (!rollbackDisposition) {
+				return 'reload-required';
+			}
 			return 'superseded';
 		}
 
-		await this.onWillUnloadInRenderer(webContents, instance, reason);
+		await this.onWillUnloadInRenderer(
+			webContents,
+			instance,
+			reason,
+			preparation.preparationId
+		);
 		if (isSuperseded()) {
-			return 'superseded-after-will-unload';
+			return 'reload-required';
 		}
 		return 'ready';
+	}
+
+	private notifyShutdownPreparationAbandonedInRenderer(
+		webContents: Electron.WebContents,
+		instance: IHostedWorkbenchInstance,
+		preparationId: string
+	): Promise<'applied' | 'stale' | undefined> {
+		if (webContents.isDestroyed()) {
+			return Promise.resolve(undefined);
+		}
+
+		return new Promise(resolve => {
+			const oneTimeEventToken = this.createOneTimeEventToken(instance);
+			const replyChannel = `vscode:reply${oneTimeEventToken}`;
+			let settled = false;
+
+			const complete = (
+				disposition: 'applied' | 'stale' | undefined
+			) => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				clearTimeout(timeoutHandle);
+				this.ipcMain.removeListener(replyChannel, handleReply);
+				webContents.removeListener('destroyed', handleDestroyed);
+				resolve(disposition);
+			};
+			const handleReply = (
+				_event: Electron.IpcMainEvent,
+				...args: unknown[]
+			) => {
+				const reply = args[0] as {
+					preparationId?: string;
+					disposition?: string;
+				} | undefined;
+				if (
+					reply?.preparationId !== preparationId ||
+					(reply.disposition !== 'applied' &&
+						reply.disposition !== 'stale')
+				) {
+					complete(undefined);
+					return;
+				}
+
+				complete(reply.disposition);
+			};
+			const handleDestroyed = () => complete(undefined);
+
+			this.ipcMain.once(replyChannel, handleReply);
+			webContents.once('destroyed', handleDestroyed);
+			const timeoutHandle = setTimeout(() => {
+				this.logService.warn(
+					'[HucodeShellMainService] Timed out waiting for hosted ' +
+					`workspace shutdown preparation rollback reply for ` +
+					`${instance.worktreePath}.`
+				);
+				complete(undefined);
+			}, this.beforeUnloadTimeoutMs);
+
+			try {
+				webContents.send('vscode:onShutdownPreparationAbandoned', {
+					preparationId,
+					replyChannel,
+				});
+			} catch (error) {
+				this.logService.warn(
+					'[HucodeShellMainService] Failed to send hosted workspace ' +
+					`shutdown preparation rollback for ` +
+					`${instance.worktreePath}: ${error}`
+				);
+				complete(undefined);
+			}
+		});
 	}
 
 	private onBeforeUnloadInRenderer(
 		webContents: Electron.WebContents,
 		instance: IHostedWorkbenchInstance,
 		reason: UnloadReason
-	): Promise<boolean> {
-		return new Promise<boolean>(resolve => {
+	): Promise<{
+		readonly preparationId: string;
+		readonly outcome: 'ready' | 'vetoed' | 'failed';
+	}> {
+		return new Promise(resolve => {
 			const oneTimeEventToken = this.createOneTimeEventToken(instance);
 			const okChannel = `vscode:ok${oneTimeEventToken}`;
 			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
+			const preparationId = oneTimeEventToken;
 
 			let settled = false;
 
-			const handleOk = () => complete(false);
-			const handleCancel = () => complete(true);
-			const handleDestroyed = () => complete(false);
+			const handleOk = () => complete('ready');
+			const handleCancel = () => complete('vetoed');
+			const handleDestroyed = () => complete('failed');
 
-			const complete = (veto: boolean) => {
+			const complete = (
+				outcome: 'ready' | 'vetoed' | 'failed'
+			) => {
 				if (settled) {
 					return;
 				}
@@ -1675,7 +2127,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.ipcMain.removeListener(cancelChannel, handleCancel);
 				webContents.removeListener('destroyed', handleDestroyed);
 
-				resolve(veto);
+				resolve({ preparationId, outcome });
 			};
 
 			this.ipcMain.once(okChannel, handleOk);
@@ -1686,13 +2138,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Timed out waiting for hosted ' +
 					`workspace before-unload reply for ${instance.worktreePath}.`
 				);
-				complete(false);
+				complete('failed');
 			}, this.beforeUnloadTimeoutMs);
 
 			try {
 				webContents.send('vscode:onBeforeUnload', {
 					okChannel,
 					cancelChannel,
+					preparationId,
 					reason
 				});
 			} catch (error) {
@@ -1700,7 +2153,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					'[HucodeShellMainService] Failed to send hosted workspace ' +
 					`before-unload for ${instance.worktreePath}: ${error}`
 				);
-				complete(false);
+				complete('failed');
 			}
 		});
 	}
@@ -1708,7 +2161,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private onWillUnloadInRenderer(
 		webContents: Electron.WebContents,
 		instance: IHostedWorkbenchInstance,
-		reason: UnloadReason
+		reason: UnloadReason,
+		preparationId: string
 	): Promise<void> {
 		return new Promise<void>(resolve => {
 			const oneTimeEventToken = this.createOneTimeEventToken(instance);
@@ -1748,6 +2202,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			try {
 				webContents.send('vscode:onWillUnload', {
 					replyChannel,
+					preparationId,
 					reason
 				});
 			} catch (error) {

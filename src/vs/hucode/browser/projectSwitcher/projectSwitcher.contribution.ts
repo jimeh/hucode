@@ -99,7 +99,10 @@ import {
 	RENAME_WORKTREE_COMMAND_ID,
 	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcherCommon.js';
+import { toggleProjectTreeItemCollapsed } from
+	'./projectSwitcherCollapse.js';
 import {
+	getOmniHostedWorkspaceState,
 	openProjectSwitcherTarget,
 	setLastActiveWorktreeBestEffort,
 	type IProjectSwitcherSelectionTarget,
@@ -156,6 +159,7 @@ import {
 	canSuspendHostedWorkbench,
 	shouldUnloadHostedWorkbench,
 } from './hostedWorkbenchActions.js';
+import { removeProjectWithHostedWorkbenchCleanup } from './removeProject.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -281,7 +285,10 @@ async function runRetainedWorkbenchQuickInput<T>(
 	}
 }
 
-class ProjectSwitcherAccessibilityProvider
+/**
+ * Supplies accessible labels for Project Switcher rows.
+ */
+export class ProjectSwitcherAccessibilityProvider
 	implements IListAccessibilityProvider<ProjectSwitcherItem> {
 
 	getWidgetAriaLabel(): string {
@@ -373,7 +380,10 @@ interface ProjectSwitcherActionTemplate {
 	currentAction?: () => void;
 }
 
-class ProjectSwitcherRenderer
+/**
+ * Renders reusable Project Switcher tree rows and their inline actions.
+ */
+export class ProjectSwitcherRenderer
 	implements ITreeRenderer<ProjectSwitcherItem, void, ProjectSwitcherTemplate> {
 
 	static readonly ID = 'hucodeProjectSwitcherItem';
@@ -725,7 +735,10 @@ class ProjectSwitcherRenderer
 	}
 }
 
-class ProjectSwitcherDragAndDrop
+/**
+ * Applies Project Switcher drag-and-drop validation and ordering.
+ */
+export class ProjectSwitcherDragAndDrop
 	implements ITreeDragAndDrop<ProjectSwitcherItem> {
 
 	constructor(
@@ -995,12 +1008,15 @@ class ProjectSwitcherDragAndDrop
 		const siblings = project.worktrees.filter(worktree =>
 			!worktree.isMain && !pathsEqual(worktree.path, source.worktreePath)
 		);
+		const targetIndex = siblings.findIndex(worktree =>
+			pathsEqual(worktree.path, target.worktreePath)
+		);
+		if (targetIndex < 0) {
+			return;
+		}
 		const beforeWorktreePath = isBeforeDropPosition(targetSector)
 			? target.worktreePath
-			: siblings.find((worktree, index) =>
-				pathsEqual(worktree.path, target.worktreePath) &&
-				index + 1 < siblings.length
-			)?.path;
+			: siblings[targetIndex + 1]?.path;
 		await this.projectManagerService.moveWorktree(
 			source.projectId,
 			source.worktreePath,
@@ -1423,17 +1439,17 @@ export class ProjectSwitcherWidget extends Disposable {
 	): Promise<void> {
 		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
-		if (this.environmentService.isOmniWindow) {
-			await this.shellService.reconcileRetainedWorkbenches(
-				this.windowId,
-				projects.flatMap(project => project.worktrees.map(worktree => ({
-					projectId: project.id,
-					folderUri: URI.file(worktree.path).toJSON(),
-				})))
+		const reconciledHostedWorkspaceState =
+			await getOmniHostedWorkspaceState(
+				this.environmentService,
+				this.shellService,
+				projects
 			);
-		}
 		if (this.projects !== projects) {
 			return;
+		}
+		if (reconciledHostedWorkspaceState) {
+			this.omniHostedWorkspaceState = reconciledHostedWorkspaceState;
 		}
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
@@ -1642,15 +1658,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		const collapsed = this.tree.isCollapsed(item);
-		if (collapsed) {
-			this.tree.expand(item);
-			this.setProjectCollapsed(item, false);
-			return;
-		}
-
-		this.tree.collapse(item);
-		this.setProjectCollapsed(item, true);
+		toggleProjectTreeItemCollapsed(
+			this.tree,
+			item,
+			collapsed => this.setProjectCollapsed(item, collapsed)
+		);
 	}
 
 	private toggleOmniSectionCollapsed(
@@ -2366,8 +2378,8 @@ registerAction2(class extends Action2 {
 			}
 
 			const project = await projectManagerService.addProject(folder[0]);
-			if (environmentService.isOmniWindow) {
-				await shellService.reconcileRetainedWorkbenches(
+			if (environmentService.isOmniShellWindow) {
+				await shellService.promoteRetainedWorkbenchProjectFolders(
 					dom.getWindowId(mainWindow),
 					project.worktrees.map(worktree => ({
 						projectId: project.id,
@@ -3009,6 +3021,8 @@ registerAction2(class extends Action2 {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const dialogService = accessor.get(IDialogService);
 		const notificationService = accessor.get(INotificationService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const shellService = accessor.get(IHucodeShellService);
 
 		try {
 			const projectId = parseProjectHandle(handle.$treeItemHandle);
@@ -3016,29 +3030,27 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			const projects = await projectManagerService.getProjects();
-			const project = projects.find(entry => entry.id === projectId);
-			if (!project) {
-				return;
-			}
-
-			const result = await dialogService.confirm({
-				type: 'warning',
-				message: localize(
-					'removeProjectConfirm',
-					'Remove project "{0}" from Hucode?',
-					project.label
-				),
-				detail: localize(
-					'removeProjectDetail',
-					'This only removes the project from the sidebar. Repository files are left untouched.'
-				),
-			});
-			if (!result.confirmed) {
-				return;
-			}
-
-			await projectManagerService.removeProject(projectId);
+			await removeProjectWithHostedWorkbenchCleanup(
+				projectId,
+				{
+					isOmniWindow: environmentService.isOmniWindow,
+					windowId: dom.getWindowId(mainWindow),
+				},
+				projectManagerService,
+				shellService,
+				async project => (await dialogService.confirm({
+					type: 'warning',
+					message: localize(
+						'removeProjectConfirm',
+						'Remove project "{0}" from Hucode?',
+						project.label
+					),
+					detail: localize(
+						'removeProjectDetail',
+						'Matching workbenches are unloaded where possible. Repository files are left untouched.'
+					),
+				})).confirmed
+			);
 		} catch (error) {
 			notificationService.error(String(error));
 		}

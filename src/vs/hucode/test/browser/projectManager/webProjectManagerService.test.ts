@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -54,6 +56,19 @@ suite('WebProjectManagerService', () => {
 			.rootUri.fsPath, '/repo');
 	});
 
+	test('preserves worktree freshness through JSON responses', async () => {
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response(JSON.stringify({
+				projects: [rawProject('/repo', 'stale')],
+			}));
+		const service = disposables.add(createService(fakeFetch));
+
+		const projects = await service.getProjects();
+
+		assert.strictEqual(projects[0].worktreeState, 'stale');
+		assert.strictEqual(projects[0].rootUri.fsPath, '/repo');
+	});
+
 	test('uses localized fallback errors for failed requests', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response('not json', { status: 500 });
@@ -63,6 +78,91 @@ suite('WebProjectManagerService', () => {
 			service.getProjects(),
 			/Project manager request failed: 500/
 		);
+	});
+
+	test('cancels worktree ref requests through the browser transport', async () => {
+		let requestSignal: AbortSignal | undefined;
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener(
+					'abort',
+					() => reject(requestSignal?.reason),
+					{ once: true }
+				);
+			});
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+
+		const refs = service.getWorktreeRefs(
+			'project',
+			undefined,
+			cancellation.token
+		);
+		cancellation.cancel();
+
+		await assert.rejects(refs, error => error instanceof CancellationError);
+		assert.strictEqual(requestSignal?.aborted, true);
+	});
+
+	test('does not start an already-canceled worktree ref request', async () => {
+		let fetchCalls = 0;
+		const fakeFetch: WebProjectManagerFetch = async () => {
+			fetchCalls++;
+			return new Response(JSON.stringify({ refs: [] }));
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+		cancellation.cancel();
+
+		await assert.rejects(
+			service.getWorktreeRefs(
+				'project',
+				undefined,
+				cancellation.token
+			),
+			error => error instanceof CancellationError
+		);
+		assert.strictEqual(fetchCalls, 0);
+	});
+
+	test('reports cancellation while reading a response body', async () => {
+		let requestSignal: AbortSignal | undefined;
+		let bodyReadStarted!: () => void;
+		const readingBody = new Promise<void>(resolve => {
+			bodyReadStarted = resolve;
+		});
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return {
+				ok: true,
+				status: 200,
+				json() {
+					bodyReadStarted();
+					return new Promise<never>((_resolve, reject) => {
+						requestSignal?.addEventListener(
+							'abort',
+							() => reject(requestSignal?.reason),
+							{ once: true }
+						);
+					});
+				},
+			} as unknown as Response;
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const cancellation = disposables.add(new CancellationTokenSource());
+
+		const refs = service.getWorktreeRefs(
+			'project',
+			undefined,
+			cancellation.token
+		);
+		await readingBody;
+		cancellation.cancel();
+
+		await assert.rejects(refs, error => error instanceof CancellationError);
+		assert.strictEqual(requestSignal?.aborted, true);
 	});
 
 	test('emits revived project updates from server-sent events', () => {
@@ -87,6 +187,23 @@ suite('WebProjectManagerService', () => {
 
 		assert.strictEqual(events.length, 1);
 		assert.strictEqual(events[0][0].rootUri.fsPath, '/repo');
+		assert.strictEqual(
+			(events[0][0] as { worktreeState?: string }).worktreeState,
+			'current'
+		);
+
+		FakeEventSource.instances[0].emit(
+			'projects',
+			new MessageEvent('projects', {
+				data: JSON.stringify({
+					projects: [rawProject('/repo', 'unavailable')],
+				}),
+			})
+		);
+		assert.strictEqual(
+			(events[1][0] as { worktreeState?: string }).worktreeState,
+			'unavailable'
+		);
 	});
 
 	test('closes project events when disposed', () => {
@@ -108,13 +225,17 @@ suite('WebProjectManagerService', () => {
 	}
 });
 
-function rawProject(path: string): object {
+function rawProject(
+	path: string,
+	worktreeState: 'current' | 'stale' | 'unavailable' = 'current'
+): object {
 	return {
 		id: 'project',
 		label: 'Repo',
 		rootUri: URI.file(path).toJSON(),
 		pinned: false,
 		order: 1,
+		worktreeState,
 		worktrees: [],
 	};
 }

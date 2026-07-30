@@ -8,7 +8,7 @@ import { EventEmitter } from 'events';
 import { mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise } from '../../../base/common/async.js';
-import { join } from '../../../base/common/path.js';
+import { basename, join } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IEnvironmentMainService } from '../../../platform/environment/electron-main/environmentMainService.js';
@@ -25,6 +25,19 @@ import {
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
+import {
+	IHostedWorkspaceContractState,
+	IHostedWorkspaceLifecycleContractAdapter,
+	registerHostedWorkspaceLifecycleContract,
+} from '../common/hostedWorkspaceLifecycleContract.js';
+
+class RecordingLogService extends NullLogService {
+	readonly warnings: string[] = [];
+
+	override warn(message: string, ..._args: unknown[]): void {
+		this.warnings.push(message);
+	}
+}
 
 class TestWebContents extends EventEmitter {
 	readonly id: number;
@@ -41,7 +54,9 @@ class TestWebContents extends EventEmitter {
 	loadUrlError: Error | undefined = undefined;
 	loadUrlPromise: Promise<void> | undefined;
 	autoBeforeUnloadReply = true;
+	autoPreparationRollbackReply = true;
 	sendHook: ((channel: string, request: unknown) => boolean) | undefined;
+	closeHook: (() => void) | undefined;
 
 	constructor(
 		id: number,
@@ -103,10 +118,26 @@ class TestWebContents extends EventEmitter {
 			const { replyChannel } = request as { replyChannel: string };
 			setTimeout(() => this.ipcMain.emitReply(replyChannel), 0);
 		}
+		if (
+			channel === 'vscode:onShutdownPreparationAbandoned' &&
+			this.autoPreparationRollbackReply
+		) {
+			const { preparationId, replyChannel } = request as {
+				preparationId: string;
+				replyChannel?: string;
+			};
+			if (replyChannel) {
+				setTimeout(() => this.ipcMain.emitReply(replyChannel, {
+					preparationId,
+					disposition: 'applied',
+				}), 0);
+			}
+		}
 	}
 
 	close(options: Electron.CloseOpts): void {
 		this.closeCalls.push(options);
+		this.closeHook?.();
 		this.destroyed = true;
 		this.emit('destroyed');
 	}
@@ -138,11 +169,17 @@ class TestWebContents extends EventEmitter {
 
 class TestHostedWorkspaceIpcMain extends EventEmitter
 	implements IHostedWorkspaceIpcMain {
+	private onceRegistrationFailure: Error | undefined;
 
 	override once(
 		channel: string,
 		listener: (event: Electron.IpcMainEvent, ...args: unknown[]) => void
 	): this {
+		if (this.onceRegistrationFailure) {
+			const failure = this.onceRegistrationFailure;
+			this.onceRegistrationFailure = undefined;
+			throw failure;
+		}
 		super.once(channel, listener);
 		return this;
 	}
@@ -155,11 +192,16 @@ class TestHostedWorkspaceIpcMain extends EventEmitter
 		return this;
 	}
 
-	emitReply(channel: string): void {
+	emitReply(channel: string, ...args: unknown[]): void {
 		this.emit(
 			channel,
-			{ senderFrame: undefined } as unknown as Electron.IpcMainEvent
+			{ senderFrame: undefined } as unknown as Electron.IpcMainEvent,
+			...args
 		);
+	}
+
+	failNextOnceRegistration(error: Error): void {
+		this.onceRegistrationFailure = error;
 	}
 }
 
@@ -219,6 +261,7 @@ class TestIPCObjectUrl<T> implements IIPCObjectUrl<T> {
 	value: T | undefined;
 	disposed = false;
 	disposeCalls = 0;
+	private disposeFailure: Error | undefined;
 
 	update(obj: T): void {
 		this.value = obj;
@@ -226,7 +269,16 @@ class TestIPCObjectUrl<T> implements IIPCObjectUrl<T> {
 
 	dispose(): void {
 		this.disposeCalls++;
+		if (this.disposeFailure) {
+			const failure = this.disposeFailure;
+			this.disposeFailure = undefined;
+			throw failure;
+		}
 		this.disposed = true;
+	}
+
+	failNextDispose(error: Error): void {
+		this.disposeFailure = error;
 	}
 }
 
@@ -280,7 +332,10 @@ class TestBrowserWindow extends EventEmitter {
 class TestBrowserViewMainService {
 	readonly visibleCalls: { id: number; visible: boolean }[] = [];
 	readonly frontCalls: number[] = [];
+	readonly destroyHostedWebContentsAttempts: number[] = [];
 	readonly destroyedHostedWebContentsIds: number[] = [];
+	private readonly destroyHostedWebContentsFailures =
+		new Map<number, Error>();
 
 	setHostedWebContentsVisible(id: number, visible: boolean): void {
 		this.visibleCalls.push({ id, visible });
@@ -291,7 +346,17 @@ class TestBrowserViewMainService {
 	}
 
 	destroyBrowserViewsForHostedWebContents(id: number): void {
+		this.destroyHostedWebContentsAttempts.push(id);
+		const failure = this.destroyHostedWebContentsFailures.get(id);
+		if (failure) {
+			this.destroyHostedWebContentsFailures.delete(id);
+			throw failure;
+		}
 		this.destroyedHostedWebContentsIds.push(id);
+	}
+
+	failNextDestroyHostedWebContents(id: number, error: Error): void {
+		this.destroyHostedWebContentsFailures.set(id, error);
 	}
 }
 
@@ -324,8 +389,10 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
 		readonly loadUrlPromises?: Promise<void>[];
+		readonly beforeUnloadTimeoutMs?: number;
 		readonly readyTimeoutMs?: number;
 		readonly restorePolicy?: 'active' | 'all' | 'none';
+		readonly willUnloadTimeoutMs?: number;
 		readonly windowId?: number;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
@@ -340,6 +407,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const untrustedProcessIds: number[] = [];
 		const trustedWebContentsIds: number[] = [];
 		const untrustedWebContentsIds: number[] = [];
+		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
 			ResidentHostedWorkspacesController['getState']
 		>[] = [];
@@ -375,7 +443,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			protocolMainService as unknown as IProtocolMainService,
 			{ useCodeCache: false } as unknown as IEnvironmentMainService,
 			{ getBackgroundColor: () => '#111111' } as IThemeMainService,
-			new NullLogService(),
+			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
 			window,
 			id => trustedProcessIds.push(id),
@@ -385,8 +453,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			state => stateChanges.push(state),
 			{
 				restorePolicy: options.restorePolicy,
-				beforeUnloadTimeoutMs: 100,
-				willUnloadTimeoutMs: 100,
+				beforeUnloadTimeoutMs:
+					options.beforeUnloadTimeoutMs ?? 100,
+				willUnloadTimeoutMs:
+					options.willUnloadTimeoutMs ?? 100,
 				readyTimeoutMs: options.readyTimeoutMs ?? 100,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
@@ -399,6 +469,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			browserViewMainService,
 			controller,
 			ipcMain,
+			logService,
 			protocolMainService,
 			stateChanges,
 			trustedProcessIds,
@@ -409,6 +480,372 @@ suite('ResidentHostedWorkspacesController', () => {
 			window,
 		};
 	}
+
+	function createLifecycleContractAdapter():
+		IHostedWorkspaceLifecycleContractAdapter {
+		const normalizeState = (
+			state: ReturnType<ResidentHostedWorkspacesController['getState']>
+		): IHostedWorkspaceContractState => {
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId
+			);
+			return {
+				activePath: active && basename(active.worktreePath),
+				instances: state.instances.map(instance => ({
+					path: basename(instance.worktreePath),
+					state: instance.state,
+				})),
+				retainedDesiredState:
+					state.retainedWorkbenches?.[0]?.desiredState,
+			};
+		};
+		const toContractState = (
+			controller: ResidentHostedWorkspacesController
+		): IHostedWorkspaceContractState =>
+			normalizeState(controller.getState());
+		const configureUnload = (
+			harness: ReturnType<typeof createController>,
+			viewIndex: number,
+			phases: string[],
+			reply: 'ready' | 'veto',
+			prepareStarted?: DeferredPromise<void>,
+			prepareGate?: DeferredPromise<void>
+		): void => {
+			harness.viewFactory.views[viewIndex].rawWebContents.sendHook =
+				(channel, request) => {
+					if (channel === 'vscode:onBeforeUnload') {
+						phases.push('prepare');
+						if (prepareStarted && !prepareStarted.isSettled) {
+							void prepareStarted.complete();
+						}
+						const replyToPreparation = () => {
+							const { okChannel, cancelChannel } = request as {
+								okChannel: string;
+								cancelChannel: string;
+							};
+							harness.ipcMain.emitReply(
+								reply === 'ready' ? okChannel : cancelChannel
+							);
+						};
+						if (prepareGate) {
+							void prepareGate.p.then(replyToPreparation);
+						} else {
+							setTimeout(replyToPreparation, 0);
+						}
+						return true;
+					}
+					if (channel === 'vscode:onWillUnload') {
+						phases.push('commit');
+						const { replyChannel } = request as {
+							replyChannel: string;
+						};
+						setTimeout(() =>
+							harness.ipcMain.emitReply(replyChannel), 0
+						);
+						return true;
+					}
+					return false;
+				};
+		};
+
+		return {
+			async generationGuard() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const harness = createController();
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				await harness.controller.openWorkspace(beta, 'project-beta');
+				harness.controller.notifyHostedWorkspaceReady('instance-2');
+
+				const phases: string[] = [];
+				const prepareStarted = new DeferredPromise<void>();
+				const prepareGate = new DeferredPromise<void>();
+				configureUnload(
+					harness,
+					0,
+					phases,
+					'ready',
+					prepareStarted,
+					prepareGate
+				);
+				const closing = harness.controller.closeWorkspace('instance-1');
+				await prepareStarted.p;
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				await prepareGate.complete();
+				await closing;
+
+				return {
+					state: toContractState(harness.controller),
+					commitCount: phases.filter(phase => phase === 'commit').length,
+				};
+			},
+			async coherentRetainedClose() {
+				const scratch = createWorktree('scratch');
+				const harness = createController();
+				await harness.controller.retainAndOpenWorkbench(URI.file(scratch));
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				const beforeClose = harness.stateChanges.length;
+
+				await harness.controller.closeWorkspace();
+
+				return {
+					state: toContractState(harness.controller),
+					emittedState: harness.stateChanges[beforeClose] &&
+						normalizeState(harness.stateChanges[beforeClose]),
+					emissionCount: harness.stateChanges.length - beforeClose,
+				};
+			},
+			async restoreActiveOnly() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const harness = createController({
+					activeWorktreePath: alpha,
+					restoreEntries: [{
+						projectId: 'project-alpha',
+						worktreePath: alpha,
+						state: 'active',
+					}, {
+						projectId: 'project-beta',
+						worktreePath: beta,
+						state: 'loaded',
+					}],
+				});
+
+				await harness.controller.ensureRestored();
+				const beforeReady = toContractState(harness.controller);
+				const alphaInstance = harness.controller.getState().instances.find(
+					instance => instance.worktreePath === alpha
+				);
+				assert.ok(alphaInstance);
+				harness.controller.notifyHostedWorkspaceReady(
+					alphaInstance.instanceId
+				);
+
+				return {
+					beforeReady,
+					afterReady: toContractState(harness.controller),
+					createdHosts: harness.viewFactory.views.length,
+				};
+			},
+			async closeActiveAndPromoteNext() {
+				const alpha = createWorktree('alpha');
+				const beta = createWorktree('beta');
+				const gamma = createWorktree('gamma');
+				const harness = createController({
+					activeWorktreePath: gamma,
+					restoreEntries: [{
+						projectId: 'project-alpha',
+						worktreePath: alpha,
+						state: 'loaded',
+						lastActiveAt: 100,
+					}, {
+						projectId: 'project-beta',
+						worktreePath: beta,
+						state: 'loaded',
+						lastActiveAt: 300,
+					}, {
+						projectId: 'project-gamma',
+						worktreePath: gamma,
+						state: 'active',
+						lastActiveAt: 200,
+					}],
+					restorePolicy: 'all',
+				});
+				await harness.controller.ensureRestored();
+				for (const instance of harness.controller.getState().instances) {
+					harness.controller.notifyHostedWorkspaceReady(
+						instance.instanceId
+					);
+				}
+				const gammaInstance = harness.controller.getState().instances.find(
+					instance => instance.worktreePath === gamma
+				);
+				assert.ok(gammaInstance);
+				const gammaViewIndex = harness.viewFactory.views.findIndex(view =>
+					view.rawWebContents.id === gammaInstance.webContentsId
+				);
+				assert.notStrictEqual(gammaViewIndex, -1);
+				const phases: string[] = [];
+				configureUnload(harness, gammaViewIndex, phases, 'ready');
+
+				await harness.controller.closeWorkspace(
+					gammaInstance.instanceId
+				);
+
+				return {
+					state: toContractState(harness.controller),
+					unloadPhases: phases,
+				};
+			},
+			async vetoThenShutdown() {
+				const alpha = createWorktree('alpha');
+				const harness = createController();
+				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				harness.controller.notifyHostedWorkspaceReady('instance-1');
+				const closePhases: string[] = [];
+				configureUnload(harness, 0, closePhases, 'veto');
+
+				await harness.controller.closeWorkspace('instance-1');
+				const closeState = toContractState(harness.controller);
+				const restorePathsBeforeShutdown =
+					harness.window.config?.omniResidentWorkspaces?.map(
+						entry => basename(entry.worktreePath)
+					) ?? [];
+				const shutdownPhases: string[] = [];
+				configureUnload(harness, 0, shutdownPhases, 'ready');
+
+				await harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				);
+
+				return {
+					closeState,
+					closePhases,
+					shutdownState: toContractState(harness.controller),
+					shutdownPhases,
+					restorePathsBeforeShutdown,
+					restorePathsAfterShutdown:
+						harness.window.config?.omniResidentWorkspaces?.map(
+							entry => basename(entry.worktreePath)
+						) ?? [],
+				};
+			},
+			async concurrentShutdown() {
+				const alpha = createWorktree('alpha');
+				const bravo = createWorktree('bravo');
+				const charlie = createWorktree('charlie');
+				const harness = createController();
+				for (const [path, projectId, instanceId] of [
+					[alpha, 'project-alpha', 'instance-1'],
+					[bravo, 'project-bravo', 'instance-2'],
+					[charlie, 'project-charlie', 'instance-3'],
+				] as const) {
+					await harness.controller.openWorkspace(path, projectId);
+					harness.controller.notifyHostedWorkspaceReady(instanceId);
+				}
+
+				const phasesByPath: Record<string, string[]> = {
+					alpha: [],
+					bravo: [],
+					charlie: [],
+				};
+				let releaseAlphaPreparation: (() => void) | undefined;
+				let releaseCharlieCommit: (() => void) | undefined;
+				const charlieCommitStarted = new DeferredPromise<void>();
+				for (const [
+					viewIndex,
+					path,
+					preparation,
+				] of [
+					[0, 'alpha', 'gated'],
+					[1, 'bravo', 'veto'],
+					[2, 'charlie', 'ready'],
+				] as const) {
+					harness.viewFactory.views[viewIndex].rawWebContents.sendHook =
+						(channel, request) => {
+							if (channel === 'vscode:onBeforeUnload') {
+								phasesByPath[path].push('prepare');
+								const {
+									okChannel,
+									cancelChannel,
+								} = request as {
+									okChannel: string;
+									cancelChannel: string;
+								};
+								if (preparation === 'gated') {
+									releaseAlphaPreparation = () =>
+										harness.ipcMain.emitReply(okChannel);
+								} else if (preparation === 'veto') {
+									harness.ipcMain.emitReply(cancelChannel);
+								} else {
+									harness.ipcMain.emitReply(okChannel);
+								}
+								return true;
+							}
+							if (channel === 'vscode:onWillUnload') {
+								phasesByPath[path].push('commit');
+								const { replyChannel } = request as {
+									replyChannel: string;
+								};
+								if (path === 'charlie') {
+									releaseCharlieCommit = () =>
+										harness.ipcMain.emitReply(replyChannel);
+									if (!charlieCommitStarted.isSettled) {
+										void charlieCommitStarted.complete();
+									}
+								} else {
+									harness.ipcMain.emitReply(replyChannel);
+								}
+								return true;
+							}
+							return false;
+						};
+				}
+
+				const firstShutdown = harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				);
+				await Promise.resolve();
+				const preparationsStartedBeforeRelease = Object.entries(
+					phasesByPath
+				).filter(([, phases]) => phases[0] === 'prepare')
+					.map(([path]) => path);
+				let secondCallResolvedBeforeRelease = false;
+				void harness.controller.shutdownAllWorkspaces(
+					UnloadReason.QUIT
+				).then(() => {
+					secondCallResolvedBeforeRelease = true;
+				});
+				await Promise.resolve();
+				const resolvedBeforeRelease = secondCallResolvedBeforeRelease;
+				assert.ok(releaseAlphaPreparation);
+				releaseAlphaPreparation();
+				await charlieCommitStarted.p;
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+				const nativeDestructionBeforeFinalHandshake =
+					[...harness.browserViewMainService
+						.destroyedHostedWebContentsIds];
+				assert.ok(releaseCharlieCommit);
+				releaseCharlieCommit();
+				await firstShutdown;
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+				const secondCallResolvedAfterRelease =
+					secondCallResolvedBeforeRelease;
+				const pathByWebContentsId = new Map([
+					[1, 'alpha'],
+					[2, 'bravo'],
+					[3, 'charlie'],
+				]);
+				const nativeDestructionOrder =
+					harness.browserViewMainService
+						.destroyedHostedWebContentsIds.map(id => {
+							const path = pathByWebContentsId.get(id);
+							assert.ok(path);
+							return path;
+						});
+
+				return {
+					failurePolicy: 'force',
+					preparationsStartedBeforeRelease,
+					secondCallResolvedAfterRelease,
+					secondCallResolvedBeforeRelease: resolvedBeforeRelease,
+					phasesByPath,
+					shutdownState: toContractState(harness.controller),
+					ignoredVetoWarnings: harness.logService.warnings.map(
+						warning => warning.replace(bravo, 'bravo')
+					),
+					nativeDestructionBeforeFinalHandshake,
+					nativeDestructionOrder,
+				};
+			},
+		};
+	}
+
+	registerHostedWorkspaceLifecycleContract(
+		'force',
+		createLifecycleContractAdapter
+	);
 
 	test('unload retains arbitrary workbench until explicit dismissal', async () => {
 		const scratch = createWorktree('scratch');
@@ -620,9 +1057,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			}],
 		});
 
-		await controller.reconcileRetainedWorkbenches([{
+		await controller.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([{
 			projectId: 'project-alpha',
-			folderUri,
+			folderUris: [folderUri],
 		}]);
 
 		assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
@@ -630,6 +1067,388 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(controller.getState().instances[0].projectId,
 			'project-alpha');
 		assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
+	});
+
+	test('keeps adopted ownership when reopened with a stale project ID',
+		async () => {
+			const adoptedPath = createWorktree('stale-reopen');
+			const { controller, window } = createController();
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+		}
+	);
+
+	test('reconciles stale ownership while reopening a crashed workbench',
+		async () => {
+			const adoptedPath = createWorktree('crashed-stale-reopen');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.openWorkspace(adoptedPath, 'removed-project');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let catalogUpdate: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				catalogUpdate = controller
+					.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+			};
+			const reopening = controller.openWorkspace(
+				adoptedPath,
+				'removed-project'
+			);
+			await teardownStarted.p;
+			assert.ok(catalogUpdate);
+			await catalogUpdate;
+			await reopening;
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[adoptedPath]
+			);
+		}
+	);
+
+	test('keeps newer ownership when crashed reopen installs a replacement',
+		async () => {
+			const replacedPath = createWorktree('crashed-replacement');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.openWorkspace(replacedPath, 'project-old');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let replacementOpen: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				replacementOpen = controller.openWorkspace(
+					replacedPath,
+					'project-new'
+				);
+			};
+			const staleReopen = controller.openWorkspace(
+				replacedPath,
+				'project-old'
+			);
+			await teardownStarted.p;
+			assert.ok(replacementOpen);
+			await Promise.all([replacementOpen, staleReopen]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].instanceId, 'instance-2');
+			assert.strictEqual(state.instances[0].projectId, 'project-new');
+			assert.strictEqual(state.activeInstanceId, 'instance-2');
+			assert.strictEqual(state.instances[0].state, 'loading');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project-new', worktreePath: replacedPath }]
+			);
+		}
+	);
+
+	test('promotes a live retained workbench and persists project ownership',
+		async () => {
+			const promotedPath = createWorktree('promoted-live');
+			const { controller, window } = createController();
+			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			await controller.promoteRetainedWorkbenchProjectFolders([{
+				projectId: 'project',
+				folderUri: URI.file(promotedPath),
+			}]);
+			await controller.openWorkspace(promotedPath, 'project');
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, 'project');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project', worktreePath: promotedPath }]
+			);
+		}
+	);
+
+	test('applies promotion while reopening a crashed retained workbench',
+		async () => {
+			const promotedPath = createWorktree('crashed-promotion');
+			const teardownStarted = new DeferredPromise<void>();
+			const { controller, viewFactory, window } = createController();
+			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+			let catalogUpdate: Promise<void> | undefined;
+			viewFactory.views[0].rawWebContents.closeHook = () => {
+				teardownStarted.complete();
+				catalogUpdate = controller
+					.promoteRetainedWorkbenchProjectFolders([{
+						projectId: 'project',
+						folderUri: URI.file(promotedPath),
+					}]);
+			};
+			const reopening = controller.openWorkspace(promotedPath);
+			await teardownStarted.p;
+			assert.ok(catalogUpdate);
+			await catalogUpdate;
+			await reopening;
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, 'project');
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, []);
+			assert.deepStrictEqual(
+				window.config?.omniResidentWorkspaces?.map(entry => ({
+					projectId: entry.projectId,
+					worktreePath: entry.worktreePath,
+				})),
+				[{ projectId: 'project', worktreePath: promotedPath }]
+			);
+		}
+	);
+
+	test('adopts active, loaded, and dormant orphaned project workbenches',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const dormant = createWorktree('dormant');
+			const { controller, window } = createController({
+				restoreEntries: [{
+					projectId: 'removed-dormant',
+					worktreePath: dormant,
+					state: 'loaded',
+					lastActiveAt: 10,
+				}],
+				restorePolicy: 'none',
+			});
+			await controller.ensureRestored();
+			await controller.openWorkspace(alpha, 'removed-alpha');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openWorkspace(bravo, 'removed-bravo');
+			controller.notifyHostedWorkspaceReady('instance-3');
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					state: instance.state,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{ path: alpha, state: 'loaded', projectId: undefined },
+					{ path: bravo, state: 'active', projectId: undefined },
+					{ path: dormant, state: 'dormant', projectId: undefined },
+				]
+			);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				).toSorted(),
+				[alpha, bravo, dormant].toSorted()
+			);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				).toSorted(),
+				[alpha, bravo, dormant].toSorted()
+			);
+		}
+	);
+
+	test('adopts a pre-fix project snapshot during initial reconciliation',
+		async () => {
+			const orphan = createWorktree('restored-orphan');
+			const { controller, window } = createController({
+				restoreEntries: [{
+					projectId: 'removed-project',
+					worktreePath: orphan,
+					state: 'loaded',
+				}],
+				restorePolicy: 'none',
+			});
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances.length, 1);
+			assert.strictEqual(state.instances[0].state, 'dormant');
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, []);
+			const persistedRetained =
+				window.config?.omniRetainedWorkbenches?.[0];
+			assert.ok(persistedRetained);
+			assert.strictEqual(
+				URI.revive(persistedRetained.folderUri).fsPath,
+				orphan
+			);
+		}
+	);
+
+	test('uses complete project identity and keeps partial promotion safe',
+		async () => {
+			const readded = createWorktree('readded');
+			const liveWithoutWorktrees = createWorktree(
+				'live-without-worktrees'
+			);
+			const orphan = createWorktree('orphan');
+			const { controller } = createController({
+				restoreEntries: [{
+					projectId: 'old-owner',
+					worktreePath: readded,
+					state: 'loaded',
+				}, {
+					projectId: 'still-live',
+					worktreePath: liveWithoutWorktrees,
+					state: 'loaded',
+				}, {
+					projectId: 'removed-owner',
+					worktreePath: orphan,
+					state: 'loaded',
+				}],
+				restorePolicy: 'none',
+			});
+
+			await controller.promoteRetainedWorkbenchProjectFolders([{
+				projectId: 'unrelated',
+				folderUri: URI.file(createWorktree('unrelated')),
+			}]);
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance =>
+					instance.projectId
+				),
+				['old-owner', 'still-live', 'removed-owner']
+			);
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([{
+					projectId: 'replacement-owner',
+					folderUris: [URI.file(readded)],
+				}, {
+					projectId: 'still-live',
+					folderUris: [],
+				}]);
+
+			const state = controller.getState();
+			assert.deepStrictEqual(
+				state.instances.map(instance => ({
+					path: instance.worktreePath,
+					projectId: instance.projectId,
+				})).toSorted((a, b) => a.path.localeCompare(b.path)),
+				[
+					{ path: liveWithoutWorktrees, projectId: 'still-live' },
+					{ path: orphan, projectId: undefined },
+					{ path: readded, projectId: 'replacement-owner' },
+				].toSorted((a, b) => a.path.localeCompare(b.path))
+			);
+			assert.deepStrictEqual(
+				state.retainedWorkbenches?.map(record =>
+					URI.revive(record.folderUri).fsPath
+				),
+				[orphan]
+			);
+		}
+	);
+
+	test('adopts a loading orphan before it becomes ready', async () => {
+		const loading = createWorktree('loading-orphan');
+		const { controller } = createController();
+		await controller.openWorkspace(loading, 'removed-owner');
+		assert.strictEqual(controller.getState().instances[0].state, 'loading');
+
+		await controller
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+		const state = controller.getState();
+		assert.strictEqual(state.instances[0].projectId, undefined);
+		const retained = state.retainedWorkbenches?.[0];
+		assert.ok(retained);
+		assert.strictEqual(
+			URI.revive(retained.folderUri).fsPath,
+			loading
+		);
+	});
+
+	test('leaves existing retained workbenches out of orphan adoption',
+		async () => {
+			const retained = createWorktree('already-retained');
+			const { controller, stateChanges } = createController();
+			await controller.openWorkspace(retained);
+			const changesBeforeReconcile = stateChanges.length;
+
+			await controller
+				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+			const state = controller.getState();
+			assert.strictEqual(state.instances[0].projectId, undefined);
+			assert.strictEqual(state.retainedWorkbenches?.length, 1);
+			assert.strictEqual(stateChanges.length, changesBeforeReconcile);
+		}
+	);
+
+	test('leaves crashed project workbenches out of orphan adoption', async () => {
+		const crashed = createWorktree('crashed-orphan');
+		const { controller, stateChanges, viewFactory } = createController();
+		await controller.openWorkspace(crashed, 'removed-project');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		viewFactory.views[0].rawWebContents.emit('render-process-gone');
+		const changesBeforeReconcile = stateChanges.length;
+
+		await controller
+			.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
+
+		const state = controller.getState();
+		assert.strictEqual(state.instances[0].state, 'crashed');
+		assert.strictEqual(state.instances[0].projectId, 'removed-project');
+		assert.deepStrictEqual(state.retainedWorkbenches, []);
+		assert.strictEqual(stateChanges.length, changesBeforeReconcile);
 	});
 
 	test('missing retained restore is kept unloaded without a retry loop',
@@ -1340,11 +2159,15 @@ suite('ResidentHostedWorkspacesController', () => {
 				state: controller.getState().instances[0].state,
 				desiredState:
 					controller.getState().retainedWorkbenches?.[0].desiredState,
+				sent: viewFactory.views[0].rawWebContents.sent.map(
+					message => message.channel
+				),
 				closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
 			}, {
 				activeInstanceId: instanceId,
 				state: 'active',
 				desiredState: 'loaded',
+				sent: ['vscode:onBeforeUnload'],
 				closeCalls: [],
 			});
 		}
@@ -1384,6 +2207,123 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(stateChanges.length, changesBeforeDormantGuard);
 	});
 
+	test('ordinary close preserves a silent workspace after timeout',
+		async () => {
+			const alpha = createWorktree('alpha-close-timeout');
+			const {
+				browserViewMainService,
+				controller,
+				ipcMain,
+				viewFactory,
+				window,
+			} = createController({ beforeUnloadTimeoutMs: 5 });
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const hostedView = viewFactory.views[0];
+			let beforeUnload: {
+				okChannel: string;
+				preparationId: string;
+			} | undefined;
+			hostedView.rawWebContents.sendHook = (channel, request) => {
+				if (channel === 'vscode:onBeforeUnload') {
+					beforeUnload = request as {
+						okChannel: string;
+						preparationId: string;
+					};
+					return true;
+				}
+				return false;
+			};
+
+			await controller.closeWorkspace('instance-1');
+			assert.ok(beforeUnload);
+			ipcMain.emitReply(beforeUnload.okChannel);
+			await Promise.resolve();
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId: 'instance-1', state: 'active' }]
+			);
+			assert.deepStrictEqual(browserWindow.contentView.children, [
+				hostedView,
+			]);
+			assert.deepStrictEqual(hostedView.rawWebContents.closeCalls, []);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[]
+			);
+			assert.deepStrictEqual(
+				hostedView.rawWebContents.sent.map(message => message.channel),
+				[
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				]
+			);
+			assert.strictEqual(
+				(
+					hostedView.rawWebContents.sent[1].request as {
+						preparationId: string;
+					}
+				).preparationId,
+				beforeUnload.preparationId
+			);
+		}
+	);
+
+	test('ordinary close preserves a workspace when before-unload send fails',
+		async () => {
+			const alpha = createWorktree('alpha-close-send-failure');
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+				window,
+			} = createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const hostedView = viewFactory.views[0];
+			hostedView.rawWebContents.sendHook = channel => {
+				if (channel === 'vscode:onBeforeUnload') {
+					throw new Error('send failed');
+				}
+				return false;
+			};
+
+			await controller.closeWorkspace('instance-1');
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId: 'instance-1', state: 'active' }]
+			);
+			assert.deepStrictEqual(browserWindow.contentView.children, [
+				hostedView,
+			]);
+			assert.deepStrictEqual(hostedView.rawWebContents.closeCalls, []);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[]
+			);
+			assert.deepStrictEqual(
+				hostedView.rawWebContents.sent.map(message => message.channel),
+				[
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				]
+			);
+			assert.strictEqual(hostedView.rawWebContents.reloadCalls.length, 0);
+		}
+	);
+
 	test('does not close a workspace reactivated during unload', async () => {
 		const alpha = createWorktree('alpha-reactivated');
 		const bravo = createWorktree('bravo-reactivated');
@@ -1405,6 +2345,12 @@ suite('ResidentHostedWorkspacesController', () => {
 		ipcMain.emitReply(beforeUnload.okChannel);
 		await closing;
 
+		const rollbackRequest = viewFactory.views[0].rawWebContents.sent[1]
+			.request as {
+				preparationId: string;
+				replyChannel?: string;
+			};
+		assert.ok(rollbackRequest.replyChannel);
 		assert.deepStrictEqual({
 			activeInstanceId: controller.getState().activeInstanceId,
 			instanceIds: controller.getState().instances.map(
@@ -1415,9 +2361,316 @@ suite('ResidentHostedWorkspacesController', () => {
 		}, {
 			activeInstanceId: 'instance-1',
 			instanceIds: ['instance-1', 'instance-2'],
-			sent: ['vscode:onBeforeUnload'],
+			sent: [
+				'vscode:onBeforeUnload',
+				'vscode:onShutdownPreparationAbandoned',
+			],
 			closeCalls: [],
 		});
+	});
+
+	test('reloads a reactivated workspace when preparation rollback send fails',
+		async () => {
+			const alpha = createWorktree('alpha-reactivated-rollback-failure');
+			const bravo = createWorktree('bravo-reactivated-rollback-failure');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			hostedWebContents.autoBeforeUnloadReply = false;
+			hostedWebContents.sendHook = channel => {
+				if (channel === 'vscode:onShutdownPreparationAbandoned') {
+					throw new Error('rollback send failed');
+				}
+				return false;
+			};
+
+			const closing = controller.closeWorkspace('instance-1');
+			await Promise.resolve();
+			const beforeUnload = hostedWebContents.sent[0].request as {
+				okChannel: string;
+			};
+			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openWorkspace(alpha, 'project-alpha');
+			ipcMain.emitReply(beforeUnload.okChannel);
+			await closing;
+
+			assert.deepStrictEqual({
+				activeInstanceId: controller.getState().activeInstanceId,
+				instanceIds: controller.getState().instances.map(
+					instance => instance.instanceId
+				).toSorted(),
+				sent: hostedWebContents.sent.map(item => item.channel),
+				state: controller.getState().instances.find(instance =>
+					instance.instanceId === 'instance-1'
+				)?.state,
+				reloadCalls: hostedWebContents.reloadCalls.length,
+				closeCalls: hostedWebContents.closeCalls,
+			}, {
+				activeInstanceId: 'instance-1',
+				instanceIds: ['instance-1', 'instance-2'],
+				sent: [
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				],
+				state: 'loading',
+				reloadCalls: 1,
+				closeCalls: [],
+			});
+		}
+	);
+
+	test('reloads when preparation rollback is not acknowledged', async () => {
+		const alpha = createWorktree('alpha-rollback-timeout');
+		const bravo = createWorktree('bravo-rollback-timeout');
+		const { controller, ipcMain, viewFactory } = createController({
+			beforeUnloadTimeoutMs: 5,
+		});
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const hostedWebContents = viewFactory.views[0].rawWebContents;
+		hostedWebContents.autoBeforeUnloadReply = false;
+		hostedWebContents.autoPreparationRollbackReply = false;
+
+		const closing = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const beforeUnload = hostedWebContents.sent[0].request as {
+			okChannel: string;
+		};
+		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		ipcMain.emitReply(beforeUnload.okChannel);
+		await closing;
+
+		assert.strictEqual(hostedWebContents.reloadCalls.length, 1);
+		assert.strictEqual(
+			controller.getState().instances.find(instance =>
+				instance.instanceId === 'instance-1'
+			)?.state,
+			'loading'
+		);
+	});
+
+	for (const invalidReply of [
+		{
+			name: 'wrong preparation token',
+			createReply: (preparationId: string) => ({
+				preparationId: `${preparationId}:wrong`,
+				disposition: 'applied',
+			}),
+		},
+		{
+			name: 'invalid disposition',
+			createReply: (preparationId: string) => ({
+				preparationId,
+				disposition: 'invalid',
+			}),
+		},
+	]) {
+		test(`reloads after rollback reply with ${invalidReply.name}`,
+			async () => {
+				const alpha = createWorktree(
+					`alpha-rollback-${invalidReply.name}`
+				);
+				const bravo = createWorktree(
+					`bravo-rollback-${invalidReply.name}`
+				);
+				const { controller, ipcMain, viewFactory } = createController();
+
+				await controller.openWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				await controller.openWorkspace(bravo, 'project-bravo');
+				controller.notifyHostedWorkspaceReady('instance-2');
+				await controller.openWorkspace(alpha, 'project-alpha');
+				const hostedWebContents = viewFactory.views[0].rawWebContents;
+				hostedWebContents.autoBeforeUnloadReply = false;
+				hostedWebContents.autoPreparationRollbackReply = false;
+				hostedWebContents.sendHook = (channel, request) => {
+					if (channel !==
+						'vscode:onShutdownPreparationAbandoned') {
+						return false;
+					}
+
+					const rollback = request as {
+						preparationId: string;
+						replyChannel: string;
+					};
+					setTimeout(() => ipcMain.emitReply(
+						rollback.replyChannel,
+						invalidReply.createReply(rollback.preparationId)
+					), 0);
+					return true;
+				};
+
+				const closing = controller.closeWorkspace('instance-1');
+				await Promise.resolve();
+				const beforeUnload = hostedWebContents.sent[0].request as {
+					okChannel: string;
+				};
+				await controller.openWorkspace(bravo, 'project-bravo');
+				await controller.openWorkspace(alpha, 'project-alpha');
+				ipcMain.emitReply(beforeUnload.okChannel);
+				await closing;
+
+				assert.strictEqual(hostedWebContents.reloadCalls.length, 1);
+				assert.strictEqual(
+					controller.getState().instances.find(instance =>
+						instance.instanceId === 'instance-1'
+					)?.state,
+					'loading'
+				);
+			}
+		);
+	}
+
+	test('settles rollback when the renderer is destroyed', async () => {
+		const alpha = createWorktree('alpha-rollback-destroyed');
+		const bravo = createWorktree('bravo-rollback-destroyed');
+		const { controller, ipcMain, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const hostedWebContents = viewFactory.views[0].rawWebContents;
+		hostedWebContents.autoBeforeUnloadReply = false;
+		hostedWebContents.autoPreparationRollbackReply = false;
+		hostedWebContents.sendHook = channel => {
+			if (channel === 'vscode:onShutdownPreparationAbandoned') {
+				setTimeout(() => hostedWebContents.close({
+					waitForBeforeUnload: false,
+				}), 0);
+				return true;
+			}
+			return false;
+		};
+
+		const closing = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const beforeUnload = hostedWebContents.sent[0].request as {
+			okChannel: string;
+		};
+		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		ipcMain.emitReply(beforeUnload.okChannel);
+		await closing;
+
+		const rollback = hostedWebContents.sent[1].request as {
+			replyChannel: string;
+		};
+		assert.strictEqual(hostedWebContents.closeCalls.length, 1);
+		assert.strictEqual(hostedWebContents.reloadCalls.length, 0);
+		assert.strictEqual(ipcMain.listenerCount(rollback.replyChannel), 0);
+		const recoveredInstance = controller.getState().instances.find(
+			instance => instance.instanceId === 'instance-1'
+		);
+		assert.ok(recoveredInstance);
+		assert.deepStrictEqual({
+			state: recoveredInstance.state,
+			focused: recoveredInstance.focused,
+			visible: recoveredInstance.visible,
+			processId: recoveredInstance.processId,
+			webContentsId: recoveredInstance.webContentsId,
+		}, {
+			state: 'crashed',
+			focused: false,
+			visible: false,
+			processId: undefined,
+			webContentsId: undefined,
+		});
+	});
+
+	test('an older unload cannot roll back a newer preparation', async () => {
+		const alpha = createWorktree('alpha-overlapping-preparation');
+		const bravo = createWorktree('bravo-overlapping-preparation');
+		const { controller, ipcMain, viewFactory } = createController();
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const hostedWebContents = viewFactory.views[0].rawWebContents;
+		hostedWebContents.autoBeforeUnloadReply = false;
+		hostedWebContents.autoPreparationRollbackReply = false;
+		hostedWebContents.sendHook = (channel, request) => {
+			if (channel === 'vscode:onWillUnload') {
+				return true;
+			}
+			if (channel === 'vscode:onShutdownPreparationAbandoned') {
+				const rollback = request as {
+					preparationId: string;
+					replyChannel?: string;
+				};
+				if (rollback.replyChannel) {
+					setTimeout(() => ipcMain.emitReply(
+						rollback.replyChannel!,
+						{
+							preparationId: rollback.preparationId,
+							disposition: 'stale',
+						}
+					), 0);
+				}
+				return true;
+			}
+			return false;
+		};
+		const firstClose = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const firstPreparation = hostedWebContents.sent[0].request as {
+			okChannel: string;
+			preparationId?: string;
+		};
+
+		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openWorkspace(alpha, 'project-alpha');
+		const secondClose = controller.closeWorkspace('instance-1');
+		await Promise.resolve();
+		const secondPreparation = hostedWebContents.sent[1].request as {
+			okChannel: string;
+			preparationId?: string;
+		};
+		ipcMain.emitReply(secondPreparation.okChannel);
+		await Promise.resolve();
+		const willUnload = hostedWebContents.sent[2].request as {
+			replyChannel: string;
+		};
+
+		ipcMain.emitReply(firstPreparation.okChannel);
+		await firstClose;
+
+		assert.ok(firstPreparation.preparationId);
+		assert.ok(secondPreparation.preparationId);
+		assert.notStrictEqual(
+			firstPreparation.preparationId,
+			secondPreparation.preparationId
+		);
+		const rollbackRequest = hostedWebContents.sent[3].request as {
+			preparationId: string;
+			replyChannel?: string;
+		};
+		assert.strictEqual(
+			hostedWebContents.sent[3].channel,
+			'vscode:onShutdownPreparationAbandoned'
+		);
+		assert.strictEqual(
+			rollbackRequest.preparationId,
+			firstPreparation.preparationId
+		);
+		assert.ok(rollbackRequest.replyChannel);
+		assert.strictEqual(hostedWebContents.reloadCalls.length, 0);
+
+		ipcMain.emitReply(willUnload.replyChannel);
+		await secondClose;
 	});
 
 	test('reloads a workspace reactivated during will-unload', async () => {
@@ -1454,11 +2707,15 @@ suite('ResidentHostedWorkspacesController', () => {
 			state: controller.getState().instances.find(instance =>
 				instance.instanceId === 'instance-1'
 			)?.state,
+			sent: viewFactory.views[0].rawWebContents.sent.map(
+				item => item.channel
+			),
 			reloadCalls: viewFactory.views[0].rawWebContents.reloadCalls.length,
 			closeCalls: viewFactory.views[0].rawWebContents.closeCalls,
 		}, {
 			activeInstanceId: 'instance-1',
 			state: 'loading',
+			sent: ['vscode:onBeforeUnload', 'vscode:onWillUnload'],
 			reloadCalls: 1,
 			closeCalls: [],
 		});
@@ -1858,6 +3115,668 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 		assert.strictEqual(controller.getState().instances[0].state, 'unloaded');
 	});
+
+	test('shutdown times out silent renderer phases and destroys the view',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const {
+				browserViewMainService,
+				controller,
+				logService,
+				viewFactory,
+			} = createController({
+				beforeUnloadTimeoutMs: 5,
+				willUnloadTimeoutMs: 5,
+			});
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			viewFactory.views[0].rawWebContents.sendHook = () => true;
+
+			await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+
+			assert.deepStrictEqual(
+				viewFactory.views[0].rawWebContents.sent.map(item =>
+					item.channel),
+				['vscode:onBeforeUnload', 'vscode:onWillUnload']
+			);
+			assert.deepStrictEqual(logService.warnings, [
+				'[HucodeShellMainService] Timed out waiting for hosted ' +
+				`workspace before-unload reply for ${alpha}.`,
+				'[HucodeShellMainService] Timed out waiting for hosted ' +
+				`workspace will-unload reply for ${alpha}.`,
+			]);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1]
+			);
+			assert.strictEqual(
+				controller.getState().instances[0].state,
+				'unloaded'
+			);
+		}
+	);
+
+	test('failed shutdown settles the batch and retries partial native cleanup',
+		async () => {
+			const paths = [
+				createWorktree('alpha'),
+				createWorktree('bravo'),
+				createWorktree('charlie'),
+			];
+			const {
+				browserViewMainService,
+				controller,
+				ipcMain,
+				protocolMainService,
+				viewFactory,
+			} = createController();
+			const phasesByWebContentsId = new Map<number, string[]>();
+			for (const [index, path] of paths.entries()) {
+				await controller.openWorkspace(path, `project-${index + 1}`);
+				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
+				const view = viewFactory.views[index].rawWebContents;
+				const phases: string[] = [];
+				phasesByWebContentsId.set(view.id, phases);
+				view.sendHook = (channel, request) => {
+					if (channel === 'vscode:onBeforeUnload') {
+						phases.push('prepare');
+						const { okChannel } = request as { okChannel: string };
+						ipcMain.emitReply(okChannel);
+						return true;
+					}
+					if (channel === 'vscode:onWillUnload') {
+						phases.push('commit');
+						const { replyChannel } = request as {
+							replyChannel: string;
+						};
+						ipcMain.emitReply(replyChannel);
+						return true;
+					}
+					return false;
+				};
+			}
+
+			const firstFailure = new Error('alpha native teardown failed');
+			const laterFailure = new Error('bravo config disposal failed');
+			browserViewMainService.failNextDestroyHostedWebContents(
+				1,
+				firstFailure
+			);
+			protocolMainService.objectUrls[1].failNextDispose(laterFailure);
+			const firstShutdown = controller.shutdownAllWorkspaces(
+				UnloadReason.QUIT
+			);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(UnloadReason.QUIT),
+				firstShutdown
+			);
+			await assert.rejects(firstShutdown, error => {
+				assert.strictEqual(error, firstFailure);
+				return true;
+			});
+
+			assert.deepStrictEqual(
+				[...phasesByWebContentsId.values()],
+				[
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+				]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[2, 3]
+			);
+			assert.deepStrictEqual(
+				protocolMainService.objectUrls.map(objectUrl => ({
+					disposeCalls: objectUrl.disposeCalls,
+					disposed: objectUrl.disposed,
+				})),
+				[
+					{ disposeCalls: 0, disposed: false },
+					{ disposeCalls: 1, disposed: false },
+					{ disposeCalls: 1, disposed: true },
+				]
+			);
+			assert.strictEqual(
+				viewFactory.views[0].rawWebContents.isDestroyed(),
+				false
+			);
+			assert.strictEqual(
+				viewFactory.views[1].rawWebContents.isDestroyed(),
+				true
+			);
+
+			const retry = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.notStrictEqual(retry, firstShutdown);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(UnloadReason.QUIT),
+				retry
+			);
+			await retry;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3, 1]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[2, 3, 1]
+			);
+			assert.deepStrictEqual(
+				protocolMainService.objectUrls.map(objectUrl => ({
+					disposeCalls: objectUrl.disposeCalls,
+					disposed: objectUrl.disposed,
+				})),
+				[
+					{ disposeCalls: 1, disposed: true },
+					{ disposeCalls: 2, disposed: true },
+					{ disposeCalls: 1, disposed: true },
+				]
+			);
+			assert.deepStrictEqual(
+				[...phasesByWebContentsId.values()],
+				[
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+					['prepare', 'commit'],
+				]
+			);
+
+			const cached = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.strictEqual(cached, retry);
+			await cached;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3, 1]
+			);
+		}
+	);
+
+	test('shutdown isolates a renderer handshake registration failure',
+		async () => {
+			const paths = [
+				createWorktree('alpha'),
+				createWorktree('bravo'),
+				createWorktree('charlie'),
+			];
+			const {
+				browserViewMainService,
+				controller,
+				ipcMain,
+				viewFactory,
+			} = createController();
+			for (const [index, path] of paths.entries()) {
+				await controller.openWorkspace(path, `project-${index + 1}`);
+				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
+			}
+
+			const failure = new Error('reply registration failed');
+			ipcMain.failNextOnceRegistration(failure);
+			const shutdown = controller.shutdownAllWorkspaces(
+				UnloadReason.QUIT
+			);
+			await assert.rejects(shutdown, error => {
+				assert.strictEqual(error, failure);
+				return true;
+			});
+
+			assert.deepStrictEqual(
+				viewFactory.views.map(view =>
+					view.rawWebContents.sent.map(item => item.channel)),
+				[
+					[],
+					['vscode:onBeforeUnload', 'vscode:onWillUnload'],
+					['vscode:onBeforeUnload', 'vscode:onWillUnload'],
+				]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1, 2, 3]
+			);
+
+			const retry = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+			assert.notStrictEqual(retry, shutdown);
+			await retry;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyHostedWebContentsAttempts,
+				[1, 2, 3]
+			);
+		}
+	);
+
+	test('shutdown prevents a late public workspace open', async () => {
+		const alpha = createWorktree('alpha');
+		const late = createWorktree('late');
+		const {
+			controller,
+			ipcMain,
+			stateChanges,
+			viewFactory,
+		} = createController();
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		let releasePreparation: (() => void) | undefined;
+		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
+			if (channel !== 'vscode:onBeforeUnload') {
+				return false;
+			}
+			const { okChannel } = request as { okChannel: string };
+			releasePreparation = () => ipcMain.emitReply(okChannel);
+			return true;
+		};
+
+		const shutdown = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+		for (let attempt = 0;
+			attempt < 20 && !releasePreparation;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.ok(releasePreparation);
+		const stateBeforeLateOpen = structuredClone(controller.getState());
+		const stateChangeCountBeforeLateOpen = stateChanges.length;
+		const viewCountBeforeLateOpen = viewFactory.views.length;
+
+		await controller.openWorkspace(late, 'project-late');
+
+		assert.deepStrictEqual(controller.getState(), stateBeforeLateOpen);
+		assert.strictEqual(
+			stateChanges.length,
+			stateChangeCountBeforeLateOpen
+		);
+		assert.strictEqual(viewFactory.views.length, viewCountBeforeLateOpen);
+
+		releasePreparation();
+		await shutdown;
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.worktreePath === late
+			),
+			false
+		);
+	});
+
+	test('reload and load shutdown allow later workspace opens', async () => {
+		for (const [reason, suffix] of [
+			[UnloadReason.RELOAD, 'reload'],
+			[UnloadReason.LOAD, 'load'],
+		] as const) {
+			const alpha = createWorktree(`${suffix}-alpha`);
+			const bravo = createWorktree(`${suffix}-bravo`);
+			const charlie = createWorktree(`${suffix}-charlie`);
+			const {
+				browserViewMainService,
+				controller,
+				viewFactory,
+			} = createController();
+			await controller.openWorkspace(alpha, `project-${suffix}-alpha`);
+			controller.notifyHostedWorkspaceReady('instance-1');
+
+			const firstShutdown = controller.shutdownAllWorkspaces(reason);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(reason),
+				firstShutdown
+			);
+			await firstShutdown;
+			await controller.openWorkspace(bravo, `project-${suffix}-bravo`);
+			controller.notifyHostedWorkspaceReady('instance-2');
+
+			assert.strictEqual(viewFactory.views.length, 2);
+			assert.strictEqual(
+				controller.getState().instances.find(instance =>
+					instance.worktreePath === bravo
+				)?.state,
+				'active'
+			);
+
+			const secondShutdown = controller.shutdownAllWorkspaces(reason);
+			assert.notStrictEqual(secondShutdown, firstShutdown);
+			assert.strictEqual(
+				controller.shutdownAllWorkspaces(reason),
+				secondShutdown
+			);
+			await secondShutdown;
+			assert.deepStrictEqual(
+				browserViewMainService.destroyedHostedWebContentsIds,
+				[1, 2]
+			);
+			assert.strictEqual(
+				viewFactory.views[1].rawWebContents.isDestroyed(),
+				true
+			);
+			assert.strictEqual(
+				controller.getState().instances.find(instance =>
+					instance.worktreePath === bravo
+				)?.state,
+				'unloaded'
+			);
+
+			await controller.openWorkspace(charlie, `project-${suffix}-charlie`);
+			controller.notifyHostedWorkspaceReady('instance-3');
+			assert.strictEqual(viewFactory.views.length, 3);
+			assert.strictEqual(
+				controller.getState().instances.find(instance =>
+					instance.worktreePath === charlie
+				)?.state,
+				'active'
+			);
+		}
+	});
+
+	test('close and quit shutdown keep later workspace opens blocked',
+		async () => {
+			for (const [reason, suffix] of [
+				[UnloadReason.CLOSE, 'close'],
+				[UnloadReason.QUIT, 'quit'],
+			] as const) {
+				const alpha = createWorktree(`${suffix}-alpha`);
+				const blocked = createWorktree(`${suffix}-blocked`);
+				const { controller, viewFactory } = createController();
+				await controller.openWorkspace(alpha, `project-${suffix}`);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				await controller.shutdownAllWorkspaces(reason);
+				const frozenState = structuredClone(controller.getState());
+				const frozenViewCount = viewFactory.views.length;
+
+				await controller.openWorkspace(blocked, 'project-blocked');
+
+				assert.deepStrictEqual(controller.getState(), frozenState);
+				assert.strictEqual(viewFactory.views.length, frozenViewCount);
+			}
+		}
+	);
+
+	test('terminal shutdown dominates overlapping surviving reasons',
+		async () => {
+			for (const [
+				firstReason,
+				secondReason,
+				expectedReasons,
+				expectedPreparationChannels,
+				suffix
+			] of [
+				[
+					UnloadReason.RELOAD,
+					UnloadReason.QUIT,
+					[
+						UnloadReason.RELOAD,
+						UnloadReason.QUIT,
+						UnloadReason.QUIT
+					],
+					[
+						'vscode:onBeforeUnload',
+						'vscode:onShutdownPreparationAbandoned',
+						'vscode:onBeforeUnload',
+						'vscode:onWillUnload'
+					],
+					'reload-then-quit'
+				],
+				[
+					UnloadReason.CLOSE,
+					UnloadReason.LOAD,
+					[UnloadReason.CLOSE, UnloadReason.CLOSE],
+					[
+						'vscode:onBeforeUnload',
+						'vscode:onWillUnload'
+					],
+					'close-then-load'
+				],
+			] as const) {
+				const alpha = createWorktree(`${suffix}-alpha`);
+				const blocked = createWorktree(`${suffix}-blocked`);
+				const {
+					controller,
+					ipcMain,
+					viewFactory,
+				} = createController();
+				await controller.openWorkspace(alpha, `project-${suffix}`);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				let releasePreparation: (() => void) | undefined;
+				let preparationCount = 0;
+				viewFactory.views[0].rawWebContents.sendHook =
+					(channel, request) => {
+						if (channel !== 'vscode:onBeforeUnload') {
+							return false;
+						}
+						if (preparationCount++ > 0) {
+							return false;
+						}
+						const { okChannel } = request as { okChannel: string };
+						releasePreparation = () => ipcMain.emitReply(okChannel);
+						return true;
+					};
+
+				const firstShutdown =
+					controller.shutdownAllWorkspaces(firstReason);
+				for (let attempt = 0;
+					attempt < 20 && !releasePreparation;
+					attempt++
+				) {
+					await Promise.resolve();
+				}
+				assert.ok(releasePreparation);
+				assert.strictEqual(
+					controller.shutdownAllWorkspaces(secondReason),
+					firstShutdown
+				);
+				releasePreparation();
+				await firstShutdown;
+				assert.deepStrictEqual(
+					viewFactory.views[0].rawWebContents.sent
+						.filter(({ channel }) =>
+							channel === 'vscode:onBeforeUnload' ||
+							channel === 'vscode:onWillUnload'
+						)
+						.map(({ request }) =>
+							(request as { reason: UnloadReason }).reason
+						),
+					expectedReasons
+				);
+				const preparationMessages =
+					viewFactory.views[0].rawWebContents.sent.filter(
+						({ channel }) =>
+							channel === 'vscode:onBeforeUnload' ||
+							channel ===
+							'vscode:onShutdownPreparationAbandoned' ||
+							channel === 'vscode:onWillUnload'
+					);
+				assert.deepStrictEqual(
+					preparationMessages.map(({ channel }) => channel),
+					expectedPreparationChannels
+				);
+				const abandonmentIndex = preparationMessages.findIndex(
+					({ channel }) =>
+						channel === 'vscode:onShutdownPreparationAbandoned'
+				);
+				if (abandonmentIndex !== -1) {
+					assert.strictEqual(
+						(
+							preparationMessages[abandonmentIndex].request as {
+								preparationId: string;
+							}
+						).preparationId,
+						(
+							preparationMessages[abandonmentIndex - 1].request as {
+								preparationId: string;
+							}
+						).preparationId
+					);
+					assert.notStrictEqual(
+						(
+							preparationMessages[abandonmentIndex + 1].request as {
+								preparationId: string;
+							}
+						).preparationId,
+						(
+							preparationMessages[abandonmentIndex - 1].request as {
+								preparationId: string;
+							}
+						).preparationId
+					);
+				}
+				const frozenState = structuredClone(controller.getState());
+				const frozenViewCount = viewFactory.views.length;
+
+				await controller.openWorkspace(blocked, 'project-blocked');
+
+				assert.deepStrictEqual(controller.getState(), frozenState);
+				assert.strictEqual(viewFactory.views.length, frozenViewCount);
+				assert.strictEqual(
+					controller.shutdownAllWorkspaces(UnloadReason.RELOAD),
+					firstShutdown
+				);
+			}
+		}
+	);
+
+	test('shutdown prevents a held restore from resuming attachment', async () => {
+		const alpha = createWorktree('restore-alpha');
+		const bravo = createWorktree('restore-bravo');
+		const heldLoad = new DeferredPromise<void>();
+		const { controller, viewFactory } = createController({
+			activeWorktreePath: alpha,
+			loadUrlPromises: [heldLoad.p],
+			restoreEntries: [{
+				projectId: 'project-alpha',
+				worktreePath: alpha,
+				state: 'active',
+			}, {
+				projectId: 'project-bravo',
+				worktreePath: bravo,
+				state: 'loaded',
+			}],
+			restorePolicy: 'all',
+		});
+
+		const restore = controller.ensureRestored();
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 1;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(viewFactory.views.length, 1);
+		await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+		const stateAfterShutdown = structuredClone(controller.getState());
+
+		heldLoad.complete();
+		await restore;
+
+		assert.strictEqual(viewFactory.views.length, 1);
+		assert.deepStrictEqual(controller.getState(), stateAfterShutdown);
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.state !== 'unloaded'
+			),
+			false
+		);
+	});
+
+	test('held load rejection preserves frozen shutdown state', async () => {
+		const alpha = createWorktree('reject-alpha');
+		const heldLoad = new DeferredPromise<void>();
+		const loadError = new Error('held load failed');
+		const {
+			controller,
+			stateChanges,
+			viewFactory,
+		} = createController({
+			loadUrlErrors: [loadError],
+			loadUrlPromises: [heldLoad.p],
+		});
+
+		const open = controller.openWorkspace(alpha, 'project-alpha');
+		for (let attempt = 0;
+			attempt < 20 && viewFactory.views.length < 1;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(viewFactory.views.length, 1);
+		await controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+		const frozenState = structuredClone(controller.getState());
+		const frozenActiveInstanceId = controller.getState().activeInstanceId;
+		const frozenStateChangeCount = stateChanges.length;
+		const rejectedOpen = assert.rejects(open, error => {
+			assert.strictEqual(error, loadError);
+			return true;
+		});
+
+		heldLoad.complete();
+		await rejectedOpen;
+
+		assert.deepStrictEqual(controller.getState(), frozenState);
+		assert.strictEqual(
+			controller.getState().activeInstanceId,
+			frozenActiveInstanceId
+		);
+		assert.strictEqual(stateChanges.length, frozenStateChangeCount);
+	});
+
+	test('held attach settlement after reload preserves frozen state',
+		async () => {
+			for (const outcome of ['fulfilled', 'rejected'] as const) {
+				const alpha = createWorktree(`reload-held-${outcome}`);
+				const heldLoad = new DeferredPromise<void>();
+				const loadError = new Error(`${outcome} held load failed`);
+				const {
+					controller,
+					stateChanges,
+					viewFactory,
+				} = createController({
+					loadUrlErrors: outcome === 'rejected' ? [loadError] : [],
+					loadUrlPromises: [heldLoad.p],
+				});
+
+				const open = controller.openWorkspace(
+					alpha,
+					`project-${outcome}`
+				);
+				for (let attempt = 0;
+					attempt < 20 && viewFactory.views.length < 1;
+					attempt++
+				) {
+					await Promise.resolve();
+				}
+				assert.strictEqual(viewFactory.views.length, 1);
+				await controller.shutdownAllWorkspaces(UnloadReason.RELOAD);
+				const frozenState = structuredClone(controller.getState());
+				const frozenActiveInstanceId =
+					controller.getState().activeInstanceId;
+				const frozenStateChangeCount = stateChanges.length;
+				const frozenViewCount = viewFactory.views.length;
+				const settlement = outcome === 'rejected'
+					? assert.rejects(open, error => {
+						assert.strictEqual(error, loadError);
+						return true;
+					})
+					: open;
+
+				heldLoad.complete();
+				await settlement;
+
+				assert.deepStrictEqual(controller.getState(), frozenState);
+				assert.strictEqual(
+					controller.getState().activeInstanceId,
+					frozenActiveInstanceId
+				);
+				assert.strictEqual(
+					stateChanges.length,
+					frozenStateChangeCount
+				);
+				assert.strictEqual(viewFactory.views.length, frozenViewCount);
+			}
+		}
+	);
 
 	test('shutdown preserves the resident workspace restore snapshot', async () => {
 		const alpha = createWorktree('alpha');

@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../base/common/buffer.js';
-import { Emitter } from '../../base/common/event.js';
+import { Emitter, Event } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
-import { Disposable, DisposableMap } from '../../base/common/lifecycle.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { isLinux } from '../../base/common/platform.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
@@ -18,7 +18,10 @@ import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
-import { UnloadReason } from '../../platform/window/electron-main/window.js';
+import {
+	ICodeWindow,
+	UnloadReason,
+} from '../../platform/window/electron-main/window.js';
 import {
 	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
@@ -28,8 +31,10 @@ import {
 import { IWindowsMainService, OpenContext } from
 	'../../platform/windows/electron-main/windows.js';
 import {
+	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceState,
 	IHucodeHostedWorkspaceOwner,
+	IHucodeProjectFolderPromotion,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
 import { ProjectSwitcherOmniSection } from
@@ -50,6 +55,7 @@ import {
 	HucodeHostedWorkbenchRestorePolicy,
 } from
 	'../common/retainedWorkbench.js';
+import { ShellControllerStore } from '../common/shellControllerStore.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -64,18 +70,10 @@ export class HucodeShellMainService extends Disposable
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
 	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
 
-	/**
-	 * Per-window hosted workspace controllers.
-	 *
-	 * A `DisposableMap` rather than a plain `Map` plus `_register`: a
-	 * `DisposableStore` keeps every entry until it is cleared or disposed, so
-	 * registering each controller there would retain one disposed controller
-	 * per closed Omni-window for the lifetime of the main process.
-	 */
-	private readonly controllers = this._register(new DisposableMap<
-		number,
+	private readonly controllers: ShellControllerStore<
+		ICodeWindow,
 		ResidentHostedWorkspacesController
-	>());
+	>;
 	private readonly trustedHostedWorkspaceProcessIds = new Map<number, number>();
 	private readonly trustedHostedWorkspaceWebContentsIds =
 		new Map<number, number>();
@@ -97,9 +95,14 @@ export class HucodeShellMainService extends Disposable
 	) {
 		super();
 
-		this._register(this.windowsMainService.onDidDestroyWindow(window => {
-			this.controllers.deleteAndDispose(window.id);
-		}));
+		this.controllers = this._register(new ShellControllerStore(
+			windowId => this.windowsMainService.getWindowById(windowId),
+			(windowId, window) => this.createController(windowId, window),
+			Event.map(
+				this.windowsMainService.onDidDestroyWindow,
+				window => window.id
+			)
+		));
 	}
 
 	isTrustedHostedWorkspaceRequest(
@@ -251,15 +254,28 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
-	async reconcileRetainedWorkbenches(
+	async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[]
+		projects: readonly IHucodeCompleteProjectCatalogEntry[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		await controller.reconcileRetainedWorkbenches(
+		await controller.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+			projects.map(project => ({
+				projectId: project.projectId,
+				folderUris: project.folderUris.map(folderUri =>
+					URI.revive(folderUri)!
+				),
+			}))
+		);
+		return controller.getState();
+	}
+
+	async promoteRetainedWorkbenchProjectFolders(
+		windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.promoteRetainedWorkbenchProjectFolders(
 			projectFolders.map(folder => ({
 				projectId: folder.projectId,
 				folderUri: URI.revive(folder.folderUri),
@@ -465,16 +481,13 @@ export class HucodeShellMainService extends Disposable
 	private getOrCreateController(
 		windowId: number
 	): ResidentHostedWorkspacesController {
-		const existing = this.controllers.get(windowId);
-		if (existing) {
-			return existing;
-		}
+		return this.controllers.getOrCreate(windowId);
+	}
 
-		const window = this.windowsMainService.getWindowById(windowId);
-		if (!window?.isOmniWindow) {
-			throw new Error(`Window ${windowId} is not a Hucode Omni-window.`);
-		}
-
+	private createController(
+		windowId: number,
+		window: ICodeWindow
+	): ResidentHostedWorkspacesController {
 		const controller =
 			new ResidentHostedWorkspacesController(
 				this.protocolMainService,
@@ -512,7 +525,6 @@ export class HucodeShellMainService extends Disposable
 						'active',
 				}
 			);
-		this.controllers.set(windowId, controller);
 		return controller;
 	}
 

@@ -275,25 +275,31 @@ function getRetainedWorkbenchPicks(
 		});
 }
 
-async function getOmniHostedWorkspaceState(
+/**
+ * Reads the shell-owned hosted workspace state without allowing a hosted child
+ * to authoritatively reconcile the complete project catalog.
+ */
+export async function getOmniHostedWorkspaceState(
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellService,
 	projects: readonly ProjectRecord[]
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
-	if (!environmentService.isOmniWindow &&
-		!environmentService.isHostedOmniWorkspace
-	) {
+	const windowId = dom.getWindowId(mainWindow);
+	if (environmentService.isHostedOmniWorkspace) {
+		return shellService.getWindowState(windowId);
+	}
+	if (!environmentService.isOmniShellWindow) {
 		return undefined;
 	}
-	const windowId = dom.getWindowId(mainWindow);
-	await shellService.reconcileRetainedWorkbenches(
+	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		windowId,
-		projects.flatMap(project => project.worktrees.map(worktree => ({
+		projects.map(project => ({
 			projectId: project.id,
-			folderUri: URI.file(worktree.path).toJSON(),
-		})))
+			folderUris: project.worktrees.map(worktree =>
+				URI.file(worktree.path).toJSON()
+			),
+		}))
 	);
-	return shellService.getWindowState(windowId);
 }
 
 function getCombinedSwitchWorkbenchPicks(

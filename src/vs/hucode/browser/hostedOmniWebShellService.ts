@@ -24,8 +24,10 @@ import {
 	IHucodeHostedOmniWebConnectionService,
 } from './hostedOmniWebConnection.js';
 import {
+	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceOwner,
 	IHucodeHostedWorkspaceState,
+	IHucodeProjectFolderPromotion,
 	IHucodeShellService,
 	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
@@ -192,15 +194,25 @@ export class HostedOmniWebShellService extends Disposable
 			shell.setRetainedWorkbenchLabel(windowId, workbenchId, label));
 	}
 
-	reconcileRetainedWorkbenches(
+	reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		_windowId: number,
-		projectFolders: readonly {
-			readonly projectId: string;
-			readonly folderUri: UriComponents;
-		}[]
+		_projects: readonly IHucodeCompleteProjectCatalogEntry[]
+	): Promise<IHucodeHostedWorkspaceState> {
+		return Promise.reject(new Error(
+			'Complete project catalog reconciliation is restricted to ' +
+			'the Omni shell.'
+		));
+	}
+
+	promoteRetainedWorkbenchProjectFolders(
+		_windowId: number,
+		projectFolders: readonly IHucodeProjectFolderPromotion[]
 	): Promise<IHucodeHostedWorkspaceState> {
 		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.reconcileRetainedWorkbenches(windowId, projectFolders));
+			shell.promoteRetainedWorkbenchProjectFolders(
+				windowId,
+				projectFolders
+			));
 	}
 
 	setHostedWorkbenchRestorePolicy(

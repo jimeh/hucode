@@ -52,6 +52,54 @@ suite('ExtensionSignatureVerificationService', () => {
 		assert.strictEqual(testObject.hucodeOpenVsxVerifier.verified, false);
 		assert.strictEqual(testObject.vsceSignLoaded, true);
 	});
+
+	test('uses node-ovsx-sign for a configured mirror host', async () => {
+		const testObject = new TestExtensionSignatureVerificationService(
+			'https://signatures.example.test/vscode/gallery',
+			{
+				openVsxSignatureVerificationHosts: [
+					' signatures.example.test ',
+				],
+			}
+		);
+
+		const result = await testObject.verify(
+			'pub.name',
+			'1.0.0',
+			'extension.vsix',
+			'extension.sigzip'
+		);
+
+		assert.strictEqual(
+			result?.code,
+			ExtensionSignatureVerificationCode.Success
+		);
+		assert.strictEqual(testObject.hucodeOpenVsxVerifier.verified, true);
+		assert.strictEqual(testObject.vsceSignLoaded, false);
+	});
+
+	test('uses vsce-sign when OpenVSX verifier hosts are explicitly disabled', async () => {
+		const testObject = new TestExtensionSignatureVerificationService(
+			'https://open-vsx.org/vscode/gallery',
+			{
+				openVsxSignatureVerificationHosts: [],
+			}
+		);
+
+		const result = await testObject.verify(
+			'pub.name',
+			'1.0.0',
+			'extension.vsix',
+			'extension.sigzip'
+		);
+
+		assert.strictEqual(
+			result?.code,
+			ExtensionSignatureVerificationCode.Success
+		);
+		assert.strictEqual(testObject.hucodeOpenVsxVerifier.verified, false);
+		assert.strictEqual(testObject.vsceSignLoaded, true);
+	});
 });
 
 class TestExtensionSignatureVerificationService extends ExtensionSignatureVerificationService {
@@ -64,12 +112,19 @@ class TestExtensionSignatureVerificationService extends ExtensionSignatureVerifi
 		serviceUrl: string,
 		private readonly options: {
 			readonly vsceVerify?: VsceVerify;
+			readonly openVsxSignatureVerificationHosts?: string[];
 		}
 	) {
 		super(
 			new NullLogService(),
 			NullTelemetryService,
-			{ extensionsGallery: { serviceUrl } } as IProductService
+			{
+				extensionsGallery: {
+					serviceUrl,
+					openVsxSignatureVerificationHosts:
+						options.openVsxSignatureVerificationHosts,
+				},
+			} as IProductService
 		);
 	}
 

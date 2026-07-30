@@ -158,7 +158,9 @@ export class ExtensionSignatureVerificationService implements IExtensionSignatur
 	private getHucodeOpenVsxSignatureVerifier():
 		HucodeOpenVsxExtensionSignatureVerifier | undefined {
 		if (!useHucodeOpenVsxSignatureVerifier(
-			this.productService.extensionsGallery?.serviceUrl
+			this.productService.extensionsGallery?.serviceUrl,
+			this.productService.extensionsGallery
+				?.openVsxSignatureVerificationHosts
 		)) {
 			return undefined;
 		}

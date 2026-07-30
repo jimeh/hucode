@@ -40,6 +40,7 @@ import {
 	toHucodeWebRouteLocation,
 } from './hucodeWebClientServerIntegration.js';
 import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
+import { IServerLifetimeService } from './serverLifetimeService.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
 	'.html': 'text/html',
@@ -140,7 +141,8 @@ export class WebClientServer extends Disposable {
 		@ILogService private readonly _logService: ILogService,
 		@IRequestService private readonly _requestService: IRequestService,
 		@IProductService private readonly _productService: IProductService,
-		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService
+		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService,
+		@IServerLifetimeService private readonly _serverLifetimeService: IServerLifetimeService
 	) {
 		super();
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
@@ -148,7 +150,25 @@ export class WebClientServer extends Disposable {
 			this._register(new HucodeWebProjectManagerServer(
 				this._environmentService.userDataPath,
 				this._logService,
-				{ enabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG] }
+				{
+					enabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
+					acquireStateWriteLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-state-write'
+						),
+					acquireMutationLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-mutation'
+						),
+					acquireReadLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-read'
+						),
+					acquireResponseLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-response'
+						),
+				}
 			));
 	}
 

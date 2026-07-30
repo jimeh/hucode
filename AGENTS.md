@@ -119,6 +119,15 @@ as the required Hucode instruction set for work in this fork.
   VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
     ./scripts/test.sh --run <test-file>
   ```
+- That `VSCODE_SKIP_PRELAUNCH=1` also skips the build, and the Electron runner
+  executes compiled `out/`. Editing a `.ts` file and re-running therefore tests
+  the *previous* build. This matters most when deliberately breaking code to
+  confirm a test catches it: the run passes, which reads as "the test does not
+  detect this" when the truth is the change was never compiled. Run
+  `npm run gulp compile-client` after every source edit, and confirm the change
+  reached `out/` before drawing any conclusion from the result. Note esbuild
+  strips comments, so verify against the compiled behaviour rather than a
+  marker comment.
 - CI suite lists are generated, not hand-maintained.
   `build/hucode/test-suites.ts` resolves them and
   `.github/workflows/hucode-ci.yml` calls it per runner. A new suite under
@@ -150,6 +159,41 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- Serve-web project SSE snapshots must wait for the corresponding project-state
+  write generation, including hydration and background refresh. A disconnected
+  request may cancel queued work and active read-only Git commands, but once a
+  worktree create/remove starts, finish that irreversible mutation and its
+  state flush. If post-create discovery fails, return a stale record for the
+  created path while the normal refresh retry recovers authoritative metadata.
+  Once discovery commits a current worktree snapshot, any remaining watcher
+  recovery is service-owned and must outlive the initiating request.
+  Node's `IncomingMessage` `close` event also fires after normal request
+  completion; use request `aborted` or response `close` before
+  `writableFinished` to detect a real disconnect.
+  Server disposal must reject waiting work immediately but keep the project
+  manager and server-lifetime consumers alive until every admitted read and
+  mutation has settled; join both admission queues and dispose the manager
+  before releasing the final lease. A canceled read response can settle before
+  its admitted Git operation, so tests must join the read queue before teardown.
+  Route project-list GETs and initial SSE hydration through that same read
+  admission path. Operation leases end when the underlying work settles, while
+  response leases remain through response `finish`, premature `close`, or
+  `error`; long-lived SSE responses retain theirs until disconnect.
+  The shared `Limiter` and `Queue` retain canceled waiting factories, and their
+  disposal clears waiting work without settling its returned promises; do not
+  use them for request admission that must release canceled or disposed work.
+- `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
+  needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
+  `serve-web` therefore runs with Copilot Chat entirely absent, which silently
+  invalidated a runtime measurement that appeared to pass.
+- Extension *enablement* state is per-browser (localStorage), so
+  enablement-dependent behaviour can only be measured in a browser holding the
+  real profile state. A control run from a different browser profile proves
+  nothing.
+- Native `IProjectManagerService` calls cross a generic `ProxyChannel`, which
+  does not support `CancellationToken` method arguments. Keep request tokens
+  web-only, or replace the generic proxy with a cancellation-aware channel
+  before adding them to the shared service contract.
 - `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
   trusted** on web. `WorkspaceProvider.create` parses the `payload` query
   parameter straight out of the page URL, so any page can set either flag.
@@ -162,3 +206,50 @@ as the required Hucode instruction set for work in this fork.
   is the third — a same-origin `MessagePort` handshake in
   `hostedOmniWebConnection.ts`. Anything deciding what a window is *allowed* to
   do needs one of those two, not the flags.
+- A trusted hosted-workbench `MessagePort` authenticates the connection, not
+  caller-supplied method arguments. Expose an explicit least-authority channel
+  facade, bind window and instance identity to the port server-side, and use a
+  closed hosted-action allowlist rather than the broad
+  `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
+  only for version-skew compatibility.
+- Complete project-catalog reconciliation is shell authority. Hosted
+  workbenches may read combined state through `getWindowState`, but must not
+  submit a supposedly complete catalog over their connection facade.
+- Web shell restoration can block on remote folder checks. Page shutdown must
+  cancel restoration without awaiting initialization, and restoration must
+  check cancellation after each asynchronous preflight before attaching an
+  iframe.
+- Shell controller ownership ends when its host fires `onDidClose`, even if a
+  later global window-destroy event also arrives. Release on both signals
+  idempotently so a closed host cannot retain controller state.
+- Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
+  CDP. Identify them through
+  `window.vscode.context.resolveConfiguration()` — their URLs are identical.
+  To crash one in a smoke test, subscribe to the page's `crash` event, fire
+  `Page.crash` without awaiting its response, and await the event instead; the
+  command response never arrives after the target dies, and the crashed page
+  remains in `context.pages()` until recovery destroys the crashed view.
+- Editor copy and cut commands synchronously emit nested document clipboard
+  events. Local Omni clipboard fallback must keep those nested events inside the
+  per-window forwarding-disabled scope or it can cancel and re-forward itself.
+- A timed-out hosted clipboard request has ambiguous delivery. Treat copy and
+  cut as consumed after the request starts rather than retrying locally: this
+  preserves at-most-once behavior, with a documented risk that a genuinely lost
+  request leaves the operation unapplied.
+- Native terminal shutdown preparation can finish before other lifecycle vetoes
+  settle. Keep persistence suppression reversible until `onWillShutdown`,
+  invalidate late preparation completions on `onShutdownVeto` and
+  `onBeforeShutdownError`, and leave the web preflight side-effect free.
+- A hosted web unload commit is already irreversible from the shell's
+  perspective. Internal commit failures must reject so the shell takes its
+  remove-anyway path; `false` is reserved for an explicit protocol refusal
+  before the commit begins.
+- A late protocol-v1 hosted unload success means that legacy workbench already
+  shut down. Remove it only when the exact instance still uses the connection
+  captured by the timed-out request, so an old reply cannot remove a reloaded
+  child.
+- Web shell-wide shutdown is currently contract-only and called only by an
+  explicit host. Ordinary browser lifecycle shutdown cannot await it and uses
+  per-workbench hosted unload instead. Any future awaited shell-close path must
+  add admission guards that reject workbenches opened after its shutdown
+  snapshot.

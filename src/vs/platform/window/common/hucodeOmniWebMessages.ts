@@ -43,11 +43,33 @@ export interface IHucodeOmniWebPortMessage {
 }
 
 /**
+ * Version of the hosted-workbench half of the Omni web protocol.
+ *
+ * 1. `prepareUnload` performs the whole shutdown; there is no commit phase.
+ * 2. unload is the two-phase
+ *    `prepareUnloadForCommit`/`commitUnload` handshake, while
+ *    `prepareUnload` keeps the version 1 behavior for older shells.
+ *
+ * A workbench announces this when it signals ready, and a shell must assume
+ * version 1 when a workbench announces nothing. The pairing is reachable:
+ * `reloadWorkspace` reloads a single hosted iframe without touching the shell
+ * document, so a long-lived shell whose server was rolled back can find
+ * itself driving an older workbench.
+ */
+export const HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION = 2;
+
+/**
  * Message sent by a hosted iframe when its workbench is ready.
  */
 export interface IHucodeOmniWebReadyMessage {
 	readonly type: HucodeOmniWebChildMessageType.Ready;
 	readonly instanceId: string;
+
+	/**
+	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows
+	 * it. Absent from workbenches built before the unload handshake split.
+	 */
+	readonly protocolVersion?: number;
 }
 
 /**
@@ -80,9 +102,32 @@ export interface IHucodeOmniWebWorkbenchClient {
 	openFiles(request: INativeOpenFileRequest): Promise<boolean>;
 
 	/**
-	 * Runs the hosted workbench shutdown handshake before unload. Resolves
-	 * false when shutdown failed or was vetoed, telling the shell to keep
-	 * the hosted workbench alive.
+	 * Performs the complete version 1 unload. This remains available on newer
+	 * workbenches because an older shell can survive a deployment and then
+	 * load a newer hosted iframe. A true answer means shutdown reached its
+	 * irreversible commit.
 	 */
 	prepareUnload(): Promise<boolean>;
+
+	/**
+	 * Runs the veto-capable half of the version 2 unload handshake. Resolves
+	 * false when preparation was vetoed or failed, telling the shell to keep
+	 * the hosted workbench alive. The workbench does not shut down either way
+	 * — that only happens once {@link commitUnload} follows — though its
+	 * shutdown listeners do run.
+	 */
+	prepareUnloadForCommit(): Promise<boolean>;
+
+	/**
+	 * Shuts the hosted workbench down after a successful
+	 * {@link prepareUnloadForCommit} and the shell's decision that the
+	 * workbench is really going away. This is the irreversible half of the
+	 * handshake. Resolves false when no prepared unload was outstanding,
+	 * leaving the workbench alive.
+	 *
+	 * Only workbenches announcing {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION}
+	 * 2 or later have this. A shell must read the version a workbench sent
+	 * with its ready message before it decides how to unload it.
+	 */
+	commitUnload(): Promise<boolean>;
 }

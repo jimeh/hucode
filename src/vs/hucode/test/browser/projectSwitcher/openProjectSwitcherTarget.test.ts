@@ -224,6 +224,7 @@ function createProject(): ProjectRecord {
 		rootUri: URI.file('/repo'),
 		pinned: false,
 		order: 0,
+		worktreeState: 'current',
 		worktrees: [{
 			path: '/repo',
 			label: 'repo',

@@ -671,6 +671,7 @@ function createProject(options: {
 		rootUri: URI.file(`/tmp/${options.id}`),
 		pinned: options.pinned ?? false,
 		order: 0,
+		worktreeState: 'current',
 		worktrees: options.worktrees,
 	};
 }
