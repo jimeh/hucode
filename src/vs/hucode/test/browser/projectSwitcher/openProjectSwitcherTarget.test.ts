@@ -14,7 +14,7 @@ import { IHostService } from
 	'../../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
-import { IHucodeShellService } from
+import { IHucodeHostedWorkspaceState, IHucodeShellService } from
 	'../../../common/omniWindow.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -27,6 +27,12 @@ suite('OpenProjectSwitcherTarget', () => {
 	const target: IProjectSwitcherSelectionTarget = {
 		projectId: 'project',
 		worktreePath: '/repo',
+	};
+	const emptyHostedWorkspaceState: IHucodeHostedWorkspaceState = {
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
+		instances: [],
 	};
 
 	function projectManager(
@@ -79,9 +85,27 @@ suite('OpenProjectSwitcherTarget', () => {
 				projectId?: string
 			) {
 				calls.push(`openWorkspace:${windowId}:${worktreePath}:${projectId}`);
+				return emptyHostedWorkspaceState;
+			},
+			async openAndFocusWorkspace(
+				windowId: number,
+				worktreePath: string,
+				projectId?: string
+			) {
+				calls.push(
+					`openAndFocus:${windowId}:${worktreePath}:${projectId}`
+				);
+				return emptyHostedWorkspaceState;
 			},
 			async focusWorkspace(windowId: number) {
 				calls.push(`focusWorkspace:${windowId}`);
+			},
+			async focusHostedWorkspaceByPath(
+				worktreePath: string,
+				projectId?: string
+			) {
+				calls.push(`focusHosted:${worktreePath}:${projectId}`);
+				return true;
 			},
 		} as unknown as IHucodeShellService;
 	}
@@ -181,11 +205,29 @@ suite('OpenProjectSwitcherTarget', () => {
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
-				'openWorkspace:7:/repo:project',
-				'focusWorkspace:7',
+				'openAndFocus:7:/repo:project',
 			]);
 		}
 	);
+
+	test('uses an atomic open and focus from a hosted workbench', async () => {
+		const calls: string[] = [];
+
+		await openProjectSwitcherTargetInWindow(
+			target,
+			7,
+			projectManager(calls),
+			environment({ isHostedOmniWorkspace: true }),
+			shell(calls, false),
+			host(calls)
+		);
+
+		assert.deepStrictEqual(calls, [
+			'setLastActive:project:/repo',
+			'focusNormal:/repo',
+			'openAndFocus:7:/repo:project',
+		]);
+	});
 
 	test('reuses current normal window outside Omni', async () => {
 		const calls: string[] = [];

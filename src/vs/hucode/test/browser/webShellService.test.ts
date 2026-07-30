@@ -1457,6 +1457,37 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
+	test('hosted shell atomically opens and focuses outside the caller',
+		async () => {
+			const { service, surface, browser } = createService();
+			const callerState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/caller',
+				'project'
+			);
+			const callerInstanceId = callerState.activeInstanceId;
+			assert.ok(callerInstanceId);
+			const caller = connectChild(browser, surface, callerInstanceId);
+			browser.iframeFocusCalls.length = 0;
+
+			const opened = await caller.shell.openAndFocusWorkspace(
+				999,
+				'/tmp/target',
+				'project'
+			);
+
+			assert.deepStrictEqual({
+				active: opened.instances.find(instance =>
+					instance.instanceId === opened.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/target',
+				focused: ['/tmp/target'],
+			});
+		}
+	);
+
 	test('rejects private methods on the hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
 		const state = await service.openWorkspace(
@@ -3425,33 +3456,49 @@ suite('WebHucodeShellService', () => {
 
 	test('coalesces concurrent workbench opens after folder preflight',
 		async () => {
-			const folderStat = new DeferredPromise<boolean>();
-			const { service, surface, browser } = createService(
-				new FakeBrowserAdapter(),
+			const firstStat = new DeferredPromise<boolean>();
+			const secondStat = new DeferredPromise<boolean>();
+			let statCalls = 0;
+			const browser = new FakeBrowserAdapter();
+			const { service, surface } = createService(
+				browser,
 				undefined,
 				'active',
-				{ exists: () => folderStat.p }
+				{
+					exists: () => ++statCalls === 1
+						? firstStat.p
+						: secondStat.p,
+				}
 			);
-			const first = service.openWorkspace(
+			const first = service.openAndFocusWorkspace(
 				browser.windowId,
 				'/tmp/concurrent'
 			);
-			const second = service.openWorkspace(
+			const second = service.openAndFocusWorkspace(
 				browser.windowId,
 				'/tmp/concurrent'
 			);
-			await Promise.resolve();
 
-			folderStat.complete(true);
-			await Promise.all([first, second]);
+			secondStat.complete(true);
+			const secondState = await second;
+			const secondInstanceId = secondState.activeInstanceId;
+			assert.ok(secondInstanceId);
+			firstStat.complete(true);
+			await first;
 			const state = await service.getWindowState(browser.windowId);
 
 			assert.deepStrictEqual({
-				instances: state.instances.length,
+				activeInstanceId: state.activeInstanceId,
+				instanceIds: state.instances.map(instance =>
+					instance.instanceId
+				),
 				iframes: surface.querySelectorAll('iframe').length,
+				focused: browser.iframeFocusCalls,
 			}, {
-				instances: 1,
+				activeInstanceId: secondInstanceId,
+				instanceIds: [secondInstanceId],
 				iframes: 1,
+				focused: ['/tmp/concurrent'],
 			});
 		}
 	);
@@ -3584,6 +3631,128 @@ suite('WebHucodeShellService', () => {
 				undefined
 			);
 		});
+
+	test('latest focused workspace open wins across folder preflights',
+		async () => {
+			const alphaStat = new DeferredPromise<boolean>();
+			const bravoStat = new DeferredPromise<boolean>();
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{
+					exists: path => path.endsWith('alpha')
+						? alphaStat.p
+						: bravoStat.p,
+				}
+			);
+
+			const alpha = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/alpha'
+			);
+			const bravo = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/bravo'
+			);
+			bravoStat.complete(true);
+			await bravo;
+			alphaStat.complete(true);
+			await alpha;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/bravo',
+				focused: ['/tmp/bravo'],
+			});
+		}
+	);
+
+	test('failed focused open restores focus to the active workbench',
+		async () => {
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{ exists: path => Promise.resolve(!path.endsWith('missing')) }
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/current');
+			browser.iframeFocusCalls.length = 0;
+
+			const state = await service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/missing'
+			);
+
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/current',
+				focused: ['/tmp/current'],
+			});
+		}
+	);
+
+	test('declined focused open restores focus to the active workbench',
+		async () => {
+			const folderStatStarted = new DeferredPromise<void>();
+			const folderStat = new DeferredPromise<boolean>();
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{
+					exists: path => {
+						if (path.endsWith('declined')) {
+							folderStatStarted.complete();
+							return folderStat.p;
+						}
+						return Promise.resolve(true);
+					},
+				}
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/current');
+			browser.iframeFocusCalls.length = 0;
+
+			const opening = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/declined'
+			);
+			await folderStatStarted.p;
+			const pendingState = await service.getWindowState(browser.windowId);
+			const pendingRecord = pendingState.retainedWorkbenches?.find(
+				record => URI.revive(record.folderUri).fsPath === '/tmp/declined'
+			);
+			assert.ok(pendingRecord);
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				pendingRecord.id
+			);
+			folderStat.complete(true);
+			const state = await opening;
+
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/current',
+				focused: ['/tmp/current'],
+			});
+		}
+	);
 
 	test('project ownership wins an overlapping arbitrary preflight',
 		async () => {
@@ -4719,6 +4888,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly origin = location.origin;
 	readonly openedUrls: string[] = [];
 	readonly portMessages: IPostedPortMessage[] = [];
+	readonly iframeFocusCalls: string[] = [];
 	contentFocusCalls = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
@@ -4747,7 +4917,9 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		this.openedUrls.push(url);
 	}
 
-	focusIframe(_iframe: HTMLIFrameElement): void { }
+	focusIframe(iframe: HTMLIFrameElement): void {
+		this.iframeFocusCalls.push(iframe.title);
+	}
 
 	focusIframeContent(_iframe: HTMLIFrameElement): void {
 		this.contentFocusCalls++;

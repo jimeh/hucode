@@ -352,12 +352,18 @@ function getCombinedSwitchWorkbenchPicks(
 	));
 }
 
-async function getActiveWorkbenchWorktreePath(
+/**
+ * Resolves the active worktree across shell, hosted, and standalone workbenches.
+ */
+export async function getActiveWorkbenchWorktreePath(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
 	shellService: IHucodeShellService
 ): Promise<string | undefined> {
-	if (environmentService.isOmniWindow) {
+	if (
+		environmentService.isOmniWindow ||
+		environmentService.isHostedOmniWorkspace
+	) {
 		const state = await shellService.getWindowState(
 			dom.getWindowId(mainWindow)
 		);

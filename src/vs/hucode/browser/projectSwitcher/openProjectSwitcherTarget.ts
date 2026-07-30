@@ -60,12 +60,20 @@ export async function openProjectSwitcherTargetInWindow(
 			return;
 		}
 
-		await shellService.openWorkspace(
-			windowId,
-			canonicalTarget.worktreePath,
-			canonicalTarget.projectId
-		);
-		await focusWorkspaceBestEffort(shellService, windowId);
+		if (environmentService.isHostedOmniWorkspace) {
+			await shellService.openAndFocusWorkspace(
+				windowId,
+				canonicalTarget.worktreePath,
+				canonicalTarget.projectId
+			);
+		} else {
+			await shellService.openWorkspace(
+				windowId,
+				canonicalTarget.worktreePath,
+				canonicalTarget.projectId
+			);
+			await focusWorkspaceBestEffort(shellService, windowId);
+		}
 		return;
 	}
 

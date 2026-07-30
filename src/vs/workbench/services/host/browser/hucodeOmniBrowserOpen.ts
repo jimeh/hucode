@@ -32,6 +32,11 @@ interface IHucodeBrowserOmniShellService {
 		path: string,
 		projectId?: string
 	): Promise<unknown>;
+	openAndFocusWorkspace(
+		windowId: number,
+		path: string,
+		projectId?: string
+	): Promise<unknown>;
 	focusWorkspace(windowId: number): Promise<void>;
 }
 
@@ -123,6 +128,15 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	} catch (error) {
 		onUnexpectedError(error);
 	}
+	const windowId = getWindowId(mainWindow);
+	if (environmentService.isHostedOmniWorkspace) {
+		await shellService.openAndFocusWorkspace(
+			windowId,
+			worktreePath,
+			projectId
+		);
+		return true;
+	}
 	try {
 		if (await shellService.focusHostedWorkspaceByPath(
 			worktreePath,
@@ -141,7 +155,6 @@ export async function tryOpenHucodeOmniBrowserWindow(
 		onUnexpectedError(error);
 	}
 
-	const windowId = getWindowId(mainWindow);
 	await shellService.openWorkspace(windowId, worktreePath, projectId);
 	await shellService.focusWorkspace(windowId);
 	return true;

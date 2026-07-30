@@ -195,6 +195,26 @@ export class HucodeShellMainService extends Disposable
 		return controller.getState();
 	}
 
+	async openAndFocusWorkspace(
+		windowId: number,
+		worktreePath: string,
+		projectId?: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		const controller = this.getOrCreateController(windowId);
+		await controller.openWorkspace(worktreePath, projectId);
+		const state = controller.getState();
+		const active = state.instances.find(instance =>
+			instance.instanceId === state.activeInstanceId
+		);
+		if (
+			active &&
+			isEqual(active.worktreePath, worktreePath, !isLinux)
+		) {
+			controller.focusWorkspace();
+		}
+		return state;
+	}
+
 	async suspendWorkspace(
 		windowId: number,
 		instanceId: string,

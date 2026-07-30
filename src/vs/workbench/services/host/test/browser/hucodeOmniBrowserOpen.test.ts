@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { getWindowId } from '../../../../../base/browser/dom.js';
+import { mainWindow } from '../../../../../base/browser/window.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -38,6 +40,7 @@ suite('HucodeOmniBrowserOpen', () => {
 		async focusHostedWorkspaceByPath() { return false; },
 		async focusNormalWindowByPath() { return false; },
 		async openWorkspace() { },
+		async openAndFocusWorkspace() { },
 		async focusWorkspace() { },
 	});
 
@@ -64,6 +67,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				) {
 					calls.push(`open:${windowId}:${path}:${projectId}`);
 				},
+				async openAndFocusWorkspace() { },
 				async focusWorkspace(windowId: number) {
 					calls.push(`focus:${windowId}`);
 				},
@@ -99,6 +103,7 @@ suite('HucodeOmniBrowserOpen', () => {
 						openedPath = path;
 						openedProjectId = projectId;
 					},
+					async openAndFocusWorkspace() { },
 					async focusWorkspace() { },
 				},
 				projectManager([{
@@ -123,6 +128,7 @@ suite('HucodeOmniBrowserOpen', () => {
 					async focusHostedWorkspaceByPath() { return true; },
 					async focusNormalWindowByPath() { return false; },
 					async openWorkspace() { opened = true; },
+					async openAndFocusWorkspace() { opened = true; },
 					async focusWorkspace() { },
 				},
 				projectManager()
@@ -208,23 +214,42 @@ suite('HucodeOmniBrowserOpen', () => {
 	});
 
 	test('routes folder opens from a hosted Omni workbench', async () => {
-		let opened = false;
+		let opened: {
+			windowId: number;
+			path: string;
+			projectId: string | undefined;
+		} | undefined;
 		const handled = await tryOpenHucodeOmniBrowserWindow(
 			[{ folderUri: URI.file('/scratch') }],
 			undefined,
 			environment({ isHostedOmniWorkspace: true }),
 			{
 				_serviceBrand: undefined,
-				async focusHostedWorkspaceByPath() { return false; },
-				async focusNormalWindowByPath() { return false; },
-				async openWorkspace() { opened = true; },
-				async focusWorkspace() { },
+				async focusHostedWorkspaceByPath() {
+					assert.fail('hosted folder open used path focus');
+				},
+				async focusNormalWindowByPath() {
+					assert.fail('hosted folder open used normal focus');
+				},
+				async openWorkspace() {
+					assert.fail('hosted folder open used non-atomic open');
+				},
+				async openAndFocusWorkspace(windowId, path, projectId) {
+					opened = { windowId, path, projectId };
+				},
+				async focusWorkspace() {
+					assert.fail('hosted folder open used generic focus');
+				},
 			},
 			projectManager()
 		);
 
 		assert.strictEqual(handled, true);
-		assert.strictEqual(opened, true);
+		assert.deepStrictEqual(opened, {
+			windowId: getWindowId(mainWindow),
+			path: '/scratch',
+			projectId: undefined,
+		});
 	});
 
 	test('routes folders for the current remote authority', async () => {
@@ -247,6 +272,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				async focusHostedWorkspaceByPath() { return false; },
 				async focusNormalWindowByPath() { return false; },
 				async openWorkspace(_windowId, path) { openedPath = path; },
+				async openAndFocusWorkspace() { },
 				async focusWorkspace() { },
 			},
 			projectManager()
