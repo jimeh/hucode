@@ -128,6 +128,15 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	} catch (error) {
 		onUnexpectedError(error);
 	}
+	const windowId = getWindowId(mainWindow);
+	if (environmentService.isHostedOmniWorkspace) {
+		await shellService.openAndFocusWorkspace(
+			windowId,
+			worktreePath,
+			projectId
+		);
+		return true;
+	}
 	try {
 		if (await shellService.focusHostedWorkspaceByPath(
 			worktreePath,
@@ -146,16 +155,7 @@ export async function tryOpenHucodeOmniBrowserWindow(
 		onUnexpectedError(error);
 	}
 
-	const windowId = getWindowId(mainWindow);
-	if (environmentService.isHostedOmniWorkspace) {
-		await shellService.openAndFocusWorkspace(
-			windowId,
-			worktreePath,
-			projectId
-		);
-	} else {
-		await shellService.openWorkspace(windowId, worktreePath, projectId);
-		await shellService.focusWorkspace(windowId);
-	}
+	await shellService.openWorkspace(windowId, worktreePath, projectId);
+	await shellService.focusWorkspace(windowId);
 	return true;
 }

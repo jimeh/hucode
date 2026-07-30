@@ -1457,6 +1457,37 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
+	test('hosted shell atomically opens and focuses outside the caller',
+		async () => {
+			const { service, surface, browser } = createService();
+			const callerState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/caller',
+				'project'
+			);
+			const callerInstanceId = callerState.activeInstanceId;
+			assert.ok(callerInstanceId);
+			const caller = connectChild(browser, surface, callerInstanceId);
+			browser.iframeFocusCalls.length = 0;
+
+			const opened = await caller.shell.openAndFocusWorkspace(
+				999,
+				'/tmp/target',
+				'project'
+			);
+
+			assert.deepStrictEqual({
+				active: opened.instances.find(instance =>
+					instance.instanceId === opened.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/target',
+				focused: ['/tmp/target'],
+			});
+		}
+	);
+
 	test('rejects private methods on the hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
 		const state = await service.openWorkspace(
@@ -3643,6 +3674,57 @@ suite('WebHucodeShellService', () => {
 				browser.windowId,
 				'/tmp/missing'
 			);
+
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/current',
+				focused: ['/tmp/current'],
+			});
+		}
+	);
+
+	test('declined focused open restores focus to the active workbench',
+		async () => {
+			const folderStatStarted = new DeferredPromise<void>();
+			const folderStat = new DeferredPromise<boolean>();
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{
+					exists: path => {
+						if (path.endsWith('declined')) {
+							folderStatStarted.complete();
+							return folderStat.p;
+						}
+						return Promise.resolve(true);
+					},
+				}
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/current');
+			browser.iframeFocusCalls.length = 0;
+
+			const opening = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/declined'
+			);
+			await folderStatStarted.p;
+			const pendingState = await service.getWindowState(browser.windowId);
+			const pendingRecord = pendingState.retainedWorkbenches?.find(
+				record => URI.revive(record.folderUri).fsPath === '/tmp/declined'
+			);
+			assert.ok(pendingRecord);
+			await service.dismissRetainedWorkbench(
+				browser.windowId,
+				pendingRecord.id
+			);
+			folderStat.complete(true);
+			const state = await opening;
 
 			assert.deepStrictEqual({
 				active: state.instances.find(instance =>
