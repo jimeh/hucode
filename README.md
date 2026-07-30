@@ -1,78 +1,201 @@
-# Visual Studio Code - Open Source ("Code - OSS")
-[![Feature Requests](https://img.shields.io/github/issues/microsoft/vscode/feature-request.svg)](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-[![Bugs](https://img.shields.io/github/issues/microsoft/vscode/bug.svg)](https://github.com/microsoft/vscode/issues?utf8=✓&q=is%3Aissue+is%3Aopen+label%3Abug)
-[![Gitter](https://img.shields.io/badge/chat-on%20gitter-yellow.svg)](https://gitter.im/Microsoft/vscode)
+<div align="center">
 
-## The Repository
+<img height="196" width="196" src="./build/hucode/mixin/stable/resources/server/code-512.png" alt="Hucode app icon">
 
-This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, but we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
+# Hucode
 
-## Visual Studio Code
+**A VS Code fork built around projects, worktrees, and persistent workspaces.**
+
+[![GitHub Release](https://img.shields.io/github/v/release/jimeh/hucode?logo=github&label=Release)](https://github.com/jimeh/hucode/releases/latest)
+[![Hucode CI](https://github.com/jimeh/hucode/actions/workflows/hucode-ci.yml/badge.svg)](https://github.com/jimeh/hucode/actions/workflows/hucode-ci.yml)
+[![GitHub Issues](https://img.shields.io/github/issues/jimeh/hucode?logo=github&label=Issues)](https://github.com/jimeh/hucode/issues)
+[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/jimeh/hucode?logo=github&label=PRs)](https://github.com/jimeh/hucode/pulls)
+[![License](https://img.shields.io/github/license/jimeh/hucode?label=License)](https://github.com/jimeh/hucode/blob/HEAD/LICENSE.txt)
+
+</div>
+
+Hucode wraps the familiar Code OSS workbench in Omni, a persistent project
+manager for repositories and Git worktrees. Add projects once, navigate their
+worktrees from a shared sidebar, and switch between resident workspaces without
+managing a separate editor window for each one.
+
+Individual workspaces remain normal VS Code workbenches, preserving the
+editing, debugging, terminal, and extension experience underneath Hucode's
+project-oriented shell.
 
 <p align="center">
-  <img alt="VS Code in action" src="https://github.com/user-attachments/assets/56af271c-949d-454c-a3ea-16188c063414">
+  <img src="./docs/hucode/screenshot.png" alt="Hucode Omni showing the Projects sidebar and workbench switcher">
 </p>
 
-[Visual Studio Code](https://code.visualstudio.com) is a distribution of the `Code - OSS` repository with Microsoft-specific customizations released under a traditional [Microsoft product license](https://code.visualstudio.com/License/).
+## What Hucode Adds
 
-[Visual Studio Code](https://code.visualstudio.com) combines the simplicity of a code editor with what developers need for their core edit-build-debug cycle. It provides comprehensive code editing, navigation, and understanding support along with lightweight debugging, a rich extensibility model, and lightweight integration with existing tools.
+- **One place for projects and worktrees.** Save repositories as projects and
+  browse their Git worktrees from the Omni sidebar.
+- **Resident workspaces.** Keep multiple workbenches loaded and switch between
+  them without reopening windows or rebuilding editor state.
+- **Explicit workspace lifecycle.** See which workspaces are active, loaded,
+  dormant, loading, or crashed, and suspend workbenches you no longer need in
+  memory.
+- **Worktree operations in the editor.** Create, rename, and remove worktrees
+  from the Projects surface while keeping destructive Git operations explicit.
+- **Desktop and web shells.** Use Omni in the native desktop app or self-host it
+  in a browser with `hucode serve-web`.
+- **OpenVSX extensions.** Hucode uses [OpenVSX](https://open-vsx.org/) for
+  extension discovery and installation.
 
-Visual Studio Code is updated monthly with new features and bug fixes. You can download it for Windows, macOS, and Linux on [Visual Studio Code's website](https://code.visualstudio.com/Download). To get the latest releases every day, install the [Insiders build](https://code.visualstudio.com/insiders).
+## Getting Around
 
-## Contributing
+Hucode provides these default workbench shortcuts on macOS:
 
-There are many ways in which you can participate in this project, for example:
+| Command | macOS |
+| --- | --- |
+| Quick Switch Loaded Workbench | `Cmd+Ctrl+Tab` |
+| Switch Workbench... | `Cmd+Ctrl+P` |
+| Switch to Previous Loaded Workbench | `Cmd+Ctrl+[` |
+| Switch to Next Loaded Workbench | `Cmd+Ctrl+]` |
 
-* [Submit bugs and feature requests](https://github.com/microsoft/vscode/issues), and help us verify as they are checked in
-* Review [source code changes](https://github.com/microsoft/vscode/pulls)
-* Review the [documentation](https://github.com/microsoft/vscode-docs) and make pull requests for anything from typos to new content.
+Quick Switch works like the macOS app switcher: hold `Cmd+Ctrl`, press `Tab` to
+cycle through loaded workbenches, use `Shift+Tab` to move backward, then release
+the modifiers to activate the selected workbench. `Cmd+Ctrl+P` opens the full
+switcher, including dormant and unloaded workbenches.
 
-If you are interested in fixing issues and contributing directly to the code base,
-please see the document [How to Contribute](https://github.com/microsoft/vscode/wiki/How-to-Contribute), which covers the following:
+All four commands are also available from the Command Palette and can be
+changed in Keyboard Shortcuts. Windows and Linux defaults are being tracked in
+[issue #100](https://github.com/jimeh/hucode/issues/100).
 
-* [How to build and run from source](https://github.com/microsoft/vscode/wiki/How-to-Contribute)
-* [The development workflow, including debugging and running tests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#debugging)
-* [Coding guidelines](https://github.com/microsoft/vscode/wiki/Coding-Guidelines)
-* [Submitting pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests)
-* [Finding an issue to work on](https://github.com/microsoft/vscode/wiki/How-to-Contribute#where-to-contribute)
-* [Contributing to translations](https://aka.ms/vscodeloc)
+## Download Hucode
 
-## Feedback
+Prebuilt desktop releases are currently available for macOS and Linux from the
+[latest GitHub Release](https://github.com/jimeh/hucode/releases/latest).
 
-* Ask a question on [Stack Overflow](https://stackoverflow.com/questions/tagged/vscode)
-* [Request a new feature](CONTRIBUTING.md)
-* Upvote [popular feature requests](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-* [File an issue](https://github.com/microsoft/vscode/issues)
-* Connect with the extension author community on [GitHub Discussions](https://github.com/microsoft/vscode-discussions/discussions) or [Slack](https://aka.ms/vscode-dev-community)
-* Follow [@code](https://x.com/code) and let us know what you think!
+### macOS
 
-See our [wiki](https://github.com/microsoft/vscode/wiki/Feedback-Channels) for a description of each of these channels and information on some other available community-driven channels.
+Download the DMG matching your Mac:
 
-## Related Projects
+- `hucode-darwin-arm64.dmg` for Apple silicon
+- `hucode-darwin-x64.dmg` for Intel
 
-Many of the core components and extensions to VS Code live in their own repositories on GitHub. For example, the [node debug adapter](https://github.com/microsoft/vscode-node-debug) and the [mono debug adapter](https://github.com/microsoft/vscode-mono-debug) repositories are separate from each other. For a complete list, please visit the [Related Projects](https://github.com/microsoft/vscode/wiki/Related-Projects) page on our [wiki](https://github.com/microsoft/vscode/wiki).
+Hucode also publishes ZIP archives used by the built-in macOS updater.
 
-## Bundled Extensions
+### Linux
 
-VS Code includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
+Linux releases are available for x64 and arm64 as:
 
-## Development Container
+- DEB packages for Debian, Ubuntu, and derivatives
+- RPM packages for Fedora, RHEL, and derivatives
+- ZIP archives for package-manager-independent installations
 
-This repository includes a Visual Studio Code Dev Containers / GitHub Codespaces development container.
+See [Linux Installation and Updates](docs/hucode/linux-installation.md) for
+package selection, checksum verification, installation, and upgrade
+instructions.
 
-* For [Dev Containers](https://aka.ms/vscode-remote/download/containers), use the **Dev Containers: Clone Repository in Container Volume...** command which creates a Docker volume for better disk I/O on macOS and Windows.
-  * If you already have VS Code and Docker installed, you can also click [here](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/microsoft/vscode) to get started. This will cause VS Code to automatically install the Dev Containers extension if needed, clone the source code into a container volume, and spin up a dev container for use.
+Every release includes `SHA256SUMS`. Verify a downloaded asset with:
 
-* For Codespaces, install the [GitHub Codespaces](https://marketplace.visualstudio.com/items?itemName=GitHub.codespaces) extension in VS Code, and use the **Codespaces: Create New Codespace** command.
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
 
-Docker / the Codespace should have at least **4 cores and 6 GB of RAM (8 GB recommended)** to run a full build. See the [development container README](.devcontainer/README.md) for more information.
+On macOS, use `shasum -a 256 <downloaded-asset>` and compare the result with
+the matching entry in `SHA256SUMS`.
 
-## Code of Conduct
+## Self-Host Hucode
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+Hucode publishes standalone CLI and server-web archives for macOS, Linux, and
+Windows. Download the `hucode-cli-<platform>-<arch>` archive for your system
+from the [latest GitHub Release](https://github.com/jimeh/hucode/releases/latest),
+extract it, and place `hucode` (`hucode.exe` on Windows) on your `PATH`. Then
+start the Omni web shell with:
 
-## License
+```sh
+hucode serve-web
+```
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+The Omni shell is available at the root URL by default. Pass `--no-omni` to
+serve a regular standalone workbench at the root instead. By default, the
+server listens on localhost and protects access with a connection token. Run
+`hucode serve-web --help` for bind, port, authentication, and browser-launch
+options.
 
-Licensed under the [MIT](LICENSE.txt) license.
+## Build From Source
+
+Hucode is maintained as a fork of the full VS Code source tree. Install the
+upstream prerequisites for your platform, then install dependencies and compile
+Hucode:
+
+```sh
+npm install
+npm run hucode:compile
+```
+
+Launch the desktop app from the compiled output:
+
+```sh
+npm run hucode:run
+```
+
+For incremental development, run the watcher in one terminal and launch Hucode
+from another:
+
+```sh
+npm run hucode:watch
+npm run hucode:run
+```
+
+To launch the local serve-web development server instead:
+
+```sh
+npm run hucode:web
+```
+
+See the [Hucode documentation](docs/hucode/README.md) for architecture, fork
+strategy, release workflow, and Hucode-specific development guidance. The
+upstream [contribution guide](CONTRIBUTING.md) covers the underlying VS Code
+toolchain and development workflow.
+
+## Documentation
+
+- [Hucode Documentation](docs/hucode/README.md) is the map for user,
+  architecture, development, release, and agent guidance.
+- [Hucode Omni](docs/hucode/omni.md) explains projects, workbenches, lifecycle
+  actions, settings, and serve-web behavior.
+- [Hucode Architecture](docs/hucode/architecture.md) describes Omni, hosted
+  workspaces, project management, and the boundaries around upstream code.
+- [Development Guide](docs/hucode/development.md) covers the overlay, local
+  commands, and validation.
+- [Release Guide](docs/hucode/release.md) covers versions, CI artifacts,
+  signing, publication, and updates.
+- [Linux Installation and Updates](docs/hucode/linux-installation.md) covers
+  Linux packages and manual upgrades.
+- [Roadmap](docs/hucode/roadmap.md) tracks completed, active, and planned work.
+- [Repository Strategy](docs/hucode/repo-strategy.md) explains how Hucode
+  follows selected VS Code releases while maintaining a reviewable patch
+  series.
+- [Changelog](CHANGELOG.md) lists user-visible changes in each Hucode release.
+
+## Contributing and Feedback
+
+- [Report a bug or request a feature](https://github.com/jimeh/hucode/issues)
+- [Review open pull requests](https://github.com/jimeh/hucode/pulls)
+- Read the [Hucode agent instructions](docs/hucode/agent-instructions.md) before
+  making Hucode-specific code or documentation changes
+
+Hucode pull requests use Conventional Commit titles. Feature and fix pull
+requests also require a matching `.changes/*.md` fragment; the agent
+instructions describe the exact format and validation workflow.
+
+## Code OSS and License
+
+Hucode is a fork of [Code - OSS](https://github.com/microsoft/vscode), the open
+source codebase underlying Visual Studio Code. Hucode keeps the standard
+workbench experience while adding its own product identity, Omni shell, project
+manager, worktree workflows, release infrastructure, and OpenVSX integration.
+
+The inherited Code OSS sources remain copyright Microsoft Corporation.
+Original Hucode additions are copyright Hucode contributors. Files materially
+derived from Code OSS retain Microsoft's notice alongside Hucode's. See the
+[copyright policy](docs/hucode/copyright.md) for the repository's attribution
+rules.
+
+All Code OSS and Hucode code is licensed under the
+[MIT License](LICENSE.txt). See [ThirdPartyNotices.txt](ThirdPartyNotices.txt)
+for third-party notices.

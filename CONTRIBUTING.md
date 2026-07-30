@@ -1,3 +1,13 @@
+# Contributing to Hucode
+
+Unless stated otherwise, contributions submitted to Hucode are provided under
+the [MIT License](LICENSE.txt). Contributors retain copyright in their work;
+contributing does not assign copyright to Hucode or Microsoft. See the
+[Hucode copyright policy](docs/hucode/copyright.md) for file-header guidance.
+
+The upstream VS Code contribution guide follows for inherited Code OSS
+workflows and conventions.
+
 # Contributing to VS Code
 
 Welcome, and thank you for your interest in contributing to VS Code!
