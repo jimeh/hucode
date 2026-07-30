@@ -186,6 +186,11 @@ as the required Hucode instruction set for work in this fork.
   needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
   `serve-web` therefore runs with Copilot Chat entirely absent, which silently
   invalidated a runtime measurement that appeared to pass.
+- CSS imported by route-specific Hucode web entrypoints is flattened into the
+  shared stylesheet in minified server-web builds, even when a development
+  dynamic import never executes. Scope Omni-only selectors under
+  `.hucode-omni-workbench` and validate the bundled CSS rather than relying on
+  `npm run hucode:web` alone.
 - Extension *enablement* state is per-browser (localStorage), so
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves
