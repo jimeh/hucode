@@ -45,6 +45,12 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from './toasts.js';
+import {
+	IHucodeBrowserOmniShellService,
+	tryOpenHucodeOmniBrowserWindow,
+} from './hucodeOmniBrowserOpen.js';
+import { IProjectManagerService } from
+	'../../../../platform/projectManager/common/projectManager.js';
 
 enum HostShutdownReason {
 
@@ -249,6 +255,21 @@ export class BrowserHostService extends Disposable implements IHostService {
 	}
 
 	private async doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
+		const hucodeHandled = (
+			this.environmentService.isOmniWindow ||
+			this.environmentService.isHostedOmniWorkspace
+		) ? await this.instantiationService.invokeFunction(async accessor =>
+			tryOpenHucodeOmniBrowserWindow(
+				toOpen,
+				options,
+				this.environmentService,
+				accessor.get(IHucodeBrowserOmniShellService),
+				accessor.get(IProjectManagerService)
+			)
+		) : false;
+		if (hucodeHandled) {
+			return;
+		}
 		const payload = this.preservePayload(false /* not an empty window */, options);
 		const fileOpenables: IFileToOpen[] = [];
 
