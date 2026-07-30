@@ -30,6 +30,10 @@ const linuxPackageSmokeJob = workflow.slice(
 	workflow.indexOf('  linux-package-smoke:'),
 	workflow.indexOf('  publish-release:')
 );
+const appBuildJob = workflow.slice(
+	workflow.indexOf('  app-build:'),
+	workflow.indexOf('  linux-omni-lifecycle-smoke:')
+);
 const smokeScript = readFileSync(path.resolve(
 	import.meta.dirname,
 	'..',
@@ -160,6 +164,19 @@ suite('Hucode release workflow contract', () => {
 			);
 			assert.strictEqual(job.indexOf('- name: Remove node_modules archive', removeIndex + 1), -1);
 		}
+	});
+
+	test('prefetches Electron after dependencies and before the release build', () => {
+		const install = appBuildJob.indexOf('- name: Install dependencies');
+		const prefetch = appBuildJob.indexOf('- name: Prefetch Electron');
+		const build = appBuildJob.indexOf('- name: Build release app');
+
+		assert.ok(prefetch > install, 'prefetch must follow dependency install');
+		assert.ok(build > prefetch, 'prefetch must precede the release build');
+		assert.match(
+			appBuildJob,
+			/run: node build\/hucode\/electron-prefetch\.ts \\\n\s+--platform "\$\{\{ matrix\.platform \}\}" \\\n\s+--arch "\$\{\{ matrix\.arch \}\}"/
+		);
 	});
 
 	test('removes the downloaded app archive before packaging', () => {

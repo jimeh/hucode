@@ -80,6 +80,11 @@ as the required Hucode instruction set for work in this fork.
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`
   `GIT_CONFIG_VALUE_0=false npm run test-build-scripts` so test commits do not
   require an interactive pinentry.
+- Release app packaging downloads Electron through `@electron/get` before the
+  platform package task can start. Keep the retrying
+  `build/hucode/electron-prefetch.ts` step after dependency installation and
+  before `Build release app`; the downstream `@vscode/gulp-electron` retry
+  classifier does not recognize all native-fetch/Undici timeout codes.
 - `windowsMainService.getPathsToOpen()` selects the default fallback window
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account

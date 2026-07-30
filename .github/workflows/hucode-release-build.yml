@@ -678,6 +678,11 @@ jobs:
         env:
           VSCODE_ARCH: ${{ matrix.arch }}
 
+      - name: Prefetch Electron
+        run: node build/hucode/electron-prefetch.ts \
+          --platform "${{ matrix.platform }}" \
+          --arch "${{ matrix.arch }}"
+
       - name: Build release app
         run: |
           set -euo pipefail
