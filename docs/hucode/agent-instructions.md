@@ -371,6 +371,9 @@ human-facing guides rather than replacing them.
   Keep that orchestration in Hucode-owned workflow/script files; running those
   bundles in parallel inside one GitHub-hosted Linux runner can exhaust runner
   resources and surface as a generic "operation was canceled" failure.
+- Keep the Architecture Checks job's 8 GB `NODE_OPTIONS` allowance. The
+  aggregate `valid-layers-check` graph can exhaust V8's default 4 GB heap on
+  GitHub runners even when the exact command passes locally.
 - The split bundle jobs intentionally prepare bundle inputs on each runner
   instead of consuming a prep artifact. `build/next/index.ts bundle` reads
   source-tree-generated inputs such as `src/.../codicon.ttf` in addition to

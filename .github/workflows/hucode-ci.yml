@@ -190,6 +190,7 @@ jobs:
     name: Architecture Checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The aggregate layer graph exceeds V8's default heap on CI runners.
     env:
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
