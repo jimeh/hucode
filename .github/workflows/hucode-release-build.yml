@@ -678,6 +678,13 @@ jobs:
         env:
           VSCODE_ARCH: ${{ matrix.arch }}
 
+      - name: Prefetch Electron
+        shell: bash
+        run: |
+          node build/hucode/electron-prefetch.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}"
+
       - name: Build release app
         run: |
           set -euo pipefail
@@ -703,6 +710,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUCODE_ELECTRON_PREFETCHED: "1"
 
       - name: Smoke test standalone CLI
         if: matrix.arch != 'armhf'

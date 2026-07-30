@@ -80,6 +80,18 @@ as the required Hucode instruction set for work in this fork.
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`
   `GIT_CONFIG_VALUE_0=false npm run test-build-scripts` so test commits do not
   require an interactive pinentry.
+- Release app packaging downloads Electron through `@electron/get` before the
+  platform package task can start. Keep the retrying
+  `build/hucode/electron-prefetch.ts` step after dependency installation and
+  before `Build release app`, and set `HUCODE_ELECTRON_PREFETCHED=1` only on
+  that build step. The flag makes packaging serve pinned checksums locally and
+  reject an Electron artifact cache miss instead of returning to the network;
+  the downstream `@vscode/gulp-electron` retry classifier does not recognize
+  all native-fetch/Undici timeout codes.
+- If `npm ci` retries after an Electron header download fails with
+  `ECONNRESET`, remove only the matching `~/.cache/node-gyp/<target>/`
+  directory first. The failed attempt can leave that target incomplete, and
+  node-gyp will otherwise reuse it and fail because `common.gypi` is missing.
 - `windowsMainService.getPathsToOpen()` selects the default fallback window
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account

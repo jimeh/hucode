@@ -6,7 +6,21 @@
 import assert from 'assert';
 import { suite, test } from 'node:test';
 import { readFileSync } from 'fs';
+import { load } from 'js-yaml';
 import path from 'path';
+
+interface IWorkflowStep {
+	readonly name?: string;
+	readonly shell?: string;
+	readonly run?: string;
+	readonly env?: Readonly<Record<string, unknown>>;
+}
+
+interface IWorkflow {
+	readonly jobs?: Record<string, {
+		readonly steps?: readonly IWorkflowStep[];
+	}>;
+}
 
 const workflowPath = path.resolve(
 	import.meta.dirname,
@@ -18,6 +32,7 @@ const workflowPath = path.resolve(
 	'hucode-release-build.yml'
 );
 const workflow = readFileSync(workflowPath, 'utf8');
+const parsedWorkflow = load(workflow) as IWorkflow;
 const prepareMatrixJob = workflow.slice(
 	workflow.indexOf('  prepare-matrix:'),
 	workflow.indexOf('  copilot-vsix:')
@@ -160,6 +175,29 @@ suite('Hucode release workflow contract', () => {
 			);
 			assert.strictEqual(job.indexOf('- name: Remove node_modules archive', removeIndex + 1), -1);
 		}
+	});
+
+	test('prefetches Electron after dependencies and before the release build', () => {
+		const steps = parsedWorkflow.jobs?.['app-build']?.steps;
+		assert.ok(steps, 'app-build steps must exist');
+
+		const install = requiredStepIndex(steps, 'Install dependencies');
+		const prefetch = requiredStepIndex(steps, 'Prefetch Electron');
+		const build = requiredStepIndex(steps, 'Build release app');
+
+		assert.ok(prefetch > install, 'prefetch must follow dependency install');
+		assert.ok(build > prefetch, 'prefetch must precede the release build');
+		assert.strictEqual(steps[prefetch].shell, 'bash');
+		assert.strictEqual(
+			steps[prefetch].run,
+			'node build/hucode/electron-prefetch.ts \\\n' +
+				'  --platform "${{ matrix.platform }}" \\\n' +
+				'  --arch "${{ matrix.arch }}"\n'
+		);
+		assert.strictEqual(
+			steps[build].env?.['HUCODE_ELECTRON_PREFETCHED'],
+			'1'
+		);
 	});
 
 	test('removes the downloaded app archive before packaging', () => {
@@ -456,3 +494,12 @@ suite('Hucode release workflow contract', () => {
 		});
 	});
 });
+
+function requiredStepIndex(
+	steps: readonly IWorkflowStep[],
+	name: string
+): number {
+	const index = steps.findIndex(step => step.name === name);
+	assert.notStrictEqual(index, -1, `${name} step must exist`);
+	return index;
+}
