@@ -7,7 +7,7 @@ import assert from 'assert';
 import type { ElectronPlatformArtifactDetails } from '@electron/get';
 import { readFileSync } from 'fs';
 import { suite, test } from 'node:test';
-import path from 'path';
+import { ELECTRON_CHECKSUM_FILE } from '../../hucode/electron-checksums.ts';
 import {
 	buildElectronArtifactDetails,
 	parseElectronChecksums,
@@ -26,13 +26,6 @@ const checksums = {
 	'electron-v42.7.0-linux-armv7l.zip': 'linux-arm-checksum',
 };
 const details = buildElectronArtifactDetails(options, checksums);
-const pinnedChecksumFile = path.resolve(
-	import.meta.dirname,
-	'..',
-	'..',
-	'checksums',
-	'electron.txt'
-);
 
 suite('Hucode Electron prefetch', () => {
 	test('builds a complete Electron download request', () => {
@@ -48,7 +41,7 @@ suite('Hucode Electron prefetch', () => {
 
 	test('parses the pinned checksum for the requested Electron artifact', () => {
 		const pinnedChecksums = parseElectronChecksums(
-			readFileSync(pinnedChecksumFile, 'utf8')
+			readFileSync(ELECTRON_CHECKSUM_FILE, 'utf8')
 		);
 		const pinnedDetails = buildElectronArtifactDetails(
 			options,

@@ -13,6 +13,7 @@ import { getVersion } from './getVersion.ts';
 import { downloadFeedPackage } from './azureFeed.ts';
 import { patchDarwinInfoPlistVersion } from './darwinProductVersion.ts';
 import electron from '@vscode/gulp-electron';
+import { ELECTRON_CHECKSUM_FILE } from '../hucode/electron-checksums.ts';
 
 type DarwinDocumentSuffix = 'document' | 'script' | 'file' | 'source code';
 type DarwinDocumentType = {
@@ -104,7 +105,6 @@ function darwinBundleDocumentTypes(types: { [name: string]: string | string[] },
 }
 
 const { electronVersion, msBuildId } = util.getElectronVersion();
-const electronChecksumFile = path.join(root, 'build', 'checksums', 'electron.txt');
 
 // In product builds, `@vscode/gulp-electron` is given an asset resolver (via the
 // `repo` option) that fetches the prebuilt Electron archives on demand from the
@@ -138,7 +138,8 @@ export function createPrefetchedElectronAssetResolver(
 	return async ({ fileName }) => {
 		if (fileName !== 'SHASUMS256.txt') {
 			throw new Error(
-				`${fileName} was not found in the Electron prefetch cache`
+				`${fileName} is not present or valid in the Electron ` +
+					'prefetch cache'
 			);
 		}
 
@@ -193,7 +194,7 @@ const electronFeedAssetResolver = electronFeed
 const electronAssetResolver = selectElectronAssetResolver(
 	electronFeedAssetResolver,
 	process.env['HUCODE_ELECTRON_PREFETCHED'] === '1',
-	electronChecksumFile
+	ELECTRON_CHECKSUM_FILE
 );
 
 export const config = {
@@ -298,7 +299,7 @@ export const config = {
 	token: process.env['GITHUB_TOKEN'],
 	repo: electronAssetResolver,
 	validateChecksum: true,
-	checksumFile: electronChecksumFile,
+	checksumFile: ELECTRON_CHECKSUM_FILE,
 	createVersionedResources: useVersionedUpdate,
 	productVersionString: versionedResourcesFolder,
 };

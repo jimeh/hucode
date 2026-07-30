@@ -5,8 +5,8 @@
 
 import assert from 'assert';
 import { readFileSync } from 'fs';
-import path from 'path';
 import { test } from 'node:test';
+import { ELECTRON_CHECKSUM_FILE } from '../../hucode/electron-checksums.ts';
 import {
 	config,
 	createPrefetchedElectronAssetResolver,
@@ -19,13 +19,7 @@ test('Electron packaging relies only on the pinned local checksum file', () => {
 		checksumFile: config.checksumFile,
 	}, {
 		localChecksumValidationEnabled: true,
-		checksumFile: path.resolve(
-			import.meta.dirname,
-			'..',
-			'..',
-			'checksums',
-			'electron.txt'
-		),
+		checksumFile: ELECTRON_CHECKSUM_FILE,
 	});
 });
 
@@ -49,7 +43,7 @@ test('selects the prefetched resolver only for the enabled no-feed path', async 
 			url: 'https://example.test/electron.zip',
 			fileName: 'electron.zip',
 		}),
-		/was not found in the Electron prefetch cache/
+		/not present or valid in the Electron prefetch cache/
 	);
 });
 
@@ -97,6 +91,6 @@ test('prefetched Electron resolver rejects an artifact cache miss', async () => 
 			url: 'https://github.com/electron/electron/releases/download/v42.7.0/electron-v42.7.0-linux-x64.zip',
 			fileName: 'electron-v42.7.0-linux-x64.zip',
 		}),
-		/was not found in the Electron prefetch cache/
+		/not present or valid in the Electron prefetch cache/
 	);
 });

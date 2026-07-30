@@ -8,9 +8,9 @@ import {
 	type ElectronPlatformArtifactDetails,
 } from '@electron/get';
 import { readFileSync } from 'fs';
-import path from 'path';
 import { fileURLToPath } from 'url';
 import { getElectronVersion } from '../lib/util.ts';
+import { ELECTRON_CHECKSUM_FILE } from './electron-checksums.ts';
 
 const MAX_ATTEMPTS = 4;
 const INITIAL_RETRY_DELAY_MS = 5_000;
@@ -268,13 +268,9 @@ export function parseElectronChecksums(
 }
 
 function readElectronChecksums(): Record<string, string> {
-	const checksumPath = path.resolve(
-		import.meta.dirname,
-		'..',
-		'checksums',
-		'electron.txt'
+	return parseElectronChecksums(
+		readFileSync(ELECTRON_CHECKSUM_FILE, 'utf8')
 	);
-	return parseElectronChecksums(readFileSync(checksumPath, 'utf8'));
 }
 
 async function main(): Promise<void> {

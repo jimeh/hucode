@@ -88,6 +88,10 @@ as the required Hucode instruction set for work in this fork.
   reject an Electron artifact cache miss instead of returning to the network;
   the downstream `@vscode/gulp-electron` retry classifier does not recognize
   all native-fetch/Undici timeout codes.
+- If `npm ci` retries after an Electron header download fails with
+  `ECONNRESET`, remove only the matching `~/.cache/node-gyp/<target>/`
+  directory first. The failed attempt can leave that target incomplete, and
+  node-gyp will otherwise reuse it and fail because `common.gypi` is missing.
 - `windowsMainService.getPathsToOpen()` selects the default fallback window
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account
