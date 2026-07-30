@@ -1,0 +1,175 @@
+{
+	"schemaVersion": 1,
+	"surfaces": [
+		{
+			"path": "src/vs/hucode/browser/parts/auxiliaryBarPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate auxiliary bar Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/auxiliaryBarPart.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "4f7a0dc262e6636977c7b2496838e7e96c1885cd"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/parts/panelPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate panel Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/panelPart.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "776e9341e265840a50790b90501cb7601407b35c"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/parts/titlebarPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate title bar Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/titlebarPart.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "8f92e542f8f1dd21d66b076d7684f448ab904d60"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/workbench.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/workbench.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "69438ed9c74e1965aa73183c65149921883e7e2f"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/browserView/test/common/browserViewLayout.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view layout arithmetic under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/common/browserViewLayout.test.ts",
+					"reason": "Hucode-authored suite for browser-view layout arithmetic"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns hosted-workbench browser-view coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts",
+					"reason": "Hucode-authored suite for the integrated browser views that hosted Omni workbenches own"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view native-host coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts",
+					"reason": "Hucode-authored suite for browser-view native host routing"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns OpenVSX signature coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts",
+					"reason": "Hucode patches the subject to verify OpenVSX signatures"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns project-manager state coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
+					"reason": "the project manager service is Hucode-owned throughout"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns project-manager main-process coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts",
+					"reason": "the project manager service is Hucode-owned throughout"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns hosted utility-process routing coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts",
+					"reason": "Hucode-authored suite; hosted workbenches depend on utility process startup routing back to the right renderer"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode extends the upstream window-resolution suite for Omni routing",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
+					"reason": "upstream suite over window resolution, which Hucode changes in windowsMainService — rationale predates this list and is unrecorded elsewhere"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view ownership coverage under the workbench namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
+					"reason": "Hucode-authored suite for browser-view ownership rules"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode extends the upstream browser-overlay suite for integrated browser views",
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+					"reason": "upstream suite in the browser-view contribution Hucode extends — rationale predates this list and is unrecorded elsewhere"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts",
+			"kind": "upstream-patch",
+			"reason": "E1 patches upstream extension enablement for the Omni shell filtering policy",
+			"upstream": {
+				"path": "src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "06b68e071fd9d48611936c72d9ca914cba06bc03"
+			},
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts",
+					"reason": "Hucode patches the subject for Omni shell extension filtering"
+				}
+			]
+		}
+	]
+}
