@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.61 - 2026-07-30
+
+### Bug Fixes
+
+- **web:** preserve panel borders in release builds (#151)
+
 ## 0.0.60 - 2026-07-30
 
 ### Features
