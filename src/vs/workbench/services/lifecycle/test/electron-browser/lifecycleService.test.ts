@@ -26,7 +26,6 @@ suite('Lifecycleservice', function () {
 		testHandleWillShutdown(reason: ShutdownReason): Promise<void> {
 			return super.handleWillShutdown(reason);
 		}
-
 	}
 
 	setup(async () => {
