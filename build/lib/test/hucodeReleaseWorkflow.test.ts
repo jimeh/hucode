@@ -6,7 +6,21 @@
 import assert from 'assert';
 import { suite, test } from 'node:test';
 import { readFileSync } from 'fs';
+import { load } from 'js-yaml';
 import path from 'path';
+
+interface IWorkflowStep {
+	readonly name?: string;
+	readonly shell?: string;
+	readonly run?: string;
+	readonly env?: Readonly<Record<string, unknown>>;
+}
+
+interface IWorkflow {
+	readonly jobs?: Record<string, {
+		readonly steps?: readonly IWorkflowStep[];
+	}>;
+}
 
 const workflowPath = path.resolve(
 	import.meta.dirname,
@@ -18,6 +32,7 @@ const workflowPath = path.resolve(
 	'hucode-release-build.yml'
 );
 const workflow = readFileSync(workflowPath, 'utf8');
+const parsedWorkflow = load(workflow) as IWorkflow;
 const prepareMatrixJob = workflow.slice(
 	workflow.indexOf('  prepare-matrix:'),
 	workflow.indexOf('  copilot-vsix:')
@@ -29,10 +44,6 @@ const linuxSmokeMatrixBuilder = prepareMatrixJob.slice(
 const linuxPackageSmokeJob = workflow.slice(
 	workflow.indexOf('  linux-package-smoke:'),
 	workflow.indexOf('  publish-release:')
-);
-const appBuildJob = workflow.slice(
-	workflow.indexOf('  app-build:'),
-	workflow.indexOf('  linux-omni-lifecycle-smoke:')
 );
 const smokeScript = readFileSync(path.resolve(
 	import.meta.dirname,
@@ -167,15 +178,25 @@ suite('Hucode release workflow contract', () => {
 	});
 
 	test('prefetches Electron after dependencies and before the release build', () => {
-		const install = appBuildJob.indexOf('- name: Install dependencies');
-		const prefetch = appBuildJob.indexOf('- name: Prefetch Electron');
-		const build = appBuildJob.indexOf('- name: Build release app');
+		const steps = parsedWorkflow.jobs?.['app-build']?.steps;
+		assert.ok(steps, 'app-build steps must exist');
+
+		const install = requiredStepIndex(steps, 'Install dependencies');
+		const prefetch = requiredStepIndex(steps, 'Prefetch Electron');
+		const build = requiredStepIndex(steps, 'Build release app');
 
 		assert.ok(prefetch > install, 'prefetch must follow dependency install');
 		assert.ok(build > prefetch, 'prefetch must precede the release build');
-		assert.match(
-			appBuildJob,
-			/run: node build\/hucode\/electron-prefetch\.ts \\\n\s+--platform "\$\{\{ matrix\.platform \}\}" \\\n\s+--arch "\$\{\{ matrix\.arch \}\}"/
+		assert.strictEqual(steps[prefetch].shell, 'bash');
+		assert.strictEqual(
+			steps[prefetch].run,
+			'node build/hucode/electron-prefetch.ts \\\n' +
+				'  --platform "${{ matrix.platform }}" \\\n' +
+				'  --arch "${{ matrix.arch }}"\n'
+		);
+		assert.strictEqual(
+			steps[build].env?.['HUCODE_ELECTRON_PREFETCHED'],
+			'1'
 		);
 	});
 
@@ -473,3 +494,12 @@ suite('Hucode release workflow contract', () => {
 		});
 	});
 });
+
+function requiredStepIndex(
+	steps: readonly IWorkflowStep[],
+	name: string
+): number {
+	const index = steps.findIndex(step => step.name === name);
+	assert.notStrictEqual(index, -1, `${name} step must exist`);
+	return index;
+}

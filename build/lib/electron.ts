@@ -104,6 +104,7 @@ function darwinBundleDocumentTypes(types: { [name: string]: string | string[] },
 }
 
 const { electronVersion, msBuildId } = util.getElectronVersion();
+const electronChecksumFile = path.join(root, 'build', 'checksums', 'electron.txt');
 
 // In product builds, `@vscode/gulp-electron` is given an asset resolver (via the
 // `repo` option) that fetches the prebuilt Electron archives on demand from the
@@ -113,6 +114,56 @@ const { electronVersion, msBuildId } = util.getElectronVersion();
 // contains exactly one file, which is streamed back as a `Response` and
 // validated against the feed's `SHASUMS256.txt`.
 const electronFeed: string | undefined = product.electronArtifactFeed;
+
+/**
+ * Resolves an Electron release asset to a response body.
+ */
+export type ElectronAssetResolver = (request: {
+	readonly url: string;
+	readonly fileName: string;
+}) => Promise<Response>;
+
+/**
+ * Creates a cache-only resolver for an Electron artifact populated by the
+ * release workflow's prefetch step.
+ */
+export function createPrefetchedElectronAssetResolver(
+	enabled: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	if (!enabled) {
+		return undefined;
+	}
+
+	return async ({ fileName }) => {
+		if (fileName !== 'SHASUMS256.txt') {
+			throw new Error(
+				`${fileName} was not found in the Electron prefetch cache`
+			);
+		}
+
+		const checksums = await fs.promises.readFile(checksumFile, 'utf8');
+		return new Response(checksums, {
+			status: 200,
+			headers: {
+				'Content-Length': String(Buffer.byteLength(checksums)),
+			},
+		});
+	};
+}
+
+/**
+ * Selects the Azure feed resolver when present, otherwise the release
+ * workflow's cache-only prefetch resolver when enabled.
+ */
+export function selectElectronAssetResolver(
+	electronFeedResolver: ElectronAssetResolver | undefined,
+	prefetched: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	return electronFeedResolver ??
+		createPrefetchedElectronAssetResolver(prefetched, checksumFile);
+}
 
 // Maps the artifact file name `@vscode/gulp-electron` requests to the matching
 // universal package name in the feed, or `undefined` when it is not mirrored.
@@ -126,7 +177,7 @@ function feedPackageName(fileName: string): string | undefined {
 	return fileName.replace(/\.zip$/, '');
 }
 
-const electronAssetResolver = electronFeed
+const electronFeedAssetResolver = electronFeed
 	? async ({ fileName }: { url: string; fileName: string }): Promise<Response> => {
 		const name = feedPackageName(fileName);
 		if (!name) {
@@ -139,6 +190,11 @@ const electronAssetResolver = electronFeed
 		return new Response(body, { status: 200, headers: { 'Content-Length': String(size) } });
 	}
 	: undefined;
+const electronAssetResolver = selectElectronAssetResolver(
+	electronFeedAssetResolver,
+	process.env['HUCODE_ELECTRON_PREFETCHED'] === '1',
+	electronChecksumFile
+);
 
 export const config = {
 	version: electronVersion,
@@ -242,7 +298,7 @@ export const config = {
 	token: process.env['GITHUB_TOKEN'],
 	repo: electronAssetResolver,
 	validateChecksum: true,
-	checksumFile: path.join(root, 'build', 'checksums', 'electron.txt'),
+	checksumFile: electronChecksumFile,
 	createVersionedResources: useVersionedUpdate,
 	productVersionString: versionedResourcesFolder,
 };

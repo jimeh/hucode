@@ -7,6 +7,8 @@ import {
 	downloadArtifact,
 	type ElectronPlatformArtifactDetails,
 } from '@electron/get';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { getElectronVersion } from '../lib/util.ts';
 
@@ -46,7 +48,7 @@ export interface IElectronPrefetchOptions {
 
 export interface IElectronPrefetchDependencies {
 	readonly download: (
-		options: IElectronPrefetchOptions
+		options: ElectronPlatformArtifactDetails
 	) => Promise<string>;
 	readonly sleep: (milliseconds: number) => Promise<void>;
 	readonly warning: (message: string) => void;
@@ -61,21 +63,41 @@ interface IErrorMetadata {
 }
 
 /**
+ * Builds the complete `@electron/get` request for a platform artifact.
+ */
+export function buildElectronArtifactDetails(
+	options: IElectronPrefetchOptions,
+	checksums: Readonly<Record<string, string>>
+): ElectronPlatformArtifactDetails {
+	const arch = options.arch === 'armhf' ? 'arm' : options.arch;
+	const checksumArch = arch === 'arm' ? 'armv7l' : arch;
+	const artifactFileName =
+		`electron-v${options.version}-${options.platform}-${checksumArch}.zip`;
+	if (!checksums[artifactFileName]) {
+		throw new Error(
+			`Missing Electron checksum for ${artifactFileName}`
+		);
+	}
+
+	return {
+		...options,
+		artifactName: 'electron',
+		arch,
+		checksums: { ...checksums },
+	};
+}
+
+/**
  * Downloads and validates an Electron artifact into `@electron/get`'s cache,
  * retrying failures that are safe to repeat.
  */
 export async function prefetchElectron(
-	options: IElectronPrefetchOptions,
+	details: ElectronPlatformArtifactDetails,
 	dependencies: IElectronPrefetchDependencies = defaultDependencies
 ): Promise<string> {
-	const downloadOptions = {
-		...options,
-		arch: options.arch === 'armhf' ? 'arm' : options.arch,
-	};
-
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 		try {
-			return await dependencies.download(downloadOptions);
+			return await dependencies.download(details);
 		} catch (error) {
 			if (
 				attempt === MAX_ATTEMPTS ||
@@ -98,9 +120,7 @@ export async function prefetchElectron(
 }
 
 const defaultDependencies: IElectronPrefetchDependencies = {
-	download: options => downloadArtifact(
-		options as ElectronPlatformArtifactDetails
-	),
+	download: options => downloadArtifact(options),
 	sleep: milliseconds =>
 		new Promise(resolve => setTimeout(resolve, milliseconds)),
 	warning: message => console.warn(message),
@@ -220,14 +240,53 @@ function readArguments(args: readonly string[]): {
 	return { platform, arch };
 }
 
+/**
+ * Parses Electron's pinned SHA-256 checksum manifest.
+ */
+export function parseElectronChecksums(
+	content: string
+): Record<string, string> {
+	const checksums: Record<string, string> = {};
+
+	for (const line of content.split(/\r?\n/)) {
+		if (!line) {
+			continue;
+		}
+
+		const match = /^([0-9a-f]{64}) \*(.+)$/.exec(line);
+		if (!match) {
+			throw new Error(`Invalid Electron checksum line: ${line}`);
+		}
+		checksums[match[2]] = match[1];
+	}
+
+	if (Object.keys(checksums).length === 0) {
+		throw new Error('Electron checksum file is empty');
+	}
+
+	return checksums;
+}
+
+function readElectronChecksums(): Record<string, string> {
+	const checksumPath = path.resolve(
+		import.meta.dirname,
+		'..',
+		'checksums',
+		'electron.txt'
+	);
+	return parseElectronChecksums(readFileSync(checksumPath, 'utf8'));
+}
+
 async function main(): Promise<void> {
 	const { platform, arch } = readArguments(process.argv.slice(2));
 	const { electronVersion } = getElectronVersion();
-	const artifactPath = await prefetchElectron({
-		version: electronVersion,
-		platform,
-		arch,
-	});
+	const artifactPath = await prefetchElectron(
+		buildElectronArtifactDetails({
+			version: electronVersion,
+			platform,
+			arch,
+		}, readElectronChecksums())
+	);
 	console.log(
 		`Electron ${electronVersion} ${platform}-${arch} cached at ${artifactPath}`
 	);

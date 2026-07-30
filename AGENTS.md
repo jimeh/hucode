@@ -83,8 +83,11 @@ as the required Hucode instruction set for work in this fork.
 - Release app packaging downloads Electron through `@electron/get` before the
   platform package task can start. Keep the retrying
   `build/hucode/electron-prefetch.ts` step after dependency installation and
-  before `Build release app`; the downstream `@vscode/gulp-electron` retry
-  classifier does not recognize all native-fetch/Undici timeout codes.
+  before `Build release app`, and set `HUCODE_ELECTRON_PREFETCHED=1` only on
+  that build step. The flag makes packaging serve pinned checksums locally and
+  reject an Electron artifact cache miss instead of returning to the network;
+  the downstream `@vscode/gulp-electron` retry classifier does not recognize
+  all native-fetch/Undici timeout codes.
 - `windowsMainService.getPathsToOpen()` selects the default fallback window
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account

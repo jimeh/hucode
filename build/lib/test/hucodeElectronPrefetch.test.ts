@@ -4,8 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import type { ElectronPlatformArtifactDetails } from '@electron/get';
+import { readFileSync } from 'fs';
 import { suite, test } from 'node:test';
+import path from 'path';
 import {
+	buildElectronArtifactDetails,
+	parseElectronChecksums,
 	prefetchElectron,
 	type IElectronPrefetchDependencies,
 	type IElectronPrefetchOptions,
@@ -16,8 +21,68 @@ const options: IElectronPrefetchOptions = {
 	platform: 'darwin',
 	arch: 'x64',
 };
+const checksums = {
+	'electron-v42.7.0-darwin-x64.zip': 'darwin-checksum',
+	'electron-v42.7.0-linux-armv7l.zip': 'linux-arm-checksum',
+};
+const details = buildElectronArtifactDetails(options, checksums);
+const pinnedChecksumFile = path.resolve(
+	import.meta.dirname,
+	'..',
+	'..',
+	'checksums',
+	'electron.txt'
+);
 
 suite('Hucode Electron prefetch', () => {
+	test('builds a complete Electron download request', () => {
+		assert.deepStrictEqual(
+			buildElectronArtifactDetails(options, checksums),
+			{
+				...options,
+				artifactName: 'electron',
+				checksums,
+			}
+		);
+	});
+
+	test('parses the pinned checksum for the requested Electron artifact', () => {
+		const pinnedChecksums = parseElectronChecksums(
+			readFileSync(pinnedChecksumFile, 'utf8')
+		);
+		const pinnedDetails = buildElectronArtifactDetails(
+			options,
+			pinnedChecksums
+		);
+
+		assert.strictEqual(
+			pinnedDetails.checksums?.[
+				'electron-v42.7.0-darwin-x64.zip'
+			],
+			'0db6f623fccabafe797bc3c9c8776707c4c87b40ffad6a46134536aa84b32c94'
+		);
+	});
+
+	test('rejects malformed or empty pinned checksum content', () => {
+		assert.throws(
+			() => parseElectronChecksums('not a checksum'),
+			/Invalid Electron checksum line/
+		);
+		assert.throws(
+			() => parseElectronChecksums(''),
+			/Electron checksum file is empty/
+		);
+	});
+
+	test('rejects checksums missing the requested Electron artifact', () => {
+		assert.throws(
+			() => buildElectronArtifactDetails(options, {
+				'electron-v42.7.0-linux-x64.zip': 'linux-checksum',
+			}),
+			/Missing Electron checksum for electron-v42\.7\.0-darwin-x64\.zip/
+		);
+	});
+
 	test('retries native fetch failures with bounded exponential backoff', async () => {
 		const transientError = new TypeError('fetch failed', {
 			cause: Object.assign(
@@ -28,7 +93,7 @@ suite('Hucode Electron prefetch', () => {
 		const harness = createHarness([transientError, transientError]);
 
 		const artifactPath = await prefetchElectron(
-			options,
+			details,
 			harness.dependencies
 		);
 
@@ -46,6 +111,21 @@ suite('Hucode Electron prefetch', () => {
 		);
 	});
 
+	test('retries bare fetch failures without error metadata', async () => {
+		const harness = createHarness([new TypeError('fetch failed')]);
+
+		const artifactPath = await prefetchElectron(
+			details,
+			harness.dependencies
+		);
+
+		assert.strictEqual(artifactPath, '/cache/electron.zip');
+		assert.strictEqual(harness.downloads.length, 2);
+		assert.deepStrictEqual(harness.delays, [5_000]);
+		assert.strictEqual(harness.warnings.length, 1);
+		assert.match(harness.warnings[0], /TypeError: fetch failed/);
+	});
+
 	test('retries transient HTTP responses', async () => {
 		const serviceUnavailable = Object.assign(
 			new Error('Response code 503 (Service Unavailable)'),
@@ -53,7 +133,7 @@ suite('Hucode Electron prefetch', () => {
 		);
 		const harness = createHarness([serviceUnavailable]);
 
-		await prefetchElectron(options, harness.dependencies);
+		await prefetchElectron(details, harness.dependencies);
 
 		assert.strictEqual(harness.downloads.length, 2);
 		assert.deepStrictEqual(harness.delays, [5_000]);
@@ -67,7 +147,7 @@ suite('Hucode Electron prefetch', () => {
 		const harness = createHarness([notFound]);
 
 		await assert.rejects(
-			prefetchElectron(options, harness.dependencies),
+			prefetchElectron(details, harness.dependencies),
 			/Response code 404/
 		);
 
@@ -84,7 +164,7 @@ suite('Hucode Electron prefetch', () => {
 		const harness = createHarness([reset, reset, reset, reset]);
 
 		await assert.rejects(
-			prefetchElectron(options, harness.dependencies),
+			prefetchElectron(details, harness.dependencies),
 			/socket reset/
 		);
 
@@ -96,27 +176,31 @@ suite('Hucode Electron prefetch', () => {
 	test('normalizes armhf to the Electron arm artifact cache key', async () => {
 		const harness = createHarness();
 
-		await prefetchElectron({
+		await prefetchElectron(buildElectronArtifactDetails({
 			...options,
 			platform: 'linux',
 			arch: 'armhf',
-		}, harness.dependencies);
+		}, checksums), harness.dependencies);
 
 		assert.deepStrictEqual(harness.downloads, [{
 			version: options.version,
 			platform: 'linux',
 			arch: 'arm',
+			artifactName: 'electron',
+			checksums,
 		}]);
+		assert.deepStrictEqual(harness.delays, []);
+		assert.deepStrictEqual(harness.warnings, []);
 	});
 });
 
 function createHarness(failures: readonly Error[] = []): {
 	readonly dependencies: IElectronPrefetchDependencies;
-	readonly downloads: IElectronPrefetchOptions[];
+	readonly downloads: ElectronPlatformArtifactDetails[];
 	readonly delays: number[];
 	readonly warnings: string[];
 } {
-	const downloads: IElectronPrefetchOptions[] = [];
+	const downloads: ElectronPlatformArtifactDetails[] = [];
 	const delays: number[] = [];
 	const warnings: string[] = [];
 	let attempt = 0;
