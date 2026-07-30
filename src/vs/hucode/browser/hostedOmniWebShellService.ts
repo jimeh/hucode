@@ -145,6 +145,15 @@ export class HostedOmniWebShellService extends Disposable
 			shell.openWorkspace(windowId, worktreePath, projectId));
 	}
 
+	openAndFocusWorkspace(
+		_windowId: number,
+		worktreePath: string,
+		projectId?: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.withShell(() => this.state, (shell, windowId) =>
+			shell.openAndFocusWorkspace(windowId, worktreePath, projectId));
+	}
+
 	suspendWorkspace(
 		_windowId: number,
 		instanceId: string,

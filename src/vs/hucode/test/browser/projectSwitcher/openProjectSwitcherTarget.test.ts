@@ -80,6 +80,15 @@ suite('OpenProjectSwitcherTarget', () => {
 			) {
 				calls.push(`openWorkspace:${windowId}:${worktreePath}:${projectId}`);
 			},
+			async openAndFocusWorkspace(
+				windowId: number,
+				worktreePath: string,
+				projectId?: string
+			) {
+				calls.push(
+					`openAndFocus:${windowId}:${worktreePath}:${projectId}`
+				);
+			},
 			async focusWorkspace(windowId: number) {
 				calls.push(`focusWorkspace:${windowId}`);
 			},
@@ -145,7 +154,7 @@ suite('OpenProjectSwitcherTarget', () => {
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
 				'openWorkspace:7:/repo:project',
-				'focusHosted:/repo:project',
+				'focusWorkspace:7',
 			]);
 		}
 	);
@@ -166,7 +175,7 @@ suite('OpenProjectSwitcherTarget', () => {
 			'setLastActive:project:/repo',
 			'focusNormal:/repo',
 			'openWorkspace:7:/repo:project',
-			'focusHosted:/repo:project',
+			'focusWorkspace:7',
 		]);
 	});
 
@@ -188,41 +197,27 @@ suite('OpenProjectSwitcherTarget', () => {
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
-				'openWorkspace:7:/repo:project',
-				'focusHosted:/repo:project',
+				'openAndFocus:7:/repo:project',
 			]);
 		}
 	);
 
-	test('keeps the opened target when hosted focus fails', async () => {
+	test('uses an atomic open and focus from a hosted workbench', async () => {
 		const calls: string[] = [];
-		const shellService = {
-			...shell(calls, false),
-			async focusHostedWorkspaceByPath(
-				worktreePath: string,
-				projectId?: string
-			) {
-				calls.push(`focusHosted:${worktreePath}:${projectId}`);
-				throw new Error('focus failed');
-			},
-		} as unknown as IHucodeShellService;
 
-		await withExpectedUnexpectedError(() =>
-			openProjectSwitcherTargetInWindow(
-				target,
-				7,
-				projectManager(calls),
-				environment({ isHostedOmniWorkspace: true }),
-				shellService,
-				host(calls)
-			)
+		await openProjectSwitcherTargetInWindow(
+			target,
+			7,
+			projectManager(calls),
+			environment({ isHostedOmniWorkspace: true }),
+			shell(calls, false),
+			host(calls)
 		);
 
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
 			'focusNormal:/repo',
-			'openWorkspace:7:/repo:project',
-			'focusHosted:/repo:project',
+			'openAndFocus:7:/repo:project',
 		]);
 	});
 

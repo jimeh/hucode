@@ -704,9 +704,9 @@ human-facing guides rather than replacing them.
   `IHucodeShellService.runActionInWorkspace()` and fall back locally when it
   returns `false`.
 - A hosted web workbench's generic `focusWorkspace()` facade is bound to the
-  calling instance. After opening a different target, focus it with
-  `focusHostedWorkspaceByPath()`; otherwise the caller is reactivated and the
-  target only flashes briefly.
+  calling instance. Open and focus a different target atomically with
+  `openAndFocusWorkspace()`; a later generic or path-based focus can reactivate
+  the caller or bypass the shell's latest-activation-wins ordering.
 - Keep the Omni command-service route scoped to Projects focus. Shell QuickInput
   widgets are renderer-local; forwarding their `quickInput.accept` or clipboard
   commands breaks project rename and other shell prompts.

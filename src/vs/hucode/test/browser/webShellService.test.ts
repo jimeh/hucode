@@ -3585,6 +3585,77 @@ suite('WebHucodeShellService', () => {
 			);
 		});
 
+	test('latest focused workspace open wins across folder preflights',
+		async () => {
+			const alphaStat = new DeferredPromise<boolean>();
+			const bravoStat = new DeferredPromise<boolean>();
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{
+					exists: path => path.endsWith('alpha')
+						? alphaStat.p
+						: bravoStat.p,
+				}
+			);
+
+			const alpha = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/alpha'
+			);
+			const bravo = service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/bravo'
+			);
+			bravoStat.complete(true);
+			await bravo;
+			alphaStat.complete(true);
+			await alpha;
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/bravo',
+				focused: ['/tmp/bravo'],
+			});
+		}
+	);
+
+	test('failed focused open restores focus to the active workbench',
+		async () => {
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				{ exists: path => Promise.resolve(!path.endsWith('missing')) }
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/current');
+			browser.iframeFocusCalls.length = 0;
+
+			const state = await service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/missing'
+			);
+
+			assert.deepStrictEqual({
+				active: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				focused: browser.iframeFocusCalls,
+			}, {
+				active: '/tmp/current',
+				focused: ['/tmp/current'],
+			});
+		}
+	);
+
 	test('project ownership wins an overlapping arbitrary preflight',
 		async () => {
 			const projectStat = new DeferredPromise<boolean>();
@@ -4719,6 +4790,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly origin = location.origin;
 	readonly openedUrls: string[] = [];
 	readonly portMessages: IPostedPortMessage[] = [];
+	readonly iframeFocusCalls: string[] = [];
 	contentFocusCalls = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
@@ -4747,7 +4819,9 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		this.openedUrls.push(url);
 	}
 
-	focusIframe(_iframe: HTMLIFrameElement): void { }
+	focusIframe(iframe: HTMLIFrameElement): void {
+		this.iframeFocusCalls.push(iframe.title);
+	}
 
 	focusIframeContent(_iframe: HTMLIFrameElement): void {
 		this.contentFocusCalls++;

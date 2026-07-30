@@ -127,6 +127,15 @@ export interface IHucodeShellService {
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/**
+	 * Opens and focuses a workspace only while this request remains the latest
+	 * activation intent for the window.
+	 */
+	openAndFocusWorkspace(
+		windowId: number,
+		worktreePath: string,
+		projectId?: string
+	): Promise<IHucodeHostedWorkspaceState>;
 	/** Unloads a live renderer while preserving a dormant restore entry. */
 	suspendWorkspace(
 		windowId: number,

@@ -38,6 +38,7 @@ suite('HucodeOmniBrowserOpen', () => {
 		async focusHostedWorkspaceByPath() { return false; },
 		async focusNormalWindowByPath() { return false; },
 		async openWorkspace() { },
+		async openAndFocusWorkspace() { },
 		async focusWorkspace() { },
 	});
 
@@ -64,6 +65,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				) {
 					calls.push(`open:${windowId}:${path}:${projectId}`);
 				},
+				async openAndFocusWorkspace() { },
 				async focusWorkspace(windowId: number) {
 					calls.push(`focus:${windowId}`);
 				},
@@ -99,6 +101,7 @@ suite('HucodeOmniBrowserOpen', () => {
 						openedPath = path;
 						openedProjectId = projectId;
 					},
+					async openAndFocusWorkspace() { },
 					async focusWorkspace() { },
 				},
 				projectManager([{
@@ -123,6 +126,7 @@ suite('HucodeOmniBrowserOpen', () => {
 					async focusHostedWorkspaceByPath() { return true; },
 					async focusNormalWindowByPath() { return false; },
 					async openWorkspace() { opened = true; },
+					async openAndFocusWorkspace() { opened = true; },
 					async focusWorkspace() { },
 				},
 				projectManager()
@@ -218,7 +222,10 @@ suite('HucodeOmniBrowserOpen', () => {
 				async focusHostedWorkspaceByPath() { return false; },
 				async focusNormalWindowByPath() { return false; },
 				async openWorkspace() { opened = true; },
-				async focusWorkspace() { },
+				async openAndFocusWorkspace() { opened = true; },
+				async focusWorkspace() {
+					assert.fail('hosted folder open used generic focus');
+				},
 			},
 			projectManager()
 		);
@@ -247,6 +254,7 @@ suite('HucodeOmniBrowserOpen', () => {
 				async focusHostedWorkspaceByPath() { return false; },
 				async focusNormalWindowByPath() { return false; },
 				async openWorkspace(_windowId, path) { openedPath = path; },
+				async openAndFocusWorkspace() { },
 				async focusWorkspace() { },
 			},
 			projectManager()

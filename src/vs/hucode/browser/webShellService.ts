@@ -354,6 +354,7 @@ type IHucodeHostedWebShellConnectionFacade = Pick<
 	| 'focusHostedWorkspaceByPath'
 	| 'focusNormalWindowByPath'
 	| 'openWorkspace'
+	| 'openAndFocusWorkspace'
 	| 'openFilesInWorkspace'
 	| 'openFilesInActiveWorkspace'
 	| 'closeWorkspace'
@@ -607,6 +608,33 @@ export class WebHucodeShellController extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
+		return this.doOpenWorkspace(
+			windowId,
+			worktreePath,
+			projectId,
+			false
+		);
+	}
+
+	async openAndFocusWorkspace(
+		windowId: number,
+		worktreePath: string,
+		projectId?: string
+	): Promise<IHucodeHostedWorkspaceState> {
+		return this.doOpenWorkspace(
+			windowId,
+			worktreePath,
+			projectId,
+			true
+		);
+	}
+
+	private async doOpenWorkspace(
+		windowId: number,
+		worktreePath: string,
+		projectId: string | undefined,
+		focus: boolean
+	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
@@ -643,6 +671,9 @@ export class WebHucodeShellController extends Disposable
 				});
 			}
 			this.activateInstance(existing);
+			if (focus) {
+				this.focusIframe(existing);
+			}
 			return this.getState();
 		}
 
@@ -676,6 +707,9 @@ export class WebHucodeShellController extends Disposable
 			}
 			if (activationIntent === this.activationIntentGeneration) {
 				this.activateInstance(currentInstance);
+				if (focus) {
+					this.focusIframe(currentInstance);
+				}
 			}
 			return this.getState();
 		}
@@ -684,6 +718,7 @@ export class WebHucodeShellController extends Disposable
 			retained.id !== retainedWorkbenchId ||
 			retained.desiredState !== 'loaded'
 		) && !invalidatedByNewCatalog) {
+			this.focusActiveInstanceIfCurrent(activationIntent, focus);
 			return this.getState();
 		}
 
@@ -699,6 +734,7 @@ export class WebHucodeShellController extends Disposable
 				}
 				this.emitState();
 			});
+			this.focusActiveInstanceIfCurrent(activationIntent, focus);
 			return this.getState();
 		}
 		if (retained?.folderStatus === 'missing') {
@@ -724,10 +760,26 @@ export class WebHucodeShellController extends Disposable
 		this.attachIframe(instance);
 		if (activationIntent === this.activationIntentGeneration) {
 			this.activateInstance(instance);
+			if (focus) {
+				this.focusIframe(instance);
+			}
 		} else {
 			this.emitState();
 		}
 		return this.getState();
+	}
+
+	private focusActiveInstanceIfCurrent(
+		activationIntent: number,
+		focus: boolean
+	): void {
+		if (!focus || activationIntent !== this.activationIntentGeneration) {
+			return;
+		}
+		const active = this.getAvailableActiveInstance();
+		if (active) {
+			this.focusIframe(active);
+		}
 	}
 
 	async retainAndOpenWorkbench(
@@ -1522,6 +1574,12 @@ export class WebHucodeShellController extends Disposable
 				this.focusNormalWindowByPath(worktreePath),
 			openWorkspace: (_windowId, worktreePath, projectId) =>
 				this.openWorkspace(this.windowId, worktreePath, projectId),
+			openAndFocusWorkspace: (_windowId, worktreePath, projectId) =>
+				this.openAndFocusWorkspace(
+					this.windowId,
+					worktreePath,
+					projectId
+				),
 			openFilesInWorkspace: (
 				_windowId,
 				worktreePath,
