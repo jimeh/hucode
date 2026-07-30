@@ -13,8 +13,6 @@ import { IHostService } from
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
 import { IHucodeShellService } from '../../common/omniWindow.js';
-import { focusWorkspaceBestEffort } from
-	'../../common/omniWindowFocus.js';
 import {
 	canonicalizeProjectSwitcherTarget,
 	IProjectSwitcherSelectionTarget,
@@ -65,7 +63,11 @@ export async function openProjectSwitcherTargetInWindow(
 			canonicalTarget.worktreePath,
 			canonicalTarget.projectId
 		);
-		await focusWorkspaceBestEffort(shellService, windowId);
+		await focusHostedWorkspaceByPathBestEffort(
+			shellService,
+			canonicalTarget.worktreePath,
+			canonicalTarget.projectId
+		);
 		return;
 	}
 
@@ -73,6 +75,18 @@ export async function openProjectSwitcherTargetInWindow(
 		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],
 		{ forceReuseWindow: true }
 	);
+}
+
+async function focusHostedWorkspaceByPathBestEffort(
+	shellService: IHucodeShellService,
+	worktreePath: string,
+	projectId: string | undefined
+): Promise<void> {
+	try {
+		await shellService.focusHostedWorkspaceByPath(worktreePath, projectId);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 }
 
 async function focusNormalWindowByPathBestEffort(

@@ -83,6 +83,13 @@ suite('OpenProjectSwitcherTarget', () => {
 			async focusWorkspace(windowId: number) {
 				calls.push(`focusWorkspace:${windowId}`);
 			},
+			async focusHostedWorkspaceByPath(
+				worktreePath: string,
+				projectId?: string
+			) {
+				calls.push(`focusHosted:${worktreePath}:${projectId}`);
+				return true;
+			},
 		} as unknown as IHucodeShellService;
 	}
 
@@ -138,7 +145,7 @@ suite('OpenProjectSwitcherTarget', () => {
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
 				'openWorkspace:7:/repo:project',
-				'focusWorkspace:7',
+				'focusHosted:/repo:project',
 			]);
 		}
 	);
@@ -159,7 +166,7 @@ suite('OpenProjectSwitcherTarget', () => {
 			'setLastActive:project:/repo',
 			'focusNormal:/repo',
 			'openWorkspace:7:/repo:project',
-			'focusWorkspace:7',
+			'focusHosted:/repo:project',
 		]);
 	});
 
@@ -182,10 +189,42 @@ suite('OpenProjectSwitcherTarget', () => {
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
 				'openWorkspace:7:/repo:project',
-				'focusWorkspace:7',
+				'focusHosted:/repo:project',
 			]);
 		}
 	);
+
+	test('keeps the opened target when hosted focus fails', async () => {
+		const calls: string[] = [];
+		const shellService = {
+			...shell(calls, false),
+			async focusHostedWorkspaceByPath(
+				worktreePath: string,
+				projectId?: string
+			) {
+				calls.push(`focusHosted:${worktreePath}:${projectId}`);
+				throw new Error('focus failed');
+			},
+		} as unknown as IHucodeShellService;
+
+		await withExpectedUnexpectedError(() =>
+			openProjectSwitcherTargetInWindow(
+				target,
+				7,
+				projectManager(calls),
+				environment({ isHostedOmniWorkspace: true }),
+				shellService,
+				host(calls)
+			)
+		);
+
+		assert.deepStrictEqual(calls, [
+			'setLastActive:project:/repo',
+			'focusNormal:/repo',
+			'openWorkspace:7:/repo:project',
+			'focusHosted:/repo:project',
+		]);
+	});
 
 	test('reuses current normal window outside Omni', async () => {
 		const calls: string[] = [];

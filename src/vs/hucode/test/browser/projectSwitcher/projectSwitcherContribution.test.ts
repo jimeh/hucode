@@ -62,7 +62,10 @@ import {
 	ProjectSwitcherWidget,
 } from
 	'../../../browser/projectSwitcher/projectSwitcher.contribution.js';
-import { getOmniHostedWorkspaceState } from
+import {
+	getActiveWorkbenchWorktreePath,
+	getOmniHostedWorkspaceState,
+} from
 	'../../../browser/projectSwitcher/switchProjectWorktree.contribution.js';
 
 suite('ProjectSwitcherContribution', () => {
@@ -129,6 +132,38 @@ suite('ProjectSwitcherContribution', () => {
 				fromUntrustedWindow: undefined,
 			});
 		});
+
+	test('resolves the active hosted web workbench from shell state', async () => {
+		const activePath = await getActiveWorkbenchWorktreePath(
+			{
+				isOmniWindow: false,
+				isHostedOmniWorkspace: true,
+			} as IWorkbenchEnvironmentService,
+			{
+				getWorkbenchState: () => WorkbenchState.FOLDER,
+				getWorkspace: () => ({
+					id: 'hosted',
+					folders: [{
+						uri: URI.parse('vscode-remote://host/repo'),
+					}],
+				}),
+			} as unknown as IWorkspaceContextService,
+			{
+				async getWindowState() {
+					return {
+						activeInstanceId: 'active',
+						instances: [{
+							instanceId: 'active',
+							worktreePath: '/repo',
+							state: 'active',
+						}],
+					};
+				},
+			} as unknown as IHucodeShellService
+		);
+
+		assert.strictEqual(activePath, '/repo');
+	});
 
 	test('recycled rows clear active ARIA and actions before rendering a section', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];
