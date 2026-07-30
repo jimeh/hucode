@@ -3456,33 +3456,49 @@ suite('WebHucodeShellService', () => {
 
 	test('coalesces concurrent workbench opens after folder preflight',
 		async () => {
-			const folderStat = new DeferredPromise<boolean>();
-			const { service, surface, browser } = createService(
-				new FakeBrowserAdapter(),
+			const firstStat = new DeferredPromise<boolean>();
+			const secondStat = new DeferredPromise<boolean>();
+			let statCalls = 0;
+			const browser = new FakeBrowserAdapter();
+			const { service, surface } = createService(
+				browser,
 				undefined,
 				'active',
-				{ exists: () => folderStat.p }
+				{
+					exists: () => ++statCalls === 1
+						? firstStat.p
+						: secondStat.p,
+				}
 			);
-			const first = service.openWorkspace(
+			const first = service.openAndFocusWorkspace(
 				browser.windowId,
 				'/tmp/concurrent'
 			);
-			const second = service.openWorkspace(
+			const second = service.openAndFocusWorkspace(
 				browser.windowId,
 				'/tmp/concurrent'
 			);
-			await Promise.resolve();
 
-			folderStat.complete(true);
-			await Promise.all([first, second]);
+			secondStat.complete(true);
+			const secondState = await second;
+			const secondInstanceId = secondState.activeInstanceId;
+			assert.ok(secondInstanceId);
+			firstStat.complete(true);
+			await first;
 			const state = await service.getWindowState(browser.windowId);
 
 			assert.deepStrictEqual({
-				instances: state.instances.length,
+				activeInstanceId: state.activeInstanceId,
+				instanceIds: state.instances.map(instance =>
+					instance.instanceId
+				),
 				iframes: surface.querySelectorAll('iframe').length,
+				focused: browser.iframeFocusCalls,
 			}, {
-				instances: 1,
+				activeInstanceId: secondInstanceId,
+				instanceIds: [secondInstanceId],
 				iframes: 1,
+				focused: ['/tmp/concurrent'],
 			});
 		}
 	);

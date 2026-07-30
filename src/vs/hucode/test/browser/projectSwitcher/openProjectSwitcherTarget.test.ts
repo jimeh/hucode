@@ -14,7 +14,7 @@ import { IHostService } from
 	'../../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
-import { IHucodeShellService } from
+import { IHucodeHostedWorkspaceState, IHucodeShellService } from
 	'../../../common/omniWindow.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -27,6 +27,12 @@ suite('OpenProjectSwitcherTarget', () => {
 	const target: IProjectSwitcherSelectionTarget = {
 		projectId: 'project',
 		worktreePath: '/repo',
+	};
+	const emptyHostedWorkspaceState: IHucodeHostedWorkspaceState = {
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
+		instances: [],
 	};
 
 	function projectManager(
@@ -79,6 +85,7 @@ suite('OpenProjectSwitcherTarget', () => {
 				projectId?: string
 			) {
 				calls.push(`openWorkspace:${windowId}:${worktreePath}:${projectId}`);
+				return emptyHostedWorkspaceState;
 			},
 			async openAndFocusWorkspace(
 				windowId: number,
@@ -88,6 +95,7 @@ suite('OpenProjectSwitcherTarget', () => {
 				calls.push(
 					`openAndFocus:${windowId}:${worktreePath}:${projectId}`
 				);
+				return emptyHostedWorkspaceState;
 			},
 			async focusWorkspace(windowId: number) {
 				calls.push(`focusWorkspace:${windowId}`);

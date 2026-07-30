@@ -629,6 +629,10 @@ export class WebHucodeShellController extends Disposable
 		);
 	}
 
+	/**
+	 * Opens a workspace and optionally transfers browser focus while this
+	 * request remains the latest activation intent.
+	 */
 	private async doOpenWorkspace(
 		windowId: number,
 		worktreePath: string,
@@ -769,6 +773,10 @@ export class WebHucodeShellController extends Disposable
 		return this.getState();
 	}
 
+	/**
+	 * Restores browser focus to the available active instance when this request
+	 * still owns the latest activation intent.
+	 */
 	private focusActiveInstanceIfCurrent(
 		activationIntent: number,
 		focus: boolean
