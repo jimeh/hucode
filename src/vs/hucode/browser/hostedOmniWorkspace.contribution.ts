@@ -82,6 +82,7 @@ import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
 	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
 	HUCODE_OMNI_TREE_INDENT_MINIMUM,
@@ -139,6 +140,15 @@ Registry.as<IConfigurationRegistry>(
 			markdownDescription: localize(
 				'hucode.worktreeItemLayout',
 				"Controls whether project worktrees use a compact single-line or two-line layout in the Omni sidebar."
+			),
+		},
+		[HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING]: {
+			type: 'boolean',
+			default: true,
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.showWorktreePaths',
+				"Controls whether non-main project worktrees show their paths in the Omni sidebar. Arbitrary workbench paths are always shown."
 			),
 		},
 		[PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING]: {

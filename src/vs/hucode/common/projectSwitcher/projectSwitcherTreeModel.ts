@@ -11,6 +11,7 @@ import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize } from '../../../nls.js';
 import {
+	GitWorktreeTargetObservation,
 	ProjectRecord,
 	WorktreeRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
@@ -123,6 +124,9 @@ export interface ProjectSwitcherWorktreeItem
 	readonly isActive: boolean;
 	readonly hasCustomLabel: boolean;
 	readonly missingGitWorktree: boolean;
+	readonly name: string;
+	readonly branch?: string;
+	readonly path?: string;
 }
 
 /**
@@ -149,6 +153,9 @@ export interface ProjectSwitcherWorkbenchItem extends ProjectSwitcherBaseItem {
 	readonly isActive: boolean;
 	readonly order: number;
 	readonly hasCustomLabel: boolean;
+	readonly name: string;
+	readonly branch?: string;
+	readonly path: string;
 }
 
 /**
@@ -236,6 +243,8 @@ export interface IProjectSwitcherTreeModelOptions {
 	readonly hostedWorkspaceState: IHucodeHostedWorkspaceState;
 	readonly collapsedOmniSections?: ReadonlySet<string>;
 	readonly omniSectionOrder?: readonly ProjectSwitcherOmniSection[];
+	readonly gitWorktreeObservations?: readonly GitWorktreeTargetObservation[];
+	readonly showWorktreePaths?: boolean;
 }
 
 /**
@@ -395,6 +404,33 @@ export function getProjectSwitcherItemDescription(
 	}
 
 	return item.description;
+}
+
+/** Explicit text fields rendered for a worktree or workbench row. */
+export interface ProjectSwitcherPresentationFields {
+	readonly name: string;
+	readonly branch?: string;
+	readonly path?: string;
+}
+
+/** Resolves independently truncatable name, branch/status, and path fields. */
+export function getProjectSwitcherPresentationFields(
+	item: ProjectSwitcherItem,
+	layout: HucodeOmniItemLayout,
+): ProjectSwitcherPresentationFields {
+	if (isWorktreeItem(item) || isRetainedWorkbenchItem(item)) {
+		return {
+			name: item.name,
+			branch: layout === 'compact' && item.branch === item.name
+				? undefined
+				: item.branch,
+			path: item.path,
+		};
+	}
+	return {
+		name: item.label,
+		branch: getProjectSwitcherItemDescription(item, layout),
+	};
 }
 
 /** Minimal live tree-node shape needed to place section drag feedback. */
@@ -600,6 +636,15 @@ function toRetainedWorkbenchElement(
 		? 'missing'
 		: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
 	const handle = `workbench:${record.id}`;
+	const observation = options.gitWorktreeObservations?.find(candidate =>
+		pathsEqual(candidate.targetPath, worktreePath)
+	);
+	const branch = state === 'missing'
+		? undefined
+		: observation?.worktree?.branch ??
+		(observation?.worktree?.isDetached
+			? localize('detachedWorkbench', 'Detached')
+			: undefined);
 	const item: ProjectSwitcherWorkbenchItem = {
 		id: handle,
 		handle,
@@ -613,8 +658,11 @@ function toRetainedWorkbenchElement(
 			options.hostedWorkspaceState.activeInstanceId,
 		order: record.order,
 		hasCustomLabel: !!record.label,
+		name: presentation.label,
+		branch,
+		path: presentation.pathLabel,
 		label: presentation.label,
-		description: presentation.pathLabel,
+		description: branch ?? presentation.pathLabel,
 		tooltip: presentation.pathLabel,
 		contextValue: WORKBENCH_CONTEXT_VALUE,
 		themeIcon: state === 'restore-pending' || state === 'loading'
@@ -729,6 +777,12 @@ function toWorktreeElement(
 		isActive,
 		hasCustomLabel: !!worktree.customLabel,
 		missingGitWorktree: false,
+		name: worktreeLabel,
+		branch: worktreeDescription,
+		path: options.isOmniWindow &&
+			!worktree.isMain && options.showWorktreePaths !== false
+			? options.getPathLabel(worktree.path)
+			: undefined,
 		label: worktreeLabel,
 		description: worktreeDescription,
 		tooltip: options.getPathLabel(worktree.path),
@@ -774,6 +828,11 @@ function toMissingWorktreeElement(
 		isActive,
 		hasCustomLabel: false,
 		missingGitWorktree: true,
+		name: basename(hostedWorkbenchInstance.worktreePath),
+		branch: localize('missingGitWorktree', 'Missing'),
+		path: options.isOmniWindow && options.showWorktreePaths !== false
+			? options.getPathLabel(hostedWorkbenchInstance.worktreePath)
+			: undefined,
 		label: basename(hostedWorkbenchInstance.worktreePath),
 		description: localize('missingGitWorktree', 'Missing'),
 		tooltip: options.getPathLabel(hostedWorkbenchInstance.worktreePath),

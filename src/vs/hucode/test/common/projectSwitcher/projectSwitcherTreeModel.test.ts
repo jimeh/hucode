@@ -20,6 +20,7 @@ import {
 	encodeWorktreeHandle,
 	getLastVisibleDescendantIndex,
 	getProjectSwitcherItemDescription,
+	getProjectSwitcherPresentationFields,
 	isItemInCollapsedOmniSection,
 	isOmniSectionItem,
 	isProjectItem,
@@ -677,6 +678,199 @@ suite('ProjectSwitcherTreeModel', () => {
 		);
 	});
 
+	test('builds explicit project and workbench fields for both row layouts', () => {
+		const linkedPath = '/repos/hucode.worktrees/feature';
+		const gitWorkbenchPath = '/scratch/repo/subdirectory';
+		const detachedWorkbenchPath = '/scratch/detached';
+		const plainWorkbenchPath = '/scratch/plain';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree('/repos/hucode', {
+						isMain: true,
+						branch: 'main',
+					}),
+					createWorktree(linkedPath, { branch: 'feature' }),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => `label:${path}`,
+			isOmniWindow: true,
+			showWorktreePaths: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				retainedWorkbenches: [
+					retained('git', gitWorkbenchPath, 0),
+					retained('detached', detachedWorkbenchPath, 1),
+					retained('plain', plainWorkbenchPath, 2),
+				],
+			},
+			gitWorktreeObservations: [{
+				targetPath: gitWorkbenchPath,
+				state: 'current',
+				repositoryRoot: '/scratch/repo',
+				worktree: createWorktree('/scratch/repo', {
+					isMain: true,
+					branch: 'topic',
+				}),
+			}, {
+				targetPath: detachedWorkbenchPath,
+				state: 'current',
+				repositoryRoot: detachedWorkbenchPath,
+				worktree: createWorktree(detachedWorkbenchPath, {
+					isMain: true,
+					branch: undefined,
+					isDetached: true,
+				}),
+			}, {
+				targetPath: plainWorkbenchPath,
+				state: 'notRepository',
+			}],
+		});
+		const items = flatten(model.roots).map(element => element.element);
+		const main = getWorktree(model.roots, '/repos/hucode');
+		const linked = getWorktree(model.roots, linkedPath);
+		const workbenches = items.filter(isRetainedWorkbenchItem);
+
+		assert.deepStrictEqual({
+			main: getProjectSwitcherPresentationFields(main, 'compact'),
+			linkedCompact: getProjectSwitcherPresentationFields(linked, 'compact'),
+			linkedTwoLine: getProjectSwitcherPresentationFields(linked, 'twoLine'),
+			gitCompact: getProjectSwitcherPresentationFields(workbenches[0], 'compact'),
+			gitTwoLine: getProjectSwitcherPresentationFields(workbenches[0], 'twoLine'),
+			detached: getProjectSwitcherPresentationFields(workbenches[1], 'compact'),
+			plainCompact: getProjectSwitcherPresentationFields(workbenches[2], 'compact'),
+			plainTwoLine: getProjectSwitcherPresentationFields(workbenches[2], 'twoLine'),
+		}, {
+			main: { name: 'local', branch: 'main', path: undefined },
+			linkedCompact: {
+				name: 'feature',
+				branch: undefined,
+				path: `label:${linkedPath}`,
+			},
+			linkedTwoLine: {
+				name: 'feature',
+				branch: 'feature',
+				path: `label:${linkedPath}`,
+			},
+			gitCompact: {
+				name: 'subdirectory',
+				branch: 'topic',
+				path: `label:${gitWorkbenchPath}`,
+			},
+			gitTwoLine: {
+				name: 'subdirectory',
+				branch: 'topic',
+				path: `label:${gitWorkbenchPath}`,
+			},
+			detached: {
+				name: 'detached',
+				branch: 'Detached',
+				path: `label:${detachedWorkbenchPath}`,
+			},
+			plainCompact: {
+				name: 'plain',
+				branch: undefined,
+				path: `label:${plainWorkbenchPath}`,
+			},
+			plainTwoLine: {
+				name: 'plain',
+				branch: undefined,
+				path: `label:${plainWorkbenchPath}`,
+			},
+		});
+	});
+
+	test('hides only linked project paths when the path setting is off', () => {
+		const linkedPath = '/repos/hucode.worktrees/feature';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [
+					createWorktree('/repos/hucode', { isMain: true }),
+					createWorktree(linkedPath, { branch: 'feature' }),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			showWorktreePaths: false,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				retainedWorkbenches: [retained('scratch', '/scratch', 0)],
+			},
+		});
+
+		const workbench = flatten(model.roots)
+			.map(element => element.element)
+			.find(isRetainedWorkbenchItem);
+		assert.ok(workbench);
+		assert.deepStrictEqual({
+			mainPath: getWorktree(model.roots, '/repos/hucode').path,
+			linkedPath: getWorktree(model.roots, linkedPath).path,
+			workbenchPath: workbench.path,
+		}, {
+			mainPath: undefined,
+			linkedPath: undefined,
+			workbenchPath: '/scratch',
+		});
+	});
+
+	test('does not apply the Omni worktree-path setting outside Omni', () => {
+		const linkedPath = '/repos/hucode.worktrees/feature';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'hucode',
+				worktrees: [createWorktree(linkedPath, { branch: 'feature' })],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: false,
+			showWorktreePaths: true,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.strictEqual(getWorktree(model.roots, linkedPath).path, undefined);
+	});
+
+	test('suppresses stale Git branches for missing retained folders', () => {
+		const missingPath = '/scratch/missing';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				retainedWorkbenches: [{
+					...retained('missing', missingPath, 0),
+					folderStatus: 'missing',
+				}],
+			},
+			gitWorktreeObservations: [{
+				targetPath: missingPath,
+				state: 'stale',
+				repositoryRoot: missingPath,
+				worktree: createWorktree(missingPath, { branch: 'stale-branch' }),
+			}],
+		});
+		const item = flatten(model.roots)
+			.map(element => element.element)
+			.find(isRetainedWorkbenchItem);
+		assert.ok(item);
+
+		assert.deepStrictEqual({
+			state: item.hostedWorkbenchState,
+			branch: item.branch,
+			description: item.description,
+		}, {
+			state: 'missing',
+			branch: undefined,
+			description: missingPath,
+		});
+	});
+
 	test('places after-section feedback after visible nested descendants', () => {
 		const nested = {
 			visible: true,
@@ -961,6 +1155,7 @@ function createWorktree(
 		readonly branch?: string;
 		readonly customLabel?: string;
 		readonly isMain?: boolean;
+		readonly isDetached?: boolean;
 		readonly pinned?: boolean;
 	} = {}
 ): WorktreeRecord {
@@ -970,8 +1165,17 @@ function createWorktree(
 		customLabel: options.customLabel,
 		branch: options.branch,
 		isMain: options.isMain ?? false,
-		isDetached: false,
+		isDetached: options.isDetached ?? false,
 		pinned: options.pinned,
+	};
+}
+
+function retained(id: string, path: string, order: number) {
+	return {
+		id,
+		folderUri: URI.file(path).toJSON(),
+		desiredState: 'unloaded' as const,
+		order,
 	};
 }
 

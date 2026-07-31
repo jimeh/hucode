@@ -80,7 +80,8 @@
 }
 
 .hucode-project-switcher-label,
-.hucode-project-switcher-description {
+.hucode-project-switcher-description,
+.hucode-project-switcher-path {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -88,12 +89,18 @@
 }
 
 .hucode-project-switcher-label {
-	flex: 0 0 auto;
+	flex: 0 1 auto;
+	flex-shrink: 1;
 	max-width: 100%;
 }
 
 .hucode-project-switcher-description {
-	flex: 1 1 auto;
+	flex: 0 4 auto;
+	opacity: 0.7;
+}
+
+.hucode-project-switcher-path {
+	flex: 1 16 auto;
 	opacity: 0.7;
 }
 
@@ -110,6 +117,11 @@
 
 .hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
 	.hucode-project-switcher-description {
+	opacity: 0.9;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-path {
 	opacity: 0.9;
 }
 
@@ -132,18 +144,43 @@
 }
 
 .hucode-project-switcher-two-line .hucode-project-switcher-text {
-	flex-direction: column;
-	align-items: stretch;
+	display: grid;
+	grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+	grid-template-rows: 17px 17px;
+	align-items: baseline;
 	justify-content: center;
-	gap: 1px;
+	column-gap: 6px;
+	row-gap: 1px;
 	line-height: 17px;
 }
 
 .hucode-project-switcher-two-line .hucode-project-switcher-label,
-.hucode-project-switcher-two-line .hucode-project-switcher-description {
+.hucode-project-switcher-two-line .hucode-project-switcher-description,
+.hucode-project-switcher-two-line .hucode-project-switcher-path {
 	display: block;
-	flex: 0 1 auto;
-	width: 100%;
+	width: auto;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-label {
+	grid-row: 1;
+	grid-column: 1;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-path {
+	grid-row: 1;
+	grid-column: 2;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-description {
+	grid-row: 2;
+	grid-column: 1 / -1;
+}
+
+.hucode-project-switcher-two-line.hucode-project-switcher-has-path:not(
+	.hucode-project-switcher-has-branch)
+	.hucode-project-switcher-path {
+	grid-row: 2;
+	grid-column: 1 / -1;
 }
 
 .hucode-project-switcher-worktree-loading {

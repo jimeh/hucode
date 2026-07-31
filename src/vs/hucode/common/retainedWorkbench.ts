@@ -41,6 +41,10 @@ export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
 export const HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING =
 	'hucode.omni.worktreeItemLayout';
 
+/** User setting controlling paths on non-main project worktree rows. */
+export const HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING =
+	'hucode.omni.showWorktreePaths';
+
 /** Persisted arbitrary-folder entry owned by one Omni window. */
 export type IHucodeRetainedWorkbench = IOmniRetainedWorkbench;
 

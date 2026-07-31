@@ -34,6 +34,29 @@ export interface WorktreeRecord {
 	readonly lastVisitedAt?: number;
 }
 
+/** Runtime freshness of Git metadata observed for an arbitrary target path. */
+export type GitWorktreeTargetState =
+	| 'current'
+	| 'stale'
+	| 'notRepository'
+	| 'unavailable';
+
+/**
+ * Ephemeral Git metadata for a folder monitored by an interested consumer.
+ */
+export interface GitWorktreeTargetObservation {
+	readonly targetPath: string;
+	readonly state: GitWorktreeTargetState;
+	readonly repositoryRoot?: string;
+	readonly worktree?: WorktreeRecord;
+}
+
+/** Git-monitor update scoped to the consumer that registered the targets. */
+export interface GitWorktreeTargetChange {
+	readonly consumerId: string;
+	readonly observations: readonly GitWorktreeTargetObservation[];
+}
+
 /**
  * Runtime freshness of a project's discovered worktrees.
  */
@@ -182,6 +205,7 @@ export interface IProjectManagerService {
 	readonly _serviceBrand: undefined;
 
 	readonly onDidChangeProjects: Event<readonly ProjectRecord[]>;
+	readonly onDidChangeGitWorktreeTargets: Event<GitWorktreeTargetChange>;
 
 	getProjects(): Promise<readonly ProjectRecord[]>;
 	addProject(uri: URI): Promise<ProjectRecord>;
@@ -232,4 +256,11 @@ export interface IProjectManagerService {
 		beforeWorktreePath?: string
 	): Promise<void>;
 	setLastActiveWorktree(projectId: string, worktreePath: string): Promise<void>;
+	/** Replaces one consumer's complete ephemeral Git-monitor target set. */
+	setGitWorktreeTargets(
+		consumerId: string,
+		targetPaths: readonly string[]
+	): Promise<readonly GitWorktreeTargetObservation[]>;
+	/** Releases all Git-monitor resources owned only by one consumer. */
+	clearGitWorktreeTargets(consumerId: string): Promise<void>;
 }

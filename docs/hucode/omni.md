@@ -29,6 +29,22 @@ A common workflow is:
 Use **Add Workbench** when a folder does not need project or git-worktree
 management.
 
+The sidebar monitors Git metadata directly without activating the full VS Code
+Git extension. Project worktrees show their branch, and arbitrary workbenches
+show the current branch (or `Detached`) when their folder is inside a Git
+worktree. Non-Git workbenches continue to show only their name and path.
+Serve-web binds these ephemeral observations to the sidebar event-stream
+session, releases them when that client disconnects, and re-registers the
+current target set after EventSource reconnects. Each serve-web registration
+accepts at most 128 target folders, and Git discovery runs through a bounded
+worker pool.
+
+Compact rows order details as name, branch/status, then path; under constrained
+width the path truncates first, followed by the branch and finally the name.
+Two-line rows place the name and path on the first line and the branch/status
+below. A non-Git workbench instead places its path on the second line. Main
+project checkouts never show a path field.
+
 ## Workbench Lifecycle
 
 Omni tracks the desired and actual state of each hosted workbench:
@@ -80,6 +96,7 @@ This setting applies to both desktop Omni and serve-web Omni.
 | `hucode.omni.treeIndent` | `8` | Set Projects tree indentation from 4 to 40 pixels. |
 | `hucode.omni.workbenchItemLayout` | `compact` | Use `compact` or `twoLine` rows for arbitrary workbenches. |
 | `hucode.omni.worktreeItemLayout` | `compact` | Use `compact` or `twoLine` rows for project worktrees. |
+| `hucode.omni.showWorktreePaths` | `true` | Show paths for non-main project worktrees. Arbitrary workbench paths remain visible. |
 | `hucode.omni.titleBar.projectControls.enabled` | `true` | Show project controls in the custom title bar when the Projects sidebar is hidden. |
 
 ## Desktop and Serve-Web
