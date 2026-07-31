@@ -7,6 +7,24 @@
 	height: 100%;
 }
 
+.dialog-message-body.hucode-worktree-delete-dialog {
+	min-width: min(640px, 70vw);
+}
+
+.dialog-message-container:has(.hucode-worktree-delete-dialog)
+	.dialog-message-detail {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.hucode-worktree-delete-preview pre {
+	max-height: min(40vh, 360px);
+	margin: 8px 0 0;
+	overflow: auto;
+	white-space: pre;
+	user-select: text;
+}
+
 .hucode-project-switcher-view .hucode-project-switcher-tree.hidden {
 	display: none;
 }

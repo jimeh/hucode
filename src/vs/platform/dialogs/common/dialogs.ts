@@ -281,6 +281,10 @@ export const IDialogService = createDecorator<IDialogService>('dialogService');
 
 export interface ICustomDialogOptions {
 	readonly buttonDetails?: string[];
+	/**
+	 * Enables or disables each button by its original dialog button index.
+	 */
+	readonly buttonEnabled?: readonly boolean[];
 	readonly markdownDetails?: ICustomDialogMarkdown[];
 	readonly classes?: string[];
 	readonly icon?: ThemeIcon;

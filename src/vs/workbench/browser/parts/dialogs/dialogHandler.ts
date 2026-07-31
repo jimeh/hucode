@@ -118,7 +118,20 @@ export class BrowserDialogHandler extends AbstractDialogHandler {
 				renderBody,
 				icon: customOptions?.icon,
 				disableCloseAction: customOptions?.disableCloseAction,
-				buttonOptions: customOptions?.buttonDetails?.map(detail => ({ sublabel: detail })),
+				buttonOptions: buttons?.map((_button, index) => {
+					const sublabel = customOptions?.buttonDetails?.[index];
+					const enabled = customOptions?.buttonEnabled?.[index];
+					if (sublabel === undefined && enabled === undefined) {
+						return undefined;
+					}
+
+					return {
+						sublabel,
+						styleButton: enabled === undefined
+							? undefined
+							: button => button.enabled = enabled,
+					};
+				}),
 				checkboxLabel: checkbox?.label,
 				checkboxChecked: checkbox?.checked,
 				inputs

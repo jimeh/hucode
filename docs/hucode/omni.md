@@ -52,7 +52,10 @@ The related actions have deliberately different meanings:
   unloaded. Its project or catalog entry remains available.
 - **Dismiss** unloads an arbitrary workbench and removes its Workbenches entry.
 - **Remove Worktree** is a separate git operation that can delete a checkout.
-  Treat it as destructive; it is not a synonym for unload or dismiss.
+  Its confirmation dialog previews uncommitted paths: clean worktrees offer
+  **Delete**, while dirty worktrees require **Force Delete** and discard the
+  listed changes. Very large previews show at most 1,000 paths plus the number
+  omitted. Treat it as destructive; it is not a synonym for unload or dismiss.
 
 Hidden loaded workbenches still use memory and processes. Suspend or unload
 them when fast switching is less important than resource use.

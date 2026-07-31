@@ -130,6 +130,44 @@ export interface CreateWorktreeOptions {
 	readonly path?: string;
 }
 
+/**
+ * One path reported by `git status --porcelain=v1`.
+ */
+export interface WorktreeStatusEntry {
+	readonly indexStatus: string;
+	readonly worktreeStatus: string;
+	readonly path: string;
+	readonly originalPath?: string;
+}
+
+/**
+ * Bounded worktree status shown before destructive removal.
+ */
+export interface WorktreeStatusPreview {
+	readonly fingerprint: string;
+	readonly totalCount: number;
+	readonly entries: readonly WorktreeStatusEntry[];
+	readonly omittedCount: number;
+}
+
+/**
+ * Preconditions and mode for removing a worktree.
+ */
+export interface RemoveWorktreeOptions {
+	readonly force: boolean;
+	readonly expectedStatusFingerprint: string;
+}
+
+/**
+ * Result of a conditional worktree removal.
+ */
+export type RemoveWorktreeResult =
+	| { readonly removed: true }
+	| {
+		readonly removed: false;
+		readonly status: WorktreeStatusPreview;
+	};
+
 export const IProjectManagerService =
 	createDecorator<IProjectManagerService>('projectManagerService');
 
@@ -175,7 +213,15 @@ export interface IProjectManagerService {
 		projectId: string,
 		options: CreateWorktreeOptions
 	): Promise<WorktreeRecord>;
-	removeWorktree(projectId: string, worktreePath: string): Promise<void>;
+	getWorktreeStatus(
+		projectId: string,
+		worktreePath: string
+	): Promise<WorktreeStatusPreview>;
+	removeWorktree(
+		projectId: string,
+		worktreePath: string,
+		options: RemoveWorktreeOptions
+	): Promise<RemoveWorktreeResult>;
 	moveWorktree(
 		projectId: string,
 		worktreePath: string,

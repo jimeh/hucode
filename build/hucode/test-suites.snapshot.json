@@ -16,6 +16,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherContribution.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/removeProject.test.ts",
+		"src/vs/hucode/test/browser/projectSwitcher/removeWorktree.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/services/omniAgentHostService.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",

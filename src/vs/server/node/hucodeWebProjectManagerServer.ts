@@ -29,6 +29,7 @@ import {
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
+	RemoveWorktreeOptions,
 	StoredProjectManagerState,
 	StoredProjectRecord,
 	WorktreeRefQueryOptions,
@@ -1109,16 +1110,30 @@ export class HucodeWebProjectManagerServer extends Disposable {
 					}), token);
 					return this.writeJson(res, 201, result);
 				}
-			case 'worktrees/remove':
-				{
-					const projects = await this.runDurableMutation(async () => {
-						await service.removeWorktree(
+			case 'worktrees/status':
+				return this.writeJson(res, 200, {
+					status: await this.runGitRead(token, () =>
+						service.getWorktreeStatus(
 							projectId,
 							requireString(body, 'worktreePath'),
+							token
+						)
+					),
+				});
+			case 'worktrees/remove':
+				{
+					const response = await this.runDurableMutation(async () => {
+						const result = await service.removeWorktree(
+							projectId,
+							requireString(body, 'worktreePath'),
+							readRemoveWorktreeOptions(body),
 						);
-						return service.getProjects();
+						return {
+							result,
+							projects: await service.getProjects(),
+						};
 					}, token);
-					return this.writeProjects(res, 200, projects);
+					return this.writeJson(res, 200, response);
 				}
 			case 'worktrees/move':
 				{
@@ -1664,6 +1679,31 @@ function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 		...(detachedValue !== undefined ? { detached: detachedValue } : {}),
 		...(path !== undefined ? { path } : {}),
 	};
+}
+
+function readRemoveWorktreeOptions(body: unknown): RemoveWorktreeOptions {
+	const value = readProperty(body, 'options');
+	if (!isRecord(value)) {
+		throw new BadRequestError('Invalid options.');
+	}
+	const force = readProperty(value, 'force');
+	const expectedStatusFingerprint = readProperty(
+		value,
+		'expectedStatusFingerprint'
+	);
+	if (typeof force !== 'boolean') {
+		throw new BadRequestError('Invalid options.force.');
+	}
+	if (
+		typeof expectedStatusFingerprint !== 'string' ||
+		!expectedStatusFingerprint
+	) {
+		throw new BadRequestError(
+			'Invalid options.expectedStatusFingerprint.'
+		);
+	}
+
+	return { force, expectedStatusFingerprint };
 }
 
 function readWorktreeRefQueryOptions(

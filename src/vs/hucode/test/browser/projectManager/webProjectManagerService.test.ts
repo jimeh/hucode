@@ -69,6 +69,78 @@ suite('WebProjectManagerService', () => {
 		assert.strictEqual(projects[0].rootUri.fsPath, '/repo');
 	});
 
+	test('serializes bounded status preview and conditional force removal',
+		async () => {
+			const calls: {
+				readonly input: RequestInfo | URL;
+				readonly init?: RequestInit;
+			}[] = [];
+			const entries = Array.from({ length: 1000 }, (_, index) => ({
+				indexStatus: '?',
+				worktreeStatus: '?',
+				path: `file-${index}.ts`,
+			}));
+			const fakeFetch: WebProjectManagerFetch = async (input, init) => {
+				calls.push({ input, init });
+				if (input.toString().endsWith('/status')) {
+					return new Response(JSON.stringify({
+						status: {
+							fingerprint: 'all-1001',
+							totalCount: 1001,
+							entries,
+							omittedCount: 1,
+						},
+					}));
+				}
+				return new Response(JSON.stringify({
+					result: { removed: true },
+					projects: [rawProject('/repo')],
+				}));
+			};
+			const service = disposables.add(createService(fakeFetch));
+
+			const status = await service.getWorktreeStatus(
+				'project',
+				'/repo.worktrees/feature'
+			);
+			const result = await service.removeWorktree(
+				'project',
+				'/repo.worktrees/feature',
+				{
+					force: true,
+					expectedStatusFingerprint: status.fingerprint,
+				}
+			);
+
+			assert.deepStrictEqual({
+				totalCount: status.totalCount,
+				entryCount: status.entries.length,
+				omittedCount: status.omittedCount,
+				lastPath: status.entries.at(-1)?.path,
+			}, {
+				totalCount: 1001,
+				entryCount: 1000,
+				omittedCount: 1,
+				lastPath: 'file-999.ts',
+			});
+			assert.deepStrictEqual(result, { removed: true });
+			assert.strictEqual(
+				calls[0].input.toString(),
+				'/api/projects/project/worktrees/status'
+			);
+			assert.deepStrictEqual(JSON.parse(calls[0].init?.body as string), {
+				worktreePath: '/repo.worktrees/feature',
+			});
+			assert.deepStrictEqual(JSON.parse(calls[1].init?.body as string), {
+				worktreePath: '/repo.worktrees/feature',
+				options: {
+					force: true,
+					expectedStatusFingerprint: 'all-1001',
+				},
+			});
+		}
+	);
+
 	test('uses localized fallback errors for failed requests', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response('not json', { status: 500 });
