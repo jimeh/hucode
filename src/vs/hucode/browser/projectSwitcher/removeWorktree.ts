@@ -128,6 +128,7 @@ export function createDeleteWorktreePrompt(
 				? [false, true, true]
 				: [true, false, true],
 			buttonFocus: 2,
+			buttonOrder: [1, 2, 0],
 			classes: ['hucode-worktree-delete-dialog'],
 			markdownDetails: [{
 				markdown,

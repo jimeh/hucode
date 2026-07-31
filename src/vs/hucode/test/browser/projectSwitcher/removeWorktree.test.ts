@@ -42,6 +42,10 @@ suite('Remove Worktree', () => {
 			customButtonEnabled(harness.prompts[0]),
 			[true, false, true]
 		);
+		assert.deepStrictEqual(
+			customButtonOrder(harness.prompts[0]),
+			[1, 2, 0]
+		);
 		assert.strictEqual(customButtonFocus(harness.prompts[0]), 2);
 		assert.deepStrictEqual(harness.removals, [{
 			projectId: 'project',
@@ -79,6 +83,7 @@ suite('Remove Worktree', () => {
 			customButtonEnabled(prompt),
 			[false, true, true]
 		);
+		assert.deepStrictEqual(customButtonOrder(prompt), [1, 2, 0]);
 		assert.strictEqual(customButtonFocus(prompt), 2);
 		const markdown = prompt.custom && typeof prompt.custom === 'object'
 			? prompt.custom.markdownDetails?.[0].markdown.value
@@ -147,6 +152,8 @@ suite('Remove Worktree', () => {
 			['Delete', 'Force Delete']
 		);
 		assert.deepStrictEqual(customButtonEnabled(prompt), [true, false, true]);
+		assert.deepStrictEqual(customButtonOrder(prompt), [1, 2, 0]);
+		assert.strictEqual(customButtonFocus(prompt), 2);
 	});
 
 	test('cancels without removing', async () => {
@@ -374,6 +381,12 @@ function customButtonEnabled(prompt: Prompt): readonly boolean[] | undefined {
 function customButtonFocus(prompt: Prompt): number | undefined {
 	return prompt.custom && typeof prompt.custom === 'object'
 		? prompt.custom.buttonFocus
+		: undefined;
+}
+
+function customButtonOrder(prompt: Prompt): readonly number[] | undefined {
+	return prompt.custom && typeof prompt.custom === 'object'
+		? prompt.custom.buttonOrder
 		: undefined;
 }
 

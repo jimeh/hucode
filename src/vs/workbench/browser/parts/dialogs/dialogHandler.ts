@@ -119,6 +119,7 @@ export class BrowserDialogHandler extends AbstractDialogHandler {
 				icon: customOptions?.icon,
 				disableCloseAction: customOptions?.disableCloseAction,
 				buttonFocus: customOptions?.buttonFocus,
+				buttonOrder: customOptions?.buttonOrder,
 				buttonOptions: buttons?.map((_button, index) => {
 					const sublabel = customOptions?.buttonDetails?.[index];
 					const enabled = customOptions?.buttonEnabled?.[index];

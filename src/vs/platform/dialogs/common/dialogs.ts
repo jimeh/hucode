@@ -289,6 +289,10 @@ export interface ICustomDialogOptions {
 	 * Focuses the button with this original dialog button index.
 	 */
 	readonly buttonFocus?: number;
+	/**
+	 * Orders buttons visually by their original dialog button indices.
+	 */
+	readonly buttonOrder?: readonly number[];
 	readonly markdownDetails?: ICustomDialogMarkdown[];
 	readonly classes?: string[];
 	readonly icon?: ThemeIcon;
