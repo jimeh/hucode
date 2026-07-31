@@ -46,18 +46,18 @@ export function createDeleteWorktreePrompt(
 	if (status.missing) {
 		markdown.appendMarkdown(localize(
 			'deleteMissingWorktree',
-			'The worktree folder no longer exists. **Delete removes only its stale Git worktree metadata.**'
+			"The worktree folder no longer exists. **Delete removes only its stale Git worktree metadata.**"
 		));
 	} else if (dirty) {
 		markdown.appendMarkdown(
 			status.totalCount === 1
 				? localize(
 					'deleteWorktreeOneChange',
-					'**1 uncommitted change will be permanently deleted.**'
+					"**1 uncommitted change will be permanently deleted.**"
 				)
 				: localize(
 					'deleteWorktreeManyChanges',
-					'**{0} uncommitted changes will be permanently deleted.**',
+					"**{0} uncommitted changes will be permanently deleted.**",
 					status.totalCount.toLocaleString()
 				)
 		);
@@ -72,11 +72,11 @@ export function createDeleteWorktreePrompt(
 				status.omittedCount === 1
 					? localize(
 						'deleteWorktreeOneOmittedChange',
-						'_and 1 more change not shown_'
+						"_and 1 more change not shown_"
 					)
 					: localize(
 						'deleteWorktreeManyOmittedChanges',
-						'_and {0} more changes not shown_',
+						"_and {0} more changes not shown_",
 						status.omittedCount.toLocaleString()
 					)
 			);
@@ -84,16 +84,16 @@ export function createDeleteWorktreePrompt(
 	} else {
 		markdown.appendMarkdown(localize(
 			'deleteWorktreeClean',
-			'No uncommitted changes were found.'
+			"No uncommitted changes were found."
 		));
 	}
 
 	const deleteButton = {
-		label: localize('deleteWorktreeDeleteButton', 'Delete'),
+		label: localize('deleteWorktreeDeleteButton', "Delete"),
 		run: () => 'delete' as const,
 	};
 	const forceButton = {
-		label: localize('deleteWorktreeForceDeleteButton', 'Force Delete'),
+		label: localize('deleteWorktreeForceDeleteButton', "Force Delete"),
 		run: () => 'force' as const,
 	};
 
@@ -102,27 +102,27 @@ export function createDeleteWorktreePrompt(
 		message: status.missing
 			? localize(
 				'deleteMissingWorktreeTitle',
-				'Remove missing worktree "{0}"?',
+				"Remove missing worktree \"{0}\"?",
 				worktreeName
 			)
 			: localize(
 				'deleteWorktreeTitle',
-				'Delete worktree "{0}"?',
+				"Delete worktree \"{0}\"?",
 				worktreeName
 			),
 		detail: status.missing
 			? localize(
 				'deleteMissingWorktreeDetail',
-				'The worktree folder no longer exists at:\n{0}\n\nDelete removes only its stale Git worktree metadata. The Git branch and committed history will remain.',
+				"The worktree folder no longer exists at:\n{0}\n\nDelete removes only its stale Git worktree metadata. The Git branch and committed history will remain.",
 				worktreePath
 			)
 			: localize(
 				'deleteWorktreeDetail',
-				'This permanently deletes the worktree folder at:\n{0}\n\nThe Git branch and committed history will remain.',
+				"This permanently deletes the worktree folder at:\n{0}\n\nThe Git branch and committed history will remain.",
 				worktreePath
 			),
 		buttons: [deleteButton, forceButton],
-		cancelButton: localize('deleteWorktreeCancelButton', 'Cancel'),
+		cancelButton: localize('deleteWorktreeCancelButton', "Cancel"),
 		custom: {
 			buttonEnabled: dirty
 				? [false, true, true]
@@ -257,17 +257,17 @@ function createStatusErrorPrompt(
 		type: 'error',
 		message: localize(
 			'deleteWorktreeStatusErrorTitle',
-			'Unable to check changes in "{0}"',
+			"Unable to check changes in \"{0}\"",
 			worktreeName
 		),
 		detail: localize(
 			'deleteWorktreeStatusErrorDetail',
-			'Hucode could not safely preview the worktree at:\n{0}\n\n{1}\n\nNo files were deleted.',
+			"Hucode could not safely preview the worktree at:\n{0}\n\n{1}\n\nNo files were deleted.",
 			worktreePath,
 			error instanceof Error ? error.message : String(error)
 		),
 		buttons: [],
-		cancelButton: localize('deleteWorktreeCloseButton', 'Close'),
+		cancelButton: localize('deleteWorktreeCloseButton', "Close"),
 		custom: {
 			classes: ['hucode-worktree-delete-dialog'],
 		},
