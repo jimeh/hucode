@@ -1,5 +1,6 @@
 {
 	"electron": [
+		"src/vs/base/test/browser/ui/dialog/hucodeDialogButtonOrder.test.ts",
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
