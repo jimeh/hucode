@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.62 - 2026-07-31
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.131.0
+
+### Bug Fixes
+
+- **ci:** retry transient Electron downloads (#152)
+
 ## 0.0.61 - 2026-07-30
 
 ### Bug Fixes
