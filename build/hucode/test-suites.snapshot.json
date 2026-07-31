@@ -1,5 +1,6 @@
 {
 	"electron": [
+		"src/vs/base/test/browser/ui/dialog/hucodeDialogButtonOrder.test.ts",
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
@@ -16,6 +17,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherContribution.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/projectSwitcherTreeIndent.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/removeProject.test.ts",
+		"src/vs/hucode/test/browser/projectSwitcher/removeWorktree.test.ts",
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/services/omniAgentHostService.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",

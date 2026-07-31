@@ -30,6 +30,7 @@ import {
 	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
 	StoredProjectManagerState,
+	WorktreeStatusPreview,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord
@@ -132,6 +133,8 @@ class TestGitWorktreeService {
 		existingPaths: readonly string[];
 	}[] = [];
 	readonly removedPaths: string[] = [];
+	readonly statuses = new Map<string, WorktreeStatusPreview>();
+	readonly removalForces: boolean[] = [];
 
 	async resolveProjectRoot(cwd: string): Promise<string> {
 		return this.resolvedRoots.get(cwd) ?? cwd;
@@ -220,15 +223,28 @@ class TestGitWorktreeService {
 
 	async removeWorktree(
 		projectRoot: string,
-		worktreePath: string
+		worktreePath: string,
+		options: { readonly force?: boolean } = {}
 	): Promise<void> {
 		this.removedPaths.push(worktreePath);
+		this.removalForces.push(options.force === true);
 		this.worktrees.set(
 			projectRoot,
 			(this.worktrees.get(projectRoot) ?? []).filter(worktree =>
 				worktree.path !== worktreePath
 			)
 		);
+	}
+
+	async getWorktreeStatus(
+		worktreePath: string
+	): Promise<WorktreeStatusPreview> {
+		return this.statuses.get(worktreePath) ?? {
+			fingerprint: 'clean',
+			totalCount: 0,
+			entries: [],
+			omittedCount: 0,
+		};
 	}
 }
 
@@ -574,6 +590,108 @@ suite('GitWorktreeService', () => {
 		]);
 	});
 
+	test('parses porcelain worktree status including rename and conflicts', () => {
+		const entries = GitWorktreeService.parseWorktreeStatus([
+			'M  staged.ts',
+			' M modified.ts',
+			'A  added.ts',
+			' D deleted.ts',
+			'?? untracked.ts',
+			'T  type.ts',
+			'UU conflicted.ts',
+			'R  renamed.ts',
+			'original.ts',
+			'C  copied.ts',
+			'source.ts',
+			'',
+		].join('\0'));
+
+		assert.deepStrictEqual(entries, [
+			{
+				indexStatus: 'M',
+				worktreeStatus: ' ',
+				path: 'staged.ts',
+			},
+			{
+				indexStatus: ' ',
+				worktreeStatus: 'M',
+				path: 'modified.ts',
+			},
+			{
+				indexStatus: 'A',
+				worktreeStatus: ' ',
+				path: 'added.ts',
+			},
+			{
+				indexStatus: ' ',
+				worktreeStatus: 'D',
+				path: 'deleted.ts',
+			},
+			{
+				indexStatus: '?',
+				worktreeStatus: '?',
+				path: 'untracked.ts',
+			},
+			{
+				indexStatus: 'T',
+				worktreeStatus: ' ',
+				path: 'type.ts',
+			},
+			{
+				indexStatus: 'U',
+				worktreeStatus: 'U',
+				path: 'conflicted.ts',
+			},
+			{
+				indexStatus: 'R',
+				worktreeStatus: ' ',
+				path: 'renamed.ts',
+				originalPath: 'original.ts',
+			},
+			{
+				indexStatus: 'C',
+				worktreeStatus: ' ',
+				path: 'copied.ts',
+				originalPath: 'source.ts',
+			},
+		]);
+	});
+
+	test('caps status previews at 1000 entries while fingerprinting all', () => {
+		const output = (count: number) =>
+			Array.from({ length: count }, (_, index) =>
+				`?? file-${index}.ts\0`
+			).join('');
+		const exact = GitWorktreeService.createWorktreeStatusPreview(
+			output(1000)
+		);
+		const truncated = GitWorktreeService.createWorktreeStatusPreview(
+			output(1001)
+		);
+
+		assert.deepStrictEqual({
+			totalCount: exact.totalCount,
+			entryCount: exact.entries.length,
+			omittedCount: exact.omittedCount,
+		}, {
+			totalCount: 1000,
+			entryCount: 1000,
+			omittedCount: 0,
+		});
+		assert.deepStrictEqual({
+			totalCount: truncated.totalCount,
+			entryCount: truncated.entries.length,
+			omittedCount: truncated.omittedCount,
+			lastPath: truncated.entries.at(-1)?.path,
+		}, {
+			totalCount: 1001,
+			entryCount: 1000,
+			omittedCount: 1,
+			lastPath: 'file-999.ts',
+		});
+		assert.notStrictEqual(exact.fingerprint, truncated.fingerprint);
+	});
+
 	test('sanitizeBranchName normalizes separators and punctuation', () => {
 		assert.strictEqual(
 			GitWorktreeService.sanitizeBranchName('feature/hello world'),
@@ -770,6 +888,7 @@ suite('GitWorktreeService', () => {
 		await service.getGitCommonDir('/repo', source.token);
 		await service.listWorktrees('/repo', source.token);
 		await service.listRefs('/repo', [], {}, source.token);
+		await service.getWorktreeStatus('/repo', source.token);
 		await service.isValidBranchName('/repo', 'feature/one', source.token);
 		await service.createWorktree(
 			'/repo',
@@ -809,6 +928,11 @@ suite('GitWorktreeService', () => {
 				{
 					operation: 'listRefs',
 					timeoutMs: 30_000,
+					maxOutputBytes: 32 * 1024 * 1024,
+				},
+				{
+					operation: 'getWorktreeStatus',
+					timeoutMs: 15_000,
 					maxOutputBytes: 32 * 1024 * 1024,
 				},
 				{
@@ -852,7 +976,13 @@ suite('GitWorktreeService', () => {
 			},
 			[]
 		);
+		await service.getWorktreeStatus('/repo.worktrees/feature');
 		await service.removeWorktree('/repo', '--option-shaped-path');
+		await service.removeWorktree(
+			'/repo',
+			'/repo.worktrees/dirty',
+			{ force: true }
+		);
 
 		assert.deepStrictEqual(calls, [
 			[
@@ -862,9 +992,136 @@ suite('GitWorktreeService', () => {
 				'/repo.worktrees/option-shaped-ref',
 				'--force',
 			],
+			[
+				'--no-optional-locks',
+				'status',
+				'--porcelain=v1',
+				'-z',
+				'--untracked-files=all',
+				'--',
+			],
 			['worktree', 'remove', '--', '--option-shaped-path'],
+			[
+				'worktree',
+				'remove',
+				'--force',
+				'--',
+				'/repo.worktrees/dirty',
+			],
 		]);
 	});
+
+	test('distinguishes missing worktrees and keeps other status failures closed',
+		async () => {
+			const failure = new GitCommandError('status failed', {
+				kind: 'spawn',
+				operation: 'getWorktreeStatus',
+				command: 'git status',
+				stderr: '',
+			});
+			let gitFails = true;
+			let pathMissing = true;
+			const service = new GitWorktreeService(
+				new NullLogService(),
+				async () => {
+					if (gitFails) {
+						throw failure;
+					}
+					return { stdout: '', stderr: '' };
+				},
+				async () => false,
+				async () => { },
+				async () => pathMissing,
+			);
+
+			const firstMissing = await service.getWorktreeStatus(
+				'/repo.worktrees/missing'
+			);
+			const secondMissing = await service.getWorktreeStatus(
+				'/repo.worktrees/missing'
+			);
+			assert.deepStrictEqual(firstMissing, secondMissing);
+			assert.strictEqual(firstMissing.totalCount, 0);
+			assert.deepStrictEqual(firstMissing.entries, []);
+			assert.strictEqual(firstMissing.missing, true);
+
+			pathMissing = false;
+			await assert.rejects(
+				service.getWorktreeStatus('/repo.worktrees/missing'),
+				error => error === failure
+			);
+
+			gitFails = false;
+			const reappeared = await service.getWorktreeStatus(
+				'/repo.worktrees/missing'
+			);
+			assert.notStrictEqual(
+				firstMissing.fingerprint,
+				reappeared.fingerprint
+			);
+			assert.strictEqual(reappeared.missing, undefined);
+
+			for (const policyFailure of [
+				new GitCommandError('status timed out', {
+					kind: 'timeout',
+					operation: 'getWorktreeStatus',
+					command: 'git status',
+					stderr: '',
+					timeoutMs: 15_000,
+				}),
+				new GitCommandError('status exceeded its output limit', {
+					kind: 'output-limit',
+					operation: 'getWorktreeStatus',
+					command: 'git status',
+					stderr: '',
+					maxOutputBytes: 32 * 1024 * 1024,
+				}),
+			]) {
+				const policyFailureService = new GitWorktreeService(
+					new NullLogService(),
+					async () => {
+						throw policyFailure;
+					},
+					async () => false,
+					async () => { },
+					async () => true,
+				);
+				await assert.rejects(
+					policyFailureService.getWorktreeStatus(
+						'/repo.worktrees/missing'
+					),
+					error => error === policyFailure
+				);
+			}
+		}
+	);
+
+	test('preserves the Git error when the missing-path probe fails',
+		async () => {
+			const gitFailure = new GitCommandError('status failed', {
+				kind: 'spawn',
+				operation: 'getWorktreeStatus',
+				command: 'git status',
+				stderr: '',
+			});
+			const service = new GitWorktreeService(
+				new NullLogService(),
+				async () => {
+					throw gitFailure;
+				},
+				async () => false,
+				async () => { },
+				async () => {
+					throw new Error('path probe failed');
+				},
+			);
+
+			await assert.rejects(
+				service.getWorktreeStatus('/repo.worktrees/missing'),
+				error => error === gitFailure
+			);
+		}
+	);
 
 	test('rejects option-like branch names before filesystem or Git work',
 		async () => {
@@ -4553,7 +4810,10 @@ suite('ProjectManagerMainService', () => {
 				[createMainWorktree('/repo')]
 			);
 			await assert.rejects(
-				service.removeWorktree(project.id, '/repo'),
+				service.removeWorktree(project.id, '/repo', {
+					force: false,
+					expectedStatusFingerprint: 'clean',
+				}),
 				/The main worktree cannot be removed\./
 			);
 
@@ -4561,7 +4821,10 @@ suite('ProjectManagerMainService', () => {
 				branchName: 'feature/two',
 				path: '/repo.worktrees/feature-two',
 			});
-			await service.removeWorktree(project.id, created.path);
+			await service.removeWorktree(project.id, created.path, {
+				force: false,
+				expectedStatusFingerprint: 'clean',
+			});
 
 			assert.deepStrictEqual({
 				created,
@@ -4586,6 +4849,131 @@ suite('ProjectManagerMainService', () => {
 			});
 		}
 	);
+
+	test('conditionally removes only an unchanged eligible worktree', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		const worktreePath = '/repo.worktrees/feature';
+		gitWorktreeService.worktrees.set('/repo', [
+			createMainWorktree('/repo'),
+			createLinkedWorktree(worktreePath, 'feature'),
+		]);
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+
+		const shown = await service.getWorktreeStatus(project.id, worktreePath);
+		const dirty: WorktreeStatusPreview = {
+			fingerprint: 'dirty',
+			totalCount: 1,
+			entries: [{
+				indexStatus: '?',
+				worktreeStatus: '?',
+				path: 'new.ts',
+			}],
+			omittedCount: 0,
+		};
+		gitWorktreeService.statuses.set(worktreePath, dirty);
+
+		assert.deepStrictEqual(
+			await service.removeWorktree(project.id, worktreePath, {
+				force: false,
+				expectedStatusFingerprint: shown.fingerprint,
+			}),
+			{ removed: false, status: dirty }
+		);
+		assert.deepStrictEqual(gitWorktreeService.removedPaths, []);
+
+		assert.deepStrictEqual(
+			await service.removeWorktree(project.id, worktreePath, {
+				force: false,
+				expectedStatusFingerprint: dirty.fingerprint,
+			}),
+			{ removed: false, status: dirty }
+		);
+		assert.deepStrictEqual(gitWorktreeService.removedPaths, []);
+
+		assert.deepStrictEqual(
+			await service.removeWorktree(project.id, worktreePath, {
+				force: true,
+				expectedStatusFingerprint: dirty.fingerprint,
+			}),
+			{ removed: true }
+		);
+		assert.deepStrictEqual(gitWorktreeService.removedPaths, [worktreePath]);
+		assert.deepStrictEqual(gitWorktreeService.removalForces, [true]);
+	});
+
+	test('removes missing worktree metadata only after a matching preview',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const worktreePath = '/repo.worktrees/missing';
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo'),
+				createLinkedWorktree(worktreePath, 'missing'),
+			]);
+			const missing: WorktreeStatusPreview = {
+				fingerprint: 'missing',
+				totalCount: 0,
+				entries: [],
+				omittedCount: 0,
+				missing: true,
+			};
+			const clean: WorktreeStatusPreview = {
+				fingerprint: 'clean',
+				totalCount: 0,
+				entries: [],
+				omittedCount: 0,
+			};
+			gitWorktreeService.statuses.set(worktreePath, missing);
+			const service = createService(stateService, gitWorktreeService);
+			const project = await service.addProject(URI.file('/repo'));
+			const shown = await service.getWorktreeStatus(
+				project.id,
+				worktreePath
+			);
+
+			gitWorktreeService.statuses.set(worktreePath, clean);
+			assert.deepStrictEqual(
+				await service.removeWorktree(project.id, worktreePath, {
+					force: false,
+					expectedStatusFingerprint: shown.fingerprint,
+				}),
+				{ removed: false, status: clean }
+			);
+			assert.deepStrictEqual(gitWorktreeService.removedPaths, []);
+
+			gitWorktreeService.statuses.set(worktreePath, missing);
+			const shownMissingAgain = await service.getWorktreeStatus(
+				project.id,
+				worktreePath
+			);
+			assert.deepStrictEqual(
+				await service.removeWorktree(project.id, worktreePath, {
+					force: false,
+					expectedStatusFingerprint: shownMissingAgain.fingerprint,
+				}),
+				{ removed: true }
+			);
+			assert.deepStrictEqual(gitWorktreeService.removedPaths, [
+				worktreePath,
+			]);
+			assert.deepStrictEqual(gitWorktreeService.removalForces, [false]);
+		}
+	);
+
+	test('rejects status previews for the main worktree', async () => {
+		const stateService = new TestStateService();
+		const gitWorktreeService = new TestGitWorktreeService();
+		gitWorktreeService.worktrees.set('/repo', [createMainWorktree('/repo')]);
+		const service = createService(stateService, gitWorktreeService);
+		const project = await service.addProject(URI.file('/repo'));
+
+		await assert.rejects(
+			service.getWorktreeStatus(project.id, '/repo'),
+			/The main worktree cannot be removed\./
+		);
+	});
 
 	test('returns a stale created worktree when post-add refresh fails',
 		async () => {

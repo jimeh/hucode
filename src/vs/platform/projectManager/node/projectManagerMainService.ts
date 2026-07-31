@@ -31,10 +31,13 @@ import {
 	PROJECT_MANAGER_STORAGE_KEY,
 	ProjectRecord,
 	ProjectWorktreeState,
+	RemoveWorktreeOptions,
+	RemoveWorktreeResult,
 	StoredProjectRecord,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
+	WorktreeStatusPreview,
 } from '../common/projectManager.js';
 import {
 	applyStoredWorktreeLabels,
@@ -95,8 +98,15 @@ export type ProjectManagerGitService = Pick<
 	'listRefs' |
 	'isValidBranchName' |
 	'createWorktree' |
-	'removeWorktree'
->;
+	'getWorktreeStatus'
+> & {
+	removeWorktree(
+		projectRoot: string,
+		worktreePath: string,
+		options?: { readonly force?: boolean },
+		token?: CancellationToken
+	): Promise<void>;
+};
 
 /**
  * Optional dependencies for production wiring and focused unit tests.
@@ -542,8 +552,9 @@ export class ProjectManagerMainService extends Disposable
 
 	async removeWorktree(
 		projectId: string,
-		worktreePath: string
-	): Promise<void> {
+		worktreePath: string,
+		options: RemoveWorktreeOptions
+	): Promise<RemoveWorktreeResult> {
 		this.ensureStateLoaded();
 		const project = this.requireProject(projectId);
 		const worktrees = await this.getProjectWorktrees(project);
@@ -557,10 +568,49 @@ export class ProjectManagerMainService extends Disposable
 			throw new Error('The main worktree cannot be removed.');
 		}
 
-		await this.gitWorktreeService.removeWorktree(project.rootPath, worktreePath);
+		const status = await this.gitWorktreeService.getWorktreeStatus(
+			worktree.path
+		);
+		if (
+			status.fingerprint !== options.expectedStatusFingerprint ||
+			(!options.force && status.totalCount > 0)
+		) {
+			return { removed: false, status };
+		}
+
+		await this.gitWorktreeService.removeWorktree(
+			project.rootPath,
+			worktree.path,
+			{ force: options.force }
+		);
 		await this.refreshProject(project);
 		this.saveState();
 		this.emitChange();
+		return { removed: true };
+	}
+
+	async getWorktreeStatus(
+		projectId: string,
+		worktreePath: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<WorktreeStatusPreview> {
+		this.ensureStateLoaded();
+		const project = this.requireProject(projectId);
+		const worktrees = await this.getProjectWorktrees(project, token);
+		const worktree = worktrees.find(entry =>
+			this.pathsEqual(entry.path, worktreePath)
+		);
+		if (!worktree) {
+			throw new Error(`Unknown worktree "${worktreePath}".`);
+		}
+		if (worktree.isMain) {
+			throw new Error('The main worktree cannot be removed.');
+		}
+
+		return this.gitWorktreeService.getWorktreeStatus(
+			worktree.path,
+			token
+		);
 	}
 
 	async moveWorktree(
