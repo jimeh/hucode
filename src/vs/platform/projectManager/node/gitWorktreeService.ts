@@ -62,6 +62,10 @@ export type ExecGitFn = (
 
 export type PathExistsFn = (path: string) => Promise<boolean>;
 export type EnsureDirFn = (path: string) => Promise<void>;
+/**
+ * Reports whether a path is genuinely absent rather than inaccessible.
+ */
+export type PathMissingFn = (path: string) => Promise<boolean>;
 
 export type GitCommandErrorKind =
 	'exit' |
@@ -142,6 +146,9 @@ const GIT_DIAGNOSTIC_OMISSION_MARKER =
 // Tree-kill is best-effort, so bound it before falling back to the root process.
 const GIT_PROCESS_CLEANUP_WATCHDOG_MS = 1_000;
 const WORKTREE_STATUS_PREVIEW_LIMIT = 1_000;
+const MISSING_WORKTREE_STATUS_FINGERPRINT = createHash('sha256')
+	.update('hucode:missing-worktree:v1')
+	.digest('hex');
 
 type WorktreeStatusEntryVisitor = (
 	indexStatus: string,
@@ -296,6 +303,8 @@ export class GitWorktreeService {
 			GitWorktreeService.pathExists(path),
 		private readonly ensureDir: EnsureDirFn = path =>
 			GitWorktreeService.ensureDir(path),
+		private readonly pathMissing: PathMissingFn = path =>
+			GitWorktreeService.pathMissing(path),
 	) {
 	}
 
@@ -498,18 +507,37 @@ export class GitWorktreeService {
 		worktreePath: string,
 		token: CancellationToken = CancellationToken.None
 	): Promise<WorktreeStatusPreview> {
-		const result = await this.runGit(
-			[
-				'status',
-				'--porcelain=v1',
-				'-z',
-				'--untracked-files=all',
-				'--',
-			],
-			worktreePath,
-			GIT_POLICIES.getWorktreeStatus,
-			token
-		);
+		let result: ExecGitResult;
+		try {
+			result = await this.runGit(
+				[
+					'--no-optional-locks',
+					'status',
+					'--porcelain=v1',
+					'-z',
+					'--untracked-files=all',
+					'--',
+				],
+				worktreePath,
+				GIT_POLICIES.getWorktreeStatus,
+				token
+			);
+		} catch (error) {
+			if (
+				error instanceof GitCommandError &&
+				error.kind === 'spawn' &&
+				await this.pathMissing(worktreePath)
+			) {
+				return {
+					fingerprint: MISSING_WORKTREE_STATUS_FINGERPRINT,
+					totalCount: 0,
+					entries: [],
+					omittedCount: 0,
+				};
+			}
+
+			throw error;
+		}
 
 		return GitWorktreeService.createWorktreeStatusPreview(result.stdout);
 	}
@@ -1150,6 +1178,20 @@ export class GitWorktreeService {
 
 	private static async ensureDir(path: string): Promise<void> {
 		await fs.mkdir(path, { recursive: true });
+	}
+
+	private static async pathMissing(path: string): Promise<boolean> {
+		try {
+			await fs.stat(path);
+			return false;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				return true;
+			}
+
+			throw error;
+		}
 	}
 
 	private static pathsEqual(pathA: string, pathB: string): boolean {

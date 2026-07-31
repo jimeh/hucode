@@ -20,6 +20,7 @@ import type {
 import {
 	createDeleteWorktreePrompt,
 	deleteWorktreeWithPreview,
+	formatWorktreeStatusEntry,
 	isCurrentWorktreePath,
 } from '../../../browser/projectSwitcher/removeWorktree.js';
 
@@ -41,6 +42,7 @@ suite('Remove Worktree', () => {
 			customButtonEnabled(harness.prompts[0]),
 			[true, false, true]
 		);
+		assert.strictEqual(customButtonFocus(harness.prompts[0]), 2);
 		assert.deepStrictEqual(harness.removals, [{
 			projectId: 'project',
 			worktreePath: '/repo.worktrees/feature',
@@ -77,9 +79,18 @@ suite('Remove Worktree', () => {
 			customButtonEnabled(prompt),
 			[true, false, true]
 		);
+		assert.strictEqual(customButtonFocus(prompt), 2);
 		const markdown = prompt.custom && typeof prompt.custom === 'object'
 			? prompt.custom.markdownDetails?.[0].markdown.value
 			: undefined;
+		const markdownClasses = prompt.custom &&
+			typeof prompt.custom === 'object'
+			? prompt.custom.markdownDetails?.[0].classes
+			: undefined;
+		assert.deepStrictEqual(
+			markdownClasses,
+			['hucode-worktree-delete-preview']
+		);
 		assert.ok(markdown?.includes('9 uncommitted changes'));
 		for (const expected of [
 			'Modified (staged)  modified.ts',
@@ -98,6 +109,20 @@ suite('Remove Worktree', () => {
 			force: true,
 			expectedStatusFingerprint: 'dirty',
 		});
+	});
+
+	test('quotes and escapes unsafe path characters', () => {
+		assert.strictEqual(
+			formatWorktreeStatusEntry(
+				entry(
+					'R',
+					' ',
+					'new\nname\t\u202e.ts',
+					'old\rname\u0007.ts'
+				)
+			),
+			'Renamed (staged)  "old\\rname\\u0007.ts" -> "new\\nname\\t\\u202e.ts"'
+		);
 	});
 
 	test('cancels without removing', async () => {
@@ -319,6 +344,12 @@ const cleanPreview: WorktreeStatusPreview = preview('clean', []);
 function customButtonEnabled(prompt: Prompt): readonly boolean[] | undefined {
 	return prompt.custom && typeof prompt.custom === 'object'
 		? prompt.custom.buttonEnabled
+		: undefined;
+}
+
+function customButtonFocus(prompt: Prompt): number | undefined {
+	return prompt.custom && typeof prompt.custom === 'object'
+		? prompt.custom.buttonFocus
 		: undefined;
 }
 

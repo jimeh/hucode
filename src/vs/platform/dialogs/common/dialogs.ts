@@ -285,6 +285,10 @@ export interface ICustomDialogOptions {
 	 * Enables or disables each button by its original dialog button index.
 	 */
 	readonly buttonEnabled?: readonly boolean[];
+	/**
+	 * Focuses the button with this original dialog button index.
+	 */
+	readonly buttonFocus?: number;
 	readonly markdownDetails?: ICustomDialogMarkdown[];
 	readonly classes?: string[];
 	readonly icon?: ThemeIcon;

@@ -54,6 +54,10 @@ export interface IDialogOptions {
 	readonly renderFooter?: (container: HTMLElement) => void;
 	readonly icon?: ThemeIcon;
 	readonly buttonOptions?: Array<undefined | { sublabel?: string; styleButton?: (button: IButton) => void }>;
+	/**
+	 * The original dialog button index to focus.
+	 */
+	readonly buttonFocus?: number;
 	readonly primaryButtonDropdown?: IButtonWithDropdownOptions;
 	readonly disableCloseAction?: boolean;
 	readonly disableCloseButton?: boolean;
@@ -563,8 +567,9 @@ export class Dialog extends Disposable {
 				this.inputs[0].focus();
 				this.inputs[0].select();
 			} else {
+				const buttonFocus = this.options.buttonFocus ?? 0;
 				buttonMap.forEach((value, index) => {
-					if (value.index === 0) {
+					if (value.index === buttonFocus) {
 						buttonBar.buttons[index].focus();
 					}
 				});

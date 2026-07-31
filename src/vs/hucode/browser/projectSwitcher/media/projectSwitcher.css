@@ -17,7 +17,7 @@
 	overflow-wrap: anywhere;
 }
 
-.hucode-worktree-delete-preview pre {
+.hucode-worktree-delete-preview [data-code] {
 	max-height: min(40vh, 360px);
 	margin: 8px 0 0;
 	overflow: auto;

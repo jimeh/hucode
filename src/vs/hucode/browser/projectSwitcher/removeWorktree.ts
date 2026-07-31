@@ -29,6 +29,9 @@ const CONFLICT_STATUSES = new Set([
 	'UU',
 ]);
 
+const UNSAFE_PATH_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const PATH_CHARACTER_TO_ESCAPE = /["\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
 /**
  * Returns whether the requested worktree is the current folder workspace.
  */
@@ -117,6 +120,7 @@ export function createDeleteWorktreePrompt(
 		cancelButton: localize('deleteWorktreeCancelButton', 'Cancel'),
 		custom: {
 			buttonEnabled: [true, false, true],
+			buttonFocus: 2,
 			classes: ['hucode-worktree-delete-dialog'],
 			markdownDetails: [{
 				markdown,
@@ -226,9 +230,43 @@ export function formatWorktreeStatusEntry(
 	}
 
 	const path = entry.originalPath
-		? `${entry.originalPath} -> ${entry.path}`
-		: entry.path;
+		? `${formatWorktreeStatusPath(entry.originalPath)} -> ${formatWorktreeStatusPath(entry.path)}`
+		: formatWorktreeStatusPath(entry.path);
 	return `${label}  ${path}`;
+}
+
+function formatWorktreeStatusPath(path: string): string {
+	if (!UNSAFE_PATH_CHARACTER.test(path)) {
+		return path;
+	}
+
+	return `"${path.replace(
+		PATH_CHARACTER_TO_ESCAPE,
+		character => {
+			switch (character) {
+				case '"':
+					return '\\"';
+				case '\\':
+					return '\\\\';
+				case '\b':
+					return '\\b';
+				case '\f':
+					return '\\f';
+				case '\n':
+					return '\\n';
+				case '\r':
+					return '\\r';
+				case '\t':
+					return '\\t';
+				default: {
+					const codePoint = character.codePointAt(0) ?? 0;
+					return codePoint <= 0xffff
+						? `\\u${codePoint.toString(16).padStart(4, '0')}`
+						: `\\u{${codePoint.toString(16)}}`;
+				}
+			}
+		}
+	)}"`;
 }
 
 function statusLabel(status: string): string | undefined {
