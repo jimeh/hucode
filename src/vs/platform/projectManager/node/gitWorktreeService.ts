@@ -525,15 +525,24 @@ export class GitWorktreeService {
 		} catch (error) {
 			if (
 				error instanceof GitCommandError &&
-				error.kind === 'spawn' &&
-				await this.pathMissing(worktreePath)
+				error.kind === 'spawn'
 			) {
-				return {
-					fingerprint: MISSING_WORKTREE_STATUS_FINGERPRINT,
-					totalCount: 0,
-					entries: [],
-					omittedCount: 0,
-				};
+				try {
+					if (await this.pathMissing(worktreePath)) {
+						return {
+							fingerprint: MISSING_WORKTREE_STATUS_FINGERPRINT,
+							totalCount: 0,
+							entries: [],
+							omittedCount: 0,
+							missing: true,
+						};
+					}
+				} catch (probeError) {
+					this.logService.debug(
+						'Failed to verify whether the worktree path is missing.',
+						probeError
+					);
+				}
 			}
 
 			throw error;

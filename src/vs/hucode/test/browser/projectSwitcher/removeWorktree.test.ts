@@ -117,12 +117,36 @@ suite('Remove Worktree', () => {
 				entry(
 					'R',
 					' ',
-					'new\nname\t\u202e.ts',
-					'old\rname\u0007.ts'
+					'new\nname\t\u202e\u2028\u2029"\u{e0001}.ts',
+					'old\\name\r\u0007.ts'
 				)
 			),
-			'Renamed (staged)  "old\\rname\\u0007.ts" -> "new\\nname\\t\\u202e.ts"'
+			'Renamed (staged)  "old\\\\name\\r\\u0007.ts" -> "new\\nname\\t\\u202e\\u2028\\u2029\\"\\u{e0001}.ts"'
 		);
+	});
+
+	test('describes a missing worktree as stale metadata only', () => {
+		const missing: WorktreeStatusPreview = {
+			...cleanPreview,
+			missing: true,
+		};
+		const prompt = createDeleteWorktreePrompt(
+			'feature',
+			'/repo.worktrees/feature',
+			missing
+		);
+		const markdown = promptMarkdown(prompt);
+
+		assert.ok(markdown?.includes('worktree folder no longer exists'));
+		assert.ok(markdown?.includes('stale Git worktree metadata'));
+		assert.ok(!markdown?.includes('uncommitted changes'));
+		assert.ok(prompt.detail?.includes('folder no longer exists'));
+		assert.ok(!prompt.detail?.includes('permanently deletes'));
+		assert.deepStrictEqual(
+			prompt.buttons?.map(button => button.label),
+			['Delete', 'Force Delete']
+		);
+		assert.deepStrictEqual(customButtonEnabled(prompt), [true, false, true]);
 	});
 
 	test('cancels without removing', async () => {

@@ -1043,6 +1043,7 @@ suite('GitWorktreeService', () => {
 			assert.deepStrictEqual(firstMissing, secondMissing);
 			assert.strictEqual(firstMissing.totalCount, 0);
 			assert.deepStrictEqual(firstMissing.entries, []);
+			assert.strictEqual(firstMissing.missing, true);
 
 			pathMissing = false;
 			await assert.rejects(
@@ -1058,6 +1059,7 @@ suite('GitWorktreeService', () => {
 				firstMissing.fingerprint,
 				reappeared.fingerprint
 			);
+			assert.strictEqual(reappeared.missing, undefined);
 
 			for (const policyFailure of [
 				new GitCommandError('status timed out', {
@@ -1091,6 +1093,33 @@ suite('GitWorktreeService', () => {
 					error => error === policyFailure
 				);
 			}
+		}
+	);
+
+	test('preserves the Git error when the missing-path probe fails',
+		async () => {
+			const gitFailure = new GitCommandError('status failed', {
+				kind: 'spawn',
+				operation: 'getWorktreeStatus',
+				command: 'git status',
+				stderr: '',
+			});
+			const service = new GitWorktreeService(
+				new NullLogService(),
+				async () => {
+					throw gitFailure;
+				},
+				async () => false,
+				async () => { },
+				async () => {
+					throw new Error('path probe failed');
+				},
+			);
+
+			await assert.rejects(
+				service.getWorktreeStatus('/repo.worktrees/missing'),
+				error => error === gitFailure
+			);
 		}
 	);
 
@@ -4888,10 +4917,13 @@ suite('ProjectManagerMainService', () => {
 				totalCount: 0,
 				entries: [],
 				omittedCount: 0,
+				missing: true,
 			};
 			const clean: WorktreeStatusPreview = {
-				...missing,
 				fingerprint: 'clean',
+				totalCount: 0,
+				entries: [],
+				omittedCount: 0,
 			};
 			gitWorktreeService.statuses.set(worktreePath, missing);
 			const service = createService(stateService, gitWorktreeService);

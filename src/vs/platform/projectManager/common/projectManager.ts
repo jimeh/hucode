@@ -148,6 +148,10 @@ export interface WorktreeStatusPreview {
 	readonly totalCount: number;
 	readonly entries: readonly WorktreeStatusEntry[];
 	readonly omittedCount: number;
+	/**
+	 * The worktree folder was absent when this status snapshot was created.
+	 */
+	readonly missing?: true;
 }
 
 /**

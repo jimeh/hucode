@@ -53,7 +53,12 @@ export function createDeleteWorktreePrompt(
 ): IPrompt<DeleteWorktreeAction> {
 	const dirty = status.totalCount > 0;
 	const markdown = new MarkdownString();
-	if (dirty) {
+	if (status.missing) {
+		markdown.appendMarkdown(localize(
+			'deleteMissingWorktree',
+			'The worktree folder no longer exists. **Delete removes only its stale Git worktree metadata.**'
+		));
+	} else if (dirty) {
 		markdown.appendMarkdown(
 			status.totalCount === 1
 				? localize(
@@ -104,16 +109,28 @@ export function createDeleteWorktreePrompt(
 
 	return {
 		type: 'warning',
-		message: localize(
-			'deleteWorktreeTitle',
-			'Delete worktree "{0}"?',
-			worktreeName
-		),
-		detail: localize(
-			'deleteWorktreeDetail',
-			'This permanently deletes the worktree folder at:\n{0}\n\nThe Git branch and committed history will remain.',
-			worktreePath
-		),
+		message: status.missing
+			? localize(
+				'deleteMissingWorktreeTitle',
+				'Remove missing worktree "{0}"?',
+				worktreeName
+			)
+			: localize(
+				'deleteWorktreeTitle',
+				'Delete worktree "{0}"?',
+				worktreeName
+			),
+		detail: status.missing
+			? localize(
+				'deleteMissingWorktreeDetail',
+				'The worktree folder no longer exists at:\n{0}\n\nDelete removes only its stale Git worktree metadata. The Git branch and committed history will remain.',
+				worktreePath
+			)
+			: localize(
+				'deleteWorktreeDetail',
+				'This permanently deletes the worktree folder at:\n{0}\n\nThe Git branch and committed history will remain.',
+				worktreePath
+			),
 		buttons: dirty
 			? [forceButton, deleteButton]
 			: [deleteButton, forceButton],

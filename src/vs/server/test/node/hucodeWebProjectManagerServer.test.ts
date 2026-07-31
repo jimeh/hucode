@@ -470,6 +470,79 @@ suite('HucodeWebProjectManagerServer', function () {
 		}
 	);
 
+	test('removes stale metadata for a missing worktree through web transport',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const added = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const worktreePath = join(serverDataPath, 'missing-worktree');
+			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
+				`${added.body.project.id}/worktrees`;
+			await handle(
+				server,
+				'POST',
+				route,
+				{
+					options: {
+						branchName: 'feature/missing-preview',
+						path: worktreePath,
+					},
+				}
+			);
+			await fs.rm(worktreePath, { recursive: true, force: true });
+
+			const preview = await handle<{
+				readonly status: {
+					readonly fingerprint: string;
+					readonly totalCount: number;
+					readonly entries: readonly unknown[];
+					readonly omittedCount: number;
+					readonly missing?: true;
+				};
+			}>(
+				server,
+				'POST',
+				`${route}/status`,
+				{ worktreePath }
+			);
+
+			assert.deepStrictEqual({
+				statusCode: preview.statusCode,
+				totalCount: preview.body.status.totalCount,
+				entries: preview.body.status.entries,
+				omittedCount: preview.body.status.omittedCount,
+				missing: preview.body.status.missing,
+			}, {
+				statusCode: 200,
+				totalCount: 0,
+				entries: [],
+				omittedCount: 0,
+				missing: true,
+			});
+
+			const removed = await handle<{
+				readonly result: { readonly removed: boolean };
+			}>(
+				server,
+				'POST',
+				`${route}/remove`,
+				{
+					worktreePath,
+					options: {
+						force: false,
+						expectedStatusFingerprint:
+							preview.body.status.fingerprint,
+					},
+				}
+			);
+			assert.deepStrictEqual(removed.body.result, { removed: true });
+		}
+	);
+
 	test('rejects nested delete routes without removing the project', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const add = await handle<ProjectResponseBody>(
