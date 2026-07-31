@@ -27,10 +27,6 @@ runs:
           package-lock.json
           extensions/copilot/package-lock.json
 
-    - name: Setup npm 11.1
-      shell: bash
-      run: npm install -g npm@11.1.0
-
     - name: Prepare node_modules cache key
       shell: bash
       run: |

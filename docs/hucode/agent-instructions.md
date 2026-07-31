@@ -451,9 +451,11 @@ human-facing guides rather than replacing them.
   reaches `build/lib/preLaunch.ts`, which runs `npm ci` only when the root
   `node_modules` directory is absent. Seeding root `node_modules` before launch
   avoids that fallback.
-- Hucode uses npm 11.1 for `min-release-age`; repo npm configs set a 3-day
-  package age gate, and CI setup upgrades to pinned npm 11.1 before dependency
-  installs. VS Code's preinstall guard currently rejects npm 11.2.0 and newer.
+- Use the npm bundled with the Node.js version in `.nvmrc`; do not pin or
+  globally downgrade npm separately in Mise or CI. The matching npm preserves
+  the selected upstream baseline's lockfile metadata and enforces the repo's
+  3-day `min-release-age` package gate. VS Code's preinstall guard rejects npm
+  12 and newer.
 - For parallel local git worktrees, dependency state is per worktree because
   VS Code's install hash lives under root `node_modules`. Use
   `npm run hucode:seed-worktree-node-modules` to copy every `node_modules` tree
