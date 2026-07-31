@@ -42,9 +42,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Setup npm 11.1
-        run: npm install -g npm@11.1.0
-
       - name: Install changelog dependencies
         run: npm ci --ignore-scripts
 

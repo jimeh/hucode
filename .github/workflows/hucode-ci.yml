@@ -228,9 +228,6 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Setup npm 11.1
-        run: npm install -g npm@11.1.0
-
       - name: Prepare node_modules cache key
         run: |
           mkdir -p .build

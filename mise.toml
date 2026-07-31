@@ -10,7 +10,6 @@ run_auto_install = true
 
 [tools]
 "github:jimeh/treeboot" = "latest"
-npm = "11.1"
 pinact = "latest"
 
 [tasks."setup"]
