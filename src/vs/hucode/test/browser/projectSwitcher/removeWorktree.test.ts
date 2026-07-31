@@ -55,8 +55,8 @@ suite('Remove Worktree', () => {
 
 	test('enables force deletion and formats every dirty status', async () => {
 		const dirty = preview('dirty', [
-			entry('M', ' ', 'modified.ts'),
-			entry('A', ' ', 'staged.ts'),
+			entry(' ', 'M', 'modified.ts'),
+			entry('M', ' ', 'staged.ts'),
 			entry(' ', 'D', 'deleted.ts'),
 			entry('?', '?', 'untracked.ts'),
 			entry('R', ' ', 'new-name.ts', 'old-name.ts'),
@@ -73,11 +73,11 @@ suite('Remove Worktree', () => {
 		const prompt = harness.prompts[0];
 		assert.deepStrictEqual(
 			prompt.buttons?.map(button => button.label),
-			['Force Delete', 'Delete']
+			['Delete', 'Force Delete']
 		);
 		assert.deepStrictEqual(
 			customButtonEnabled(prompt),
-			[true, false, true]
+			[false, true, true]
 		);
 		assert.strictEqual(customButtonFocus(prompt), 2);
 		const markdown = prompt.custom && typeof prompt.custom === 'object'
@@ -93,15 +93,15 @@ suite('Remove Worktree', () => {
 		);
 		assert.ok(markdown?.includes('9 uncommitted changes'));
 		for (const expected of [
-			'Modified (staged)  modified.ts',
-			'Added (staged)  staged.ts',
-			'Deleted  deleted.ts',
-			'Untracked  untracked.ts',
-			'Renamed (staged)  old-name.ts -> new-name.ts',
-			'Copied (staged)  source.ts -> copy.ts',
-			'Type changed (staged)  type.ts',
-			'Conflicted  conflicted.ts',
-			'Added (staged), modified  added-then-modified.ts',
+			' M  modified.ts',
+			'M   staged.ts',
+			' D  deleted.ts',
+			'??  untracked.ts',
+			'R   old-name.ts -> new-name.ts',
+			'C   source.ts -> copy.ts',
+			'T   type.ts',
+			'UU  conflicted.ts',
+			'AM  added-then-modified.ts',
 		]) {
 			assert.ok(markdown?.includes(expected), expected);
 		}
@@ -121,7 +121,7 @@ suite('Remove Worktree', () => {
 					'old\\name\r\u0007.ts'
 				)
 			),
-			'Renamed (staged)  "old\\\\name\\r\\u0007.ts" -> "new\\nname\\t\\u202e\\u2028\\u2029\\"\\u{e0001}.ts"'
+			'R   "old\\\\name\\r\\u0007.ts" -> "new\\nname\\t\\u202e\\u2028\\u2029\\"\\u{e0001}.ts"'
 		);
 	});
 

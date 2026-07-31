@@ -19,16 +19,6 @@ import { pathsEqual } from './projectSwitcherCommon.js';
 
 type DeleteWorktreeAction = 'delete' | 'force';
 
-const CONFLICT_STATUSES = new Set([
-	'DD',
-	'AU',
-	'UD',
-	'UA',
-	'DU',
-	'AA',
-	'UU',
-]);
-
 const UNSAFE_PATH_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const PATH_CHARACTER_TO_ESCAPE = /["\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
@@ -131,12 +121,12 @@ export function createDeleteWorktreePrompt(
 				'This permanently deletes the worktree folder at:\n{0}\n\nThe Git branch and committed history will remain.',
 				worktreePath
 			),
-		buttons: dirty
-			? [forceButton, deleteButton]
-			: [deleteButton, forceButton],
+		buttons: [deleteButton, forceButton],
 		cancelButton: localize('deleteWorktreeCancelButton', 'Cancel'),
 		custom: {
-			buttonEnabled: [true, false, true],
+			buttonEnabled: dirty
+				? [false, true, true]
+				: [true, false, true],
 			buttonFocus: 2,
 			classes: ['hucode-worktree-delete-dialog'],
 			markdownDetails: [{
@@ -216,40 +206,11 @@ export function formatWorktreeStatusEntry(
 	entry: WorktreeStatusEntry
 ): string {
 	const status = `${entry.indexStatus}${entry.worktreeStatus}`;
-	let label: string;
-	if (CONFLICT_STATUSES.has(status)) {
-		label = localize('worktreeStatusConflicted', 'Conflicted');
-	} else if (status === '??') {
-		label = localize('worktreeStatusUntracked', 'Untracked');
-	} else {
-		const stagedLabel = statusLabel(entry.indexStatus);
-		const worktreeLabel = statusLabel(entry.worktreeStatus);
-		const labels: string[] = [];
-		if (stagedLabel) {
-			labels.push(localize(
-				'worktreeStatusStaged',
-				'{0} (staged)',
-				stagedLabel
-			));
-		}
-		if (worktreeLabel) {
-			labels.push(
-				stagedLabel
-					? worktreeLabel.toLocaleLowerCase()
-					: worktreeLabel
-			);
-		}
-		label = labels.join(', ') || localize(
-			'worktreeStatusChanged',
-			'Changed ({0})',
-			status
-		);
-	}
 
 	const path = entry.originalPath
 		? `${formatWorktreeStatusPath(entry.originalPath)} -> ${formatWorktreeStatusPath(entry.path)}`
 		: formatWorktreeStatusPath(entry.path);
-	return `${label}  ${path}`;
+	return `${status}  ${path}`;
 }
 
 function formatWorktreeStatusPath(path: string): string {
@@ -284,25 +245,6 @@ function formatWorktreeStatusPath(path: string): string {
 			}
 		}
 	)}"`;
-}
-
-function statusLabel(status: string): string | undefined {
-	switch (status) {
-		case 'M':
-			return localize('worktreeStatusModified', 'Modified');
-		case 'A':
-			return localize('worktreeStatusAdded', 'Added');
-		case 'D':
-			return localize('worktreeStatusDeleted', 'Deleted');
-		case 'R':
-			return localize('worktreeStatusRenamed', 'Renamed');
-		case 'C':
-			return localize('worktreeStatusCopied', 'Copied');
-		case 'T':
-			return localize('worktreeStatusTypeChanged', 'Type changed');
-		default:
-			return undefined;
-	}
 }
 
 function createStatusErrorPrompt(
