@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.63 - 2026-08-01
+
+### Features
+
+- **omni:** enrich Projects sidebar worktree details (#155)
+- **omni:** preview changes before deleting worktrees (#153)
+
 ## 0.0.62 - 2026-07-31
 
 ### Features
