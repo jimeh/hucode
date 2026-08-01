@@ -75,8 +75,10 @@ import { ICommandService } from
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 import {
+	getProjectSwitcherGitConsumerId,
 	IProjectManagerService,
 	GitWorktreeTargetObservation,
+	PROJECT_MANAGER_GIT_TARGET_LIMIT,
 	ProjectRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
@@ -1158,7 +1160,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	private isNavigatingWorktreeHistory = false;
 	private hasSeededNavigationHistory = false;
 	private readonly gitMonitorConsumerId =
-		`project-switcher:window:${this.windowId}`;
+		getProjectSwitcherGitConsumerId(this.windowId);
 	private gitWorktreeObservations: readonly GitWorktreeTargetObservation[] = [];
 	private gitMonitorGeneration = 0;
 	private readonly canGoBackContext: IContextKey<boolean>;
@@ -1736,13 +1738,22 @@ export class ProjectSwitcherWidget extends Disposable {
 		state: IHucodeHostedWorkspaceState
 	): Promise<void> {
 		const generation = ++this.gitMonitorGeneration;
+		const retainedWorkbenches = state.retainedWorkbenches ?? [];
+		if (retainedWorkbenches.length > PROJECT_MANAGER_GIT_TARGET_LIMIT) {
+			this.logService.warn(
+				`[ProjectSwitcher] Monitoring the first ` +
+				`${PROJECT_MANAGER_GIT_TARGET_LIMIT} of ` +
+				`${retainedWorkbenches.length} arbitrary workbenches for Git ` +
+				`metadata.`
+			);
+		}
 		try {
 			const observations = await this.projectManagerService
 				.setGitWorktreeTargets(
 					this.gitMonitorConsumerId,
-					(state.retainedWorkbenches ?? []).map(record =>
-						URI.revive(record.folderUri).fsPath
-					)
+					retainedWorkbenches
+						.slice(0, PROJECT_MANAGER_GIT_TARGET_LIMIT)
+						.map(record => URI.revive(record.folderUri).fsPath)
 				);
 			if (generation !== this.gitMonitorGeneration) {
 				return;

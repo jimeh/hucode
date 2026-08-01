@@ -534,6 +534,54 @@ suite('ProjectSwitcherContribution', () => {
 			assert.match(String(warnings[0]), /monitor unavailable/);
 		});
 
+	test('bounds decorative Git monitoring without dropping the request',
+		async () => {
+			const warnings: unknown[] = [];
+			let targetPaths: readonly string[] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				gitMonitorGeneration: 0,
+				gitMonitorConsumerId: 'project-switcher:window:1',
+				projectManagerService: {
+					setGitWorktreeTargets: async (
+						_consumerId: string,
+						paths: readonly string[]
+					) => {
+						targetPaths = paths;
+						return [];
+					},
+				},
+				logService: { warn: (warning: unknown) => warnings.push(warning) },
+				gitWorktreeObservations: [],
+				projects: [],
+				renderProjects: () => undefined,
+			});
+			const updateTargets = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateGitWorktreeTargets'
+			) as (
+				this: object,
+				state: IHucodeHostedWorkspaceState
+			) => Promise<void>;
+
+			await updateTargets.call(host, {
+				...hostedState(),
+				retainedWorkbenches: Array.from(
+					{ length: 129 },
+					(_, index) => retainedRecord(
+						`workbench-${index}`,
+						`/workbench-${index}`,
+						index
+					)
+				),
+			});
+
+			assert.strictEqual(targetPaths.length, 128);
+			assert.deepStrictEqual(warnings, [
+				'[ProjectSwitcher] Monitoring the first 128 of 129 arbitrary ' +
+				'workbenches for Git metadata.',
+			]);
+		});
+
 	test('render wires the live tree services and initial empty state', async () => {
 		const projectChanges = disposables.add(
 			new Emitter<readonly ProjectRecord[]>()

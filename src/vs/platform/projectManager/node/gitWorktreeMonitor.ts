@@ -146,7 +146,8 @@ export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
 
 	watch(path: string, onDidChange: () => void): IDisposable {
 		const store = new DisposableStore();
-		this.watchPath(store, path, onDidChange);
+		const currentWatcher = store.add(new MutableDisposable<IDisposable>());
+		this.watchPath(store, currentWatcher, path, onDidChange);
 		return store;
 	}
 
@@ -158,6 +159,7 @@ export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
 
 	private watchPath(
 		store: DisposableStore,
+		currentWatcher: MutableDisposable<IDisposable>,
 		path: string,
 		onDidChange: () => void
 	): void {
@@ -170,9 +172,20 @@ export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
 				const watcher = fs.watch(
 					path,
 					{ persistent: false },
-					() => onDidChange()
+					event => {
+						if (event === 'rename') {
+							currentWatcher.clear();
+							this.watchPath(
+								store,
+								currentWatcher,
+								path,
+								onDidChange
+							);
+						}
+						onDidChange();
+					}
 				);
-				store.add(toDisposable(() => watcher.close()));
+				currentWatcher.value = toDisposable(() => watcher.close());
 				return;
 			} catch (error) {
 				this.logService.warn(
@@ -186,8 +199,6 @@ export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
 			return;
 		}
 
-		const pending = new MutableDisposable();
-		store.add(pending);
 		try {
 			const watcher = fs.watch(
 				ancestor.dir,
@@ -200,12 +211,17 @@ export class NodeGitMetadataWatcher implements IGitMetadataWatcher {
 						return;
 					}
 
-					pending.clear();
-					this.watchPath(store, path, onDidChange);
+					currentWatcher.clear();
+					this.watchPath(
+						store,
+						currentWatcher,
+						path,
+						onDidChange
+					);
 					onDidChange();
 				}
 			);
-			pending.value = toDisposable(() => watcher.close());
+			currentWatcher.value = toDisposable(() => watcher.close());
 		} catch (error) {
 			this.logService.warn(
 				`[GitWorktreeMonitor] Failed to watch ${ancestor.dir}: ${error}`

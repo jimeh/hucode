@@ -20,10 +20,12 @@ import {
 } from '../../base/common/lifecycle.js';
 import { join } from '../../base/common/path.js';
 import { URI } from '../../base/common/uri.js';
+import { generateUuid } from '../../base/common/uuid.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
 	CreateWorktreeOptions,
 	GitWorktreeTargetChange,
+	PROJECT_MANAGER_GIT_TARGET_LIMIT,
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
@@ -43,9 +45,8 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_EVENT_CLIENT_LIMIT = 64;
 const DEFAULT_GIT_READ_CONCURRENCY = 4;
 const DEFAULT_PROJECT_REQUEST_PENDING_LIMIT = 64;
-// One shell normally registers only its retained workbenches. This cap keeps a
-// malformed request from expanding into an unbounded batch of Git processes.
-const MAX_GIT_MONITOR_TARGETS = 128;
+const MAX_GIT_MONITOR_CONSUMERS_PER_SESSION = 1;
+const MAX_GIT_MONITOR_CONSUMER_ID_LENGTH = 128;
 const EVENT_RETRY_MS = 1000;
 const DEFAULT_EVENT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS = 30_000;
@@ -729,7 +730,9 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const relativePath = pathname
 			.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
 			.replace(/^\/+/, '');
-		const eventSessionId = getEventSessionId(relativePath);
+		const eventSessionId = relativePath === 'events'
+			? generateUuid()
+			: getEventSessionId(relativePath);
 		if (this.disposed) {
 			return req.method === 'GET' && eventSessionId !== undefined
 				? this.writeEventClientUnavailableError(res)
@@ -945,8 +948,19 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		if (relativePath === 'git-monitor/targets') {
 			const sessionId = requireString(body, 'sessionId');
 			const consumerId = requireString(body, 'consumerId');
+			if (consumerId.length > MAX_GIT_MONITOR_CONSUMER_ID_LENGTH) {
+				throw new BadRequestError(
+					`consumerId exceeds the limit of ` +
+					`${MAX_GIT_MONITOR_CONSUMER_ID_LENGTH} characters.`
+				);
+			}
 			const targetPaths = requireStringArray(body, 'targetPaths');
 			const client = this.requireEventClient(sessionId);
+			const previous = client.gitConsumers.get(consumerId);
+			if (!previous && client.gitConsumers.size >=
+				MAX_GIT_MONITOR_CONSUMERS_PER_SESSION) {
+				throw new BadRequestError('Git monitor consumer limit reached.');
+			}
 			const registrationId = ++this.nextWebGitRegistrationId;
 			const serviceConsumerId = getWebGitConsumerId(
 				sessionId,
@@ -957,7 +971,6 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				serviceConsumerId,
 				registrationId,
 			};
-			const previous = client.gitConsumers.get(consumerId);
 			client.gitConsumers.set(consumerId, registration);
 			this.webGitConsumerOwners.set(serviceConsumerId, {
 				client,
@@ -1800,9 +1813,9 @@ function requireStringArray(body: unknown, key: string): readonly string[] {
 	if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
 		throw new BadRequestError(`Invalid ${key}.`);
 	}
-	if (value.length > MAX_GIT_MONITOR_TARGETS) {
+	if (value.length > PROJECT_MANAGER_GIT_TARGET_LIMIT) {
 		throw new BadRequestError(
-			`${key} exceeds the limit of ${MAX_GIT_MONITOR_TARGETS}.`
+			`${key} exceeds the limit of ${PROJECT_MANAGER_GIT_TARGET_LIMIT}.`
 		);
 	}
 	return value.filter(entry => entry.length > 0);

@@ -11,6 +11,14 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
  * IPC channel name for the Hucode project manager service.
  */
 export const PROJECT_MANAGER_CHANNEL_NAME = 'projectManager';
+/** Maximum arbitrary folders monitored for one Projects sidebar. */
+export const PROJECT_MANAGER_GIT_TARGET_LIMIT = 128;
+
+/** Returns the desktop Git-monitor consumer owned by one Projects window. */
+export function getProjectSwitcherGitConsumerId(windowId: number): string {
+	return `project-switcher:window:${windowId}`;
+}
+
 /**
  * Application storage key for persisted Hucode project metadata.
  */

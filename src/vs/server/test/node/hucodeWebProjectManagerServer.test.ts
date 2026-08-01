@@ -690,6 +690,51 @@ suite('HucodeWebProjectManagerServer', function () {
 		events.close();
 	});
 
+	test('limits Git monitor consumers across one event session', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const register = (consumerId: string) => handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId,
+				targetPaths: [projectPath],
+			}
+		);
+
+		assert.strictEqual((await register('shell')).statusCode, 200);
+		assert.deepStrictEqual(await register('other'), {
+			statusCode: 400,
+			body: { error: 'Git monitor consumer limit reached.' },
+		});
+		assert.strictEqual((await register('shell')).statusCode, 200);
+		assert.strictEqual(getGitMonitorConsumerCount(server), 1);
+		events.close();
+	});
+
+	test('rejects oversized Git monitor consumer identifiers', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId: 'x'.repeat(129),
+				targetPaths: [projectPath],
+			}
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'consumerId exceeds the limit of 128 characters.' },
+		});
+		events.close();
+	});
+
 	test('preserves whitespace in Git target paths', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
 		const events = await handleEvents(server);
@@ -987,6 +1032,19 @@ suite('HucodeWebProjectManagerServer', function () {
 			{ projects: add.body.projects }
 		);
 
+		events.close();
+	});
+
+	test('keeps the sessionless project event route compatible', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = startEvents(server, { sessionless: true });
+		await events.completion;
+
+		assert.strictEqual(events.statusCode, 200);
+		assert.strictEqual(
+			headersValue(events.headers, 'Content-Type'),
+			'text/event-stream'
+		);
 		events.close();
 	});
 
@@ -4695,6 +4753,30 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.strictEqual(changed, true);
 	});
 
+	test('re-arms a metadata file watch after atomic replacement', async () => {
+		const root = await fs.mkdtemp(join(os.tmpdir(), 'hucode-watch-rearm-'));
+		disposables.add(toDisposable(() => {
+			void fs.rm(root, { recursive: true, force: true });
+		}));
+		const target = join(root, 'HEAD');
+		await fs.writeFile(target, 'ref: refs/heads/main\n');
+
+		const watcher = new HucodeNodeProjectMetadataWatcher(new NullLogService());
+		let changes = 0;
+		disposables.add(watcher.watch(target, () => changes++));
+		const replace = async (branch: string) => {
+			const previousChanges = changes;
+			const replacement = `${target}.lock`;
+			await fs.writeFile(replacement, `ref: refs/heads/${branch}\n`);
+			await fs.rename(replacement, target);
+			await waitFor(() => changes > previousChanges, 3000);
+			await new Promise(resolve => setTimeout(resolve, 50));
+		};
+
+		await replace('feature');
+		await replace('next');
+	});
+
 	test('watches entry membership without observing contents churn', async () => {
 		const root = await fs.mkdtemp(join(os.tmpdir(), 'hucode-entry-watch-'));
 		disposables.add(toDisposable(() => {
@@ -4930,6 +5012,7 @@ async function handleEvents(
 	server: HucodeWebProjectManagerServer,
 	options: {
 		readonly sessionId?: string;
+		readonly sessionless?: boolean;
 		readonly blockProjectWrites?: number;
 		readonly throwProjectWrites?: number;
 	} = {}
@@ -4943,6 +5026,7 @@ function startEvents(
 	server: HucodeWebProjectManagerServer,
 	options: {
 		readonly sessionId?: string;
+		readonly sessionless?: boolean;
 		readonly blockProjectWrites?: number;
 		readonly throwProjectWrites?: number;
 	} = {}
@@ -4960,7 +5044,9 @@ function startEvents(
 	const completion = server.handle(
 		req,
 		res,
-		`${HUCODE_WEB_PROJECTS_API_PATH}/events/${sessionId}`
+		options.sessionless
+			? `${HUCODE_WEB_PROJECTS_API_PATH}/events`
+			: `${HUCODE_WEB_PROJECTS_API_PATH}/events/${sessionId}`
 	).then(result => {
 		assert.strictEqual(result, true);
 	});

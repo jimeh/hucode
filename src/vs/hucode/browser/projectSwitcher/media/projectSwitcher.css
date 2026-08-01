@@ -155,7 +155,7 @@
 
 .hucode-project-switcher-two-line .hucode-project-switcher-text {
 	display: grid;
-	grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+	grid-template-columns: minmax(0, auto) minmax(4em, 1fr);
 	grid-template-rows: 17px 17px;
 	align-items: baseline;
 	justify-content: center;

@@ -39,11 +39,13 @@ current target set after EventSource reconnects. Each serve-web registration
 accepts at most 128 target folders, and Git discovery runs through a bounded
 worker pool.
 
-Compact rows order details as name, branch/status, then path; under constrained
-width the path truncates first, followed by the branch and finally the name.
-Two-line rows place the name and path on the first line and the branch/status
-below. A non-Git workbench instead places its path on the second line. Main
-project checkouts never show a path field.
+Compact project-worktree rows show the name followed by branch/status, while
+compact arbitrary-workbench rows show the name followed by path. The secondary
+field truncates before the name. Two-line project-worktree rows place the name
+and optional path on the first line with branch/status below. Two-line arbitrary
+workbenches place the name and optional branch/status on the first line and keep
+the path on the second line. Project paths and the compact inline metadata
+icons can be hidden independently in settings.
 
 ## Workbench Lifecycle
 
@@ -94,9 +96,10 @@ This setting applies to both desktop Omni and serve-web Omni.
 | --- | --- | --- |
 | `hucode.omni.restoreHostedWorkbenches` | `active` | Choose `active`, `all`, or `none` for eager startup restoration. |
 | `hucode.omni.treeIndent` | `8` | Set Projects tree indentation from 4 to 40 pixels. |
-| `hucode.omni.workbenchItemLayout` | `compact` | Use `compact` or `twoLine` rows for arbitrary workbenches. |
-| `hucode.omni.worktreeItemLayout` | `compact` | Use `compact` or `twoLine` rows for project worktrees. |
-| `hucode.omni.showWorktreePaths` | `true` | Show paths for non-main project worktrees. Arbitrary workbench paths remain visible. |
+| `hucode.omni.workbenchItemLayout` | `twoLine` | Use `compact` or `twoLine` rows for arbitrary workbenches. |
+| `hucode.omni.worktreeItemLayout` | `twoLine` | Use `compact` or `twoLine` rows for project worktrees. |
+| `hucode.omni.showWorktreePaths` | `true` | Show paths for root and linked project worktrees. Arbitrary workbench paths remain visible. |
+| `hucode.omni.showInlineIcons` | `true` | Show compact branch and folder icons beside row metadata. |
 | `hucode.omni.titleBar.projectControls.enabled` | `true` | Show project controls in the custom title bar when the Projects sidebar is hidden. |
 
 ## Desktop and Serve-Web
