@@ -42,7 +42,10 @@ import { ipcBrowserViewGroupChannelName } from '../../platform/browserView/commo
 import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/browserView/electron-main/browserViewMainService.js';
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
 import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
-import { PROJECT_MANAGER_CHANNEL_NAME } from '../../platform/projectManager/common/projectManager.js';
+import {
+	getProjectSwitcherGitConsumerId,
+	PROJECT_MANAGER_CHANNEL_NAME,
+} from '../../platform/projectManager/common/projectManager.js';
 import { HUCODE_SHELL_CHANNEL_NAME } from '../../hucode/common/omniWindow.js';
 import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
 import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
@@ -1401,14 +1404,25 @@ export class CodeApplication extends Disposable {
 		sharedProcessClient.then(client => client.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel));
 
 		// Hucode Project Manager
+		const projectManagerService = accessor.get(IProjectManagerMainService);
 		const projectManagerChannel = ProxyChannel.fromService(
-			accessor.get(IProjectManagerMainService),
+			projectManagerService,
 			disposables
 		);
 		mainProcessElectronServer.registerChannel(
 			PROJECT_MANAGER_CHANNEL_NAME,
 			projectManagerChannel
 		);
+		disposables.add(accessor.get(IWindowsMainService).onDidDestroyWindow(
+			window => {
+				void projectManagerService.clearGitWorktreeTargets(
+					getProjectSwitcherGitConsumerId(window.id)
+				).catch(error => this.logService.warn(
+					`[Hucode Projects] Failed to clear destroyed window Git ` +
+					`monitor: ${error}`
+				));
+			}
+		));
 
 		// Hucode Omni Shell
 		const hucodeShellChannel = ProxyChannel.fromService(

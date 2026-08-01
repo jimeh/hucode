@@ -11,6 +11,14 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
  * IPC channel name for the Hucode project manager service.
  */
 export const PROJECT_MANAGER_CHANNEL_NAME = 'projectManager';
+/** Maximum arbitrary folders monitored for one Projects sidebar. */
+export const PROJECT_MANAGER_GIT_TARGET_LIMIT = 128;
+
+/** Returns the desktop Git-monitor consumer owned by one Projects window. */
+export function getProjectSwitcherGitConsumerId(windowId: number): string {
+	return `project-switcher:window:${windowId}`;
+}
+
 /**
  * Application storage key for persisted Hucode project metadata.
  */
@@ -32,6 +40,29 @@ export interface WorktreeRecord {
 	readonly isDetached: boolean;
 	readonly pinned?: boolean;
 	readonly lastVisitedAt?: number;
+}
+
+/** Runtime freshness of Git metadata observed for an arbitrary target path. */
+export type GitWorktreeTargetState =
+	| 'current'
+	| 'stale'
+	| 'notRepository'
+	| 'unavailable';
+
+/**
+ * Ephemeral Git metadata for a folder monitored by an interested consumer.
+ */
+export interface GitWorktreeTargetObservation {
+	readonly targetPath: string;
+	readonly state: GitWorktreeTargetState;
+	readonly repositoryRoot?: string;
+	readonly worktree?: WorktreeRecord;
+}
+
+/** Git-monitor update scoped to the consumer that registered the targets. */
+export interface GitWorktreeTargetChange {
+	readonly consumerId: string;
+	readonly observations: readonly GitWorktreeTargetObservation[];
 }
 
 /**
@@ -182,6 +213,7 @@ export interface IProjectManagerService {
 	readonly _serviceBrand: undefined;
 
 	readonly onDidChangeProjects: Event<readonly ProjectRecord[]>;
+	readonly onDidChangeGitWorktreeTargets: Event<GitWorktreeTargetChange>;
 
 	getProjects(): Promise<readonly ProjectRecord[]>;
 	addProject(uri: URI): Promise<ProjectRecord>;
@@ -232,4 +264,11 @@ export interface IProjectManagerService {
 		beforeWorktreePath?: string
 	): Promise<void>;
 	setLastActiveWorktree(projectId: string, worktreePath: string): Promise<void>;
+	/** Replaces one consumer's complete ephemeral Git-monitor target set. */
+	setGitWorktreeTargets(
+		consumerId: string,
+		targetPaths: readonly string[]
+	): Promise<readonly GitWorktreeTargetObservation[]>;
+	/** Releases all Git-monitor resources owned only by one consumer. */
+	clearGitWorktreeTargets(consumerId: string): Promise<void>;
 }

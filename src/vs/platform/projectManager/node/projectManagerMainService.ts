@@ -13,12 +13,10 @@ import { Emitter } from '../../../base/common/event.js';
 import {
 	Disposable,
 	DisposableMap,
-	DisposableStore,
-	IDisposable,
 	toDisposable,
 } from '../../../base/common/lifecycle.js';
 import { equals } from '../../../base/common/objects.js';
-import { basename, join } from '../../../base/common/path.js';
+import { basename } from '../../../base/common/path.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { URI } from '../../../base/common/uri.js';
 import { isLinux } from '../../../base/common/platform.js';
@@ -27,6 +25,7 @@ import { ILogService } from '../../log/common/log.js';
 import { IFileService } from '../../files/common/files.js';
 import {
 	CreateWorktreeOptions,
+	GitWorktreeTargetObservation,
 	IProjectManagerService,
 	PROJECT_MANAGER_STORAGE_KEY,
 	ProjectRecord,
@@ -56,6 +55,10 @@ import {
 	setStoredWorktreeVisited,
 } from '../common/projectManagerState.js';
 import { GitWorktreeService } from './gitWorktreeService.js';
+import {
+	GitWorktreeMonitor,
+	IGitMetadataWatcher,
+} from './gitWorktreeMonitor.js';
 
 const PROJECT_AUTO_REFRESH_DEBOUNCE_MS = 1000;
 const PROJECT_AUTO_REFRESH_QUIET_MS = 5000;
@@ -82,9 +85,7 @@ type ProjectRefreshAttemptResult =
 /**
  * Watches targeted project metadata paths for worktree-affecting changes.
  */
-export interface IProjectMetadataWatcher {
-	watch(path: string, onDidChange: () => void): IDisposable;
-}
+export type IProjectMetadataWatcher = IGitMetadataWatcher;
 
 /**
  * Git operations used by the main-process project manager.
@@ -115,6 +116,7 @@ export interface ProjectManagerMainServiceOptions {
 	readonly fileService?: IFileService;
 	readonly gitWorktreeService?: ProjectManagerGitService;
 	readonly metadataWatcher?: IProjectMetadataWatcher;
+	readonly gitWorktreeMonitor?: GitWorktreeMonitor;
 	readonly now?: () => number;
 	readonly autoRefreshDebounceMs?: number;
 	readonly autoRefreshQuietMs?: number;
@@ -123,23 +125,6 @@ export interface ProjectManagerMainServiceOptions {
 		milliseconds: number,
 		token: CancellationToken
 	) => Promise<void>;
-}
-
-class FileServiceProjectMetadataWatcher implements IProjectMetadataWatcher {
-
-	constructor(private readonly fileService: IFileService) {
-	}
-
-	watch(path: string, onDidChange: () => void): IDisposable {
-		const store = new DisposableStore();
-		const watcher = store.add(this.fileService.createWatcher(URI.file(path), {
-			recursive: false,
-			excludes: [],
-		}));
-		store.add(watcher.onDidChange(() => onDidChange()));
-
-		return store;
-	}
 }
 
 /**
@@ -151,7 +136,7 @@ export class ProjectManagerMainService extends Disposable
 	declare readonly _serviceBrand: undefined;
 
 	private readonly gitWorktreeService: ProjectManagerGitService;
-	private readonly metadataWatcher: IProjectMetadataWatcher | undefined;
+	private readonly gitWorktreeMonitor: GitWorktreeMonitor;
 	private readonly autoRefreshDebounceMs: number;
 	private readonly autoRefreshQuietMs: number;
 	private readonly refreshDelay: (milliseconds: number) => Promise<void>;
@@ -163,6 +148,8 @@ export class ProjectManagerMainService extends Disposable
 	private readonly _onDidChangeProjects =
 		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
+	readonly onDidChangeGitWorktreeTargets:
+		IProjectManagerService['onDidChangeGitWorktreeTargets'];
 
 	private storedProjects: StoredProjectRecord[] = [];
 	private projectWorktrees = new Map<string, readonly WorktreeRecord[]>();
@@ -187,10 +174,20 @@ export class ProjectManagerMainService extends Disposable
 
 		this.gitWorktreeService = options.gitWorktreeService ??
 			new GitWorktreeService(logService);
-		this.metadataWatcher = options.metadataWatcher ??
-			(options.fileService
-				? new FileServiceProjectMetadataWatcher(options.fileService)
-				: undefined);
+		this.gitWorktreeMonitor = options.gitWorktreeMonitor ?? this._register(
+			new GitWorktreeMonitor(
+				this.gitWorktreeService,
+				logService,
+				{
+					fileService: options.fileService,
+					metadataWatcher: options.metadataWatcher,
+					debounceMs: options.autoRefreshDebounceMs,
+					retryDelay: options.retryDelay,
+				}
+			)
+		);
+		this.onDidChangeGitWorktreeTargets =
+			this.gitWorktreeMonitor.onDidChangeTargets;
 		this.autoRefreshDebounceMs = options.autoRefreshDebounceMs ??
 			PROJECT_AUTO_REFRESH_DEBOUNCE_MS;
 		this.autoRefreshQuietMs = options.autoRefreshQuietMs ??
@@ -692,6 +689,17 @@ export class ProjectManagerMainService extends Disposable
 		this.emitChange();
 	}
 
+	async setGitWorktreeTargets(
+		consumerId: string,
+		targetPaths: readonly string[]
+	): Promise<readonly GitWorktreeTargetObservation[]> {
+		return this.gitWorktreeMonitor.setTargets(consumerId, targetPaths);
+	}
+
+	async clearGitWorktreeTargets(consumerId: string): Promise<void> {
+		this.gitWorktreeMonitor.clearTargets(consumerId);
+	}
+
 	private async refreshProject(
 		project: StoredProjectRecord
 	): Promise<readonly WorktreeRecord[]> {
@@ -748,26 +756,14 @@ export class ProjectManagerMainService extends Disposable
 	): Promise<ProjectRefreshAttemptResult> {
 		const token = owner.source.token;
 		try {
-			// Resolve the git common dir (needed only for metadata watchers)
-			// concurrently with the worktree list; both are independent git
-			// subprocesses that read only the project root. The catch keeps a
-			// getGitCommonDir rejection from surfacing as an unhandled rejection
-			// if listWorktrees throws first; createProjectWatchers re-awaits it.
-			const commonGitDirPromise = this.metadataWatcher
-				? this.gitWorktreeService.getGitCommonDir(project.rootPath, token)
-				: undefined;
-			commonGitDirPromise?.catch(() => undefined);
-
-			const discoveredWorktrees =
-				await this.gitWorktreeService.listWorktrees(
-					project.rootPath,
-					token
-				);
-			const watchers = await this.createProjectWatchers(
-				project,
-				commonGitDirPromise,
-				token
+			const observation = await this.gitWorktreeMonitor.observeRepository(
+				project.rootPath,
+				() => this.scheduleProjectRefresh(project.id),
+				token,
+				{ forceReplaceWatcher: true }
 			);
+			const discoveredWorktrees = observation.worktrees;
+			const watchers = observation.watcher;
 			if (!this.isCurrentRefreshOwner(project.id, owner) ||
 				token.isCancellationRequested) {
 				watchers?.dispose();
@@ -817,7 +813,7 @@ export class ProjectManagerMainService extends Disposable
 			Object.assign(project, stagedProject);
 			this.projectWorktrees.set(project.id, worktrees);
 			this.projectWorktreeStates.set(project.id, 'current');
-			if (watchers instanceof DisposableStore) {
+			if (watchers) {
 				this.projectWatchers.set(project.id, watchers);
 			}
 			if (watchers !== null) {
@@ -849,61 +845,6 @@ export class ProjectManagerMainService extends Disposable
 				kind: 'failed',
 				stateChanged: previousState !== nextState,
 			};
-		}
-	}
-
-	private async createProjectWatchers(
-		project: StoredProjectRecord,
-		commonGitDirPromise: Promise<string> | undefined,
-		token: CancellationToken
-	): Promise<DisposableStore | null | undefined> {
-		if (!this.metadataWatcher) {
-			return undefined;
-		}
-
-		const watchers = new DisposableStore();
-		try {
-			const commonGitDir = await (
-				commonGitDirPromise ??
-				this.gitWorktreeService.getGitCommonDir(project.rootPath, token)
-			);
-			this.watchProjectMetadataPath(
-				watchers,
-				project.id,
-				join(commonGitDir, 'HEAD')
-			);
-			this.watchProjectMetadataPath(
-				watchers,
-				project.id,
-				join(commonGitDir, 'worktrees')
-			);
-
-			for (const adminDirName of
-				await this.gitWorktreeService.listWorktreeAdminDirs(commonGitDir)) {
-				const adminDir = join(commonGitDir, 'worktrees', adminDirName);
-				this.watchProjectMetadataPath(
-					watchers,
-					project.id,
-					join(adminDir, 'HEAD')
-				);
-				this.watchProjectMetadataPath(
-					watchers,
-					project.id,
-					join(adminDir, 'gitdir')
-				);
-			}
-
-			return watchers;
-		} catch (error) {
-			watchers.dispose();
-			if (isCancellationError(error) || token.isCancellationRequested) {
-				throw error;
-			}
-			this.logService.warn(
-				`[ProjectManagerMainService] Failed to watch ` +
-				`${project.rootPath}: ${error}`
-			);
-			return null;
 		}
 	}
 
@@ -1082,21 +1023,6 @@ export class ProjectManagerMainService extends Disposable
 				? project.worktreeVisits.map(visit => ({ ...visit }))
 				: undefined,
 		};
-	}
-
-	private watchProjectMetadataPath(
-		watchers: DisposableStore,
-		projectId: string,
-		path: string
-	): void {
-		const metadataWatcher = this.metadataWatcher;
-		if (!metadataWatcher) {
-			return;
-		}
-
-		watchers.add(metadataWatcher.watch(path, () => {
-			this.scheduleProjectRefresh(projectId);
-		}));
 	}
 
 	private scheduleProjectRefresh(projectId: string): void {

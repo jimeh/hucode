@@ -16,16 +16,16 @@ import {
 import { CancellationError, isCancellationError } from '../../base/common/errors.js';
 import {
 	Disposable,
-	DisposableStore,
 	IDisposable,
-	MutableDisposable,
-	toDisposable,
 } from '../../base/common/lifecycle.js';
-import { basename, dirname, join } from '../../base/common/path.js';
+import { join } from '../../base/common/path.js';
 import { URI } from '../../base/common/uri.js';
+import { generateUuid } from '../../base/common/uuid.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
 	CreateWorktreeOptions,
+	GitWorktreeTargetChange,
+	PROJECT_MANAGER_GIT_TARGET_LIMIT,
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
@@ -34,10 +34,10 @@ import {
 	StoredProjectRecord,
 	WorktreeRefQueryOptions,
 } from '../../platform/projectManager/common/projectManager.js';
-import {
-	IProjectMetadataWatcher,
-	ProjectManagerMainService,
-} from '../../platform/projectManager/node/projectManagerMainService.js';
+import { ProjectManagerMainService } from
+	'../../platform/projectManager/node/projectManagerMainService.js';
+import { NodeGitMetadataWatcher } from
+	'../../platform/projectManager/node/gitWorktreeMonitor.js';
 import { IStateService } from '../../platform/state/node/state.js';
 
 export const HUCODE_WEB_PROJECTS_API_PATH = '/_hucode/projects';
@@ -45,6 +45,8 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_EVENT_CLIENT_LIMIT = 64;
 const DEFAULT_GIT_READ_CONCURRENCY = 4;
 const DEFAULT_PROJECT_REQUEST_PENDING_LIMIT = 64;
+const MAX_GIT_MONITOR_CONSUMERS_PER_SESSION = 1;
+const MAX_GIT_MONITOR_CONSUMER_ID_LENGTH = 128;
 const EVENT_RETRY_MS = 1000;
 const DEFAULT_EVENT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_EVENT_BACKPRESSURE_TIMEOUT_MS = 30_000;
@@ -84,18 +86,26 @@ interface HucodeWebProjectManagerResponse {
 }
 
 interface HucodeWebProjectEventClient {
+	readonly sessionId: string;
 	readonly req: HucodeWebProjectManagerRequest;
 	readonly res: HucodeWebProjectManagerResponse;
+	readonly gitConsumers: Map<string, WebGitConsumerRegistration>;
 	closed: boolean;
 	ready: boolean;
 	pendingInitialProjects: readonly ProjectRecord[] | undefined;
 	blocked: boolean;
 	pendingFrame: string | undefined;
+	readonly pendingGitWorktreeTargets: Map<string, GitWorktreeTargetChange>;
 	drainListening: boolean;
 	heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	backpressureTimer: ReturnType<typeof setTimeout> | undefined;
 	onTerminated: () => void;
 	onDrain: () => void;
+}
+
+interface WebGitConsumerRegistration {
+	readonly serviceConsumerId: string;
+	readonly registrationId: number;
 }
 
 /**
@@ -456,102 +466,7 @@ export class HucodeProjectFileStateService implements IStateService {
 	}
 }
 
-export class HucodeNodeProjectMetadataWatcher implements IProjectMetadataWatcher {
-	watch(path: string, onDidChange: () => void): IDisposable {
-		const store = new DisposableStore();
-		this.watchPath(store, path, onDidChange);
-		return store;
-	}
-
-	/**
-	 * Watches `path`, tolerating a target that does not exist yet. Raw fs.watch
-	 * throws ENOENT for a missing path, so a project whose `.git/worktrees`
-	 * directory has not been created yet would be left permanently unwatched
-	 * and an externally created worktree would go undetected. The desktop
-	 * file-service watcher watches such paths before they exist; match that by
-	 * watching the nearest existing ancestor for the missing segment to appear,
-	 * then re-establishing a direct watch and notifying.
-	 */
-	private watchPath(
-		store: DisposableStore,
-		path: string,
-		onDidChange: () => void
-	): void {
-		if (store.isDisposed) {
-			return;
-		}
-
-		if (fs.existsSync(path)) {
-			try {
-				const watcher = fs.watch(
-					path,
-					{ persistent: false },
-					() => onDidChange()
-				);
-				store.add(toDisposable(() => watcher.close()));
-				return;
-			} catch (error) {
-				this.logService.warn(
-					`[Hucode Projects] Failed to watch ${path}: ${error}`
-				);
-			}
-		}
-
-		const ancestor = nearestExistingAncestor(path);
-		if (!ancestor) {
-			return;
-		}
-
-		const pending = new MutableDisposable();
-		store.add(pending);
-		try {
-			const watcher = fs.watch(
-				ancestor.dir,
-				{ persistent: false },
-				(_event, filename) => {
-					if (filename !== null && filename !== ancestor.nextSegment) {
-						return;
-					}
-					if (!fs.existsSync(join(ancestor.dir, ancestor.nextSegment))) {
-						return;
-					}
-
-					// The missing segment appeared: drop the ancestor watch,
-					// re-evaluate the full path, and report the change.
-					pending.clear();
-					this.watchPath(store, path, onDidChange);
-					onDidChange();
-				}
-			);
-			pending.value = toDisposable(() => watcher.close());
-		} catch (error) {
-			this.logService.warn(
-				`[Hucode Projects] Failed to watch ${ancestor.dir}: ${error}`
-			);
-		}
-	}
-
-	constructor(private readonly logService: ILogService) { }
-}
-
-/**
- * Returns the nearest existing ancestor directory of `path` and the immediate
- * child segment on the way to `path`, or undefined when no ancestor exists.
- */
-function nearestExistingAncestor(
-	path: string
-): { readonly dir: string; readonly nextSegment: string } | undefined {
-	let current = path;
-	let parent = dirname(current);
-	while (parent !== current) {
-		if (fs.existsSync(parent)) {
-			return { dir: parent, nextSegment: basename(current) };
-		}
-		current = parent;
-		parent = dirname(current);
-	}
-	return undefined;
-}
+export { NodeGitMetadataWatcher as HucodeNodeProjectMetadataWatcher };
 
 interface HucodeProjectAdmissionEntry {
 	readonly factory: () => Promise<unknown>;
@@ -701,6 +616,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		| (() => IDisposable)
 		| undefined;
 	private readonly eventClients = new Set<HucodeWebProjectEventClient>();
+	private readonly eventClientsBySession =
+		new Map<string, HucodeWebProjectEventClient>();
+	private readonly webGitConsumerOwners = new Map<
+		string,
+		{
+			readonly client: HucodeWebProjectEventClient;
+			readonly consumerId: string;
+			readonly registrationId: number;
+		}
+	>();
 	private readonly eventClientLimit: number;
 	private readonly eventHeartbeatIntervalMs: number;
 	private readonly eventBackpressureTimeoutMs: number;
@@ -712,6 +637,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		| undefined;
 	private nextProjectPublicationId = 0;
+	private nextWebGitRegistrationId = 0;
 	private disposed = false;
 
 	constructor(
@@ -781,10 +707,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		this.service = new ProjectManagerMainService(
 			this.stateService,
 			logService,
-			{ metadataWatcher: new HucodeNodeProjectMetadataWatcher(logService) },
+			{ metadataWatcher: new NodeGitMetadataWatcher(logService) },
 		);
 		this._register(this.service.onDidChangeProjects(projects => {
 			this.queueProjectsPublication(projects);
+		}));
+		this._register(this.service.onDidChangeGitWorktreeTargets(change => {
+			this.broadcastGitWorktreeTargets(change);
 		}));
 	}
 
@@ -801,8 +730,11 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		const relativePath = pathname
 			.substring(HUCODE_WEB_PROJECTS_API_PATH.length)
 			.replace(/^\/+/, '');
+		const eventSessionId = relativePath === 'events'
+			? generateUuid()
+			: getEventSessionId(relativePath);
 		if (this.disposed) {
-			return req.method === 'GET' && relativePath === 'events'
+			return req.method === 'GET' && eventSessionId !== undefined
 				? this.writeEventClientUnavailableError(res)
 				: this.writeRequestError(
 					res,
@@ -869,11 +801,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				requestCancellation.cancel();
 			}
 			try {
-				if (req.method === 'GET' && relativePath === 'events') {
+				if (req.method === 'GET' && eventSessionId !== undefined) {
 					return await this.handleEvents(
 						service,
 						req,
 						res,
+						eventSessionId,
 						requestCancellation.token
 					);
 				}
@@ -1012,6 +945,104 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		body: unknown,
 		token: CancellationToken,
 	): Promise<boolean> {
+		if (relativePath === 'git-monitor/targets') {
+			const sessionId = requireString(body, 'sessionId');
+			const consumerId = requireString(body, 'consumerId');
+			if (consumerId.length > MAX_GIT_MONITOR_CONSUMER_ID_LENGTH) {
+				throw new BadRequestError(
+					`consumerId exceeds the limit of ` +
+					`${MAX_GIT_MONITOR_CONSUMER_ID_LENGTH} characters.`
+				);
+			}
+			const targetPaths = requireStringArray(body, 'targetPaths');
+			const client = this.requireEventClient(sessionId);
+			const previous = client.gitConsumers.get(consumerId);
+			if (!previous && client.gitConsumers.size >=
+				MAX_GIT_MONITOR_CONSUMERS_PER_SESSION) {
+				throw new BadRequestError('Git monitor consumer limit reached.');
+			}
+			const registrationId = ++this.nextWebGitRegistrationId;
+			const serviceConsumerId = getWebGitConsumerId(
+				sessionId,
+				consumerId,
+				registrationId
+			);
+			const registration = {
+				serviceConsumerId,
+				registrationId,
+			};
+			client.gitConsumers.set(consumerId, registration);
+			this.webGitConsumerOwners.set(serviceConsumerId, {
+				client,
+				consumerId,
+				registrationId: registration.registrationId,
+			});
+			try {
+				if (previous) {
+					this.webGitConsumerOwners.delete(previous.serviceConsumerId);
+					await service.clearGitWorktreeTargets(
+						previous.serviceConsumerId
+					);
+				}
+				const observations = await this.runGitRead(
+					token,
+					async () => {
+						this.requireCurrentGitRegistration(
+							client,
+							consumerId,
+							registration
+						);
+						const currentObservations =
+							await service.setGitWorktreeTargets(
+								serviceConsumerId,
+								targetPaths
+							);
+						if (!this.isCurrentGitRegistration(
+							client,
+							consumerId,
+							registration
+						)) {
+							await service.clearGitWorktreeTargets(
+								serviceConsumerId
+							);
+							throw new BadRequestError(
+								'Git monitor event session is not connected.'
+							);
+						}
+						return currentObservations;
+					}
+				);
+				return this.writeJson(res, 200, { observations });
+			} catch (error) {
+				if (client.gitConsumers.get(consumerId) === registration) {
+					client.gitConsumers.delete(consumerId);
+				}
+				if (this.webGitConsumerOwners.get(serviceConsumerId)
+					?.registrationId === registration.registrationId) {
+					this.webGitConsumerOwners.delete(serviceConsumerId);
+				}
+				await service.clearGitWorktreeTargets(serviceConsumerId);
+				throw error;
+			}
+		}
+		if (relativePath === 'git-monitor/clear') {
+			const sessionId = requireString(body, 'sessionId');
+			const consumerId = requireString(body, 'consumerId');
+			const client = this.eventClientsBySession.get(sessionId);
+			if (!client || client.closed) {
+				return this.writeJson(res, 200, {});
+			}
+			const registration = client.gitConsumers.get(consumerId);
+			if (registration) {
+				client.gitConsumers.delete(consumerId);
+				this.webGitConsumerOwners.delete(registration.serviceConsumerId);
+				await service.clearGitWorktreeTargets(
+					registration.serviceConsumerId
+				);
+			}
+			return this.writeJson(res, 200, {});
+		}
+
 		const [projectId, ...parts] = relativePath
 			.split('/')
 			.map(decodeURIComponent);
@@ -1319,23 +1350,31 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		service: ProjectManagerMainService,
 		req: HucodeWebProjectManagerRequest,
 		res: HucodeWebProjectManagerResponse,
+		sessionId: string,
 		token: CancellationToken
 	): Promise<true> {
 		if (this.disposed) {
 			return this.writeEventClientUnavailableError(res);
+		}
+		const previousClient = this.eventClientsBySession.get(sessionId);
+		if (previousClient) {
+			this.removeEventClient(previousClient);
 		}
 		if (this.eventClients.size >= this.eventClientLimit) {
 			return this.writeEventClientCapacityError(res);
 		}
 
 		const client: HucodeWebProjectEventClient = {
+			sessionId,
 			req,
 			res,
+			gitConsumers: new Map(),
 			closed: false,
 			ready: false,
 			pendingInitialProjects: undefined,
 			blocked: false,
 			pendingFrame: undefined,
+			pendingGitWorktreeTargets: new Map(),
 			drainListening: false,
 			heartbeatTimer: undefined,
 			backpressureTimer: undefined,
@@ -1345,6 +1384,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		client.onTerminated = () => this.removeEventClient(client);
 		client.onDrain = () => this.drainEventClient(client);
 		this.eventClients.add(client);
+		this.eventClientsBySession.set(sessionId, client);
 		req.on?.('aborted', client.onTerminated);
 		res.on?.('close', client.onTerminated);
 		res.on?.('error', client.onTerminated);
@@ -1479,6 +1519,39 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 	}
 
+	private broadcastGitWorktreeTargets(
+		change: GitWorktreeTargetChange
+	): void {
+		const owner = this.webGitConsumerOwners.get(change.consumerId);
+		if (!owner || owner.client.closed || !owner.client.ready) {
+			return;
+		}
+		const clientChange = {
+			consumerId: owner.consumerId,
+			observations: change.observations,
+		};
+		if (owner.client.blocked) {
+			owner.client.pendingGitWorktreeTargets.set(
+				owner.consumerId,
+				clientChange
+			);
+			return;
+		}
+		this.writeGitWorktreeTargetsEvent(owner.client, clientChange);
+	}
+
+	private writeGitWorktreeTargetsEvent(
+		client: HucodeWebProjectEventClient,
+		change: GitWorktreeTargetChange
+	): void {
+		this.writeEventFrame(
+			client,
+			`event: git-worktrees\n` +
+			`data: ${JSON.stringify(change)}\n\n`,
+			false
+		);
+	}
+
 	private writeProjectsEvent(
 		client: HucodeWebProjectEventClient,
 		projects: readonly ProjectRecord[],
@@ -1544,6 +1617,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		if (pendingFrame !== undefined) {
 			this.writeEventFrame(client, pendingFrame);
 		}
+		if (client.blocked) {
+			return;
+		}
+		for (const [consumerId, change] of client.pendingGitWorktreeTargets) {
+			client.pendingGitWorktreeTargets.delete(consumerId);
+			this.writeGitWorktreeTargetsEvent(client, change);
+			if (client.blocked) {
+				return;
+			}
+		}
 	}
 
 	private removeEventClient(
@@ -1555,6 +1638,10 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 		client.closed = true;
 		this.eventClients.delete(client);
+		if (this.eventClientsBySession.get(client.sessionId) === client) {
+			this.eventClientsBySession.delete(client.sessionId);
+		}
+		this.clearEventClientGitConsumers(client);
 		client.req.removeListener?.('aborted', client.onTerminated);
 		client.res.removeListener?.('close', client.onTerminated);
 		client.res.removeListener?.('error', client.onTerminated);
@@ -1579,6 +1666,58 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				// The response can already be closed or failed.
 			}
 		}
+	}
+
+	private requireEventClient(sessionId: string): HucodeWebProjectEventClient {
+		const client = this.eventClientsBySession.get(sessionId);
+		if (!client || client.closed || !client.ready) {
+			throw new BadRequestError(
+				'Git monitor event session is not connected.'
+			);
+		}
+		return client;
+	}
+
+	private isCurrentGitRegistration(
+		client: HucodeWebProjectEventClient,
+		consumerId: string,
+		registration: WebGitConsumerRegistration
+	): boolean {
+		return !this.disposed &&
+			!client.closed &&
+			client.ready &&
+			this.eventClientsBySession.get(client.sessionId) === client &&
+			client.gitConsumers.get(consumerId) === registration &&
+			this.webGitConsumerOwners.get(registration.serviceConsumerId)
+				?.registrationId === registration.registrationId;
+	}
+
+	private requireCurrentGitRegistration(
+		client: HucodeWebProjectEventClient,
+		consumerId: string,
+		registration: WebGitConsumerRegistration
+	): void {
+		if (!this.isCurrentGitRegistration(client, consumerId, registration)) {
+			throw new BadRequestError(
+				'Git monitor event session is not connected.'
+			);
+		}
+	}
+
+	private clearEventClientGitConsumers(
+		client: HucodeWebProjectEventClient
+	): void {
+		for (const registration of client.gitConsumers.values()) {
+			this.webGitConsumerOwners.delete(registration.serviceConsumerId);
+			void this.service?.clearGitWorktreeTargets(
+				registration.serviceConsumerId
+			)
+				.catch(error => this.logService.warn(
+					`[Hucode Projects] Failed to clear Git monitor target: ${error}`
+				));
+		}
+		client.gitConsumers.clear();
+		client.pendingGitWorktreeTargets.clear();
 	}
 }
 
@@ -1621,6 +1760,33 @@ class ProjectStateUnavailableError extends Error {
 
 class InvalidProjectStateError extends Error { }
 
+function getEventSessionId(relativePath: string): string | undefined {
+	const prefix = 'events/';
+	if (!relativePath.startsWith(prefix)) {
+		return undefined;
+	}
+	const encoded = relativePath.substring(prefix.length);
+	if (!encoded || encoded.includes('/')) {
+		return undefined;
+	}
+	try {
+		const sessionId = decodeURIComponent(encoded);
+		return /^[A-Za-z0-9._-]{1,128}$/.test(sessionId)
+			? sessionId
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function getWebGitConsumerId(
+	sessionId: string,
+	consumerId: string,
+	registrationId: number
+): string {
+	return `web:${JSON.stringify([sessionId, consumerId, registrationId])}`;
+}
+
 function requireString(body: unknown, key: string): string {
 	const value = readProperty(body, key);
 	if (typeof value !== 'string' || !value.trim()) {
@@ -1640,6 +1806,19 @@ function requireBoolean(body: unknown, key: string): boolean {
 		throw new BadRequestError(`Missing ${key}.`);
 	}
 	return value;
+}
+
+function requireStringArray(body: unknown, key: string): readonly string[] {
+	const value = readProperty(body, key);
+	if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+		throw new BadRequestError(`Invalid ${key}.`);
+	}
+	if (value.length > PROJECT_MANAGER_GIT_TARGET_LIMIT) {
+		throw new BadRequestError(
+			`${key} exceeds the limit of ${PROJECT_MANAGER_GIT_TARGET_LIMIT}.`
+		);
+	}
+	return value.filter(entry => entry.length > 0);
 }
 
 function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {

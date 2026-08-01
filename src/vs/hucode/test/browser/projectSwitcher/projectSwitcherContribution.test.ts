@@ -13,7 +13,9 @@ import { ElementsDragAndDropData, ListViewTargetSector } from
 	'../../../../base/browser/ui/list/listView.js';
 import { ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
 import { mainWindow } from '../../../../base/browser/window.js';
+import { timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
+import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -28,6 +30,7 @@ import { INotificationService } from
 import { WorkbenchObjectTree } from
 	'../../../../platform/list/browser/listService.js';
 import {
+	GitWorktreeTargetChange,
 	IProjectManagerService,
 	ProjectRecord,
 	WorktreeRecord,
@@ -169,6 +172,7 @@ suite('ProjectSwitcherContribution', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];
 		const renderer = new ProjectSwitcherRenderer(
 			() => 'compact',
+			() => true,
 			{
 				executeCommand: async (id: string, ...args: unknown[]) => {
 					commands.push({ id, args });
@@ -242,6 +246,165 @@ suite('ProjectSwitcherContribution', () => {
 		renderer.disposeTemplate(template);
 	});
 
+	test('renders independent name branch and path fields in source order', () => {
+		let layout: 'compact' | 'twoLine' = 'compact';
+		const renderer = new ProjectSwitcherRenderer(
+			() => layout,
+			() => true,
+			{ executeCommand: async () => undefined } as unknown as ICommandService
+		);
+		const container = mainWindow.document.createElement('div');
+		const template = renderer.renderTemplate(container);
+		const item = worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		});
+
+		renderer.renderElement(treeNode(item), 0, template);
+		const compact = Array.from(template.text.children).map(element => ({
+			className: element.className,
+			text: element.textContent,
+			display: (element as HTMLElement).style.display,
+		}));
+		layout = 'twoLine';
+		renderer.renderElement(treeNode(item), 0, template);
+		const twoLine = {
+			branch: template.description.textContent,
+			branchDisplay: template.description.style.display,
+			path: template.path.textContent,
+			pathDisplay: template.path.style.display,
+		};
+
+		assert.deepStrictEqual({
+			compact,
+			twoLine,
+			twoLineClass: template.container.classList.contains(
+				'hucode-project-switcher-two-line'
+			),
+			hasBranch: template.container.classList.contains(
+				'hucode-project-switcher-has-branch'
+			),
+			hasPath: template.container.classList.contains(
+				'hucode-project-switcher-has-path'
+			),
+		}, {
+			compact: [{
+				className: 'hucode-project-switcher-label',
+				text: 'Feature',
+				display: '',
+			}, {
+				className: 'hucode-project-switcher-description',
+				text: 'feature/topic',
+				display: '',
+			}, {
+				className: 'hucode-project-switcher-path',
+				text: '',
+				display: 'none',
+			}],
+			twoLine: {
+				branch: 'feature/topic',
+				branchDisplay: '',
+				path: '/repo.worktrees/feature',
+				pathDisplay: '',
+			},
+			twoLineClass: true,
+			hasBranch: true,
+			hasPath: true,
+		});
+		renderer.disposeTemplate(template);
+	});
+
+	test('toggles inline metadata icons without decorating project paths', () => {
+		let showInlineIcons = true;
+		const renderer = new ProjectSwitcherRenderer(
+			() => 'twoLine',
+			() => showInlineIcons,
+			{ executeCommand: async () => undefined } as unknown as ICommandService
+		);
+		const container = mainWindow.document.createElement('div');
+		const template = renderer.renderTemplate(container);
+
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const worktree = {
+			branch: template.description.textContent,
+			path: template.path.textContent,
+			branchIcon: !!template.description.querySelector(
+				'.codicon-git-branch-compact'
+			),
+			pathIcon: !!template.path.querySelector('.codicon-folder-compact'),
+		};
+
+		renderer.renderElement(treeNode(retainedWorkbenchItem({
+			name: 'Scratch',
+			branch: 'topic',
+			path: '/scratch/repo',
+		})), 0, template);
+		const workbench = {
+			name: template.label.textContent,
+			branch: template.description.textContent,
+			path: template.path.textContent,
+			branchIcon: !!template.description.querySelector(
+				'.codicon-git-branch-compact'
+			),
+			pathIcon: !!template.path.querySelector('.codicon-folder-compact'),
+			workbenchClass: template.container.classList.contains(
+				'hucode-project-switcher-workbench'
+			),
+		};
+
+		showInlineIcons = false;
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const hiddenIcons = {
+			branch: template.descriptionIcon.style.display,
+			path: template.pathIcon.style.display,
+		};
+
+		renderer.renderElement(treeNode(projectItem({
+			description: '/projects',
+		})), 0, template);
+
+		assert.deepStrictEqual({
+			worktree,
+			workbench,
+			hiddenIcons,
+			projectDescription: template.description.textContent,
+			projectDescriptionIcon: !!template.description.querySelector(
+				'.codicon-folder'
+			),
+		}, {
+			worktree: {
+				branch: 'feature/topic',
+				path: '/repo.worktrees/feature',
+				branchIcon: true,
+				pathIcon: true,
+			},
+			workbench: {
+				name: 'Scratch',
+				branch: 'topic',
+				path: '/scratch/repo',
+				branchIcon: true,
+				pathIcon: true,
+				workbenchClass: true,
+			},
+			hiddenIcons: {
+				branch: 'none',
+				path: 'none',
+			},
+			projectDescription: '/projects',
+			projectDescriptionIcon: false,
+		});
+		renderer.disposeTemplate(template);
+	});
+
 	test('renders retained lifecycle states in accessible labels', () => {
 		const provider = new ProjectSwitcherAccessibilityProvider();
 		const labels = ([
@@ -269,10 +432,164 @@ suite('ProjectSwitcherContribution', () => {
 		]);
 	});
 
-	test('render wires the live tree services and initial empty state', () => {
+	test('omits redundant branches from accessible row labels', () => {
+		const provider = new ProjectSwitcherAccessibilityProvider();
+
+		assert.deepStrictEqual({
+			workbench: provider.getAriaLabel(retainedWorkbenchItem({
+				name: 'topic',
+				branch: 'topic',
+				path: '/workbenches/topic',
+			})),
+			worktree: provider.getAriaLabel(worktreeItem({
+				name: 'topic',
+				branch: 'topic',
+				path: '/repo.worktrees/topic',
+			})),
+			distinctBranch: provider.getAriaLabel(worktreeItem({
+				name: 'Topic label',
+				branch: 'topic',
+				path: '/repo.worktrees/topic',
+			})),
+		}, {
+			workbench: 'topic, /workbenches/topic, Unloaded',
+			worktree: 'topic, /repo.worktrees/topic',
+			distinctBranch: 'Topic label, topic, /repo.worktrees/topic',
+		});
+	});
+
+	test('keeps configured worktree paths out of non-Omni rows', () => {
+		const linkedPath = '/repo.worktrees/feature';
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			collapsedProjectIds: new Set<string>(),
+			collapsedOmniSections: new Set<string>(),
+			omniSectionOrder: ['workbenches', 'projects'],
+			gitWorktreeObservations: [],
+			environmentService: { isOmniWindow: false },
+			omniHostedWorkspaceState: hostedState(),
+			configurationService: { getValue: () => true },
+			getPathLabel: (path: string) => path,
+			getActiveWorktreePath: () => undefined,
+		});
+		const buildRoots = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'buildRoots'
+		) as (this: object, projects: readonly ProjectRecord[]) => {
+			readonly itemsById: Map<string, ProjectSwitcherItem>;
+		};
+		const model = buildRoots.call(host, [{
+			id: 'project-1',
+			label: 'repo',
+			rootUri: URI.file('/repo'),
+			pinned: false,
+			order: 1,
+			worktreeState: 'current',
+			worktrees: [{
+				path: linkedPath,
+				label: 'feature',
+				branch: 'feature',
+				isMain: false,
+				isDetached: false,
+			}],
+		}] as readonly ProjectRecord[]);
+		const worktree = [...model.itemsById.values()].find(item =>
+			item.kind === 'worktree'
+		) as ProjectSwitcherWorktreeItem;
+
+		assert.strictEqual(worktree.path, undefined);
+	});
+
+	test('logs decorative Git monitor failures without a user toast',
+		async () => {
+			const warnings: unknown[] = [];
+			const errors: unknown[] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				gitMonitorGeneration: 0,
+				gitMonitorConsumerId: 'project-switcher:window:1',
+				projectManagerService: {
+					setGitWorktreeTargets: async () => {
+						throw new Error('monitor unavailable');
+					},
+				},
+				logService: { warn: (error: unknown) => warnings.push(error) },
+				notificationService: {
+					error: (error: unknown) => errors.push(error),
+				},
+				gitWorktreeObservations: [],
+				projects: [],
+				renderProjects: () => undefined,
+			});
+			const updateTargets = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateGitWorktreeTargets'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => Promise<void>;
+
+			await updateTargets.call(host, {
+				...hostedState(),
+				retainedWorkbenches: [retainedRecord('scratch', '/scratch', 0)],
+			});
+
+			assert.strictEqual(errors.length, 0);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(String(warnings[0]), /monitor unavailable/);
+		});
+
+	test('bounds decorative Git monitoring without dropping the request',
+		async () => {
+			const warnings: unknown[] = [];
+			let targetPaths: readonly string[] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				gitMonitorGeneration: 0,
+				gitMonitorConsumerId: 'project-switcher:window:1',
+				projectManagerService: {
+					setGitWorktreeTargets: async (
+						_consumerId: string,
+						paths: readonly string[]
+					) => {
+						targetPaths = paths;
+						return [];
+					},
+				},
+				logService: { warn: (warning: unknown) => warnings.push(warning) },
+				gitWorktreeObservations: [],
+				projects: [],
+				renderProjects: () => undefined,
+			});
+			const updateTargets = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateGitWorktreeTargets'
+			) as (
+				this: object,
+				state: IHucodeHostedWorkspaceState
+			) => Promise<void>;
+
+			await updateTargets.call(host, {
+				...hostedState(),
+				retainedWorkbenches: Array.from(
+					{ length: 129 },
+					(_, index) => retainedRecord(
+						`workbench-${index}`,
+						`/workbench-${index}`,
+						index
+					)
+				),
+			});
+
+			assert.strictEqual(targetPaths.length, 128);
+			assert.deepStrictEqual(warnings, [
+				'[ProjectSwitcher] Monitoring the first 128 of 129 arbitrary ' +
+				'workbenches for Git metadata.',
+			]);
+		});
+
+	test('render wires the live tree services and initial empty state', async () => {
 		const projectChanges = disposables.add(
 			new Emitter<readonly ProjectRecord[]>()
 		);
+		const gitChanges = disposables.add(new Emitter<{
+			readonly consumerId: string;
+			readonly observations: readonly [];
+		}>());
 		const workspaceFolderChanges = disposables.add(new Emitter<void>());
 		const workspaceStateChanges = disposables.add(new Emitter<void>());
 		const hostFocusChanges = disposables.add(new Emitter<boolean>());
@@ -283,6 +600,19 @@ suite('ProjectSwitcherContribution', () => {
 			new Emitter<IConfigurationChangeEvent>()
 		);
 		const commands: string[] = [];
+		const clearedGitConsumers: string[] = [];
+		const clearError = new Error('clear failed');
+		const warnings: unknown[] = [];
+		const unhandledRejections: unknown[] = [];
+		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+			unhandledRejections.push(event.reason);
+			event.preventDefault();
+		};
+		mainWindow.addEventListener('unhandledrejection', onUnhandledRejection);
+		disposables.add(toDisposable(() => mainWindow.removeEventListener(
+			'unhandledrejection',
+			onUnhandledRejection
+		)));
 		const subscriptions: string[] = [];
 		const treeLayouts: Array<{ height: number; width: number }> = [];
 		let treeOptions: {
@@ -291,6 +621,10 @@ suite('ProjectSwitcherContribution', () => {
 			};
 			readonly dnd: ProjectSwitcherDragAndDrop;
 		} | undefined;
+		let treeDelegate: {
+			getHeight(item: ProjectSwitcherItem): number;
+		} | undefined;
+		let showInlineIcons: (() => boolean) | undefined;
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
 		const tree = {
 			contextKeyService: {
@@ -317,8 +651,10 @@ suite('ProjectSwitcherContribution', () => {
 		const instantiationService = {
 			createInstance: (ctor: unknown, ...args: unknown[]) => {
 				if (ctor === ProjectSwitcherRenderer) {
+					showInlineIcons = args[1] as () => boolean;
 					return new ProjectSwitcherRenderer(
 						args[0] as (item: ProjectSwitcherItem) => 'compact',
+						args[1] as () => boolean,
 						commandService
 					);
 				}
@@ -340,6 +676,7 @@ suite('ProjectSwitcherContribution', () => {
 					);
 				}
 				if (ctor === WorkbenchObjectTree) {
+					treeDelegate = args[2] as typeof treeDelegate;
 					renderers = args[3] as readonly ProjectSwitcherRenderer[];
 					treeOptions = args[4] as typeof treeOptions;
 					return tree;
@@ -364,6 +701,17 @@ suite('ProjectSwitcherContribution', () => {
 				getProjects: () => new Promise<readonly ProjectRecord[]>(
 					() => undefined
 				),
+				onDidChangeGitWorktreeTargets: (
+					listener: (change: GitWorktreeTargetChange) => void
+				) => {
+					subscriptions.push('git-monitor');
+					return gitChanges.event(listener);
+				},
+				setGitWorktreeTargets: async () => [],
+				clearGitWorktreeTargets: async (consumerId: string) => {
+					clearedGitConsumers.push(consumerId);
+					throw clearError;
+				},
 			} as unknown as IProjectManagerService,
 			{
 				onDidChangeWorkspaceFolders: (listener: () => void) => {
@@ -412,6 +760,7 @@ suite('ProjectSwitcherContribution', () => {
 				},
 				getValue: () => undefined,
 			} as unknown as IConfigurationService,
+			{ warn: (value: unknown) => warnings.push(value) } as never,
 		));
 
 		widget.render(container);
@@ -432,6 +781,11 @@ suite('ProjectSwitcherContribution', () => {
 				'.hucode-project-switcher-empty'
 			)?.classList.contains('hidden'),
 			treeRenderer: renderers[0] instanceof ProjectSwitcherRenderer,
+			defaultWorkbenchHeight: treeDelegate?.getHeight(
+				retainedWorkbenchItem()
+			),
+			defaultWorktreeHeight: treeDelegate?.getHeight(worktreeItem()),
+			showInlineIcons: showInlineIcons?.(),
 			treeDnd: treeOptions?.dnd instanceof ProjectSwitcherDragAndDrop,
 			ariaLabel: treeOptions?.accessibilityProvider
 				.getWidgetAriaLabel(),
@@ -443,6 +797,9 @@ suite('ProjectSwitcherContribution', () => {
 			treeHidden: true,
 			emptyHidden: false,
 			treeRenderer: true,
+			defaultWorkbenchHeight: 44,
+			defaultWorktreeHeight: 44,
+			showInlineIcons: true,
 			treeDnd: true,
 			ariaLabel: 'Workbenches and Projects',
 			treeLayouts: [{ height: 260, width: 420 }],
@@ -453,10 +810,22 @@ suite('ProjectSwitcherContribution', () => {
 			'configuration',
 			'focus',
 			'folders',
+			'git-monitor',
 			'projects',
 			'shell-state',
 			'workspace-state',
 		]);
+		const gitConsumerId = Reflect.get(widget, 'gitMonitorConsumerId');
+		assert.strictEqual(
+			gitConsumerId,
+			`project-switcher:window:${getWindowId(mainWindow)}`
+		);
+		widget.dispose();
+		await timeout(0);
+		assert.deepStrictEqual(clearedGitConsumers, [gitConsumerId]);
+		assert.deepStrictEqual(unhandledRejections, []);
+		assert.strictEqual(warnings.length, 1);
+		assert.match(String(warnings[0]), /clear failed/);
 	});
 
 	test('accepts only valid project and worktree reorder boundaries', () => {
@@ -1079,13 +1448,16 @@ suite('ProjectSwitcherContribution', () => {
 			} as unknown as IContextKeyService,
 			{
 				onDidChangeProjects: Event.None,
+				onDidChangeGitWorktreeTargets: Event.None,
+				setGitWorktreeTargets: async () => [],
+				clearGitWorktreeTargets: async () => undefined,
 			} as unknown as IProjectManagerService,
 			{
 				onDidChangeWorkspaceFolders: Event.None,
 				onDidChangeWorkbenchState: Event.None,
 				getWorkbenchState: () => WorkbenchState.EMPTY,
 			} as unknown as IWorkspaceContextService,
-			{} as unknown as INotificationService,
+			{ error: () => undefined } as unknown as INotificationService,
 			{} as unknown as ICommandService,
 			{
 				get: () => undefined,
@@ -1107,6 +1479,7 @@ suite('ProjectSwitcherContribution', () => {
 				onDidChangeConfiguration: Event.None,
 				getValue: () => undefined,
 			} as unknown as IConfigurationService,
+			{ warn: () => undefined } as never,
 		));
 		Reflect.set(widget, 'omniHostedWorkspaceState', initialState);
 
@@ -1166,6 +1539,8 @@ function worktreeItem(
 		handle: 'worktree:project-1:%2Frepo%2Ffeature',
 		kind: 'worktree',
 		label: 'feature',
+		name: 'feature',
+		path: '/repo/feature',
 		description: '/repo/feature',
 		contextValue: 'hucode-worktree',
 		projectId: 'project-1',
@@ -1188,6 +1563,8 @@ function retainedWorkbenchItem(
 		handle: 'workbench:scratch',
 		kind: 'workbench',
 		label: 'Scratch',
+		name: 'Scratch',
+		path: '/scratch',
 		description: '/scratch',
 		contextValue: 'hucode-retained-workbench',
 		retainedWorkbenchId: 'scratch',

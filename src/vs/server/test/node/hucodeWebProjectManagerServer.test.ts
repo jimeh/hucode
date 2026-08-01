@@ -34,6 +34,7 @@ interface ProjectManagerResponse<TBody = unknown> {
 }
 
 interface ProjectManagerEventResponse {
+	readonly sessionId: string;
 	readonly statusCode: number;
 	readonly headers: Record<string, unknown>;
 	readonly body: string;
@@ -261,6 +262,110 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.deepStrictEqual(second.body.projects, [first.body.project]);
 	});
 
+	test('observes and clears ephemeral Git targets through the web API',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const subdirectory = join(projectPath, 'nested');
+			await fs.mkdir(subdirectory);
+			const events = await handleEvents(server);
+
+			const observed = await handle<{
+				readonly observations: readonly {
+					readonly targetPath: string;
+					readonly state: string;
+					readonly repositoryRoot?: string;
+					readonly worktree?: {
+						readonly path: string;
+						readonly branch?: string;
+					};
+				}[];
+			}>(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'web-shell',
+					targetPaths: [subdirectory],
+				}
+			);
+			const cleared = await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/clear`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'web-shell',
+				}
+			);
+
+			const observation = observed.body.observations[0];
+			assert.deepStrictEqual({
+				statusCode: observed.statusCode,
+				targetPath: observation.targetPath,
+				state: observation.state,
+				repositoryRoot: observation.repositoryRoot,
+				worktreePath: observation.worktree?.path,
+				branchType: typeof observation.worktree?.branch,
+				clear: cleared,
+			}, {
+				statusCode: 200,
+				targetPath: subdirectory,
+				state: 'current',
+				repositoryRoot: projectPath,
+				worktreePath: projectPath,
+				branchType: 'string',
+				clear: { statusCode: 200, body: {} },
+			});
+			events.close();
+		});
+
+	test('observes retained-folder repository removal and recreation',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const target = join(serverDataPath, 'retained-folder');
+			await fs.mkdir(target);
+			const events = await handleEvents(server);
+			await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'membership-shell',
+					targetPaths: [target],
+				}
+			);
+
+			const gitMarker = join(target, '.git');
+			const markerWatcher = getGitMonitorProbeWatcher(server, gitMarker);
+			assert.ok(markerWatcher);
+			await fs.rm(target, { recursive: true });
+			await fs.mkdir(target);
+			await waitFor(() => {
+				const rebound = getGitMonitorProbeWatcher(server, gitMarker);
+				return !!rebound && rebound !== markerWatcher;
+			}, 5000);
+
+			await execFile('git', ['init'], { cwd: target });
+			await waitFor(() => readEventData(events.body, 'git-worktrees')
+				.some(change => change.observations[0]?.state === 'current'), 5000);
+
+			await fs.rm(join(target, '.git'), { recursive: true, force: true });
+			await waitFor(() => readEventData(events.body, 'git-worktrees')
+				.filter(change =>
+					change.observations[0]?.state === 'notRepository'
+				).length >= 2, 5000);
+
+			await execFile('git', ['init'], { cwd: target });
+			await waitFor(() => readEventData(events.body, 'git-worktrees')
+				.filter(change =>
+					change.observations[0]?.state === 'current'
+				).length >= 2, 5000);
+			events.close();
+		}
+	);
+
 	test('keeps a normal Node HTTP request live after its body completes',
 		async () => {
 			const http = await import('http');
@@ -328,6 +433,339 @@ suite('HucodeWebProjectManagerServer', function () {
 			}
 		}
 	);
+
+	test('clears event-client Git targets after an abrupt disconnect',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const subdirectory = join(projectPath, 'nested');
+			await fs.mkdir(subdirectory);
+			const events = await handleEvents(server);
+
+			await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'disconnecting-shell',
+					targetPaths: [subdirectory],
+				}
+			);
+			assert.strictEqual(getGitMonitorConsumerCount(server), 1);
+
+			events.close();
+
+			assert.strictEqual(getGitMonitorConsumerCount(server), 0);
+		}
+	);
+
+	test('rejects Git targets without a connected event session', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: 'missing-session',
+				consumerId: 'orphaned-shell',
+				targetPaths: [projectPath],
+			}
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'Git monitor event session is not connected.' },
+		});
+		assert.strictEqual(getGitMonitorConsumerCount(server), 0);
+	});
+
+	test('sends Git target observations only to their owning event client',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const subdirectory = join(projectPath, 'nested');
+			await fs.mkdir(subdirectory);
+			const owner = await handleEvents(server);
+			const other = await handleEvents(server);
+
+			await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: owner.sessionId,
+					consumerId: 'owner-shell',
+					targetPaths: [subdirectory],
+				}
+			);
+
+			assert.deepStrictEqual(
+				readEventData(owner.body, 'git-worktrees').map(change =>
+					change.observations[0].targetPath
+				),
+				[subdirectory]
+			);
+			assert.deepStrictEqual(
+				readEventData(other.body, 'git-worktrees'),
+				[]
+			);
+
+			owner.close();
+			other.close();
+		}
+	);
+
+	test('does not admit Git targets after their event owner disconnects',
+		async () => {
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				undefined,
+				undefined,
+				undefined,
+				1
+			);
+			const events = await handleEvents(server);
+			const service = Reflect.get(server, 'service') as {
+				getProjects(): Promise<readonly unknown[]>;
+				setGitWorktreeTargets(): Promise<readonly unknown[]>;
+			};
+			let targetRegistrations = 0;
+			const readStarted = new DeferredPromise<void>();
+			const releaseRead = new DeferredPromise<void>();
+			service.getProjects = async () => {
+				readStarted.complete();
+				await releaseRead.p;
+				return [];
+			};
+			service.setGitWorktreeTargets = async () => {
+				targetRegistrations++;
+				return [];
+			};
+			const activeRead = startHandle(
+				server,
+				'GET',
+				HUCODE_WEB_PROJECTS_API_PATH
+			);
+			await readStarted.p;
+			const registration = startHandle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'queued-shell',
+					targetPaths: [projectPath],
+				}
+			);
+			await waitFor(() => requestQueueSize(server, 'gitReadLimiter') === 1);
+
+			events.close();
+			releaseRead.complete();
+			await activeRead.completion;
+			await registration.completion;
+
+			assert.strictEqual(registration.response.statusCode, 400);
+			assert.strictEqual(targetRegistrations, 0);
+			assert.strictEqual(getGitMonitorConsumerCount(server), 0);
+		}
+	);
+
+	test('keeps superseded Git registrations isolated by generation',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const events = await handleEvents(server);
+			const service = Reflect.get(server, 'service') as {
+				setGitWorktreeTargets(
+					consumerId: string,
+					targetPaths: readonly string[]
+				): Promise<readonly unknown[]>;
+				clearGitWorktreeTargets(consumerId: string): Promise<void>;
+			};
+			const firstStarted = new DeferredPromise<void>();
+			const releaseFirst = new DeferredPromise<void>();
+			const serviceConsumerIds: string[] = [];
+			const clearedConsumerIds: string[] = [];
+			service.setGitWorktreeTargets = async (consumerId, targetPaths) => {
+				serviceConsumerIds.push(consumerId);
+				if (targetPaths[0] === '/first') {
+					firstStarted.complete();
+					await releaseFirst.p;
+				}
+				return [];
+			};
+			service.clearGitWorktreeTargets = async consumerId => {
+				clearedConsumerIds.push(consumerId);
+			};
+
+			const first = startHandle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'shell',
+					targetPaths: ['/first'],
+				}
+			);
+			await firstStarted.p;
+			const second = await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: events.sessionId,
+					consumerId: 'shell',
+					targetPaths: ['/second'],
+				}
+			);
+			releaseFirst.complete();
+			await first.completion;
+
+			assert.strictEqual(second.statusCode, 200);
+			assert.strictEqual(serviceConsumerIds.length, 2);
+			assert.notStrictEqual(serviceConsumerIds[0], serviceConsumerIds[1]);
+			assert.ok(clearedConsumerIds.includes(serviceConsumerIds[0]));
+			assert.ok(!clearedConsumerIds.includes(serviceConsumerIds[1]));
+			events.close();
+		}
+	);
+
+	test('rejects excessive Git target lists', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId: 'oversized-shell',
+				targetPaths: Array.from(
+					{ length: 129 },
+					(_, index) => `/target-${index}`
+				),
+			}
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'targetPaths exceeds the limit of 128.' },
+		});
+		events.close();
+	});
+
+	test('accepts the maximum Git target list', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const service = Reflect.get(server, 'service') as {
+			setGitWorktreeTargets(
+				consumerId: string,
+				targetPaths: readonly string[]
+			): Promise<readonly unknown[]>;
+		};
+		let receivedCount = 0;
+		service.setGitWorktreeTargets = async (_consumerId, targetPaths) => {
+			receivedCount = targetPaths.length;
+			return [];
+		};
+
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId: 'maximum-shell',
+				targetPaths: Array.from(
+					{ length: 128 },
+					(_, index) => `/target-${index}`
+				),
+			}
+		);
+
+		assert.strictEqual(response.statusCode, 200);
+		assert.strictEqual(receivedCount, 128);
+		events.close();
+	});
+
+	test('limits Git monitor consumers across one event session', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const register = (consumerId: string) => handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId,
+				targetPaths: [projectPath],
+			}
+		);
+
+		assert.strictEqual((await register('shell')).statusCode, 200);
+		assert.deepStrictEqual(await register('other'), {
+			statusCode: 400,
+			body: { error: 'Git monitor consumer limit reached.' },
+		});
+		assert.strictEqual((await register('shell')).statusCode, 200);
+		assert.strictEqual(getGitMonitorConsumerCount(server), 1);
+		events.close();
+	});
+
+	test('rejects oversized Git monitor consumer identifiers', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId: 'x'.repeat(129),
+				targetPaths: [projectPath],
+			}
+		);
+
+		assert.deepStrictEqual(response, {
+			statusCode: 400,
+			body: { error: 'consumerId exceeds the limit of 128 characters.' },
+		});
+		events.close();
+	});
+
+	test('preserves whitespace in Git target paths', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = await handleEvents(server);
+		const service = Reflect.get(server, 'service') as {
+			setGitWorktreeTargets(
+				consumerId: string,
+				targetPaths: readonly string[]
+			): Promise<readonly unknown[]>;
+		};
+		let received: readonly string[] = [];
+		service.setGitWorktreeTargets = async (_consumerId, targetPaths) => {
+			received = targetPaths;
+			return [];
+		};
+		const path = ' /repo with spaces/ ';
+
+		const response = await handle(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+			{
+				sessionId: events.sessionId,
+				consumerId: 'whitespace-shell',
+				targetPaths: [path],
+			}
+		);
+
+		assert.strictEqual(response.statusCode, 200);
+		assert.deepStrictEqual(received, [path]);
+		events.close();
+	});
 
 	test('rejects unsupported worktree ref sort options', async () => {
 		const server = createServer(serverDataPath, disposables, servers);
@@ -594,6 +1032,19 @@ suite('HucodeWebProjectManagerServer', function () {
 			{ projects: add.body.projects }
 		);
 
+		events.close();
+	});
+
+	test('keeps the sessionless project event route compatible', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const events = startEvents(server, { sessionless: true });
+		await events.completion;
+
+		assert.strictEqual(events.statusCode, 200);
+		assert.strictEqual(
+			headersValue(events.headers, 'Content-Type'),
+			'text/event-stream'
+		);
 		events.close();
 	});
 
@@ -1836,11 +2287,13 @@ suite('HucodeWebProjectManagerServer', function () {
 							token: CancellationToken
 						): Promise<readonly unknown[]>;
 					};
-					metadataWatcher: {
-						watch(
-							path: string,
-							onDidChange: () => void
-						): ReturnType<typeof toDisposable>;
+					gitWorktreeMonitor: {
+						metadataWatcher: {
+							watch(
+								path: string,
+								onDidChange: () => void
+							): ReturnType<typeof toDisposable>;
+						};
 					};
 				};
 			}).service;
@@ -1853,7 +2306,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				lifetimeEvents.push('service-disposed');
 				originalDispose();
 			};
-			service.metadataWatcher.watch = path => {
+			service.gitWorktreeMonitor.metadataWatcher.watch = path => {
 				lifetimeEvents.push(`watch:${path}`);
 				return toDisposable(() => {
 					lifetimeEvents.push(`unwatch:${path}`);
@@ -1985,11 +2438,13 @@ suite('HucodeWebProjectManagerServer', function () {
 							token: CancellationToken
 						): Promise<readonly unknown[]>;
 					};
-					metadataWatcher: {
-						watch(
-							path: string,
-							onDidChange: () => void
-						): ReturnType<typeof toDisposable>;
+					gitWorktreeMonitor: {
+						metadataWatcher: {
+							watch(
+								path: string,
+								onDidChange: () => void
+							): ReturnType<typeof toDisposable>;
+						};
 					};
 				};
 			}).service;
@@ -2000,7 +2455,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				lifetimeEvents.push('service-disposed');
 				originalDispose();
 			};
-			service.metadataWatcher.watch = path => {
+			service.gitWorktreeMonitor.metadataWatcher.watch = path => {
 				lifetimeEvents.push(`watch:${path}`);
 				return toDisposable(() => {
 					lifetimeEvents.push(`unwatch:${path}`);
@@ -2236,11 +2691,13 @@ suite('HucodeWebProjectManagerServer', function () {
 			const service = (server as unknown as {
 				service: {
 					getProjects(): Promise<readonly unknown[]>;
-					metadataWatcher: {
-						watch(
-							path: string,
-							onDidChange: () => void
-						): ReturnType<typeof toDisposable>;
+					gitWorktreeMonitor: {
+						metadataWatcher: {
+							watch(
+								path: string,
+								onDidChange: () => void
+							): ReturnType<typeof toDisposable>;
+						};
 					};
 				};
 			}).service;
@@ -2251,7 +2708,7 @@ suite('HucodeWebProjectManagerServer', function () {
 				return originalGetProjects();
 			};
 			let watcherCreations = 0;
-			service.metadataWatcher.watch = () => {
+			service.gitWorktreeMonitor.metadataWatcher.watch = () => {
 				watcherCreations++;
 				return toDisposable(() => { });
 			};
@@ -3173,6 +3630,63 @@ suite('HucodeWebProjectManagerServer', function () {
 		slow.close();
 		healthy.close();
 	});
+
+	test('retains Git target updates behind a pending durable project event',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const subdirectory = join(projectPath, 'nested');
+			await fs.mkdir(subdirectory);
+			const slow = await handleEvents(server, {
+				blockProjectWrites: 2,
+			});
+
+			await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			await handle(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/git-monitor/targets`,
+				{
+					sessionId: slow.sessionId,
+					consumerId: 'slow-shell',
+					targetPaths: [subdirectory],
+				}
+			);
+
+			assert.deepStrictEqual(
+				readEventData(slow.body, 'git-worktrees'),
+				[]
+			);
+			slow.response.emit('drain');
+			assert.strictEqual(slow.response.listenerCount('drain'), 1);
+			assert.deepStrictEqual(
+				readEventData(slow.body, 'git-worktrees'),
+				[]
+			);
+			slow.response.emit('drain');
+
+			assert.strictEqual(countEvents(slow.body, 'projects'), 2);
+			assert.strictEqual(readProjectEvents(slow.body).length, 2);
+			assert.deepStrictEqual(
+				readEventData(slow.body, 'git-worktrees').map(change => ({
+					consumerId: change.consumerId,
+					targetPath: change.observations[0].targetPath,
+					state: change.observations[0].state,
+				})),
+				[{
+					consumerId: 'slow-shell',
+					targetPath: subdirectory,
+					state: 'current',
+				}]
+			);
+
+			slow.close();
+		}
+	);
 
 	test('sends retry guidance and heartbeat comments', async () => {
 		const server = createServer(
@@ -4239,6 +4753,76 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.strictEqual(changed, true);
 	});
 
+	test('re-arms a metadata file watch after atomic replacement', async () => {
+		const root = await fs.mkdtemp(join(os.tmpdir(), 'hucode-watch-rearm-'));
+		disposables.add(toDisposable(() => {
+			void fs.rm(root, { recursive: true, force: true });
+		}));
+		const target = join(root, 'HEAD');
+		await fs.writeFile(target, 'ref: refs/heads/main\n');
+
+		const watcher = new HucodeNodeProjectMetadataWatcher(new NullLogService());
+		let changes = 0;
+		disposables.add(watcher.watch(target, () => changes++));
+		const replace = async (branch: string) => {
+			const previousChanges = changes;
+			const replacement = `${target}.lock`;
+			await fs.writeFile(replacement, `ref: refs/heads/${branch}\n`);
+			await fs.rename(replacement, target);
+			await waitFor(() => changes > previousChanges, 3000);
+			await new Promise(resolve => setTimeout(resolve, 50));
+		};
+
+		await replace('feature');
+		await replace('next');
+	});
+
+	test('watches entry membership without observing contents churn', async () => {
+		const root = await fs.mkdtemp(join(os.tmpdir(), 'hucode-entry-watch-'));
+		disposables.add(toDisposable(() => {
+			void fs.rm(root, { recursive: true, force: true });
+		}));
+		const target = join(root, 'worktree');
+		const gitMarker = join(target, '.git');
+		await fs.mkdir(target);
+
+		const watcher = new HucodeNodeProjectMetadataWatcher(new NullLogService());
+		const entryWatcher = watcher as unknown as {
+			watchEntry(
+				path: string,
+				onDidChange: () => void
+			): { dispose(): void };
+		};
+		let changes = 0;
+		let targetChanges = 0;
+		disposables.add(entryWatcher.watchEntry(gitMarker, () => changes++));
+		disposables.add(entryWatcher.watchEntry(target, () => targetChanges++));
+
+		await fs.writeFile(join(target, 'unrelated.txt'), 'unrelated');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		assert.strictEqual(changes, 0);
+
+		await fs.mkdir(gitMarker);
+		await waitFor(() => changes > 0, 3000);
+		const afterCreate = changes;
+		await fs.writeFile(join(gitMarker, 'HEAD'), 'ref: refs/heads/main\n');
+		await fs.writeFile(join(target, 'another.txt'), 'another');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		assert.strictEqual(changes, afterCreate);
+
+		await fs.rm(gitMarker, { recursive: true });
+		await waitFor(() => changes > afterCreate, 3000);
+		const afterRemove = changes;
+		await fs.mkdir(gitMarker);
+		await waitFor(() => changes > afterRemove, 3000);
+
+		await fs.rm(target, { recursive: true });
+		await waitFor(() => targetChanges > 0, 3000);
+		const afterTargetRemove = targetChanges;
+		await fs.mkdir(target);
+		await waitFor(() => targetChanges > afterTargetRemove, 3000);
+	});
+
 	test('matches project API paths', () => {
 		assert.strictEqual(
 			isHucodeWebProjectsApiPath(HUCODE_WEB_PROJECTS_API_PATH),
@@ -4422,9 +5006,13 @@ async function pathExists(path: string): Promise<boolean> {
 	}
 }
 
+let nextEventSessionId = 0;
+
 async function handleEvents(
 	server: HucodeWebProjectManagerServer,
 	options: {
+		readonly sessionId?: string;
+		readonly sessionless?: boolean;
 		readonly blockProjectWrites?: number;
 		readonly throwProjectWrites?: number;
 	} = {}
@@ -4437,10 +5025,14 @@ async function handleEvents(
 function startEvents(
 	server: HucodeWebProjectManagerServer,
 	options: {
+		readonly sessionId?: string;
+		readonly sessionless?: boolean;
 		readonly blockProjectWrites?: number;
 		readonly throwProjectWrites?: number;
 	} = {}
 ): PendingProjectManagerEventResponse {
+	const sessionId = options.sessionId ??
+		`test-session-${++nextEventSessionId}`;
 	const req = Object.assign(new EventEmitter(), {
 		method: 'GET',
 		async *[Symbol.asyncIterator]() { },
@@ -4452,12 +5044,15 @@ function startEvents(
 	const completion = server.handle(
 		req,
 		res,
-		`${HUCODE_WEB_PROJECTS_API_PATH}/events`
+		options.sessionless
+			? `${HUCODE_WEB_PROJECTS_API_PATH}/events`
+			: `${HUCODE_WEB_PROJECTS_API_PATH}/events/${sessionId}`
 	).then(result => {
 		assert.strictEqual(result, true);
 	});
 
 	return {
+		sessionId,
 		get statusCode() {
 			return res.statusCode;
 		},
@@ -4699,11 +5294,61 @@ function headersValue(
 }
 
 function readProjectEvents(body: string): unknown[] {
-	return body
-		.split(/\n\n/)
+	return readEventFrames(body, 'projects')
 		.map(chunk => chunk.split('\n').find(line => line.startsWith('data: ')))
 		.filter(line => !!line)
 		.map(line => JSON.parse(line!.substring('data: '.length)));
+}
+
+function readEventFrames(body: string, eventName: string): string[] {
+	return body
+		.split(/\n\n/)
+		.filter(chunk => chunk.split('\n').includes(`event: ${eventName}`));
+}
+
+function readEventData(
+	body: string,
+	eventName: string
+): Array<{
+	readonly consumerId: string;
+	readonly observations: readonly {
+		readonly targetPath: string;
+		readonly state: string;
+	}[];
+}> {
+	return readEventFrames(body, eventName)
+		.map(chunk => chunk.split('\n').find(line => line.startsWith('data: ')))
+		.filter(line => !!line)
+		.map(line => JSON.parse(line!.substring('data: '.length)));
+}
+
+function countEvents(body: string, eventName: string): number {
+	return readEventFrames(body, eventName).length;
+}
+
+function getGitMonitorConsumerCount(
+	server: HucodeWebProjectManagerServer
+): number {
+	const service = Reflect.get(server, 'service') as object;
+	const monitor = Reflect.get(service, 'gitWorktreeMonitor') as object;
+	const consumers = Reflect.get(monitor, 'consumers') as { readonly size: number };
+	return consumers.size;
+}
+
+function getGitMonitorProbeWatcher(
+	server: HucodeWebProjectManagerServer,
+	path: string
+): unknown {
+	const service = Reflect.get(server, 'service') as object;
+	const monitor = Reflect.get(service, 'gitWorktreeMonitor') as object;
+	const probes = Reflect.get(monitor, 'probeWatches') as Map<
+		string,
+		{ readonly watcher: unknown }
+	>;
+	const pathKey = Array.from(probes.keys()).find(key =>
+		key === path || key.toLowerCase() === path.toLowerCase()
+	);
+	return pathKey ? probes.get(pathKey)?.watcher : undefined;
 }
 
 async function waitFor(

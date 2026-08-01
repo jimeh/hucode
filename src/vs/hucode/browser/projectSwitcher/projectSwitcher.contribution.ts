@@ -49,6 +49,7 @@ import { WorkbenchObjectTree } from
 	'../../../platform/list/browser/listService.js';
 import { INotificationService } from
 	'../../../platform/notification/common/notification.js';
+import { ILogService } from '../../../platform/log/common/log.js';
 import { IQuickInputService } from
 	'../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from
@@ -74,7 +75,10 @@ import { ICommandService } from
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 import {
+	getProjectSwitcherGitConsumerId,
 	IProjectManagerService,
+	GitWorktreeTargetObservation,
+	PROJECT_MANAGER_GIT_TARGET_LIMIT,
 	ProjectRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
 import {
@@ -119,7 +123,7 @@ import {
 	buildProjectSwitcherTreeModel,
 	encodeProjectHandle,
 	getLastVisibleDescendantIndex,
-	getProjectSwitcherItemDescription,
+	getProjectSwitcherPresentationFields,
 	isHostedWorkbenchInProgress,
 	isItemInCollapsedOmniSection,
 	isProjectItem,
@@ -138,7 +142,10 @@ import {
 	UNPINNED_SECTION,
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
+	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
+	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
@@ -334,13 +341,16 @@ export class ProjectSwitcherAccessibilityProvider
 						return localize('workbenchStateUnloaded', 'Unloaded');
 				}
 			})();
-			return localize(
-				'workbenchAriaLabel',
-				'{0}, {1}, {2}',
-				item.label,
-				item.description ?? item.worktreePath,
-				stateLabel
-			);
+			const branch = item.branch === item.name ? undefined : item.branch;
+			return [item.name, branch, item.path, stateLabel]
+				.filter(Boolean)
+				.join(', ');
+		}
+		if (isWorktreeItem(item)) {
+			const branch = item.branch === item.name ? undefined : item.branch;
+			return [item.name, branch, item.path]
+				.filter(Boolean)
+				.join(', ');
 		}
 
 		return item.description
@@ -374,6 +384,11 @@ interface ProjectSwitcherTemplate {
 	readonly text: HTMLElement;
 	readonly label: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
+	readonly descriptionIcon: HTMLSpanElement;
+	readonly descriptionText: HTMLSpanElement;
+	readonly path: HTMLSpanElement;
+	readonly pathIcon: HTMLSpanElement;
+	readonly pathText: HTMLSpanElement;
 	readonly actions: HTMLElement;
 	readonly leadingAction: ProjectSwitcherActionTemplate;
 	readonly trailingAction: ProjectSwitcherActionTemplate;
@@ -398,6 +413,7 @@ export class ProjectSwitcherRenderer
 		private readonly getItemLayout: (
 			item: ProjectSwitcherItem
 		) => HucodeOmniItemLayout,
+		private readonly showInlineIcons: () => boolean,
 		@ICommandService
 		private readonly commandService: ICommandService,
 	) {
@@ -414,6 +430,28 @@ export class ProjectSwitcherRenderer
 		const description = dom.append(
 			text,
 			dom.$('span.hucode-project-switcher-description')
+		) as HTMLSpanElement;
+		const descriptionIcon = dom.append(
+			description,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		descriptionIcon.setAttribute('aria-hidden', 'true');
+		const descriptionText = dom.append(
+			description,
+			dom.$('span.hucode-project-switcher-field-text')
+		) as HTMLSpanElement;
+		const path = dom.append(
+			text,
+			dom.$('span.hucode-project-switcher-path')
+		) as HTMLSpanElement;
+		const pathIcon = dom.append(
+			path,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		pathIcon.setAttribute('aria-hidden', 'true');
+		const pathText = dom.append(
+			path,
+			dom.$('span.hucode-project-switcher-field-text')
 		) as HTMLSpanElement;
 		const actions = dom.append(
 			item,
@@ -458,6 +496,11 @@ export class ProjectSwitcherRenderer
 			text,
 			label,
 			description,
+			descriptionIcon,
+			descriptionText,
+			path,
+			pathIcon,
+			pathText,
 			actions,
 			leadingAction,
 			trailingAction,
@@ -480,18 +523,48 @@ export class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		templateData.descriptionIcon.className =
+			'hucode-project-switcher-inline-icon';
+		templateData.pathIcon.className =
+			'hucode-project-switcher-inline-icon';
 		if (this.getItemLayout(item) === 'twoLine') {
 			templateData.container.classList.add(
 				'hucode-project-switcher-two-line'
 			);
 		}
-		const description = getProjectSwitcherItemDescription(
+		const fields = getProjectSwitcherPresentationFields(
 			item,
 			this.getItemLayout(item)
 		);
-		templateData.label.textContent = item.label;
-		templateData.description.textContent = description ?? '';
-		templateData.description.style.display = description ? '' : 'none';
+		templateData.label.textContent = fields.name;
+		templateData.descriptionText.textContent = fields.branch ?? '';
+		templateData.description.style.display = fields.branch ? '' : 'none';
+		templateData.pathText.textContent = fields.path ?? '';
+		templateData.path.style.display = fields.path ? '' : 'none';
+		const showMetadataIcons = this.showInlineIcons() &&
+			(isWorktreeItem(item) || isRetainedWorkbenchItem(item));
+		templateData.descriptionIcon.style.display =
+			showMetadataIcons && fields.branch ? '' : 'none';
+		templateData.pathIcon.style.display =
+			showMetadataIcons && fields.path ? '' : 'none';
+		if (showMetadataIcons && fields.branch) {
+			templateData.descriptionIcon.classList.add(
+				...ThemeIcon.asClassNameArray(Codicon.gitBranchCompact)
+			);
+		}
+		if (showMetadataIcons && fields.path) {
+			templateData.pathIcon.classList.add(
+				...ThemeIcon.asClassNameArray(Codicon.folderCompact)
+			);
+		}
+		templateData.container.classList.toggle(
+			'hucode-project-switcher-has-branch',
+			!!fields.branch
+		);
+		templateData.container.classList.toggle(
+			'hucode-project-switcher-has-path',
+			!!fields.path
+		);
 		templateData.container.title = item.tooltip ?? '';
 		templateData.actions.className = 'hucode-project-switcher-actions';
 		templateData.actions.style.display = 'none';
@@ -510,6 +583,7 @@ export class ProjectSwitcherRenderer
 			);
 			templateData.icon.style.display = 'none';
 			templateData.description.style.display = 'none';
+			templateData.path.style.display = 'none';
 			return;
 		}
 
@@ -1085,6 +1159,10 @@ export class ProjectSwitcherWidget extends Disposable {
 	private worktreeNavigationIndex = -1;
 	private isNavigatingWorktreeHistory = false;
 	private hasSeededNavigationHistory = false;
+	private readonly gitMonitorConsumerId =
+		getProjectSwitcherGitConsumerId(this.windowId);
+	private gitWorktreeObservations: readonly GitWorktreeTargetObservation[] = [];
+	private gitMonitorGeneration = 0;
 	private readonly canGoBackContext: IContextKey<boolean>;
 	private readonly canGoForwardContext: IContextKey<boolean>;
 	private omniHostedWorkspaceState: IHucodeHostedWorkspaceState = {
@@ -1121,6 +1199,8 @@ export class ProjectSwitcherWidget extends Disposable {
 		private readonly labelService: ILabelService,
 		@IConfigurationService
 		private readonly configurationService: IConfigurationService,
+		@ILogService
+		private readonly logService: ILogService,
 	) {
 		super();
 		currentProjectSwitcherWidget = this;
@@ -1155,6 +1235,22 @@ export class ProjectSwitcherWidget extends Disposable {
 			void this.handleWorkspaceContextChange();
 		}));
 		if (this.environmentService.isOmniWindow) {
+			this._register(this.projectManagerService
+				.onDidChangeGitWorktreeTargets(change => {
+					if (change.consumerId !== this.gitMonitorConsumerId) {
+						return;
+					}
+					this.gitWorktreeObservations = change.observations;
+					this.renderProjects(this.projects);
+				}));
+			this._register(toDisposable(() => {
+				void this.projectManagerService.clearGitWorktreeTargets(
+					this.gitMonitorConsumerId
+				).catch(error => this.logService.warn(
+					`[ProjectSwitcher] Failed to clear decorative Git ` +
+					`metadata: ${error}`
+				));
+			}));
 			this._register(onDidChangeProjectSwitcherTreeIndent(
 				this.environmentService.isOmniWindow,
 				this.configurationService
@@ -1179,6 +1275,10 @@ export class ProjectSwitcherWidget extends Disposable {
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
 						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+					) || event.affectsConfiguration(
+						HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING
+					) || event.affectsConfiguration(
+						HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING
 					)) {
 						this.renderProjects(this.projects);
 					}
@@ -1208,12 +1308,12 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (isRetainedWorkbenchItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
 				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
-			) ?? 'compact';
+			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
 		}
 		if (isWorktreeItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
 				HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
-			) ?? 'compact';
+			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
 		}
 		return 'compact';
 	}
@@ -1270,7 +1370,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			new ProjectSwitcherDelegate(item => this.getItemLayout(item)),
 			[this.instantiationService.createInstance(
 				ProjectSwitcherRenderer,
-				(item: ProjectSwitcherItem) => this.getItemLayout(item)
+				(item: ProjectSwitcherItem) => this.getItemLayout(item),
+				() => this.configurationService.getValue<boolean>(
+					HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING
+				) ?? true
 			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
@@ -1520,6 +1623,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			hostedWorkspaceState: this.omniHostedWorkspaceState,
 			collapsedOmniSections: this.collapsedOmniSections,
 			omniSectionOrder: this.omniSectionOrder,
+			gitWorktreeObservations: this.gitWorktreeObservations,
+			showWorktreePaths: this.configurationService.getValue<boolean>(
+				HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING
+			) ?? true,
 		});
 	}
 
@@ -1611,6 +1718,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		state: IHucodeHostedWorkspaceState
 	): void {
 		this.omniHostedWorkspaceState = state;
+		void this.updateGitWorktreeTargets(state);
 		if (!this.tree) {
 			return;
 		}
@@ -1624,6 +1732,42 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.notificationService.error(String(error));
 		});
 		this.recordActiveWorktree(this.projects);
+	}
+
+	private async updateGitWorktreeTargets(
+		state: IHucodeHostedWorkspaceState
+	): Promise<void> {
+		const generation = ++this.gitMonitorGeneration;
+		const retainedWorkbenches = state.retainedWorkbenches ?? [];
+		if (retainedWorkbenches.length > PROJECT_MANAGER_GIT_TARGET_LIMIT) {
+			this.logService.warn(
+				`[ProjectSwitcher] Monitoring the first ` +
+				`${PROJECT_MANAGER_GIT_TARGET_LIMIT} of ` +
+				`${retainedWorkbenches.length} arbitrary workbenches for Git ` +
+				`metadata.`
+			);
+		}
+		try {
+			const observations = await this.projectManagerService
+				.setGitWorktreeTargets(
+					this.gitMonitorConsumerId,
+					retainedWorkbenches
+						.slice(0, PROJECT_MANAGER_GIT_TARGET_LIMIT)
+						.map(record => URI.revive(record.folderUri).fsPath)
+				);
+			if (generation !== this.gitMonitorGeneration) {
+				return;
+			}
+			this.gitWorktreeObservations = observations;
+			this.renderProjects(this.projects);
+		} catch (error) {
+			if (generation === this.gitMonitorGeneration) {
+				this.logService.warn(
+					`[ProjectSwitcher] Failed to refresh decorative Git ` +
+					`metadata: ${error}`
+				);
+			}
+		}
 	}
 
 	private getHostedWorkbenchInstance(

@@ -3,17 +3,21 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { DeferredPromise } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CancellationError } from '../../../base/common/errors.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
+import { generateUuid } from '../../../base/common/uuid.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { localize } from '../../../nls.js';
 import { InstantiationType, registerSingleton } from
 	'../../../platform/instantiation/common/extensions.js';
 import {
 	CreateWorktreeOptions,
+	GitWorktreeTargetChange,
+	GitWorktreeTargetObservation,
 	IProjectManagerService,
 	ProjectRecord,
 	RemoveWorktreeOptions,
@@ -97,11 +101,31 @@ export class WebProjectManagerClient extends Disposable
 	private readonly _onDidChangeProjects =
 		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
+	private readonly _onDidChangeGitWorktreeTargets = this._register(
+		new Emitter<GitWorktreeTargetChange>()
+	);
+	readonly onDidChangeGitWorktreeTargets =
+		this._onDidChangeGitWorktreeTargets.event;
+	private eventSessionReady = new DeferredPromise<void>();
+	private readonly gitWorktreeTargetPaths =
+		new Map<string, readonly string[]>();
+	private readonly gitWorktreeTargetRegistrations = new Map<
+		string,
+		{
+			readonly generation: number;
+			readonly targetPaths: readonly string[];
+			readonly promise: Promise<readonly GitWorktreeTargetObservation[]>;
+		}
+	>();
+	private eventConnectionGeneration = 0;
+	private hasEventSource = false;
+	private eventConnected = false;
 
 	constructor(
 		private readonly projectsApi: string,
 		private readonly transport: IWebProjectManagerServiceTransport =
 			defaultWebProjectManagerTransport(),
+		private readonly eventSessionId: string = generateUuid(),
 	) {
 		super();
 
@@ -265,6 +289,97 @@ export class WebProjectManagerClient extends Disposable
 		);
 	}
 
+	async setGitWorktreeTargets(
+		consumerId: string,
+		targetPaths: readonly string[]
+	): Promise<readonly GitWorktreeTargetObservation[]> {
+		const paths = [...targetPaths];
+		this.gitWorktreeTargetPaths.set(consumerId, paths);
+		if (this.hasEventSource) {
+			await this.eventSessionReady.p;
+		}
+		if (this.gitWorktreeTargetPaths.get(consumerId) !== paths) {
+			return [];
+		}
+		return this.registerGitWorktreeTargets(consumerId, paths);
+	}
+
+	async clearGitWorktreeTargets(consumerId: string): Promise<void> {
+		const registration = this.gitWorktreeTargetRegistrations.get(consumerId);
+		this.gitWorktreeTargetPaths.delete(consumerId);
+		this.gitWorktreeTargetRegistrations.delete(consumerId);
+		try {
+			await registration?.promise;
+		} catch {
+			// The idempotent clear still applies after a failed registration.
+		}
+		if (this.gitWorktreeTargetPaths.has(consumerId) ||
+			this.gitWorktreeTargetRegistrations.has(consumerId)) {
+			return;
+		}
+		if (this.hasEventSource && !this.eventConnected) {
+			return;
+		}
+		await this.request('git-monitor/clear', {
+			method: 'POST',
+			body: { sessionId: this.eventSessionId, consumerId },
+		});
+	}
+
+	private registerGitWorktreeTargets(
+		consumerId: string,
+		targetPaths: readonly string[]
+	): Promise<readonly GitWorktreeTargetObservation[]> {
+		const existing = this.gitWorktreeTargetRegistrations.get(consumerId);
+		if (existing?.generation === this.eventConnectionGeneration &&
+			sameStringArray(existing.targetPaths, targetPaths)) {
+			return existing.promise;
+		}
+
+		const generation = this.eventConnectionGeneration;
+		const promise = this.request<{
+			readonly observations: readonly GitWorktreeTargetObservation[];
+		}>('git-monitor/targets', {
+			method: 'POST',
+			body: {
+				sessionId: this.eventSessionId,
+				consumerId,
+				targetPaths,
+			},
+		}).then(response => response.observations);
+		const registration = { generation, targetPaths, promise };
+		this.gitWorktreeTargetRegistrations.set(consumerId, registration);
+		promise.catch(() => {
+			if (this.gitWorktreeTargetRegistrations.get(consumerId) ===
+				registration) {
+				this.gitWorktreeTargetRegistrations.delete(consumerId);
+			}
+		});
+		return promise;
+	}
+
+	private async restoreGitWorktreeTargets(publish: boolean): Promise<void> {
+		for (const [consumerId, targetPaths] of this.gitWorktreeTargetPaths) {
+			try {
+				const observations = await this.registerGitWorktreeTargets(
+					consumerId,
+					targetPaths
+				);
+				if (this.gitWorktreeTargetPaths.get(consumerId) !== targetPaths) {
+					continue;
+				}
+				if (publish) {
+					this._onDidChangeGitWorktreeTargets.fire({
+						consumerId,
+						observations,
+					});
+				}
+			} catch {
+				// EventSource reconnect will retry the complete current target set.
+			}
+		}
+	}
+
 	private async writeProjectMutation(path: string, body: unknown): Promise<void> {
 		this.readProjectsResponse(await this.request<ProjectsResponse>(
 			path,
@@ -364,14 +479,38 @@ export class WebProjectManagerClient extends Disposable
 		}
 
 		const events = new transport.EventSource(
-			this.toApiUrl('events'),
+			this.toApiUrl(
+				`events/${encodeURIComponent(this.eventSessionId)}`
+			),
 			{ withCredentials: true }
 		);
+		this.hasEventSource = true;
 		this._register(toDisposable(() => events.close()));
+		events.addEventListener('open', () => {
+			const reconnecting = this.eventConnectionGeneration > 0;
+			this.eventConnectionGeneration++;
+			this.eventConnected = true;
+			void this.eventSessionReady.complete();
+			void this.restoreGitWorktreeTargets(reconnecting);
+		});
+		events.addEventListener('error', () => {
+			this.eventConnected = false;
+			if (this.eventConnectionGeneration === 0) {
+				void this.eventSessionReady.complete();
+			} else if (this.eventSessionReady.isResolved) {
+				this.eventSessionReady = new DeferredPromise<void>();
+			}
+		});
 		events.addEventListener('projects', event => {
 			const projects = readProjectEvent(event);
 			if (projects) {
 				this._onDidChangeProjects.fire(projects);
+			}
+		});
+		events.addEventListener('git-worktrees', event => {
+			const change = readGitWorktreeEvent(event);
+			if (change) {
+				this._onDidChangeGitWorktreeTargets.fire(change);
 			}
 		});
 	}
@@ -406,6 +545,13 @@ function getErrorMessage(body: unknown): string | undefined {
 	return typeof error === 'string' ? error : undefined;
 }
 
+function sameStringArray(
+	a: readonly string[],
+	b: readonly string[]
+): boolean {
+	return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 function readProjectEvent(event: Event): readonly ProjectRecord[] | undefined {
 	const data = (event as { readonly data?: unknown }).data;
 	if (typeof data !== 'string') {
@@ -419,6 +565,22 @@ function readProjectEvent(event: Event): readonly ProjectRecord[] | undefined {
 		}
 
 		return body.projects.map(project => reviveProject(project));
+	} catch {
+		return undefined;
+	}
+}
+
+function readGitWorktreeEvent(event: Event): GitWorktreeTargetChange | undefined {
+	const data = (event as { readonly data?: unknown }).data;
+	if (typeof data !== 'string') {
+		return undefined;
+	}
+	try {
+		const change = JSON.parse(data) as GitWorktreeTargetChange;
+		return typeof change.consumerId === 'string' &&
+			Array.isArray(change.observations)
+			? change
+			: undefined;
 	} catch {
 		return undefined;
 	}
