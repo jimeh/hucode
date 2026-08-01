@@ -172,6 +172,7 @@ suite('ProjectSwitcherContribution', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];
 		const renderer = new ProjectSwitcherRenderer(
 			() => 'compact',
+			() => true,
 			{
 				executeCommand: async (id: string, ...args: unknown[]) => {
 					commands.push({ id, args });
@@ -249,6 +250,7 @@ suite('ProjectSwitcherContribution', () => {
 		let layout: 'compact' | 'twoLine' = 'compact';
 		const renderer = new ProjectSwitcherRenderer(
 			() => layout,
+			() => true,
 			{ executeCommand: async () => undefined } as unknown as ICommandService
 		);
 		const container = mainWindow.document.createElement('div');
@@ -267,9 +269,16 @@ suite('ProjectSwitcherContribution', () => {
 		}));
 		layout = 'twoLine';
 		renderer.renderElement(treeNode(item), 0, template);
+		const twoLine = {
+			branch: template.description.textContent,
+			branchDisplay: template.description.style.display,
+			path: template.path.textContent,
+			pathDisplay: template.path.style.display,
+		};
 
 		assert.deepStrictEqual({
 			compact,
+			twoLine,
 			twoLineClass: template.container.classList.contains(
 				'hucode-project-switcher-two-line'
 			),
@@ -290,12 +299,108 @@ suite('ProjectSwitcherContribution', () => {
 				display: '',
 			}, {
 				className: 'hucode-project-switcher-path',
-				text: '/repo.worktrees/feature',
-				display: '',
+				text: '',
+				display: 'none',
 			}],
+			twoLine: {
+				branch: 'feature/topic',
+				branchDisplay: '',
+				path: '/repo.worktrees/feature',
+				pathDisplay: '',
+			},
 			twoLineClass: true,
 			hasBranch: true,
 			hasPath: true,
+		});
+		renderer.disposeTemplate(template);
+	});
+
+	test('toggles inline metadata icons without decorating project paths', () => {
+		let showInlineIcons = true;
+		const renderer = new ProjectSwitcherRenderer(
+			() => 'twoLine',
+			() => showInlineIcons,
+			{ executeCommand: async () => undefined } as unknown as ICommandService
+		);
+		const container = mainWindow.document.createElement('div');
+		const template = renderer.renderTemplate(container);
+
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const worktree = {
+			branch: template.description.textContent,
+			path: template.path.textContent,
+			branchIcon: !!template.description.querySelector(
+				'.codicon-git-branch-compact'
+			),
+			pathIcon: !!template.path.querySelector('.codicon-folder-compact'),
+		};
+
+		renderer.renderElement(treeNode(retainedWorkbenchItem({
+			name: 'Scratch',
+			branch: 'topic',
+			path: '/scratch/repo',
+		})), 0, template);
+		const workbench = {
+			name: template.label.textContent,
+			branch: template.description.textContent,
+			path: template.path.textContent,
+			branchIcon: !!template.description.querySelector(
+				'.codicon-git-branch-compact'
+			),
+			pathIcon: !!template.path.querySelector('.codicon-folder-compact'),
+			workbenchClass: template.container.classList.contains(
+				'hucode-project-switcher-workbench'
+			),
+		};
+
+		showInlineIcons = false;
+		renderer.renderElement(treeNode(worktreeItem({
+			name: 'Feature',
+			branch: 'feature/topic',
+			path: '/repo.worktrees/feature',
+		})), 0, template);
+		const hiddenIcons = {
+			branch: template.descriptionIcon.style.display,
+			path: template.pathIcon.style.display,
+		};
+
+		renderer.renderElement(treeNode(projectItem({
+			description: '/projects',
+		})), 0, template);
+
+		assert.deepStrictEqual({
+			worktree,
+			workbench,
+			hiddenIcons,
+			projectDescription: template.description.textContent,
+			projectDescriptionIcon: !!template.description.querySelector(
+				'.codicon-folder'
+			),
+		}, {
+			worktree: {
+				branch: 'feature/topic',
+				path: '/repo.worktrees/feature',
+				branchIcon: true,
+				pathIcon: true,
+			},
+			workbench: {
+				name: 'Scratch',
+				branch: 'topic',
+				path: '/scratch/repo',
+				branchIcon: true,
+				pathIcon: true,
+				workbenchClass: true,
+			},
+			hiddenIcons: {
+				branch: 'none',
+				path: 'none',
+			},
+			projectDescription: '/projects',
+			projectDescriptionIcon: false,
 		});
 		renderer.disposeTemplate(template);
 	});
@@ -468,6 +573,10 @@ suite('ProjectSwitcherContribution', () => {
 			};
 			readonly dnd: ProjectSwitcherDragAndDrop;
 		} | undefined;
+		let treeDelegate: {
+			getHeight(item: ProjectSwitcherItem): number;
+		} | undefined;
+		let showInlineIcons: (() => boolean) | undefined;
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
 		const tree = {
 			contextKeyService: {
@@ -494,8 +603,10 @@ suite('ProjectSwitcherContribution', () => {
 		const instantiationService = {
 			createInstance: (ctor: unknown, ...args: unknown[]) => {
 				if (ctor === ProjectSwitcherRenderer) {
+					showInlineIcons = args[1] as () => boolean;
 					return new ProjectSwitcherRenderer(
 						args[0] as (item: ProjectSwitcherItem) => 'compact',
+						args[1] as () => boolean,
 						commandService
 					);
 				}
@@ -517,6 +628,7 @@ suite('ProjectSwitcherContribution', () => {
 					);
 				}
 				if (ctor === WorkbenchObjectTree) {
+					treeDelegate = args[2] as typeof treeDelegate;
 					renderers = args[3] as readonly ProjectSwitcherRenderer[];
 					treeOptions = args[4] as typeof treeOptions;
 					return tree;
@@ -621,6 +733,11 @@ suite('ProjectSwitcherContribution', () => {
 				'.hucode-project-switcher-empty'
 			)?.classList.contains('hidden'),
 			treeRenderer: renderers[0] instanceof ProjectSwitcherRenderer,
+			defaultWorkbenchHeight: treeDelegate?.getHeight(
+				retainedWorkbenchItem()
+			),
+			defaultWorktreeHeight: treeDelegate?.getHeight(worktreeItem()),
+			showInlineIcons: showInlineIcons?.(),
 			treeDnd: treeOptions?.dnd instanceof ProjectSwitcherDragAndDrop,
 			ariaLabel: treeOptions?.accessibilityProvider
 				.getWidgetAriaLabel(),
@@ -632,6 +749,9 @@ suite('ProjectSwitcherContribution', () => {
 			treeHidden: true,
 			emptyHidden: false,
 			treeRenderer: true,
+			defaultWorkbenchHeight: 44,
+			defaultWorktreeHeight: 44,
+			showInlineIcons: true,
 			treeDnd: true,
 			ariaLabel: 'Workbenches and Projects',
 			treeLayouts: [{ height: 260, width: 420 }],

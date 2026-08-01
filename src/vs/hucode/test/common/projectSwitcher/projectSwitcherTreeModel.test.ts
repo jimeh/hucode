@@ -323,11 +323,11 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.strictEqual(project.element.contextValue, PROJECT_CONTEXT_VALUE);
 		assert.strictEqual(
 			project.element.description,
-			'Worktrees out of date · path:/repos/stale'
+			'Worktrees out of date · path:/repos'
 		);
 		assert.strictEqual(
 			project.element.tooltip,
-			'Worktrees out of date · path:/repos/stale'
+			'Worktrees out of date · path:/repos'
 		);
 		assert.deepStrictEqual(
 			ThemeIcon.asClassNameArray(project.element.themeIcon!),
@@ -367,11 +367,11 @@ suite('ProjectSwitcherTreeModel', () => {
 			assert.deepStrictEqual(project.children, []);
 			assert.strictEqual(
 				project.element.description,
-				`Worktrees unavailable · path:/repos/${project.element.label}`
+				'Worktrees unavailable · path:/repos'
 			);
 			assert.strictEqual(
 				project.element.tooltip,
-				`Worktrees unavailable · path:/repos/${project.element.label}`
+				'Worktrees unavailable · path:/repos'
 			);
 			assert.deepStrictEqual(
 				ThemeIcon.asClassNameArray(project.element.themeIcon!),
@@ -620,7 +620,7 @@ suite('ProjectSwitcherTreeModel', () => {
 		const worktree = getWorktree(model.roots, '/repos/hucode');
 
 		assert.strictEqual(project.label, 'Hucode Fork');
-		assert.strictEqual(project.description, '/repos/hucode');
+		assert.strictEqual(project.description, '/repos');
 		assert.strictEqual(worktree.label, 'stable');
 		assert.strictEqual(worktree.hasCustomLabel, true);
 		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
@@ -729,25 +729,46 @@ suite('ProjectSwitcherTreeModel', () => {
 			}],
 		});
 		const items = flatten(model.roots).map(element => element.element);
+		const project = items.find(isProjectItem);
+		assert.ok(project);
 		const main = getWorktree(model.roots, '/repos/hucode');
 		const linked = getWorktree(model.roots, linkedPath);
 		const workbenches = items.filter(isRetainedWorkbenchItem);
 
 		assert.deepStrictEqual({
+			projectDescription: project.description,
 			main: getProjectSwitcherPresentationFields(main, 'compact'),
+			mainTwoLine: getProjectSwitcherPresentationFields(main, 'twoLine'),
 			linkedCompact: getProjectSwitcherPresentationFields(linked, 'compact'),
 			linkedTwoLine: getProjectSwitcherPresentationFields(linked, 'twoLine'),
 			gitCompact: getProjectSwitcherPresentationFields(workbenches[0], 'compact'),
 			gitTwoLine: getProjectSwitcherPresentationFields(workbenches[0], 'twoLine'),
-			detached: getProjectSwitcherPresentationFields(workbenches[1], 'compact'),
+			detachedCompact: getProjectSwitcherPresentationFields(
+				workbenches[1],
+				'compact'
+			),
+			detachedTwoLine: getProjectSwitcherPresentationFields(
+				workbenches[1],
+				'twoLine'
+			),
 			plainCompact: getProjectSwitcherPresentationFields(workbenches[2], 'compact'),
 			plainTwoLine: getProjectSwitcherPresentationFields(workbenches[2], 'twoLine'),
 		}, {
-			main: { name: 'local', branch: 'main', path: undefined },
+			projectDescription: 'label:/repos',
+			main: {
+				name: 'local',
+				branch: 'main',
+				path: undefined,
+			},
+			mainTwoLine: {
+				name: 'local',
+				branch: 'main',
+				path: 'label:/repos/hucode',
+			},
 			linkedCompact: {
 				name: 'feature',
 				branch: undefined,
-				path: `label:${linkedPath}`,
+				path: undefined,
 			},
 			linkedTwoLine: {
 				name: 'feature',
@@ -756,7 +777,7 @@ suite('ProjectSwitcherTreeModel', () => {
 			},
 			gitCompact: {
 				name: 'subdirectory',
-				branch: 'topic',
+				branch: undefined,
 				path: `label:${gitWorkbenchPath}`,
 			},
 			gitTwoLine: {
@@ -764,7 +785,12 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: 'topic',
 				path: `label:${gitWorkbenchPath}`,
 			},
-			detached: {
+			detachedCompact: {
+				name: 'detached',
+				branch: undefined,
+				path: `label:${detachedWorkbenchPath}`,
+			},
+			detachedTwoLine: {
 				name: 'detached',
 				branch: 'Detached',
 				path: `label:${detachedWorkbenchPath}`,
@@ -831,7 +857,14 @@ suite('ProjectSwitcherTreeModel', () => {
 			hostedWorkspaceState: createHostedState(),
 		});
 
-		assert.strictEqual(getWorktree(model.roots, linkedPath).path, undefined);
+		const linkedWorktree = getWorktree(model.roots, linkedPath);
+		assert.deepStrictEqual({
+			path: linkedWorktree.path,
+			iconClasses: ThemeIcon.asClassNameArray(linkedWorktree.themeIcon!),
+		}, {
+			path: undefined,
+			iconClasses: ['codicon', 'codicon-worktree'],
+		});
 	});
 
 	test('suppresses stale Git branches for missing retained folders', () => {

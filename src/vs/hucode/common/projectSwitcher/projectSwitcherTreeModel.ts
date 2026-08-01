@@ -5,7 +5,7 @@
 
 import { Codicon } from '../../../base/common/codicons.js';
 import { isEqual } from '../../../base/common/extpath.js';
-import { basename } from '../../../base/common/path.js';
+import { basename, dirname } from '../../../base/common/path.js';
 import { isLinux } from '../../../base/common/platform.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
@@ -418,12 +418,19 @@ export function getProjectSwitcherPresentationFields(
 	item: ProjectSwitcherItem,
 	layout: HucodeOmniItemLayout,
 ): ProjectSwitcherPresentationFields {
-	if (isWorktreeItem(item) || isRetainedWorkbenchItem(item)) {
+	if (isWorktreeItem(item)) {
 		return {
 			name: item.name,
 			branch: layout === 'compact' && item.branch === item.name
 				? undefined
 				: item.branch,
+			path: layout === 'twoLine' ? item.path : undefined,
+		};
+	}
+	if (isRetainedWorkbenchItem(item)) {
+		return {
+			name: item.name,
+			branch: layout === 'twoLine' ? item.branch : undefined,
 			path: item.path,
 		};
 	}
@@ -688,6 +695,8 @@ function toProjectElement(
 	const rootUri = URI.revive(project.rootUri);
 	const rootPath = rootUri.fsPath;
 	const rootBasename = basename(rootPath);
+	const rootParentPath = dirname(rootPath);
+	const rootParentLabel = options.getPathLabel(rootParentPath);
 	const handle = encodeProjectHandle(project.id, section);
 	const unavailable = project.worktreeState === 'unavailable';
 	const stale = project.worktreeState === 'stale';
@@ -695,13 +704,13 @@ function toProjectElement(
 		? localize(
 			'projectWorktreesUnavailable',
 			'Worktrees unavailable · {0}',
-			options.getPathLabel(rootPath)
+			rootParentLabel
 		)
 		: stale
 			? localize(
 				'projectWorktreesOutOfDate',
 				'Worktrees out of date · {0}',
-				options.getPathLabel(rootPath)
+				rootParentLabel
 			)
 			: undefined;
 	const item: ProjectSwitcherProjectItem = {
@@ -714,7 +723,7 @@ function toProjectElement(
 		rootPath,
 		hasCustomLabel: project.label !== rootBasename,
 		label: project.label,
-		description: stateDescription ?? options.getPathLabel(rootPath),
+		description: stateDescription ?? rootParentLabel,
 		tooltip: stateDescription ?? options.getPathLabel(rootPath),
 		contextValue: project.pinned
 			? PINNED_PROJECT_CONTEXT_VALUE
@@ -779,8 +788,7 @@ function toWorktreeElement(
 		missingGitWorktree: false,
 		name: worktreeLabel,
 		branch: worktreeDescription,
-		path: options.isOmniWindow &&
-			!worktree.isMain && options.showWorktreePaths !== false
+		path: options.isOmniWindow && options.showWorktreePaths !== false
 			? options.getPathLabel(worktree.path)
 			: undefined,
 		label: worktreeLabel,
@@ -796,7 +804,7 @@ function toWorktreeElement(
 				: hostedWorkbenchInstance?.state === 'unloaded' ||
 					options.isOmniWindow && !hostedWorkbenchInstance
 					? Codicon.circleOutline
-					: worktree.isMain ? Codicon.repo : Codicon.gitBranch,
+					: worktree.isMain ? Codicon.repo : Codicon.worktree,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };

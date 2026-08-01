@@ -82,6 +82,8 @@ import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
+	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
 	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
 	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
@@ -125,7 +127,7 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
 			enum: ['twoLine', 'compact'],
-			default: 'compact',
+			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.workbenchItemLayout',
@@ -134,8 +136,8 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
-			enum: ['compact', 'twoLine'],
-			default: 'compact',
+			enum: ['twoLine', 'compact'],
+			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.worktreeItemLayout',
@@ -148,7 +150,16 @@ Registry.as<IConfigurationRegistry>(
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
 				'hucode.showWorktreePaths',
-				"Controls whether non-main project worktrees show their paths in the Omni sidebar. Arbitrary workbench paths are always shown."
+				"Controls whether project worktrees show their paths in the Omni sidebar. Arbitrary workbench paths are always shown."
+			),
+		},
+		[HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING]: {
+			type: 'boolean',
+			default: true,
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.showInlineIcons',
+				"Controls whether branch and folder icons are shown beside inline metadata in the Omni sidebar."
 			),
 		},
 		[PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING]: {

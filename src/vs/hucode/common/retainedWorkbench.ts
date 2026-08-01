@@ -33,6 +33,10 @@ export const HUCODE_OMNI_TREE_INDENT_MAXIMUM = 40;
 /** Layout variants supported by Omni sidebar workbench rows. */
 export type HucodeOmniItemLayout = 'compact' | 'twoLine';
 
+/** Default layout for Omni sidebar workbench and worktree rows. */
+export const HUCODE_OMNI_ITEM_LAYOUT_DEFAULT: HucodeOmniItemLayout =
+	'twoLine';
+
 /** User setting controlling arbitrary workbench row layout. */
 export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
 	'hucode.omni.workbenchItemLayout';
@@ -41,9 +45,13 @@ export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
 export const HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING =
 	'hucode.omni.worktreeItemLayout';
 
-/** User setting controlling paths on non-main project worktree rows. */
+/** User setting controlling paths on project worktree rows. */
 export const HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING =
 	'hucode.omni.showWorktreePaths';
+
+/** User setting controlling inline metadata icons in Omni sidebar rows. */
+export const HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING =
+	'hucode.omni.showInlineIcons';
 
 /** Persisted arbitrary-folder entry owned by one Omni window. */
 export type IHucodeRetainedWorkbench = IOmniRetainedWorkbench;

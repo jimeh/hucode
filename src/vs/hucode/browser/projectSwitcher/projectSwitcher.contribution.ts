@@ -140,7 +140,9 @@ import {
 	UNPINNED_SECTION,
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
+	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
 	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
@@ -380,7 +382,11 @@ interface ProjectSwitcherTemplate {
 	readonly text: HTMLElement;
 	readonly label: HTMLSpanElement;
 	readonly description: HTMLSpanElement;
+	readonly descriptionIcon: HTMLSpanElement;
+	readonly descriptionText: HTMLSpanElement;
 	readonly path: HTMLSpanElement;
+	readonly pathIcon: HTMLSpanElement;
+	readonly pathText: HTMLSpanElement;
 	readonly actions: HTMLElement;
 	readonly leadingAction: ProjectSwitcherActionTemplate;
 	readonly trailingAction: ProjectSwitcherActionTemplate;
@@ -405,6 +411,7 @@ export class ProjectSwitcherRenderer
 		private readonly getItemLayout: (
 			item: ProjectSwitcherItem
 		) => HucodeOmniItemLayout,
+		private readonly showInlineIcons: () => boolean,
 		@ICommandService
 		private readonly commandService: ICommandService,
 	) {
@@ -422,9 +429,27 @@ export class ProjectSwitcherRenderer
 			text,
 			dom.$('span.hucode-project-switcher-description')
 		) as HTMLSpanElement;
+		const descriptionIcon = dom.append(
+			description,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		descriptionIcon.setAttribute('aria-hidden', 'true');
+		const descriptionText = dom.append(
+			description,
+			dom.$('span.hucode-project-switcher-field-text')
+		) as HTMLSpanElement;
 		const path = dom.append(
 			text,
 			dom.$('span.hucode-project-switcher-path')
+		) as HTMLSpanElement;
+		const pathIcon = dom.append(
+			path,
+			dom.$('span.hucode-project-switcher-inline-icon')
+		) as HTMLSpanElement;
+		pathIcon.setAttribute('aria-hidden', 'true');
+		const pathText = dom.append(
+			path,
+			dom.$('span.hucode-project-switcher-field-text')
 		) as HTMLSpanElement;
 		const actions = dom.append(
 			item,
@@ -469,7 +494,11 @@ export class ProjectSwitcherRenderer
 			text,
 			label,
 			description,
+			descriptionIcon,
+			descriptionText,
 			path,
+			pathIcon,
+			pathText,
 			actions,
 			leadingAction,
 			trailingAction,
@@ -492,6 +521,10 @@ export class ProjectSwitcherRenderer
 		templateData.container.className = 'hucode-project-switcher-item';
 		templateData.icon.className = 'hucode-project-switcher-icon';
 		templateData.text.className = 'hucode-project-switcher-text';
+		templateData.descriptionIcon.className =
+			'hucode-project-switcher-inline-icon';
+		templateData.pathIcon.className =
+			'hucode-project-switcher-inline-icon';
 		if (this.getItemLayout(item) === 'twoLine') {
 			templateData.container.classList.add(
 				'hucode-project-switcher-two-line'
@@ -502,10 +535,26 @@ export class ProjectSwitcherRenderer
 			this.getItemLayout(item)
 		);
 		templateData.label.textContent = fields.name;
-		templateData.description.textContent = fields.branch ?? '';
+		templateData.descriptionText.textContent = fields.branch ?? '';
 		templateData.description.style.display = fields.branch ? '' : 'none';
-		templateData.path.textContent = fields.path ?? '';
+		templateData.pathText.textContent = fields.path ?? '';
 		templateData.path.style.display = fields.path ? '' : 'none';
+		const showMetadataIcons = this.showInlineIcons() &&
+			(isWorktreeItem(item) || isRetainedWorkbenchItem(item));
+		templateData.descriptionIcon.style.display =
+			showMetadataIcons && fields.branch ? '' : 'none';
+		templateData.pathIcon.style.display =
+			showMetadataIcons && fields.path ? '' : 'none';
+		if (showMetadataIcons && fields.branch) {
+			templateData.descriptionIcon.classList.add(
+				...ThemeIcon.asClassNameArray(Codicon.gitBranchCompact)
+			);
+		}
+		if (showMetadataIcons && fields.path) {
+			templateData.pathIcon.classList.add(
+				...ThemeIcon.asClassNameArray(Codicon.folderCompact)
+			);
+		}
 		templateData.container.classList.toggle(
 			'hucode-project-switcher-has-branch',
 			!!fields.branch
@@ -1226,6 +1275,8 @@ export class ProjectSwitcherWidget extends Disposable {
 						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
 						HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING
+					) || event.affectsConfiguration(
+						HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING
 					)) {
 						this.renderProjects(this.projects);
 					}
@@ -1255,12 +1306,12 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (isRetainedWorkbenchItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
 				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
-			) ?? 'compact';
+			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
 		}
 		if (isWorktreeItem(item)) {
 			return this.configurationService.getValue<HucodeOmniItemLayout>(
 				HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
-			) ?? 'compact';
+			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
 		}
 		return 'compact';
 	}
@@ -1317,7 +1368,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			new ProjectSwitcherDelegate(item => this.getItemLayout(item)),
 			[this.instantiationService.createInstance(
 				ProjectSwitcherRenderer,
-				(item: ProjectSwitcherItem) => this.getItemLayout(item)
+				(item: ProjectSwitcherItem) => this.getItemLayout(item),
+				() => this.configurationService.getValue<boolean>(
+					HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING
+				) ?? true
 			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
