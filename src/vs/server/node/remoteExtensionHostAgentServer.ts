@@ -42,6 +42,7 @@ import { setupServerServices, SocketServer } from './serverServices.js';
 import { CacheControl, serveError, serveFile, WebClientServer } from './webClientServer.js';
 import { isHucodeWebProjectsApiPath } from './hucodeWebProjectManagerServer.js';
 import { HUCODE_WEB_OMNI_ROOT_ARG } from './hucodeWebOmniRoutes.js';
+import { isHucodeWebUserDataApiPath } from './hucodeWebUserDataServer.js';
 const require = createRequire(import.meta.url);
 
 declare namespace vsda {
@@ -132,7 +133,8 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 			!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG];
 		if (
 			req.method !== 'GET' &&
-			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname))
+			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname)) &&
+			!isHucodeWebUserDataApiPath(pathname)
 		) {
 			return serveError(req, res, 405, `Unsupported method ${req.method}`);
 		}
