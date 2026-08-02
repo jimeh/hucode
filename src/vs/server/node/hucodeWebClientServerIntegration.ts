@@ -26,6 +26,7 @@ import {
 	getHucodeWebOmniProjectsApi,
 	getHucodeWebOmniWorkbenchBase,
 } from './hucodeWebOmniShell.js';
+import { HUCODE_WEB_USER_DATA_API_PATH } from './hucodeWebUserDataServer.js';
 
 export { HUCODE_WEB_OMNI_ROOT_ARG, toHucodeWebRouteLocation };
 
@@ -111,7 +112,11 @@ export function getHucodeWebClientRouteAction(
 export function getHucodeWebWorkbenchConfiguration(
 	basePath: string,
 	routeOptions: IHucodeWebWorkbenchRouteOptions,
-	env: { readonly serverPathCaseSensitive: boolean }
+	env: {
+		readonly serverPathCaseSensitive: boolean;
+		readonly userDataStorage?: 'browser' | 'server';
+		readonly userDataHome?: IHucodeWebWorkbenchConfiguration['hucodeWebUserDataHome'];
+	}
 ): IHucodeWebWorkbenchConfiguration {
 	return {
 		hucodeOmniShell: routeOptions.hucodeOmniShell,
@@ -121,6 +126,11 @@ export function getHucodeWebWorkbenchConfiguration(
 			getHucodeWebOmniHostedWorkbenchBase(basePath),
 		hucodeOmniProjectsApi: getHucodeWebOmniProjectsApi(basePath),
 		hucodeServerPathCaseSensitive: env.serverPathCaseSensitive,
+		hucodeWebUserDataStorage: env.userDataStorage ?? 'browser',
+		hucodeWebUserDataApi: env.userDataStorage === 'server'
+			? toHucodeWebRouteLocation(basePath, HUCODE_WEB_USER_DATA_API_PATH, {})
+			: undefined,
+		hucodeWebUserDataHome: env.userDataHome,
 		webviewEndpoint: getHucodeWebviewEndpoint(basePath),
 	};
 }

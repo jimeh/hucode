@@ -220,6 +220,9 @@ pub struct ServeWebArgs {
 	/// Specifies the directory that server data is kept in.
 	#[clap(long)]
 	pub server_data_dir: Option<String>,
+	/// Selects where serve-web settings, profiles, and workbench state are stored.
+	#[clap(long, value_enum, default_value_t = ServeWebUserDataStorage::Browser)]
+	pub user_data_storage: ServeWebUserDataStorage,
 	/// Serve the regular workbench at the root URL instead of the Hucode Omni
 	/// Projects shell.
 	#[clap(long, conflicts_with = "omni")]
@@ -239,6 +242,22 @@ pub struct ServeWebArgs {
 	/// Use a specific commit SHA for the client.
 	#[clap(long)]
 	pub commit_id: Option<String>,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServeWebUserDataStorage {
+	#[default]
+	Browser,
+	Server,
+}
+
+impl fmt::Display for ServeWebUserDataStorage {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Browser => write!(f, "browser"),
+			Self::Server => write!(f, "server"),
+		}
+	}
 }
 
 impl ServeWebArgs {
@@ -1020,5 +1039,35 @@ mod tests {
 			.unwrap_err();
 
 		assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+	}
+
+	#[test]
+	fn serve_web_stores_user_data_in_browser_by_default() {
+		let args = parse_serve_web(&["hucode", "serve-web"]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Browser);
+	}
+
+	#[test]
+	fn serve_web_accepts_server_user_data_storage() {
+		let args = parse_serve_web(&[
+			"hucode",
+			"serve-web",
+			"--user-data-storage=server",
+		]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
+	}
+
+	#[test]
+	fn serve_web_rejects_unknown_user_data_storage() {
+		let error = IntegratedCli::try_parse_from([
+			"hucode",
+			"serve-web",
+			"--user-data-storage=elsewhere",
+		])
+		.unwrap_err();
+
+		assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
 	}
 }

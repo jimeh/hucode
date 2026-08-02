@@ -252,39 +252,75 @@ suite('Hucode upstream provenance', () => {
 		assert.ok(suites.every(entry => entry.reason.length > 10));
 	});
 
-	test('records baseline blobs for every fork and the E1 seam', () => {
+	test('records baseline blobs for every fork and tracked upstream seam', () => {
 		const tracked = UPSTREAM_PROVENANCE.surfaces.filter(
 			surface => surface.upstream
 		);
+		const expectedPaths = [
+			'cli/src/commands/args.rs',
+			'cli/src/commands/serve_web.rs',
+			'src/vs/base/parts/storage/node/storage.ts',
+			'src/vs/code/browser/workbench/workbench.ts',
+			'src/vs/hucode/browser/parts/auxiliaryBarPart.ts',
+			'src/vs/hucode/browser/parts/panelPart.ts',
+			'src/vs/hucode/browser/parts/titlebarPart.ts',
+			'src/vs/hucode/browser/workbench.ts',
+			'src/vs/platform/storage/common/storageIpc.ts',
+			'src/vs/platform/storage/common/storageService.ts',
+			'src/vs/platform/storage/electron-main/storageIpc.ts',
+			'src/vs/server/node/remoteExtensionHostAgentServer.ts',
+			'src/vs/server/node/serverEnvironmentService.ts',
+			'src/vs/server/node/serverServices.ts',
+			'src/vs/server/node/webClientServer.ts',
+			'src/vs/sessions/browser/web.main.ts',
+			'src/vs/sessions/contrib/automations/browser/'
+				+ 'automationStorageService.ts',
+			'src/vs/workbench/browser/web.factory.ts',
+			'src/vs/workbench/browser/web.main.ts',
+			'src/vs/workbench/services/environment/browser/'
+				+ 'environmentService.ts',
+			'src/vs/workbench/services/extensionManagement/browser/'
+				+ 'extensionEnablementService.ts',
+			'src/vs/workbench/services/storage/browser/storageService.ts',
+		].sort();
+		const legacyBaselines = new Set([
+			'src/vs/hucode/browser/parts/auxiliaryBarPart.ts',
+			'src/vs/hucode/browser/parts/panelPart.ts',
+			'src/vs/hucode/browser/parts/titlebarPart.ts',
+			'src/vs/workbench/services/extensionManagement/browser/'
+				+ 'extensionEnablementService.ts',
+		]);
 
-		assert.deepStrictEqual(
-			tracked.map(surface => ({
-				path: surface.path,
-				baseline: surface.upstream?.lastSyncedBaseline,
-			})).sort((a, b) => a.path.localeCompare(b.path)),
-			[
-				{
-					path: 'src/vs/hucode/browser/parts/auxiliaryBarPart.ts',
-					baseline: '1.130.0',
-				},
-				{
-					path: 'src/vs/hucode/browser/parts/panelPart.ts',
-					baseline: '1.130.0',
-				},
-				{
-					path: 'src/vs/hucode/browser/parts/titlebarPart.ts',
-					baseline: '1.130.0',
-				},
-				{
-					path: 'src/vs/hucode/browser/workbench.ts',
-					baseline: '1.131.0',
-				},
-				{
-					path: 'src/vs/workbench/services/extensionManagement/'
-						+ 'browser/extensionEnablementService.ts',
-					baseline: '1.130.0',
-				},
-			]
+		assert.deepStrictEqual(tracked.map(surface => surface.path).sort(), expectedPaths);
+		for (const surface of tracked) {
+			assert.strictEqual(
+				surface.upstream?.lastSyncedBaseline,
+				legacyBaselines.has(surface.path) ? '1.130.0' : '1.131.0',
+				`unexpected baseline for ${surface.path}`,
+			);
+			assert.match(surface.upstream?.blob ?? '', /^[0-9a-f]{40}$/);
+		}
+	});
+
+	test('remote server owns the setup-service lifecycle', async () => {
+		const server = await fs.readFile(
+			path.join(repoRoot, 'src/vs/server/node/remoteExtensionHostAgentServer.ts'),
+			'utf8',
+		);
+		const setup = await fs.readFile(
+			path.join(repoRoot, 'src/vs/server/node/serverServices.ts'),
+			'utf8',
+		);
+
+		assert.match(server, /constructor\(\s*serverServices: IDisposable,/);
+		assert.match(server, /this\._register\(serverServices\);/);
+		assert.match(
+			server,
+			/createInstance\(RemoteExtensionHostAgentServer, serverServices, socketServer,/,
+		);
+		assert.match(
+			setup,
+			/serverServices: hucodeWebUserDataServer\.createServerServicesDisposal\(disposables\)/,
 		);
 	});
 

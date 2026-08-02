@@ -39,6 +39,7 @@ import {
 	getHucodeWebWorkbenchConfiguration,
 	toHucodeWebRouteLocation,
 } from './hucodeWebClientServerIntegration.js';
+import { IHucodeWebUserDataServer } from './hucodeWebUserDataServer.js';
 import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
 import { IServerLifetimeService } from './serverLifetimeService.js';
 
@@ -142,7 +143,8 @@ export class WebClientServer extends Disposable {
 		@IRequestService private readonly _requestService: IRequestService,
 		@IProductService private readonly _productService: IProductService,
 		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService,
-		@IServerLifetimeService private readonly _serverLifetimeService: IServerLifetimeService
+		@IServerLifetimeService private readonly _serverLifetimeService: IServerLifetimeService,
+		@IHucodeWebUserDataServer private readonly _hucodeWebUserDataServer: IHucodeWebUserDataServer,
 	) {
 		super();
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
@@ -181,6 +183,9 @@ export class WebClientServer extends Disposable {
 	 */
 	async handle(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery, pathname: string): Promise<void> {
 		try {
+			if (await this._hucodeWebUserDataServer.handle(req, res, pathname)) {
+				return;
+			}
 			if (pathname.startsWith(STATIC_PATH) && pathname.charCodeAt(STATIC_PATH.length) === CharCode.Slash) {
 				return this._handleStatic(req, res, pathname.substring(STATIC_PATH.length));
 			}
@@ -453,6 +458,10 @@ export class WebClientServer extends Disposable {
 			serverBasePath: basePath,
 			...getHucodeWebWorkbenchConfiguration(basePath, options, {
 				serverPathCaseSensitive: isLinux,
+				userDataStorage: this._hucodeWebUserDataServer.enabled ? 'server' : 'browser',
+				userDataHome: this._hucodeWebUserDataServer.enabled
+					? URI.file(this._hucodeWebUserDataServer.userHome).with({ scheme: Schemas.vscodeRemote, authority: remoteAuthority })
+					: undefined,
 			}),
 			_wrapWebWorkerExtHostInIframe,
 			developmentOptions: { enableSmokeTestDriver: this._environmentService.args['enable-smoke-test-driver'] ? true : undefined, logLevel: this._logService.getLevel() },

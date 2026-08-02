@@ -13,7 +13,7 @@ import { VSBuffer } from '../../base/common/buffer.js';
 import { CharCode } from '../../base/common/charCode.js';
 import { isSigPipeError, onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { isEqualOrParent } from '../../base/common/extpath.js';
-import { Disposable, DisposableMap, DisposableStore } from '../../base/common/lifecycle.js';
+import { Disposable, DisposableMap, DisposableStore, IDisposable } from '../../base/common/lifecycle.js';
 import { connectionTokenQueryName, FileAccess, getServerProductSegment, Schemas } from '../../base/common/network.js';
 import { dirname, join } from '../../base/common/path.js';
 import * as perf from '../../base/common/performance.js';
@@ -42,6 +42,7 @@ import { setupServerServices, SocketServer } from './serverServices.js';
 import { CacheControl, serveError, serveFile, WebClientServer } from './webClientServer.js';
 import { isHucodeWebProjectsApiPath } from './hucodeWebProjectManagerServer.js';
 import { HUCODE_WEB_OMNI_ROOT_ARG } from './hucodeWebOmniRoutes.js';
+import { isHucodeWebUserDataNonGetRequestAllowed } from './hucodeWebUserDataServer.js';
 const require = createRequire(import.meta.url);
 
 declare namespace vsda {
@@ -72,6 +73,7 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 	private readonly _serverProductPath: string;
 
 	constructor(
+		serverServices: IDisposable,
 		private readonly _socketServer: SocketServer<RemoteAgentConnectionContext>,
 		private readonly _connectionToken: ServerConnectionToken,
 		private readonly _vsdaMod: typeof vsda | null,
@@ -100,6 +102,7 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 				? this._register(this._instantiationService.createInstance(WebClientServer, this._connectionToken, serverBasePath ?? '/', this._serverProductPath))
 				: null
 		);
+		this._register(serverServices);
 		this._logService.info(`Extension host agent started.`);
 		this._reconnectionGraceTime = this._environmentService.reconnectionGraceTime;
 	}
@@ -125,14 +128,15 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 			pathname = pathname.substring(this._serverProductPath.length);
 		}
 
-		// Only serve GET requests, except for the Hucode-owned web APIs, which
-		// exist only when Omni web mode is enabled. Without the flag the
-		// upstream method guard applies so non-Omni servers keep 405 behavior.
+		// Only serve GET requests, except for Hucode-owned web APIs whose
+		// corresponding serve-web mode is enabled. Otherwise preserve the
+		// upstream 405 response.
 		const hucodeWebOmniEnabled =
 			!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG];
 		if (
 			req.method !== 'GET' &&
-			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname))
+			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname)) &&
+			!isHucodeWebUserDataNonGetRequestAllowed(this._environmentService.args['hucode-web-user-data-storage'], pathname)
 		) {
 			return serveError(req, res, 405, `Unsupported method ${req.method}`);
 		}
@@ -643,7 +647,7 @@ export async function createServer(address: string | net.AddressInfo | null, arg
 	});
 
 	const disposables = new DisposableStore();
-	const { socketServer, instantiationService } = await setupServerServices(connectionToken, args, REMOTE_DATA_FOLDER, disposables);
+	const { socketServer, instantiationService, serverServices } = await setupServerServices(connectionToken, args, REMOTE_DATA_FOLDER, disposables);
 
 	// Set the unexpected error handler after the services have been initialized, to avoid having
 	// the telemetry service overwrite our handler
@@ -726,7 +730,7 @@ export async function createServer(address: string | net.AddressInfo | null, arg
 		console.log(`Web UI available at http://localhost${address.port === 80 ? '' : `:${address.port}`}${serverBasePath ?? ''}${queryPart}`);
 	}
 
-	const remoteExtensionHostAgentServer = instantiationService.createInstance(RemoteExtensionHostAgentServer, socketServer, connectionToken, vsdaMod, hasWebClient, serverBasePath);
+	const remoteExtensionHostAgentServer = instantiationService.createInstance(RemoteExtensionHostAgentServer, serverServices, socketServer, connectionToken, vsdaMod, hasWebClient, serverBasePath);
 
 	perf.mark('code/server/ready');
 	const currentTime = performance.now();

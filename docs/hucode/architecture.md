@@ -119,8 +119,36 @@ through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
 under the server user-data path and is active unless serve-web runs with
 `--no-omni`. Browser requests must be same-origin (cross-origin `Origin`
 headers are rejected and POST bodies must be JSON) so the mutating API stays
-safe even with `--without-connection-token`. User settings/state remain the
-existing browser-side serve-web concern.
+safe even with `--without-connection-token`.
+
+Serve-web user data has two startup modes. `browser`, the default, retains the
+upstream IndexedDB/local-storage ownership. `server` makes the separate
+`<server-data-dir>/data/WebUser` namespace authoritative for profile files,
+the web profile catalog, and application/profile/workspace state. The Rust CLI
+selects the mode with `--user-data-storage`, and the Node server injects that
+trusted choice into every regular, Omni-shell, and hosted-workbench route.
+Before `BrowserMain` constructs profile or storage services, the Hucode web
+entrypoint initializes the versioned server manifest or offers to migrate
+known logical browser resources through a staged, generation-checked API.
+
+The server exposes `WebUser/User` through the existing remote file provider,
+a dedicated web-profile channel, and Node-hosted SQLite databases under
+`WebUser/State` through the common storage protocol. This namespace is not the
+remote extension host's `data/User` tree. Browser mode never registers or uses
+these authorities. In server mode, the browser IndexedDB provider remains only
+as the migration and rollback source; there is no live mirror or merge.
+Workspace identifiers are hashed, profile identifiers and migration paths are
+validated, state writes are serialized per database, and cross-client changes
+are broadcast for every storage scope.
+
+Secret storage, authentication sessions, cookies, and connection credentials
+remain browser-local in both modes and are excluded from migration. Settings
+files may themselves contain sensitive values, so selecting server mode means
+trusting and backing up the server data directory. A server-mode bootstrap or
+persistence failure is surfaced to the user and never falls back silently to
+browser authority. The Reset User Data action warns that server mode erases
+shared non-secret data for every connected browser; it does not erase the
+browser migration copy or browser-local secrets and sign-ins.
 
 ## Core Subsystems
 
