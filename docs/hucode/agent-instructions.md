@@ -749,6 +749,13 @@ human-facing guides rather than replacing them.
 
 ## Other Hucode Gotchas
 
+- Server-backed WebUser file handles are owned by the exact deserialized IPC
+  context object, not `remoteAuthority`, `clientId`, or other context fields.
+  Release them from `SocketServer.onDidRemoveConnection`, and take the owner
+  snapshot inside the shared WebUser FIFO queue so an admitted delayed `open`
+  cannot escape disconnect cleanup. Generic `IPCServer.dispose()` does not fire
+  removal events, so awaited server disposal also needs a final close-all pass.
+
 - Do not null out or remove `defaultChatAgent` from the product configuration
   served to web clients. Upstream account and chat entitlement services
   dereference it unconditionally during workbench startup, so removing it
