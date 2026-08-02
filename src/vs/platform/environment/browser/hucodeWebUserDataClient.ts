@@ -14,27 +14,31 @@ export async function runHucodeWebUserDataUploadWithLeaseRenewal<TTimer>(
 ): Promise<void> {
 	const controller = new AbortController();
 	let renewalError: unknown;
+	let renewalFailed = false;
 	let renewal = Promise.resolve();
 	const renewLease = () => {
 		renewal = renewal.then(renew).catch(error => {
+			renewalFailed = true;
 			renewalError = error;
 			controller.abort();
 		});
 	};
 	const timer = setRenewalInterval(renewLease, 20_000);
 	let uploadError: unknown;
+	let uploadFailed = false;
 	try {
 		await upload(controller.signal);
 	} catch (error) {
+		uploadFailed = true;
 		uploadError = error;
 	} finally {
 		clearRenewalInterval(timer);
 	}
 	await renewal;
-	if (renewalError) {
+	if (renewalFailed) {
 		throw renewalError;
 	}
-	if (uploadError) {
+	if (uploadFailed) {
 		throw uploadError;
 	}
 }

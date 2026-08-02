@@ -51,6 +51,30 @@ suite('Hucode web user-data client', () => {
 		assert.strictEqual(timerCleared, true);
 	});
 
+	test('preserves a falsy renewal failure', async () => {
+		let renewLease: (() => void) | undefined;
+		const result = runHucodeWebUserDataUploadWithLeaseRenewal(
+			signal => new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('Upload aborted', 'AbortError')))),
+			() => Promise.reject(undefined),
+			callback => {
+				renewLease = callback;
+				return 1;
+			},
+			() => undefined,
+		);
+		assert.ok(renewLease);
+		renewLease();
+
+		let rejected = false;
+		try {
+			await result;
+		} catch (error) {
+			rejected = true;
+			assert.strictEqual(error, undefined);
+		}
+		assert.strictEqual(rejected, true);
+	});
+
 	test('stops scheduling renewals before draining the final renewal', async () => {
 		let renewLease: (() => void) | undefined;
 		let resolveUpload!: () => void;
