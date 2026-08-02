@@ -259,6 +259,7 @@ suite('Hucode upstream provenance', () => {
 		const expectedPaths = [
 			'cli/src/commands/args.rs',
 			'cli/src/commands/serve_web.rs',
+			'src/vs/base/parts/storage/node/storage.ts',
 			'src/vs/code/browser/workbench/workbench.ts',
 			'src/vs/hucode/browser/parts/auxiliaryBarPart.ts',
 			'src/vs/hucode/browser/parts/panelPart.ts',
