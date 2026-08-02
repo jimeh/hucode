@@ -13,6 +13,7 @@ import { ILogService } from '../../platform/log/common/log.js';
 import { IRemoteService } from '../../platform/ipc/common/services.js';
 import { RemoteStorageService } from '../../platform/storage/common/storageService.js';
 import { IStorageService } from '../../platform/storage/common/storage.js';
+import { HucodeWebUserDataStorageService } from './hucodeWebUserDataStorageService.js';
 import { IUserDataProfile, IUserDataProfilesService } from '../../platform/userDataProfile/common/userDataProfile.js';
 import { UserDataProfilesService } from '../../platform/userDataProfile/common/userDataProfileIpc.js';
 import { IUriIdentityService } from '../../platform/uriIdentity/common/uriIdentity.js';
@@ -20,6 +21,7 @@ import { IAnyWorkspaceIdentifier, isSingleFolderWorkspaceIdentifier, isWorkspace
 import { IBrowserWorkbenchEnvironmentService } from '../services/environment/browser/environmentService.js';
 import { IRemoteAgentService } from '../services/remote/common/remoteAgentService.js';
 import { IUserDataProfileService } from '../services/userDataProfile/common/userDataProfile.js';
+import { BrowserStorageService } from '../services/storage/browser/storageService.js';
 import { BrowserMain, IBrowserUserDataProfilesService } from './web.main.js';
 import { IWorkbenchConstructionOptions } from './web.api.js';
 import { getHucodeWebUserDataBootstrapResult } from '../../platform/environment/browser/hucodeWebUserDataBootstrapState.js';
@@ -58,7 +60,7 @@ export class HucodeWebUserDataBrowserMain extends BrowserMain {
 
 	protected override async createStorageService(
 		workspace: IAnyWorkspaceIdentifier,
-		_logService: ILogService,
+		logService: ILogService,
 		userDataProfileService: IUserDataProfileService,
 		userDataProfilesService: IUserDataProfilesService,
 		remoteAgentService: IRemoteAgentService,
@@ -73,11 +75,18 @@ export class HucodeWebUserDataBrowserMain extends BrowserMain {
 			getChannel: name => connection.getChannel(name),
 			registerChannel: () => { throw new Error('Registering client channels is unsupported.'); },
 		};
-		const storage = new RemoteStorageService(workspace, {
+		const remoteStorage = new RemoteStorageService(workspace, {
 			defaultProfile: userDataProfilesService.defaultProfile,
 			currentProfile: userDataProfileService.currentProfile,
 		}, remoteService, environmentService);
-		await storage.initialize();
+		const browserStorage = new BrowserStorageService(workspace, userDataProfileService, logService);
+		const storage = new HucodeWebUserDataStorageService(remoteStorage, browserStorage);
+		try {
+			await Promise.all([remoteStorage.initialize(), browserStorage.initialize()]);
+		} catch (error) {
+			storage.dispose();
+			throw error;
+		}
 		this.onWillShutdownDisposables.add(toDisposable(() => { void storage.close(); }));
 		return storage;
 	}

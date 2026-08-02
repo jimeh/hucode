@@ -21,6 +21,7 @@
 		"src/vs/hucode/test/browser/projectSwitcher/renameProjectWorktreeRouting.test.ts",
 		"src/vs/hucode/test/browser/services/omniAgentHostService.test.ts",
 		"src/vs/hucode/test/browser/webShellService.test.ts",
+		"src/vs/hucode/test/browser/webUserDataStorageService.test.ts",
 		"src/vs/hucode/test/browser/workbench.test.ts",
 		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
 		"src/vs/hucode/test/electron-browser/omniCommandService.test.ts",
