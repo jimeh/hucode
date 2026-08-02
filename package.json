@@ -18,6 +18,7 @@
     "hucode:check-test-suites": "node build/hucode/test-suites.ts --check",
     "hucode:check-upstream-provenance": "node build/hucode/upstream-provenance.ts",
     "hucode:smoke:linux-omni": "node build/hucode/linux-omni-smoke.ts",
+    "hucode:smoke:web-server-user-data": "node build/hucode/web-server-user-data-smoke.ts",
     "hucode:watch": "npm run hucode:prepare && node build/hucode/run-with-mixin.js --quality stable -- npm run watch",
     "hucode:run": "npm run hucode:prepare && ./scripts/hucode.sh",
     "hucode:cli": "npm run hucode:prepare && ./scripts/hucode-cli.sh",

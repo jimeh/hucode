@@ -9,6 +9,7 @@ import { HucodeWebUserDataBrowserMain } from '../../workbench/browser/hucodeWebU
 import { createWithBrowserMain } from '../../workbench/browser/web.factory.js';
 import { IBrowserMainWorkbench } from '../../workbench/browser/web.main.js';
 import { IWorkbenchConstructionOptions } from '../../workbench/browser/web.api.js';
+import './omniWeb.contribution.js';
 import { Workbench } from './workbench.js';
 
 class HucodeOmniWebUserDataBrowserMain extends HucodeWebUserDataBrowserMain {
