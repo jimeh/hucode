@@ -1,6 +1,6 @@
 ---
 title: Serve-Web Server User Data Plan
-status: implementation
+status: implemented
 last_updated: 2026-08-02
 ---
 
@@ -16,14 +16,14 @@ boundaries.
 
 The plan is intentionally stored in the repository so implementation and
 review can refer to an explicit contract rather than reconstructing decisions
-from chat history. Move it to `docs/hucode/archive/` once the work is complete
-and the durable behavior is documented in the architecture and serve-web docs.
+from chat history. Durable behavior is now documented in `architecture.md` and
+the root README; archive this plan after the delivery PR lands.
 
 ## Delivery status
 
 - Product and architecture decisions: **Approved**
-- Implementation: **In progress**
-- Delivery base: `series-1.131.0` at `42a01a4c965`
+- Implementation: **Complete; PR validation in progress**
+- Delivery base: `series-1.131.0` at `af8424f48d0`
 - Required independent review: Codex and Claude
 - Selected external review: CodeRabbit
 - Post-draft correction-cycle budget: two pushes
@@ -460,6 +460,49 @@ while Hucode-owned topics should replay without editing the generic seams.
 
 ## Implementation closure matrix
 
+### Implemented surfaces and deviations
+
+The implementation keeps policy and persistence in Hucode-owned companions:
+`hucodeWebUserDataBootstrap.ts`, `hucodeWebUserDataBrowserMain.ts`, and the
+three `hucodeWebUserData*` Node services. Upstream `BrowserMain` gained only
+protected construction hooks and a small profile-service interface; the
+default factory still constructs the original class. The generic common
+storage patch adds workspace events and atomic operations without selecting a
+Hucode mode.
+
+Four upstream touches exceeded the initial table:
+
+- `workbench.ts` explicitly selects the existing browser-local secret provider
+  in server mode; leaving its remote fallback active would put secrets on the
+  server and violate the product boundary.
+- `web.factory.ts` accepts a `BrowserMain` constructor so all three Hucode web
+  routes use one backend seam without copying the factory.
+- `web.main.ts` also exposes the existing reset action through two protected
+  hooks, keeping server reset policy and warning text in the Hucode subclass.
+- `BrowserStorageService` and the Sessions automation storage adapter implement
+  and consume a narrow atomic-storage capability, removing the previous
+  concrete-class assumption.
+- `sessions/browser/web.main.ts` forwards the now-explicit construction
+  dependencies from its existing override. It adds no Hucode policy.
+
+Every non-trivial upstream patch is recorded in
+`build/hucode/upstream-provenance.json` against the `1.131.0` baseline. The
+focused implementation suites collected before PR review are:
+
+- `src/vs/server/test/node/hucodeWebUserDataServer.test.ts` for first-wins
+  initialization, staged commit, ready-generation protection, empty
+  initialization, and traversal rejection;
+- `src/vs/server/test/node/hucodeWebUserDataStorage.test.ts` for durable reopen,
+  serialized compare-and-swap, workspace external events, and identifier
+  rejection;
+- `src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts` for the
+  browser default and trusted server route configuration;
+- Rust `commands::args::tests` for the public CLI default, valid values,
+  invalid values, and argument interaction.
+
+Real multi-browser migration and restart smokes remain final PR validation
+evidence rather than being represented as complete by a browser mock.
+
 The implementer owns focused evidence while building. The delivery orchestrator
 owns evidence sufficiency and final-head gates; CI owns clean-environment and
 supported-runner coverage. When final test paths differ from the proposed names
@@ -495,7 +538,8 @@ npm run gulp compile-client
 npm run hucode:test-suites -- --write-snapshot
 npm run hucode:check-test-suites
 npm run test-node -- --run src/vs/server/test/node/hucodeWebUserDataServer.test.ts
-npm run test-node -- --run src/vs/platform/storage/test/common/hucodeWebStorageIpc.test.ts
+npm run test-node -- --run src/vs/server/test/node/hucodeWebUserDataStorage.test.ts
+npm run test-node -- --run src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts
 ```
 
 Browser/Electron-layer suites resolved by `hucode:test-suites` must run through
