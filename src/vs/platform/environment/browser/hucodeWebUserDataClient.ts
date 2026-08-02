@@ -22,19 +22,20 @@ export async function runHucodeWebUserDataUploadWithLeaseRenewal<TTimer>(
 		});
 	};
 	const timer = setRenewalInterval(renewLease, 20_000);
+	let uploadError: unknown;
 	try {
-		try {
-			await upload(controller.signal);
-		} catch (error) {
-			await renewal;
-			throw renewalError ?? error;
-		}
-		await renewal;
-		if (renewalError) {
-			throw renewalError;
-		}
+		await upload(controller.signal);
+	} catch (error) {
+		uploadError = error;
 	} finally {
 		clearRenewalInterval(timer);
+	}
+	await renewal;
+	if (renewalError) {
+		throw renewalError;
+	}
+	if (uploadError) {
+		throw uploadError;
 	}
 }
 

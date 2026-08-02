@@ -51,6 +51,40 @@ suite('Hucode web user-data client', () => {
 		assert.strictEqual(timerCleared, true);
 	});
 
+	test('stops scheduling renewals before draining the final renewal', async () => {
+		let renewLease: (() => void) | undefined;
+		let resolveUpload!: () => void;
+		let resolveFirstRenewal!: () => void;
+		let renewalCalls = 0;
+		let timerCleared = false;
+		const result = runHucodeWebUserDataUploadWithLeaseRenewal(
+			() => new Promise<void>(resolve => { resolveUpload = resolve; }),
+			() => {
+				renewalCalls++;
+				return renewalCalls === 1 ? new Promise<void>(resolve => { resolveFirstRenewal = resolve; }) : Promise.resolve();
+			},
+			callback => {
+				renewLease = callback;
+				return 1;
+			},
+			() => { timerCleared = true; },
+		);
+		assert.ok(renewLease);
+		renewLease();
+		await Promise.resolve();
+		resolveUpload();
+		await Promise.resolve();
+		await Promise.resolve();
+		if (!timerCleared) {
+			renewLease();
+		}
+		resolveFirstRenewal();
+
+		await result;
+		assert.strictEqual(timerCleared, true);
+		assert.strictEqual(renewalCalls, 1);
+	});
+
 	test('prefers a structured reset error and falls back for non-JSON', async () => {
 		const fallback = 'Unable to reset server user data (HTTP 502).';
 		assert.strictEqual(await readHucodeWebUserDataResponseError({ json: async () => ({ error: 'server rejected reset' }) }, fallback), 'server rejected reset');

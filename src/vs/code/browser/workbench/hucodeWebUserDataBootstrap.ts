@@ -6,7 +6,7 @@
 import { mainWindow } from '../../../base/browser/window.js';
 import { URI, UriDto } from '../../../base/common/uri.js';
 import { localize } from '../../../nls.js';
-import { readHucodeWebUserDataStore, runHucodeWebUserDataUploadWithLeaseRenewal } from '../../../platform/environment/browser/hucodeWebUserDataClient.js';
+import { readHucodeWebUserDataResponseError, readHucodeWebUserDataStore, runHucodeWebUserDataUploadWithLeaseRenewal } from '../../../platform/environment/browser/hucodeWebUserDataClient.js';
 import { isAcceptedWebUserDataResponse, shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
 import { IUserDataProfile } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import { IHucodeWebWorkbenchConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
@@ -314,11 +314,10 @@ async function requestJson<T>(url: string, init?: RequestInit, allowConflict = f
 		headers: { 'Content-Type': 'application/json' },
 		...init,
 	});
-	const value = await response.json() as T & { error?: string };
 	if (!isAcceptedWebUserDataResponse(response.ok, response.status, allowConflict)) {
-		throw new Error(value.error ?? `User-data server returned HTTP ${response.status}.`);
+		throw new Error(await readHucodeWebUserDataResponseError(response, localize('hucode web user data request error', "User-data server returned HTTP {0}.", response.status)));
 	}
-	return value;
+	return await response.json() as T;
 }
 
 function setResult(profiles: readonly UriDto<IUserDataProfile>[], home: URI): void {
