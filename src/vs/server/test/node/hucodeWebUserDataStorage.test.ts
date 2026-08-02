@@ -108,6 +108,47 @@ suite('HucodeWebUserDataStorage', () => {
 		assert.deepStrictEqual(await changed, { changed: [['layout', 'wide']] } satisfies ISerializableItemsChangeEvent);
 	});
 
+	test('retries entry creation after a transient parent failure', async () => {
+		const applicationHome = join(testHome, 'application');
+		await fs.writeFile(applicationHome, 'blocks directory creation');
+		const request = applicationRequest();
+
+		await assert.rejects(host.getItems(request));
+		await fs.rm(applicationHome);
+		await host.updateItems({ ...request, insert: [['theme', 'dark']] });
+
+		assert.deepStrictEqual(await host.getItems(request), [['theme', 'dark']]);
+	});
+
+	test('rejects SQLite fallback to memory', async () => {
+		const databasePath = join(testHome, 'application', 'state.vscdb');
+		await fs.mkdir(databasePath, { recursive: true });
+
+		await assert.rejects(
+			host.getItems(applicationRequest()),
+			/Serve-web user-data database could not be opened/,
+		);
+	});
+
+	test('recreates entry event ownership after repeated resets', async () => {
+		const request = applicationRequest();
+		const events: ISerializableItemsChangeEvent[] = [];
+		const listener = disposables.add(host.getChangeEvent(request)(event => events.push(event)));
+
+		await host.updateItems({ ...request, insert: [['theme', 'dark']] });
+		await host.reset();
+		await host.updateItems({ ...request, insert: [['theme', 'light']] });
+		await host.reset();
+		listener.dispose();
+
+		assert.deepStrictEqual(events, [
+			{ changed: [['theme', 'dark']] },
+			{ deleted: ['theme'] },
+			{ changed: [['theme', 'light']] },
+			{ deleted: ['theme'] },
+		]);
+	});
+
 	test('rejects unknown profiles and invalid workspace identifiers', async () => {
 		await assert.rejects(
 			host.getItems({ profile: { id: 'unknown' } as never, workspace: undefined }),

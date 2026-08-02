@@ -270,6 +270,11 @@ export class SQLiteStorageDatabase implements IStorageDatabase {
 		return integrity;
 	}
 
+	/** Returns whether opening the configured database fell back to memory. */
+	async isInMemory(): Promise<boolean> {
+		return (await this.whenConnected).isInMemory;
+	}
+
 	private async connect(path: string, retryOnBusy = true): Promise<IDatabaseConnection> {
 		this.logger.trace(`[storage ${this.name}] open(${path}, retryOnBusy: ${retryOnBusy})`);
 

@@ -7,8 +7,8 @@ import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import { Queue } from '../../base/common/async.js';
 import { Emitter, Event } from '../../base/common/event.js';
-import { Disposable, IDisposable } from '../../base/common/lifecycle.js';
-import { join } from '../../base/common/path.js';
+import { Disposable, DisposableMap, DisposableStore, IDisposable } from '../../base/common/lifecycle.js';
+import { dirname, join } from '../../base/common/path.js';
 import { IServerChannel } from '../../base/parts/ipc/common/ipc.js';
 import { Storage } from '../../base/parts/storage/common/storage.js';
 import { SQLiteStorageDatabase } from '../../base/parts/storage/node/storage.js';
@@ -23,6 +23,7 @@ import {
 } from '../../platform/storage/common/storageIpc.js';
 
 interface HucodeWebStorageEntry {
+	readonly key: string;
 	readonly storage: Storage;
 	readonly writes: Queue<unknown>;
 }
@@ -32,6 +33,7 @@ interface HucodeWebStorageEntry {
  */
 export class HucodeWebUserDataStorageHost extends Disposable {
 	private readonly entries = new Map<string, Promise<HucodeWebStorageEntry>>();
+	private readonly entryDisposables = this._register(new DisposableMap<string, DisposableStore>());
 	private readonly emitters = new Map<string, Emitter<ISerializableItemsChangeEvent>>();
 	private readonly operations = new Queue<unknown>();
 	private closing = false;
@@ -117,19 +119,16 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 	/** Clears every server-backed state database after admitted operations settle. */
 	async reset(): Promise<void> {
 		await this.queueOperation(async () => {
-			const entries = await Promise.all(this.entries.values());
 			for (const [key, entry] of [...this.entries.entries()]) {
 				const resolved = await entry;
 				const deleted = [...resolved.storage.items.keys()];
-				await resolved.writes.whenIdle();
-				await resolved.storage.close();
+				await this.closeEntry(resolved);
 				if (deleted.length) {
 					this.emitters.get(key)?.fire({ deleted });
 				}
 			}
 			this.entries.clear();
 			await fs.rm(this.stateHome, { recursive: true, force: true });
-			await Promise.all(entries.map(entry => entry.writes.whenIdle()));
 		});
 	}
 
@@ -139,10 +138,7 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 			this.closePromise = (async () => {
 				await this.operations.whenIdle();
 				const entries = await Promise.all(this.entries.values());
-				await Promise.all(entries.map(async entry => {
-					await entry.writes.whenIdle();
-					await entry.storage.close();
-				}));
+				await Promise.all(entries.map(entry => this.closeEntry(entry)));
 			})();
 		}
 		await this.closePromise;
@@ -170,34 +166,59 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 		if (!entry) {
 			entry = this.createEntry(resolved.key, resolved.path);
 			this.entries.set(resolved.key, entry);
+			void entry.catch(() => {
+				if (this.entries.get(resolved.key) === entry) {
+					this.entries.delete(resolved.key);
+				}
+			});
 		}
 		return entry;
 	}
 
 	private async createEntry(key: string, path: string): Promise<HucodeWebStorageEntry> {
-		await fs.mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
+		await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
 		const database = new SQLiteStorageDatabase(path, {
 			logging: {
 				logTrace: message => this.logService.trace(`[WebUser storage ${key}] ${message}`),
 				logError: error => this.logService.error(`[WebUser storage ${key}]`, error),
 			},
 		});
-		const storage = this._register(new Storage(database));
-		await storage.init();
-		const integrity = await database.checkIntegrity(false);
-		if (integrity.includes('(in-memory!)')) {
-			await storage.close();
-			throw new Error(`Serve-web user-data database could not be opened at ${path}.`);
+		const disposables = new DisposableStore();
+		const storage = disposables.add(new Storage(database));
+		try {
+			await storage.init();
+			if (await database.isInMemory()) {
+				throw new Error(`Serve-web user-data database could not be opened at ${path}.`);
+			}
+
+			disposables.add(storage.onDidChangeStorage(event => {
+				const value = storage.get(event.key);
+				this.emitters.get(key)?.fire(value === undefined
+					? { deleted: [event.key] }
+					: { changed: [[event.key, value]] });
+			}));
+
+			this.entryDisposables.set(key, disposables);
+			return { key, storage, writes: new Queue<unknown>() };
+		} catch (error) {
+			try {
+				await storage.close();
+			} catch (closeError) {
+				this.logService.error(`[WebUser storage ${key}] Unable to close failed database entry.`, closeError);
+			} finally {
+				disposables.dispose();
+			}
+			throw error;
 		}
+	}
 
-		this._register(storage.onDidChangeStorage(event => {
-			const value = storage.get(event.key);
-			this.emitters.get(key)?.fire(value === undefined
-				? { deleted: [event.key] }
-				: { changed: [[event.key, value]] });
-		}));
-
-		return { storage, writes: new Queue<unknown>() };
+	private async closeEntry(entry: HucodeWebStorageEntry): Promise<void> {
+		await entry.writes.whenIdle();
+		try {
+			await entry.storage.close();
+		} finally {
+			this.entryDisposables.deleteAndDispose(entry.key);
+		}
 	}
 
 	private resolveDatabase(request: IBaseSerializableStorageRequest): {

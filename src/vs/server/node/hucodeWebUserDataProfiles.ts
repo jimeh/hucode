@@ -186,8 +186,11 @@ export class HucodeWebUserDataProfilesChannel<TContext = unknown> implements ISe
 			switch (command) {
 				case 'createNamedProfile': result = await this.service.createNamedProfile(incoming[0] as string, incoming[1] as never, incoming[2] as never); break;
 				case 'createProfile': {
-					if (!isSafeProfileId(incoming[0])) { throw new Error('Invalid web user-data profile identifier.'); }
-					result = await this.service.createProfile(incoming[0], incoming[1] as string, incoming[2] as never, incoming[3] as never);
+					const id = incoming[0];
+					if (!isSafeProfileId(id) || this.service.profiles.some(profile => profile.id.toLowerCase() === id.toLowerCase())) {
+						throw new Error('Invalid web user-data profile identifier.');
+					}
+					result = await this.service.createProfile(id, incoming[1] as string, incoming[2] as never, incoming[3] as never);
 					break;
 				}
 				case 'createTransientProfile': result = await this.service.createTransientProfile(incoming[0] as never); break;
@@ -235,11 +238,13 @@ export function validateWebProfileCatalog(value: unknown, source: 'stored' | 'mi
 		return invalid('profile catalog');
 	}
 	const ids = new Set<string>();
+	const caseFoldedIds = new Set<string>();
 	const profiles = value.profiles.map(profile => {
-		if (!isRecord(profile) || !isSafeProfileId(profile.id) || profile.id === '__default__profile__' || ids.has(profile.id)) {
+		if (!isRecord(profile) || !isSafeProfileId(profile.id) || profile.id === '__default__profile__' || ids.has(profile.id) || caseFoldedIds.has(profile.id.toLowerCase())) {
 			return invalid('profile identifier');
 		}
 		ids.add(profile.id);
+		caseFoldedIds.add(profile.id.toLowerCase());
 		if (typeof profile.name !== 'string' || !profile.name) {
 			return invalid('profile name');
 		}

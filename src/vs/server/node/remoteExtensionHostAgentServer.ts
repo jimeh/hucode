@@ -42,7 +42,7 @@ import { setupServerServices, SocketServer } from './serverServices.js';
 import { CacheControl, serveError, serveFile, WebClientServer } from './webClientServer.js';
 import { isHucodeWebProjectsApiPath } from './hucodeWebProjectManagerServer.js';
 import { HUCODE_WEB_OMNI_ROOT_ARG } from './hucodeWebOmniRoutes.js';
-import { isHucodeWebUserDataApiPath } from './hucodeWebUserDataServer.js';
+import { isHucodeWebUserDataNonGetRequestAllowed } from './hucodeWebUserDataServer.js';
 const require = createRequire(import.meta.url);
 
 declare namespace vsda {
@@ -128,15 +128,15 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
 			pathname = pathname.substring(this._serverProductPath.length);
 		}
 
-		// Only serve GET requests, except for the Hucode-owned web APIs, which
-		// exist only when Omni web mode is enabled. Without the flag the
-		// upstream method guard applies so non-Omni servers keep 405 behavior.
+		// Only serve GET requests, except for Hucode-owned web APIs whose
+		// corresponding serve-web mode is enabled. Otherwise preserve the
+		// upstream 405 response.
 		const hucodeWebOmniEnabled =
 			!!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG];
 		if (
 			req.method !== 'GET' &&
 			!(hucodeWebOmniEnabled && isHucodeWebProjectsApiPath(pathname)) &&
-			!isHucodeWebUserDataApiPath(pathname)
+			!isHucodeWebUserDataNonGetRequestAllowed(this._environmentService.args['hucode-web-user-data-storage'], pathname)
 		) {
 			return serveError(req, res, 405, `Unsupported method ${req.method}`);
 		}

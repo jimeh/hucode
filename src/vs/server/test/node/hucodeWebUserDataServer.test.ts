@@ -26,7 +26,7 @@ import { NullLogService } from '../../../platform/log/common/log.js';
 import product from '../../../platform/product/common/product.js';
 import { UriIdentityService } from '../../../platform/uriIdentity/common/uriIdentityService.js';
 import { HucodeWebUserDataProfilesChannel, validateWebProfileCatalog } from '../../node/hucodeWebUserDataProfiles.js';
-import { HUCODE_WEB_USER_DATA_API_PATH, HucodeWebUserDataServer, HucodeWebUserDataServerOptions } from '../../node/hucodeWebUserDataServer.js';
+import { HUCODE_WEB_USER_DATA_API_PATH, HucodeWebUserDataServer, HucodeWebUserDataServerOptions, isHucodeWebUserDataNonGetRequestAllowed } from '../../node/hucodeWebUserDataServer.js';
 import { ServerEnvironmentService } from '../../node/serverEnvironmentService.js';
 
 suite('HucodeWebUserDataServer', () => {
@@ -34,7 +34,7 @@ suite('HucodeWebUserDataServer', () => {
 	let fileService: FileService;
 	let diskProvider: DiskFileSystemProvider;
 	let server: HucodeWebUserDataServer;
-	let logService: NullLogService;
+	let logService: RecordingLogService;
 	let uriIdentityService: UriIdentityService;
 
 	teardown(async () => {
@@ -49,7 +49,7 @@ suite('HucodeWebUserDataServer', () => {
 
 	setup(async () => {
 		testHome = await fs.mkdtemp(join(tmpdir(), 'hucode-web-user-data-server-'));
-		logService = new NullLogService();
+		logService = new RecordingLogService();
 		fileService = disposables.add(new FileService(logService));
 		diskProvider = disposables.add(new DiskFileSystemProvider(logService));
 		disposables.add(fileService.registerProvider(Schemas.file, diskProvider));
@@ -153,6 +153,23 @@ suite('HucodeWebUserDataServer', () => {
 		assert.strictEqual((await invoke(server, 'GET', '/bootstrap')).value.state, 'staging');
 	});
 
+	test('rejects non-string migrated state identifiers as request errors', async () => {
+		const claim = await invoke(server, 'POST', '/claim', {});
+		const lease = claim.value as { owner: string; generation: number };
+		const upload = await invoke(server, 'POST', '/upload', {
+			...lease,
+			migration: {
+				files: [],
+				profiles: [],
+				associations: {},
+				state: [{ id: 42, items: [] }],
+			},
+		});
+
+		assert.strictEqual(upload.status, 400);
+		assert.strictEqual(upload.value.error, 'Invalid migrated workspace state identifier.');
+	});
+
 	test('rejects profile traversal before creating a folder', async () => {
 		await invoke(server, 'POST', '/initialize-empty', {});
 		const channel = new HucodeWebUserDataProfilesChannel(server.profilesService!, () => DefaultURITransformer);
@@ -165,6 +182,39 @@ suite('HucodeWebUserDataServer', () => {
 			fs.stat(join(testHome, 'WebUser', 'escaped-profile')),
 			error => (error as NodeJS.ErrnoException).code === 'ENOENT',
 		);
+	});
+
+	test('rejects case-folded profile collisions before creating a folder', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = new HucodeWebUserDataProfilesChannel(server.profilesService!, () => DefaultURITransformer);
+		await channel.call(null, 'createProfile', ['Foo', 'First']);
+
+		await assert.rejects(
+			channel.call(null, 'createProfile', ['foo', 'Second']),
+			/Invalid web user-data profile identifier/,
+		);
+		assert.deepStrictEqual(await fs.readdir(join(testHome, 'WebUser', 'User', 'profiles')), ['Foo']);
+	});
+
+	test('rejects case-folded migrated profile collisions before staging files', async () => {
+		const claim = await invoke(server, 'POST', '/claim', {});
+		const lease = claim.value as { owner: string; generation: number };
+		const sentinel = join(testHome, 'WebUser', '.staging', lease.owner, 'sentinel');
+		await fs.writeFile(sentinel, 'preserved');
+
+		const upload = await invoke(server, 'POST', '/upload', {
+			...lease,
+			migration: {
+				files: [{ path: '/User/profiles/Foo/settings.json', contents: '' }],
+				profiles: [{ id: 'Foo', name: 'First' }, { id: 'foo', name: 'Second' }],
+				associations: {},
+				state: [],
+			},
+		});
+
+		assert.strictEqual(upload.status, 400);
+		assert.match(String(upload.value.error), /Invalid migrated profile identifier/);
+		assert.strictEqual(await fs.readFile(sentinel, 'utf8'), 'preserved');
 	});
 
 	test('rejects all-dot migrated profile identifiers', async () => {
@@ -190,6 +240,7 @@ suite('HucodeWebUserDataServer', () => {
 	test('validates every stored catalog field', () => {
 		const invalidCatalogs = [
 			{ profiles: [{ id: 'duplicate', name: 'One' }, { id: 'duplicate', name: 'Two' }], associations: {} },
+			{ profiles: [{ id: 'Foo', name: 'One' }, { id: 'foo', name: 'Two' }], associations: {} },
 			{ profiles: [{ id: '..', name: 'Unsafe' }], associations: {} },
 			{ profiles: [{ id: 'valid', name: '' }], associations: {} },
 			{ profiles: [{ id: 'valid', name: 'Valid' }], associations: { workspaces: [] } },
@@ -216,10 +267,10 @@ suite('HucodeWebUserDataServer', () => {
 		const bootstrap = await invoke(server, 'GET', '/bootstrap');
 		const reset = await invoke(server, 'POST', '/reset', {});
 
-		assert.strictEqual(bootstrap.status, 400);
-		assert.match(String(bootstrap.value.error), /profile catalog is corrupt/);
-		assert.strictEqual(reset.status, 400);
-		assert.match(String(reset.value.error), /profile catalog is corrupt/);
+		assert.strictEqual(bootstrap.status, 500);
+		assert.strictEqual(bootstrap.value.error, 'Unable to complete the serve-web user-data request.');
+		assert.strictEqual(reset.status, 500);
+		assert.strictEqual(reset.value.error, 'Unable to complete the serve-web user-data request.');
 		assert.strictEqual(await fs.readFile(catalogPath, 'utf8'), corrupt);
 	});
 
@@ -232,8 +283,8 @@ suite('HucodeWebUserDataServer', () => {
 
 		const bootstrap = await invoke(server, 'GET', '/bootstrap');
 
-		assert.strictEqual(bootstrap.status, 400);
-		assert.match(String(bootstrap.value.error), /profile catalog is corrupt/);
+		assert.strictEqual(bootstrap.status, 500);
+		assert.strictEqual(bootstrap.value.error, 'Unable to complete the serve-web user-data request.');
 		assert.strictEqual(await fs.readFile(catalogPath, 'utf8'), malformed);
 	});
 
@@ -245,8 +296,8 @@ suite('HucodeWebUserDataServer', () => {
 
 		const bootstrap = await invoke(server, 'GET', '/bootstrap');
 
-		assert.strictEqual(bootstrap.status, 400);
-		assert.match(String(bootstrap.value.error), /profile catalog is missing/);
+		assert.strictEqual(bootstrap.status, 500);
+		assert.strictEqual(bootstrap.value.error, 'Unable to complete the serve-web user-data request.');
 		await assert.rejects(fs.stat(catalogPath), error => (error as NodeJS.ErrnoException).code === 'ENOENT');
 	});
 
@@ -388,6 +439,30 @@ suite('HucodeWebUserDataServer', () => {
 		assert.strictEqual((await invoke(server, 'POST', '/commit', lease)).status, 200);
 	});
 
+	test('logs unexpected failures without exposing host paths', async () => {
+		const failure = new Error(`ENOENT: unable to open ${join(testHome, 'private', 'state.vscdb')}`);
+		await reopenServer({ beforeUploadLeaseRefresh: async () => { throw failure; } });
+		const claim = await invoke(server, 'POST', '/claim', {});
+		const lease = claim.value as { owner: string; generation: number };
+
+		const upload = await invoke(server, 'POST', '/upload', {
+			...lease,
+			migration: { files: [], profiles: [], associations: {}, state: [] },
+		});
+
+		assert.strictEqual(upload.status, 500);
+		assert.strictEqual(upload.value.error, 'Unable to complete the serve-web user-data request.');
+		assert.ok(!JSON.stringify(upload.value).includes(testHome));
+		assert.ok(logService.errors.some(args => args.includes(failure)), 'the original failure must be logged server-side');
+	});
+
+	test('allows user-data methods only in server storage mode', () => {
+		assert.strictEqual(isHucodeWebUserDataNonGetRequestAllowed('server', `${HUCODE_WEB_USER_DATA_API_PATH}/reset`), true);
+		assert.strictEqual(isHucodeWebUserDataNonGetRequestAllowed('browser', `${HUCODE_WEB_USER_DATA_API_PATH}/reset`), false);
+		assert.strictEqual(isHucodeWebUserDataNonGetRequestAllowed(undefined, `${HUCODE_WEB_USER_DATA_API_PATH}/reset`), false);
+		assert.strictEqual(isHucodeWebUserDataNonGetRequestAllowed('server', '/unrelated'), false);
+	});
+
 	test('recovers an idle staging lease after expiry', async () => {
 		let now = 0;
 		await reopenServer({ now: () => now, leaseMs: 10 });
@@ -482,6 +557,14 @@ suite('HucodeWebUserDataServer', () => {
 		await server.close();
 	});
 });
+
+class RecordingLogService extends NullLogService {
+	readonly errors: unknown[][] = [];
+
+	override error(message: string | Error, ...args: unknown[]): void {
+		this.errors.push([message, ...args]);
+	}
+}
 
 async function invoke(
 	server: HucodeWebUserDataServer,

@@ -89,6 +89,11 @@ export function isHucodeWebUserDataApiPath(pathname: string): boolean {
 	return pathname === HUCODE_WEB_USER_DATA_API_PATH || pathname.startsWith(`${HUCODE_WEB_USER_DATA_API_PATH}/`);
 }
 
+/** Returns whether a non-GET request may enter the serve-web user-data API. */
+export function isHucodeWebUserDataNonGetRequestAllowed(mode: 'browser' | 'server' | undefined, pathname: string): boolean {
+	return mode === 'server' && isHucodeWebUserDataApiPath(pathname);
+}
+
 /**
  * Owns the authoritative WebUser manifest, migration staging, profile catalog, and state host.
  */
@@ -255,9 +260,14 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 
 				respondJson(res, 404, { error: 'Unknown serve-web user-data operation.' });
 			} catch (error) {
-				respondJson(res, error instanceof HucodeWebUserDataServerClosingError ? 503 : 400, {
-					error: error instanceof Error ? error.message : String(error),
-				});
+				if (error instanceof HucodeWebUserDataServerClosingError) {
+					respondJson(res, 503, { error: error.message });
+				} else if (error instanceof HucodeWebUserDataRequestError) {
+					respondJson(res, 400, { error: error.message });
+				} else {
+					this.logService.error('Unexpected serve-web user-data request failure.', error);
+					respondJson(res, 500, { error: 'Unable to complete the serve-web user-data request.' });
+				}
 			}
 			return true;
 		} finally {
@@ -340,8 +350,18 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private async upload(owner: unknown, generation: unknown, migration: HucodeWebUserDataMigration | undefined): Promise<void> {
 		const manifest = this.assertLease(owner, generation);
 		if (!migration || !Array.isArray(migration.files) || !Array.isArray(migration.profiles) || !Array.isArray(migration.state)) {
-			throw new Error('Invalid migration payload.');
+			throw new HucodeWebUserDataRequestError('Invalid migration payload.');
 		}
+		let catalog: ReturnType<typeof validateWebProfileCatalog>;
+		try {
+			catalog = validateWebProfileCatalog({
+				profiles: migration.profiles,
+				associations: migration.associations ?? {},
+			}, 'migrated');
+		} catch (error) {
+			throw new HucodeWebUserDataRequestError(error instanceof Error ? error.message : 'Invalid migrated profile catalog.');
+		}
+		const profileIds = new Set(catalog.profiles.map(profile => profile.id));
 		const stage = join(this.stagingHome, manifest.lease!.owner);
 		await fs.promises.rm(stage, { recursive: true, force: true });
 		await fs.promises.mkdir(stage, { recursive: true, mode: 0o700 });
@@ -353,11 +373,6 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			await fs.promises.writeFile(target, Buffer.from(file.contents, 'base64'), { mode: 0o600 });
 		}
 
-		const catalog = validateWebProfileCatalog({
-			profiles: migration.profiles,
-			associations: migration.associations ?? {},
-		}, 'migrated');
-		const profileIds = new Set(catalog.profiles.map(profile => profile.id));
 		await fs.promises.writeFile(join(stage, 'profiles.json'), JSON.stringify(catalog, undefined, 2), { mode: 0o600 });
 
 		for (const state of migration.state) {
@@ -372,7 +387,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 					}
 				}
 				await database.updateItems({ insert: items });
-				if ((await database.checkIntegrity(false)).includes('(in-memory!)')) {
+				if (await database.isInMemory()) {
 					throw new Error(`Unable to persist migrated state database ${state.id}.`);
 				}
 			} finally {
@@ -383,7 +398,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		await this.options.beforeUploadLeaseRefresh?.();
 		const current = this.readManifest();
 		if (current?.state !== 'staging' || !current.lease || current.generation !== manifest.generation || current.lease.owner !== manifest.lease?.owner) {
-			throw new Error('Migration lease or generation does not match.');
+			throw new HucodeWebUserDataRequestError('Migration lease or generation does not match.');
 		}
 		await this.writeManifest({
 			...current,
@@ -407,7 +422,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		const claimed = this.assertLease(owner, generation);
 		const stage = join(this.stagingHome, claimed.lease!.owner);
 		if (!fs.existsSync(join(stage, 'profiles.json'))) {
-			throw new Error('Migration upload is incomplete.');
+			throw new HucodeWebUserDataRequestError('Migration upload is incomplete.');
 		}
 
 		await fs.promises.rm(this.userHome, { recursive: true, force: true });
@@ -451,7 +466,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private async reset(): Promise<{ reset: true; generation: number; profiles: readonly IUserDataProfile[] }> {
 		const manifest = this.readManifest();
 		if (manifest?.state !== 'ready') {
-			throw new Error('Server user data must be initialized before it can be reset.');
+			throw new HucodeWebUserDataRequestError('Server user data must be initialized before it can be reset.');
 		}
 		this.profilesService!.assertCatalogReady();
 		await this.storageHost!.reset();
@@ -472,10 +487,10 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private assertLease(owner: unknown, generation: unknown): HucodeWebUserDataManifest {
 		const manifest = this.readManifest();
 		if (manifest?.state !== 'staging' || typeof owner !== 'string' || owner !== manifest.lease?.owner || generation !== manifest.generation) {
-			throw new Error('Migration lease or generation does not match.');
+			throw new HucodeWebUserDataRequestError('Migration lease or generation does not match.');
 		}
 		if (manifest.lease.expiresAt <= this.now()) {
-			throw new Error('Migration lease has expired.');
+			throw new HucodeWebUserDataRequestError('Migration lease has expired.');
 		}
 		return manifest;
 	}
@@ -589,9 +604,11 @@ class HucodeWebUserDataServerClosingError extends Error {
 	}
 }
 
+class HucodeWebUserDataRequestError extends Error { }
+
 function validateMigratedFilePath(path: string): string {
 	if (typeof path !== 'string' || !path.startsWith('/User/')) {
-		throw new Error('Migrated user-data file is outside /User.');
+		throw new HucodeWebUserDataRequestError('Migrated user-data file is outside /User.');
 	}
 	return path.slice('/User/'.length);
 }
@@ -600,21 +617,21 @@ function confinedJoin(root: string, relative: string): string {
 	const target = normalize(join(root, relative));
 	const normalizedRoot = normalize(root);
 	if (target !== normalizedRoot && !target.startsWith(`${normalizedRoot}/`) && !target.startsWith(`${normalizedRoot}\\`)) {
-		throw new Error('User-data path escapes the server namespace.');
+		throw new HucodeWebUserDataRequestError('User-data path escapes the server namespace.');
 	}
 	return target;
 }
 
 function resolveMigratedStatePath(root: string, id: string, profileIds: ReadonlySet<string>): string {
+	if (typeof id !== 'string' || !id || id.length > 4096 || id.includes('\0')) {
+		throw new HucodeWebUserDataRequestError('Invalid migrated workspace state identifier.');
+	}
 	if (id === 'global') { return join(root, 'application', 'state.vscdb'); }
 	if (id === 'global-shared') { return join(root, 'application-shared', 'state.vscdb'); }
 	if (id.startsWith('global-')) {
 		const profileId = id.slice('global-'.length);
-		if (!profileIds.has(profileId)) { throw new Error('Migration references an unknown profile.'); }
+		if (!profileIds.has(profileId)) { throw new HucodeWebUserDataRequestError('Migration references an unknown profile.'); }
 		return join(root, 'profiles', profileId, 'state.vscdb');
-	}
-	if (typeof id !== 'string' || !id || id.length > 4096 || id.includes('\0')) {
-		throw new Error('Invalid migrated workspace state identifier.');
 	}
 	const digest = createHash('sha256').update(id).digest('hex');
 	return join(root, 'workspaces', digest, 'state.vscdb');
@@ -626,10 +643,14 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
 	for await (const chunk of req) {
 		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 		size += buffer.byteLength;
-		if (size > MAX_BODY_BYTES) { throw new Error('User-data migration payload is too large.'); }
+		if (size > MAX_BODY_BYTES) { throw new HucodeWebUserDataRequestError('User-data migration payload is too large.'); }
 		chunks.push(buffer);
 	}
-	return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+	try {
+		return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+	} catch {
+		throw new HucodeWebUserDataRequestError('Invalid JSON request body.');
+	}
 }
 
 function respondJson(res: http.ServerResponse, status: number, value: unknown): void {
