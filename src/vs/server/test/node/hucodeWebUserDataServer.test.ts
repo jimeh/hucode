@@ -624,6 +624,36 @@ suite('HucodeWebUserDataServer', () => {
 		assert.deepStrictEqual(delegate.closeHandles, [61]);
 	});
 
+	test('disconnect cleanup and a captured explicit close share one failed provider close', async () => {
+		const blockerStarted = new DeferredPromise<void>();
+		const releaseBlocker = new DeferredPromise<void>();
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const closeFailure = new Error('shared close failed');
+		const delegate = new RecordingFileSystemChannel<object>(66);
+		delegate.handlers.set('writeFile', async () => {
+			blockerStarted.complete();
+			await releaseBlocker.p;
+		});
+		delegate.handlers.set('close', () => { throw closeFailure; });
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const managed = URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', 'settings.json')).path });
+		const handle = await channel.call<number>(context, 'open', [managed, {}]);
+		const blocker = channel.call(context, 'writeFile', [managed, VSBuffer.fromString('{}'), {}]);
+		await blockerStarted.p;
+		const cleanupResult = channel.releaseConnection(context).then(() => undefined, error => error as AggregateError);
+		const explicitCloseResult = channel.call(context, 'close', [handle]).then(() => undefined, error => error as Error);
+
+		releaseBlocker.complete();
+		await blocker;
+		const cleanupError = await cleanupResult;
+		const explicitCloseError = await explicitCloseResult;
+
+		assert.ok(cleanupError instanceof AggregateError);
+		assert.strictEqual((cleanupError.errors[0] as AggregateError).errors[0], closeFailure);
+		assert.strictEqual(explicitCloseError, closeFailure);
+		assert.deepStrictEqual(delegate.closeHandles, [66]);
+	});
+
 	test('disconnect attempts every owned close once when one fails', async () => {
 		const context = { remoteAuthority: 'test', clientId: 'renderer' };
 		const delegate = new RecordingFileSystemChannel<object>(71);
@@ -664,6 +694,40 @@ suite('HucodeWebUserDataServer', () => {
 		await closing;
 		await channel.releaseConnection(context);
 		assert.deepStrictEqual(delegate.closeHandles, [81]);
+	});
+
+	test('server disposal attempts every tracked close and logs aggregate failures before teardown', async () => {
+		const secondCloseStarted = new DeferredPromise<void>();
+		const releaseSecondClose = new DeferredPromise<void>();
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(86);
+		delegate.handlers.set('close', async (_context, arg) => {
+			if ((arg as [number])[0] === 86) {
+				throw new Error('first close failed');
+			}
+			secondCloseStarted.complete();
+			await releaseSecondClose.p;
+		});
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const remote = (name: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', name)).path });
+		await channel.call(context, 'open', [remote('settings.json'), {}]);
+		await channel.call(context, 'open', [remote('keybindings.json'), {}]);
+		const setupDisposed = new DeferredPromise<void>();
+		const setupServices = new DisposableStore();
+		setupServices.add(toDisposable(() => setupDisposed.complete()));
+
+		server.createServerServicesDisposal(setupServices).dispose();
+		await secondCloseStarted.p;
+		assert.strictEqual(setupDisposed.isSettled, false, 'provider-backed services must remain available for every close attempt');
+		releaseSecondClose.complete();
+		await setupDisposed.p;
+		const closeHandles = delegate.closeHandles;
+		const loggedFailure = logService.errors.find(args => args[0] === 'Unable to drain serve-web user data before server disposal.');
+		server.dispose();
+		server = createServer();
+
+		assert.deepStrictEqual(closeHandles, [86, 87]);
+		assert.ok(loggedFailure?.[1] instanceof AggregateError);
 	});
 
 	test('browser-backed mode leaves remote filesystem handles untracked', async () => {

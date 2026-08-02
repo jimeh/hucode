@@ -1,6 +1,6 @@
 ---
 title: Serve-Web User-Data Handle Cleanup Plan
-status: approved
+status: implementation-in-progress
 last_updated: 2026-08-02
 issue: https://github.com/jimeh/hucode/issues/158
 ---
@@ -27,7 +27,8 @@ and this plan should move to `docs/hucode/archive/` after delivery.
   `9cb62ef7ca930753ab94efc35ebb59e1ae5ec7ac`.
 - Design: independently reviewed by Claude; corrections incorporated; approved
   by the user on 2026-08-02.
-- Implementation: not started.
+- Implementation: in progress in
+  [pull request #159](https://github.com/jimeh/hucode/pull/159).
 - Delivery issue: `jimeh/hucode#158`.
 - Expected pull request title:
   `fix(web): release server user-data handles on disconnect`.

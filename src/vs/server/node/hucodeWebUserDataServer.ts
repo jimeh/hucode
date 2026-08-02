@@ -583,6 +583,7 @@ interface OpenWebUserHandle<TContext> {
 }
 
 class HucodeWebUserDataFileSystemChannel<TContext> implements IHucodeWebUserDataFileSystemChannel<TContext> {
+	// The shared provider issues process-wide unique live handles, so clients cannot collide in this numeric index.
 	private readonly handles = new Map<number, OpenWebUserHandle<TContext>>();
 	private readonly handlesByOwner = new Map<TContext, Set<OpenWebUserHandle<TContext>>>();
 
