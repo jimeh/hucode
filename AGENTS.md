@@ -198,6 +198,10 @@ as the required Hucode instruction set for work in this fork.
   needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
   `serve-web` therefore runs with Copilot Chat entirely absent, which silently
   invalidated a runtime measurement that appeared to pass.
+- Keep Omni web shell registrations in `omniWeb.contribution.ts`, imported by
+  both `omni.web.main.ts` and `omniWebUserData.factory.ts`. The latter is the
+  default root entrypoint under server-side user-data storage; omitting shared
+  registrations leaves the page blank before the workbench renders.
 - CSS imported by route-specific Hucode web entrypoints is flattened into the
   shared stylesheet in minified server-web builds, even when a development
   dynamic import never executes. Scope Omni-only selectors under
