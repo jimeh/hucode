@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
+import sinon from 'sinon';
 import { join } from '../../../base/common/path.js';
 import { Event } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
@@ -128,6 +129,33 @@ suite('HucodeWebUserDataStorage', () => {
 			host.getItems(applicationRequest()),
 			/Serve-web user-data database could not be opened/,
 		);
+	});
+
+	test('does not recover over an existing database after fallback to memory', async () => {
+		const databasePath = join(testHome, 'application', 'state.vscdb');
+		const sentinel = 'existing corrupt database';
+		await fs.mkdir(join(testHome, 'application'), { recursive: true });
+		await fs.writeFile(databasePath, sentinel);
+		const originalUnlink = fs.unlink.bind(fs);
+		let targetUnlinks = 0;
+		const unlink = sinon.stub(fs, 'unlink').callsFake(async path => {
+			if (path === databasePath && targetUnlinks++ === 0) {
+				throw new Error('transient unlink failure');
+			}
+			return originalUnlink(path);
+		});
+
+		try {
+			await assert.rejects(
+				host.getItems(applicationRequest()),
+				/Serve-web user-data database could not be opened/,
+			);
+		} finally {
+			unlink.restore();
+		}
+
+		assert.strictEqual(targetUnlinks, 1);
+		assert.strictEqual(await fs.readFile(databasePath, 'utf8'), sentinel);
 	});
 
 	test('recreates entry event ownership after repeated resets', async () => {

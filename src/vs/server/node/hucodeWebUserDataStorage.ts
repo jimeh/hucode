@@ -202,7 +202,7 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 			return { key, storage, writes: new Queue<unknown>() };
 		} catch (error) {
 			try {
-				await storage.close();
+				await database.close();
 			} catch (closeError) {
 				this.logService.error(`[WebUser storage ${key}] Unable to close failed database entry.`, closeError);
 			} finally {
