@@ -2,6 +2,17 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.64 - 2026-08-02
+
+### Features
+
+- **web:** persist serve-web user data on the server (#156)
+
+### Bug Fixes
+
+- **web:** load Omni with server-side user data (#161)
+- **web:** release server user-data handles on disconnect (#159)
+
 ## 0.0.63 - 2026-08-01
 
 ### Features
