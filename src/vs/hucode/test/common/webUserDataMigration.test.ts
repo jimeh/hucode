@@ -22,6 +22,7 @@ suite('HucodeWebUserDataMigration', () => {
 	test('excludes secret and storage bookkeeping state', () => {
 		assert.strictEqual(shouldMigrateWebUserDataState('workbench.colorTheme', 'Default Dark Modern'), true);
 		assert.strictEqual(shouldMigrateWebUserDataState(`${SECRET_STORAGE_PREFIX}github.token`, 'secret'), false);
+		assert.strictEqual(shouldMigrateWebUserDataState('storage.serviceMachineId', 'browser-uuid'), false);
 		assert.strictEqual(shouldMigrateWebUserDataState(IS_NEW_KEY, 'true'), false);
 		assert.strictEqual(shouldMigrateWebUserDataState('workbench.colorTheme', { value: 'not persisted state' }), false);
 	});

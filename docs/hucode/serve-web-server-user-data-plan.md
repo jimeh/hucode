@@ -525,7 +525,7 @@ below, update this matrix with the exact collected paths before opening the PR.
 | Application, application-shared, profile, workspace, extension global, and extension workspace state persist | Storage host/client integration tests for every scope plus representative runtime state across browser profiles | Implementer |
 | Concurrent clients observe committed workspace state | Common/Electron IPC regression test, Node host multi-client test, and two-browser runtime check | Implementer |
 | Same-key conflicts are deterministic | Two-client last-successful-write-wins integration test | Implementer |
-| Secrets and authentication remain browser-local | Migration exclusion unit test and isolated-browser runtime check | Implementer |
+| Secrets, authentication, and machine identity remain browser-local | File and state migration exclusion unit tests plus isolated-browser runtime checks | Implementer |
 | Empty server initializes without a prompt | Bootstrap state-machine test and fresh-browser runtime check | Implementer |
 | Existing browser data offers migrate, start-fresh, and cancel | Bootstrap UI/state tests covering all three results; runtime migration of representative resources | Implementer |
 | Migration is atomic and first complete commit wins | Lease/generation tests for race, stale and long-upload renewal, upload failure, commit failure, benign initialization conflict, and idle recovery | Implementer |
