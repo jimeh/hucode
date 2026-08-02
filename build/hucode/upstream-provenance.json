@@ -32,16 +32,7 @@
 				"lastSyncedBaseline": "1.131.0",
 				"blob": "df02aaf08aa81e7e7d84a761d6ec35999be8e179"
 			},
-			"testSuites": [
-				{
-					"file": "src/vs/server/test/node/hucodeWebUserDataServer.test.ts",
-					"reason": "Migration refuses SQLite fallback to memory before publishing staged state"
-				},
-				{
-					"file": "src/vs/server/test/node/hucodeWebUserDataStorage.test.ts",
-					"reason": "Runtime state storage rejects SQLite fallback to memory"
-				}
-			]
+			"testSuites": []
 		},
 		{
 			"path": "src/vs/code/browser/workbench/workbench.ts",
