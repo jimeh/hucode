@@ -5,6 +5,8 @@
 
 import { mainWindow } from '../../../base/browser/window.js';
 import { URI, UriDto } from '../../../base/common/uri.js';
+import { localize } from '../../../nls.js';
+import { readHucodeWebUserDataStore, runHucodeWebUserDataUploadWithLeaseRenewal } from '../../../platform/environment/browser/hucodeWebUserDataClient.js';
 import { isAcceptedWebUserDataResponse, shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
 import { IUserDataProfile } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import { IHucodeWebWorkbenchConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
@@ -90,34 +92,19 @@ export async function bootstrapHucodeWebUserData(
 }
 
 async function uploadWithLeaseRenewal(api: string, owner: string, generation: number, migration: BrowserMigration): Promise<void> {
-	const controller = new AbortController();
-	let renewalError: unknown;
-	let renewal = Promise.resolve();
-	const renew = () => {
-		renewal = renewal.then(async () => {
-			await requestJson(`${api}/renew`, {
-				method: 'POST',
-				body: JSON.stringify({ owner, generation }),
-			});
-		}).catch(error => {
-			renewalError = error;
-			controller.abort();
-		});
-	};
-	const timer = mainWindow.setInterval(renew, 20_000);
-	try {
-		await requestJson(`${api}/upload`, {
+	await runHucodeWebUserDataUploadWithLeaseRenewal(
+		signal => requestJson(`${api}/upload`, {
 			method: 'POST',
 			body: JSON.stringify({ owner, generation, migration }),
-			signal: controller.signal,
-		});
-		await renewal;
-		if (renewalError) {
-			throw renewalError;
-		}
-	} finally {
-		mainWindow.clearInterval(timer);
-	}
+			signal,
+		}),
+		() => requestJson(`${api}/renew`, {
+			method: 'POST',
+			body: JSON.stringify({ owner, generation }),
+		}),
+		(callback, delay) => mainWindow.setInterval(callback, delay),
+		timer => mainWindow.clearInterval(timer),
+	);
 }
 
 interface BootstrapStatus {
@@ -173,15 +160,13 @@ async function collectUserDataFiles(): Promise<{ path: string; contents: string 
 		}
 		const transaction = database.transaction(USER_DATA_STORE, 'readonly');
 		const store = transaction.objectStore(USER_DATA_STORE);
-		const keys = await idbRequest<IDBValidKey[]>(store.getAllKeys());
-		const values = await Promise.all(keys.map(key => idbRequest(store.get(key))));
+		const entries = await readHucodeWebUserDataStore(store);
 		const files: { path: string; contents: string }[] = [];
-		for (let index = 0; index < keys.length; index++) {
-			const path = String(keys[index]);
+		for (const [key, value] of entries) {
+			const path = String(key);
 			if (!shouldMigrateWebUserDataFile(path)) {
 				continue;
 			}
-			const value = values[index];
 			const bytes = value instanceof Uint8Array ? value : typeof value === 'string' ? new TextEncoder().encode(value) : undefined;
 			if (bytes) {
 				files.push({ path, contents: bytesToBase64(bytes) });
@@ -215,12 +200,10 @@ async function collectStateDatabases(currentWorkspaceId: string | undefined): Pr
 				continue;
 			}
 			const store = database.transaction(STATE_STORE, 'readonly').objectStore(STATE_STORE);
-			const keys = await idbRequest<IDBValidKey[]>(store.getAllKeys());
-			const values = await Promise.all(keys.map(key => idbRequest(store.get(key))));
+			const entries = await readHucodeWebUserDataStore(store);
 			const items: [string, string][] = [];
-			for (let index = 0; index < keys.length; index++) {
-				const key = String(keys[index]);
-				const value = values[index];
+			for (const [rawKey, value] of entries) {
+				const key = String(rawKey);
 				if (shouldMigrateWebUserDataState(key, value)) {
 					items.push([key, value]);
 				}
@@ -317,13 +300,6 @@ function openExistingDatabase(name: string): Promise<IDBDatabase | undefined> {
 	});
 }
 
-function idbRequest<T>(request: IDBRequest<T>): Promise<T> {
-	return new Promise((resolve, reject) => {
-		request.onerror = () => reject(request.error);
-		request.onsuccess = () => resolve(request.result);
-	});
-}
-
 function bytesToBase64(value: Uint8Array): string {
 	let binary = '';
 	for (let offset = 0; offset < value.byteLength; offset += 0x8000) {
@@ -370,17 +346,26 @@ function remoteProfile(profile: UriDto<IUserDataProfile>, home: URI): UriDto<IUs
 
 function showMigrationPrompt(workspaceInventoryComplete: boolean): Promise<'migrate' | 'fresh' | 'cancel'> {
 	return showBootstrapDialog(
-		'Move browser data to this Hucode server?',
-		`Your settings, keybindings, profiles, and workbench state can be copied to the server. Secrets and sign-ins stay in this browser, and the browser copy is kept.${workspaceInventoryComplete ? '' : ' This browser cannot list older workspace databases, so inactive workspace state will remain only in this browser.'}`,
-		[['Use Browser Data', 'migrate'], ['Start Fresh on Server', 'fresh'], ['Cancel', 'cancel']],
+		localize('hucode web user data migration title', "Move browser data to this Hucode server?"),
+		workspaceInventoryComplete
+			? localize('hucode web user data migration message', "Your settings, keybindings, profiles, and workbench state can be copied to the server. Secrets and sign-ins stay in this browser, and the browser copy is kept.")
+			: localize('hucode web user data incomplete migration message', "Your settings, keybindings, profiles, and workbench state can be copied to the server. Secrets and sign-ins stay in this browser, and the browser copy is kept. This browser cannot list older workspace databases, so inactive workspace state will remain only in this browser."),
+		[
+			[localize('hucode web user data migrate action', "Use Browser Data"), 'migrate'],
+			[localize('hucode web user data fresh action', "Start Fresh on Server"), 'fresh'],
+			[localize('hucode web user data cancel migration action', "Cancel"), 'cancel'],
+		],
 	);
 }
 
 async function showBootstrapError(error: unknown): Promise<boolean> {
 	return (await showBootstrapDialog(
-		'Unable to open server user data',
-		`${error instanceof Error ? error.message : String(error)} Browser storage was not used as a fallback.`,
-		[['Retry', true], ['Cancel', false]],
+		localize('hucode web user data error title', "Unable to open server user data"),
+		localize('hucode web user data error message', "{0} Browser storage was not used as a fallback.", error instanceof Error ? error.message : String(error)),
+		[
+			[localize('hucode web user data retry action', "Retry"), true],
+			[localize('hucode web user data cancel error action', "Cancel"), false],
+		],
 	)) as boolean;
 }
 

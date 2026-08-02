@@ -26,6 +26,7 @@ import { BrowserMain, IBrowserUserDataProfilesService } from './web.main.js';
 import { IWorkbenchConstructionOptions } from './web.api.js';
 import { getHucodeWebUserDataBootstrapResult } from '../../platform/environment/browser/hucodeWebUserDataBootstrapState.js';
 import { IHucodeWebWorkbenchConfiguration } from '../../platform/environment/common/hucodeWebConfiguration.js';
+import { readHucodeWebUserDataResponseError } from '../../platform/environment/browser/hucodeWebUserDataClient.js';
 import { localize } from '../../nls.js';
 
 /** BrowserMain backend that uses the serve-web server as the sole non-secret authority. */
@@ -107,8 +108,7 @@ export class HucodeWebUserDataBrowserMain extends BrowserMain {
 			body: '{}',
 		});
 		if (!response.ok) {
-			const body = await response.json() as { error?: string };
-			throw new Error(body.error ?? `Unable to reset server user data (HTTP ${response.status}).`);
+			throw new Error(await readHucodeWebUserDataResponseError(response, localize('reset server user data error', "Unable to reset server user data (HTTP {0}).", response.status)));
 		}
 	}
 }

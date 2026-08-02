@@ -39,9 +39,9 @@ export class SessionsBrowserMain extends BrowserMain {
 		_workspace: IAnyWorkspaceIdentifier,
 		environmentService: IBrowserWorkbenchEnvironmentService,
 		userDataProfileService: IUserDataProfileService,
-		_userDataProfilesService: BrowserUserDataProfilesService,
+		userDataProfilesService: BrowserUserDataProfilesService,
 		fileService: FileService,
-		_remoteAgentService: IRemoteAgentService,
+		remoteAgentService: IRemoteAgentService,
 		uriIdentityService: IUriIdentityService,
 		policyService: IPolicyService,
 		logService: ILogService,
@@ -86,8 +86,8 @@ export class SessionsBrowserMain extends BrowserMain {
 			workspaceIdentifier,
 			logService,
 			userDataProfileService,
-			_userDataProfilesService,
-			_remoteAgentService,
+			userDataProfilesService,
+			remoteAgentService,
 			environmentService,
 		);
 		serviceCollection.set(IStorageService, storageService);

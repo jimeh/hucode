@@ -510,6 +510,8 @@ focused implementation suites collected before PR review are:
   browser default and trusted server route configuration;
 - `src/vs/hucode/test/common/webUserDataMigration.test.ts` for secret and
   machine-ID exclusion plus benign bootstrap-conflict classification;
+- `src/vs/hucode/test/browser/webUserDataClient.test.ts` for lease-renewal error
+  precedence, transaction-safe IndexedDB reads, and reset-response fallback;
 - `src/vs/hucode/test/browser/webUserDataStorageService.test.ts` for exact-key
   local routing, hidden legacy server identity, atomic access, mixed-batch event
   ordering, reset isolation, and distinct first-run identities backed by local
