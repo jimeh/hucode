@@ -1,0 +1,17 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { SECRET_STORAGE_PREFIX } from '../../secrets/common/secrets.js';
+import { IS_NEW_KEY } from '../../storage/common/storage.js';
+
+/** Returns whether a browser user-data file is safe to migrate to the shared server namespace. */
+export function shouldMigrateWebUserDataFile(path: string): boolean {
+	return path.startsWith('/User/') && path !== '/User/machineid';
+}
+
+/** Returns whether a browser state entry is non-secret persisted user data. */
+export function shouldMigrateWebUserDataState(key: string, value: unknown): value is string {
+	return key !== IS_NEW_KEY && !key.startsWith(SECRET_STORAGE_PREFIX) && typeof value === 'string';
+}
