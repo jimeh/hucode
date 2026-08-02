@@ -23,6 +23,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 	private readonly onDidChangeApplicationSharedStorageEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
 
 	private readonly mapProfileToOnDidChangeProfileStorageEmitter = new Map<string /* profile ID */, Emitter<ISerializableItemsChangeEvent>>();
+	private readonly mapWorkspaceToOnDidChangeWorkspaceStorageEmitter = new Map<string /* workspace ID */, Emitter<ISerializableItemsChangeEvent>>();
 
 	constructor(
 		private readonly logService: ILogService,
@@ -79,6 +80,17 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 		switch (event) {
 			case 'onDidChangeStorage': {
 				const profile = arg.profile ? revive<IUserDataProfile>(arg.profile) : undefined;
+				const workspace = reviveIdentifier(arg.workspace);
+
+				if (workspace) {
+					let workspaceStorageChangeEmitter = this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id);
+					if (!workspaceStorageChangeEmitter) {
+						workspaceStorageChangeEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
+						this.registerStorageChangeListeners(this.storageMainService.workspaceStorage(workspace), workspaceStorageChangeEmitter);
+						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.set(workspace.id, workspaceStorageChangeEmitter);
+					}
+					return workspaceStorageChangeEmitter.event;
+				}
 
 				// Without profile: application or application-shared scope
 				if (!profile) {
@@ -161,7 +173,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 					return result;
 				}
 
-				storage.set(request.key, request.newValue);
+				await storage.set(request.key, request.newValue);
 				const result: ISerializableCompareAndSwapResult = { swapped: true, currentValue: request.newValue };
 				return result;
 			}
