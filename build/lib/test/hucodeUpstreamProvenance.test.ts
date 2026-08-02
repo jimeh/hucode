@@ -301,6 +301,28 @@ suite('Hucode upstream provenance', () => {
 		}
 	});
 
+	test('remote server owns the setup-service lifecycle', async () => {
+		const server = await fs.readFile(
+			path.join(repoRoot, 'src/vs/server/node/remoteExtensionHostAgentServer.ts'),
+			'utf8',
+		);
+		const setup = await fs.readFile(
+			path.join(repoRoot, 'src/vs/server/node/serverServices.ts'),
+			'utf8',
+		);
+
+		assert.match(server, /constructor\(\s*serverServices: IDisposable,/);
+		assert.match(server, /this\._register\(serverServices\);/);
+		assert.match(
+			server,
+			/createInstance\(RemoteExtensionHostAgentServer, serverServices, socketServer,/,
+		);
+		assert.match(
+			setup,
+			/serverServices: hucodeWebUserDataServer\.createServerServicesDisposal\(disposables\)/,
+		);
+	});
+
 	test('compares the supplied ref instead of a patched worktree copy', async t => {
 		const fixture = await fs.mkdtemp(
 			path.join(os.tmpdir(), 'hucode-upstream-provenance-')

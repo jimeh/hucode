@@ -7,8 +7,11 @@ import * as fs from 'fs';
 import type * as http from 'http';
 import { createHash } from 'crypto';
 import { Queue } from '../../base/common/async.js';
-import { Disposable, IDisposable } from '../../base/common/lifecycle.js';
+import { CancellationToken } from '../../base/common/cancellation.js';
+import { Event } from '../../base/common/event.js';
+import { Disposable, IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { join, normalize } from '../../base/common/path.js';
+import { URI, UriComponents } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { IURITransformer } from '../../base/common/uriIpc.js';
 import { SQLiteStorageDatabase } from '../../base/parts/storage/node/storage.js';
@@ -75,6 +78,8 @@ export interface IHucodeWebUserDataServer extends IDisposable {
 	readonly profilesService: HucodeWebUserDataProfilesService | undefined;
 	readonly storageChannel: IServerChannel<RemoteAgentConnectionContext> | undefined;
 	createProfilesChannel<TContext>(getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext>;
+	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext>;
+	createServerServicesDisposal(serverServices: IDisposable): IDisposable;
 	handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean>;
 	close(): Promise<void>;
 }
@@ -110,7 +115,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		mode: 'browser' | 'server',
 		environmentService: IEnvironmentService,
 		fileService: IFileService,
-		uriIdentityService: IUriIdentityService,
+		private readonly uriIdentityService: IUriIdentityService,
 		private readonly logService: ILogService,
 		private readonly options: HucodeWebUserDataServerOptions = {},
 	) {
@@ -150,6 +155,29 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			getUriTransformer,
 			operation => this.queueOperation(operation),
 		);
+	}
+
+	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext> {
+		return new HucodeWebUserDataFileSystemChannel(
+			channel,
+			getUriTransformer,
+			(resources, operation) => this.runFileOperation(resources, operation),
+		);
+	}
+
+	createServerServicesDisposal(serverServices: IDisposable): IDisposable {
+		if (!this.enabled) {
+			return serverServices;
+		}
+		return toDisposable(() => {
+			void this.close().then(
+				() => serverServices.dispose(),
+				error => {
+					this.logService.error('Unable to drain serve-web user data before server disposal.', error);
+					serverServices.dispose();
+				},
+			);
+		});
 	}
 
 	async handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean> {
@@ -279,6 +307,14 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				lease?.dispose();
 			}
 		}) as Promise<T>;
+	}
+
+	private runFileOperation<T>(resources: readonly URI[], operation: () => Promise<T>): Promise<T> {
+		const webUserHome = URI.file(this.webUserHome);
+		if (!this.enabled || !resources.some(resource => this.uriIdentityService.extUri.isEqualOrParent(resource.with({ query: null, fragment: null }), webUserHome))) {
+			return operation();
+		}
+		return this.queueOperation(operation);
 	}
 
 	private async claim(): Promise<{ claimed: boolean; owner?: string; generation: number; expiresAt?: number }> {
@@ -481,6 +517,69 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 
 	private get leaseMs(): number {
 		return this.options.leaseMs ?? DEFAULT_LEASE_MS;
+	}
+}
+
+class HucodeWebUserDataFileSystemChannel<TContext> implements IServerChannel<TContext> {
+	private readonly openResources = new Map<number, URI>();
+
+	constructor(
+		private readonly channel: IServerChannel<TContext>,
+		private readonly getUriTransformer: (context: TContext) => IURITransformer,
+		private readonly runOperation: <T>(resources: readonly URI[], operation: () => Promise<T>) => Promise<T>,
+	) { }
+
+	listen<T>(context: TContext, event: string, arg?: unknown): Event<T> {
+		return this.channel.listen(context, event, arg);
+	}
+
+	call<T>(context: TContext, command: string, arg?: unknown, cancellationToken?: CancellationToken): Promise<T> {
+		const args = (arg ?? []) as unknown[];
+		const invoke = () => this.channel.call<T>(context, command, arg, cancellationToken);
+		if (command === 'open') {
+			const resource = this.transformIncoming(context, args[0] as UriComponents, true);
+			return this.runOperation([resource], async () => {
+				const handle = await this.channel.call<number>(context, command, arg, cancellationToken);
+				this.openResources.set(handle, resource);
+				return handle as T;
+			});
+		}
+		if (command === 'close') {
+			const handle = args[0] as number;
+			const resource = this.openResources.get(handle);
+			return this.runOperation(resource ? [resource] : [], invoke).finally(() => this.openResources.delete(handle));
+		}
+		if (command === 'read' || command === 'write') {
+			const resource = this.openResources.get(args[0] as number);
+			return this.runOperation(resource ? [resource] : [], invoke);
+		}
+		return this.runOperation(this.getResources(context, command, args), invoke);
+	}
+
+	private getResources(context: TContext, command: string, args: readonly unknown[]): readonly URI[] {
+		const transform = (index: number, supportVSCodeResource = false) => this.transformIncoming(context, args[index] as UriComponents, supportVSCodeResource);
+		switch (command) {
+			case 'stat':
+			case 'realpath':
+			case 'readFile': return [transform(0, true)];
+			case 'readdir':
+			case 'writeFile':
+			case 'mkdir':
+			case 'delete': return [transform(0)];
+			case 'rename':
+			case 'copy':
+			case 'cloneFile': return [transform(0), transform(1)];
+			case 'watch': return [transform(2)];
+			default: return [];
+		}
+	}
+
+	private transformIncoming(context: TContext, resource: UriComponents, supportVSCodeResource = false): URI {
+		if (supportVSCodeResource && resource.path === '/vscode-resource' && resource.query) {
+			const requestResourcePath = JSON.parse(resource.query).requestResourcePath;
+			return URI.from({ scheme: 'file', path: requestResourcePath });
+		}
+		return URI.revive(this.getUriTransformer(context).transformIncoming(resource));
 	}
 }
 

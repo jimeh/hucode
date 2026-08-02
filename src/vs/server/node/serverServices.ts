@@ -363,7 +363,10 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		socketServer.registerChannel(McpGatewayChannelName, instantiationService.createInstance(McpGatewayChannel<RemoteAgentConnectionContext>, socketServer));
 
 		const remoteFileSystemChannel = disposables.add(new RemoteAgentFileSystemProviderChannel(logService, environmentService, configurationService));
-		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, remoteFileSystemChannel);
+		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, hucodeWebUserDataServer.createFileSystemChannel(
+			remoteFileSystemChannel,
+			(ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority),
+		));
 
 		socketServer.registerChannel('request', new RequestChannel(accessor.get(IRequestService)));
 
@@ -382,7 +385,11 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		};
 	});
 
-	return { socketServer, instantiationService };
+	return {
+		socketServer,
+		instantiationService,
+		serverServices: hucodeWebUserDataServer.createServerServicesDisposal(disposables),
+	};
 }
 
 const _uriTransformerCache: { [remoteAuthority: string]: IURITransformer } = Object.create(null);

@@ -171,6 +171,9 @@ Requirements:
 
 - normal file watching and cross-client change events must work;
 - writes must retain the existing atomic file-write behavior;
+- remote file operations beneath `WebUser` must share server user-data
+  admission, lifetime leases, and orderly-shutdown draining without changing
+  the lifecycle of unrelated remote file operations;
 - the server must resolve and confine all paths beneath `WebUser`;
 - clients must not be able to use a profile or migration argument to select an
   arbitrary server path;
@@ -492,7 +495,8 @@ focused implementation suites collected before PR review are:
 - `src/vs/server/test/node/hucodeWebUserDataServer.test.ts` for first-wins
   initialization, staged commit, ready-generation and long-upload lease
   protection, strict catalog restart behavior, profile/reset serialization,
-  lifetime ownership, empty initialization, and traversal rejection;
+  lifetime ownership, remote WebUser file admission and setup-service draining,
+  empty initialization, and traversal rejection;
 - `src/vs/server/test/node/hucodeWebUserDataStorage.test.ts` for durable reopen,
   all persisted scopes, serialized compare-and-swap, workspace external events,
   shutdown draining, and identifier rejection;
@@ -527,7 +531,7 @@ below, update this matrix with the exact collected paths before opening the PR.
 | Migration is atomic and first complete commit wins | Lease/generation tests for race, stale and long-upload renewal, upload failure, commit failure, benign initialization conflict, and idle recovery | Implementer |
 | Server paths and logical identifiers are confined | Traversal before folder creation, dot-segment profile IDs, strict catalog schema, unknown profile, invalid workspace, and staging-generation rejection tests | Implementer |
 | Server outage never falls back to browser | Bootstrap/backend failure test and runtime retry/error observation | Implementer |
-| Orderly shutdown drains admitted writes | Storage-host shutdown test followed by reopen/read verification; HTTP/profile/storage lifetime-lease tests; dispose admission test | Implementer |
+| Orderly shutdown drains admitted writes | Storage-host shutdown test followed by reopen/read verification; HTTP/profile/storage/remote-file lifetime-lease tests; blocked WebUser write and setup-owner drain test; dispose admission test | Implementer |
 | Regular, Omni, hosted Omni, and `--no-omni` share the mode | Route/config unit tests and representative runtime smoke for each entrypoint | Implementer |
 | Upstream integration remains narrow and detectable | Provenance check against `1.131.0`, real-seam contract tests, and final diff audit against the documented touch budget | Orchestrator |
 | TypeScript, Rust, generated suite inventory, hygiene, and supported CI stay green | Final-head local gates below and required GitHub Actions checks | Orchestrator and CI |

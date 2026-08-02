@@ -10,10 +10,15 @@ import { EventEmitter } from 'events';
 import { tmpdir } from 'os';
 import { Readable } from 'stream';
 import { DeferredPromise } from '../../../base/common/async.js';
-import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { VSBuffer } from '../../../base/common/buffer.js';
+import { Event } from '../../../base/common/event.js';
+import { DisposableStore, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { join } from '../../../base/common/path.js';
 import { Schemas } from '../../../base/common/network.js';
 import { DefaultURITransformer } from '../../../base/common/uriIpc.js';
+import { createURITransformer } from '../../../base/common/uriTransformer.js';
+import { URI } from '../../../base/common/uri.js';
+import { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { FileService } from '../../../platform/files/common/fileService.js';
 import { DiskFileSystemProvider } from '../../../platform/files/node/diskFileSystemProvider.js';
@@ -403,6 +408,68 @@ suite('HucodeWebUserDataServer', () => {
 		assert.strictEqual(rejected.status, 503);
 		assert.match(String(rejected.value.error), /server is shutting down/);
 		await closing;
+	});
+
+	test('server disposal drains admitted remote WebUser writes and rejects late ones', async () => {
+		let acquiredLeases = 0;
+		let activeLeases = 0;
+		await reopenServer({
+			acquireOperationLease: () => {
+				acquiredLeases++;
+				activeLeases++;
+				return toDisposable(() => activeLeases--);
+			},
+		});
+		const writeStarted = new DeferredPromise<void>();
+		const releaseWrite = new DeferredPromise<void>();
+		let blockWrite = true;
+		let delegatedCalls = 0;
+		const delegate: IServerChannel<null> = {
+			async call<T>(_context: null, command: string): Promise<T> {
+				delegatedCalls++;
+				if (command === 'open') {
+					return 7 as T;
+				}
+				if (command === 'writeFile' && blockWrite) {
+					blockWrite = false;
+					writeStarted.complete();
+					await releaseWrite.p;
+				}
+				return undefined as T;
+			},
+			listen: () => Event.None,
+		};
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(path).path });
+		const managed = remote(join(server.webUserHome, 'User', 'settings.json')).with({ query: 'cache=1' });
+		const outside = remote(join(testHome, 'outside.json'));
+
+		await channel.call(null, 'copy', [outside, managed, {}]);
+		await channel.call(null, 'rename', [managed, outside, {}]);
+		const handle = await channel.call<number>(null, 'open', [managed, {}]);
+		await channel.call(null, 'write', [handle, 0, VSBuffer.fromString('{}'), 0, 2]);
+		await channel.call(null, 'close', [handle]);
+		assert.strictEqual(acquiredLeases, 5, 'resource endpoints and open handles must recognize WebUser paths');
+		assert.strictEqual(activeLeases, 0);
+
+		const write = channel.call(null, 'writeFile', [managed, VSBuffer.fromString('{}'), {}]);
+		await writeStarted.p;
+		assert.strictEqual(activeLeases, 1);
+
+		const setupDisposed = new DeferredPromise<void>();
+		const setupServices = new DisposableStore();
+		setupServices.add(toDisposable(() => setupDisposed.complete()));
+		const serverServices = server.createServerServicesDisposal(setupServices);
+		serverServices.dispose();
+		assert.strictEqual(setupDisposed.isSettled, false, 'setup services must remain available while an admitted write is blocked');
+		await assert.rejects(channel.call(null, 'writeFile', [managed, VSBuffer.fromString('{}'), {}]), /server is shutting down/);
+		await channel.call(null, 'writeFile', [outside, VSBuffer.fromString('{}'), {}]);
+		assert.strictEqual(delegatedCalls, 7, 'late non-WebUser operations remain outside Hucode admission');
+
+		releaseWrite.complete();
+		await write;
+		await setupDisposed.p;
+		assert.strictEqual(activeLeases, 0);
 	});
 
 	test('disposal initiates close admission before synchronous teardown', async () => {

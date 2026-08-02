@@ -70,7 +70,7 @@
 		{
 			"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
 			"kind": "upstream-patch",
-			"reason": "Hucode admits authenticated non-GET requests only for its bounded user-data migration API",
+			"reason": "Hucode admits authenticated user-data requests and owns the setup-service lifecycle needed to drain them",
 			"upstream": {
 				"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
 				"lastSyncedBaseline": "1.131.0",
@@ -92,7 +92,7 @@
 		{
 			"path": "src/vs/server/node/serverServices.ts",
 			"kind": "upstream-patch",
-			"reason": "Hucode registers separate web-profile and storage channels without changing the remote extension-host profile namespace",
+			"reason": "Hucode registers separate web-profile and storage channels and scopes remote file admission to WebUser",
 			"upstream": {
 				"path": "src/vs/server/node/serverServices.ts",
 				"lastSyncedBaseline": "1.131.0",
