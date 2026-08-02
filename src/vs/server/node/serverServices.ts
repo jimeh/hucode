@@ -363,10 +363,18 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		socketServer.registerChannel(McpGatewayChannelName, instantiationService.createInstance(McpGatewayChannel<RemoteAgentConnectionContext>, socketServer));
 
 		const remoteFileSystemChannel = disposables.add(new RemoteAgentFileSystemProviderChannel(logService, environmentService, configurationService));
-		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, hucodeWebUserDataServer.createFileSystemChannel(
+		const webUserDataFileSystemChannel = hucodeWebUserDataServer.createFileSystemChannel(
 			remoteFileSystemChannel,
 			(ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority),
-		));
+		);
+		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, webUserDataFileSystemChannel);
+		if (hucodeWebUserDataServer.enabled) {
+			disposables.add(socketServer.onDidRemoveConnection(connection => {
+				void webUserDataFileSystemChannel.releaseConnection(connection.ctx).catch(error => {
+					logService.error('Unable to release disconnected WebUser file handles.', error);
+				});
+			}));
+		}
 
 		socketServer.registerChannel('request', new RequestChannel(accessor.get(IRequestService)));
 

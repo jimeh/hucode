@@ -141,6 +141,15 @@ Workspace identifiers are hashed, profile identifiers and migration paths are
 validated, state writes are serialized per database, and cross-client changes
 are broadcast for every storage scope.
 
+The server-backed remote filesystem facade owns each open `WebUser` handle by
+the exact logical IPC connection context that opened it. Final connection
+removal queues cleanup behind admitted WebUser operations, closes only that
+context's remaining handles, and shares claim-once close state with explicit
+close. Server shutdown drains the same queue and closes every remaining tracked
+handle before disposing the underlying filesystem provider. Reconnection grace
+retains the original logical context, so temporary transport loss does not
+release handles that the returning client still owns.
+
 Secret storage, authentication sessions, cookies, and connection credentials
 remain browser-local in both modes and are excluded from migration. Settings
 files may themselves contain sensitive values, so selecting server mode means

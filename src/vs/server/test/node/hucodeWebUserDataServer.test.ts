@@ -21,6 +21,7 @@ import { URI } from '../../../base/common/uri.js';
 import { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { FileService } from '../../../platform/files/common/fileService.js';
+import { FileSystemProviderErrorCode, toFileSystemProviderErrorCode } from '../../../platform/files/common/files.js';
 import { DiskFileSystemProvider } from '../../../platform/files/node/diskFileSystemProvider.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import product from '../../../platform/product/common/product.js';
@@ -57,10 +58,10 @@ suite('HucodeWebUserDataServer', () => {
 		server = createServer();
 	});
 
-	function createServer(options: HucodeWebUserDataServerOptions = {}): HucodeWebUserDataServer {
+	function createServer(options: HucodeWebUserDataServerOptions = {}, mode: 'browser' | 'server' = 'server'): HucodeWebUserDataServer {
 		return disposables.add(new HucodeWebUserDataServer(
 			testHome,
-			'server',
+			mode,
 			new ServerEnvironmentService({
 				_: [],
 				'user-data-dir': testHome,
@@ -547,6 +548,139 @@ suite('HucodeWebUserDataServer', () => {
 		assert.strictEqual(activeLeases, 0);
 	});
 
+	test('disconnect closes only the managed handles owned by that connection', async () => {
+		const delegate = new RecordingFileSystemChannel<object>(41);
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(path).path });
+		const firstContext = { remoteAuthority: 'test', clientId: 'renderer' };
+		const secondContext = { remoteAuthority: 'test', clientId: 'renderer' };
+		const firstHandle = await channel.call<number>(firstContext, 'open', [remote(join(server.webUserHome, 'User', 'settings.json')), {}]);
+		const secondHandle = await channel.call<number>(secondContext, 'open', [remote(join(server.webUserHome, 'User', 'keybindings.json')), {}]);
+
+		for (const command of ['read', 'write', 'close']) {
+			await assert.rejects(
+				channel.call(secondContext, command, [firstHandle, 0, 1]),
+				error => toFileSystemProviderErrorCode(error as Error) === FileSystemProviderErrorCode.Unknown,
+			);
+		}
+		await channel.releaseConnection(firstContext);
+
+		assert.deepStrictEqual(
+			delegate.calls.filter(call => call.command === 'close').map(call => ({ context: call.context, handle: (call.arg as [number])[0] })),
+			[{ context: firstContext, handle: firstHandle }],
+		);
+		await channel.call(secondContext, 'read', [secondHandle, 0, 1]);
+	});
+
+	test('disconnect queues behind a delayed open before taking its handle snapshot', async () => {
+		const openStarted = new DeferredPromise<void>();
+		const releaseOpen = new DeferredPromise<void>();
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(51);
+		delegate.handlers.set('open', async () => {
+			openStarted.complete();
+			await releaseOpen.p;
+			return 51;
+		});
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const managed = URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', 'settings.json')).path });
+
+		const opening = channel.call<number>(context, 'open', [managed, {}]);
+		await openStarted.p;
+		const cleanup = channel.releaseConnection(context);
+		releaseOpen.complete();
+
+		assert.strictEqual(await opening, 51);
+		await cleanup;
+		assert.deepStrictEqual(delegate.closeHandles, [51]);
+	});
+
+	test('queued reads and writes recheck a handle claimed by close', async () => {
+		const blockerStarted = new DeferredPromise<void>();
+		const releaseBlocker = new DeferredPromise<void>();
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(61);
+		delegate.handlers.set('writeFile', async () => {
+			blockerStarted.complete();
+			await releaseBlocker.p;
+		});
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const managed = URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', 'settings.json')).path });
+		const handle = await channel.call<number>(context, 'open', [managed, {}]);
+		const blocker = channel.call(context, 'writeFile', [managed, VSBuffer.fromString('{}'), {}]);
+		await blockerStarted.p;
+		const close = channel.call(context, 'close', [handle]);
+		const read = channel.call(context, 'read', [handle, 0, 1]);
+		const write = channel.call(context, 'write', [handle, 0, VSBuffer.fromString('x'), 0, 1]);
+		const cleanup = channel.releaseConnection(context);
+
+		releaseBlocker.complete();
+		await blocker;
+		await close;
+		await assert.rejects(read, error => toFileSystemProviderErrorCode(error as Error) === FileSystemProviderErrorCode.Unknown);
+		await assert.rejects(write, error => toFileSystemProviderErrorCode(error as Error) === FileSystemProviderErrorCode.Unknown);
+		await cleanup;
+		assert.deepStrictEqual(delegate.calls.filter(call => call.command === 'read' || call.command === 'write'), []);
+		assert.deepStrictEqual(delegate.closeHandles, [61]);
+	});
+
+	test('disconnect attempts every owned close once when one fails', async () => {
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(71);
+		delegate.handlers.set('close', (_context, arg) => {
+			if ((arg as [number])[0] === 71) {
+				throw new Error('close failed');
+			}
+		});
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const remote = (name: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', name)).path });
+		await channel.call(context, 'open', [remote('settings.json'), {}]);
+		await channel.call(context, 'open', [remote('keybindings.json'), {}]);
+
+		await assert.rejects(channel.releaseConnection(context), error => error instanceof AggregateError && error.errors.length === 1);
+		await channel.releaseConnection(context);
+
+		assert.deepStrictEqual(delegate.closeHandles, [71, 72]);
+	});
+
+	test('server close drains a delayed open and closes its handle without a disconnect event', async () => {
+		const openStarted = new DeferredPromise<void>();
+		const releaseOpen = new DeferredPromise<void>();
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(81);
+		delegate.handlers.set('open', async () => {
+			openStarted.complete();
+			await releaseOpen.p;
+			return 81;
+		});
+		const channel = server.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const managed = URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(server.webUserHome, 'User', 'settings.json')).path });
+		const opening = channel.call<number>(context, 'open', [managed, {}]);
+		await openStarted.p;
+		const closing = server.close();
+		releaseOpen.complete();
+
+		assert.strictEqual(await opening, 81);
+		await closing;
+		await channel.releaseConnection(context);
+		assert.deepStrictEqual(delegate.closeHandles, [81]);
+	});
+
+	test('browser-backed mode leaves remote filesystem handles untracked', async () => {
+		const browserServer = createServer({}, 'browser');
+		const context = { remoteAuthority: 'test', clientId: 'renderer' };
+		const delegate = new RecordingFileSystemChannel<object>(91);
+		const channel = browserServer.createFileSystemChannel(delegate, () => createURITransformer('test'));
+		const resource = URI.from({ scheme: Schemas.vscodeRemote, authority: 'test', path: URI.file(join(browserServer.webUserHome, 'User', 'settings.json')).path });
+		const handle = await channel.call<number>(context, 'open', [resource, {}]);
+
+		await channel.releaseConnection(context);
+		assert.deepStrictEqual(delegate.closeHandles, []);
+		await channel.call(context, 'close', [handle]);
+		assert.deepStrictEqual(delegate.closeHandles, [91]);
+		await browserServer.close();
+	});
+
 	test('disposal initiates close admission before synchronous teardown', async () => {
 		server.dispose();
 
@@ -563,6 +697,36 @@ class RecordingLogService extends NullLogService {
 
 	override error(message: string | Error, ...args: unknown[]): void {
 		this.errors.push([message, ...args]);
+	}
+}
+
+class RecordingFileSystemChannel<TContext> implements IServerChannel<TContext> {
+	readonly calls: { context: TContext; command: string; arg: unknown }[] = [];
+	readonly handlers = new Map<string, (context: TContext, arg: unknown) => unknown | Promise<unknown>>();
+	private nextHandle: number;
+
+	constructor(firstHandle: number) {
+		this.nextHandle = firstHandle;
+	}
+
+	get closeHandles(): number[] {
+		return this.calls.filter(call => call.command === 'close').map(call => (call.arg as [number])[0]);
+	}
+
+	async call<T>(context: TContext, command: string, arg?: unknown): Promise<T> {
+		this.calls.push({ context, command, arg });
+		const handler = this.handlers.get(command);
+		if (handler) {
+			return await handler(context, arg) as T;
+		}
+		if (command === 'open') {
+			return this.nextHandle++ as T;
+		}
+		return undefined as T;
+	}
+
+	listen<T>(): Event<T> {
+		return Event.None;
 	}
 }
 

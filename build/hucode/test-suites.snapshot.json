@@ -82,6 +82,7 @@
 		"src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts",
 		"src/vs/server/test/node/hucodeWebOmniRoutes.test.ts",
 		"src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts",
+		"src/vs/server/test/node/hucodeWebUserDataConnection.test.ts",
 		"src/vs/server/test/node/hucodeWebUserDataServer.test.ts",
 		"src/vs/server/test/node/hucodeWebUserDataStorage.test.ts",
 		"src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",

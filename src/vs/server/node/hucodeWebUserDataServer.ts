@@ -16,7 +16,7 @@ import { generateUuid } from '../../base/common/uuid.js';
 import { IURITransformer } from '../../base/common/uriIpc.js';
 import { SQLiteStorageDatabase } from '../../base/parts/storage/node/storage.js';
 import { IEnvironmentService } from '../../platform/environment/common/environment.js';
-import { IFileService } from '../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileService } from '../../platform/files/common/files.js';
 import { createDecorator } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IServerChannel } from '../../base/parts/ipc/common/ipc.js';
@@ -78,10 +78,18 @@ export interface IHucodeWebUserDataServer extends IDisposable {
 	readonly profilesService: HucodeWebUserDataProfilesService | undefined;
 	readonly storageChannel: IServerChannel<RemoteAgentConnectionContext> | undefined;
 	createProfilesChannel<TContext>(getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext>;
-	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext>;
+	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IHucodeWebUserDataFileSystemChannel<TContext>;
 	createServerServicesDisposal(serverServices: IDisposable): IDisposable;
 	handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean>;
 	close(): Promise<void>;
+}
+
+/** A filesystem channel that can release the WebUser handles owned by a connection. */
+export interface IHucodeWebUserDataFileSystemChannel<TContext> extends IServerChannel<TContext> {
+	/** Closes every tracked WebUser handle owned by the removed connection. */
+	releaseConnection(context: TContext): Promise<void>;
+	/** Closes every remaining tracked WebUser handle during server shutdown. */
+	closeTrackedHandles(): Promise<void>;
 }
 
 /** Returns whether a path targets the authenticated serve-web user-data API. */
@@ -109,6 +117,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private readonly manifestPath: string;
 	private readonly stagingHome: string;
 	private readonly operations = new Queue<unknown>();
+	private readonly closeFileSystemChannels: (() => Promise<void>)[] = [];
 	private readonly storageHost: HucodeWebUserDataStorageHost | undefined;
 	private closing = false;
 	private closed = false;
@@ -162,12 +171,16 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		);
 	}
 
-	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext> {
-		return new HucodeWebUserDataFileSystemChannel(
+	createFileSystemChannel<TContext>(channel: IServerChannel<TContext>, getUriTransformer: (context: TContext) => IURITransformer): IHucodeWebUserDataFileSystemChannel<TContext> {
+		const fileSystemChannel = new HucodeWebUserDataFileSystemChannel(
 			channel,
 			getUriTransformer,
+			resource => this.isManagedResource(resource),
 			(resources, operation) => this.runFileOperation(resources, operation),
+			operation => this.queueCleanup(operation),
 		);
+		this.closeFileSystemChannels.push(() => fileSystemChannel.closeTrackedHandles());
+		return fileSystemChannel;
 	}
 
 	createServerServicesDisposal(serverServices: IDisposable): IDisposable {
@@ -280,8 +293,22 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			this.closing = true;
 			this.closePromise = (async () => {
 				await this.operations.whenIdle();
-				await this.storageHost?.close();
+				const errors: unknown[] = [];
+				const handleResults = await Promise.allSettled(this.closeFileSystemChannels.map(close => close()));
+				for (const result of handleResults) {
+					if (result.status === 'rejected') {
+						errors.push(result.reason);
+					}
+				}
+				try {
+					await this.storageHost?.close();
+				} catch (error) {
+					errors.push(error);
+				}
 				this.closed = true;
+				if (errors.length > 0) {
+					throw new AggregateError(errors, 'Unable to close serve-web user data.');
+				}
 			})();
 		}
 		await this.closePromise;
@@ -320,9 +347,22 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 
 	private runFileOperation<T>(resources: readonly URI[], operation: () => Promise<T>): Promise<T> {
-		const webUserHome = URI.file(this.webUserHome);
-		if (!this.enabled || !resources.some(resource => this.uriIdentityService.extUri.isEqualOrParent(resource.with({ query: null, fragment: null }), webUserHome))) {
+		if (!resources.some(resource => this.isManagedResource(resource))) {
 			return operation();
+		}
+		return this.queueOperation(operation);
+	}
+
+	private isManagedResource(resource: URI): boolean {
+		return this.enabled && this.uriIdentityService.extUri.isEqualOrParent(
+			resource.with({ query: null, fragment: null }),
+			URI.file(this.webUserHome),
+		);
+	}
+
+	private queueCleanup(operation: () => Promise<void>): Promise<void> {
+		if (this.closing) {
+			return Promise.resolve();
 		}
 		return this.queueOperation(operation);
 	}
@@ -535,17 +575,43 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	}
 }
 
-class HucodeWebUserDataFileSystemChannel<TContext> implements IServerChannel<TContext> {
-	private readonly openResources = new Map<number, URI>();
+interface OpenWebUserHandle<TContext> {
+	readonly handle: number;
+	readonly resource: URI;
+	readonly owner: TContext;
+	closePromise: Promise<void> | undefined;
+}
+
+class HucodeWebUserDataFileSystemChannel<TContext> implements IHucodeWebUserDataFileSystemChannel<TContext> {
+	private readonly handles = new Map<number, OpenWebUserHandle<TContext>>();
+	private readonly handlesByOwner = new Map<TContext, Set<OpenWebUserHandle<TContext>>>();
 
 	constructor(
 		private readonly channel: IServerChannel<TContext>,
 		private readonly getUriTransformer: (context: TContext) => IURITransformer,
+		private readonly isManagedResource: (resource: URI) => boolean,
 		private readonly runOperation: <T>(resources: readonly URI[], operation: () => Promise<T>) => Promise<T>,
+		private readonly queueCleanup: (operation: () => Promise<void>) => Promise<void>,
 	) { }
 
 	listen<T>(context: TContext, event: string, arg?: unknown): Event<T> {
 		return this.channel.listen(context, event, arg);
+	}
+
+	releaseConnection(context: TContext): Promise<void> {
+		return this.queueCleanup(async () => {
+			await this.closeEntries(
+				[...this.handlesByOwner.get(context) ?? []],
+				'Unable to release disconnected WebUser file handles.',
+			);
+		});
+	}
+
+	closeTrackedHandles(): Promise<void> {
+		return this.closeEntries(
+			[...this.handles.values()],
+			'Unable to close tracked WebUser file handles.',
+		);
 	}
 
 	call<T>(context: TContext, command: string, arg?: unknown, cancellationToken?: CancellationToken): Promise<T> {
@@ -555,20 +621,80 @@ class HucodeWebUserDataFileSystemChannel<TContext> implements IServerChannel<TCo
 			const resource = this.transformIncoming(context, args[0] as UriComponents, true);
 			return this.runOperation([resource], async () => {
 				const handle = await this.channel.call<number>(context, command, arg, cancellationToken);
-				this.openResources.set(handle, resource);
+				if (this.isManagedResource(resource)) {
+					const entry: OpenWebUserHandle<TContext> = { handle, resource, owner: context, closePromise: undefined };
+					this.handles.set(handle, entry);
+					let ownerHandles = this.handlesByOwner.get(context);
+					if (!ownerHandles) {
+						ownerHandles = new Set();
+						this.handlesByOwner.set(context, ownerHandles);
+					}
+					ownerHandles.add(entry);
+				}
 				return handle as T;
 			});
 		}
 		if (command === 'close') {
 			const handle = args[0] as number;
-			const resource = this.openResources.get(handle);
-			return this.runOperation(resource ? [resource] : [], invoke).finally(() => this.openResources.delete(handle));
+			const entry = this.handles.get(handle);
+			if (!entry) {
+				return invoke();
+			}
+			if (entry.owner !== context) {
+				return Promise.reject(this.createUnavailableHandleError());
+			}
+			return this.runOperation([entry.resource], () => this.closeEntry(entry)) as Promise<T>;
 		}
 		if (command === 'read' || command === 'write') {
-			const resource = this.openResources.get(args[0] as number);
-			return this.runOperation(resource ? [resource] : [], invoke);
+			const entry = this.handles.get(args[0] as number);
+			if (!entry) {
+				return invoke();
+			}
+			if (entry.owner !== context) {
+				return Promise.reject(this.createUnavailableHandleError());
+			}
+			return this.runOperation([entry.resource], () => {
+				if (entry.closePromise) {
+					return Promise.reject(this.createUnavailableHandleError());
+				}
+				return invoke();
+			});
 		}
 		return this.runOperation(this.getResources(context, command, args), invoke);
+	}
+
+	private closeEntry(entry: OpenWebUserHandle<TContext>): Promise<void> {
+		if (entry.closePromise) {
+			return entry.closePromise;
+		}
+		if (this.handles.get(entry.handle) === entry) {
+			this.handles.delete(entry.handle);
+		}
+		const ownerHandles = this.handlesByOwner.get(entry.owner);
+		ownerHandles?.delete(entry);
+		if (ownerHandles?.size === 0) {
+			this.handlesByOwner.delete(entry.owner);
+		}
+		entry.closePromise = Promise.resolve().then(() => this.channel.call<void>(entry.owner, 'close', [entry.handle]));
+		return entry.closePromise;
+	}
+
+	private async closeEntries(entries: readonly OpenWebUserHandle<TContext>[], message: string): Promise<void> {
+		const results = await Promise.allSettled(entries.map(entry => this.closeEntry(entry)));
+		const errors: unknown[] = [];
+		for (let index = 0; index < results.length; index++) {
+			const result = results[index];
+			if (result.status === 'rejected') {
+				errors.push(new AggregateError([result.reason], `Unable to close WebUser file handle ${entries[index].handle}.`));
+			}
+		}
+		if (errors.length > 0) {
+			throw new AggregateError(errors, message);
+		}
+	}
+
+	private createUnavailableHandleError(): Error {
+		return createFileSystemProviderError('WebUser file handle is unavailable.', FileSystemProviderErrorCode.Unknown);
 	}
 
 	private getResources(context: TContext, command: string, args: readonly unknown[]): readonly URI[] {
