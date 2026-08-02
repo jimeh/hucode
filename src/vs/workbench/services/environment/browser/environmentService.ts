@@ -156,7 +156,12 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get agentSessionsWorkspace(): URI { return joinPath(this.userRoamingDataHome, 'agent-sessions.code-workspace'); }
 
 	@memoize
-	get serviceMachineIdResource(): URI { return joinPath(this.userRoamingDataHome, 'machineid'); }
+	get serviceMachineIdResource(): URI {
+		const userDataHome = isHucodeServerUserDataConfiguration(this.options)
+			? URI.file('/User').with({ scheme: Schemas.vscodeUserData })
+			: this.userRoamingDataHome;
+		return joinPath(userDataHome, 'machineid');
+	}
 
 	@memoize
 	get extHostLogsPath(): URI { return joinPath(this.logsHome, 'exthost'); }

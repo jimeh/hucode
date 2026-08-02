@@ -206,7 +206,9 @@ protocol where practical. Use `RemoteStorageService` on the browser side, with
 a Hucode-owned exact-key overlay that keeps the canonical
 `storage.serviceMachineId` entry in browser IndexedDB. The overlay must hide any
 legacy server copy, preserve mixed-batch event ordering, and leave the local
-identity untouched by server reset.
+identity untouched by server reset. Keep the first-run `machineid` fallback at
+`vscodeUserData:/User/machineid`; it must not follow the server-mode
+`userRoamingDataHome` into the shared remote filesystem.
 
 The Electron `StorageMainService` cannot simply be instantiated in the Node
 server because its lifecycle and environment dependencies are Electron-main
@@ -510,7 +512,8 @@ focused implementation suites collected before PR review are:
   machine-ID exclusion plus benign bootstrap-conflict classification;
 - `src/vs/hucode/test/browser/webUserDataStorageService.test.ts` for exact-key
   local routing, hidden legacy server identity, atomic access, mixed-batch event
-  ordering, and reset isolation;
+  ordering, reset isolation, and distinct first-run identities backed by local
+  browser files;
 - `src/vs/platform/storage/test/electron-main/hucodeStorageIpc.test.ts` for
   workspace event rebinding after the desktop storage instance closes;
 - Rust `commands::args::tests` for the public CLI default, valid values,
@@ -532,7 +535,7 @@ below, update this matrix with the exact collected paths before opening the PR.
 | Application, application-shared, profile, workspace, extension global, and extension workspace state persist | Storage host/client integration tests for every scope plus representative runtime state across browser profiles | Implementer |
 | Concurrent clients observe committed workspace state | Common/Electron IPC regression test, Node host multi-client test, and two-browser runtime check | Implementer |
 | Same-key conflicts are deterministic | Two-client last-successful-write-wins integration test | Implementer |
-| Secrets, authentication, and machine identity remain browser-local | File/state migration exclusion and exact-key storage-routing unit tests plus isolated-browser runtime checks | Implementer |
+| Secrets, authentication, and machine identity remain browser-local | File/state migration exclusion, exact-key storage routing, and first-run machine-ID fallback tests plus isolated-browser runtime checks | Implementer |
 | Empty server initializes without a prompt | Bootstrap state-machine test and fresh-browser runtime check | Implementer |
 | Existing browser data offers migrate, start-fresh, and cancel | Bootstrap UI/state tests covering all three results; runtime migration of representative resources | Implementer |
 | Migration is atomic and first complete commit wins | Lease/generation tests for race, stale and long-upload renewal, upload failure, commit failure, benign initialization conflict, and idle recovery | Implementer |

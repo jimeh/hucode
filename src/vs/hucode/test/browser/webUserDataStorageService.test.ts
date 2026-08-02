@@ -4,11 +4,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Schemas } from '../../../base/common/network.js';
+import { joinPath } from '../../../base/common/resources.js';
+import { URI } from '../../../base/common/uri.js';
+import { isUUID } from '../../../base/common/uuid.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { getServiceMachineId } from '../../../platform/externalServices/common/serviceMachineId.js';
+import { FileService } from '../../../platform/files/common/fileService.js';
+import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { HucodeWebUserDataStorageService, IHucodeWebUserDataStorageBackend } from '../../../workbench/browser/hucodeWebUserDataStorageService.js';
 import { HUCODE_WEB_USER_DATA_SERVICE_MACHINE_ID_KEY } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import { InMemoryStorageService, StorageScope, StorageTarget } from '../../../platform/storage/common/storage.js';
+import type { IWorkbenchConstructionOptions } from '../../../workbench/browser/web.api.js';
+import { BrowserWorkbenchEnvironmentService } from '../../../workbench/services/environment/browser/environmentService.js';
+import { TestProductService } from '../../../workbench/test/common/workbenchTestServices.js';
 
 suite('HucodeWebUserDataStorageService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -94,6 +105,45 @@ suite('HucodeWebUserDataStorageService', () => {
 		remote.remove(HUCODE_WEB_USER_DATA_SERVICE_MACHINE_ID_KEY, StorageScope.APPLICATION);
 		remote.remove('workbench.colorTheme', StorageScope.APPLICATION);
 		assert.strictEqual(storage.get(HUCODE_WEB_USER_DATA_SERVICE_MACHINE_ID_KEY, StorageScope.APPLICATION), 'browser-atomic', 'server reset must not clear browser identity');
+	});
+
+	test('creates distinct first-run identities in browser-local files', async () => {
+		const remoteUserDataHome = URI.from({ scheme: Schemas.vscodeRemote, authority: 'host', path: '/WebUser/User' });
+		const environmentService = new BrowserWorkbenchEnvironmentService(
+			'workspace-id',
+			URI.file('/logs'),
+			{
+				hucodeWebUserDataStorage: 'server',
+				hucodeWebUserDataHome: remoteUserDataHome,
+			} as IWorkbenchConstructionOptions,
+			TestProductService,
+		);
+		const expectedBrowserMachineIdResource = URI.from({ scheme: Schemas.vscodeUserData, path: '/User/machineid' });
+		assert.strictEqual(environmentService.userRoamingDataHome.toString(), remoteUserDataHome.toString());
+		assert.strictEqual(environmentService.serviceMachineIdResource.toString(), expectedBrowserMachineIdResource.toString());
+		assert.strictEqual(environmentService.stateResource.scheme, Schemas.vscodeRemote, 'all other user data resources must stay remote');
+
+		const sharedRemoteProvider = disposables.add(new InMemoryFileSystemProvider());
+		const identities: string[] = [];
+		for (let browser = 0; browser < 2; browser++) {
+			const fileService = disposables.add(new FileService(new NullLogService()));
+			const browserProvider = disposables.add(new InMemoryFileSystemProvider());
+			disposables.add(fileService.registerProvider(Schemas.vscodeUserData, browserProvider));
+			disposables.add(fileService.registerProvider(Schemas.vscodeRemote, sharedRemoteProvider));
+			await fileService.createFolder(joinPath(expectedBrowserMachineIdResource, '..'));
+			await fileService.createFolder(remoteUserDataHome);
+			const { storage, remote, browser: browserStorage } = await createStorage();
+
+			const identity = await getServiceMachineId(environmentService, fileService, storage);
+			identities.push(identity);
+			assert.ok(isUUID(identity));
+			assert.strictEqual((await fileService.readFile(expectedBrowserMachineIdResource)).value.toString(), identity);
+			assert.strictEqual(browserStorage.get(HUCODE_WEB_USER_DATA_SERVICE_MACHINE_ID_KEY, StorageScope.APPLICATION), identity);
+			assert.strictEqual(remote.get(HUCODE_WEB_USER_DATA_SERVICE_MACHINE_ID_KEY, StorageScope.APPLICATION), undefined);
+			assert.strictEqual(await fileService.exists(joinPath(remoteUserDataHome, 'machineid')), false, 'first-run fallback must not create a server machine identity file');
+		}
+
+		assert.notStrictEqual(identities[0], identities[1], 'fresh browser profiles must not adopt a server-shared machine identity');
 	});
 });
 
