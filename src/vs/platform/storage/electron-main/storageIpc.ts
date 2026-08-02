@@ -5,7 +5,7 @@
 
 import { Promises } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { revive } from '../../../base/common/marshalling.js';
 import { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ILogService } from '../../log/common/log.js';
@@ -23,7 +23,11 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 	private readonly onDidChangeApplicationSharedStorageEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
 
 	private readonly mapProfileToOnDidChangeProfileStorageEmitter = new Map<string /* profile ID */, Emitter<ISerializableItemsChangeEvent>>();
-	private readonly mapWorkspaceToOnDidChangeWorkspaceStorageEmitter = new Map<string /* workspace ID */, Emitter<ISerializableItemsChangeEvent>>();
+	private readonly mapWorkspaceToOnDidChangeWorkspaceStorageEmitter = new Map<string /* workspace ID */, {
+		readonly storage: IStorageMain;
+		readonly emitter: Emitter<ISerializableItemsChangeEvent>;
+		readonly disposables: DisposableStore;
+	}>();
 
 	constructor(
 		private readonly logService: ILogService,
@@ -31,18 +35,24 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 	) {
 		super();
 
-		this.registerStorageChangeListeners(storageMainService.applicationStorage, this.onDidChangeApplicationStorageEmitter);
-		this.registerStorageChangeListeners(storageMainService.applicationSharedStorage, this.onDidChangeApplicationSharedStorageEmitter);
+		this._register(this.registerStorageChangeListeners(storageMainService.applicationStorage, this.onDidChangeApplicationStorageEmitter));
+		this._register(this.registerStorageChangeListeners(storageMainService.applicationSharedStorage, this.onDidChangeApplicationSharedStorageEmitter));
+		this._register(toDisposable(() => {
+			for (const entry of this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.values()) {
+				entry.disposables.dispose();
+			}
+			this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.clear();
+		}));
 	}
 
 	//#region Storage Change Events
 
-	private registerStorageChangeListeners(storage: IStorageMain, emitter: Emitter<ISerializableItemsChangeEvent>): void {
+	private registerStorageChangeListeners(storage: IStorageMain, emitter: Emitter<ISerializableItemsChangeEvent>): IDisposable {
 
 		// Listen for changes in provided storage to send to listeners
 		// that are listening. Use a debouncer to reduce IPC traffic.
 
-		this._register(Event.debounce(storage.onDidChangeStorage, (prev: IStorageChangeEvent[] | undefined, cur: IStorageChangeEvent) => {
+		return Event.debounce(storage.onDidChangeStorage, (prev: IStorageChangeEvent[] | undefined, cur: IStorageChangeEvent) => {
 			if (!prev) {
 				prev = [cur];
 			} else {
@@ -54,7 +64,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 			if (events.length) {
 				emitter.fire(this.serializeStorageChangeEvents(events, storage));
 			}
-		}));
+		});
 	}
 
 	private serializeStorageChangeEvents(events: IStorageChangeEvent[], storage: IStorageMain): ISerializableItemsChangeEvent {
@@ -83,13 +93,28 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 				const workspace = reviveIdentifier(arg.workspace);
 
 				if (workspace) {
-					let workspaceStorageChangeEmitter = this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id);
-					if (!workspaceStorageChangeEmitter) {
-						workspaceStorageChangeEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
-						this.registerStorageChangeListeners(this.storageMainService.workspaceStorage(workspace), workspaceStorageChangeEmitter);
-						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.set(workspace.id, workspaceStorageChangeEmitter);
+					const storage = this.storageMainService.workspaceStorage(workspace);
+					let entry = this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id);
+					if (entry?.storage !== storage) {
+						entry?.disposables.dispose();
+						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.delete(workspace.id);
+						entry = undefined;
 					}
-					return workspaceStorageChangeEmitter.event;
+					if (!entry) {
+						const emitter = new Emitter<ISerializableItemsChangeEvent>();
+						const disposables = new DisposableStore();
+						entry = { storage, emitter, disposables };
+						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.set(workspace.id, entry);
+						disposables.add(emitter);
+						disposables.add(this.registerStorageChangeListeners(storage, emitter));
+						disposables.add(Event.once(storage.onDidCloseStorage)(() => {
+							if (this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id) === entry) {
+								this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.delete(workspace.id);
+							}
+							disposables.dispose();
+						}));
+					}
+					return entry.emitter.event;
 				}
 
 				// Without profile: application or application-shared scope
@@ -105,7 +130,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 				let profileStorageChangeEmitter = this.mapProfileToOnDidChangeProfileStorageEmitter.get(profile.id);
 				if (!profileStorageChangeEmitter) {
 					profileStorageChangeEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
-					this.registerStorageChangeListeners(this.storageMainService.profileStorage(profile), profileStorageChangeEmitter);
+					this._register(this.registerStorageChangeListeners(this.storageMainService.profileStorage(profile), profileStorageChangeEmitter));
 					this.mapProfileToOnDidChangeProfileStorageEmitter.set(profile.id, profileStorageChangeEmitter);
 				}
 

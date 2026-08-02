@@ -5,7 +5,7 @@
 
 import { mainWindow } from '../../../base/browser/window.js';
 import { URI, UriDto } from '../../../base/common/uri.js';
-import { shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
+import { isAcceptedWebUserDataResponse, shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
 import { IUserDataProfile } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import { IHucodeWebWorkbenchConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
 import { setHucodeWebUserDataBootstrapResult } from '../../../platform/environment/browser/hucodeWebUserDataBootstrapState.js';
@@ -46,7 +46,7 @@ export async function bootstrapHucodeWebUserData(
 
 			const migration = await collectBrowserMigration(config);
 			if (!hasMeaningfulData(migration)) {
-				status = await requestJson<BootstrapStatus>(`${api}/initialize-empty`, { method: 'POST', body: '{}' });
+				status = await requestJson<BootstrapStatus>(`${api}/initialize-empty`, { method: 'POST', body: '{}' }, true);
 				if (status.profiles) {
 					setResult(status.profiles, userHome);
 					return true;
@@ -59,7 +59,7 @@ export async function bootstrapHucodeWebUserData(
 				return false;
 			}
 			if (choice === 'fresh') {
-				status = await requestJson<BootstrapStatus>(`${api}/initialize-empty`, { method: 'POST', body: '{}' });
+				status = await requestJson<BootstrapStatus>(`${api}/initialize-empty`, { method: 'POST', body: '{}' }, true);
 				if (status.profiles) {
 					setResult(status.profiles, userHome);
 					return true;
@@ -339,7 +339,7 @@ async function requestJson<T>(url: string, init?: RequestInit, allowConflict = f
 		...init,
 	});
 	const value = await response.json() as T & { error?: string };
-	if (!response.ok && !(allowConflict && response.status === 409)) {
+	if (!isAcceptedWebUserDataResponse(response.ok, response.status, allowConflict)) {
 		throw new Error(value.error ?? `User-data server returned HTTP ${response.status}.`);
 	}
 	return value;

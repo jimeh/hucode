@@ -59,7 +59,7 @@
 		{
 			"path": "src/vs/platform/storage/electron-main/storageIpc.ts",
 			"kind": "upstream-patch",
-			"reason": "Hucode keeps desktop storage protocol parity for workspace events and compare-and-swap",
+			"reason": "Hucode keeps desktop storage protocol parity while rebinding workspace events after a storage instance closes",
 			"upstream": {
 				"path": "src/vs/platform/storage/electron-main/storageIpc.ts",
 				"lastSyncedBaseline": "1.131.0",

@@ -490,13 +490,18 @@ Every non-trivial upstream patch is recorded in
 focused implementation suites collected before PR review are:
 
 - `src/vs/server/test/node/hucodeWebUserDataServer.test.ts` for first-wins
-  initialization, staged commit, ready-generation protection, empty
-  initialization, and traversal rejection;
+  initialization, staged commit, ready-generation and long-upload lease
+  protection, strict catalog restart behavior, profile/reset serialization,
+  lifetime ownership, empty initialization, and traversal rejection;
 - `src/vs/server/test/node/hucodeWebUserDataStorage.test.ts` for durable reopen,
-  serialized compare-and-swap, workspace external events, and identifier
-  rejection;
+  all persisted scopes, serialized compare-and-swap, workspace external events,
+  shutdown draining, and identifier rejection;
 - `src/vs/server/test/node/hucodeWebClientServerIntegration.test.ts` for the
   browser default and trusted server route configuration;
+- `src/vs/hucode/test/common/webUserDataMigration.test.ts` for secret and
+  machine-ID exclusion plus benign bootstrap-conflict classification;
+- `src/vs/platform/storage/test/electron-main/hucodeStorageIpc.test.ts` for
+  workspace event rebinding after the desktop storage instance closes;
 - Rust `commands::args::tests` for the public CLI default, valid values,
   invalid values, and argument interaction.
 
@@ -519,10 +524,10 @@ below, update this matrix with the exact collected paths before opening the PR.
 | Secrets and authentication remain browser-local | Migration exclusion unit test and isolated-browser runtime check | Implementer |
 | Empty server initializes without a prompt | Bootstrap state-machine test and fresh-browser runtime check | Implementer |
 | Existing browser data offers migrate, start-fresh, and cancel | Bootstrap UI/state tests covering all three results; runtime migration of representative resources | Implementer |
-| Migration is atomic and first complete commit wins | Lease/generation tests for race, stale lease, upload failure, commit failure, and recovery | Implementer |
-| Server paths and logical identifiers are confined | Traversal, unknown profile, invalid workspace, and staging-generation rejection tests | Implementer |
+| Migration is atomic and first complete commit wins | Lease/generation tests for race, stale and long-upload renewal, upload failure, commit failure, benign initialization conflict, and idle recovery | Implementer |
+| Server paths and logical identifiers are confined | Traversal before folder creation, dot-segment profile IDs, strict catalog schema, unknown profile, invalid workspace, and staging-generation rejection tests | Implementer |
 | Server outage never falls back to browser | Bootstrap/backend failure test and runtime retry/error observation | Implementer |
-| Orderly shutdown drains admitted writes | Storage-host shutdown test followed by reopen/read verification | Implementer |
+| Orderly shutdown drains admitted writes | Storage-host shutdown test followed by reopen/read verification; HTTP/profile/storage lifetime-lease tests; dispose admission test | Implementer |
 | Regular, Omni, hosted Omni, and `--no-omni` share the mode | Route/config unit tests and representative runtime smoke for each entrypoint | Implementer |
 | Upstream integration remains narrow and detectable | Provenance check against `1.131.0`, real-seam contract tests, and final diff audit against the documented touch budget | Orchestrator |
 | TypeScript, Rust, generated suite inventory, hygiene, and supported CI stay green | Final-head local gates below and required GitHub Actions checks | Orchestrator and CI |

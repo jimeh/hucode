@@ -7,7 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { SECRET_STORAGE_PREFIX } from '../../../platform/secrets/common/secrets.js';
 import { IS_NEW_KEY } from '../../../platform/storage/common/storage.js';
-import { shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
+import { isAcceptedWebUserDataResponse, shouldMigrateWebUserDataFile, shouldMigrateWebUserDataState } from '../../../platform/environment/common/hucodeWebUserDataMigration.js';
 
 suite('HucodeWebUserDataMigration', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -24,5 +24,12 @@ suite('HucodeWebUserDataMigration', () => {
 		assert.strictEqual(shouldMigrateWebUserDataState(`${SECRET_STORAGE_PREFIX}github.token`, 'secret'), false);
 		assert.strictEqual(shouldMigrateWebUserDataState(IS_NEW_KEY, 'true'), false);
 		assert.strictEqual(shouldMigrateWebUserDataState('workbench.colorTheme', { value: 'not persisted state' }), false);
+	});
+
+	test('accepts only explicitly allowed bootstrap conflicts', () => {
+		assert.strictEqual(isAcceptedWebUserDataResponse(true, 200, false), true);
+		assert.strictEqual(isAcceptedWebUserDataResponse(false, 409, true), true);
+		assert.strictEqual(isAcceptedWebUserDataResponse(false, 409, false), false);
+		assert.strictEqual(isAcceptedWebUserDataResponse(false, 500, true), false);
 	});
 });

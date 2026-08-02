@@ -15,3 +15,8 @@ export function shouldMigrateWebUserDataFile(path: string): boolean {
 export function shouldMigrateWebUserDataState(key: string, value: unknown): value is string {
 	return key !== IS_NEW_KEY && !key.startsWith(SECRET_STORAGE_PREFIX) && typeof value === 'string';
 }
+
+/** Returns whether an HTTP response is accepted by a bootstrap operation. */
+export function isAcceptedWebUserDataResponse(ok: boolean, status: number, allowConflict: boolean): boolean {
+	return ok || (allowConflict && status === 409);
+}

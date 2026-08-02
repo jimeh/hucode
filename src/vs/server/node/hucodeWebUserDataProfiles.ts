@@ -15,7 +15,6 @@ import { ILogService } from '../../platform/log/common/log.js';
 import {
 	DidChangeProfilesEvent,
 	IUserDataProfile,
-	IUserDataProfilesService,
 	StoredProfileAssociations,
 	StoredUserDataProfile,
 	UserDataProfilesService,
@@ -23,14 +22,14 @@ import {
 import { IUriIdentityService } from '../../platform/uriIdentity/common/uriIdentity.js';
 import { isSafeProfileId } from './hucodeWebUserDataStorage.js';
 
-interface StoredWebProfile {
+export interface StoredWebProfile {
 	readonly id: string;
 	readonly name: string;
 	readonly icon?: string;
 	readonly useDefaultFlags?: StoredUserDataProfile['useDefaultFlags'];
 }
 
-interface StoredWebProfileCatalog {
+export interface StoredWebProfileCatalog {
 	readonly profiles: readonly StoredWebProfile[];
 	readonly associations: StoredProfileAssociations;
 }
@@ -61,17 +60,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	/** Replaces the uninitialized catalog with a validated migration snapshot. */
 	importCatalog(catalog: StoredWebProfileCatalog): void {
 		const previous = this.profiles;
-		const ids = new Set<string>();
-		for (const profile of catalog.profiles) {
-			if (!isSafeProfileId(profile.id) || profile.id === '__default__profile__' || ids.has(profile.id)) {
-				throw new Error('Invalid migrated profile identifier.');
-			}
-			ids.add(profile.id);
-			if (typeof profile.name !== 'string' || !profile.name) {
-				throw new Error('Invalid migrated profile name.');
-			}
-		}
-		this.catalog = { profiles: [...catalog.profiles], associations: catalog.associations };
+		this.catalog = validateWebProfileCatalog(catalog, 'migrated');
 		this.writeCatalog();
 		this.init();
 		const current = this.profiles;
@@ -85,7 +74,19 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	/** Reloads catalog state after a staging generation has committed. */
 	reload(): void {
 		this.catalog = undefined;
+		this.assertCatalogReady();
 		this.init();
+	}
+
+	/** Fails when the authoritative profile catalog is missing or malformed. */
+	assertCatalogReady(): void {
+		this.readCatalog();
+	}
+
+	/** Returns whether an identifier belongs to the validated catalog. */
+	isKnownProfile(id: string): boolean {
+		this.assertCatalogReady();
+		return this.profiles.some(profile => profile.id === id);
 	}
 
 	protected override getStoredProfiles(): StoredUserDataProfile[] {
@@ -99,7 +100,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 
 	protected override saveStoredProfiles(profiles: StoredUserDataProfile[]): void {
 		const existing = this.readCatalog();
-		this.catalog = {
+		this.catalog = validateWebProfileCatalog({
 			profiles: profiles.map(profile => {
 				const id = this.uriIdentityService.extUri.basename(profile.location);
 				if (!isSafeProfileId(id)) {
@@ -108,7 +109,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 				return { id, name: profile.name, icon: profile.icon, useDefaultFlags: profile.useDefaultFlags };
 			}),
 			associations: existing.associations,
-		};
+		}, 'stored');
 		this.writeCatalog();
 	}
 
@@ -118,7 +119,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 
 	protected override saveStoredProfileAssociations(associations: StoredProfileAssociations): void {
 		const existing = this.readCatalog();
-		this.catalog = { profiles: existing.profiles, associations };
+		this.catalog = validateWebProfileCatalog({ profiles: existing.profiles, associations }, 'stored');
 		this.writeCatalog();
 	}
 
@@ -126,17 +127,21 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 		if (this.catalog) {
 			return this.catalog;
 		}
+		let contents: string;
 		try {
-			const parsed = JSON.parse(fs.readFileSync(this.catalogPath, 'utf8')) as StoredWebProfileCatalog;
-			this.catalog = {
-				profiles: Array.isArray(parsed.profiles) ? parsed.profiles : [],
-				associations: parsed.associations && typeof parsed.associations === 'object' ? parsed.associations : {},
-			};
+			contents = fs.readFileSync(this.catalogPath, 'utf8');
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-				this.logService.error('Unable to read serve-web profile catalog.', error);
-			}
-			this.catalog = { profiles: [], associations: {} };
+			throw new Error(
+				(error as NodeJS.ErrnoException).code === 'ENOENT'
+					? 'Serve-web profile catalog is missing.'
+					: 'Unable to read serve-web profile catalog.',
+				{ cause: error },
+			);
+		}
+		try {
+			this.catalog = validateWebProfileCatalog(JSON.parse(contents), 'stored');
+		} catch (error) {
+			throw new Error('Serve-web profile catalog is corrupt.', { cause: error });
 		}
 		return this.catalog;
 	}
@@ -155,8 +160,9 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
  */
 export class HucodeWebUserDataProfilesChannel<TContext = unknown> implements IServerChannel<TContext> {
 	constructor(
-		private readonly service: IUserDataProfilesService,
+		private readonly service: HucodeWebUserDataProfilesService,
 		private readonly getUriTransformer: (context: TContext) => IURITransformer,
+		private readonly runOperation: <T>(operation: () => Promise<T>) => Promise<T> = operation => operation(),
 	) { }
 
 	listen<T>(context: TContext, event: string): Event<T> {
@@ -172,41 +178,111 @@ export class HucodeWebUserDataProfilesChannel<TContext = unknown> implements ISe
 	}
 
 	async call<T>(context: TContext, command: string, args: unknown[] = []): Promise<T> {
-		const transformer = this.getUriTransformer(context);
-		const incoming = transformIncomingURIs(args, transformer) as unknown[];
-		let result: unknown;
-		switch (command) {
-			case 'createNamedProfile': result = await this.service.createNamedProfile(incoming[0] as string, incoming[1] as never, incoming[2] as never); break;
-			case 'createProfile': result = await this.service.createProfile(incoming[0] as string, incoming[1] as string, incoming[2] as never, incoming[3] as never); break;
-			case 'createTransientProfile': result = await this.service.createTransientProfile(incoming[0] as never); break;
-			case 'setProfileForWorkspace': {
-				const requested = incoming[1] as IUserDataProfile;
-				const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
-				if (!profile) { throw new Error('Unknown web user-data profile.'); }
-				result = await this.service.setProfileForWorkspace(incoming[0] as never, profile);
-				break;
+		return this.runOperation(async () => {
+			this.service.assertCatalogReady();
+			const transformer = this.getUriTransformer(context);
+			const incoming = transformIncomingURIs(args, transformer) as unknown[];
+			let result: unknown;
+			switch (command) {
+				case 'createNamedProfile': result = await this.service.createNamedProfile(incoming[0] as string, incoming[1] as never, incoming[2] as never); break;
+				case 'createProfile': {
+					if (!isSafeProfileId(incoming[0])) { throw new Error('Invalid web user-data profile identifier.'); }
+					result = await this.service.createProfile(incoming[0], incoming[1] as string, incoming[2] as never, incoming[3] as never);
+					break;
+				}
+				case 'createTransientProfile': result = await this.service.createTransientProfile(incoming[0] as never); break;
+				case 'setProfileForWorkspace': {
+					const requested = incoming[1] as IUserDataProfile;
+					const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
+					if (!profile) { throw new Error('Unknown web user-data profile.'); }
+					result = await this.service.setProfileForWorkspace(incoming[0] as never, profile);
+					break;
+				}
+				case 'removeProfile': {
+					const requested = incoming[0] as IUserDataProfile;
+					const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
+					if (!profile) { throw new Error('Unknown web user-data profile.'); }
+					result = await this.service.removeProfile(profile);
+					break;
+				}
+				case 'updateProfile': {
+					const requested = incoming[0] as IUserDataProfile;
+					const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
+					if (!profile) { throw new Error('Unknown web user-data profile.'); }
+					const options = incoming[1] as { name?: unknown };
+					if (options.name !== undefined && (typeof options.name !== 'string' || options.name.length === 0)) {
+						throw new Error('Invalid web user-data profile name.');
+					}
+					result = await this.service.updateProfile(profile, incoming[1] as never);
+					break;
+				}
+				case 'resetWorkspaces': result = await this.service.resetWorkspaces(); break;
+				case 'cleanUp': result = await this.service.cleanUp(); break;
+				case 'cleanUpTransientProfiles': result = await this.service.cleanUpTransientProfiles(); break;
+				default: throw new Error(`Invalid call ${command}`);
 			}
-			case 'removeProfile': {
-				const requested = incoming[0] as IUserDataProfile;
-				const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
-				if (!profile) { throw new Error('Unknown web user-data profile.'); }
-				result = await this.service.removeProfile(profile);
-				break;
-			}
-			case 'updateProfile': {
-				const requested = incoming[0] as IUserDataProfile;
-				const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
-				if (!profile) { throw new Error('Unknown web user-data profile.'); }
-				result = await this.service.updateProfile(profile, incoming[1] as never);
-				break;
-			}
-			case 'resetWorkspaces': result = await this.service.resetWorkspaces(); break;
-			case 'cleanUp': result = await this.service.cleanUp(); break;
-			case 'cleanUpTransientProfiles': result = await this.service.cleanUpTransientProfiles(); break;
-			default: throw new Error(`Invalid call ${command}`);
-		}
-		return transformOutgoingURIs(result, transformer) as T;
+			return transformOutgoingURIs(result, transformer) as T;
+		});
 	}
+}
+
+/** Validates and normalizes a persisted or migrating web profile catalog. */
+export function validateWebProfileCatalog(value: unknown, source: 'stored' | 'migrated'): StoredWebProfileCatalog {
+	const invalid = (subject: string): never => {
+		throw new Error(source === 'migrated' ? `Invalid migrated ${subject}.` : `Invalid stored ${subject}.`);
+	};
+	if (!isRecord(value) || !Array.isArray(value.profiles) || !isRecord(value.associations)) {
+		return invalid('profile catalog');
+	}
+	const ids = new Set<string>();
+	const profiles = value.profiles.map(profile => {
+		if (!isRecord(profile) || !isSafeProfileId(profile.id) || profile.id === '__default__profile__' || ids.has(profile.id)) {
+			return invalid('profile identifier');
+		}
+		ids.add(profile.id);
+		if (typeof profile.name !== 'string' || !profile.name) {
+			return invalid('profile name');
+		}
+		if (profile.icon !== undefined && typeof profile.icon !== 'string') {
+			return invalid('profile icon');
+		}
+		if (profile.useDefaultFlags !== undefined && !isBooleanRecord(profile.useDefaultFlags)) {
+			return invalid('profile defaults');
+		}
+		return {
+			id: profile.id,
+			name: profile.name,
+			icon: profile.icon,
+			useDefaultFlags: profile.useDefaultFlags,
+		};
+	});
+	const associations: StoredProfileAssociations = {};
+	for (const key of Object.keys(value.associations)) {
+		if (key !== 'workspaces' && key !== 'emptyWindows') {
+			return invalid('profile associations');
+		}
+		const dictionary = value.associations[key];
+		if (!isRecord(dictionary)) {
+			return invalid('profile associations');
+		}
+		const normalized: Record<string, string> = {};
+		for (const [association, profileId] of Object.entries(dictionary)) {
+			if (!association || typeof profileId !== 'string' || (profileId !== '__default__profile__' && !ids.has(profileId))) {
+				return invalid('profile associations');
+			}
+			normalized[association] = profileId;
+		}
+		associations[key] = normalized;
+	}
+	return { profiles, associations };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isBooleanRecord(value: unknown): value is Record<string, boolean> {
+	return isRecord(value) && Object.values(value).every(entry => typeof entry === 'boolean');
 }
 
 function transformProfileChange(change: DidChangeProfilesEvent, transformer: IURITransformer): DidChangeProfilesEvent {

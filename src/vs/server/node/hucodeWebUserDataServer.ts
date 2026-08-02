@@ -10,6 +10,7 @@ import { Queue } from '../../base/common/async.js';
 import { Disposable, IDisposable } from '../../base/common/lifecycle.js';
 import { join, normalize } from '../../base/common/path.js';
 import { generateUuid } from '../../base/common/uuid.js';
+import { IURITransformer } from '../../base/common/uriIpc.js';
 import { SQLiteStorageDatabase } from '../../base/parts/storage/node/storage.js';
 import { IEnvironmentService } from '../../platform/environment/common/environment.js';
 import { IFileService } from '../../platform/files/common/files.js';
@@ -19,12 +20,12 @@ import { IServerChannel } from '../../base/parts/ipc/common/ipc.js';
 import type { RemoteAgentConnectionContext } from '../../platform/remote/common/remoteAgentEnvironment.js';
 import { IUriIdentityService } from '../../platform/uriIdentity/common/uriIdentity.js';
 import type { IUserDataProfile } from '../../platform/userDataProfile/common/userDataProfile.js';
-import { HucodeWebUserDataProfilesService } from './hucodeWebUserDataProfiles.js';
-import { HucodeWebUserDataStorageHost, isSafeProfileId } from './hucodeWebUserDataStorage.js';
+import { HucodeWebUserDataProfilesChannel, HucodeWebUserDataProfilesService, validateWebProfileCatalog } from './hucodeWebUserDataProfiles.js';
+import { HucodeWebUserDataStorageHost } from './hucodeWebUserDataStorage.js';
 
 export const HUCODE_WEB_USER_DATA_API_PATH = '/_hucode/user-data';
 const MANIFEST_VERSION = 1;
-const LEASE_MS = 60_000;
+const DEFAULT_LEASE_MS = 60_000;
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export interface HucodeWebUserDataManifest {
@@ -54,6 +55,17 @@ export interface HucodeWebUserDataMigration {
 	}[];
 }
 
+export interface HucodeWebUserDataServerOptions {
+	readonly acquireOperationLease?: () => IDisposable;
+	readonly acquireResponseLease?: () => IDisposable;
+	/** Internal test override for deterministic lease expiry coverage. */
+	readonly now?: () => number;
+	/** Internal test override for deterministic lease expiry coverage. */
+	readonly leaseMs?: number;
+	/** Internal test hook for pausing a fully staged upload before its lease refresh. */
+	readonly beforeUploadLeaseRefresh?: () => Promise<void>;
+}
+
 export const IHucodeWebUserDataServer = createDecorator<IHucodeWebUserDataServer>('hucodeWebUserDataServer');
 
 export interface IHucodeWebUserDataServer extends IDisposable {
@@ -62,6 +74,7 @@ export interface IHucodeWebUserDataServer extends IDisposable {
 	readonly userHome: string;
 	readonly profilesService: HucodeWebUserDataProfilesService | undefined;
 	readonly storageChannel: IServerChannel<RemoteAgentConnectionContext> | undefined;
+	createProfilesChannel<TContext>(getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext>;
 	handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean>;
 	close(): Promise<void>;
 }
@@ -88,6 +101,8 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private readonly operations = new Queue<unknown>();
 	private readonly storageHost: HucodeWebUserDataStorageHost | undefined;
 	private closing = false;
+	private closed = false;
+	private disposeStarted = false;
 	private closePromise: Promise<void> | undefined;
 
 	constructor(
@@ -96,7 +111,8 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		environmentService: IEnvironmentService,
 		fileService: IFileService,
 		uriIdentityService: IUriIdentityService,
-		logService: ILogService,
+		private readonly logService: ILogService,
+		private readonly options: HucodeWebUserDataServerOptions = {},
 	) {
 		super();
 		this.enabled = mode === 'server';
@@ -117,11 +133,23 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			));
 			this.storageHost = this._register(new HucodeWebUserDataStorageHost(
 				this.stateHome,
-				id => this.profilesService!.profiles.some(profile => profile.id === id),
+				id => this.profilesService!.isKnownProfile(id),
 				logService,
+				options.acquireOperationLease,
 			));
 			this.storageChannel = this.storageHost.createChannel<RemoteAgentConnectionContext>();
 		}
+	}
+
+	createProfilesChannel<TContext>(getUriTransformer: (context: TContext) => IURITransformer): IServerChannel<TContext> {
+		if (!this.profilesService) {
+			throw new Error('Server user-data storage is disabled.');
+		}
+		return new HucodeWebUserDataProfilesChannel(
+			this.profilesService,
+			getUriTransformer,
+			operation => this.queueOperation(operation),
+		);
 	}
 
 	async handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<boolean> {
@@ -137,65 +165,76 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			return true;
 		}
 
+		const releaseUntrackedResponseLease = holdResponseLease(res, this.options.acquireResponseLease?.());
 		try {
-			if (req.method === 'GET' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/bootstrap`) {
-				await this.queueOperation(() => this.recoverExpiredLease());
-				const manifest = this.readManifest();
-				respondJson(res, 200, {
-					state: manifest?.state ?? 'uninitialized',
-					generation: manifest?.generation ?? 0,
-					leaseExpiresAt: manifest?.lease?.expiresAt,
-					profiles: manifest?.state === 'ready' ? this.profilesService!.profiles : undefined,
+			try {
+				if (req.method === 'GET' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/bootstrap`) {
+					const result = await this.queueOperation(async () => {
+						await this.recoverExpiredLease();
+						const manifest = this.readManifest();
+						if (manifest?.state === 'ready') {
+							this.profilesService!.assertCatalogReady();
+						}
+						return {
+							state: manifest?.state ?? 'uninitialized',
+							generation: manifest?.generation ?? 0,
+							leaseExpiresAt: manifest?.lease?.expiresAt,
+							profiles: manifest?.state === 'ready' ? this.profilesService!.profiles : undefined,
+						};
+					});
+					respondJson(res, 200, result);
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/claim`) {
+					const result = await this.queueOperation(() => this.claim());
+					respondJson(res, result.claimed ? 200 : 409, result);
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/upload`) {
+					const body = await readJsonBody<{ owner?: unknown; generation?: unknown; migration?: HucodeWebUserDataMigration }>(req);
+					await this.queueOperation(() => this.upload(body.owner, body.generation, body.migration));
+					respondJson(res, 200, { uploaded: true });
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/renew`) {
+					const body = await readJsonBody<{ owner?: unknown; generation?: unknown }>(req);
+					const result = await this.queueOperation(() => this.renew(body.owner, body.generation));
+					respondJson(res, 200, result);
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/commit`) {
+					const body = await readJsonBody<{ owner?: unknown; generation?: unknown }>(req);
+					const result = await this.queueOperation(() => this.commit(body.owner, body.generation));
+					respondJson(res, result.committed ? 200 : 409, result);
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/initialize-empty`) {
+					const result = await this.queueOperation(() => this.initializeEmpty());
+					respondJson(res, result.committed ? 200 : 409, result);
+					return true;
+				}
+
+				if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/reset`) {
+					const result = await this.queueOperation(() => this.reset());
+					respondJson(res, 200, result);
+					return true;
+				}
+
+				respondJson(res, 404, { error: 'Unknown serve-web user-data operation.' });
+			} catch (error) {
+				respondJson(res, error instanceof HucodeWebUserDataServerClosingError ? 503 : 400, {
+					error: error instanceof Error ? error.message : String(error),
 				});
-				return true;
 			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/claim`) {
-				const result = await this.queueOperation(() => this.claim());
-				respondJson(res, result.claimed ? 200 : 409, result);
-				return true;
-			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/upload`) {
-				const body = await readJsonBody<{ owner?: unknown; generation?: unknown; migration?: HucodeWebUserDataMigration }>(req);
-				await this.queueOperation(() => this.upload(body.owner, body.generation, body.migration));
-				respondJson(res, 200, { uploaded: true });
-				return true;
-			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/renew`) {
-				const body = await readJsonBody<{ owner?: unknown; generation?: unknown }>(req);
-				const result = await this.queueOperation(() => this.renew(body.owner, body.generation));
-				respondJson(res, 200, result);
-				return true;
-			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/commit`) {
-				const body = await readJsonBody<{ owner?: unknown; generation?: unknown }>(req);
-				const result = await this.queueOperation(() => this.commit(body.owner, body.generation));
-				respondJson(res, result.committed ? 200 : 409, result);
-				return true;
-			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/initialize-empty`) {
-				const result = await this.queueOperation(() => this.initializeEmpty());
-				respondJson(res, result.committed ? 200 : 409, result);
-				return true;
-			}
-
-			if (req.method === 'POST' && pathname === `${HUCODE_WEB_USER_DATA_API_PATH}/reset`) {
-				const result = await this.queueOperation(() => this.reset());
-				respondJson(res, 200, result);
-				return true;
-			}
-
-			respondJson(res, 404, { error: 'Unknown serve-web user-data operation.' });
-		} catch (error) {
-			respondJson(res, error instanceof HucodeWebUserDataServerClosingError ? 503 : 400, {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			return true;
+		} finally {
+			releaseUntrackedResponseLease();
 		}
-		return true;
 	}
 
 	async close(): Promise<void> {
@@ -204,16 +243,42 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			this.closePromise = (async () => {
 				await this.operations.whenIdle();
 				await this.storageHost?.close();
+				this.closed = true;
 			})();
 		}
 		await this.closePromise;
+	}
+
+	override dispose(): void {
+		if (this.disposeStarted) {
+			return;
+		}
+		this.disposeStarted = true;
+		if (this.closed) {
+			super.dispose();
+			return;
+		}
+		void this.close().then(
+			() => super.dispose(),
+			error => {
+				this.logService.error('Unable to close serve-web user data.', error);
+				super.dispose();
+			},
+		);
 	}
 
 	private queueOperation<T>(operation: () => Promise<T>): Promise<T> {
 		if (this.closing) {
 			return Promise.reject(new HucodeWebUserDataServerClosingError());
 		}
-		return this.operations.queue(operation) as Promise<T>;
+		const lease = this.options.acquireOperationLease?.();
+		return this.operations.queue(async () => {
+			try {
+				return await operation();
+			} finally {
+				lease?.dispose();
+			}
+		}) as Promise<T>;
 	}
 
 	private async claim(): Promise<{ claimed: boolean; owner?: string; generation: number; expiresAt?: number }> {
@@ -224,7 +289,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		}
 		const owner = generateUuid();
 		const generation = (current?.generation ?? 0) + 1;
-		const expiresAt = Date.now() + LEASE_MS;
+		const expiresAt = this.now() + this.leaseMs;
 		await fs.promises.mkdir(join(this.stagingHome, owner), { recursive: true, mode: 0o700 });
 		await this.writeManifest({
 			version: MANIFEST_VERSION,
@@ -252,20 +317,12 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 			await fs.promises.writeFile(target, Buffer.from(file.contents, 'base64'), { mode: 0o600 });
 		}
 
-		const profileIds = new Set<string>();
-		for (const profile of migration.profiles) {
-			if (!isSafeProfileId(profile.id) || profile.id === '__default__profile__' || profileIds.has(profile.id)) {
-				throw new Error('Invalid migrated profile identifier.');
-			}
-			profileIds.add(profile.id);
-			if (typeof profile.name !== 'string' || !profile.name) {
-				throw new Error('Invalid migrated profile name.');
-			}
-		}
-		await fs.promises.writeFile(join(stage, 'profiles.json'), JSON.stringify({
+		const catalog = validateWebProfileCatalog({
 			profiles: migration.profiles,
 			associations: migration.associations ?? {},
-		}, undefined, 2), { mode: 0o600 });
+		}, 'migrated');
+		const profileIds = new Set(catalog.profiles.map(profile => profile.id));
+		await fs.promises.writeFile(join(stage, 'profiles.json'), JSON.stringify(catalog, undefined, 2), { mode: 0o600 });
 
 		for (const state of migration.state) {
 			const databasePath = resolveMigratedStatePath(join(stage, 'State'), state.id, profileIds);
@@ -286,11 +343,21 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 				await database.close();
 			}
 		}
+
+		await this.options.beforeUploadLeaseRefresh?.();
+		const current = this.readManifest();
+		if (current?.state !== 'staging' || !current.lease || current.generation !== manifest.generation || current.lease.owner !== manifest.lease?.owner) {
+			throw new Error('Migration lease or generation does not match.');
+		}
+		await this.writeManifest({
+			...current,
+			lease: { owner: current.lease.owner, expiresAt: this.now() + this.leaseMs },
+		});
 	}
 
 	private async renew(owner: unknown, generation: unknown): Promise<{ generation: number; expiresAt: number }> {
 		const manifest = this.assertLease(owner, generation);
-		const expiresAt = Date.now() + LEASE_MS;
+		const expiresAt = this.now() + this.leaseMs;
 		await this.writeManifest({ ...manifest, lease: { owner: manifest.lease!.owner, expiresAt } });
 		return { generation: manifest.generation, expiresAt };
 	}
@@ -298,6 +365,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 	private async commit(owner: unknown, generation: unknown): Promise<{ committed: boolean; generation: number; profiles?: readonly IUserDataProfile[] }> {
 		const manifest = this.readManifest();
 		if (manifest?.state === 'ready') {
+			this.profilesService!.assertCatalogReady();
 			return { committed: false, generation: manifest.generation, profiles: this.profilesService!.profiles };
 		}
 		const claimed = this.assertLease(owner, generation);
@@ -334,6 +402,9 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		await this.recoverExpiredLease();
 		const current = this.readManifest();
 		if (current?.state === 'ready' || current?.state === 'staging') {
+			if (current.state === 'ready') {
+				this.profilesService!.assertCatalogReady();
+			}
 			return { committed: false, generation: current.generation, profiles: current.state === 'ready' ? this.profilesService!.profiles : undefined };
 		}
 		const claim = await this.claim();
@@ -346,6 +417,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		if (manifest?.state !== 'ready') {
 			throw new Error('Server user data must be initialized before it can be reset.');
 		}
+		this.profilesService!.assertCatalogReady();
 		await this.storageHost!.reset();
 		await fs.promises.rm(this.userHome, { recursive: true, force: true });
 		await fs.promises.mkdir(this.userHome, { recursive: true, mode: 0o700 });
@@ -366,7 +438,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		if (manifest?.state !== 'staging' || typeof owner !== 'string' || owner !== manifest.lease?.owner || generation !== manifest.generation) {
 			throw new Error('Migration lease or generation does not match.');
 		}
-		if (manifest.lease.expiresAt <= Date.now()) {
+		if (manifest.lease.expiresAt <= this.now()) {
 			throw new Error('Migration lease has expired.');
 		}
 		return manifest;
@@ -374,7 +446,7 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 
 	private async recoverExpiredLease(): Promise<void> {
 		const manifest = this.readManifest();
-		if (manifest?.state !== 'staging' || (manifest.lease?.expiresAt ?? 0) > Date.now()) {
+		if (manifest?.state !== 'staging' || (manifest.lease?.expiresAt ?? 0) > this.now()) {
 			return;
 		}
 		await fs.promises.rm(this.stagingHome, { recursive: true, force: true });
@@ -401,6 +473,14 @@ export class HucodeWebUserDataServer extends Disposable implements IHucodeWebUse
 		const temporary = `${this.manifestPath}.tmp`;
 		await fs.promises.writeFile(temporary, JSON.stringify(manifest, undefined, 2), { mode: 0o600 });
 		await fs.promises.rename(temporary, this.manifestPath);
+	}
+
+	private now(): number {
+		return this.options.now?.() ?? Date.now();
+	}
+
+	private get leaseMs(): number {
+		return this.options.leaseMs ?? DEFAULT_LEASE_MS;
 	}
 }
 
@@ -456,6 +536,30 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
 function respondJson(res: http.ServerResponse, status: number, value: unknown): void {
 	res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
 	res.end(JSON.stringify(value));
+}
+
+function holdResponseLease(res: http.ServerResponse, lease: IDisposable | undefined): () => void {
+	if (!lease) {
+		return () => undefined;
+	}
+	if (typeof res.on !== 'function' || typeof res.removeListener !== 'function') {
+		return () => lease.dispose();
+	}
+	let released = false;
+	const release = () => {
+		if (released) {
+			return;
+		}
+		released = true;
+		res.removeListener('finish', release);
+		res.removeListener('close', release);
+		res.removeListener('error', release);
+		lease.dispose();
+	};
+	res.on('finish', release);
+	res.on('close', release);
+	res.on('error', release);
+	return () => undefined;
 }
 
 function hasJsonContentType(headers: http.IncomingHttpHeaders | undefined): boolean {

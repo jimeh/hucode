@@ -103,7 +103,6 @@ import { IMcpGalleryManifestService } from '../../platform/mcp/common/mcpGallery
 import { McpGalleryManifestIPCService } from '../../platform/mcp/common/mcpGalleryManifestServiceIpc.js';
 import { SANDBOX_HELPER_CHANNEL_NAME, SandboxHelperChannel } from '../../platform/sandbox/common/sandboxHelperIpc.js';
 import { SandboxHelperService } from '../../platform/sandbox/node/sandboxHelper.js';
-import { HucodeWebUserDataProfilesChannel } from './hucodeWebUserDataProfiles.js';
 import { HucodeWebUserDataServer, IHucodeWebUserDataServer } from './hucodeWebUserDataServer.js';
 
 const eventPrefix = 'monacoworkbench';
@@ -154,6 +153,12 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 	const configurationService = new ConfigurationService(environmentService.machineSettingsResource, fileService, new NullPolicyService(), logService);
 	services.set(IConfigurationService, configurationService);
 
+	const serverLifetimeService = new ServerLifetimeService({
+		enableAutoShutdown: !!args['enable-remote-auto-shutdown'],
+		shutdownWithoutDelay: !!args['remote-auto-shutdown-without-delay'],
+	}, logService);
+	services.set(IServerLifetimeService, serverLifetimeService);
+
 	// User Data Profiles
 	const userDataProfilesService = new ServerUserDataProfilesService(uriIdentityService, environmentService, fileService, logService);
 	services.set(IUserDataProfilesService, userDataProfilesService);
@@ -172,13 +177,16 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		fileService,
 		uriIdentityService,
 		logService,
+		{
+			acquireOperationLease: () => serverLifetimeService.active('hucode-user-data-operation'),
+			acquireResponseLease: () => serverLifetimeService.active('hucode-user-data-response'),
+		},
 	);
 	services.set(IHucodeWebUserDataServer, hucodeWebUserDataServer);
 	disposables.add(hucodeWebUserDataServer);
 	if (hucodeWebUserDataServer.enabled) {
 		socketServer.registerChannel('storage', hucodeWebUserDataServer.storageChannel!);
-		socketServer.registerChannel('hucodeWebUserDataProfiles', new HucodeWebUserDataProfilesChannel(
-			hucodeWebUserDataServer.profilesService!,
+		socketServer.registerChannel('hucodeWebUserDataProfiles', hucodeWebUserDataServer.createProfilesChannel(
 			(ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority),
 		));
 	}
@@ -260,12 +268,6 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 	);
 	const ptyHostService = instantiationService.createInstance(PtyHostService, ptyHostStarter);
 	services.set(IPtyService, ptyHostService);
-
-	const serverLifetimeService = instantiationService.createInstance(ServerLifetimeService, {
-		enableAutoShutdown: !!args['enable-remote-auto-shutdown'],
-		shutdownWithoutDelay: !!args['remote-auto-shutdown-without-delay'],
-	});
-	services.set(IServerLifetimeService, serverLifetimeService);
 
 	// ---- Agent host wiring -------------------------------------------------
 	//

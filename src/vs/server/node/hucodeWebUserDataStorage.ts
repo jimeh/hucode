@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import { Queue } from '../../base/common/async.js';
 import { Emitter, Event } from '../../base/common/event.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import { Disposable, IDisposable } from '../../base/common/lifecycle.js';
 import { join } from '../../base/common/path.js';
 import { IServerChannel } from '../../base/parts/ipc/common/ipc.js';
 import { Storage } from '../../base/parts/storage/common/storage.js';
@@ -41,6 +41,7 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 		private readonly stateHome: string,
 		private readonly isKnownProfile: (id: string) => boolean,
 		private readonly logService: ILogService,
+		private readonly acquireOperationLease?: () => IDisposable,
 	) {
 		super();
 	}
@@ -151,7 +152,14 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 		if (this.closing) {
 			return Promise.reject(new Error('Serve-web user-data storage is shutting down.'));
 		}
-		return this.operations.queue(operation) as Promise<T>;
+		const lease = this.acquireOperationLease?.();
+		return this.operations.queue(async () => {
+			try {
+				return await operation();
+			} finally {
+				lease?.dispose();
+			}
+		}) as Promise<T>;
 	}
 
 	private async getEntry(
@@ -235,7 +243,7 @@ export class HucodeWebUserDataStorageHost extends Disposable {
 
 /** Returns whether an identifier is safe for use as a profile path segment. */
 export function isSafeProfileId(id: unknown): id is string {
-	return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id);
+	return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id) && !/^\.+$/.test(id);
 }
 
 class HucodeWebUserDataStorageChannel implements IServerChannel {

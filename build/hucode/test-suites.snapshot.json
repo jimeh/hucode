@@ -34,6 +34,7 @@
 		"src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts",
 		"src/vs/platform/list/test/browser/hucodeListService.test.ts",
 		"src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts",
+		"src/vs/platform/storage/test/electron-main/hucodeStorageIpc.test.ts",
 		"src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts",
 		"src/vs/platform/windows/test/electron-main/hucodeWindowsStateHandler.test.ts",
 		"src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
