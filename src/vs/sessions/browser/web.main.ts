@@ -82,7 +82,14 @@ export class SessionsBrowserMain extends BrowserMain {
 		serviceCollection.set(IWorkbenchConfigurationService, configurationService);
 
 		// Storage
-		const storageService = await this.createStorageService(workspaceIdentifier, logService, userDataProfileService);
+		const storageService = await this.createStorageService(
+			workspaceIdentifier,
+			logService,
+			userDataProfileService,
+			_userDataProfilesService,
+			_remoteAgentService,
+			environmentService,
+		);
 		serviceCollection.set(IStorageService, storageService);
 
 		// Workspace Trust Service
