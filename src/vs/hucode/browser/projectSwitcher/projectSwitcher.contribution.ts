@@ -1464,7 +1464,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				return;
 			}
 
-			this.setProjectCollapsed(item, event.node.collapsed);
+			this.handleProjectCollapseChange(item, event.node.collapsed);
 		}));
 		this._register(this.tree.onContextMenu(event => this.onContextMenu(event)));
 		this._register(this.tree.onDidOpen(event => {
@@ -1838,7 +1838,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		toggleProjectTreeItemCollapsed(
 			this.tree,
 			item,
-			collapsed => this.setProjectCollapsed(item, collapsed)
+			collapsed => this.handleProjectCollapseChange(item, collapsed)
 		);
 	}
 
@@ -2255,9 +2255,8 @@ export class ProjectSwitcherWidget extends Disposable {
 				this.collapsedOmniSections
 			);
 
-		if (isWorktreeItem(currentWorktree) &&
-			!isHiddenByCollapsedOmniSection
-		) {
+		let isHiddenByCollapsedProject = false;
+		if (isWorktreeItem(currentWorktree)) {
 			const projectItem = this.itemsById.get(
 				encodeProjectHandle(
 					currentWorktree.projectId,
@@ -2265,8 +2264,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				)
 			);
 			if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
-				tree.expand(projectItem);
-				this.setProjectCollapsed(projectItem, false);
+				isHiddenByCollapsedProject = tree.isCollapsed(projectItem);
 			}
 		}
 
@@ -2274,7 +2272,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		if (!isHiddenByCollapsedOmniSection) {
+		if (!isHiddenByCollapsedOmniSection && !isHiddenByCollapsedProject) {
 			await tree.reveal(currentWorktree);
 		}
 		if (
@@ -2505,18 +2503,34 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
-	private setProjectCollapsed(
+	private handleProjectCollapseChange(
 		item: ProjectSwitcherProjectItem,
 		collapsed: boolean
 	): void {
+		if (this.isSynchronizingTree) {
+			return;
+		}
+
+		if (this.setProjectCollapsed(item, collapsed)) {
+			this.saveState();
+		}
+	}
+
+	private setProjectCollapsed(
+		item: ProjectSwitcherProjectItem,
+		collapsed: boolean
+	): boolean {
+		const wasCollapsed = this.collapsedProjectIds.has(item.id) ||
+			this.collapsedProjectIds.has(item.projectId);
 		if (collapsed) {
 			this.collapsedProjectIds.delete(item.projectId);
 			this.collapsedProjectIds.add(item.id);
-			return;
+			return !wasCollapsed;
 		}
 
 		this.collapsedProjectIds.delete(item.id);
 		this.collapsedProjectIds.delete(item.projectId);
+		return wasCollapsed;
 	}
 }
 
