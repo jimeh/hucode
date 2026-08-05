@@ -1194,24 +1194,20 @@ suite('ProjectSwitcherContribution', () => {
 			collapsedProjectIds,
 			isSynchronizingTree: true,
 			saveState: () => savedStates.push([...collapsedProjectIds]),
-		}) as {
+		}) as unknown as {
 			isSynchronizingTree: boolean;
+			handleProjectCollapseChange(
+				item: ProjectSwitcherProjectItem,
+				collapsed: boolean
+			): void;
 		};
-		const handleCollapse = Reflect.get(
-			ProjectSwitcherWidget.prototype,
-			'handleProjectCollapseChange'
-		) as (
-			this: object,
-			item: ProjectSwitcherProjectItem,
-			collapsed: boolean
-		) => void;
 		const project = projectItem();
 
-		handleCollapse.call(host, project, true);
+		host.handleProjectCollapseChange(project, true);
 		host.isSynchronizingTree = false;
-		handleCollapse.call(host, project, true);
-		handleCollapse.call(host, project, true);
-		handleCollapse.call(host, project, false);
+		host.handleProjectCollapseChange(project, true);
+		host.handleProjectCollapseChange(project, true);
+		host.handleProjectCollapseChange(project, false);
 
 		assert.deepStrictEqual(savedStates, [
 			[project.id],
@@ -1252,13 +1248,11 @@ suite('ProjectSwitcherContribution', () => {
 				setFocus: (items: ProjectSwitcherItem[]) => focused.push(items),
 			},
 			viewItemContext: { set: () => undefined },
-		});
-		const updateSelection = Reflect.get(
-			ProjectSwitcherWidget.prototype,
-			'updateCurrentWorktreeSelection'
-		) as (this: object) => Promise<void>;
+		}) as unknown as {
+			updateCurrentWorktreeSelection(): Promise<void>;
+		};
 
-		await updateSelection.call(host);
+		await host.updateCurrentWorktreeSelection();
 
 		assert.deepStrictEqual({ reveals, selected, focused }, {
 			reveals: 0,
@@ -1292,13 +1286,11 @@ suite('ProjectSwitcherContribution', () => {
 				setFocus: () => undefined,
 			},
 			viewItemContext: { set: () => undefined },
-		});
-		const updateSelection = Reflect.get(
-			ProjectSwitcherWidget.prototype,
-			'updateCurrentWorktreeSelection'
-		) as (this: object) => Promise<void>;
+		}) as unknown as {
+			updateCurrentWorktreeSelection(): Promise<void>;
+		};
 
-		await updateSelection.call(host);
+		await host.updateCurrentWorktreeSelection();
 
 		assert.deepStrictEqual({
 			expanded,

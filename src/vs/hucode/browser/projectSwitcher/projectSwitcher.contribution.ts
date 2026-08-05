@@ -2508,6 +2508,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
+	/** Persists user-authored collapse changes while ignoring tree synchronization. */
 	private handleProjectCollapseChange(
 		item: ProjectSwitcherProjectItem,
 		collapsed: boolean
@@ -2521,6 +2522,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
+	/** Updates the persisted project collapse set and reports whether it changed. */
 	private setProjectCollapsed(
 		item: ProjectSwitcherProjectItem,
 		collapsed: boolean
