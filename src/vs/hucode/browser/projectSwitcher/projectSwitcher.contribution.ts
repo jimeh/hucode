@@ -2264,7 +2264,12 @@ export class ProjectSwitcherWidget extends Disposable {
 				)
 			);
 			if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
-				isHiddenByCollapsedProject = tree.isCollapsed(projectItem);
+				if (this.environmentService.isOmniWindow) {
+					isHiddenByCollapsedProject = tree.isCollapsed(projectItem);
+				} else {
+					tree.expand(projectItem);
+					this.setProjectCollapsed(projectItem, false);
+				}
 			}
 		}
 

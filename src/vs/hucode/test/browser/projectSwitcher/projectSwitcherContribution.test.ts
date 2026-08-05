@@ -1267,6 +1267,50 @@ suite('ProjectSwitcherContribution', () => {
 		});
 	});
 
+	test('reveals the active worktree outside the Omni shell', async () => {
+		const expanded: ProjectSwitcherItem[] = [];
+		const revealed: ProjectSwitcherItem[] = [];
+		const project = projectItem();
+		const current = worktreeItem({ isActive: true });
+		const collapsedProjectIds = new Set([project.id]);
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			itemsById: new Map<string, ProjectSwitcherItem>([
+				[project.id, project],
+				[current.id, current],
+			]),
+			collapsedProjectIds,
+			collapsedOmniSections: new Set<string>(),
+			environmentService: { isOmniWindow: false },
+			getActiveWorktreePath: () => current.worktreePath,
+			tree: {
+				hasElement: () => true,
+				expand: (item: ProjectSwitcherItem) => expanded.push(item),
+				reveal: async (item: ProjectSwitcherItem) => {
+					revealed.push(item);
+				},
+				setSelection: () => undefined,
+				setFocus: () => undefined,
+			},
+			viewItemContext: { set: () => undefined },
+		});
+		const updateSelection = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'updateCurrentWorktreeSelection'
+		) as (this: object) => Promise<void>;
+
+		await updateSelection.call(host);
+
+		assert.deepStrictEqual({
+			expanded,
+			revealed,
+			collapsedProjectIds: [...collapsedProjectIds],
+		}, {
+			expanded: [project],
+			revealed: [current],
+			collapsedProjectIds: [],
+		});
+	});
+
 	test('does not select an item after an asynchronous reveal is superseded', async () => {
 		const selected: ProjectSwitcherItem[][] = [];
 		const focused: ProjectSwitcherItem[][] = [];
