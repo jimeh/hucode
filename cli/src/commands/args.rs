@@ -1056,6 +1056,13 @@ mod tests {
 	}
 
 	#[test]
+	fn serve_web_accepts_server_user_data_storage() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--user-data-storage=server"]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
+	}
+
+	#[test]
 	fn serve_web_rejects_unknown_user_data_storage() {
 		let error = IntegratedCli::try_parse_from([
 			"hucode",
