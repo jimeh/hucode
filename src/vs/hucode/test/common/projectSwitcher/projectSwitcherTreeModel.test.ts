@@ -626,6 +626,42 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.strictEqual(worktree.contextValue, MAIN_WORKTREE_CONTEXT_VALUE);
 	});
 
+	test('labels the exact home parent with a trailing slash', () => {
+		const homePath = '/home/tester';
+		const model = buildProjectSwitcherTreeModel({
+			projects: [
+				{
+					...createProject({
+						id: 'dotfiles',
+						worktrees: [createWorktree(`${homePath}/.dotfiles`)],
+					}),
+					rootUri: URI.file(`${homePath}/.dotfiles`),
+				},
+				{
+					...createProject({
+						id: 'hucode',
+						worktrees: [
+							createWorktree(`${homePath}/Projects/hucode`),
+						],
+					}),
+					rootUri: URI.file(`${homePath}/Projects/hucode`),
+				},
+			],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path === homePath
+				? path
+				: path.replace(homePath, '~'),
+			isOmniWindow: false,
+			hostedWorkspaceState: createHostedState(),
+		});
+
+		assert.deepStrictEqual(
+			model.roots.filter(root => isProjectItem(root.element))
+				.map(root => root.element.description),
+			['~/', '~/Projects']
+		);
+	});
+
 	test('shows duplicate worktree descriptions only in two-line layout', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [
