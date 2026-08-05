@@ -30,6 +30,10 @@ import {
 	Parts,
 } from '../../workbench/services/layout/browser/layoutService.js';
 import { IHucodeShellService } from '../common/omniWindow.js';
+import {
+	createLegacyHucodeHostedShellActionRequest,
+	HucodeHostedShellAction,
+} from '../../platform/window/common/hucodeHostedShellActions.js';
 import { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID } from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { Menus } from './menus.js';
@@ -127,7 +131,9 @@ registerAction2(class extends Action2 {
 
 			const didForward = await accessor.get(IHucodeShellService).runActionInShell(
 				getWindowId(mainWindow),
-				{ id: TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID, from: 'keybinding' }
+				createLegacyHucodeHostedShellActionRequest(
+					HucodeHostedShellAction.ToggleProjectsSidebar
+				)
 			);
 			if (!didForward) {
 				projectsSidebarHidden.set(wasHidden);

@@ -34,6 +34,10 @@ import {
 	IOmniWorkspaceRestoreEntry,
 	IRectangle,
 } from '../../platform/window/common/window.js';
+import {
+	createLegacyHucodeHostedShellActionRequest,
+	getHucodeHostedShellAction,
+} from '../../platform/window/common/hucodeHostedShellActions.js';
 import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
 import { getProjectManagerPathComparisonKey } from
@@ -2275,6 +2279,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	runActionInShell(request: INativeRunActionInWindowRequest): boolean {
+		const action = getHucodeHostedShellAction(request.id);
+		if (!action) {
+			this.logService.warn(
+				'[HucodeShellMainService] Rejected hosted shell action from ' +
+				`legacy desktop connection for Omni window ${this.window.id}: ` +
+				'unsupported command id.'
+			);
+			return false;
+		}
+
 		const webContents = this.window.win?.webContents;
 		if (!webContents || webContents.isDestroyed()) {
 			return false;
@@ -2283,7 +2297,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		try {
 			webContents.send(
 				'vscode:runAction',
-				this.withOmniForwardingMarker(request)
+				this.withOmniForwardingMarker(
+					createLegacyHucodeHostedShellActionRequest(action)
+				)
 			);
 			return true;
 		} catch (error) {
