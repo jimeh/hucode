@@ -19,6 +19,8 @@ import { IThemeService } from '../../../platform/theme/common/themeService.js';
 import { Part } from '../../../workbench/browser/part.js';
 import { SIDE_BAR_FOREGROUND } from '../../../workbench/common/theme.js';
 import {
+	FLOATING_PANEL_INNER_MARGIN,
+	FLOATING_PANEL_MARGIN,
 	IWorkbenchLayoutService,
 	Parts,
 } from '../../../workbench/services/layout/browser/layoutService.js';
@@ -37,6 +39,9 @@ import { ProjectSwitcherWidget } from
 	'../projectSwitcher/projectSwitcher.contribution.js';
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
+
+// Keep in sync with the floating Projects card geometry in media/omniHost.css.
+const MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET = 1;
 
 /**
  * Shell-owned Projects surface for Omni windows.
@@ -126,9 +131,41 @@ export class ProjectsPart extends Part {
 	}
 
 	override layout(width: number, height: number, top: number, left: number): void {
+		const floating = this.layoutService.isFloatingPanelsEnabled();
 		super.layout(width, height, top, left);
 		const layout = this.layoutContents(width, height);
-		this.widget?.layout(layout.contentSize.width, layout.contentSize.height);
+		let contentWidth = layout.contentSize.width;
+		let contentHeight = layout.contentSize.height;
+		if (floating) {
+			const borderTotal = 2;
+			const horizontalCardInsets = (
+				FLOATING_PANEL_MARGIN * 2 +
+				borderTotal
+			);
+			const verticalCardInsets = (
+				FLOATING_PANEL_MARGIN * 2 +
+				FLOATING_PANEL_INNER_MARGIN +
+				MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET +
+				borderTotal
+			);
+			contentWidth = Math.max(0, contentWidth - horizontalCardInsets);
+			contentHeight = Math.max(0, contentHeight - verticalCardInsets);
+		}
+
+		this.widget?.layout(contentWidth, contentHeight);
+	}
+
+	/** Recomputes Projects geometry after Modern UI changes at the same grid size. */
+	relayoutForModernUI(): void {
+		const dimension = this.getRelayoutDimension();
+		if (dimension && this.contentPosition) {
+			this.layout(
+				dimension.width,
+				dimension.height,
+				this.contentPosition.top,
+				this.contentPosition.left
+			);
+		}
 	}
 
 	focus(): void {

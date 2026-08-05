@@ -175,6 +175,59 @@
 	z-index: 36;
 }
 
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar > .hucode-omni-projects-title {
+	height: 32px;
+	border-bottom-color: transparent;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.hucode-omni-projects-title-navigation-actions,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.hucode-omni-projects-title-actions {
+	transform: translateY(2.5px);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.monaco-sash.vertical:not(.part .monaco-sash)::before {
+	top: calc(32px + var(--vscode-spacing-size20) + 1px);
+	bottom: calc(var(--vscode-spacing-size40) * 2);
+	height: auto;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	border: 0 !important;
+	border-radius: 0;
+	background: transparent !important;
+	overflow: visible;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar > .content {
+	/* The shell title is 32px; the extra pixel aligns this card with the
+	 * standard workbench cards at y=35. Keep the inset arithmetic in sync
+	 * with ProjectsPart.layout. */
+	box-sizing: border-box;
+	width: calc(100% - (var(--vscode-spacing-size40) * 2)) !important;
+	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - (var(--vscode-spacing-size40) * 2)) !important;
+	margin: calc(var(--vscode-spacing-size20) + 1px) 0
+		calc(var(--vscode-spacing-size40) * 2)
+		calc(var(--vscode-spacing-size40) * 2);
+	border: 1px solid var(--vscode-surface-border, var(--vscode-widget-border, transparent)) !important;
+	border-radius: var(--vscode-cornerRadius-large);
+	background: var(--vscode-surface-background);
+	overflow: hidden;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar::after {
+	display: none;
+}
+
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.part.hucode-omni-host > .content .monaco-editor,
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
