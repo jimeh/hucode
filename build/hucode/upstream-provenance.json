@@ -4,7 +4,7 @@
 		{
 			"path": "cli/src/commands/args.rs",
 			"kind": "upstream-patch",
-			"reason": "Hucode adds the typed serve-web user-data storage mode while retaining browser storage as the upstream-compatible default",
+			"reason": "Hucode adds the typed serve-web user-data storage mode and defaults Hucode launches to server-backed storage",
 			"upstream": {
 				"path": "cli/src/commands/args.rs",
 				"lastSyncedBaseline": "1.131.0",

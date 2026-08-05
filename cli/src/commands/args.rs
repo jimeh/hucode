@@ -221,7 +221,7 @@ pub struct ServeWebArgs {
 	#[clap(long)]
 	pub server_data_dir: Option<String>,
 	/// Selects where serve-web settings, profiles, and workbench state are stored.
-	#[clap(long, value_enum, default_value_t = ServeWebUserDataStorage::Browser)]
+	#[clap(long, value_enum, default_value_t = ServeWebUserDataStorage::Server)]
 	pub user_data_storage: ServeWebUserDataStorage,
 	/// Serve the regular workbench at the root URL instead of the Hucode Omni
 	/// Projects shell.
@@ -246,8 +246,8 @@ pub struct ServeWebArgs {
 
 #[derive(ValueEnum, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ServeWebUserDataStorage {
-	#[default]
 	Browser,
+	#[default]
 	Server,
 }
 
@@ -1042,21 +1042,17 @@ mod tests {
 	}
 
 	#[test]
-	fn serve_web_stores_user_data_in_browser_by_default() {
+	fn serve_web_stores_user_data_on_server_by_default() {
 		let args = parse_serve_web(&["hucode", "serve-web"]);
 
-		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Browser);
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
 	}
 
 	#[test]
-	fn serve_web_accepts_server_user_data_storage() {
-		let args = parse_serve_web(&[
-			"hucode",
-			"serve-web",
-			"--user-data-storage=server",
-		]);
+	fn serve_web_accepts_browser_user_data_storage() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--user-data-storage=browser"]);
 
-		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Browser);
 	}
 
 	#[test]
