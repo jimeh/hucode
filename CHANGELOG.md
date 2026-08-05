@@ -2,6 +2,18 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.65 - 2026-08-05
+
+### Features
+
+- **cli:** default serve-web user data to server storage (#165)
+- **omni:** support Modern UI in Projects sidebar (#162)
+
+### Bug Fixes
+
+- **omni:** persist collapsed project state (#164)
+- **omni:** show the home parent as ~/ in Projects (#163)
+
 ## 0.0.64 - 2026-08-02
 
 ### Features
