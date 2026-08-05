@@ -121,10 +121,10 @@ under the server user-data path and is active unless serve-web runs with
 headers are rejected and POST bodies must be JSON) so the mutating API stays
 safe even with `--without-connection-token`.
 
-Serve-web user data has two startup modes. `browser`, the default, retains the
-upstream IndexedDB/local-storage ownership. `server` makes the separate
-`<server-data-dir>/data/WebUser` namespace authoritative for profile files,
-the web profile catalog, and application/profile/workspace state. The Rust CLI
+Serve-web user data has two startup modes. `server`, the default, makes the
+separate `<server-data-dir>/data/WebUser` namespace authoritative for profile
+files, the web profile catalog, and application/profile/workspace state.
+`browser` retains the upstream IndexedDB/local-storage ownership. The Rust CLI
 selects the mode with `--user-data-storage`, and the Node server injects that
 trusted choice into every regular, Omni-shell, and hosted-workbench route.
 Before `BrowserMain` constructs profile or storage services, the Hucode web

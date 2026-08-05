@@ -116,13 +116,14 @@ server listens on localhost and protects access with a connection token. Run
 `hucode serve-web --help` for bind, port, authentication, and browser-launch
 options.
 
-Settings, keybindings, profiles, and UI/extension state remain browser-local by
-default. To share them between browsers and devices that use the same server,
-start serve-web with `--user-data-storage=server`. On first use, Hucode offers
-to migrate supported data from the current browser or start with an empty
-server profile. Secrets, sign-ins, cookies, and connection credentials always
-remain in each browser. Server mode stores non-secret user data below the
-server data directory, so back up that directory with the rest of the server.
+Settings, keybindings, profiles, and UI/extension state are stored on the server
+by default, so browsers and devices using the same server share them. On first
+use, Hucode offers to migrate supported data from the current browser or start
+with an empty server profile. Pass `--user-data-storage=browser` to keep this
+data browser-local instead. Secrets, sign-ins, cookies, and connection
+credentials always remain in each browser. Server mode stores non-secret user
+data below the server data directory, so back up that directory with the rest
+of the server.
 
 ## Build From Source
 
