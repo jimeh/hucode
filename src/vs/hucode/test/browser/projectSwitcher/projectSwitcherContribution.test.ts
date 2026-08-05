@@ -61,6 +61,7 @@ import {
 import {
 	ProjectSwitcherAccessibilityProvider,
 	ProjectSwitcherDragAndDrop,
+	getProjectSwitcherItemHeight,
 	ProjectSwitcherRenderer,
 	ProjectSwitcherWidget,
 } from
@@ -73,6 +74,46 @@ import {
 
 suite('ProjectSwitcherContribution', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('uses Modern UI pane-header height only for Omni sections', () => {
+		const section: ProjectSwitcherSectionItem = {
+			id: PROJECTS_SECTION_HANDLE,
+			handle: PROJECTS_SECTION_HANDLE,
+			kind: 'section',
+			sectionKind: 'projects',
+			label: 'Projects',
+			contextValue: 'hucode-omni-section',
+		};
+		const workbench = retainedWorkbenchItem();
+
+		assert.deepStrictEqual({
+			classicSection: getProjectSwitcherItemHeight(
+				section,
+				'compact',
+				false
+			),
+			modernSection: getProjectSwitcherItemHeight(
+				section,
+				'compact',
+				true
+			),
+			modernCompactItem: getProjectSwitcherItemHeight(
+				workbench,
+				'compact',
+				true
+			),
+			modernTwoLineItem: getProjectSwitcherItemHeight(
+				workbench,
+				'twoLine',
+				true
+			),
+		}, {
+			classicSection: 22,
+			modernSection: 28,
+			modernCompactItem: 22,
+			modernTwoLineItem: 44,
+		});
+	});
 
 	test('keeps complete project catalog reconciliation in the shell',
 		async () => {

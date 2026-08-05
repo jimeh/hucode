@@ -36,6 +36,43 @@ suite('Omni Parts', () => {
 		assert.strictEqual(focusCount, 1);
 	});
 
+	test('ProjectsPart keeps navigation outside the floating body card', () => {
+		const element = mainWindow.document.createElement('div');
+		const layouts: Array<{ width: number; height: number }> = [];
+		const widgetLayouts: Array<{ width: number; height: number }> = [];
+		let floating = true;
+		const host = prototypeHost(ProjectsPart.prototype, {
+			element,
+			layoutService: { isFloatingPanelsEnabled: () => floating },
+			layoutContents: (width: number, height: number) => {
+				layouts.push({ width, height });
+				return { contentSize: { width, height } };
+			},
+			widget: {
+				layout: (width: number, height: number) =>
+					widgetLayouts.push({ width, height }),
+			},
+		});
+
+		ProjectsPart.prototype.layout.call(host, 300, 900, 0, 0);
+		floating = false;
+		ProjectsPart.prototype.relayoutForModernUI.call(host);
+
+		assert.deepStrictEqual({
+			layouts,
+			widgetLayouts,
+		}, {
+			layouts: [
+				{ width: 300, height: 900 },
+				{ width: 300, height: 900 },
+			],
+			widgetLayouts: [
+				{ width: 290, height: 887 },
+				{ width: 300, height: 900 },
+			],
+		});
+	});
+
 	test('OmniHostPart exposes a loaded active workbench', () => {
 		const harness = createOmniHostRenderHarness({
 			activeInstanceId: 'active',

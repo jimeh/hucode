@@ -120,6 +120,40 @@
 	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
 }
 
+/* Omni sections are tree nodes rather than ViewPane headers, so mirror the
+ * Modern UI pane-header and row insets explicitly when the setting is active. */
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view .monaco-list-row {
+	left: var(--vscode-spacing-size40, 4px);
+	right: var(--vscode-spacing-size40, 4px);
+	width: auto;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:has(.hucode-project-switcher-section) {
+	background-color: var(--vscode-sideBar-background) !important;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not(:first-child):has(.hucode-project-switcher-section)::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: var(--vscode-spacing-size40, 4px);
+	right: var(--vscode-spacing-size40, 4px);
+	height: 1px;
+	background-color: var(--vscode-sideBarSectionHeader-border);
+	pointer-events: none;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row.hucode-project-switcher-active-row {
+	box-shadow: none;
+}
+
 .hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
 	.hucode-project-switcher-label {
 	font-weight: 600;

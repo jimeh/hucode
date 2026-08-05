@@ -15,7 +15,7 @@ import { isFullscreen, onDidChangeFullscreen, isChrome, isFirefox, isSafari } fr
 import { mark } from '../../base/common/performance.js';
 import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/common/platform.js';
-import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString } from '../../workbench/services/layout/browser/layoutService.js';
+import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString, LayoutSettings } from '../../workbench/services/layout/browser/layoutService.js';
 import { ILayoutOffsetInfo } from '../../platform/layout/browser/layoutService.js';
 import { Part } from '../../workbench/browser/part.js';
 import { Direction, ISerializableView, ISerializedGrid, IViewSize, SerializableGrid } from '../../base/browser/ui/grid/grid.js';
@@ -93,7 +93,9 @@ enum LayoutClasses {
 	OMNI_HOST_HIDDEN = 'noomnihost',
 	STATUSBAR_HIDDEN = 'nostatusbar',
 	FULLSCREEN = 'fullscreen',
-	MAXIMIZED = 'maximized'
+	MAXIMIZED = 'maximized',
+	FLOATING_PANELS = 'floating-panels',
+	STYLE_OVERRIDE = 'style-override'
 }
 
 //#endregion
@@ -268,6 +270,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	private paneCompositeService!: IPaneCompositePartService;
 	private viewDescriptorService!: IViewDescriptorService;
 	private omniHostPart!: OmniHostPart;
+	private configurationService!: IConfigurationService;
 	private readonly isWebOmniShell: boolean;
 
 	//#endregion
@@ -345,7 +348,7 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			instantiationService.invokeFunction(accessor => {
 				const lifecycleService = accessor.get(ILifecycleService);
 				const storageService = accessor.get(IStorageService);
-				const configurationService = accessor.get(IConfigurationService);
+				const configurationService = this.configurationService = accessor.get(IConfigurationService);
 				const hostService = accessor.get(IHostService);
 				const hoverService = accessor.get(IHoverService);
 				const dialogService = accessor.get(IDialogService);
@@ -422,7 +425,14 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 
 	private registerListeners(lifecycleService: ILifecycleService, storageService: IStorageService, configurationService: IConfigurationService, hostService: IHostService, dialogService: IDialogService): void {
 		// Configuration changes
-		this._register(configurationService.onDidChangeConfiguration(e => this.updateFontAliasing(e, configurationService)));
+		this._register(configurationService.onDidChangeConfiguration(e => {
+			this.updateFontAliasing(e, configurationService);
+			if (e.affectsConfiguration(LayoutSettings.MODERN_UI)) {
+				this.updateFloatingPanels();
+				this.projectsPart.relayoutForModernUI();
+				this.layout();
+			}
+		}));
 
 		// Font Info
 		if (isNative) {
@@ -868,7 +878,21 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	isFloatingPanelsEnabled(): boolean {
-		return false; // the Omni window has its own shell layout design
+		return this.configurationService.getValue<boolean>(LayoutSettings.MODERN_UI) === true;
+	}
+
+	private updateFloatingPanels(): void {
+		const enabled = this.isFloatingPanelsEnabled();
+		this.mainContainer.classList.toggle(
+			LayoutClasses.FLOATING_PANELS,
+			enabled
+		);
+		// Keep PartLayout's 32px title calculation in sync before the
+		// Restored-phase style contribution processes the same config event.
+		this.mainContainer.classList.toggle(
+			LayoutClasses.STYLE_OVERRIDE,
+			enabled
+		);
 	}
 
 	getLayoutClasses(): string[] {
@@ -879,7 +903,9 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			!this.partVisibility.auxiliaryBar ? LayoutClasses.AUXILIARYBAR_HIDDEN : undefined,
 			!this.partVisibility.omniHost ? LayoutClasses.OMNI_HOST_HIDDEN : undefined,
 			LayoutClasses.STATUSBAR_HIDDEN, // agents window never has a status bar
-			this.mainWindowFullscreen ? LayoutClasses.FULLSCREEN : undefined
+			this.mainWindowFullscreen ? LayoutClasses.FULLSCREEN : undefined,
+			this.isFloatingPanelsEnabled() ? LayoutClasses.FLOATING_PANELS : undefined,
+			this.isFloatingPanelsEnabled() ? LayoutClasses.STYLE_OVERRIDE : undefined
 		]);
 	}
 

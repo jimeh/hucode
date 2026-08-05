@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Part } from '../../../workbench/browser/part.js';
-import { Parts } from
+import { LayoutSettings, Parts } from
 	'../../../workbench/services/layout/browser/layoutService.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
@@ -30,6 +30,60 @@ suite('Omni Workbench', () => {
 	) => HTMLElement | undefined;
 	const layout = Workbench.prototype.layout as
 		(this: IWorkbenchHost) => void;
+	const updateFloatingPanels = Reflect.get(
+		Workbench.prototype,
+		'updateFloatingPanels'
+	) as (this: IWorkbenchHost) => void;
+
+	test('mirrors the Modern UI setting into Omni layout classes', () => {
+		const enabled = createHost({ modernUI: true });
+		const disabled = createHost({ modernUI: false });
+
+		updateFloatingPanels.call(enabled);
+		updateFloatingPanels.call(disabled);
+
+		assert.deepStrictEqual({
+			enabled: {
+				floating: Workbench.prototype.isFloatingPanelsEnabled.call(enabled),
+				classes: Workbench.prototype.getLayoutClasses.call(enabled),
+				toggles: enabled.classToggles,
+			},
+			disabled: {
+				floating: Workbench.prototype.isFloatingPanelsEnabled.call(disabled),
+				classes: Workbench.prototype.getLayoutClasses.call(disabled),
+				toggles: disabled.classToggles,
+			},
+		}, {
+			enabled: {
+				floating: true,
+				classes: [
+					'nomaineditorarea',
+					'nopanel',
+					'noauxiliarybar',
+					'nostatusbar',
+					'floating-panels',
+					'style-override',
+				],
+				toggles: [
+					{ name: 'floating-panels', force: true },
+					{ name: 'style-override', force: true },
+				],
+			},
+			disabled: {
+				floating: false,
+				classes: [
+					'nomaineditorarea',
+					'nopanel',
+					'noauxiliarybar',
+					'nostatusbar',
+				],
+				toggles: [
+					{ name: 'floating-panels', force: false },
+					{ name: 'style-override', force: false },
+				],
+			},
+		});
+	});
 
 	test('sidebar visibility is idempotent and transfers focus to the host', () => {
 		const host = createHost();
@@ -318,6 +372,9 @@ interface IWorkbenchHost {
 		size: { width: number; height: number };
 	}>;
 	readonly layoutEvents: Array<{ width: number; height: number }>;
+	configurationService: {
+		getValue<T>(key: string): T | undefined;
+	};
 	hideCompositeCount: number;
 	hasFocus(part: Parts): boolean;
 	focusPart(part: Parts): void;
@@ -329,6 +386,7 @@ function createHost(options: {
 	readonly mainContainerDimension?: { width: number; height: number };
 	readonly sidebarSize?: { width: number; height: number };
 	readonly activePanel?: boolean;
+	readonly modernUI?: boolean;
 } = {}): IWorkbenchHost {
 	const parent = options.parent ?? mainWindow.document.createElement('div');
 	const mainContainer = mainWindow.document.createElement('div');
@@ -401,6 +459,11 @@ function createHost(options: {
 			activeGroup: { focus: () => delegatedFocus.push('editor') },
 		},
 		logService: { trace: () => undefined },
+		configurationService: {
+			getValue: <T>(key: string) => key === LayoutSettings.MODERN_UI
+				? options.modernUI as T
+				: undefined,
+		},
 		_onDidLayoutContainer: { fire: () => undefined },
 		_onDidLayoutMainContainer: {
 			fire: (dimension: { width: number; height: number }) =>
