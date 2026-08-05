@@ -5,7 +5,11 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
+import { Emitter, Event } from '../../../base/common/event.js';
+import { IDisposable } from '../../../base/common/lifecycle.js';
 import { Part } from '../../../workbench/browser/part.js';
+import { IConfigurationChangeEvent } from
+	'../../../platform/configuration/common/configuration.js';
 import { LayoutSettings, Parts } from
 	'../../../workbench/services/layout/browser/layoutService.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -13,7 +17,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 import { Workbench } from '../../browser/workbench.js';
 
 suite('Omni Workbench', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const setSideBarHidden = Reflect.get(
 		Workbench.prototype,
@@ -34,6 +38,17 @@ suite('Omni Workbench', () => {
 		Workbench.prototype,
 		'updateFloatingPanels'
 	) as (this: IWorkbenchHost) => void;
+	const registerListeners = Reflect.get(
+		Workbench.prototype,
+		'registerListeners'
+	) as (
+		this: IWorkbenchHost,
+		lifecycleService: unknown,
+		storageService: unknown,
+		configurationService: unknown,
+		hostService: unknown,
+		dialogService: unknown
+	) => void;
 
 	test('mirrors the Modern UI setting into Omni layout classes', () => {
 		const enabled = createHost({ modernUI: true });
@@ -82,6 +97,64 @@ suite('Omni Workbench', () => {
 					{ name: 'style-override', force: false },
 				],
 			},
+		});
+	});
+
+	test('relayouts the Omni shell when the Modern UI setting changes', () => {
+		const configurationChanges = disposables.add(
+			new Emitter<IConfigurationChangeEvent>()
+		);
+		let modernUI = false;
+		let projectsRelayouts = 0;
+		let workbenchRelayouts = 0;
+		const configurationService = {
+			getValue: <T>(key: string) => key === LayoutSettings.MODERN_UI
+				? modernUI as T
+				: undefined,
+			onDidChangeConfiguration: configurationChanges.event,
+		};
+		const host = createHost({
+			registerDisposable: disposable => disposables.add(disposable),
+		});
+		host.configurationService = configurationService;
+		host.projectsPart.relayoutForModernUI = () => projectsRelayouts++;
+		host.layout = () => workbenchRelayouts++;
+
+		registerListeners.call(
+			host,
+			{
+				onWillShutdown: Event.None,
+				onDidShutdown: Event.None,
+			},
+			{
+				onWillSaveState: Event.None,
+				flush: () => undefined,
+			},
+			configurationService,
+			{ onDidChangeFocus: Event.None },
+			{
+				onWillShowDialog: Event.None,
+				onDidShowDialog: Event.None,
+			}
+		);
+
+		modernUI = true;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === LayoutSettings.MODERN_UI,
+		} as unknown as IConfigurationChangeEvent);
+
+		assert.deepStrictEqual({
+			classes: host.classToggles,
+			projectsRelayouts,
+			workbenchRelayouts,
+		}, {
+			classes: [
+				{ name: 'floating-panels', force: true },
+				{ name: 'style-override', force: true },
+			],
+			projectsRelayouts: 1,
+			workbenchRelayouts: 1,
 		});
 	});
 
@@ -356,7 +429,10 @@ interface IWorkbenchHost {
 		getActivePaneComposite(): object | undefined;
 		hideActivePaneComposite(): void;
 	};
-	projectsPart: { focus(): void };
+	projectsPart: {
+		focus(): void;
+		relayoutForModernUI(): void;
+	};
 	omniHostPart: { focus(): void };
 	editorGroupService: {
 		getPart(container: HTMLElement): Part | undefined;
@@ -375,6 +451,7 @@ interface IWorkbenchHost {
 	configurationService: {
 		getValue<T>(key: string): T | undefined;
 	};
+	layout(): void;
 	hideCompositeCount: number;
 	hasFocus(part: Parts): boolean;
 	focusPart(part: Parts): void;
@@ -387,6 +464,7 @@ function createHost(options: {
 	readonly sidebarSize?: { width: number; height: number };
 	readonly activePanel?: boolean;
 	readonly modernUI?: boolean;
+	readonly registerDisposable?: <T extends IDisposable>(disposable: T) => T;
 } = {}): IWorkbenchHost {
 	const parent = options.parent ?? mainWindow.document.createElement('div');
 	const mainContainer = mainWindow.document.createElement('div');
@@ -404,6 +482,8 @@ function createHost(options: {
 	}> = [];
 	const layoutEvents: Array<{ width: number; height: number }> = [];
 	const host = prototypeHost(Workbench.prototype, {
+		_register: <T extends IDisposable>(disposable: T) =>
+			options.registerDisposable?.(disposable) ?? disposable,
 		parent,
 		mainContainer,
 		_mainContainerDimension:
@@ -450,6 +530,7 @@ function createHost(options: {
 		},
 		projectsPart: {
 			focus: () => delegatedFocus.push('projects'),
+			relayoutForModernUI: () => undefined,
 		},
 		omniHostPart: {
 			focus: () => delegatedFocus.push('host'),
