@@ -10,6 +10,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { Parts } from
 	'../../../../workbench/services/layout/browser/layoutService.js';
+import { shouldApplyFloatingEditorLayout } from
+	'../../../../workbench/browser/parts/editor/editorPart.js';
 import { AuxiliaryBarPart } from
 	'../../../browser/parts/auxiliaryBarPart.js';
 import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
@@ -24,6 +26,20 @@ import {
 
 suite('Omni Parts', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('modal editor ignores Modern UI floating-card insets', () => {
+		assert.deepStrictEqual({
+			mainEditor: shouldApplyFloatingEditorLayout(1, 1, true, false),
+			modalEditor: shouldApplyFloatingEditorLayout(1, 1, true, true),
+			classicEditor: shouldApplyFloatingEditorLayout(1, 1, false, false),
+			auxiliaryEditor: shouldApplyFloatingEditorLayout(2, 1, true, false),
+		}, {
+			mainEditor: true,
+			modalEditor: false,
+			classicEditor: false,
+			auxiliaryEditor: false,
+		});
+	});
 
 	test('ProjectsPart delegates focus to the project switcher widget', () => {
 		let focusCount = 0;

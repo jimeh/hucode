@@ -209,7 +209,8 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
 	.part.sidebar > .content {
 	/* The shell title is 32px; the extra pixel aligns this card with the
-	 * standard workbench cards at y=35. */
+	 * standard workbench cards at y=35. Keep the inset arithmetic in sync
+	 * with ProjectsPart.layout. */
 	box-sizing: border-box;
 	width: calc(100% - (var(--vscode-spacing-size40) * 2)) !important;
 	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - (var(--vscode-spacing-size40) * 2)) !important;

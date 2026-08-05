@@ -137,7 +137,7 @@
 
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
-	.monaco-list-row:not(:first-child):has(.hucode-project-switcher-section)::before {
+	.monaco-list-row:not([data-index='0']):has(.hucode-project-switcher-section)::before {
 	content: '';
 	position: absolute;
 	top: 0;
