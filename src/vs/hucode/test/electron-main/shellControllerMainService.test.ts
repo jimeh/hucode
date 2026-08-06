@@ -39,7 +39,7 @@ suite('ShellControllerMainService capability port', () => {
 		]);
 	});
 
-	test('denies invalid, destroyed, and non-owner renderers', () => {
+	test('denies invalid, destroyed, unknown, and non-owner renderers', () => {
 		const harness = createHarness();
 		disposables.add(harness.connections);
 
@@ -48,16 +48,38 @@ suite('ShellControllerMainService capability port', () => {
 		assert.strictEqual(harness.accept('destroyed'), false);
 		harness.sender.destroyed = false;
 		harness.owner = undefined;
-		assert.strictEqual(harness.accept('ordinary'), false);
+		assert.strictEqual(harness.accept('unknown'), false);
+		harness.owner = { windowId: 3, webContentsId: 8 };
+		assert.strictEqual(harness.accept('non-owner'), false);
 
 		assert.deepStrictEqual(harness.acquiredOwners, []);
 		assert.deepStrictEqual(harness.refusals, [
 			'invalid nonce',
 			'destroyed sender',
 			'unknown or non-owner sender',
+			'unknown or non-owner sender',
 		]);
 		assert.deepStrictEqual(harness.responses.at(-1), {
-			nonce: 'ordinary',
+			nonce: 'non-owner',
+			ports: [],
+		});
+	});
+
+	test('preserves an existing connection when replacement creation fails', () => {
+		const harness = createHarness();
+		disposables.add(harness.connections);
+
+		assert.strictEqual(harness.accept('connected'), true);
+		harness.onCreateConnection = () => {
+			throw new Error('replacement failed');
+		};
+		assert.strictEqual(harness.accept('failed-replacement'), false);
+
+		assert.strictEqual(harness.connections.size, 1);
+		assert.deepStrictEqual(harness.transferred, [1]);
+		assert.deepStrictEqual(harness.disposed, []);
+		assert.deepStrictEqual(harness.responses.at(-1), {
+			nonce: 'failed-replacement',
 			ports: [],
 		});
 	});
@@ -101,6 +123,42 @@ suite('ShellControllerMainService capability port', () => {
 		registration.dispose();
 		webContents.emit('render-process-gone');
 		assert.strictEqual(disposeCalls, 1);
+	});
+
+	test('disposes an active connection when the renderer exits', () => {
+		const webContents = new EventEmitter() as EventEmitter & {
+			isLoadingMainFrame(): boolean;
+		};
+		webContents.isLoadingMainFrame = () => false;
+		let disposeCalls = 0;
+		const registration = disposables.add(
+			registerHucodeShellControllerOwnerLifecycle(
+				webContents as unknown as Electron.WebContents,
+				() => disposeCalls++
+			)
+		);
+
+		webContents.emit('render-process-gone');
+		assert.strictEqual(disposeCalls, 1);
+		registration.dispose();
+	});
+
+	test('disposes an active connection when WebContents is destroyed', () => {
+		const webContents = new EventEmitter() as EventEmitter & {
+			isLoadingMainFrame(): boolean;
+		};
+		webContents.isLoadingMainFrame = () => false;
+		let disposeCalls = 0;
+		const registration = disposables.add(
+			registerHucodeShellControllerOwnerLifecycle(
+				webContents as unknown as Electron.WebContents,
+				() => disposeCalls++
+			)
+		);
+
+		webContents.emit('destroyed');
+		assert.strictEqual(disposeCalls, 1);
+		registration.dispose();
 	});
 });
 

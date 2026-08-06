@@ -13,7 +13,7 @@ import { ElementsDragAndDropData, ListViewTargetSector } from
 	'../../../../base/browser/ui/list/listView.js';
 import { ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { timeout } from '../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -1642,6 +1642,41 @@ suite('ProjectSwitcherContribution', () => {
 		}, {
 			afterSameWindow: 'same',
 		});
+	});
+
+	test('keeps live shell state over a late initial snapshot', async () => {
+		const snapshotReady = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const liveState = hostedState('live');
+		const appliedStates: IHucodeHostedWorkspaceState[] = [];
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			omniSectionOrder: [],
+			didReceiveOmniHostedWorkspaceStateChange: false,
+			shellService: {
+				setProjectSwitcherSectionOrder: async () => undefined,
+				setHostedWorkbenchRestorePolicy: async () => undefined,
+				getState: () => snapshotReady.p,
+			},
+			configurationService: { getValue: () => 'active' },
+			updateOmniHostedWorkspaceState: (
+				state: IHucodeHostedWorkspaceState
+			) => appliedStates.push(state),
+			notificationService: {
+				error: (error: unknown) => assert.fail(String(error)),
+			},
+		});
+		const initialize = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'initializeOmniHostedWorkspaceState'
+		) as (this: object) => Promise<void>;
+
+		const initialization = initialize.call(host);
+		await Promise.resolve();
+		Reflect.set(host, 'didReceiveOmniHostedWorkspaceStateChange', true);
+		appliedStates.push(liveState);
+		snapshotReady.complete(hostedState('snapshot'));
+		await initialization;
+
+		assert.deepStrictEqual(appliedStates, [liveState]);
 	});
 });
 

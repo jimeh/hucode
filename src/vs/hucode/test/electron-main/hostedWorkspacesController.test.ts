@@ -4424,7 +4424,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const caller = createWorktree('cross-shell-stale-caller');
 			const target = createWorktree('cross-shell-stale-target');
-			const { controller, viewFactory } = createController({
+			const {
+				controller,
+				focusHostedWorkspaceByPathCalls,
+				viewFactory,
+			} = createController({
 				hostedWindowPaths: [target],
 				hostedWindowFocusOutcome:
 					HucodeHostedShellOperationOutcome.Superseded,
@@ -4442,6 +4446,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				),
 				HucodeHostedShellOperationOutcome.Superseded
 			);
+			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
 			assert.strictEqual(viewFactory.views.length, 1);
 			assert.strictEqual(
 				controller.getState().instances.some(instance =>

@@ -1189,6 +1189,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+	private didReceiveOmniHostedWorkspaceStateChange = false;
 
 	constructor(
 		@IInstantiationService
@@ -1279,8 +1280,10 @@ export class ProjectSwitcherWidget extends Disposable {
 					void this.refreshProjectsIfStale();
 				}
 			}));
-			this._register(this.shellService.onDidChangeState(state =>
-				this.updateOmniHostedWorkspaceState(state)));
+			this._register(this.shellService.onDidChangeState(state => {
+				this.didReceiveOmniHostedWorkspaceStateChange = true;
+				this.updateOmniHostedWorkspaceState(state);
+			}));
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
 					if (event.affectsConfiguration(
@@ -1720,9 +1723,10 @@ export class ProjectSwitcherWidget extends Disposable {
 					HucodeHostedWorkbenchRestorePolicy
 				>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
 			);
-			this.updateOmniHostedWorkspaceState(
-				await this.shellService.getState()
-			);
+			const initialState = await this.shellService.getState();
+			if (!this.didReceiveOmniHostedWorkspaceStateChange) {
+				this.updateOmniHostedWorkspaceState(initialState);
+			}
 		} catch (error) {
 			this.notificationService.error(String(error));
 		}

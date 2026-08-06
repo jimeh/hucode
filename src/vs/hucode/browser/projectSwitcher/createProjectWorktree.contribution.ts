@@ -68,6 +68,11 @@ type CancellableProjectManagerService = IProjectManagerService & {
 	): Promise<boolean>;
 };
 
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
+
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
 		return undefined;
@@ -333,7 +338,7 @@ async function runCreateWorktreeQuickInput<T>(
 	const shouldOcclude = environmentService.isOmniWindow;
 	if (shouldOcclude) {
 		if (!shellService) {
-			throw new Error('Omni shell controller is unavailable.');
+			throw new Error(omniShellControllerUnavailable);
 		}
 		await shellService.focusShell();
 		await shellService.setWorkspaceOverlayOcclusion(true);

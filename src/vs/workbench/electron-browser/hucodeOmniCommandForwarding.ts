@@ -253,6 +253,10 @@ export class HucodeOmniCommandForwarding {
 		}
 	}
 
+	/**
+	 * Forwards copy or cut, retrying locally only when dispatch definitely did
+	 * not start; ambiguous transport failures are consumed for at-most-once use.
+	 */
 	private async tryForwardClipboardActionToWorkspace(
 		request: INativeRunActionInWindowRequest
 	): Promise<boolean> {
@@ -270,6 +274,7 @@ export class HucodeOmniCommandForwarding {
 		}
 	}
 
+	/** Forwards a keybinding and permits local fallback after any failure. */
 	private async tryForwardKeybindingToWorkspace(
 		request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {

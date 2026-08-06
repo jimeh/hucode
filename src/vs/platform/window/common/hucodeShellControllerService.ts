@@ -238,9 +238,12 @@ export function createHucodeShellControllerClient(
 			['supportsWorkspaceScreenshotOverlay', true],
 		]),
 	});
+	// Keep a concrete literal so Promise assimilation cannot synthesize a
+	// remote `then` call, and so every argument mapping remains explicit.
 	return {
 		_serviceBrand: undefined,
-		supportsWorkspaceScreenshotOverlay: true,
+		supportsWorkspaceScreenshotOverlay:
+			remote.supportsWorkspaceScreenshotOverlay,
 		onDidChangeState: remote.onDidChangeState,
 		getState: () => remote.getState(),
 		focusHostedWorkspaceByPath: (path, projectId) =>

@@ -32,6 +32,7 @@ import {
 export type DesktopShellControllerConnector = () =>
 	Promise<IHucodeShellControllerService | undefined>;
 
+/** Bounds privileged connection acquisition and shutdown joining. */
 interface IDesktopShellControllerAdapterOptions {
 	readonly connectionTimeoutMs?: number;
 	readonly shutdownConnectionTimeoutMs?: number;
@@ -54,9 +55,9 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 
 	constructor(
 		connect: DesktopShellControllerConnector,
+		options: IDesktopShellControllerAdapterOptions = {},
 		@INativeWorkbenchEnvironmentService
-		environmentService: INativeWorkbenchEnvironmentService,
-		options: IDesktopShellControllerAdapterOptions = {}
+		environmentService: INativeWorkbenchEnvironmentService
 	) {
 		super();
 		this.shutdownConnectionTimeoutMs =
@@ -259,6 +260,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	}
 }
 
+/** Acquires the owner-bound privileged controller port for an Omni shell. */
 export async function connectDesktopShellController():
 	Promise<IHucodeShellControllerService> {
 	const port = await acquirePortOrUndefined(
@@ -285,7 +287,7 @@ registerSingleton(
 	IHucodeShellControllerService,
 	new SyncDescriptor(
 		DesktopShellControllerServiceAdapter,
-		[connectDesktopShellController],
+		[connectDesktopShellController, {}],
 		true
 	)
 );

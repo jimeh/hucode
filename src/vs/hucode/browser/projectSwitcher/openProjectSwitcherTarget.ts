@@ -6,6 +6,7 @@
 import { onUnexpectedError } from
 	'../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
+import { localize } from '../../../nls.js';
 import { IProjectManagerService } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
@@ -24,6 +25,19 @@ import {
 } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { pathsEqual } from './projectSwitcherCommon.js';
+
+const hostedShellCapabilityUnavailable = localize(
+	'hostedShellCapabilityUnavailable',
+	'Hosted shell capability is unavailable.'
+);
+const hostedFolderNavigationUnsupported = localize(
+	'hostedFolderNavigationUnsupported',
+	'Hosted folder navigation is unsupported.'
+);
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
 
 /**
  * Opens a project switcher target in the current workbench context.
@@ -54,20 +68,20 @@ export async function openProjectSwitcherTargetInWindow(
 
 	if (environmentService.isHostedOmniWorkspace) {
 		if (!hostedShellService) {
-			throw new Error('Hosted shell capability is unavailable.');
+			throw new Error(hostedShellCapabilityUnavailable);
 		}
 		const outcome = await hostedShellService.navigateToFolder({
 			folderUri: URI.file(canonicalTarget.worktreePath).toJSON(),
 		});
 		if (outcome === HucodeHostedShellOperationOutcome.Unsupported) {
-			throw new Error('Hosted folder navigation is unsupported.');
+			throw new Error(hostedFolderNavigationUnsupported);
 		}
 		return;
 	}
 
 	if (environmentService.isOmniWindow) {
 		if (!shellService) {
-			throw new Error('Omni shell controller is unavailable.');
+			throw new Error(omniShellControllerUnavailable);
 		}
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
@@ -102,6 +116,7 @@ async function focusNormalWindowByPathBestEffort(
 	}
 }
 
+/** Focuses the opened workspace without failing the completed navigation. */
 async function focusWorkspaceBestEffort(
 	shellService: IHucodeShellControllerService
 ): Promise<void> {

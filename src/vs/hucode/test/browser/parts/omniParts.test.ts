@@ -200,6 +200,48 @@ suite('Omni Parts', () => {
 		});
 	});
 
+	test('OmniHostPart keeps live state over a late initial snapshot', async () => {
+		const snapshotReady = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const liveState: IHucodeHostedWorkspaceState = {
+			activeInstanceId: 'live',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('live', 'active')],
+		};
+		const snapshotState: IHucodeHostedWorkspaceState = {
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [],
+		};
+		const host = prototypeHost(OmniHostPart.prototype, {
+			state: snapshotState,
+			didReceiveStateChange: false,
+			configurationService: { getValue: () => 'active' },
+			shellService: {
+				setHostedWorkbenchRestorePolicy: async () => undefined,
+				getState: () => snapshotReady.p,
+			},
+			renderState: () => assert.fail('late snapshot rendered'),
+			scheduleHostedWorkspaceLayout: () =>
+				assert.fail('late snapshot scheduled layout'),
+		});
+		const initialize = Reflect.get(
+			OmniHostPart.prototype,
+			'initialize'
+		) as (this: object) => Promise<void>;
+
+		const initialization = initialize.call(host);
+		await Promise.resolve();
+		Reflect.set(host, 'didReceiveStateChange', true);
+		Reflect.set(host, 'state', liveState);
+		snapshotReady.complete(snapshotState);
+		await initialization;
+
+		assert.strictEqual(Reflect.get(host, 'state'), liveState);
+	});
+
 	test('OmniHostPart rejects a token-stale screenshot result', async () => {
 		const screenshotReady = new DeferredPromise<boolean>();
 		const transitions: string[] = [];

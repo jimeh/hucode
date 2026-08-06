@@ -105,6 +105,11 @@ export type { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 export { setLastActiveWorktreeBestEffort } from './openProjectSwitcherTarget.js';
 
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
+
 interface ILoadedWorkbenchWorktree {
 	readonly path: string;
 	readonly lastActiveAt?: number;
@@ -293,7 +298,7 @@ export async function getOmniHostedWorkspaceState(
 		return undefined;
 	}
 	if (!shellService) {
-		throw new Error('Omni shell controller is unavailable.');
+		throw new Error(omniShellControllerUnavailable);
 	}
 	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
 		projects.map(project => ({
@@ -365,7 +370,7 @@ export async function getActiveWorkbenchWorktreePath(
 ): Promise<string | undefined> {
 	if (environmentService.isOmniWindow) {
 		if (!shellService) {
-			throw new Error('Omni shell controller is unavailable.');
+			throw new Error(omniShellControllerUnavailable);
 		}
 		const state = await shellService.getState();
 		return state.instances.find(instance =>
@@ -403,7 +408,7 @@ async function getLoadedWorkbenchWorktrees(
 ): Promise<readonly ILoadedWorkbenchWorktree[]> {
 	if (environmentService.isOmniWindow) {
 		if (!shellService) {
-			throw new Error('Omni shell controller is unavailable.');
+			throw new Error(omniShellControllerUnavailable);
 		}
 		const state = await shellService.getState();
 		return state.instances
@@ -515,7 +520,7 @@ async function tryForwardShellSwitchCommand(
 		return false;
 	}
 	if (!shellService) {
-		throw new Error('Omni shell controller is unavailable.');
+		throw new Error(omniShellControllerUnavailable);
 	}
 
 	return shellService.runActionInWorkspace({
@@ -704,7 +709,7 @@ async function quickSwitchLoadedProjectWorktree(
 	try {
 		if (environmentService.isOmniWindow) {
 			if (!shellService) {
-				throw new Error('Omni shell controller is unavailable.');
+				throw new Error(omniShellControllerUnavailable);
 			}
 			const forwarded = await tryForwardShellSwitchCommand(
 				QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
@@ -836,7 +841,7 @@ registerAction2(class extends Action2 {
 		try {
 			if (environmentService.isOmniWindow) {
 				if (!shellService) {
-					throw new Error('Omni shell controller is unavailable.');
+					throw new Error(omniShellControllerUnavailable);
 				}
 				const forwarded = await tryForwardShellSwitchCommand(
 					SWITCH_WORKTREE_COMMAND_ID,

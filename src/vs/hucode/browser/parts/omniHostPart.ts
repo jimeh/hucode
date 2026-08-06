@@ -65,6 +65,7 @@ export class OmniHostPart extends Part {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+	private didReceiveStateChange = false;
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private layoutScheduled = false;
@@ -103,6 +104,7 @@ export class OmniHostPart extends Part {
 			HasLoadedWorkbenchContext.bindTo(contextKeyService);
 
 		this._register(this.shellService.onDidChangeState(state => {
+			this.didReceiveStateChange = true;
 			this.state = state;
 			this.renderState();
 			this.scheduleHostedWorkspaceLayout();
@@ -186,7 +188,11 @@ export class OmniHostPart extends Part {
 				HucodeHostedWorkbenchRestorePolicy
 			>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
 		);
-		this.state = await this.shellService.getState();
+		const initialState = await this.shellService.getState();
+		if (this.didReceiveStateChange) {
+			return;
+		}
+		this.state = initialState;
 		this.renderState();
 		this.scheduleHostedWorkspaceLayout();
 	}

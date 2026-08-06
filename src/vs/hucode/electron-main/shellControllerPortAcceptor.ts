@@ -70,15 +70,19 @@ export function acceptHucodeShellControllerPortRequest(
 	}
 
 	const owner = dependencies.resolveOwner(sender);
+	// Independently verify the identity returned by the injected resolver so a
+	// weakened resolver cannot widen admission.
 	if (!owner || owner.webContentsId !== sender.id) {
 		dependencies.logRefusal('unknown or non-owner sender');
 		postShellControllerPortDenial(sender, nonce, dependencies.logFailure);
 		return false;
 	}
 
+	let connectionStored = false;
 	try {
 		const connection = dependencies.createConnection(owner);
 		dependencies.connections.set(owner.windowId, connection);
+		connectionStored = true;
 		const currentOwner = dependencies.resolveOwner(sender);
 		if (sender.isDestroyed() ||
 			currentOwner?.windowId !== owner.windowId ||
@@ -93,7 +97,9 @@ export function acceptHucodeShellControllerPortRequest(
 		connection.markTransferred();
 		return true;
 	} catch (error) {
-		dependencies.connections.deleteAndDispose(owner.windowId);
+		if (connectionStored) {
+			dependencies.connections.deleteAndDispose(owner.windowId);
+		}
 		dependencies.logFailure(error);
 		postShellControllerPortDenial(sender, nonce, dependencies.logFailure);
 		return false;

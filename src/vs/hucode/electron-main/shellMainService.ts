@@ -405,6 +405,8 @@ export class HucodeShellMainService extends Disposable
 				change => change.state
 			),
 			getState: () => this.getWindowState(windowId),
+			// These searches intentionally span windows so existing workbenches are
+			// reused instead of duplicated in the requesting shell.
 			focusHostedWorkspaceByPath: (path, projectId) =>
 				this.focusHostedWorkspaceByPath(path, projectId),
 			focusNormalWindowByPath: path =>

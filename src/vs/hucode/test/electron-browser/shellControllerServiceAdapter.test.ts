@@ -43,6 +43,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		} as unknown as IHucodeShellControllerService;
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
 			() => connection.p,
+			{},
 			shellEnvironment(true)
 		));
 		const observed: IHucodeHostedWorkspaceState[] = [];
@@ -90,6 +91,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 						connectCalls++;
 						return undefined;
 					},
+					{},
 					shellEnvironment(false)
 				)
 			);
@@ -106,6 +108,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			let connectionDisposed = false;
 			const adapter = new DesktopShellControllerServiceAdapter(
 				() => connection.p,
+				{},
 				shellEnvironment(true)
 			);
 			const operation = adapter.getState();
@@ -126,11 +129,11 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			new DeferredPromise<IHucodeShellControllerService | undefined>();
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
 			() => connection.p,
-			shellEnvironment(true),
 			{
 				connectionTimeoutMs: 1000,
 				shutdownConnectionTimeoutMs: 5,
-			}
+			},
+			shellEnvironment(true)
 		));
 
 		await adapter.shutdownWindowWorkspaces(4);
@@ -143,8 +146,8 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		let connectionDisposed = false;
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
 			() => connection.p,
-			shellEnvironment(true),
-			{ connectionTimeoutMs: 5 }
+			{ connectionTimeoutMs: 5 },
+			shellEnvironment(true)
 		));
 
 		await assert.rejects(adapter.getState(), /capability is unavailable/);

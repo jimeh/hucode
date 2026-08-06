@@ -31,6 +31,11 @@ import {
 import { tryForwardShellRenameCommand } from
 	'./renameProjectWorktreeRouting.js';
 
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
+
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
 		return undefined;
@@ -80,7 +85,7 @@ async function runShellRenameInput<T>(
 ): Promise<T> {
 	if (environmentService.isOmniWindow) {
 		if (!shellService) {
-			throw new Error('Omni shell controller is unavailable.');
+			throw new Error(omniShellControllerUnavailable);
 		}
 		await shellService.focusShell();
 	}
