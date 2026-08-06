@@ -4,8 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { getWindowId } from '../../../../../base/browser/dom.js';
-import { mainWindow } from '../../../../../base/browser/window.js';
+import { Event } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -13,9 +12,14 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 import {
 	IHucodeOmniBrowserEnvironment,
 	IHucodeOmniBrowserProjectManager,
+	tryNavigateHucodeHostedBrowserWindow,
 	tryOpenHucodeOmniBrowserWindow,
 } from
 	'../../browser/hucodeOmniBrowserOpen.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../../../platform/window/common/hucodeHostedShellService.js';
 
 suite('HucodeOmniBrowserOpen', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -214,43 +218,59 @@ suite('HucodeOmniBrowserOpen', () => {
 	});
 
 	test('routes folder opens from a hosted Omni workbench', async () => {
-		let opened: {
-			windowId: number;
-			path: string;
-			projectId: string | undefined;
-		} | undefined;
-		const handled = await tryOpenHucodeOmniBrowserWindow(
+		let opened: URI | undefined;
+		const handled = await tryNavigateHucodeHostedBrowserWindow(
 			[{ folderUri: URI.file('/scratch') }],
 			undefined,
 			environment({ isHostedOmniWorkspace: true }),
 			{
 				_serviceBrand: undefined,
-				async focusHostedWorkspaceByPath() {
-					assert.fail('hosted folder open used path focus');
+				onDidChangeState: Event.None,
+				async navigateToFolder(request) {
+					opened = URI.revive(request.folderUri);
+					return HucodeHostedShellOperationOutcome.Accepted;
 				},
-				async focusNormalWindowByPath() {
-					assert.fail('hosted folder open used normal focus');
-				},
-				async openWorkspace() {
-					assert.fail('hosted folder open used non-atomic open');
-				},
-				async openAndFocusWorkspace(windowId, path, projectId) {
-					opened = { windowId, path, projectId };
-				},
-				async focusWorkspace() {
-					assert.fail('hosted folder open used generic focus');
-				},
-			},
-			projectManager()
+			} as Partial<IHucodeHostedShellService> as IHucodeHostedShellService
 		);
 
 		assert.strictEqual(handled, true);
-		assert.deepStrictEqual(opened, {
-			windowId: getWindowId(mainWindow),
-			path: '/scratch',
-			projectId: undefined,
-		});
+		assert.strictEqual(opened?.fsPath, '/scratch');
 	});
+
+	test('fails closed when a hosted folder capability is unavailable',
+		async () => {
+			for (const outcome of [
+				HucodeHostedShellOperationOutcome.Unavailable,
+				HucodeHostedShellOperationOutcome.Rejected,
+				HucodeHostedShellOperationOutcome.Stale,
+				HucodeHostedShellOperationOutcome.Superseded,
+			]) {
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					{
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() { return outcome; },
+					} as Partial<IHucodeHostedShellService> as
+					IHucodeHostedShellService
+				), true);
+			}
+			assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+				[{ folderUri: URI.from({ scheme: 'memfs', path: '/scratch' }) }],
+				undefined,
+				environment({ isHostedOmniWorkspace: true }),
+				{
+					_serviceBrand: undefined,
+					onDidChangeState: Event.None,
+					async navigateToFolder() {
+						return HucodeHostedShellOperationOutcome.Unsupported;
+					},
+				} as Partial<IHucodeHostedShellService> as
+				IHucodeHostedShellService
+			), false);
+		});
 
 	test('routes folders for the current remote authority', async () => {
 		let openedPath: string | undefined;

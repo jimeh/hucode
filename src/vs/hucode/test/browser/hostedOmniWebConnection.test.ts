@@ -5,9 +5,18 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
+import { Emitter } from '../../../base/common/event.js';
+import { URI } from '../../../base/common/uri.js';
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
+import {
+	HUCODE_HOSTED_SHELL_CAPABILITIES,
+	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+	HucodeHostedShellOperationOutcome,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
+import { HucodeHostedShellAction } from
+	'../../../platform/window/common/hucodeHostedShellActions.js';
 import {
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HucodeOmniWebChildMessageType,
@@ -17,6 +26,15 @@ import {
 	HucodeHostedOmniWebConnectionService,
 	IHostedOmniWebConnectionBrowserAdapter,
 } from '../../browser/hostedOmniWebConnection.js';
+import {
+	createLegacyHostedShellClient,
+	getHostedOmniWebShellClientMode,
+} from
+	'../../browser/hostedOmniWebShellService.js';
+import {
+	IHucodeHostedWorkspaceState,
+	IHucodeShellService,
+} from '../../common/omniWindow.js';
 
 const INSTANCE_ID = 'hosted-instance';
 
@@ -42,11 +60,17 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 	function portMessage(overrides?: {
 		readonly instanceId?: string;
 		readonly windowId?: number;
+		readonly hostedShellProtocolVersion?: number;
 	}): object {
 		return {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: overrides?.instanceId ?? INSTANCE_ID,
 			windowId: overrides?.windowId ?? 7,
+			...(overrides?.hostedShellProtocolVersion === undefined ? {} : {
+				hostedShellProtocolVersion:
+					overrides.hostedShellProtocolVersion,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+			}),
 		};
 	}
 
@@ -61,6 +85,21 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		const connection = await service.whenConnected();
 
 		assert.strictEqual(connection.shellWindowId, 7);
+		assert.strictEqual(connection.hostedShellProtocolVersion, undefined);
+
+		const current = createService();
+		current.browser.emitFromParent(portMessage({
+			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+		}), new MessageChannel().port1);
+		const negotiated = await current.service.whenConnected();
+		assert.strictEqual(
+			negotiated.hostedShellProtocolVersion,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
+		);
+		assert.deepStrictEqual(
+			negotiated.hostedShellCapabilities,
+			HUCODE_HOSTED_SHELL_CAPABILITIES
+		);
 	});
 
 	test('ignores port transfers from non-parent same-origin sources', async () => {
@@ -121,6 +160,9 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 				type: HucodeOmniWebChildMessageType.Ready,
 				instanceId: INSTANCE_ID,
 				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion:
+					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 			},
 			{
 				type: HucodeOmniWebChildMessageType.Focus,
@@ -129,7 +171,132 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			},
 		]);
 	});
+
+	test('selects legacy only for a parent without capability versioning', () => {
+		assert.strictEqual(
+			getHostedOmniWebShellClientMode(undefined, undefined),
+			'legacy'
+		);
+		assert.strictEqual(getHostedOmniWebShellClientMode(
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CAPABILITIES
+		), 'current');
+		assert.strictEqual(getHostedOmniWebShellClientMode(
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION + 1,
+			HUCODE_HOSTED_SHELL_CAPABILITIES
+		), 'unavailable');
+		assert.strictEqual(getHostedOmniWebShellClientMode(
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CAPABILITIES.slice(0, -1)
+		), 'unavailable');
+	});
+
+	test('keeps the new-child old-parent adapter bound to self', async () => {
+		const stateChanges = disposables.add(new Emitter<{
+			readonly windowId: number;
+			readonly state: IHucodeHostedWorkspaceState;
+		}>());
+		let state = legacyState('other');
+		let closeCalls = 0;
+		const calls: string[] = [];
+		const legacy = {
+			onDidChangeWindowState: stateChanges.event,
+			getWindowState: async () => state,
+			notifyHostedWorkspaceReady: async () => { calls.push('ready'); },
+			closeWorkspace: async () => { closeCalls++; return state; },
+			reloadWorkspace: async () => { calls.push('reload'); },
+			focusShell: async () => { calls.push('focusShell'); },
+			runActionInShell: async () => { calls.push('action'); return true; },
+			openAndFocusWorkspace: async () => { calls.push('navigate'); return state; },
+			triggerPasteInWorkspace: async () => { calls.push('paste'); return true; },
+			captureWorkspaceScreenshot: async () => {
+				calls.push('screenshot');
+				return undefined;
+			},
+			focusHostedWorkspaceByPath: async path => {
+				calls.push(`focusPath:${path}`);
+				state = legacyState('self');
+				return true;
+			},
+			focusWorkspace: async () => { calls.push('focusWorkspace'); },
+		} as Partial<IHucodeShellService> as IHucodeShellService;
+		const client = createLegacyHostedShellClient(legacy, 7, 'self');
+		const projectedChanges: unknown[] = [];
+		disposables.add(client.onDidChangeState(change =>
+			projectedChanges.push(change)));
+		stateChanges.fire({ windowId: 7, state });
+		projectedChanges.length = 0;
+		state = {
+			...state,
+			instances: state.instances.map(instance =>
+				instance.instanceId === 'other'
+					? { ...instance, focused: true }
+					: instance),
+		};
+		stateChanges.fire({ windowId: 7, state });
+		assert.deepStrictEqual(projectedChanges, []);
+
+		assert.strictEqual((await client.getState()).active, false);
+		assert.strictEqual(await client.reloadSelf(),
+			HucodeHostedShellOperationOutcome.Rejected);
+		assert.strictEqual(await client.focusShell(),
+			HucodeHostedShellOperationOutcome.Rejected);
+		assert.strictEqual(await client.requestShellAction(
+			HucodeHostedShellAction.AddProject
+		), HucodeHostedShellOperationOutcome.Rejected);
+		assert.strictEqual(await client.requestShellAction(
+			'not-a-hosted-action' as HucodeHostedShellAction
+		), HucodeHostedShellOperationOutcome.Unsupported);
+		assert.strictEqual(await client.navigateToFolder({
+			folderUri: undefined as never,
+		}), HucodeHostedShellOperationOutcome.Unsupported);
+		assert.strictEqual(await client.navigateToFolder({
+			folderUri: URI.file('/target').toJSON(),
+		}), HucodeHostedShellOperationOutcome.Rejected);
+		assert.strictEqual(await client.triggerPasteInSelf(),
+			HucodeHostedShellOperationOutcome.Rejected);
+		assert.strictEqual(await client.captureSelfScreenshot(), undefined);
+		assert.deepStrictEqual(calls, []);
+
+		assert.strictEqual(await client.focusSelf(),
+			HucodeHostedShellOperationOutcome.Accepted);
+		assert.deepStrictEqual(calls, [
+			'focusPath:/self',
+			'focusWorkspace',
+		]);
+
+		state = legacyState(undefined);
+		assert.strictEqual(await client.closeSelf(),
+			HucodeHostedShellOperationOutcome.Unavailable);
+		assert.strictEqual(closeCalls, 0);
+		assert.strictEqual((await client.notifyReady()).outcome,
+			HucodeHostedShellOperationOutcome.Unavailable);
+	});
 });
+
+function legacyState(
+	activeInstanceId: string | undefined
+): IHucodeHostedWorkspaceState {
+	return {
+		activeInstanceId,
+		projectsSidebarVisible: true,
+		projectSwitcherCanGoBack: false,
+		projectSwitcherCanGoForward: false,
+		instances: activeInstanceId === undefined ? [] : [{
+			instanceId: 'self',
+			worktreePath: '/self',
+			state: activeInstanceId === 'self' ? 'active' : 'loaded',
+			visible: activeInstanceId === 'self',
+			focused: false,
+		}, {
+			instanceId: 'other',
+			worktreePath: '/other',
+			state: activeInstanceId === 'other' ? 'active' : 'loaded',
+			visible: activeInstanceId === 'other',
+			focused: false,
+		}],
+	};
+}
 
 class FakeConnectionBrowserAdapter
 	implements IHostedOmniWebConnectionBrowserAdapter {

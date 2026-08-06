@@ -8,6 +8,7 @@ import {
 	HUCODE_SHELL_CHANNEL_NAME,
 	IHucodeShellService
 } from '../common/omniWindow.js';
+import './hostedShellServiceAdapter.js';
 
 registerMainProcessRemoteService(
 	IHucodeShellService,

@@ -3,392 +3,372 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { getWindowId } from '../../base/browser/dom.js';
-import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
-import { Emitter } from '../../base/common/event.js';
+import { Emitter, Event } from '../../base/common/event.js';
 import { Disposable } from '../../base/common/lifecycle.js';
-import { UriComponents } from '../../base/common/uri.js';
+import { URI } from '../../base/common/uri.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import {
-	INativeOpenFileRequest,
-	INativeRunActionInWindowRequest,
-	INativeRunKeybindingInWindowRequest,
-	IRectangle,
-} from '../../platform/window/common/window.js';
+	areHucodeHostedShellStatesEqual,
+	HucodeHostedShellCapability,
+	createHucodeHostedShellClient,
+	HUCODE_HOSTED_SHELL_CHANNEL,
+	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedNavigationRequest,
+	IHucodeHostedReadyResult,
+	IHucodeHostedShellService,
+	IHucodeHostedShellState,
+	isSupportedHucodeHostedNavigationRequest,
+	negotiateHucodeHostedShellCapabilities,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import {
+	createLegacyHucodeHostedShellActionRequest,
+	isHucodeHostedShellAction,
+} from
+	'../../platform/window/common/hucodeHostedShellActions.js';
+import { IRectangle } from '../../platform/window/common/window.js';
 import { HUCODE_OMNI_WEB_SHELL_CHANNEL } from
 	'../../platform/window/common/hucodeOmniWebMessages.js';
+import { IWorkbenchEnvironmentService } from
+	'../../workbench/services/environment/common/environmentService.js';
 import {
 	IHucodeHostedOmniWebConnectionService,
 } from './hostedOmniWebConnection.js';
 import {
-	IHucodeCompleteProjectCatalogEntry,
-	IHucodeHostedWorkspaceOwner,
 	IHucodeHostedWorkspaceState,
-	IHucodeProjectFolderPromotion,
 	IHucodeShellService,
-	IHucodeShellWindowStateChange,
 } from '../common/omniWindow.js';
-import { ProjectSwitcherOmniSection } from
-	'../common/projectSwitcher/projectSwitcherViewState.js';
-import { createEmptyHostedWorkspaceState } from
-	'../common/hostedWorkspaceState.js';
-import { ShutdownReason } from
-	'../../workbench/services/lifecycle/common/lifecycle.js';
-import { HucodeHostedWorkbenchRestorePolicy } from
-	'../common/retainedWorkbench.js';
 
-interface IConnectedShell {
-	readonly shell: IHucodeShellService;
-	readonly shellWindowId: number;
+/** Client path selected from the parent shell's explicit handshake. */
+export type HostedOmniWebShellClientMode =
+	| 'current'
+	| 'legacy'
+	| 'unavailable';
+
+/** Selects legacy only when the parent omitted capability versioning. */
+export function getHostedOmniWebShellClientMode(
+	protocolVersion: number | undefined,
+	capabilities: readonly HucodeHostedShellCapability[] | undefined
+): HostedOmniWebShellClientMode {
+	if (negotiateHucodeHostedShellCapabilities(
+		protocolVersion,
+		capabilities
+	)) {
+		return 'current';
+	}
+	return protocolVersion === undefined ? 'legacy' : 'unavailable';
 }
 
 /**
- * Hosted iframe implementation of the Hucode shell service.
+ * Hosted iframe client for the narrow shell capability.
  *
- * Every call proxies over the shell's MessagePort channel, substituting the
- * shell's window id because hosted iframe windows have their own ids that the
- * shell controller does not know about.
+ * A missing capability version identifies the selected one-generation legacy
+ * window: a new child connected to an older shell. That path adapts only this
+ * narrow interface to the old channel and never exposes the old service to
+ * current hosted contributions.
  */
 export class HostedOmniWebShellService extends Disposable
-	implements IHucodeShellService {
+	implements IHucodeHostedShellService {
 
 	declare readonly _serviceBrand: undefined;
-	readonly supportsWorkspaceScreenshotOverlay = false;
 
-	private readonly windowId = getWindowId(mainWindow);
-	private readonly connected: Promise<IConnectedShell> | undefined;
-	private state = createEmptyHostedWorkspaceState();
-
-	private readonly _onDidChangeWindowState =
-		this._register(new Emitter<IHucodeShellWindowStateChange>());
-	readonly onDidChangeWindowState = this._onDidChangeWindowState.event;
+	private readonly connected: Promise<IHucodeHostedShellService> | undefined;
+	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	private readonly _onDidChangeState =
+		this._register(new Emitter<IHucodeHostedShellState>());
+	readonly onDidChangeState = this._onDidChangeState.event;
 
 	constructor(
 		@IHucodeHostedOmniWebConnectionService
 		connectionService: IHucodeHostedOmniWebConnectionService,
+		@IWorkbenchEnvironmentService
+		environmentService: IWorkbenchEnvironmentService,
 	) {
 		super();
 
-		if (!connectionService.isHosted) {
+		const instanceId = environmentService.hostedInstanceId;
+		if (!connectionService.isHosted || !instanceId) {
 			return;
 		}
 
 		let disposed = false;
 		this._register({ dispose: () => { disposed = true; } });
 		this.connected = connectionService.whenConnected().then(connection => {
-			const shell = ProxyChannel.toService<IHucodeShellService>(
-				connection.ipcClient.getChannel(HUCODE_OMNI_WEB_SHELL_CHANNEL)
+			const mode = getHostedOmniWebShellClientMode(
+				connection.hostedShellProtocolVersion,
+				connection.hostedShellCapabilities
 			);
+			const shell = mode === 'current'
+				? createHucodeHostedShellClient(connection.ipcClient.getChannel(
+					HUCODE_HOSTED_SHELL_CHANNEL
+				))
+				: mode === 'legacy'
+					? createLegacyHostedShellClient(
+						ProxyChannel.toService<IHucodeShellService>(
+							connection.ipcClient.getChannel(
+								HUCODE_OMNI_WEB_SHELL_CHANNEL
+							)
+						),
+						connection.shellWindowId,
+						instanceId
+					)
+					: createUnavailableHostedShellClient();
 			if (!disposed) {
-				this._register(shell.onDidChangeWindowState(change => {
-					this.state = change.state;
-					this._onDidChangeWindowState.fire({
-						windowId: this.windowId,
-						state: change.state,
-					});
+				this._register(shell.onDidChangeState(state => {
+					this.state = state;
+					this._onDidChangeState.fire(state);
 				}));
 			}
-			return { shell, shellWindowId: connection.shellWindowId };
+			return shell;
 		});
 	}
 
 	private async withShell<T>(
 		fallback: () => T,
-		run: (shell: IHucodeShellService, shellWindowId: number) => Promise<T>
+		run: (shell: IHucodeHostedShellService) => Promise<T>
 	): Promise<T> {
-		if (!this.connected) {
-			return fallback();
-		}
-
-		const { shell, shellWindowId } = await this.connected;
-		return run(shell, shellWindowId);
+		return this.connected ? run(await this.connected) : fallback();
 	}
 
-	async getWindowState(
-		_windowId: number
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, async (shell, windowId) => {
-			this.state = await shell.getWindowState(windowId);
+	async getState(): Promise<IHucodeHostedShellState> {
+		return this.withShell(() => this.state, async shell => {
+			this.state = await shell.getState();
 			return this.state;
 		});
 	}
 
-	findHostedWorkspaceByPath(
-		worktreePath: string
-	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
-		return this.withShell(() => undefined, shell =>
-			shell.findHostedWorkspaceByPath(worktreePath));
+	notifyReady(): Promise<IHucodeHostedReadyResult> {
+		return this.withShell(
+			() => ({ outcome: HucodeHostedShellOperationOutcome.Unavailable }),
+			shell => shell.notifyReady()
+		);
 	}
 
-	focusHostedWorkspaceByPath(
-		worktreePath: string,
-		projectId?: string
-	): Promise<boolean> {
-		return this.withShell(() => false, shell =>
-			shell.focusHostedWorkspaceByPath(worktreePath, projectId));
+	closeSelf() {
+		return this.runOperation(shell => shell.closeSelf());
 	}
 
-	focusNormalWindowByPath(worktreePath: string): Promise<boolean> {
-		return this.withShell(() => false, shell =>
-			shell.focusNormalWindowByPath(worktreePath));
+	reopenSelfInNormalWindow() {
+		return this.runOperation(shell => shell.reopenSelfInNormalWindow());
 	}
 
-	openWorkspace(
-		_windowId: number,
-		worktreePath: string,
-		projectId?: string
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.openWorkspace(windowId, worktreePath, projectId));
+	reloadSelf() {
+		return this.runOperation(shell => shell.reloadSelf());
 	}
 
-	openAndFocusWorkspace(
-		_windowId: number,
-		worktreePath: string,
-		projectId?: string
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.openAndFocusWorkspace(windowId, worktreePath, projectId));
+	focusSelf() {
+		return this.runOperation(shell => shell.focusSelf());
 	}
 
-	suspendWorkspace(
-		_windowId: number,
-		instanceId: string,
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.suspendWorkspace(windowId, instanceId));
+	focusShell() {
+		return this.runOperation(shell => shell.focusShell());
 	}
 
-	retainAndOpenWorkbench(
-		_windowId: number,
-		folderUri: UriComponents
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.retainAndOpenWorkbench(windowId, folderUri));
+	requestShellAction(action: Parameters<
+		IHucodeHostedShellService['requestShellAction']
+	>[0]) {
+		return this.runOperation(shell => shell.requestShellAction(action));
 	}
 
-	unloadRetainedWorkbench(
-		_windowId: number,
-		workbenchId: string
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.unloadRetainedWorkbench(windowId, workbenchId));
+	navigateToFolder(request: IHucodeHostedNavigationRequest) {
+		return this.runOperation(shell => shell.navigateToFolder(request));
 	}
 
-	dismissRetainedWorkbench(
-		_windowId: number,
-		workbenchId: string
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.dismissRetainedWorkbench(windowId, workbenchId));
+	triggerPasteInSelf() {
+		return this.runOperation(shell => shell.triggerPasteInSelf());
 	}
 
-	reorderRetainedWorkbenches(
-		_windowId: number,
-		orderedWorkbenchIds: readonly string[]
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.reorderRetainedWorkbenches(windowId, orderedWorkbenchIds));
-	}
-
-	setRetainedWorkbenchLabel(
-		_windowId: number,
-		workbenchId: string,
-		label: string | undefined,
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.setRetainedWorkbenchLabel(windowId, workbenchId, label));
-	}
-
-	reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-		_windowId: number,
-		_projects: readonly IHucodeCompleteProjectCatalogEntry[]
-	): Promise<IHucodeHostedWorkspaceState> {
-		return Promise.reject(new Error(
-			'Complete project catalog reconciliation is restricted to ' +
-			'the Omni shell.'
-		));
-	}
-
-	promoteRetainedWorkbenchProjectFolders(
-		_windowId: number,
-		projectFolders: readonly IHucodeProjectFolderPromotion[]
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.promoteRetainedWorkbenchProjectFolders(
-				windowId,
-				projectFolders
-			));
-	}
-
-	setHostedWorkbenchRestorePolicy(
-		_windowId: number,
-		policy: HucodeHostedWorkbenchRestorePolicy
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.setHostedWorkbenchRestorePolicy(windowId, policy));
-	}
-
-	openFilesInWorkspace(
-		_windowId: number,
-		worktreePath: string,
-		request: INativeOpenFileRequest,
-		projectId?: string
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.openFilesInWorkspace(
-				windowId,
-				worktreePath,
-				request,
-				projectId
-			));
-	}
-
-	openFilesInActiveWorkspace(
-		_windowId: number,
-		request: INativeOpenFileRequest
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.openFilesInActiveWorkspace(windowId, request));
-	}
-
-	closeWorkspace(
-		_windowId: number,
-		instanceId?: string
-	): Promise<IHucodeHostedWorkspaceState> {
-		return this.withShell(() => this.state, (shell, windowId) =>
-			shell.closeWorkspace(windowId, instanceId));
-	}
-
-	reopenWorkspaceInNormalWindow(
-		_windowId: number,
-		instanceId: string
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.reopenWorkspaceInNormalWindow(windowId, instanceId));
-	}
-
-	notifyHostedWorkspaceReady(
-		_windowId: number,
-		instanceId: string
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.notifyHostedWorkspaceReady(windowId, instanceId));
-	}
-
-	focusWorkspace(_windowId: number): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.focusWorkspace(windowId));
-	}
-
-	focusShell(_windowId: number): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.focusShell(windowId));
-	}
-
-	setProjectsSidebarVisible(
-		_windowId: number,
-		visible: boolean
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.setProjectsSidebarVisible(windowId, visible));
-	}
-
-	setProjectSwitcherNavigationState(
-		_windowId: number,
-		canGoBack: boolean,
-		canGoForward: boolean
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.setProjectSwitcherNavigationState(
-				windowId,
-				canGoBack,
-				canGoForward
-			));
-	}
-
-	setProjectSwitcherSectionOrder(
-		_windowId: number,
-		order: readonly ProjectSwitcherOmniSection[]
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.setProjectSwitcherSectionOrder(windowId, order));
-	}
-
-	runActionInShell(
-		_windowId: number,
-		request: INativeRunActionInWindowRequest
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.runActionInShell(windowId, request));
-	}
-
-	runActionInWorkspace(
-		_windowId: number,
-		request: INativeRunActionInWindowRequest
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.runActionInWorkspace(windowId, request));
-	}
-
-	runKeybindingInWorkspace(
-		_windowId: number,
-		request: INativeRunKeybindingInWindowRequest
-	): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.runKeybindingInWorkspace(windowId, request));
-	}
-
-	triggerPasteInWorkspace(_windowId: number): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.triggerPasteInWorkspace(windowId));
-	}
-
-	reloadWorkspace(_windowId: number): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.reloadWorkspace(windowId));
-	}
-
-	toggleWorkspaceDevTools(_windowId: number): Promise<boolean> {
-		return this.withShell(() => false, (shell, windowId) =>
-			shell.toggleWorkspaceDevTools(windowId));
-	}
-
-	layoutWorkspace(_windowId: number, bounds: IRectangle): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.layoutWorkspace(windowId, bounds));
-	}
-
-	async captureWorkspaceScreenshot(
-		_windowId: number,
-		_rect?: IRectangle,
-		_quality?: number
+	captureSelfScreenshot(
+		rect?: IRectangle,
+		quality?: number
 	): Promise<VSBuffer | undefined> {
-		return undefined;
+		return this.withShell(
+			() => undefined,
+			shell => shell.captureSelfScreenshot(rect, quality)
+		);
 	}
 
-	setWorkspaceOverlayOcclusion(
-		_windowId: number,
-		occluded: boolean
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.setWorkspaceOverlayOcclusion(windowId, occluded));
-	}
-
-	shutdownWindowWorkspaces(
-		_windowId: number,
-		reason: ShutdownReason
-	): Promise<void> {
-		return this.withShell(() => undefined, (shell, windowId) =>
-			shell.shutdownWindowWorkspaces(windowId, reason));
+	private runOperation(
+		run: (
+			shell: IHucodeHostedShellService
+		) => Promise<HucodeHostedShellOperationOutcome>
+	): Promise<HucodeHostedShellOperationOutcome> {
+		return this.withShell(
+			() => HucodeHostedShellOperationOutcome.Unavailable,
+			run
+		);
 	}
 }
 
+function createUnavailableHostedShellClient(): IHucodeHostedShellService {
+	const unavailable = () => Promise.resolve(
+		HucodeHostedShellOperationOutcome.Unavailable
+	);
+	return {
+		_serviceBrand: undefined,
+		onDidChangeState: Event.None,
+		getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+		notifyReady: async () => ({
+			outcome: HucodeHostedShellOperationOutcome.Unavailable,
+		}),
+		closeSelf: unavailable,
+		reopenSelfInNormalWindow: unavailable,
+		reloadSelf: unavailable,
+		focusSelf: unavailable,
+		focusShell: unavailable,
+		requestShellAction: unavailable,
+		navigateToFolder: unavailable,
+		triggerPasteInSelf: unavailable,
+		captureSelfScreenshot: async () => undefined,
+	};
+}
+
+/** Adapts a trusted old-parent channel to the narrow current client surface. */
+export function createLegacyHostedShellClient(
+	legacy: IHucodeShellService,
+	windowId: number,
+	instanceId: string
+): IHucodeHostedShellService {
+	const project = (state: IHucodeHostedWorkspaceState) => {
+		const self = state.instances.find(instance =>
+			instance.instanceId === instanceId);
+		return self ? {
+			available: true,
+			projectsSidebarVisible: state.projectsSidebarVisible,
+			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
+			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
+			lifecycleState: self?.state,
+			active: state.activeInstanceId === instanceId,
+			visible: self.visible,
+		} satisfies IHucodeHostedShellState :
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	};
+	const onDidChangeState = Event.latch(
+		Event.map(
+			Event.filter(legacy.onDidChangeWindowState, change =>
+				change.windowId === windowId),
+			change => project(change.state)
+		),
+		areHucodeHostedShellStatesEqual
+	);
+	const accepted = (value: boolean) => value
+		? HucodeHostedShellOperationOutcome.Accepted
+		: HucodeHostedShellOperationOutcome.Unavailable;
+	const getLegacyState = () => legacy.getWindowState(windowId);
+	const isActiveVisible = async () => {
+		const state = await getLegacyState();
+		const self = state.instances.find(candidate =>
+			candidate.instanceId === instanceId);
+		return !!self && state.activeInstanceId === instanceId && self.visible;
+	};
+
+	return {
+		_serviceBrand: undefined,
+		onDidChangeState,
+		getState: async () => project(await getLegacyState()),
+		async notifyReady() {
+			await legacy.notifyHostedWorkspaceReady(windowId, instanceId);
+			const state = project(await getLegacyState());
+			return {
+				outcome: !state.available
+					? HucodeHostedShellOperationOutcome.Unavailable
+					: state.lifecycleState === 'loading' ||
+						state.lifecycleState === 'restore-pending'
+						? HucodeHostedShellOperationOutcome.Unavailable
+						: HucodeHostedShellOperationOutcome.Accepted,
+				state,
+			};
+		},
+		async closeSelf() {
+			const state = project(await getLegacyState());
+			if (!state.available) {
+				return HucodeHostedShellOperationOutcome.Unavailable;
+			}
+			await legacy.closeWorkspace(windowId, instanceId);
+			return HucodeHostedShellOperationOutcome.Accepted;
+		},
+		async reopenSelfInNormalWindow() {
+			return accepted(await legacy.reopenWorkspaceInNormalWindow(
+				windowId,
+				instanceId
+			));
+		},
+		async reloadSelf() {
+			if (!await isActiveVisible()) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
+			await legacy.reloadWorkspace(windowId);
+			return HucodeHostedShellOperationOutcome.Accepted;
+		},
+		async focusSelf() {
+			const state = await getLegacyState();
+			const self = state.instances.find(candidate =>
+				candidate.instanceId === instanceId);
+			if (!self) {
+				return HucodeHostedShellOperationOutcome.Unavailable;
+			}
+			if (state.activeInstanceId !== instanceId &&
+				!await legacy.focusHostedWorkspaceByPath(
+					self.worktreePath,
+					self.projectId
+				)) {
+				return HucodeHostedShellOperationOutcome.Unavailable;
+			}
+			await legacy.focusWorkspace(windowId);
+			return HucodeHostedShellOperationOutcome.Accepted;
+		},
+		async focusShell() {
+			if (!await isActiveVisible()) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
+			await legacy.focusShell(windowId);
+			return HucodeHostedShellOperationOutcome.Accepted;
+		},
+		async requestShellAction(action) {
+			if (!isHucodeHostedShellAction(action)) {
+				return HucodeHostedShellOperationOutcome.Unsupported;
+			}
+			if (!await isActiveVisible()) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
+			return accepted(await legacy.runActionInShell(
+				windowId,
+				createLegacyHucodeHostedShellActionRequest(action)
+			));
+		},
+		async navigateToFolder(request) {
+			if (!isSupportedHucodeHostedNavigationRequest(request)) {
+				return HucodeHostedShellOperationOutcome.Unsupported;
+			}
+			if (!await isActiveVisible()) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
+			const resource = URI.revive(request.folderUri);
+			await legacy.openAndFocusWorkspace(
+				windowId,
+				resource.fsPath
+			);
+			return HucodeHostedShellOperationOutcome.Accepted;
+		},
+		async triggerPasteInSelf() {
+			if (!await isActiveVisible()) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
+			return accepted(await legacy.triggerPasteInWorkspace(windowId));
+		},
+		async captureSelfScreenshot(rect, quality) {
+			return await isActiveVisible()
+				? legacy.captureWorkspaceScreenshot(windowId, rect, quality)
+				: undefined;
+		},
+	};
+}
+
 registerSingleton(
-	IHucodeShellService,
+	IHucodeHostedShellService,
 	HostedOmniWebShellService,
 	InstantiationType.Delayed
 );
