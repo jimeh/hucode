@@ -1,7 +1,7 @@
 ---
 title: Hosted Shell Capability Plan
-status: proposed
-last_updated: 2026-08-05
+status: corrective implementation
+last_updated: 2026-08-06
 ---
 
 # Hosted Shell Capability Plan
@@ -42,7 +42,10 @@ This plan deliberately does **not** cover:
   shell to the active hosted workbench, except where those calls must move to a
   privileged shell connection;
 - reimplementing the existing serve-web parent/iframe trust handshake; or
-- changing project ownership or catalog reconciliation semantics.
+- changing project ownership or catalog reconciliation semantics;
+- automating the exact macOS-only keyboard chord from Linux CI; or
+- replacing the existing Omni runtime smoke harness with a new end-to-end
+  framework.
 
 ## Independent review corrections
 
@@ -74,6 +77,38 @@ as settled requirements before implementation begins:
   protocol version remain separate until there is a demonstrated reason to
   combine them.
 
+## Post-integration runtime correction
+
+The first five staging PRs established the intended authority boundary, but
+macOS testing of integration PR #171 exposed two behavioral gaps that block
+mainline delivery:
+
+- the hosted state projection is too narrow for workbench navigation. A hosted
+  workbench can see only itself, so loaded next/previous, last-active, and the
+  loaded quick switcher cannot discover sibling workbenches. The full switcher
+  can display project catalog entries, but hosted navigation failures are
+  treated as success and last-active state is written before the shell accepts
+  the navigation;
+- desktop capability acquisition is a one-shot, unbounded promise. A denied,
+  lost, or never-answered port request can permanently leave one workbench in a
+  loading state with shell-aware commands unavailable. There is no bounded
+  retry or replacement recovery path.
+
+The same navigation defect applies to the current integration branch's
+serve-web implementation because both platforms now use the shared narrow
+capability. Mainline serve-web worked because its authenticated per-instance
+port exposed the complete read-only shell state. That was a better transport
+boundary than the former desktop global channel, but its state surface was
+broader than necessary. The correction therefore restores the required
+observation through a sanitized shared projection instead of restoring the
+complete service.
+
+Two corrective staging PRs are added after the original five. Both target
+`series-1.131.0-hosted-shell-capability`, use a three-cycle correction budget,
+and require focused Codex, Claude, and CodeRabbit review because they change
+shared navigation semantics and connection lifecycle respectively. The final
+integration PR remains user-merge-only.
+
 ## Executive decision
 
 Replace the single renderer-visible `IHucodeShellService` with capabilities
@@ -82,7 +117,7 @@ issued according to renderer role:
 | Capability | Recipient | Authority |
 | --- | --- | --- |
 | Shell controller | Exact desktop Omni shell renderer | Administer that shell window and its hosted workbenches |
-| Hosted shell | Exact hosted workbench instance | Inspect minimal self-related state, control itself, and request a closed set of shell UI actions |
+| Hosted shell | Exact hosted workbench instance | Inspect self state plus a sanitized read-only navigation projection, control itself, and request a closed set of shell UI actions |
 | Omni open broker | Ordinary trusted workbenches, only if still required | Ask Hucode to open or focus a folder through a high-level operation |
 | Shell main service | Main process only | Own the complete controller implementation and authoritative state |
 
@@ -176,7 +211,8 @@ The current hosted contributions require a much smaller surface than the
 complete shell service:
 
 - observe enough state to know whether the calling instance is active and
-  visible and to render Projects navigation affordances;
+  visible, render Projects navigation affordances, and choose among sanitized
+  sibling navigation targets;
 - notify the shell when the calling workbench is ready;
 - close, reload, focus, or reopen the calling instance;
 - focus the shell;
@@ -187,8 +223,10 @@ complete shell service:
   fallback.
 
 Hosted workbenches do not need complete catalog authority, arbitrary retained
-workbench mutation, other instance identities, shell layout control,
-shell-wide shutdown, or arbitrary shell command execution.
+workbench mutation, instance or process identities, shell layout control,
+shell-wide shutdown, or arbitrary shell command execution. They do need
+read-only sibling navigation metadata. Observation of that bounded metadata is
+not authority to reconcile or mutate the shell's catalog.
 
 ## Risk framing
 
@@ -334,7 +372,7 @@ silently grant it to hosted workbenches.
 
 ### State projection
 
-Define a minimal hosted projection, expected to contain only:
+Keep the evented self projection minimal. It contains only:
 
 - Projects sidebar visibility;
 - Projects back and forward availability;
@@ -343,13 +381,41 @@ Define a minimal hosted projection, expected to contain only:
 - any coarse availability flag demonstrably required by existing titlebar
   behavior.
 
+Add a separate on-demand navigation projection for workbench-switching
+commands. Each target may contain only the data needed to render and order a
+choice and navigate by folder:
+
+- folder URI;
+- lifecycle class (`loading`, `active`, `loaded`, `dormant`, `unloaded`,
+  `missing`, or `crashed`);
+- last-active timestamp;
+- sanitized label, description, detail, and logical ordering metadata for
+  retained targets; and
+- shell-owned section order.
+
+The authoritative side constructs this snapshot. It may combine current
+instances with retained records, but the hosted caller cannot submit or
+reconcile either collection. The projection must remain a read model, not a
+mutation protocol. Prefer a dedicated method such as
+`getNavigationSnapshot()` over adding sibling data to every self-state event;
+switcher commands already perform asynchronous reads and do not need a live
+catalog stream.
+
+Sibling folder URIs and sanitized retained labels are an intentional bounded
+disclosure. Mainline serve-web already supplied them through its broader
+read-only state, and visible navigation cannot work without target identity at
+the folder level. The authority boundary is preserved because the snapshot has
+no controller identity and `navigateToFolder` still validates, canonicalizes,
+and commits the target server-side.
+
 Do not expose:
 
-- other instance IDs or paths;
+- instance IDs, project IDs, window IDs, or connection generations;
 - process or `webContents` IDs;
 - complete project catalogs;
-- retained workbench records; or
-- controller generations unrelated to protocol freshness.
+- unsanitized retained workbench records;
+- controller focus internals; or
+- catalog reconciliation or arbitrary mutation methods.
 
 `notifyReady` should return enough information for readiness retry and
 verification so the hosted client does not need to inspect the full window
@@ -422,9 +488,36 @@ Connection failures should be logged and reflected as unavailable controls or
 failed operations. There must be no fallback from the narrow hosted capability
 to the global full-service channel.
 
+Navigation callers must handle every protocol outcome explicitly:
+
+- `accepted` means the authoritative shell committed navigation;
+- `superseded` means a newer activation intent won and is a handled no-op;
+- `rejected`, `stale`, and `unavailable` are visible failures and must not be
+  reported as successful selection;
+- `unsupported` remains an explicit compatibility failure.
+
+Last-active-worktree persistence belongs to the navigation authority. It is
+updated only after navigation is accepted, using the canonical target resolved
+server-side. The caller must not write MRU state before the request because a
+rejected, stale, unavailable, or superseded request did not navigate. Do not
+automatically replay a user operation after a response timeout: delivery is
+ambiguous and replay could apply navigation twice or after intent has changed.
+
 ### Protocol versioning
 
 Give the hosted capability protocol an explicit version and capability set.
+
+- Add `navigationSnapshot` as an optional capability group within protocol
+  version 1,
+  rather than making a strict version bump that would disable the whole hosted
+  service during serve-web asset skew. The eight existing v1 core groups,
+  including the existing `navigation` group for `navigateToFolder`, are
+  immutable and remain required. Negotiation returns the intersection of known
+  optional groups in addition to that core. The server
+  exposes `getNavigationSnapshot` only when that group was offered and accepted,
+  and the client never invokes it otherwise. Test new-parent/old-child and old-
+  parent/new-child handshakes in both directions. Reserve a protocol-version
+  bump for a wire-incompatible change with an explicit two-version fallback.
 
 - Desktop is normally same-build and may fail closed on mismatch, prompting a
   renderer reload.
@@ -464,11 +557,40 @@ than changing the generic IPC server or preload security model.
 The request/response nonce provides correlation, not authentication. The
 authoritative sender-to-instance lookup provides authentication and scope.
 
-The renderer-side client begins in an explicit connecting state and queues or
-declines operations according to their semantics. Ready notification retries
-after connection, while user operations surface temporary unavailability.
-Slow acquisition, reload during acquisition, and shutdown before acquisition
-completes are tested. The client never falls back to the global shell channel.
+The renderer-side client uses an explicit connection state machine:
+
+```text
+connecting -> connected -> unavailable/backoff -> connecting
+     |             |                  |               |
+     +-------------+------------------+-----------> disposed
+```
+
+Port acquisition has a cancellable deadline and cannot leave the service
+promise pending forever. Merely racing the existing acquisition promise with a
+timer is insufficient because both the renderer and preload listeners would
+remain registered. Add the smallest additive preload release method,
+`ipcMessagePort.cancel(responseChannel, nonce)`, and a renderer acquisition
+handle that removes the DOM listener and invokes that release method. This is a
+deliberate, narrowly tested exception to avoiding preload churn; renderer-only
+cleanup cannot satisfy the leak requirement.
+
+A denial, timeout, stale-generation outcome, transport exception, or bounded
+operation-response timeout transitions to backoff and permits a new
+acquisition. The generic browser `MessagePort` wrapper has no reliable remote-
+close event, so do not claim one: a dead established port is detected by a
+bounded call response or an explicit Hucode liveness signal if implementation
+evidence shows one is needed. The operation that discovered ambiguous delivery
+returns unavailable and is never replayed. Successful replacement disposes the
+old client and state observer before publishing the new connection. Disposal
+cancels acquisition, backoff, listeners, and queued readiness work
+idempotently, and a late-arriving port is closed immediately.
+
+Ready notification may retry after a connection is re-established. User
+operations return `unavailable` while disconnected; they are not queued or
+replayed because their delivery or current intent may be ambiguous. Slow
+acquisition, first denial followed by success, reload during acquisition,
+connection loss after success, and shutdown before acquisition completes are
+tested. The client never falls back to the global shell channel.
 
 ### Shell connection bootstrap
 
@@ -516,11 +638,29 @@ After migration, remove the web-local hosted-service `Pick`, duplicated action
 allowlist, and hosted client that pretends to implement the complete
 `IHucodeShellService`.
 
+The parent-driven web bootstrap is more reliable than desktop's renderer-
+initiated acquisition, but it still needs bounded failure behavior. A hosted
+iframe must not wait forever for its initial port. Use a bounded
+`whenConnected` wait and an idempotent, rate-limited ready re-signal while the
+initial port is absent. Stop it on connection or disposal and preserve the
+same-origin source-window check, instance binding, and generation replacement.
+The re-signal must be correlation-safe: today the child latches its first port
+while the parent treats every repeated Ready as a reload and replaces its
+connection. Add an attempt generation or nonce that the parent echoes, discard
+late ports from older attempts, and let the child adopt and re-register on the
+latest accepted port. Never leave the child on a parent-disposed first port.
+Cached peers that did not negotiate this bootstrap behavior retain the existing
+one-shot path. Do not copy the desktop reconnect state machine or reconnect an
+established same-document port unless a real loss path is demonstrated; iframe
+reload already creates a fresh child service. As on desktop, user operations
+are not replayed after ambiguous delivery.
+
 ## Delivery topology
 
-Deliver one combined pull request to mainline, while using five focused pull
-requests against a temporary integration branch to make implementation and
-review tractable.
+Deliver one combined pull request to mainline. The original authority migration
+used five focused pull requests against a temporary integration branch. The
+runtime correction adds two more focused pull requests against that same
+branch before the combined pull request can proceed.
 
 At execution start:
 
@@ -538,13 +678,14 @@ At execution start:
 5. Refresh the integration branch from the recorded mainline at deliberate
    checkpoints without force-pushing reviewed history. Resolve base drift and
    rerun affected evidence before the final review.
-6. After all five stages are merged, open one integration PR from
-   `series-1.131.0-hosted-shell-capability` to the recorded mainline branch.
+6. After all original and corrective stages are merged, update the integration
+   PR from `series-1.131.0-hosted-shell-capability` to the recorded mainline
+   branch.
 
 The final PR is not a rubber stamp. Stage reviews establish local correctness;
 the combined PR receives fresh exact-head CI, a complete branch-diff review,
 and runtime verification of interactions between stages. Its review must cover
-the whole changeset rather than relying only on approvals from the five staging
+the whole changeset rather than relying only on approvals from the staging
 PRs.
 
 ### Staging PR workflow and merge authority
@@ -561,8 +702,8 @@ independent delivery against the integration branch. Each stage therefore has:
   matches `series-*`; and
 - an exact-head ready gate before merge.
 
-The user explicitly authorizes the orchestrator to merge each of the five
-staging PRs into the integration branch after its required reviews are
+The user explicitly authorizes the orchestrator to merge each staging PR into
+the integration branch after its required reviews are
 non-blocking, required CI is green on the intended head, local delivery is
 complete, and the PR is ready. This authorization does not extend to the final
 integration PR into mainline.
@@ -581,8 +722,8 @@ the sole authority to merge the integration branch into mainline.
 
 ### Selected CodeRabbit reviews
 
-Use CodeRabbit intentionally on the three staging PRs where an additional
-external perspective is proportionate:
+Use CodeRabbit intentionally on the staging PRs where an additional external
+perspective is proportionate:
 
 | Staging PR | Risk | CodeRabbit | Reason |
 | --- | --- | --- | --- |
@@ -591,13 +732,16 @@ external perspective is proportionate:
 | PR 3 — desktop hosted capability | Medium to high | **Required** | Introduces sender-authenticated Electron ports, stale-generation handling, startup latching, disposal, paste, and screenshot targeting |
 | PR 4 — privileged shell migration | High | **Required** | Migrates the broadest consumer surface, role-aware dependency injection, cross-window behavior, and privileged shell authority |
 | PR 5 — global channel removal | Medium, mostly deletion | No by default | Static audit and focused startup tests close the local risk, and the immediately following combined CodeRabbit review covers the final deletion in full context |
+| PR 6 — hosted navigation repair | Medium to high | **Required** | Restores shared sibling navigation without restoring identity or catalog authority, and corrects outcome and MRU semantics |
+| PR 7 — resilient transport and runtime CI | High | **Required** | Changes retry, timeout, replacement, and disposal behavior and adds real desktop and serve-web multi-workbench coverage |
 
 Escalate PR 5 to its own CodeRabbit review if it grows beyond mechanical
 removal, static enforcement, and documentation or introduces new production
 behavior to resolve a missed consumer.
 
-For PRs 2, 3, and 4, request one explicit incremental review with a top-level
-`@coderabbitai review` comment on the internally accepted candidate head. Do not
+For PRs 2, 3, 4, 6, and 7, request one explicit incremental review with a
+top-level `@coderabbitai review` comment on the internally accepted candidate
+head. Do not
 use the `coderabbit:review` label and do not push while a review is active.
 Because CodeRabbit skips draft PRs in this repository, mark the internally
 accepted candidate ready before triggering it, but keep the merge gate closed
@@ -625,9 +769,10 @@ PRs.
 
 ## Implementation sequence
 
-The five staging PRs form one release-level migration. Temporary adapters and
-the global channel may exist between staging PRs on the integration branch,
-but the integration branch is not ready for mainline until PR 5 removes them.
+The original five staging PRs and the two corrective PRs form one release-level
+migration. PR 5 removed the global channel, but the integration branch is not
+ready for mainline until PRs 6 and 7 close the runtime regressions and their
+automated coverage gaps.
 
 ### PR 1 — Legacy-wire action policy and immediate hardening
 
@@ -802,6 +947,137 @@ least-authority architecture is complete.
 point at which any missed consumer becomes visible and the security improvement
 becomes complete.
 
+### PR 6 — Restore hosted navigation behavior without restoring authority
+
+**Objective.** Make every workbench-switching command behave consistently from
+a hosted desktop or web workbench while keeping identity, reconciliation, and
+mutation authority in the shell.
+
+**Work.**
+
+- Add the sanitized on-demand navigation snapshot to the shared hosted
+  capability and both authoritative delegates as the optional negotiated v1
+  `navigationSnapshot` group with per-connection method exposure. Do not rename,
+  reuse, or demote the existing required `navigation` group.
+- Build the snapshot server-side from current instances and retained records,
+  preserving folder, lifecycle, ordering, section, and MRU information without
+  exposing instance, window, project, process, or generation identity.
+- Refactor shared switcher code to consume one navigation read model from shell,
+  hosted, and standalone contexts instead of special-casing hosted callers as a
+  one-item collection.
+- Make full picker, loaded picker, next/previous loaded, last-active, and quick
+  navigation commands operate on that model.
+- Treat navigation outcomes explicitly. Surface rejected, stale, unavailable,
+  and unsupported outcomes; treat superseded as a handled no-op.
+- Remove the hosted caller's premature MRU write and retain the existing desktop
+  and web authority writes after accepted canonical navigation. Audit shell-
+  controller, standalone, and `omniSelectionOpen` paths and move each remaining
+  client write after its successful focus/open so non-hosted MRU ordering is not
+  lost and hosted navigation writes exactly once.
+- Keep `HasLoadedWorkbenchContext` driven by cached self state for titlebar/menu
+  presentation, but do not use temporary `available: false` to hide the command
+  from F1.
+- Replace the duplicate first-wins Unload registrations with one role-aware
+  action. Keep it registered and F1-visible in applicable windows, then use
+  enablement and a synchronous cached-availability execution guard so PR 6
+  cannot wait on the desktop adapter's still-unbounded connection. Surface an
+  unavailable message instead.
+- Apply that cached-availability gate to every shell-aware navigation snapshot
+  read and hosted command execution in PR 6. A workbench whose initial desktop
+  connection is unavailable must fall back to the safe project/current-folder
+  model or report unavailable without invoking the still-queued adapter path.
+- Apply the same explicit outcome handling to other user-invoked hosted
+  lifecycle and semantic shell actions that currently discard `unavailable`,
+  `stale`, or `rejected` results.
+- Add shared contract, projection, command-context, picker, MRU, and outcome
+  regression tests for desktop and web delegates.
+
+**Acceptance criteria.**
+
+- Full picker selection, loaded picker selection, next/previous loaded, and
+  last-active navigation switch between at least two hosted workbenches.
+- A failed selection does not silently succeed or update MRU.
+- An accepted selection updates authoritative MRU exactly once using the
+  canonical target.
+- Unload Current Worktree appears in the hosted command palette when applicable.
+- Projection tests prove that privileged identity and mutation surfaces remain
+  absent and that old/new serve-web peers retain the core capability when the
+  optional navigation group is unavailable.
+- Desktop and serve-web consume the same projection and outcome semantics.
+
+**Risk.** Medium to high. The data is read-only, but it feeds several command
+families and persistence. A broad state shortcut would undo the quality of the
+authority boundary, so the projection shape and negative tests are part of the
+feature rather than optional hardening. This PR is an independently reviewable
+stage, not a mainline-ready endpoint: PR 7 remains required to remove the
+underlying unbounded desktop connection path.
+
+### PR 7 — Resilient capability lifecycle and real multi-workbench CI
+
+**Objective.** Ensure a transient connection failure cannot permanently disable
+one hosted workbench, and exercise the actual hosted command path in normal
+pull-request CI on desktop and serve-web.
+
+**Work.**
+
+- Replace the desktop adapter's one-shot deferred promise with the bounded
+  connection state machine described above.
+- Add the minimal preload cancellation method and a cancellable timeout to
+  desktop port acquisition that removes renderer and preload listeners. Retry
+  with bounded backoff after denial, timeout, stale generation, transport
+  failure, or bounded response timeout, and tear down all timers/listeners on
+  replacement or disposal.
+- Keep readiness retryable but return unavailable immediately for user
+  operations while disconnected; never replay an ambiguous operation.
+- Give web bootstrap a bounded initial wait and correlation-safe, rate-limited
+  ready re-signal with latest-port adoption, without weakening origin,
+  source-window, binding, or generation checks.
+- Extend the existing Linux Omni smoke driver with narrowly scoped test-driver
+  setup and hosted-frame/page command driving. Reuse the real Hucode desktop
+  runtime and serve-web shell rather than mocking their connection boundary.
+- Identify desktop hosted pages and web hosted frames through resolved workbench
+  configuration, then share transport-neutral command-palette/Quick Input
+  helpers. Extend the smoke-only Omni driver only as far as needed to open the
+  deterministic Alpha/Bravo fixtures in serve-web.
+- Treat serve-web as new multi-workbench fixture and hosted-frame coverage: its
+  current smoke checks only user-data and shell rendering. Treat desktop command
+  driving as new coverage on top of the existing lifecycle smoke. The existing
+  executable argument already accepts the development wrapper once the Electron
+  runtime has been prepared under the Hucode mixin.
+- Run the smoke in ordinary PR CI. Keep release packaging smoke coverage, but
+  do not make packaging the only place this regression can be detected.
+- Assert shell lifecycle state after each operation and after one forced hosted
+  connection replacement or renderer recovery so a stuck loading indicator is
+  observable.
+
+**Acceptance criteria.**
+
+- First acquisition denial or timeout followed by a successful response
+  recovers without reloading the shell or falling back to a broad channel.
+- Stale generation, transport/response timeout, renderer reload/crash recovery,
+  and disposal settle without leaked listeners, timers, or permanently pending
+  calls.
+- A timed-out or disposed acquisition leaves no renderer or preload response
+  listener behind.
+- A user operation during disconnection returns unavailable and is not replayed.
+- A lost first web port followed by a correlated re-signal cannot leave the
+  child latched to a parent-disposed port; stale attempt ports are closed.
+- Linux desktop CI opens two example workbenches and drives the full picker,
+  loaded next/previous, last-active, loaded quick switcher, and unload command
+  from a hosted workbench.
+- Serve-web CI exercises the same command behaviors through hosted iframes.
+- The smoke verifies lifecycle and active-row state after switching and after a
+  recovery event, catching permanent loading indicators and dead command
+  forwarding.
+- CI prepares the development Electron runtime under the Hucode mixin, runs the
+  desktop smoke after Electron unit tests to avoid shared-runtime races, and
+  retains capped logs, page errors, target inventory, and failure screenshots.
+
+**Risk.** High but localized. Retry and teardown code is timing-sensitive, and
+real Electron/browser smoke adds CI cost. Reusing the existing fixture and
+covering one representative recovery path per platform keeps maintenance and
+runtime proportionate.
+
 ## Verification strategy
 
 Authority tests must inspect the actual target and delivered operation, not
@@ -820,7 +1096,16 @@ only a returned boolean.
   intent after any asynchronous preflight.
 - Paste targets the bound active visible instance and cannot fall through to
   the shell window on rejection.
-- State projection omits paths, other IDs, process identity, and catalogs.
+- Navigation projection includes only folder and sanitized presentation,
+  lifecycle, order, and MRU fields; it omits every instance/window/project/
+  process identity, connection internals, complete catalogs, and mutation
+  methods.
+- Rejected, stale, unavailable, unsupported, and superseded navigation outcomes
+  have distinct tested caller behavior.
+- MRU persistence occurs only after accepted canonical navigation.
+- Old/new serve-web peers preserve the v1 core in both directions; the
+  navigation snapshot method is remotely callable only when its optional group
+  was negotiated.
 - Stale connection generations fail closed.
 - The exposed method list is exact, so adding a method to a broader service
   cannot widen the hosted facade implicitly.
@@ -832,6 +1117,11 @@ only a returned boolean.
 - Caller-provided nonce reuse cannot change the authoritative sender binding.
 - Slow connection establishment exposes a bounded connecting state; readiness
   recovers after connection without broad-channel fallback.
+- First denial followed by success, no response followed by success, and port
+  close after success all recover through bounded reacquisition.
+- Acquisition timeout/disposal removes the nonce-specific DOM and preload
+  listeners and closes a late-arriving port.
+- User operations fail unavailable while disconnected and are never replayed.
 - Reload replaces the connection and invalidates the old port.
 - Crash, removal, unload, shutdown-before-connect, controller close, and window
   destruction dispose connections exactly once.
@@ -853,6 +1143,10 @@ only a returned boolean.
   compatibility window.
 - Replaced and stale iframe connections are rejected.
 - Protocol version mismatch follows the documented compatibility policy.
+- Initial port wait is bounded and a valid parent re-signal can recover the
+  same bound child without broadening the handshake.
+- A first-port/re-signal race adopts only the latest correlated port and closes
+  the parent-disposed or stale attempt.
 - Web and desktop expose the same hosted capability surface and action policy.
 
 ### Integration and runtime tests
@@ -874,11 +1168,25 @@ only a returned boolean.
 - Devtools, overlay occlusion, layout, and shell shutdown, including shutdown
   ordering while privileged and hosted ports are disposing.
 
+### Corrective closure matrix
+
+| Reported or adjacent behavior | Automated evidence | Residual/manual evidence |
+| --- | --- | --- |
+| `Cmd+Ctrl+Tab` / Switch to Last Active Workbench | Shared command test invokes the registered command with two hosted targets and verifies accepted navigation and MRU | Linux cannot synthesize the macOS-only chord faithfully; verify the macOS keybinding registration statically and include the chord in final macOS QA |
+| Full Switch Workbench picker selection | Desktop and serve-web smoke choose the other fixture from a hosted workbench | None beyond final macOS spot check |
+| Switch to Next/Previous Loaded Workbench | Shared unit coverage plus desktop and serve-web hosted-command smoke | None |
+| Quick Switch Loaded Workbench | Desktop and serve-web hosted-command smoke selects a sibling | None |
+| Unload Current Worktree command palette presence | Single-registration/role dispatch test plus runtime command-palette assertion, including cached unavailable guard | None |
+| Selection currently does nothing | Outcome tests for every protocol result plus runtime accepted selection | Final macOS confirmation of error presentation |
+| Permanent loading icon and dead commands in one workbench | Adapter denial/timeout/reconnect tests plus runtime connection replacement/recovery and shell lifecycle assertions | Final macOS reproduction attempt after integration update |
+| Mainline serve-web behavior retained | Shared projection tests plus real hosted-iframe smoke | Browser/version skew outside the tested compatibility window remains normal deployment risk |
+| Least-authority boundary retained | Exact method-surface and serialized-projection negative tests on both delegates | CodeRabbit and whole-integration review |
+
 ### Repository validation
 
 Use proportionate focused suites during each PR, then the relevant aggregate
 Hucode validation before delivery. Repeat final aggregate and runtime evidence
-on the exact integration head after all five staging PRs and mainline drift are
+on the exact integration head after all staging PRs and mainline drift are
 combined:
 
 - `npm run gulp compile-client` after TypeScript source edits;
@@ -891,6 +1199,14 @@ combined:
 - `npm run -s precommit -- <edited paths>` before staging, or the staged
   precommit path when appropriate; and
 - desktop and serve-web smoke runs for the interaction matrix above.
+
+PR 6 must at minimum run `npm run gulp compile-client`, the focused shared
+hosted-capability and project-switcher suites, `npm run typecheck-client`,
+`npm run hucode:check-test-suites`, and precommit on every edited path. PR 7
+adds the focused desktop adapter/port and web connection suites plus the real
+Linux desktop and serve-web multi-workbench smoke jobs. If a new Hucode-named
+suite is added, regenerate and commit
+`build/hucode/test-suites.snapshot.json` before checking the inventory.
 
 Do not run multiple Electron test harnesses concurrently. Recompile after
 source edits before interpreting `VSCODE_SKIP_PRELAUNCH=1` test results.
@@ -931,7 +1247,10 @@ Keep generic IPC, preload, and upstream workbench changes minimal. Hucode-owned
 port servers, clients, and contracts should live under `src/vs/hucode/` where
 possible. The desktop startup registration and a handful of workbench
 integration seams are likely unavoidable, but the design should not alter
-`ProxyChannel` or the core IPC context format.
+`ProxyChannel` or the core IPC context format. The one justified upstream-
+adjacent change is the additive nonce-specific `ipcMessagePort.cancel` preload
+method needed to prevent listener leaks; keep it generic, minimal, and directly
+tested.
 
 This structure should be easier to replay across upstream upgrades than a
 custom role-aware fork of VS Code's generic IPC system.
@@ -941,14 +1260,20 @@ custom role-aware fork of VS Code's generic IPC system.
 | Risk | Mitigation |
 | --- | --- |
 | Hidden hosted dependency on complete state | Characterize call sites first, add projected-state tests, and migrate web before desktop |
+| Sanitized navigation projection grows into a shadow catalog | Separate on-demand read model, exact serialized-field tests, and no identity/reconciliation methods |
 | Stale renderer controls a replacement | Bind a connection generation and fail closed after replacement |
 | Port leak across lifecycle paths | Central idempotent disposal; tests for reload, crash, unload, host close, and global destruction |
+| Acquisition timeout leaks preload listeners | Add and directly test the nonce-specific preload cancel seam; renderer-only timeout is not accepted |
 | New action is accidentally authorized | Closed semantic union; never reuse namespace routing as authorization |
 | Desktop and web drift again | Shared facade/client/policy plus cross-platform conformance suite |
 | Serve-web old/new asset mismatch | Preserve the legacy action wire in PR 1, then use an explicit capability version and bounded adapter |
+| Optional navigation leaks across version skew | Keep the v1 core compatible in both directions and gate remote member exposure on negotiated optional capability |
+| Web retry disposes the child's latched port | Correlate attempts, adopt only the latest accepted port, and close late or replaced clients |
 | Hidden child steals navigation | Active/visible authorization plus latest-activation-intent checks after asynchronous preflight |
 | Hosted paste reaches the shell | Self-bound paste capability with no shell-window fallback |
 | Slow desktop connection regresses startup | Explicit connecting state, bounded behavior, and shutdown-during-connect tests |
+| Retry duplicates a user operation | Retry acquisition and readiness only; return unavailable for user operations and never replay ambiguous delivery |
+| Runtime smoke becomes flaky or release-only | Reuse deterministic Alpha/Bravo fixtures, assert observable shell state, and run desktop plus serve-web smoke in ordinary PR CI |
 | Cross-window shell behavior is lost | High-level path-scoped operations resolved authoritatively in main |
 | Ordinary workbench DI breaks | Role-aware service registration and startup-construction tests before global channel removal |
 | Migration silently restores broad access | No runtime fallback to global full service; static raw-channel audit |
@@ -974,6 +1299,17 @@ The work is complete only when all of the following are true:
 - the desktop shell renderer has a separately bound privileged capability;
 - the complete shell main service is no longer globally renderer-visible;
 - desktop and web share policy, facade, client, and conformance tests;
+- hosted switchers receive a sanitized read-only sibling navigation projection
+  without instance identity or catalog authority;
+- serve-web version skew preserves the v1 core and exposes navigation only
+  after optional capability negotiation;
+- every navigation outcome has explicit caller semantics and only accepted
+  canonical navigation updates MRU;
+- desktop and web connection bootstrap is bounded and can recover from a
+  transient denial, timeout, detected transport loss, or replacement without
+  replaying user operations;
+- acquisition cancellation removes both renderer and preload listeners, and a
+  web re-signal cannot leave the child bound to a replaced port;
 - there is no broad compatibility fallback;
 - negative authority tests verify denied operations and actual targets;
 - existing user-facing Omni behavior passes focused automated and runtime
@@ -997,21 +1333,34 @@ The recommended defaults for implementation are:
 6. Keep only transport bootstrap and host mechanics platform-specific.
 7. Preserve the legacy serve-web action wire for PR 1, then version the new
    hosted capability separately from the unload protocol.
-8. Deliver five focused `ship-feature-pr` staging PRs into
-   `series-1.131.0-hosted-shell-capability`, followed by one holistic PR from
-   that branch to mainline.
+8. Deliver the original five and both corrective `ship-feature-pr` staging PRs
+   into `series-1.131.0-hosted-shell-capability`, followed by one holistic PR
+   from that branch to mainline.
 9. Treat staging reviews as focused evidence, not a substitute for fresh
    exact-head review of the combined mainline PR.
 10. Merge staging PRs only after their ready gates pass; never merge the final
     integration PR, whose merge authority remains exclusively with the user.
 11. Remove the complete global desktop channel as the terminal condition.
+12. Treat sanitized sibling navigation as observation, not authority, and keep
+    it out of the evented self-state projection. Add it as an optional v1
+    `navigationSnapshot` capability group with negotiated per-connection method
+    exposure; leave all eight existing v1 core groups unchanged.
+13. Bound and retry connection establishment, but never replay a user operation
+    after ambiguous delivery.
+14. Require normal-PR Linux desktop and serve-web multi-workbench smoke before
+    integration is ready for the user's final macOS retest.
 
 ## Source map
 
 - `src/vs/hucode/common/omniWindow.ts` — current complete service contract.
+- `src/vs/platform/window/common/hucodeHostedShellService.ts` — shared hosted
+  contract, capability negotiation, exact remote surface, projection, and
+  bound facade.
 - `src/vs/code/electron-main/app.ts` — desktop global channel registration.
-- `src/vs/hucode/electron-browser/omniWindowService.ts` — desktop renderer
-  remote-service registration.
+- `src/vs/hucode/electron-browser/hostedShellServiceAdapter.ts` — current
+  one-shot desktop hosted connection and corrective retry state machine seam.
+- `src/vs/hucode/electron-main/hostedShellPortAcceptor.ts` — desktop request
+  denial, authoritative binding, connection replacement, and retry seam.
 - `src/vs/hucode/electron-main/shellMainService.ts` — main service delegation.
 - `src/vs/hucode/electron-main/hostedWorkspacesController.ts` — hosted view
   ownership, trust tracking, and shell action delivery.
@@ -1021,12 +1370,18 @@ The recommended defaults for implementation are:
   bootstrap.
 - `src/vs/hucode/browser/hostedOmniWebShellService.ts` — current hosted web
   client adapter.
+- `src/vs/hucode/browser/hostedOmniWorkspace.web.contribution.ts` — hosted web
+  Ready signal and workbench-client registration.
 - `src/vs/hucode/browser/hostedOmniWorkspace.contribution.ts` — shared hosted
   readiness, actions, and lifecycle consumers.
+- `src/vs/hucode/browser/hostedShellStateObserver.ts` — cached self-state and
+  capability-availability observation.
 - `src/vs/hucode/browser/omniSelectionOpen.ts` — path-scoped standalone-window
   flow that can intentionally cross Omni window ownership.
 - `src/vs/hucode/browser/projectSwitcher/openProjectSwitcherTarget.ts` — hosted
   navigation, normal-window fallback, and activation-intent consumer.
+- `src/vs/hucode/browser/projectSwitcher/switchProjectWorktree.contribution.ts`
+  — full, loaded, adjacent, last-active, and quick switcher state consumers.
 - `src/vs/workbench/services/host/electron-browser/hucodeHostedOmniHost.ts` —
   desktop hosted focus, state, and screenshot integration.
 - `src/vs/workbench/services/host/electron-browser/nativeHostService.ts` —
@@ -1044,3 +1399,7 @@ The recommended defaults for implementation are:
 - `src/vs/base/parts/ipc/electron-browser/ipc.mp.ts` and
   `src/vs/base/parts/ipc/electron-main/ipc.mp.ts` — existing Electron
   `MessagePort` infrastructure.
+- `build/hucode/linux-omni-smoke.ts` — existing real desktop lifecycle smoke to
+  extend with hosted command and recovery coverage.
+- `build/hucode/web-server-user-data-smoke.ts` — existing serve-web smoke seam
+  to extend or complement with hosted iframe navigation coverage.
