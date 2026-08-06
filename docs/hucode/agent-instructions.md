@@ -656,6 +656,10 @@ human-facing guides rather than replacing them.
 - Shell-state consumers that subscribe before fetching their initial snapshot
   must not apply that snapshot after an `onDidChangeState` event arrives. The
   late snapshot can be older and overwrite live host or Projects state.
+- Keep the complete desktop `IHucodeShellMainService` main-process-internal.
+  Desktop entrypoints register only the owner-bound shell-controller and
+  per-instance hosted-shell adapters; do not restore a global `hucodeShell`
+  renderer channel or refine the main decorator from `IHucodeShellService`.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.
