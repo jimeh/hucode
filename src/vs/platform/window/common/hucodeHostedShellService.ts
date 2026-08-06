@@ -16,6 +16,14 @@ import { IRectangle } from './window.js';
 /** MessagePort channel exposing the narrow hosted-to-shell capability. */
 export const HUCODE_HOSTED_SHELL_CHANNEL = 'hucodeHostedShell';
 
+/** Desktop IPC request used only to acquire a bound hosted capability port. */
+export const HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL =
+	'vscode:hucodeHostedShellPort';
+
+/** Desktop IPC response carrying the bound hosted capability port. */
+export const HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL =
+	'vscode:hucodeHostedShellPortResult';
+
 /** Current version of the hosted shell capability contract. */
 export const HUCODE_HOSTED_SHELL_PROTOCOL_VERSION = 1;
 

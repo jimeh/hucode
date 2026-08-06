@@ -23,8 +23,11 @@ import {
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
+	HucodeHostedShellAction,
 	REFRESH_PROJECTS_COMMAND_ID,
 } from '../../../platform/window/common/hucodeHostedShellActions.js';
+import { HucodeHostedShellOperationOutcome } from
+	'../../../platform/window/common/hucodeHostedShellService.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
@@ -418,6 +421,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const untrustedProcessIds: number[] = [];
 		const trustedWebContentsIds: number[] = [];
 		const untrustedWebContentsIds: number[] = [];
+		const invalidatedHostedShellWebContentsIds: number[] = [];
 		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
 			ResidentHostedWorkspacesController['getState']
@@ -461,6 +465,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			id => untrustedProcessIds.push(id),
 			id => trustedWebContentsIds.push(id),
 			id => untrustedWebContentsIds.push(id),
+			id => invalidatedHostedShellWebContentsIds.push(id),
 			state => stateChanges.push(state),
 			{
 				restorePolicy: options.restorePolicy,
@@ -480,6 +485,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			browserViewMainService,
 			controller,
 			ipcMain,
+			invalidatedHostedShellWebContentsIds,
 			logService,
 			protocolMainService,
 			stateChanges,
@@ -4116,6 +4122,223 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(
 			viewFactory.views[0].rawWebContents.pasteCalls.length,
 			1
+		);
+	});
+
+	test('hosted shell bindings are sender-bound and generation-scoped',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const {
+				controller,
+				invalidatedHostedShellWebContentsIds,
+				viewFactory,
+			} = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			assert.strictEqual(
+				controller.acquireHostedShellBinding(999),
+				undefined
+			);
+
+			const first = controller.acquireHostedShellBinding(1)!;
+			const replacement = controller.acquireHostedShellBinding(1)!;
+			assert.strictEqual(first.instanceId, 'instance-1');
+			assert.ok(
+				replacement.connectionGeneration > first.connectionGeneration
+			);
+			assert.strictEqual(
+				controller.getHostedShellAuthorityState(first).disposed,
+				true
+			);
+			assert.strictEqual(
+				controller.getHostedShellAuthorityState(replacement).disposed,
+				false
+			);
+
+			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+			assert.strictEqual(
+				controller.getHostedShellAuthorityState(replacement).disposed,
+				true
+			);
+			assert.deepStrictEqual(
+				invalidatedHostedShellWebContentsIds,
+				[1, 1, 1]
+			);
+		});
+
+	test('bound paste, screenshot, focus, and action never retarget',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { controller, viewFactory, window } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const alphaBinding = controller.acquireHostedShellBinding(1)!;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			const bravoBinding = controller.acquireHostedShellBinding(2)!;
+
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(alphaBinding),
+				false
+			);
+			assert.strictEqual(
+				await controller.captureHostedShellSelfScreenshot(alphaBinding),
+				undefined
+			);
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(bravoBinding),
+				true
+			);
+			assert.strictEqual(
+				(await controller.captureHostedShellSelfScreenshot(
+					bravoBinding
+				))?.toString(),
+				'test'
+			);
+			assert.strictEqual(
+				controller.focusHostedShellSelf(alphaBinding),
+				true
+			);
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(alphaBinding),
+				true
+			);
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(bravoBinding),
+				false
+			);
+			assert.strictEqual(
+				controller.runHostedShellAction(
+					bravoBinding,
+					HucodeHostedShellAction.AddProject
+				),
+				false
+			);
+			assert.strictEqual(
+				controller.runHostedShellAction(
+					alphaBinding,
+					HucodeHostedShellAction.AddProject
+				),
+				true
+			);
+			const shellWebContents = window.win!.webContents as unknown as
+				TestWebContents;
+			assert.strictEqual(shellWebContents.sent.length, 1);
+			assert.strictEqual(viewFactory.views[0].rawWebContents.pasteCalls.length, 1);
+			assert.strictEqual(viewFactory.views[1].rawWebContents.pasteCalls.length, 1);
+		});
+
+	test('stale hosted shell binding cannot control a reloading view',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const stale = controller.acquireHostedShellBinding(1)!;
+			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+
+			assert.strictEqual(controller.reloadHostedShellSelf(stale), false);
+			assert.strictEqual(controller.focusHostedShellSelf(stale), false);
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(stale),
+				false
+			);
+			const current = controller.acquireHostedShellBinding(1)!;
+			assert.strictEqual(controller.reloadHostedShellSelf(current), true);
+			assert.strictEqual(
+				viewFactory.views[0].rawWebContents.reloadCalls.length,
+				1
+			);
+		});
+
+	test('hosted close cannot remove a reloaded capability generation',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			hostedWebContents.autoBeforeUnloadReply = false;
+
+			const closing = controller.closeHostedShellSelf(binding);
+			await Promise.resolve();
+			const beforeUnload = hostedWebContents.sent[0].request as {
+				okChannel: string;
+			};
+			hostedWebContents.emit('did-start-loading');
+			ipcMain.emitReply(beforeUnload.okChannel);
+
+			assert.strictEqual(await closing, false);
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => instance.instanceId),
+				['instance-1']
+			);
+			assert.deepStrictEqual(
+				hostedWebContents.sent.map(message => message.channel),
+				[
+					'vscode:onBeforeUnload',
+					'vscode:onShutdownPreparationAbandoned',
+				]
+			);
+			assert.deepStrictEqual(hostedWebContents.closeCalls, []);
+		});
+
+	test('superseded hosted navigation cannot regain activation', async () => {
+		const alpha = createWorktree('alpha');
+		const bravo = createWorktree('bravo');
+		const charlie = createWorktree('charlie');
+		const heldLoad = new DeferredPromise<void>();
+		const { controller } = createController({
+			loadUrlPromises: [
+				Promise.resolve(),
+				Promise.resolve(),
+				heldLoad.p,
+			],
+		});
+
+		await controller.openWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const alphaBinding = controller.acquireHostedShellBinding(1)!;
+		await controller.openWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+		assert.strictEqual(
+			controller.focusHostedShellSelf(alphaBinding),
+			true
+		);
+		const navigation = controller.navigateHostedShellToFolder(
+			alphaBinding,
+			{ folderUri: URI.file(charlie).toJSON() },
+			{
+				isCurrentAndActiveVisible: async () => {
+					const state = controller.getHostedShellAuthorityState(
+						alphaBinding
+					);
+					return !state.disposed &&
+						state.activeInstanceId === alphaBinding.instanceId &&
+						state.instances.some(instance =>
+							instance.instanceId === alphaBinding.instanceId &&
+							instance.visible
+						);
+				},
+			}
+		);
+		await Promise.resolve();
+		await controller.openWorkspace(bravo, 'project-bravo');
+		void heldLoad.complete();
+
+		assert.strictEqual(
+			await navigation,
+			HucodeHostedShellOperationOutcome.Superseded
+		);
+		assert.strictEqual(
+			controller.getState().activeInstanceId,
+			'instance-2'
 		);
 	});
 });
