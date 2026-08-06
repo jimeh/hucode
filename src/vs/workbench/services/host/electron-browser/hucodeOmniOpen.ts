@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { isEqual } from '../../../../base/common/extpath.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { isLinux } from '../../../../base/common/platform.js';
+import { localize } from '../../../../nls.js';
 import { INativeHostService } from
 	'../../../../platform/native/common/native.js';
 import { IProjectManagerService } from
@@ -81,9 +82,10 @@ export async function tryOpenHucodeOmniWindow(
 		}
 		if (environmentService.isHostedOmniWorkspace) {
 			if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
-				onUnexpectedError(new Error(
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationUnavailable',
 					'Hosted Omni folder navigation is unavailable.'
-				));
+				)));
 				return true;
 			}
 			const outcome = await hostedShellService.navigateToFolder({
@@ -92,10 +94,12 @@ export async function tryOpenHucodeOmniWindow(
 			if (outcome !== HucodeHostedShellOperationOutcome.Accepted &&
 				outcome !== HucodeHostedShellOperationOutcome.Unsupported &&
 				outcome !== HucodeHostedShellOperationOutcome.Superseded) {
-				onUnexpectedError(new Error(
-					'Hosted Omni folder navigation was not accepted for ' +
-					`${openable.folderUri.toString(true)}: ${outcome}.`
-				));
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationNotAccepted',
+					'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+					openable.folderUri.toString(true),
+					outcome
+				)));
 			}
 			return outcome !== HucodeHostedShellOperationOutcome.Unsupported;
 		}

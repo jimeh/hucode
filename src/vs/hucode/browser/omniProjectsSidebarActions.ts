@@ -72,6 +72,7 @@ const noCurrentWorktreeToUnload = localize(
 	'There is no current worktree to unload.'
 );
 
+/** Keeps accepted outcomes silent and turns failures into localized notices. */
 export function notifyHucodeHostedOperationOutcome(
 	operation: string,
 	outcome: HucodeHostedShellOperationOutcome,

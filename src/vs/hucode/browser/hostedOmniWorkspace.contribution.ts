@@ -336,6 +336,7 @@ registerWorkbenchContribution2(
 	WorkbenchPhase.AfterRestored
 );
 
+/** Uses cached adapter availability to fail fast, then reports the outcome. */
 async function runHostedShellOperation(
 	accessor: ServicesAccessor,
 	operation: string,

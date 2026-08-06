@@ -755,7 +755,7 @@ useful. Leave valid unresolved or uncertain concerns open and return them for
 correction. This authority does not permit dismissing a blocking review.
 
 The final integration PR also requires a CodeRabbit review over the complete
-combined diff, as selected by the user. That review does not replace the three
+combined diff, as selected by the user. That review does not replace the five
 scoped reviews, and their results do not replace it. Corrections from any
 CodeRabbit review use the same bounded `ship-feature-pr` correction budget and
 risk-based internal re-review policy.

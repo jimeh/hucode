@@ -8,6 +8,7 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { createDecorator } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
@@ -171,9 +172,10 @@ export async function tryNavigateHucodeHostedBrowserWindow(
 		return false;
 	}
 	if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
-		onUnexpectedError(new Error(
+		onUnexpectedError(new Error(localize(
+			'hostedOmniFolderNavigationUnavailable',
 			'Hosted Omni folder navigation is unavailable.'
-		));
+		)));
 		return true;
 	}
 
@@ -190,10 +192,12 @@ export async function tryNavigateHucodeHostedBrowserWindow(
 		case HucodeHostedShellOperationOutcome.Stale:
 		case HucodeHostedShellOperationOutcome.Unavailable:
 		default:
-			onUnexpectedError(new Error(
-				'Hosted Omni folder navigation was not accepted for ' +
-				`${toOpen[0].folderUri.toString(true)}: ${result}.`
-			));
+			onUnexpectedError(new Error(localize(
+				'hostedOmniFolderNavigationNotAccepted',
+				'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+				toOpen[0].folderUri.toString(true),
+				result
+			)));
 			return true;
 	}
 }

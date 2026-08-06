@@ -184,7 +184,8 @@ suite('HucodeOmniOpen', () => {
 		options as Partial<IWorkbenchEnvironmentService> as IWorkbenchEnvironmentService;
 
 	const withExpectedUnexpectedError = async <T>(
-		callback: () => Promise<T>
+		callback: () => Promise<T>,
+		verifyError?: (error: unknown) => void
 	): Promise<T> => {
 		const originalHandler = errorHandler.getUnexpectedErrorHandler();
 		const errors: unknown[] = [];
@@ -192,6 +193,7 @@ suite('HucodeOmniOpen', () => {
 		try {
 			const result = await callback();
 			assert.strictEqual(errors.length, 1);
+			verifyError?.(errors[0]);
 			return result;
 		} finally {
 			errorHandler.setUnexpectedErrorHandler(originalHandler);
@@ -403,7 +405,13 @@ suite('HucodeOmniOpen', () => {
 					shell.service,
 					hostedShellService,
 					projectManager.service
-				), true)
+				), true),
+				error => {
+					assert.ok(String(error).includes('/outside'));
+					assert.ok(String(error).includes(
+						HucodeHostedShellOperationOutcome.Unavailable
+					));
+				}
 			);
 			assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 

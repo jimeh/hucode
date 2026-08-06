@@ -1853,8 +1853,27 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(JSON.stringify(state).includes('/tmp/'), false);
 			const navigationSnapshot =
 				await child.shell.getNavigationSnapshot!();
+			assert.ok(navigationSnapshot);
 			assert.deepStrictEqual(
-				navigationSnapshot?.targets.map(target => ({
+				Object.getOwnPropertyNames(navigationSnapshot).sort(),
+				['sectionOrder', 'targets']
+			);
+			for (const target of navigationSnapshot.targets) {
+				assert.deepStrictEqual(
+					Object.getOwnPropertyNames(target).sort(),
+					[
+						'folderUri', 'lastActiveAt', 'lifecycleState',
+						'order', 'section',
+					]
+				);
+				assert.strictEqual(Object.values(target).includes(undefined), false);
+			}
+			assert.strictEqual(
+				Object.values(navigationSnapshot).includes(undefined),
+				false
+			);
+			assert.deepStrictEqual(
+				navigationSnapshot.targets.map(target => ({
 					path: URI.revive(target.folderUri).fsPath,
 					lifecycleState: target.lifecycleState,
 					section: target.section,
@@ -1865,12 +1884,6 @@ suite('WebHucodeShellService', () => {
 					section: 'projects',
 				}]
 			);
-			for (const forbidden of [
-				'instanceId', 'projectId', 'windowId', 'connectionGeneration',
-			]) {
-				assert.strictEqual(JSON.stringify(navigationSnapshot)
-					.includes(forbidden), false);
-			}
 			for (const action of HUCODE_HOSTED_SHELL_ACTIONS) {
 				assert.strictEqual(
 					await child.shell.requestShellAction(action),

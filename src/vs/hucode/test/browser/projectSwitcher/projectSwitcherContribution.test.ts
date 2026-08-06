@@ -249,11 +249,17 @@ suite('ProjectSwitcherContribution', () => {
 			notifyHucodeHostedOperationOutcome(
 				'Test operation', outcome, notificationService);
 		}
+		notifyHucodeHostedOperationOutcome(
+			'Test operation',
+			'future-outcome' as HucodeHostedShellOperationOutcome,
+			notificationService
+		);
 		assert.deepStrictEqual(errors, [
 			'Test operation was rejected by the Omni shell.',
 			'Test operation could not run because this workbench is no longer connected to the current Omni shell.',
 			'Test operation could not run because the Omni shell connection is unavailable.',
 			'Test operation is not supported by this Omni shell.',
+			'Test operation could not be completed.',
 		]);
 	});
 

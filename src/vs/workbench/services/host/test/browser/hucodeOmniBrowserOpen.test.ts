@@ -20,6 +20,7 @@ import {
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	withHucodeHostedShellCachedAvailability,
 } from '../../../../../platform/window/common/hucodeHostedShellService.js';
 
 suite('HucodeOmniBrowserOpen', () => {
@@ -262,7 +263,7 @@ suite('HucodeOmniBrowserOpen', () => {
 						IHucodeHostedShellService
 					), true);
 					assert.strictEqual(errors.length, expectedErrorCount);
-					assert.match(String(errors.at(-1)), new RegExp(outcome));
+					assert.ok(String(errors.at(-1)).includes(outcome));
 				}
 
 				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
@@ -298,6 +299,39 @@ suite('HucodeOmniBrowserOpen', () => {
 					IHucodeHostedShellService
 				), false);
 				assert.strictEqual(errors.length, 3);
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(originalHandler);
+			}
+		});
+
+	test('fails fast while the hosted shell transport is unavailable',
+		async () => {
+			const originalHandler = errorHandler.getUnexpectedErrorHandler();
+			const errors: unknown[] = [];
+			let navigationCalls = 0;
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				const hostedShellService =
+					withHucodeHostedShellCachedAvailability({
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() {
+							navigationCalls++;
+							return HucodeHostedShellOperationOutcome.Accepted;
+						},
+					} as Partial<IHucodeHostedShellService> as
+						IHucodeHostedShellService, () => false);
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					hostedShellService
+				), true);
+				assert.strictEqual(navigationCalls, 0);
+				assert.strictEqual(errors.length, 1);
+				assert.ok(String(errors[0]).includes(
+					'Hosted Omni folder navigation is unavailable.'
+				));
 			} finally {
 				errorHandler.setUnexpectedErrorHandler(originalHandler);
 			}
