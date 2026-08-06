@@ -76,6 +76,8 @@ import {
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
 } from './projectSwitcher/projectSwitcherCommon.js';
+import { observeHucodeHostedShellState } from
+	'./hostedShellStateObserver.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
@@ -192,7 +194,7 @@ class ToggleProjectTitleBarControls extends ToggleTitleBarConfigAction {
 
 registerAction2(ToggleProjectTitleBarControls);
 
-export class HostedOmniWorkspaceReadyContribution extends Disposable
+class HostedOmniWorkspaceReadyContribution extends Disposable
 	implements IWorkbenchContribution {
 
 	static readonly ID = 'hucode.hostedOmniWorkspaceReady';
@@ -245,17 +247,10 @@ export class HostedOmniWorkspaceReadyContribution extends Disposable
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);
 		};
 
-		let didReceiveStateChange = false;
-		this._register(shellService.onDidChangeState(state => {
-			didReceiveStateChange = true;
-			updateShellStateContexts(state);
-		}));
-
-		void shellService.getState().then(state => {
-			if (!didReceiveStateChange) {
-				updateShellStateContexts(state);
-			}
-		});
+		this._register(observeHucodeHostedShellState(
+			shellService,
+			updateShellStateContexts
+		));
 	}
 
 	override dispose(): void {
