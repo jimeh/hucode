@@ -547,10 +547,11 @@ export class HucodeShellMainService extends Disposable
 
 	async focusHostedWorkspaceByPath(
 		worktreePath: string,
-		projectId?: string
+		projectId?: string,
+		canApply: () => boolean = () => true
 	): Promise<boolean> {
 		const owner = await this.findHostedWorkspaceByPath(worktreePath);
-		if (!owner) {
+		if (!owner || !canApply()) {
 			return false;
 		}
 
@@ -559,13 +560,20 @@ export class HucodeShellMainService extends Disposable
 			return false;
 		}
 
-		window.focus();
-		await this.openWorkspace(
-			owner.windowId,
+		const controller = this.getOrCreateController(owner.windowId);
+		await controller.openWorkspace(
 			owner.worktreePath,
-			projectId ?? owner.projectId
+			projectId ?? owner.projectId,
+			canApply,
+			canApply
 		);
-		await this.focusWorkspace(owner.windowId);
+		if (!canApply() ||
+			controller.getState().activeInstanceId !== owner.instanceId) {
+			return false;
+		}
+
+		window.focus();
+		controller.focusWorkspace();
 		return true;
 	}
 
@@ -957,6 +965,11 @@ export class HucodeShellMainService extends Disposable
 				},
 				webContentsId => this.hostedShellConnections.deleteAndDispose(
 					webContentsId
+				),
+				(worktreePath, canApply) => this.focusHostedWorkspaceByPath(
+					worktreePath,
+					undefined,
+					canApply
 				),
 				worktreePath => this.focusNormalWindowByPath(worktreePath),
 				(state: IHucodeHostedWorkspaceState) =>

@@ -417,6 +417,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly restorePolicy?: 'active' | 'all' | 'none';
 		readonly willUnloadTimeoutMs?: number;
 		readonly windowId?: number;
+		readonly hostedWindowPaths?: readonly string[];
 		readonly normalWindowPaths?: readonly string[];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
@@ -433,6 +434,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const trustedWebContentsIds: number[] = [];
 		const untrustedWebContentsIds: number[] = [];
 		const invalidatedHostedShellWebContentsIds: number[] = [];
+		const focusHostedWorkspaceByPathCalls: string[] = [];
 		const focusNormalWindowByPathCalls: string[] = [];
 		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
@@ -478,6 +480,11 @@ suite('ResidentHostedWorkspacesController', () => {
 			id => trustedWebContentsIds.push(id),
 			id => untrustedWebContentsIds.push(id),
 			id => invalidatedHostedShellWebContentsIds.push(id),
+			async (path, canApply) => {
+				focusHostedWorkspaceByPathCalls.push(path);
+				return canApply() &&
+					(options.hostedWindowPaths?.includes(path) ?? false);
+			},
 			async path => {
 				focusNormalWindowByPathCalls.push(path);
 				return options.normalWindowPaths?.includes(path) ?? false;
@@ -500,6 +507,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		return {
 			browserViewMainService,
 			controller,
+			focusHostedWorkspaceByPathCalls,
 			focusNormalWindowByPathCalls,
 			ipcMain,
 			invalidatedHostedShellWebContentsIds,
@@ -4339,6 +4347,39 @@ suite('ResidentHostedWorkspacesController', () => {
 				]
 			);
 			assert.deepStrictEqual(hostedWebContents.closeCalls, []);
+		});
+
+	test('hosted navigation focuses a workbench in another Omni window',
+		async () => {
+			const caller = createWorktree('cross-shell-caller');
+			const target = createWorktree('cross-shell-target');
+			const {
+				controller,
+				focusHostedWorkspaceByPathCalls,
+				focusNormalWindowByPathCalls,
+				viewFactory,
+			} = createController({ hostedWindowPaths: [target] });
+
+			await controller.openWorkspace(caller, 'project-caller');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+
+			assert.strictEqual(
+				await controller.navigateHostedShellToFolder(
+					binding,
+					{ folderUri: URI.file(target).toJSON() },
+					{ isCurrentAndActiveVisible: async () => true }
+				),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.deepStrictEqual(focusNormalWindowByPathCalls, []);
+			assert.strictEqual(viewFactory.views.length, 1);
+			assert.strictEqual(
+				controller.getState().instances.some(instance =>
+					instance.worktreePath === target),
+				false
+			);
 		});
 
 	test('hosted navigation focuses an existing standalone window', async () => {
