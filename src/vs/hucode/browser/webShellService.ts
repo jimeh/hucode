@@ -716,7 +716,9 @@ export class WebHucodeShellController extends Disposable
 			activationIntent !== this.activationIntentGeneration) {
 			return HucodeHostedShellOperationOutcome.Superseded;
 		}
-		const folderExists = await this.folderAccess.exists(worktreePath);
+		const folderExists = this.getAvailableInstanceByPath(worktreePath)
+			? undefined
+			: await this.folderAccess.exists(worktreePath);
 		if (!await authorization.isCurrentAndActiveVisible() ||
 			activationIntent !== this.activationIntentGeneration) {
 			return HucodeHostedShellOperationOutcome.Superseded;

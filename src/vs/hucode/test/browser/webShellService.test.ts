@@ -1972,6 +1972,50 @@ suite('WebHucodeShellService', () => {
 				'/tmp/preflight-target'), false);
 		});
 
+	test('reuses a loaded hosted navigation target without folder preflight',
+		async () => {
+			const checkedPaths: string[] = [];
+			let folderProviderAvailable = true;
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					async exists(path) {
+						checkedPaths.push(path);
+						if (!folderProviderAvailable) {
+							throw new Error('provider unavailable');
+						}
+						return true;
+					},
+				}
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/loaded-target');
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/loaded-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+			const checksBeforeNavigation = checkedPaths.length;
+			folderProviderAvailable = false;
+
+			assert.strictEqual(await child.shell.navigateToFolder({
+				folderUri: URI.file('/tmp/loaded-target').toJSON(),
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(checkedPaths.length, checksBeforeNavigation);
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId)?.worktreePath,
+				'/tmp/loaded-target'
+			);
+		});
+
 	test('uses canonical catalog path for case-insensitive hosted navigation',
 		async () => {
 			const canonicalPath = '/tmp/Canonical-Target';
