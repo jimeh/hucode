@@ -13,7 +13,8 @@ import {
 } from '../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/common/ipc.mp.js';
-import { acquirePort } from '../../base/parts/ipc/electron-browser/ipc.mp.js';
+import { acquirePortOrUndefined } from
+	'../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import { SyncDescriptor } from
@@ -178,7 +179,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 
 async function connectDesktopHostedShell():
 	Promise<IHucodeHostedShellService> {
-	const port = await acquirePort(
+	const port = await acquirePortOrUndefined(
 		HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 		HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL
 	);

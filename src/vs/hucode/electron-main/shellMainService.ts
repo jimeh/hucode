@@ -73,6 +73,7 @@ import {
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellDelegate,
+	IHucodeHostedShellService,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import {
 	acceptHucodeHostedShellPortRequest,
@@ -156,6 +157,7 @@ export class HucodeShellMainService extends Disposable
 				this.trustedHostedWorkspaceWebContentsIds.has(webContentsId));
 	}
 
+	/** Accepts a sender-derived hosted-shell capability request. */
 	private acceptHostedShellPort(
 		event: Electron.IpcMainEvent,
 		nonce: unknown
@@ -177,6 +179,7 @@ export class HucodeShellMainService extends Disposable
 		}, event, nonce);
 	}
 
+	/** Creates and owns the MessagePort connection for one bound instance. */
 	private createHostedShellPortConnection(
 		controller: ResidentHostedWorkspacesController,
 		binding: IHucodeHostedShellBinding
@@ -206,10 +209,11 @@ export class HucodeShellMainService extends Disposable
 		});
 	}
 
+	/** Exposes only operations scoped to the supplied hosted-shell binding. */
 	private createHostedShellFacade(
 		controller: ResidentHostedWorkspacesController,
 		binding: IHucodeHostedShellBinding
-	) {
+	): IHucodeHostedShellService {
 		const delegate: IHucodeHostedShellDelegate = {
 			onDidChangeState: Event.map(
 				Event.filter(this.onDidChangeWindowState, change =>
@@ -250,6 +254,7 @@ export class HucodeShellMainService extends Disposable
 		return createBoundHucodeHostedShellFacade(binding, delegate);
 	}
 
+	/** Reopens only the workspace identified by the bound capability. */
 	private async reopenHostedShellSelf(
 		controller: ResidentHostedWorkspacesController,
 		binding: IHucodeHostedShellBinding

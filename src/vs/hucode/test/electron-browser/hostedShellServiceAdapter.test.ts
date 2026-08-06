@@ -31,7 +31,7 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				new DeferredPromise<IHucodeHostedShellService | undefined>();
 			const changes = disposables.add(new Emitter<IHucodeHostedShellState>());
 			const calls: string[] = [];
-			const state: IHucodeHostedShellState = {
+			let state: IHucodeHostedShellState = {
 				available: true,
 				projectsSidebarVisible: true,
 				projectSwitcherCanGoBack: false,
@@ -73,10 +73,21 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				() => connection.p,
 				createHostedEnvironment()
 			));
+			const forwardedStates: IHucodeHostedShellState[] = [];
+			disposables.add(adapter.onDidChangeState(value =>
+				forwardedStates.push(value)
+			));
 
 			const statePromise = adapter.getState();
 			void connection.complete(shell);
 			assert.deepStrictEqual(await statePromise, state);
+			state = {
+				...state,
+				projectsSidebarVisible: false,
+			};
+			changes.fire(state);
+			assert.deepStrictEqual(forwardedStates.at(-1), state);
+			assert.deepStrictEqual(await adapter.getState(), state);
 			assert.strictEqual(
 				await adapter.requestShellAction(HucodeHostedShellAction.AddProject),
 				HucodeHostedShellOperationOutcome.Accepted

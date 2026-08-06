@@ -4241,6 +4241,41 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.strictEqual(viewFactory.views[1].rawWebContents.pasteCalls.length, 1);
 		});
 
+	test('invalid binding cannot discover or reuse a sibling generation',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { controller, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.acquireHostedShellBinding(1);
+			const alphaBinding = controller.acquireHostedShellBinding(1)!;
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			const bravoBinding = controller.acquireHostedShellBinding(2)!;
+			assert.notStrictEqual(
+				alphaBinding.connectionGeneration,
+				bravoBinding.connectionGeneration
+			);
+
+			const forged = {
+				...bravoBinding,
+				instanceId: alphaBinding.instanceId,
+			};
+			const authority = controller.getHostedShellAuthorityState(forged);
+			assert.strictEqual(authority.disposed, true);
+			assert.strictEqual(authority.connectionGeneration, -1);
+			assert.strictEqual(controller.reloadHostedShellSelf({
+				...forged,
+				connectionGeneration: authority.connectionGeneration,
+			}), false);
+			assert.strictEqual(
+				viewFactory.views[0].rawWebContents.reloadCalls.length,
+				0
+			);
+		});
+
 	test('stale hosted shell binding cannot control a reloading view',
 		async () => {
 			const alpha = createWorktree('alpha');

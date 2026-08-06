@@ -110,6 +110,28 @@ suite('HostedShellMainService capability port', () => {
 			ports: [],
 		});
 	});
+
+	test('rejects a renderer replaced during connection setup', () => {
+		const harness = createHarness();
+		disposables.add(harness.connections);
+		harness.createConnectionHook = () => harness.owners.set(7, {
+			windowId: 1,
+			instanceId: 'replacement-instance',
+		});
+
+		assert.strictEqual(harness.accept('replaced'), false);
+		assert.deepStrictEqual(harness.disposedConnectionIds, [1]);
+		assert.deepStrictEqual(
+			harness.releasedBindings.map(binding => binding.instanceId),
+			['instance-1']
+		);
+		assert.strictEqual(harness.connections.size, 0);
+		assert.deepStrictEqual(harness.responses.at(-1), {
+			channel: 'vscode:hucodeHostedShellPortResult',
+			nonce: 'replaced',
+			ports: [],
+		});
+	});
 });
 
 function createHarness() {
@@ -166,6 +188,7 @@ function createHarness() {
 		refusals,
 		failures,
 		sender,
+		createConnectionHook: undefined as (() => void) | undefined,
 		binding: {
 			windowId: 1,
 			instanceId: 'instance-1',
@@ -179,6 +202,7 @@ function createHarness() {
 					: undefined,
 				connections,
 				createConnection: () => {
+					harness.createConnectionHook?.();
 					const id = ++connectionId;
 					return {
 						transferPort: { id } as unknown as Electron.MessagePortMain,

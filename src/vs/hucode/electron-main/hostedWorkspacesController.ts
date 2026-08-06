@@ -339,11 +339,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		binding: IHucodeHostedShellBinding
 	): IHucodeHostedShellAuthorityState {
 		const instance = this.instancesById.get(binding.instanceId);
+		const bindingIsCurrent = !!instance &&
+			this.isCurrentHostedShellBinding(instance, binding);
 		const state = this.getState();
 		return {
-			connectionGeneration: instance?.connectionGeneration ?? -1,
-			disposed: !instance ||
-				!this.isCurrentHostedShellBinding(instance, binding),
+			connectionGeneration: bindingIsCurrent
+				? instance.connectionGeneration
+				: -1,
+			disposed: !bindingIsCurrent,
 			projectsSidebarVisible: state.projectsSidebarVisible,
 			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
 			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,

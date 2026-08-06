@@ -86,6 +86,15 @@ suite('RetainedWorkbench', () => {
 		assert.strictEqual(catalog.dismiss(restored.id), true);
 		assert.strictEqual(catalog.restore(restored).id, restored.id);
 		assert.deepStrictEqual(catalog.all, [first, restored, third]);
+
+		assert.strictEqual(catalog.dismiss(restored.id), true);
+		const replacement = catalog.retain(URI.file('/repos/two'), 'loaded');
+		assert.strictEqual(catalog.restore(restored).id, replacement.id);
+		assert.strictEqual(catalog.restore(restored).desiredState, 'loaded');
+		assert.deepStrictEqual(
+			catalog.all.map(record => record.id),
+			[first.id, third.id, replacement.id]
+		);
 	});
 
 	test('sets, trims, resets, and validates custom labels', () => {
