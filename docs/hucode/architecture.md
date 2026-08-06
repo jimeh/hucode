@@ -66,13 +66,24 @@ the web `WebHucodeShellController` injects iframe, timer, and browser-message
 behavior. Keep controller orchestration changes in sync across both adapters
 unless the difference is explicitly platform-specific.
 
-The shell service contract is shared as `IHucodeShellService`. Desktop exposes
-it through IPC to the main-process controller. Web implements the same contract
-in the shell renderer and serves it to hosted iframes over per-instance
-`MessagePort` channels (`vs/base/parts/ipc` + `ProxyChannel`), so both call
-directions are statically typed against the shared interfaces. Same-origin
-window `postMessage` is only used for the bootstrap handshake: `Ready` and
-`Focus` from the iframe, and the `Port` transfer from the shell.
+The complete `IHucodeShellService` contract is controller-internal: desktop
+implements it in the main process, while web implements it in the shell
+renderer. Desktop never publishes that complete service as renderer IPC.
+Instead, each renderer role receives a disjoint capability:
+
+- the exact Omni shell renderer gets an owner-bound shell-controller
+  `MessagePort` with its window identity fixed by the main process;
+- each hosted workbench gets a generation-scoped hosted-shell `MessagePort`
+  with its instance identity fixed by the connection; and
+- ordinary workbench renderers receive neither capability.
+
+Current web-hosted iframes use the same hosted-shell contract and policy over a
+per-instance `MessagePort` (`vs/base/parts/ipc` + `ProxyChannel`). A bounded
+one-generation adapter retains the legacy web wire for cached older children,
+but binds it to the connection's authoritative instance rather than exposing
+the complete shell service. Same-origin window `postMessage` is only used for
+the bootstrap handshake: `Ready` and `Focus` from the iframe, and the `Port`
+transfer from the shell.
 
 ### Serve-Web Routing
 
@@ -110,9 +121,10 @@ Key services:
 - `src/vs/platform/browserView/electron-main/browserViewMainService.ts` owns
   integrated browser views and hosted-workspace browser ownership.
 
-The `projectManager` and `hucodeShell` channels are registered from the main
-process so the Omni shell and hosted desktop workbenches can share these
-services.
+The `projectManager` channel remains a main-process shared service. Shell
+administration and hosted-to-shell requests use the two authenticated,
+least-authority `MessagePort` capabilities above; there is no global desktop
+shell-service channel.
 
 Serve-web reuses the project manager service from the shared `node` layer
 through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data

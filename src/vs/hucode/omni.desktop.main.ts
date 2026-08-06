@@ -101,7 +101,8 @@ import '../workbench/services/browserView/electron-browser/playwrightWorkbenchSe
 import '../workbench/services/process/electron-browser/processService.js';
 import '../workbench/services/power/electron-browser/powerService.js';
 import '../platform/projectManager/electron-browser/projectManagerService.js';
-import './electron-browser/omniWindowService.js';
+import './electron-browser/hostedShellServiceAdapter.js';
+import './electron-browser/shellControllerServiceAdapter.js';
 import './browser/omniWindowUI.js';
 import './browser/omniProjectsSidebarActions.js';
 

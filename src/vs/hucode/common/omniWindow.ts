@@ -21,8 +21,6 @@ import {
 import { ProjectSwitcherOmniSection } from
 	'./projectSwitcher/projectSwitcherViewState.js';
 
-export const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
-
 export { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
 
