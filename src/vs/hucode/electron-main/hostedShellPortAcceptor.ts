@@ -73,6 +73,9 @@ export function acceptHucodeHostedShellPortRequest<
 		return false;
 	}
 
+	// Acquisition deliberately invalidates the prior binding and connection so
+	// replacement setup cannot leave two usable generations. Failure below is
+	// fail-closed and the renderer must retry acquisition.
 	const binding = controller.acquireHostedShellBinding(webContentsId);
 	if (!binding || binding.instanceId !== owner.instanceId) {
 		if (binding) {

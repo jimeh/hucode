@@ -178,6 +178,10 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			'legacy'
 		);
 		assert.strictEqual(getHostedOmniWebShellClientMode(
+			undefined,
+			HUCODE_HOSTED_SHELL_CAPABILITIES
+		), 'unavailable');
+		assert.strictEqual(getHostedOmniWebShellClientMode(
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			HUCODE_HOSTED_SHELL_CAPABILITIES
 		), 'current');

@@ -66,6 +66,24 @@ suite('HostedShellStateObserver', () => {
 		assert.deepStrictEqual(observed, [initial, current]);
 	});
 
+	test('ignores a pending initial snapshot after disposal', async () => {
+		const initialState = new DeferredPromise<IHucodeHostedShellState>();
+		const stateChanges = disposables.add(
+			new Emitter<IHucodeHostedShellState>()
+		);
+		const observed: IHucodeHostedShellState[] = [];
+		const observation = disposables.add(observeHucodeHostedShellState({
+			getState: () => initialState.p,
+			onDidChangeState: stateChanges.event,
+		}, value => observed.push(value)));
+
+		observation.dispose();
+		await initialState.complete(state(true));
+		stateChanges.fire(state(false));
+
+		assert.deepStrictEqual(observed, []);
+	});
+
 	test('ignores an initial snapshot rejected during connection teardown',
 		async () => {
 			const stateChanges = disposables.add(

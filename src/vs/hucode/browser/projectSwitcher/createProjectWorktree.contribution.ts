@@ -335,7 +335,7 @@ async function runCreateWorktreeQuickInput<T>(
 	shellService: IHucodeShellControllerService | undefined,
 	callback: () => Promise<T>
 ): Promise<T> {
-	const shouldOcclude = environmentService.isOmniWindow;
+	const shouldOcclude = environmentService.isOmniShellWindow;
 	if (shouldOcclude) {
 		if (!shellService) {
 			throw new Error(omniShellControllerUnavailable);
@@ -537,7 +537,7 @@ registerAction2(class extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const configurationService = accessor.get(IConfigurationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = environmentService.isOmniWindow
+		const shellService = environmentService.isOmniShellWindow
 			? accessor.get(IHucodeShellControllerService)
 			: undefined;
 

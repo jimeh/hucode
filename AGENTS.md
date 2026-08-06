@@ -233,6 +233,10 @@ as the required Hucode instruction set for work in this fork.
   closed hosted-action allowlist rather than the broad
   `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
   only for version-skew compatibility.
+- Desktop hosted-shell port acquisition deliberately invalidates the previous
+  binding generation and connection before replacement setup. A setup failure
+  stays fail-closed and requires a renderer retry; do not preserve the stale
+  connection as though it were still usable.
 - Complete project-catalog reconciliation is shell authority. Hosted
   workbenches may read combined state through `getWindowState`, but must not
   submit a supposedly complete catalog over their connection facade.

@@ -148,9 +148,11 @@ suite('HucodeOmniOpen', () => {
 	const unavailable = async () =>
 		HucodeHostedShellOperationOutcome.Unavailable;
 	let hostedNavigationCalls: URI[];
+	let hostedNavigationOutcome: HucodeHostedShellOperationOutcome;
 	let hostedShellService: IHucodeHostedShellService;
 	setup(() => {
 		hostedNavigationCalls = [];
+		hostedNavigationOutcome = HucodeHostedShellOperationOutcome.Accepted;
 		hostedShellService = {
 			_serviceBrand: undefined,
 			onDidChangeState: Event.None,
@@ -166,7 +168,7 @@ suite('HucodeOmniOpen', () => {
 			requestShellAction: unavailable,
 			async navigateToFolder(request) {
 				hostedNavigationCalls.push(URI.revive(request.folderUri));
-				return HucodeHostedShellOperationOutcome.Accepted;
+				return hostedNavigationOutcome;
 			},
 			triggerPasteInSelf: unavailable,
 			captureSelfScreenshot: async () => undefined,
@@ -383,6 +385,48 @@ suite('HucodeOmniOpen', () => {
 			openWindow: [],
 		});
 	});
+
+	test('reports hosted folder opens that the bound capability drops',
+		async () => {
+			const nativeHost = createNativeHostService();
+			const projectManager = createProjectManagerService([]);
+			const shell = createShellService();
+			hostedNavigationOutcome =
+				HucodeHostedShellOperationOutcome.Unavailable;
+
+			await withExpectedUnexpectedError(async () =>
+				assert.strictEqual(await tryOpenHucodeOmniWindow(
+					[{ folderUri: URI.file('/outside') }],
+					undefined,
+					nativeHost.service,
+					environment({ isHostedOmniWorkspace: true }),
+					shell.service,
+					hostedShellService,
+					projectManager.service
+				), true)
+			);
+			assert.deepStrictEqual(nativeHost.openWindowCalls, []);
+
+			const originalHandler = errorHandler.getUnexpectedErrorHandler();
+			const errors: unknown[] = [];
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				hostedNavigationOutcome =
+					HucodeHostedShellOperationOutcome.Superseded;
+				assert.strictEqual(await tryOpenHucodeOmniWindow(
+					[{ folderUri: URI.file('/newer-intent-won') }],
+					undefined,
+					nativeHost.service,
+					environment({ isHostedOmniWorkspace: true }),
+					shell.service,
+					hostedShellService,
+					projectManager.service
+				), true);
+				assert.deepStrictEqual(errors, []);
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(originalHandler);
+			}
+		});
 
 	test('leaves remote folders for native window handling', async () => {
 		const nativeHost = createNativeHostService();

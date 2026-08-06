@@ -368,7 +368,10 @@ export async function getActiveWorkbenchWorktreePath(
 	workspaceContextService: IWorkspaceContextService,
 	shellService: IHucodeShellControllerService | undefined
 ): Promise<string | undefined> {
-	if (environmentService.isOmniWindow) {
+	if (environmentService.isHostedOmniWorkspace) {
+		return workspaceContextService.getWorkspace().folders[0]?.uri.fsPath;
+	}
+	if (environmentService.isOmniShellWindow) {
 		if (!shellService) {
 			throw new Error(omniShellControllerUnavailable);
 		}
@@ -377,10 +380,6 @@ export async function getActiveWorkbenchWorktreePath(
 			instance.instanceId === state.activeInstanceId
 		)?.worktreePath;
 	}
-	if (environmentService.isHostedOmniWorkspace) {
-		return workspaceContextService.getWorkspace().folders[0]?.uri.fsPath;
-	}
-
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
 		return undefined;
 	}
@@ -406,7 +405,11 @@ async function getLoadedWorkbenchWorktrees(
 	workspaceContextService: IWorkspaceContextService,
 	shellService: IHucodeShellControllerService | undefined
 ): Promise<readonly ILoadedWorkbenchWorktree[]> {
-	if (environmentService.isOmniWindow) {
+	if (environmentService.isHostedOmniWorkspace) {
+		const folderUri = workspaceContextService.getWorkspace().folders[0]?.uri;
+		return folderUri ? [{ path: folderUri.fsPath }] : [];
+	}
+	if (environmentService.isOmniShellWindow) {
 		if (!shellService) {
 			throw new Error(omniShellControllerUnavailable);
 		}
@@ -418,11 +421,6 @@ async function getLoadedWorkbenchWorktrees(
 				lastActiveAt: instance.lastActiveAt,
 			}));
 	}
-	if (environmentService.isHostedOmniWorkspace) {
-		const folderUri = workspaceContextService.getWorkspace().folders[0]?.uri;
-		return folderUri ? [{ path: folderUri.fsPath }] : [];
-	}
-
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
 		return [];
 	}
@@ -516,7 +514,7 @@ async function tryForwardShellSwitchCommand(
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellControllerService | undefined
 ): Promise<boolean> {
-	if (!environmentService.isOmniWindow) {
+	if (!environmentService.isOmniShellWindow) {
 		return false;
 	}
 	if (!shellService) {
@@ -539,7 +537,7 @@ async function switchAdjacentProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = environmentService.isOmniWindow
+	const shellService = environmentService.isOmniShellWindow
 		? accessor.get(IHucodeShellControllerService)
 		: undefined;
 	const hostService = accessor.get(IHostService);
@@ -624,7 +622,7 @@ async function switchLastActiveProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = environmentService.isOmniWindow
+	const shellService = environmentService.isOmniShellWindow
 		? accessor.get(IHucodeShellControllerService)
 		: undefined;
 	const hostService = accessor.get(IHostService);
@@ -698,7 +696,7 @@ async function quickSwitchLoadedProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = environmentService.isOmniWindow
+	const shellService = environmentService.isOmniShellWindow
 		? accessor.get(IHucodeShellControllerService)
 		: undefined;
 	const hostService = accessor.get(IHostService);
@@ -707,7 +705,7 @@ async function quickSwitchLoadedProjectWorktree(
 		: undefined;
 
 	try {
-		if (environmentService.isOmniWindow) {
+		if (environmentService.isOmniShellWindow) {
 			if (!shellService) {
 				throw new Error(omniShellControllerUnavailable);
 			}
@@ -830,7 +828,7 @@ registerAction2(class extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const workspaceContextService = accessor.get(IWorkspaceContextService);
-		const shellService = environmentService.isOmniWindow
+		const shellService = environmentService.isOmniShellWindow
 			? accessor.get(IHucodeShellControllerService)
 			: undefined;
 		const hostService = accessor.get(IHostService);
@@ -839,7 +837,7 @@ registerAction2(class extends Action2 {
 			: undefined;
 
 		try {
-			if (environmentService.isOmniWindow) {
+			if (environmentService.isOmniShellWindow) {
 				if (!shellService) {
 					throw new Error(omniShellControllerUnavailable);
 				}

@@ -82,6 +82,14 @@ export async function tryOpenHucodeOmniWindow(
 			const outcome = await hostedShellService.navigateToFolder({
 				folderUri: openable.folderUri.toJSON(),
 			});
+			if (outcome !== HucodeHostedShellOperationOutcome.Accepted &&
+				outcome !== HucodeHostedShellOperationOutcome.Unsupported &&
+				outcome !== HucodeHostedShellOperationOutcome.Superseded) {
+				onUnexpectedError(new Error(
+					'Hosted Omni folder navigation was not accepted for ' +
+					`${openable.folderUri.toString(true)}: ${outcome}.`
+				));
+			}
 			return outcome !== HucodeHostedShellOperationOutcome.Unsupported;
 		}
 		const target = await getProjectWorktreeTarget(

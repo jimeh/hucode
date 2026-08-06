@@ -172,8 +172,9 @@ suite('ProjectSwitcherContribution', () => {
 		async () => {
 			const activePath = await getActiveWorkbenchWorktreePath(
 				{
-					isOmniWindow: false,
+					isOmniWindow: true,
 					isHostedOmniWorkspace: true,
+					isOmniShellWindow: false,
 				} as IWorkbenchEnvironmentService,
 				{
 					getWorkbenchState: () => WorkbenchState.FOLDER,
@@ -190,7 +191,7 @@ suite('ProjectSwitcherContribution', () => {
 							activeInstanceId: 'active',
 							instances: [{
 								instanceId: 'active',
-								worktreePath: '/repo',
+								worktreePath: '/shell-repo',
 								state: 'active',
 							}],
 						};
@@ -199,6 +200,27 @@ suite('ProjectSwitcherContribution', () => {
 			);
 
 			assert.strictEqual(activePath, '/repo');
+		});
+
+	test('ignores an untrusted Omni flag in a standalone web workbench',
+		async () => {
+			const activePath = await getActiveWorkbenchWorktreePath(
+				{
+					isOmniWindow: true,
+					isHostedOmniWorkspace: false,
+					isOmniShellWindow: false,
+				} as IWorkbenchEnvironmentService,
+				{
+					getWorkbenchState: () => WorkbenchState.FOLDER,
+					getWorkspace: () => ({
+						id: 'standalone',
+						folders: [{ uri: URI.file('/standalone') }],
+					}),
+				} as unknown as IWorkspaceContextService,
+				undefined
+			);
+
+			assert.strictEqual(activePath, '/standalone');
 		});
 
 	test('recycled rows clear active ARIA and actions before rendering a section', () => {

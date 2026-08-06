@@ -14,18 +14,23 @@ type HucodeHostedShellStateSource = Pick<
 	'getState' | 'onDidChangeState'
 >;
 
+/**
+ * Observes hosted shell state without allowing a late initial snapshot to
+ * overwrite an event or outlive the returned subscription.
+ */
 export function observeHucodeHostedShellState(
 	source: HucodeHostedShellStateSource,
 	listener: (state: IHucodeHostedShellState) => void
 ): IDisposable {
 	let didReceiveStateChange = false;
+	let disposed = false;
 	const subscription = source.onDidChangeState(state => {
 		didReceiveStateChange = true;
 		listener(state);
 	});
 
 	void source.getState().then(state => {
-		if (!didReceiveStateChange) {
+		if (!didReceiveStateChange && !disposed) {
 			listener(state);
 		}
 	}, () => {
@@ -34,5 +39,10 @@ export function observeHucodeHostedShellState(
 		// authoritative and the rejection must not escape as an unhandled promise.
 	});
 
-	return subscription;
+	return {
+		dispose: () => {
+			disposed = true;
+			subscription.dispose();
+		},
+	};
 }

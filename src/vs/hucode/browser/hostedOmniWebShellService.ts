@@ -48,7 +48,7 @@ export type HostedOmniWebShellClientMode =
 	| 'legacy'
 	| 'unavailable';
 
-/** Selects legacy only when the parent omitted capability versioning. */
+/** Selects legacy only when the parent omitted all capability metadata. */
 export function getHostedOmniWebShellClientMode(
 	protocolVersion: number | undefined,
 	capabilities: readonly HucodeHostedShellCapability[] | undefined
@@ -59,16 +59,18 @@ export function getHostedOmniWebShellClientMode(
 	)) {
 		return 'current';
 	}
-	return protocolVersion === undefined ? 'legacy' : 'unavailable';
+	return protocolVersion === undefined && capabilities === undefined
+		? 'legacy'
+		: 'unavailable';
 }
 
 /**
  * Hosted iframe client for the narrow shell capability.
  *
- * A missing capability version identifies the selected one-generation legacy
- * window: a new child connected to an older shell. That path adapts only this
- * narrow interface to the old channel and never exposes the old service to
- * current hosted contributions.
+ * Missing capability metadata identifies the selected one-generation legacy
+ * window: a new child connected to an older shell. Partial metadata fails
+ * closed. The legacy path adapts only this narrow interface to the old channel
+ * and never exposes the old service to current hosted contributions.
  */
 export class HostedOmniWebShellService extends Disposable
 	implements IHucodeHostedShellService {

@@ -94,6 +94,34 @@ suite('CreateProjectWorktreeRouting', () => {
 		assert.deepStrictEqual(calls, []);
 	});
 
+	test('does not use shell quick-input behavior for an untrusted Omni flag',
+		async () => {
+			const result = await pickCreateWorktreeOptions(
+				'project',
+				{
+					getWorktreeRefs: async () => [],
+				} as Partial<IProjectManagerService> as IProjectManagerService,
+				{
+					async pick(picks: Promise<unknown>) {
+						await picks;
+						return undefined;
+					},
+				} as Partial<IQuickInputService> as IQuickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{
+					isOmniWindow: true,
+					isOmniShellWindow: false,
+				} as IWorkbenchEnvironmentService,
+				undefined,
+				false
+			);
+
+			assert.strictEqual(result, undefined);
+		});
+
 	test('cancels ref loading when the picker is dismissed', async () => {
 		let requestSignal: AbortSignal | undefined;
 		let resolveRequestAbort: (() => void) | undefined;
