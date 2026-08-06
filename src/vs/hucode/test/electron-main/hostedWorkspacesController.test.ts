@@ -19,6 +19,17 @@ import { IThemeMainService } from '../../../platform/theme/electron-main/themeMa
 import { UnloadReason, ICodeWindow } from '../../../platform/window/electron-main/window.js';
 import { INativeWindowConfiguration, IRectangle } from '../../../platform/window/common/window.js';
 import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from '../../../platform/window/common/hucodeHostedShellActions.js';
+import {
+	FOCUS_PROJECT_PANE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+} from '../../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
 	IHostedWorkbenchView,
 	IHostedWorkbenchViewFactory,
 	IHostedWorkspaceIpcMain,
@@ -3934,27 +3945,57 @@ suite('ResidentHostedWorkspacesController', () => {
 			]);
 		});
 
-	test('runActionInShell forwards marked action to shell webContents', () => {
-		const { controller, window } = createController();
+	test('runActionInShell canonicalizes allowed legacy requests', () => {
+		const { controller, logService, window } = createController();
 		const shellWebContents = window.win!.webContents as unknown as
 			TestWebContents;
 
-		const sent = controller.runActionInShell({
-			id: 'workbench.action.toggleSidebarVisibility',
-			from: 'menu',
-			args: ['test'],
-		});
+		const allowedCommands = [
+			TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+			ADD_PROJECT_COMMAND_ID,
+			REFRESH_PROJECTS_COMMAND_ID,
+			COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+			GO_BACK_WORKTREE_COMMAND_ID,
+			GO_FORWARD_WORKTREE_COMMAND_ID,
+		];
+		for (const id of allowedCommands) {
+			assert.strictEqual(controller.runActionInShell({
+				id,
+				from: 'keybinding',
+				args: [{ callerControlled: true }],
+			}), true);
+		}
 
-		assert.strictEqual(sent, true);
-		assert.deepStrictEqual(shellWebContents.sent, [{
+		assert.deepStrictEqual(shellWebContents.sent, allowedCommands.map(id => ({
 			channel: 'vscode:runAction',
 			request: {
-				id: 'workbench.action.toggleSidebarVisibility',
+				id,
 				from: 'menu',
-				args: ['test'],
 				hucodeForwardedFromOmniShell: true,
 			},
-		}]);
+		})));
+
+		const rejectedCommands = [
+			'hucode.projectSwitcher.dismissWorkbench',
+			`${ADD_PROJECT_COMMAND_ID}.lookalike`,
+			FOCUS_PROJECT_PANE_COMMAND_ID,
+		];
+		for (const id of rejectedCommands) {
+			assert.strictEqual(controller.runActionInShell({
+				id,
+				from: 'menu',
+				args: [{ arbitrary: 'value' }],
+			}), false);
+		}
+		assert.strictEqual(shellWebContents.sent.length, allowedCommands.length);
+		assert.strictEqual(logService.warnings.length, 3);
+		for (const id of rejectedCommands) {
+			assert.ok(logService.warnings.some(warning => warning.includes(id)));
+		}
+		assert.ok(logService.warnings.every(warning =>
+			warning.includes('Rejected hosted shell action') &&
+			!warning.includes('arbitrary')
+		));
 	});
 
 	test('runActionInWorkspace restores and forwards to active workspace', async () => {

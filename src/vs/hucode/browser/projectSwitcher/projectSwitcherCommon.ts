@@ -12,15 +12,16 @@ import { RawContextKey } from
 import { WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
 
+export {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from '../../../platform/window/common/hucodeHostedShellActions.js';
+
 export const SWITCH_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.switchWorktree';
-export const GO_BACK_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.goBack';
-export const GO_FORWARD_WORKTREE_COMMAND_ID =
-	'hucode.projectSwitcher.goForward';
-export const ADD_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.addProject';
-export const REFRESH_PROJECTS_COMMAND_ID = 'hucode.projectSwitcher.refresh';
-export const COLLAPSE_ALL_PROJECTS_COMMAND_ID =
-	'hucode.projectSwitcher.collapseAll';
 export const ProjectSwitcherCanGoBackContext = new RawContextKey<boolean>(
 	'hucode.projectSwitcher.canGoBack',
 	false,

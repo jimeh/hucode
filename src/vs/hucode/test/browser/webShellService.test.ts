@@ -43,6 +43,13 @@ import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
 } from '../../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	GO_BACK_WORKTREE_COMMAND_ID,
+	GO_FORWARD_WORKTREE_COMMAND_ID,
+	REFRESH_PROJECTS_COMMAND_ID,
+} from '../../../platform/window/common/hucodeHostedShellActions.js';
 import { INativeOpenFileRequest } from
 	'../../../platform/window/common/window.js';
 import {
@@ -63,14 +70,6 @@ import {
 	IHostedWorkspaceLifecycleContractAdapter,
 	registerHostedWorkspaceLifecycleContract,
 } from '../common/hostedWorkspaceLifecycleContract.js';
-import {
-	ADD_PROJECT_COMMAND_ID,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	GO_BACK_WORKTREE_COMMAND_ID,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
-	REFRESH_PROJECTS_COMMAND_ID,
-} from '../../browser/projectSwitcher/projectSwitcherCommon.js';
-
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -1539,16 +1538,20 @@ suite('WebHucodeShellService', () => {
 
 	test('allows registered shell actions and rejects lookalike commands',
 		async () => {
-			const commandCalls: string[] = [];
+			const commandCalls: { id: string; args: unknown[] }[] = [];
+			const logService = new RecordingLogService();
 			const { service, surface, browser } = createService(
 				new FakeBrowserAdapter(),
 				undefined,
 				'active',
 				undefined,
-				new RecordingLogService(),
+				logService,
 				{
-					async executeCommand<T = unknown>(commandId: string) {
-						commandCalls.push(commandId);
+					async executeCommand<T = unknown>(
+						commandId: string,
+						...args: unknown[]
+					) {
+						commandCalls.push({ id: commandId, args });
 						return undefined as T;
 					},
 				}
@@ -1571,8 +1574,12 @@ suite('WebHucodeShellService', () => {
 				from: 'menu',
 				args: [{ $treeItemHandle: 'workbench:unrelated' }],
 			}), false);
+			assert.strictEqual(await child.shell.runActionInShell(999, {
+				id: FOCUS_PROJECT_PANE_COMMAND_ID,
+				from: 'menu',
+			}), false);
+			await child.shell.focusShell(999);
 			const allowedCommands = [
-				FOCUS_PROJECT_PANE_COMMAND_ID,
 				TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
 				ADD_PROJECT_COMMAND_ID,
 				REFRESH_PROJECTS_COMMAND_ID,
@@ -1583,11 +1590,22 @@ suite('WebHucodeShellService', () => {
 			for (const id of allowedCommands) {
 				assert.strictEqual(await child.shell.runActionInShell(999, {
 					id,
-					from: 'menu',
+					from: 'keybinding',
+					args: [{ callerControlled: true }],
 				}), true);
 			}
 
-			assert.deepStrictEqual(commandCalls, allowedCommands);
+			assert.deepStrictEqual(commandCalls, [
+				{ id: FOCUS_PROJECT_PANE_COMMAND_ID, args: [] },
+				...allowedCommands.map(id => ({ id, args: [] })),
+			]);
+			for (const id of [
+				'hucode.unregistered',
+				'hucode.projectSwitcher.dismissWorkbench',
+				FOCUS_PROJECT_PANE_COMMAND_ID,
+			]) {
+				assert.ok(logService.warnings.some(warning => warning.includes(id)));
+			}
 		});
 
 	test('closes the requested instance through the shell channel', async () => {
