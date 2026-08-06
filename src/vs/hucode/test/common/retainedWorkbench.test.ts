@@ -69,6 +69,25 @@ suite('RetainedWorkbench', () => {
 		assert.deepStrictEqual(catalog.all, []);
 	});
 
+	test('restores a dismissed record at its prior order', () => {
+		let nextId = 0;
+		const catalog = new RetainedWorkbenchCatalog(
+			[],
+			uri => uri.fsPath,
+			() => `workbench-${++nextId}`
+		);
+		const first = catalog.retain(URI.file('/repos/one'));
+		const restored = {
+			...catalog.retain(URI.file('/repos/two'), 'unloaded', 42),
+			label: 'Scratch',
+		};
+		const third = catalog.retain(URI.file('/repos/three'));
+
+		assert.strictEqual(catalog.dismiss(restored.id), true);
+		assert.strictEqual(catalog.restore(restored).id, restored.id);
+		assert.deepStrictEqual(catalog.all, [first, restored, third]);
+	});
+
 	test('sets, trims, resets, and validates custom labels', () => {
 		const catalog = new RetainedWorkbenchCatalog(
 			[],

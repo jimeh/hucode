@@ -19,6 +19,7 @@ import { registerSingleton } from
 import { SyncDescriptor } from
 	'../../platform/instantiation/common/descriptors.js';
 import {
+	areHucodeHostedShellStatesEqual,
 	createHucodeHostedShellClient,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
@@ -102,12 +103,16 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		fallback: () => T,
 		run: (shell: IHucodeHostedShellService) => Promise<T>
 	): Promise<T> {
-		const shell = await this.connection.p;
-		return shell ? run(shell) : fallback();
+		try {
+			const shell = await this.connection.p;
+			return shell ? await run(shell) : fallback();
+		} catch {
+			return fallback();
+		}
 	}
 
 	getState(): Promise<IHucodeHostedShellState> {
-		return this.withShell(() => this.state, async shell => {
+		return this.withShell(() => this.markUnavailable(), async shell => {
 			this.state = await shell.getState();
 			return this.state;
 		});
@@ -158,6 +163,17 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			run
 		);
 	}
+
+	private markUnavailable(): IHucodeHostedShellState {
+		if (!areHucodeHostedShellStatesEqual(
+			this.state,
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+		)) {
+			this.state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+			this._onDidChangeState.fire(this.state);
+		}
+		return this.state;
+	}
 }
 
 async function connectDesktopHostedShell():
@@ -166,6 +182,9 @@ async function connectDesktopHostedShell():
 		HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 		HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL
 	);
+	if (!port) {
+		throw new Error('Desktop hosted shell capability was denied.');
+	}
 	const disposables = new DisposableStore();
 	const client = disposables.add(new MessagePortClient(
 		port,

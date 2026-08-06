@@ -71,10 +71,13 @@ import {
 	createBoundHucodeHostedShellFacade,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
-	HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellDelegate,
 } from '../../platform/window/common/hucodeHostedShellService.js';
+import {
+	acceptHucodeHostedShellPortRequest,
+	IHucodeHostedShellPortConnection,
+} from './hostedShellPortAcceptor.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -157,24 +160,27 @@ export class HucodeShellMainService extends Disposable
 		event: Electron.IpcMainEvent,
 		nonce: unknown
 	): void {
-		if (typeof nonce !== 'string' || nonce.length > 128 ||
-			event.sender.isDestroyed()) {
-			return;
-		}
+		acceptHucodeHostedShellPortRequest({
+			ownersByWebContentsId:
+				this.hostedWorkspaceOwnersByWebContentsId,
+			getController: windowId => this.controllers.get(windowId),
+			connections: this.hostedShellConnections,
+			createConnection: (controller, binding) =>
+				this.createHostedShellPortConnection(controller, binding),
+			logRefusal: reason => this.logService.debug(
+				'[HucodeShellMainService] Refused hosted shell port: ' + reason
+			),
+			logFailure: error => this.logService.warn(
+				'[HucodeShellMainService] Failed to transfer hosted shell port: ' +
+				`${error}`
+			),
+		}, event, nonce);
+	}
 
-		const webContentsId = event.sender.id;
-		const owner = this.hostedWorkspaceOwnersByWebContentsId.get(
-			webContentsId
-		);
-		const controller = owner
-			? this.controllers.get(owner.windowId)
-			: undefined;
-		const binding = controller?.acquireHostedShellBinding(webContentsId);
-		if (!owner || !controller || !binding ||
-			binding.instanceId !== owner.instanceId) {
-			return;
-		}
-
+	private createHostedShellPortConnection(
+		controller: ResidentHostedWorkspacesController,
+		binding: IHucodeHostedShellBinding
+	): IHucodeHostedShellPortConnection {
 		const connection = new DisposableStore();
 		const { port1, port2 } = new MessageChannelMain();
 		let portTransferred = false;
@@ -194,28 +200,10 @@ export class HucodeShellMainService extends Disposable
 				connection
 			)
 		);
-		this.hostedShellConnections.set(webContentsId, connection);
-
-		try {
-			if (event.sender.isDestroyed() ||
-				this.hostedWorkspaceOwnersByWebContentsId.get(webContentsId) !==
-				owner) {
-				throw new Error('Hosted renderer was replaced during port setup.');
-			}
-			event.sender.postMessage(
-				HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL,
-				nonce,
-				[port2]
-			);
-			portTransferred = true;
-		} catch (error) {
-			this.hostedShellConnections.deleteAndDispose(webContentsId);
-			controller.releaseHostedShellBinding(binding);
-			this.logService.warn(
-				'[HucodeShellMainService] Failed to transfer hosted shell port: ' +
-				`${error}`
-			);
-		}
+		return Object.assign(connection, {
+			transferPort: port2,
+			markTransferred: () => portTransferred = true,
+		});
 	}
 
 	private createHostedShellFacade(

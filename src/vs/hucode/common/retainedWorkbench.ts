@@ -182,6 +182,21 @@ export class RetainedWorkbenchCatalog {
 		return true;
 	}
 
+	/** Restores a previously dismissed record without changing a replacement. */
+	restore(record: IHucodeRetainedWorkbench): IHucodeRetainedWorkbench {
+		const existing = this.getById(record.id) ??
+			this.getByUri(URI.revive(record.folderUri));
+		if (existing) {
+			return existing;
+		}
+
+		const order = Math.min(record.order, this.records.length);
+		const next = [...this.records];
+		next.splice(order, 0, record);
+		this.records = compactRetainedWorkbenchOrder(next);
+		return this.records[order];
+	}
+
 	/** Replaces manual order after validating exact catalog membership. */
 	reorder(orderedIds: readonly string[]): boolean {
 		if (

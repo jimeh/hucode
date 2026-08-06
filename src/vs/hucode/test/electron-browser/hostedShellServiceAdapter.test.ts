@@ -116,6 +116,32 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		await Promise.resolve();
 		assert.strictEqual(connectionDisposed, true);
 	});
+
+	test('maps rejected port operations to unavailable outcomes', async () => {
+		const changes = disposables.add(new Emitter<IHucodeHostedShellState>());
+		const shell = Object.assign(createUnavailableShell(), {
+			onDidChangeState: changes.event,
+			getState: async () => {
+				throw new Error('connection disposed');
+			},
+			closeSelf: async () => {
+				throw new Error('connection disposed');
+			},
+		});
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			async () => shell,
+			createHostedEnvironment()
+		));
+
+		assert.deepStrictEqual(
+			await adapter.getState(),
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+		);
+		assert.strictEqual(
+			await adapter.closeSelf(),
+			HucodeHostedShellOperationOutcome.Unavailable
+		);
+	});
 });
 
 function createUnavailableShell(): IHucodeHostedShellService {

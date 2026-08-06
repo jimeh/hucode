@@ -65,4 +65,20 @@ suite('HostedShellStateObserver', () => {
 
 		assert.deepStrictEqual(observed, [initial, current]);
 	});
+
+	test('ignores an initial snapshot rejected during connection teardown',
+		async () => {
+			const stateChanges = disposables.add(
+				new Emitter<IHucodeHostedShellState>()
+			);
+			const observed: IHucodeHostedShellState[] = [];
+			disposables.add(observeHucodeHostedShellState({
+				getState: () => Promise.reject(new Error('connection disposed')),
+				onDidChangeState: stateChanges.event,
+			}, value => observed.push(value)));
+
+			await Promise.resolve();
+
+			assert.deepStrictEqual(observed, []);
+		});
 });

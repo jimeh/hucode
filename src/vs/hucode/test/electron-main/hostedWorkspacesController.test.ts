@@ -71,6 +71,7 @@ class TestWebContents extends EventEmitter {
 	autoPreparationRollbackReply = true;
 	sendHook: ((channel: string, request: unknown) => boolean) | undefined;
 	closeHook: (() => void) | undefined;
+	deferDestroyedEvent = false;
 
 	constructor(
 		id: number,
@@ -153,7 +154,11 @@ class TestWebContents extends EventEmitter {
 		this.closeCalls.push(options);
 		this.closeHook?.();
 		this.destroyed = true;
-		this.emit('destroyed');
+		if (this.deferDestroyedEvent) {
+			setTimeout(() => this.emit('destroyed'), 0);
+		} else {
+			this.emit('destroyed');
+		}
 	}
 
 	reload(): void {
@@ -256,7 +261,8 @@ class TestHostedWorkbenchViewFactory implements IHostedWorkbenchViewFactory {
 	constructor(
 		private readonly ipcMain: TestHostedWorkspaceIpcMain,
 		private readonly loadUrlErrors: Error[] = [],
-		private readonly loadUrlPromises: Promise<void>[] = []
+		private readonly loadUrlPromises: Promise<void>[] = [],
+		private readonly deferDestroyedEvents: boolean[] = []
 	) { }
 
 	createView(): IHostedWorkbenchView {
@@ -265,6 +271,8 @@ class TestHostedWorkbenchViewFactory implements IHostedWorkbenchViewFactory {
 		);
 		view.rawWebContents.loadUrlError = this.loadUrlErrors.shift();
 		view.rawWebContents.loadUrlPromise = this.loadUrlPromises.shift();
+		view.rawWebContents.deferDestroyedEvent =
+			this.deferDestroyedEvents.shift() ?? false;
 		this.views.push(view);
 		return view as unknown as IHostedWorkbenchView;
 	}
@@ -403,6 +411,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
 		readonly loadUrlErrors?: Error[];
 		readonly loadUrlPromises?: Promise<void>[];
+		readonly deferDestroyedEvents?: boolean[];
 		readonly beforeUnloadTimeoutMs?: number;
 		readonly readyTimeoutMs?: number;
 		readonly restorePolicy?: 'active' | 'all' | 'none';
@@ -414,7 +423,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const viewFactory = new TestHostedWorkbenchViewFactory(
 			ipcMain,
 			[...(options.loadUrlErrors ?? [])],
-			[...(options.loadUrlPromises ?? [])]
+			[...(options.loadUrlPromises ?? [])],
+			[...(options.deferDestroyedEvents ?? [])]
 		);
 		const browserViewMainService = new TestBrowserViewMainService();
 		const trustedProcessIds: number[] = [];
@@ -4294,7 +4304,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo');
 		const charlie = createWorktree('charlie');
 		const heldLoad = new DeferredPromise<void>();
-		const { controller } = createController({
+		const { controller, stateChanges, window } = createController({
 			loadUrlPromises: [
 				Promise.resolve(),
 				Promise.resolve(),
@@ -4340,5 +4350,232 @@ suite('ResidentHostedWorkspacesController', () => {
 			controller.getState().activeInstanceId,
 			'instance-2'
 		);
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.worktreePath === charlie),
+			false
+		);
+		assert.strictEqual(
+			controller.getState().retainedWorkbenches?.some(record =>
+				URI.revive(record.folderUri).fsPath === charlie),
+			false
+		);
+		assert.deepStrictEqual(stateChanges.at(-1), controller.getState());
+		assert.strictEqual(
+			window.config?.omniResidentWorkspaces?.some(entry =>
+				entry.worktreePath === charlie),
+			false
+		);
+		assert.strictEqual(
+			window.config?.omniRetainedWorkbenches?.some(record =>
+				URI.revive(record.folderUri).fsPath === charlie),
+			false
+		);
 	});
+
+	test('superseded navigation restores an unloaded retained target',
+		async () => {
+			const caller = createWorktree('retained-caller');
+			const target = createWorktree('retained-target');
+			const heldLoad = new DeferredPromise<void>();
+			const { controller, stateChanges, viewFactory, window } =
+				createController({
+					loadUrlPromises: [Promise.resolve(), heldLoad.p],
+					retainedWorkbenches: [{
+						id: 'retained-target',
+						folderUri: URI.file(target).toJSON(),
+						desiredState: 'unloaded',
+						order: 0,
+						lastActiveAt: 42,
+					}],
+				});
+
+			await controller.openWorkspace(caller, 'project-caller');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const navigation = controller.navigateHostedShellToFolder(
+				binding,
+				{ folderUri: URI.file(target).toJSON() },
+				{
+					isCurrentAndActiveVisible: async () => true,
+				}
+			);
+			await Promise.resolve();
+			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+			void heldLoad.complete();
+
+			assert.strictEqual(
+				await navigation,
+				HucodeHostedShellOperationOutcome.Superseded
+			);
+			const state = controller.getState();
+			assert.strictEqual(state.instances.some(instance =>
+				instance.worktreePath === target), false);
+			assert.deepStrictEqual(state.retainedWorkbenches?.map(record => ({
+				path: URI.revive(record.folderUri).fsPath,
+				desiredState: record.desiredState,
+				lastActiveAt: record.lastActiveAt,
+			})), [{
+				path: target,
+				desiredState: 'unloaded',
+				lastActiveAt: 42,
+			}]);
+			assert.deepStrictEqual(stateChanges.at(-1), state);
+			assert.deepStrictEqual(
+				window.config?.omniRetainedWorkbenches?.map(record => ({
+					path: URI.revive(record.folderUri).fsPath,
+					desiredState: record.desiredState,
+				})),
+				[{ path: target, desiredState: 'unloaded' }]
+			);
+		});
+
+	test('superseded open restores a promoted retained record', async () => {
+		const caller = createWorktree('promoted-caller');
+		const target = createWorktree('promoted-target');
+		const sibling = createWorktree('promoted-sibling');
+		const heldLoad = new DeferredPromise<void>();
+		const { controller, stateChanges, window } = createController({
+			loadUrlPromises: [Promise.resolve(), heldLoad.p],
+			retainedWorkbenches: [{
+				id: 'retained-target',
+				folderUri: URI.file(target).toJSON(),
+				label: 'Scratch target',
+				desiredState: 'unloaded',
+				folderStatus: 'missing',
+				order: 0,
+				lastActiveAt: 42,
+			}, {
+				id: 'retained-sibling',
+				folderUri: URI.file(sibling).toJSON(),
+				desiredState: 'unloaded',
+				order: 1,
+			}],
+		});
+
+		await controller.openWorkspace(caller, 'project-caller');
+		let canApply = true;
+		const open = controller.openWorkspace(
+			target,
+			'project-target',
+			() => true,
+			() => canApply
+		);
+		await Promise.resolve();
+		canApply = false;
+		void heldLoad.complete();
+		await open;
+
+		const state = controller.getState();
+		assert.strictEqual(state.instances.some(instance =>
+			instance.worktreePath === target), false);
+		assert.deepStrictEqual(state.retainedWorkbenches?.map(record => ({
+			id: record.id,
+			path: URI.revive(record.folderUri).fsPath,
+			label: record.label,
+			desiredState: record.desiredState,
+			folderStatus: record.folderStatus,
+			order: record.order,
+			lastActiveAt: record.lastActiveAt,
+		})), [{
+			id: 'retained-target',
+			path: target,
+			label: 'Scratch target',
+			desiredState: 'unloaded',
+			folderStatus: 'missing',
+			order: 0,
+			lastActiveAt: 42,
+		}, {
+			id: 'retained-sibling',
+			path: sibling,
+			label: undefined,
+			desiredState: 'unloaded',
+			folderStatus: undefined,
+			order: 1,
+			lastActiveAt: undefined,
+		}]);
+		assert.deepStrictEqual(stateChanges.at(-1), state);
+		assert.deepStrictEqual(
+			window.config?.omniRetainedWorkbenches,
+			state.retainedWorkbenches
+		);
+	});
+
+	test('superseded navigation restores a dormant retained target',
+		async () => {
+			const target = createWorktree('dormant-target');
+			const caller = createWorktree('dormant-caller');
+			const heldLoad = new DeferredPromise<void>();
+			const { controller, stateChanges, viewFactory, window } =
+				createController({
+					loadUrlPromises: [
+						Promise.resolve(),
+						Promise.resolve(),
+						heldLoad.p,
+					],
+					deferDestroyedEvents: [false, false, true],
+				});
+
+			await controller.retainAndOpenWorkbench(URI.file(target));
+			const targetInstanceId = controller.getState().activeInstanceId;
+			assert.ok(targetInstanceId);
+			controller.notifyHostedWorkspaceReady(targetInstanceId);
+			await controller.openWorkspace(caller, 'project-caller');
+			const callerState = controller.getState().instances.find(instance =>
+				instance.worktreePath === caller);
+			assert.ok(callerState?.webContentsId);
+			controller.notifyHostedWorkspaceReady(callerState.instanceId);
+			await controller.suspendWorkspace(targetInstanceId);
+			const dormantBefore = controller.getState().instances.find(instance =>
+				instance.worktreePath === target);
+			assert.strictEqual(dormantBefore?.state, 'dormant');
+			const binding = controller.acquireHostedShellBinding(
+				callerState.webContentsId
+			)!;
+			const navigation = controller.navigateHostedShellToFolder(
+				binding,
+				{ folderUri: URI.file(target).toJSON() },
+				{
+					isCurrentAndActiveVisible: async () => true,
+				}
+			);
+			await Promise.resolve();
+			viewFactory.views[1].rawWebContents.emit('did-start-loading');
+			void heldLoad.complete();
+
+			assert.strictEqual(
+				await navigation,
+				HucodeHostedShellOperationOutcome.Superseded
+			);
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			const state = controller.getState();
+			assert.deepStrictEqual(state.instances.find(instance =>
+				instance.worktreePath === target), {
+				instanceId: dormantBefore.instanceId,
+				projectId: undefined,
+				worktreePath: target,
+				state: 'dormant',
+				visible: false,
+				focused: false,
+				lastActiveAt: 1000,
+				processId: undefined,
+				webContentsId: undefined,
+			});
+			assert.strictEqual(
+				state.retainedWorkbenches?.[0].desiredState,
+				'loaded'
+			);
+			assert.deepStrictEqual(stateChanges.at(-1), state);
+			assert.strictEqual(
+				window.config?.omniResidentWorkspaces?.some(entry =>
+					entry.worktreePath === target),
+				false
+			);
+			assert.strictEqual(
+				window.config?.omniRetainedWorkbenches?.find(record =>
+					URI.revive(record.folderUri).fsPath === target
+				)?.desiredState,
+				'loaded'
+			);
+		});
 });
