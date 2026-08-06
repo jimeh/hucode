@@ -87,6 +87,7 @@ import { nativeHoverDelegate } from '../../platform/hover/browser/hover.js';
 import { WINDOW_ACTIVE_BORDER, WINDOW_INACTIVE_BORDER } from '../common/theme.js';
 import { IContextMenuService } from '../../platform/contextview/browser/contextView.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
+import { IHucodeShellControllerService } from '../../platform/window/common/hucodeShellControllerService.js';
 import { HucodeOmniCommandForwarding } from './hucodeOmniCommandForwarding.js';
 import { IHucodeOmniCommandForwardingContext } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 
@@ -141,6 +142,8 @@ export class NativeWindow extends BaseWindow {
 		@IHostService hostService: IHostService,
 		@IContextMenuService contextMenuService: IContextMenuService,
 		@IMainProcessService mainProcessService: IMainProcessService,
+		@IHucodeShellControllerService
+		shellControllerService: IHucodeShellControllerService,
 		@IHucodeOmniCommandForwardingContext
 		commandForwardingContext: IHucodeOmniCommandForwardingContext,
 	) {
@@ -148,7 +151,7 @@ export class NativeWindow extends BaseWindow {
 
 		this.hucodeOmniCommandForwarding = new HucodeOmniCommandForwarding(
 			nativeEnvironmentService,
-			mainProcessService,
+			shellControllerService,
 			logService,
 			commandForwardingContext.createScope(),
 		);

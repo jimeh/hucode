@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IHucodeShellService } from '../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { CREATE_WORKTREE_COMMAND_ID } from './projectSwitcherCommon.js';
 
 /**
@@ -16,15 +17,14 @@ export async function tryForwardShellCreateWorktreeCommand(
 		readonly isOmniWindow: boolean;
 		readonly isWebClient: boolean;
 	},
-	shellService: Pick<IHucodeShellService, 'runActionInWorkspace'>,
-	windowId: number,
+	shellService: Pick<IHucodeShellControllerService, 'runActionInWorkspace'>,
 	handle?: unknown
 ): Promise<boolean> {
 	if (!routing.isOmniWindow || routing.isWebClient) {
 		return false;
 	}
 
-	return shellService.runActionInWorkspace(windowId, {
+	return shellService.runActionInWorkspace({
 		id: CREATE_WORKTREE_COMMAND_ID,
 		from: 'mouse',
 		args: handle !== undefined ? [handle] : undefined,

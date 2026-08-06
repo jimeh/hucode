@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { errorHandler } from '../../../../base/common/errors.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -14,8 +13,14 @@ import { IHostService } from
 	'../../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
-import { IHucodeHostedWorkspaceState, IHucodeShellService } from
+import { IHucodeHostedWorkspaceState } from
 	'../../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { openProjectSwitcherTargetInWindow } from
@@ -70,7 +75,7 @@ suite('OpenProjectSwitcherTarget', () => {
 	function shell(
 		calls: string[],
 		focusNormalResult: boolean | Error
-	): IHucodeShellService {
+	): IHucodeShellControllerService {
 		return {
 			async focusNormalWindowByPath(worktreePath: string) {
 				calls.push(`focusNormal:${worktreePath}`);
@@ -80,25 +85,14 @@ suite('OpenProjectSwitcherTarget', () => {
 				return focusNormalResult;
 			},
 			async openWorkspace(
-				windowId: number,
 				worktreePath: string,
 				projectId?: string
 			) {
-				calls.push(`openWorkspace:${windowId}:${worktreePath}:${projectId}`);
+				calls.push(`openWorkspace:${worktreePath}:${projectId}`);
 				return emptyHostedWorkspaceState;
 			},
-			async openAndFocusWorkspace(
-				windowId: number,
-				worktreePath: string,
-				projectId?: string
-			) {
-				calls.push(
-					`openAndFocus:${windowId}:${worktreePath}:${projectId}`
-				);
-				return emptyHostedWorkspaceState;
-			},
-			async focusWorkspace(windowId: number) {
-				calls.push(`focusWorkspace:${windowId}`);
+			async focusWorkspace() {
+				calls.push('focusWorkspace');
 			},
 			async focusHostedWorkspaceByPath(
 				worktreePath: string,
@@ -107,23 +101,19 @@ suite('OpenProjectSwitcherTarget', () => {
 				calls.push(`focusHosted:${worktreePath}:${projectId}`);
 				return true;
 			},
-		} as unknown as IHucodeShellService;
+		} as unknown as IHucodeShellControllerService;
 	}
 
-	const withExpectedUnexpectedError = async <T>(
-		callback: () => Promise<T>
-	): Promise<T> => {
-		const originalHandler = errorHandler.getUnexpectedErrorHandler();
-		const errors: unknown[] = [];
-		errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
-		try {
-			const result = await callback();
-			assert.strictEqual(errors.length, 1);
-			return result;
-		} finally {
-			errorHandler.setUnexpectedErrorHandler(originalHandler);
-		}
-	};
+	function hostedShell(calls: string[]): IHucodeHostedShellService {
+		return {
+			async navigateToFolder(request: Parameters<
+				IHucodeHostedShellService['navigateToFolder']
+			>[0]) {
+				calls.push(`navigate:${URI.revive(request.folderUri).fsPath}`);
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
+		} as unknown as IHucodeHostedShellService;
+	}
 
 	test('focuses existing normal window instead of opening in Omni',
 		async () => {
@@ -131,7 +121,6 @@ suite('OpenProjectSwitcherTarget', () => {
 
 			await openProjectSwitcherTargetInWindow(
 				target,
-				7,
 				projectManager(calls),
 				environment({ isOmniWindow: true }),
 				shell(calls, true),
@@ -151,7 +140,6 @@ suite('OpenProjectSwitcherTarget', () => {
 
 			await openProjectSwitcherTargetInWindow(
 				target,
-				7,
 				projectManager(calls),
 				environment({ isOmniWindow: true }),
 				shell(calls, false),
@@ -161,8 +149,8 @@ suite('OpenProjectSwitcherTarget', () => {
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
 				'focusNormal:/repo',
-				'openWorkspace:7:/repo:project',
-				'focusWorkspace:7',
+				'openWorkspace:/repo:project',
+				'focusWorkspace',
 			]);
 		}
 	);
@@ -172,7 +160,6 @@ suite('OpenProjectSwitcherTarget', () => {
 
 		await openProjectSwitcherTargetInWindow(
 			{ worktreePath: '/repo' },
-			7,
 			projectManager(calls),
 			environment({ isOmniWindow: true }),
 			shell(calls, false),
@@ -182,30 +169,27 @@ suite('OpenProjectSwitcherTarget', () => {
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
 			'focusNormal:/repo',
-			'openWorkspace:7:/repo:project',
-			'focusWorkspace:7',
+			'openWorkspace:/repo:project',
+			'focusWorkspace',
 		]);
 	});
 
-	test('falls back to hosted workspace when normal focus lookup fails',
+	test('hosted navigation never consults the privileged shell service',
 		async () => {
 			const calls: string[] = [];
 
-			await withExpectedUnexpectedError(() =>
-				openProjectSwitcherTargetInWindow(
-					target,
-					7,
-					projectManager(calls),
-					environment({ isHostedOmniWorkspace: true }),
-					shell(calls, new Error('lookup failed')),
-					host(calls)
-				)
+			await openProjectSwitcherTargetInWindow(
+				target,
+				projectManager(calls),
+				environment({ isHostedOmniWorkspace: true }),
+				shell(calls, new Error('must not be called')),
+				host(calls),
+				hostedShell(calls)
 			);
 
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
-				'focusNormal:/repo',
-				'openAndFocus:7:/repo:project',
+				'navigate:/repo',
 			]);
 		}
 	);
@@ -215,17 +199,16 @@ suite('OpenProjectSwitcherTarget', () => {
 
 		await openProjectSwitcherTargetInWindow(
 			target,
-			7,
 			projectManager(calls),
 			environment({ isHostedOmniWorkspace: true }),
 			shell(calls, false),
-			host(calls)
+			host(calls),
+			hostedShell(calls)
 		);
 
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
-			'focusNormal:/repo',
-			'openAndFocus:7:/repo:project',
+			'navigate:/repo',
 		]);
 	});
 
@@ -243,7 +226,6 @@ suite('OpenProjectSwitcherTarget', () => {
 
 		await openProjectSwitcherTargetInWindow(
 			target,
-			7,
 			projectManager(calls),
 			environment({}),
 			shell(calls, false),

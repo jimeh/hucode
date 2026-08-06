@@ -22,7 +22,8 @@ import { NullExtensionService } from
 	'../../../workbench/services/extensions/common/extensions.js';
 import type { INativeWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/electron-browser/environmentService.js';
-import type { IHucodeShellService } from '../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { OmniCommandService } from
 	'../../electron-browser/omniCommandService.js';
 
@@ -34,19 +35,15 @@ suite('OmniCommandService', () => {
 			const commandId = 'hucode.test.forwarding-context';
 			const unrelatedCommandId =
 				'hucode.test.unrelated-forwarding-context';
-			const shellCalls: {
-				windowId: number;
-				request: INativeRunActionInWindowRequest;
-			}[] = [];
+			const shellCalls: INativeRunActionInWindowRequest[] = [];
 			const shellService = {
 				runActionInWorkspace(
-					windowId: number,
 					request: INativeRunActionInWindowRequest
 				): Promise<boolean> {
-					shellCalls.push({ windowId, request });
+					shellCalls.push(request);
 					return Promise.resolve(true);
 				},
-			} as unknown as IHucodeShellService;
+			} as unknown as IHucodeShellControllerService;
 			const environmentService = {
 				isOmniWindow: true,
 				window: { id: 42 },
@@ -131,28 +128,19 @@ suite('OmniCommandService', () => {
 			assert.strictEqual(localCommandCalls, 1);
 			assert.deepStrictEqual(shellCalls, [
 				{
-					windowId: 42,
-					request: {
-						id: commandId,
-						from: 'keybinding',
-						args: undefined,
-					},
+					id: commandId,
+					from: 'keybinding',
+					args: undefined,
 				},
 				{
-					windowId: 42,
-					request: {
-						id: unrelatedCommandId,
-						from: 'keybinding',
-						args: undefined,
-					},
+					id: unrelatedCommandId,
+					from: 'keybinding',
+					args: undefined,
 				},
 				{
-					windowId: 42,
-					request: {
-						id: commandId,
-						from: 'keybinding',
-						args: undefined,
-					},
+					id: commandId,
+					from: 'keybinding',
+					args: undefined,
 				},
 			]);
 		}

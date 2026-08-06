@@ -10,6 +10,7 @@ import {
 } from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { encodeBase64, VSBuffer } from '../../../base/common/buffer.js';
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { Part } from '../../../workbench/browser/part.js';
 import { localize } from '../../../nls.js';
 import { BrowserOverlayManager } from
@@ -28,13 +29,12 @@ import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
 } from '../../common/retainedWorkbench.js';
-import { focusWorkspaceBestEffort } from
-	'../../common/omniWindowFocus.js';
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { isHostedWorkspaceAvailable } from
 	'../../common/hostedWorkspaceState.js';
 import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
@@ -54,7 +54,6 @@ export class OmniHostPart extends Part {
 	readonly minimumHeight = 0;
 	readonly maximumHeight = Number.POSITIVE_INFINITY;
 
-	private readonly windowId: number;
 
 	private surface: HTMLElement | undefined;
 	private emptyState: HTMLElement | undefined;
@@ -87,8 +86,8 @@ export class OmniHostPart extends Part {
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IConfigurationService
 		private readonly configurationService: IConfigurationService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IHucodeShellControllerService
+		private readonly shellService: IHucodeShellControllerService,
 		@IHucodeWebOmniHostSurfaceService
 		private readonly hostSurfaceService: IHucodeWebOmniHostSurfaceService,
 	) {
@@ -100,16 +99,11 @@ export class OmniHostPart extends Part {
 			layoutService
 		);
 
-		this.windowId = mainWindow.vscodeWindowId;
 		this.hasLoadedWorkbenchContext =
 			HasLoadedWorkbenchContext.bindTo(contextKeyService);
 
-		this._register(this.shellService.onDidChangeWindowState(change => {
-			if (change.windowId !== this.windowId) {
-				return;
-			}
-
-			this.state = change.state;
+		this._register(this.shellService.onDidChangeState(state => {
+			this.state = state;
 			this.renderState();
 			this.scheduleHostedWorkspaceLayout();
 		}));
@@ -179,7 +173,7 @@ export class OmniHostPart extends Part {
 
 	focus(): void {
 		this.getContainer()?.focus();
-		void focusWorkspaceBestEffort(this.shellService, this.windowId);
+		void this.shellService.focusWorkspace().catch(onUnexpectedError);
 	}
 
 	override toJSON(): object {
@@ -188,12 +182,11 @@ export class OmniHostPart extends Part {
 
 	private async initialize(): Promise<void> {
 		await this.shellService.setHostedWorkbenchRestorePolicy(
-			this.windowId,
 			this.configurationService.getValue<
 				HucodeHostedWorkbenchRestorePolicy
 			>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
 		);
-		this.state = await this.shellService.getWindowState(this.windowId);
+		this.state = await this.shellService.getState();
 		this.renderState();
 		this.scheduleHostedWorkspaceLayout();
 	}
@@ -278,7 +271,7 @@ export class OmniHostPart extends Part {
 		const height = Math.max(0, mainWindow.innerHeight);
 		this.layoutScreenshot(rect.left, width, height);
 
-		await this.shellService.layoutWorkspace(this.windowId, {
+		await this.shellService.layoutWorkspace({
 			x: rect.left,
 			y: 0,
 			width,
@@ -384,7 +377,6 @@ export class OmniHostPart extends Part {
 		let screenshot: VSBuffer | undefined;
 		try {
 			screenshot = await this.shellService.captureWorkspaceScreenshot(
-				this.windowId,
 				undefined,
 				80
 			);
@@ -460,7 +452,6 @@ export class OmniHostPart extends Part {
 	private setMainOverlayOcclusion(occluded: boolean): void {
 		this.mainOverlayOccluded = occluded;
 		void this.shellService.setWorkspaceOverlayOcclusion(
-			this.windowId,
 			occluded
 		);
 	}

@@ -139,10 +139,8 @@ import { OmniWorkspaceContextService } from
 	'../browser/services/workspace/omniWorkspaceContextService.js';
 import { getWorkspaceIdentifier } from
 	'../../platform/workspaces/common/workspaceIdentifier.js';
-import {
-	HUCODE_SHELL_CHANNEL_NAME,
-	IHucodeShellService,
-} from '../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import {
@@ -223,13 +221,15 @@ export class OmniMain extends Disposable {
 			extraClasses: this.getExtraClasses(),
 		}, services.serviceCollection, services.logService);
 
+		const instantiationService = workbench.startup();
+		const shellService = instantiationService.invokeFunction(accessor =>
+			accessor.get(IHucodeShellControllerService)
+		);
 		this.registerListeners(
 			workbench,
 			services.storageService,
-			services.shellService
+			shellService
 		);
-
-		const instantiationService = workbench.startup();
 
 		this._register(instantiationService.createInstance(NativeWindow));
 
@@ -268,12 +268,11 @@ export class OmniMain extends Disposable {
 	private registerListeners(
 		workbench: OmniWorkbench,
 		storageService: NativeWorkbenchStorageService,
-		shellService?: IHucodeShellService
+		shellService?: IHucodeShellControllerService
 	): void {
 		if (shellService) {
 			this._register(workbench.onWillShutdown(event => event.join(
 				shellService.shutdownWindowWorkspaces(
-					this.configuration.windowId,
 					event.reason as ShutdownReason
 				),
 				{
@@ -301,7 +300,6 @@ export class OmniMain extends Disposable {
 		logService: ILogService;
 		storageService: NativeWorkbenchStorageService;
 		configurationService: OmniConfigurationService;
-		shellService: IHucodeShellService;
 	}> {
 		const serviceCollection = new ServiceCollection();
 
@@ -403,10 +401,6 @@ export class OmniMain extends Disposable {
 			mainProcessService.getChannel('sign')
 		);
 		serviceCollection.set(ISignService, signService);
-
-		const shellService = ProxyChannel.toService<IHucodeShellService>(
-			mainProcessService.getChannel(HUCODE_SHELL_CHANNEL_NAME)
-		);
 
 		const fileService = this._register(new FileService(logService));
 		serviceCollection.set(IFileService, fileService);
@@ -563,7 +557,6 @@ export class OmniMain extends Disposable {
 			logService,
 			storageService,
 			configurationService,
-			shellService,
 		};
 	}
 

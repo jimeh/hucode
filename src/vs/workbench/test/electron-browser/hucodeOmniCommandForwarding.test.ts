@@ -10,7 +10,8 @@ import { URI } from '../../../base/common/uri.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
-import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
@@ -90,7 +91,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.actionExecutedCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -113,7 +114,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.actionExecutedCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -195,7 +196,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.keybindingCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runKeybindingInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -309,7 +310,6 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
 			arg: [
-				fixture.windowId,
 				{
 					id: 'editor.action.clipboardCopyAction',
 					from: 'menu'
@@ -589,12 +589,17 @@ function createFixture(options: {
 		new HucodeOmniCommandForwardingContext();
 	const commandForwardingScope =
 		commandForwardingContext.createScope();
-	const mainProcessService = {
-		getChannel(channelName: string): IChannel {
-			assert.strictEqual(channelName, 'hucodeShell');
-			return channel;
-		}
-	} as Partial<IMainProcessService> as IMainProcessService;
+	const shellControllerService = {
+		runActionInWorkspace(request: INativeRunActionInWindowRequest) {
+			return channel.call<boolean>('runActionInWorkspace', [request]);
+		},
+		runKeybindingInWorkspace(request: INativeRunKeybindingInWindowRequest) {
+			return channel.call<boolean>('runKeybindingInWorkspace', [request]);
+		},
+		triggerPasteInWorkspace() {
+			return channel.call<boolean>('triggerPasteInWorkspace');
+		},
+	} as unknown as IHucodeShellControllerService;
 	const environmentService = {
 		isOmniWindow: options.isOmniWindow,
 		window: { id: windowId }
@@ -648,7 +653,7 @@ function createFixture(options: {
 		commandForwardingScope,
 		forwarding: new HucodeOmniCommandForwarding(
 			environmentService,
-			mainProcessService,
+			shellControllerService,
 			new NullLogService(),
 			commandForwardingScope
 		),

@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import {
 	CancellationToken,
@@ -38,7 +37,8 @@ import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
 import { TreeViewItemHandleArg } from
 	'../../../workbench/common/views.js';
-import { IHucodeShellService } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { tryForwardShellCreateWorktreeCommand } from
 	'./createProjectWorktreeRouting.js';
 import { CREATE_WORKTREE_COMMAND_ID } from './projectSwitcherCommon.js';
@@ -98,7 +98,7 @@ export async function pickCreateWorktreeOptions(
 	notificationService: INotificationService,
 	configurationService: IConfigurationService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	supportsRequestCancellation = isWeb
 ): Promise<CreateWorktreeOptions | undefined> {
 	const cancellation = new CancellationTokenSource();
@@ -281,7 +281,7 @@ export async function pickCreateWorktreeBranchName(
 	projectManagerService: IProjectManagerService,
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	supportsRequestCancellation = isWeb
 ): Promise<string | undefined> {
 	const cancellation = new CancellationTokenSource();
@@ -327,14 +327,16 @@ export async function pickCreateWorktreeBranchName(
 async function runCreateWorktreeQuickInput<T>(
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	callback: () => Promise<T>
 ): Promise<T> {
-	const windowId = dom.getWindowId(mainWindow);
 	const shouldOcclude = environmentService.isOmniWindow;
 	if (shouldOcclude) {
-		await shellService.focusShell(windowId);
-		await shellService.setWorkspaceOverlayOcclusion(windowId, true);
+		if (!shellService) {
+			throw new Error('Omni shell controller is unavailable.');
+		}
+		await shellService.focusShell();
+		await shellService.setWorkspaceOverlayOcclusion(true);
 	}
 
 	try {
@@ -345,8 +347,8 @@ async function runCreateWorktreeQuickInput<T>(
 		}
 		return await result;
 	} finally {
-		if (shouldOcclude) {
-			await shellService.setWorkspaceOverlayOcclusion(windowId, false);
+		if (shouldOcclude && shellService) {
+			await shellService.setWorkspaceOverlayOcclusion(false);
 		}
 	}
 }
@@ -530,18 +532,21 @@ registerAction2(class extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const configurationService = accessor.get(IConfigurationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = environmentService.isOmniWindow
+			? accessor.get(IHucodeShellControllerService)
+			: undefined;
 
 		try {
-			const forwarded = await tryForwardShellCreateWorktreeCommand(
-				{
-					isOmniWindow: environmentService.isOmniWindow,
-					isWebClient: isWeb,
-				},
-				shellService,
-				dom.getWindowId(mainWindow),
-				handle
-			);
+			const forwarded = shellService
+				? await tryForwardShellCreateWorktreeCommand(
+					{
+						isOmniWindow: environmentService.isOmniWindow,
+						isWebClient: isWeb,
+					},
+					shellService,
+					handle
+				)
+				: false;
 			if (forwarded) {
 				return;
 			}

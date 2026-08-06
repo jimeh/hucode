@@ -17,7 +17,8 @@ import {
 	isHucodeOmniLocalInputFocus,
 	isHucodeOmniProjectsFocus,
 } from '../browser/omniFocus.js';
-import { IHucodeShellService } from '../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import { CommandService } from '../../workbench/services/commands/common/commandService.js';
 import { INativeWorkbenchEnvironmentService } from '../../workbench/services/environment/electron-browser/environmentService.js';
 import { IExtensionService } from '../../workbench/services/extensions/common/extensions.js';
@@ -31,8 +32,9 @@ export class OmniCommandService extends CommandService {
 		@INativeWorkbenchEnvironmentService
 		private readonly nativeEnvironmentService:
 			INativeWorkbenchEnvironmentService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IHucodeShellControllerService
+		private readonly shellControllerService:
+			IHucodeShellControllerService,
 		@IHucodeOmniCommandForwardingContext
 		private readonly commandForwardingContext:
 			IHucodeOmniCommandForwardingContext
@@ -70,10 +72,8 @@ export class OmniCommandService extends CommandService {
 		};
 
 		try {
-			return await this.shellService.runActionInWorkspace(
-				this.nativeEnvironmentService.window.id,
-				request
-			);
+			return await this.shellControllerService
+				.runActionInWorkspace(request);
 		} catch (error) {
 			this.omniLogService.warn(
 				`Failed to forward Omni shell command ${id}: ${error}`

@@ -15,8 +15,9 @@ import type {
 import type {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
 import { removeProjectWithHostedWorkbenchCleanup } from
 	'../../../browser/projectSwitcher/removeProject.js';
 
@@ -201,15 +202,14 @@ suite('Remove Project', () => {
 interface IHarness {
 	readonly routing: {
 		readonly isOmniWindow: boolean;
-		readonly windowId: number;
 	};
 	readonly projectManagerService: Pick<
 		IProjectManagerService,
 		'getProjects' | 'removeProject'
 	>;
 	readonly shellService: Pick<
-		IHucodeShellService,
-		'getWindowState' | 'closeWorkspace'
+		IHucodeShellControllerService,
+		'getState' | 'closeWorkspace'
 	>;
 	readonly confirmRemoval: (project: ProjectRecord) => Promise<boolean>;
 	readonly confirmed: string[];
@@ -251,13 +251,11 @@ function createHarness(options: {
 		},
 	};
 	const shellService = {
-		async getWindowState(windowId: number) {
-			assert.strictEqual(windowId, 7);
+		async getState() {
 			mutable.stateReads++;
 			return state(mutable.instances, mutable.activeInstanceId);
 		},
-		async closeWorkspace(windowId: number, instanceId?: string) {
-			assert.strictEqual(windowId, 7);
+		async closeWorkspace(instanceId?: string) {
 			assert.ok(instanceId);
 			closed.push(instanceId);
 			return options.onClose?.(instanceId) ?? emptyState;
@@ -267,7 +265,6 @@ function createHarness(options: {
 	return {
 		routing: {
 			isOmniWindow: options.isOmniWindow ?? true,
-			windowId: 7,
 		},
 		projectManagerService,
 		shellService,

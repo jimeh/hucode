@@ -21,8 +21,11 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IProjectManagerService } from '../../../../platform/projectManager/common/projectManager.js';
+import { IHucodeHostedShellService } from '../../../../platform/window/common/hucodeHostedShellService.js';
+import { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
 import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
-import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeShellService } from './hucodeHostedOmniHost.js';
+import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from './hucodeHostedOmniHost.js';
 
 // @ts-expect-error: interface is implemented via proxy
 class WorkbenchNativeHostService implements INativeHostService {
@@ -50,7 +53,8 @@ class WorkbenchHostService extends Disposable implements IHostService {
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ILabelService private readonly labelService: ILabelService,
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
-		@IHucodeShellService private readonly hucodeShellService: IHucodeShellService,
+		@IHucodeShellControllerService private readonly hucodeShellService: IHucodeShellControllerService,
+		@IHucodeHostedShellService private readonly hucodeHostedShellService: IHucodeHostedShellService,
 		@IProjectManagerService private readonly projectManagerService: IProjectManagerService
 	) {
 		super();
@@ -59,7 +63,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 			new HucodeHostedOmniFocusTracker(
 				nativeHostService,
 				environmentService,
-				hucodeShellService
+				hucodeHostedShellService
 			)
 		);
 
@@ -171,6 +175,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 			this.nativeHostService,
 			this.environmentService,
 			this.hucodeShellService,
+			this.hucodeHostedShellService,
 			this.projectManagerService
 		)) {
 			return;
@@ -268,8 +273,7 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	getScreenshot(rect?: IRectangle): Promise<VSBuffer | undefined> {
 		const hucodeScreenshot = getHucodeHostedOmniScreenshot(
 			this.environmentService,
-			this.hucodeShellService,
-			this.nativeHostService.windowId,
+			this.hucodeHostedShellService,
 			rect
 		);
 		if (hucodeScreenshot) {

@@ -10,22 +10,27 @@ import { Emitter } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { INativeHostService } from '../../../../../platform/native/common/native.js';
 import { IRectangle } from '../../../../../platform/window/common/window.js';
+import {
+	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	IHucodeHostedShellState,
+} from '../../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
-import { getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker, IHucodeHostedWorkspaceState, IHucodeShellService } from '../../electron-browser/hucodeHostedOmniHost.js';
+import { getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from '../../electron-browser/hucodeHostedOmniHost.js';
 
 suite('HucodeHostedOmniHost', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const hostedState = (
-		activeInstanceId: string | undefined,
+		active: boolean,
 		visible: boolean
-	): IHucodeHostedWorkspaceState => ({
-		activeInstanceId,
-		instances: [{
-			instanceId: 'instance',
-			state: 'active',
-			visible
-		}]
+	): IHucodeHostedShellState => ({
+		...HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+		available: true,
+		active,
+		visible,
+		lifecycleState: 'active',
 	});
 
 	const createNativeHostService = (windowId: number) => {
@@ -53,36 +58,45 @@ suite('HucodeHostedOmniHost', () => {
 	};
 
 	const createShellService = (
-		state: IHucodeHostedWorkspaceState = hostedState(undefined, false)
+		state: IHucodeHostedShellState = hostedState(false, false)
 	) => {
-		const stateEmitter = disposables.add(new Emitter<{
-			windowId: number;
-			state: IHucodeHostedWorkspaceState;
-		}>());
-		const screenshots: {
-			windowId: number;
-			rect?: IRectangle;
-		}[] = [];
+		const stateEmitter = disposables.add(
+			new Emitter<IHucodeHostedShellState>()
+		);
+		const screenshots: { rect?: IRectangle }[] = [];
+		const unavailable = async () =>
+			HucodeHostedShellOperationOutcome.Unavailable;
 
 		const service = {
-			onDidChangeWindowState: stateEmitter.event,
-			async getWindowState(): Promise<IHucodeHostedWorkspaceState> {
+			_serviceBrand: undefined,
+			onDidChangeState: stateEmitter.event,
+			async getState(): Promise<IHucodeHostedShellState> {
 				return state;
 			},
-			async captureWorkspaceScreenshot(
-				windowId: number,
+			notifyReady: async () => ({
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			}),
+			closeSelf: unavailable,
+			reopenSelfInNormalWindow: unavailable,
+			reloadSelf: unavailable,
+			focusSelf: unavailable,
+			focusShell: unavailable,
+			requestShellAction: unavailable,
+			navigateToFolder: unavailable,
+			triggerPasteInSelf: unavailable,
+			async captureSelfScreenshot(
 				rect?: IRectangle
 			): Promise<VSBuffer | undefined> {
-				screenshots.push({ windowId, rect });
+				screenshots.push({ rect });
 				return VSBuffer.fromString('screenshot');
 			}
-		} as Partial<IHucodeShellService> as IHucodeShellService;
+		} satisfies IHucodeHostedShellService;
 
 		return {
 			service,
 			stateEmitter,
 			screenshots,
-			setState(nextState: IHucodeHostedWorkspaceState): void {
+			setState(nextState: IHucodeHostedShellState): void {
 				state = nextState;
 			}
 		};
@@ -112,7 +126,7 @@ suite('HucodeHostedOmniHost', () => {
 
 	test('tracks hosted workspace focus from shell and window state', async () => {
 		const nativeHost = createNativeHostService(1);
-		const shell = createShellService(hostedState(undefined, false));
+		const shell = createShellService(hostedState(false, false));
 		let focusEvents = 0;
 		const tracker = disposables.add(new HucodeHostedOmniFocusTracker(
 			nativeHost.service,
@@ -132,24 +146,18 @@ suite('HucodeHostedOmniHost', () => {
 		assert.strictEqual(tracker.hasFocus, false);
 		assert.strictEqual(focusEvents, 0);
 
-		shell.stateEmitter.fire({
-			windowId: 1,
-			state: hostedState('instance', true)
-		});
+		shell.stateEmitter.fire(hostedState(true, true));
 		assert.strictEqual(tracker.hasFocus, true);
 		assert.strictEqual(focusEvents, 1);
 
-		shell.stateEmitter.fire({
-			windowId: 1,
-			state: hostedState(undefined, true)
-		});
+		shell.stateEmitter.fire(hostedState(false, true));
 		assert.strictEqual(tracker.hasFocus, false);
 		assert.strictEqual(focusEvents, 2);
 	});
 
 	test('refreshes hosted state when checking last focus', async () => {
 		const nativeHost = createNativeHostService(1);
-		const shell = createShellService(hostedState('instance', true));
+		const shell = createShellService(hostedState(true, true));
 		const tracker = disposables.add(new HucodeHostedOmniFocusTracker(
 			nativeHost.service,
 			environment({
@@ -167,24 +175,22 @@ suite('HucodeHostedOmniHost', () => {
 		assert.strictEqual(await tracker.hadLastFocus(), true);
 	});
 
-	test('routes hosted screenshots through the Omni shell service', async () => {
+	test('routes hosted screenshots through the bound capability', async () => {
 		const shell = createShellService();
 		const rect = { x: 1, y: 2, width: 3, height: 4 };
 
 		const screenshot = await getHucodeHostedOmniScreenshot(
 			environment({ isHostedOmniWorkspace: true }),
 			shell.service,
-			1,
 			rect
 		);
 
 		assert.strictEqual(screenshot?.toString(), 'screenshot');
-		assert.deepStrictEqual(shell.screenshots, [{ windowId: 1, rect }]);
+		assert.deepStrictEqual(shell.screenshots, [{ rect }]);
 		assert.strictEqual(
 			getHucodeHostedOmniScreenshot(
 				environment({}),
 				shell.service,
-				1,
 				rect
 			),
 			undefined
