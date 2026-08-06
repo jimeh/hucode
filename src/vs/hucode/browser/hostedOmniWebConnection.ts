@@ -17,6 +17,11 @@ import { registerSingleton } from
 import { SyncDescriptor } from
 	'../../platform/instantiation/common/descriptors.js';
 import {
+	HUCODE_HOSTED_SHELL_CAPABILITIES,
+	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+	HucodeHostedShellCapability,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import {
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
@@ -38,6 +43,8 @@ export const IHucodeHostedOmniWebConnectionService =
 export interface IHucodeHostedOmniWebConnection {
 	readonly ipcClient: MessagePortClient;
 	readonly shellWindowId: number;
+	readonly hostedShellProtocolVersion?: number;
+	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 }
 
 /**
@@ -151,6 +158,10 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			void this.connection.complete({
 				ipcClient,
 				shellWindowId: event.data.windowId,
+				hostedShellProtocolVersion:
+					event.data.hostedShellProtocolVersion,
+				hostedShellCapabilities:
+					event.data.hostedShellCapabilities,
 			});
 		}));
 	}
@@ -178,6 +189,9 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			type: HucodeOmniWebChildMessageType.Ready,
 			instanceId: this.instanceId,
 			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+			hostedShellProtocolVersion:
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 		});
 	}
 
@@ -210,10 +224,20 @@ function isPortMessage(
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
 		readonly windowId?: unknown;
+		readonly hostedShellProtocolVersion?: unknown;
+		readonly hostedShellCapabilities?: unknown;
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
-		typeof message.windowId === 'number';
+		typeof message.windowId === 'number' &&
+		(
+			message.hostedShellProtocolVersion === undefined ||
+			typeof message.hostedShellProtocolVersion === 'number'
+		) &&
+		(
+			message.hostedShellCapabilities === undefined ||
+			Array.isArray(message.hostedShellCapabilities)
+		);
 }
 
 registerSingleton(

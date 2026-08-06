@@ -48,8 +48,18 @@ import {
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
+	HUCODE_HOSTED_SHELL_ACTIONS,
+	HucodeHostedShellAction,
 	REFRESH_PROJECTS_COMMAND_ID,
 } from '../../../platform/window/common/hucodeHostedShellActions.js';
+import {
+	createHucodeHostedShellClient,
+	HUCODE_HOSTED_SHELL_CAPABILITIES,
+	HUCODE_HOSTED_SHELL_CHANNEL,
+	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { INativeOpenFileRequest } from
 	'../../../platform/window/common/window.js';
 import {
@@ -63,6 +73,7 @@ import {
 	IWebHucodeShellFolderAccess,
 	IWebHucodeShellPersistedState,
 	IWebHucodeShellPersistenceAdapter,
+	IWebHucodeHostedNavigationProjectManager,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
 import {
@@ -146,7 +157,9 @@ suite('WebHucodeShellService', () => {
 				commandId: string,
 				...args: unknown[]
 			): Promise<T>;
-		} = { async executeCommand<T>() { return undefined as T; } }
+		} = { async executeCommand<T>() { return undefined as T; } },
+		navigationProjectManager?: IWebHucodeHostedNavigationProjectManager,
+		serverPathCaseSensitive = true
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -161,7 +174,7 @@ suite('WebHucodeShellService', () => {
 			{
 				workbenchRoute: '/workbench',
 				hostedWorkbenchRoute: '/omni/workbench',
-				serverPathCaseSensitive: true,
+				serverPathCaseSensitive,
 			},
 			commandService,
 			{
@@ -174,7 +187,8 @@ suite('WebHucodeShellService', () => {
 			persistence,
 			restorePolicy,
 			folderAccess,
-			logService
+			logService,
+			navigationProjectManager
 		));
 		return { service, surface, browser, logService };
 	}
@@ -208,6 +222,21 @@ suite('WebHucodeShellService', () => {
 		postMessage(browser, surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
 			...(protocolVersion === 'none' ? {} : { protocolVersion }),
+		});
+	}
+
+	function markHostedCapabilityReady(
+		browser: FakeBrowserAdapter,
+		surface: HTMLElement,
+		instanceId: string,
+		protocolVersion = HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+		capabilities: readonly string[] = HUCODE_HOSTED_SHELL_CAPABILITIES
+	): void {
+		postMessage(browser, surface, instanceId, {
+			type: HucodeOmniWebChildMessageType.Ready,
+			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+			hostedShellProtocolVersion: protocolVersion,
+			hostedShellCapabilities: capabilities,
 		});
 	}
 
@@ -259,6 +288,42 @@ suite('WebHucodeShellService', () => {
 			shell,
 			shellChannel,
 			shellWindowId: posted.windowId,
+		};
+	}
+
+	function connectCurrentChild(
+		browser: FakeBrowserAdapter,
+		surface: HTMLElement,
+		instanceId: string
+	): {
+		readonly workbench: FakeHostedWorkbench;
+		readonly shell: IHucodeHostedShellService;
+		readonly shellChannel: IChannel;
+	} {
+		markHostedCapabilityReady(browser, surface, instanceId);
+		const posted = browser.portMessages.at(-1);
+		assert.ok(posted, 'expected a transferred shell port');
+		assert.strictEqual(
+			posted.hostedShellProtocolVersion,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
+		);
+		const client = disposables.add(new MessagePortClient(
+			posted.port,
+			`test-current-child-${instanceId}`
+		));
+		const workbench = new FakeHostedWorkbench();
+		client.registerChannel(
+			HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+			ProxyChannel.fromService(
+				workbench,
+				disposables.add(new DisposableStore())
+			)
+		);
+		const shellChannel = client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL);
+		return {
+			workbench,
+			shell: createHucodeHostedShellClient(shellChannel),
+			shellChannel,
 		};
 	}
 
@@ -1442,7 +1507,13 @@ suite('WebHucodeShellService', () => {
 		assert.ok(secondInstanceId);
 
 		const boundState = await firstChild.shell.getWindowState(999);
-		assert.strictEqual(boundState.instances.length, 2);
+		assert.deepStrictEqual(boundState.instances.map(instance => ({
+			instanceId: instance.instanceId,
+			worktreePath: instance.worktreePath,
+		})), [{
+			instanceId: firstInstanceId,
+			worktreePath: '',
+		}]);
 
 		await firstChild.shell.closeWorkspace(
 			firstChild.shellWindowId,
@@ -1456,9 +1527,28 @@ suite('WebHucodeShellService', () => {
 		);
 	});
 
-	test('hosted shell atomically opens and focuses outside the caller',
+	test('legacy hosted navigation uses authoritative project ownership',
 		async () => {
-			const { service, surface, browser } = createService();
+			const mruCalls: { projectId: string; worktreePath: string }[] = [];
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				{
+					async getProjects() {
+						return [{
+							id: 'authoritative-project',
+							worktrees: [{ path: '/tmp/target' }],
+						}];
+					},
+					async setLastActiveWorktree(projectId, worktreePath) {
+						mruCalls.push({ projectId, worktreePath });
+					},
+				}
+			);
 			const callerState = await service.openWorkspace(
 				browser.windowId,
 				'/tmp/caller',
@@ -1472,20 +1562,123 @@ suite('WebHucodeShellService', () => {
 			const opened = await caller.shell.openAndFocusWorkspace(
 				999,
 				'/tmp/target',
-				'project'
+				'caller-controlled-project'
 			);
 
+			const controllerState = await service.getWindowState(browser.windowId);
+			const active = controllerState.instances.find(instance =>
+				instance.instanceId === controllerState.activeInstanceId);
 			assert.deepStrictEqual({
-				active: opened.instances.find(instance =>
-					instance.instanceId === opened.activeInstanceId
-				)?.worktreePath,
+				active: active ? {
+					worktreePath: active.worktreePath,
+					projectId: active.projectId,
+				} : undefined,
 				focused: browser.iframeFocusCalls,
+				returnedInstances: opened.instances.map(instance => ({
+					instanceId: instance.instanceId,
+					worktreePath: instance.worktreePath,
+				})),
 			}, {
-				active: '/tmp/target',
+				active: {
+					worktreePath: '/tmp/target',
+					projectId: 'authoritative-project',
+				},
 				focused: ['/tmp/target'],
+				returnedInstances: [{
+					instanceId: callerInstanceId,
+					worktreePath: '',
+				}],
 			});
+			assert.deepStrictEqual(mruCalls, [{
+				projectId: 'authoritative-project',
+				worktreePath: '/tmp/target',
+			}]);
 		}
 	);
+
+	test('hidden legacy hosted children cannot navigate', async () => {
+		const { service, surface, browser } = createService();
+		const caller = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/legacy-hidden-caller'
+		);
+		assert.ok(caller.activeInstanceId);
+		const child = connectChild(browser, surface, caller.activeInstanceId);
+		await service.openWorkspace(browser.windowId, '/tmp/legacy-current');
+
+		await child.shell.openAndFocusWorkspace(
+			browser.windowId,
+			'/tmp/legacy-hidden-target',
+			'caller-controlled-project'
+		);
+
+		const state = await service.getWindowState(browser.windowId);
+		assert.strictEqual(state.instances.some(instance =>
+			instance.worktreePath === '/tmp/legacy-hidden-target'), false);
+		assert.strictEqual(state.instances.find(instance =>
+			instance.instanceId === state.activeInstanceId)?.worktreePath,
+			'/tmp/legacy-current');
+	});
+
+	test('stale legacy hosted children cannot navigate after reconnect',
+		async () => {
+			const catalogStarted = new DeferredPromise<void>();
+			const catalogGate = new DeferredPromise<readonly {
+				readonly id: string;
+				readonly worktrees: readonly { readonly path: string }[];
+			}[]>();
+			let mruCalls = 0;
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				{
+					async getProjects() {
+						await catalogStarted.complete();
+						return catalogGate.p;
+					},
+					async setLastActiveWorktree() { mruCalls++; },
+				}
+			);
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/legacy-stale-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const oldChild = connectChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+
+			void oldChild.shell.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/legacy-stale-target',
+				'caller-controlled-project'
+			).catch(() => undefined);
+			await catalogStarted.p;
+			const replacement = connectChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+			await catalogGate.complete([{
+				id: 'authoritative-project',
+				worktrees: [{ path: '/tmp/legacy-stale-target' }],
+			}]);
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(state.instances.some(instance =>
+				instance.worktreePath === '/tmp/legacy-stale-target'), false);
+			assert.strictEqual(mruCalls, 0);
+			assert.strictEqual((await replacement.shell.getWindowState(
+				browser.windowId
+			)).instances.length, 1);
+		});
 
 	test('rejects private methods on the hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
@@ -1498,10 +1691,18 @@ suite('WebHucodeShellService', () => {
 		assert.ok(instanceId);
 		const child = connectChild(browser, surface, instanceId);
 
-		await assert.rejects(
-			child.shellChannel.call('getState'),
-			/Method not found|Unknown channel command|getState/
-		);
+		for (const method of [
+			'getState',
+			'findHostedWorkspaceByPath',
+			'focusHostedWorkspaceByPath',
+			'focusNormalWindowByPath',
+			'openWorkspace',
+		]) {
+			await assert.rejects(
+				child.shellChannel.call(method),
+				new RegExp(`Method not found|Unknown channel command|${method}`)
+			);
+		}
 	});
 
 	test('rejects hosted catalog reconciliation while exposing window state',
@@ -1607,6 +1808,412 @@ suite('WebHucodeShellService', () => {
 				assert.ok(logService.warnings.some(warning => warning.includes(id)));
 			}
 		});
+
+	test('exposes only the typed hosted capability to current children',
+		async () => {
+			const commandCalls: string[] = [];
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				{
+					async executeCommand<T = unknown>(commandId: string) {
+						commandCalls.push(commandId);
+						return undefined as T;
+					},
+				}
+			);
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/current-child',
+				'project'
+			);
+			assert.ok(opened.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+
+			const state = await child.shell.getState();
+			assert.deepStrictEqual(state, {
+				available: true,
+				projectsSidebarVisible: true,
+				projectSwitcherCanGoBack: false,
+				projectSwitcherCanGoForward: false,
+				lifecycleState: 'active',
+				active: true,
+				visible: true,
+			});
+			assert.strictEqual(JSON.stringify(state).includes('/tmp/'), false);
+			for (const action of HUCODE_HOSTED_SHELL_ACTIONS) {
+				assert.strictEqual(
+					await child.shell.requestShellAction(action),
+					HucodeHostedShellOperationOutcome.Accepted
+				);
+			}
+			assert.deepStrictEqual(commandCalls, [
+				TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+				ADD_PROJECT_COMMAND_ID,
+				REFRESH_PROJECTS_COMMAND_ID,
+				COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+				GO_BACK_WORKTREE_COMMAND_ID,
+				GO_FORWARD_WORKTREE_COMMAND_ID,
+			]);
+			await assert.rejects(
+				child.shellChannel.call('getWindowState', [browser.windowId]),
+				/Method not found|Unknown channel command|getWindowState/
+			);
+		});
+
+	test('rejects hidden current children from shell actions and navigation',
+		async () => {
+			const commandCalls: string[] = [];
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				{
+					async executeCommand<T = unknown>(commandId: string) {
+						commandCalls.push(commandId);
+						return undefined as T;
+					},
+				}
+			);
+			const first = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hidden-caller'
+			);
+			assert.ok(first.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				first.activeInstanceId
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/current-active');
+
+			assert.strictEqual(
+				await child.shell.requestShellAction(
+					HucodeHostedShellAction.AddProject
+				),
+				HucodeHostedShellOperationOutcome.Rejected
+			);
+			assert.strictEqual(
+				await child.shell.navigateToFolder({
+					folderUri: URI.file('/tmp/stolen').toJSON(),
+				}),
+				HucodeHostedShellOperationOutcome.Rejected
+			);
+			assert.deepStrictEqual(commandCalls, []);
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId)?.worktreePath,
+				'/tmp/current-active'
+			);
+		});
+
+	test('supersedes hosted navigation hidden during folder preflight',
+		async () => {
+			const preflightStarted = new DeferredPromise<void>();
+			const preflight = new DeferredPromise<boolean>();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					async exists(path) {
+						if (path === '/tmp/preflight-target') {
+							await preflightStarted.complete();
+							return preflight.p;
+						}
+						return true;
+					},
+				}
+			);
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/preflight-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+			const navigation = child.shell.navigateToFolder({
+				folderUri: URI.file('/tmp/preflight-target').toJSON(),
+			});
+			await preflightStarted.p;
+			await service.openWorkspace(browser.windowId, '/tmp/newer-target');
+			await preflight.complete(true);
+
+			assert.strictEqual(
+				await navigation,
+				HucodeHostedShellOperationOutcome.Superseded
+			);
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId)?.worktreePath,
+				'/tmp/newer-target'
+			);
+			assert.strictEqual(state.instances.some(instance =>
+				instance.worktreePath === '/tmp/preflight-target'), false);
+			assert.strictEqual(state.retainedWorkbenches?.some(record =>
+				URI.revive(record.folderUri).fsPath === '/tmp/preflight-target'), false);
+			assert.strictEqual(Array.from(
+				surface.querySelectorAll<HTMLIFrameElement>('iframe')
+			).some(iframe => new URL(iframe.src).searchParams.get('folder') ===
+				'/tmp/preflight-target'), false);
+		});
+
+	test('reuses a loaded hosted navigation target without folder preflight',
+		async () => {
+			const checkedPaths: string[] = [];
+			let folderProviderAvailable = true;
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				{
+					async exists(path) {
+						checkedPaths.push(path);
+						if (!folderProviderAvailable) {
+							throw new Error('provider unavailable');
+						}
+						return true;
+					},
+				}
+			);
+			await service.openWorkspace(browser.windowId, '/tmp/loaded-target');
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/loaded-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+			const checksBeforeNavigation = checkedPaths.length;
+			folderProviderAvailable = false;
+
+			assert.strictEqual(await child.shell.navigateToFolder({
+				folderUri: URI.file('/tmp/loaded-target').toJSON(),
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(checkedPaths.length, checksBeforeNavigation);
+			const state = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId)?.worktreePath,
+				'/tmp/loaded-target'
+			);
+		});
+
+	test('uses canonical catalog path for case-insensitive hosted navigation',
+		async () => {
+			const canonicalPath = '/tmp/Canonical-Target';
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				{
+					async getProjects() {
+						return [{
+							id: 'canonical-project',
+							worktrees: [{ path: canonicalPath }],
+						}];
+					},
+					async setLastActiveWorktree() { },
+				},
+				false
+			);
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/canonical-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+
+			assert.strictEqual(await child.shell.navigateToFolder({
+				folderUri: URI.file('/TMP/CANONICAL-TARGET').toJSON(),
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			const state = await service.getWindowState(browser.windowId);
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId);
+			assert.deepStrictEqual({
+				path: active?.worktreePath,
+				projectId: active?.projectId,
+			}, {
+				path: canonicalPath,
+				projectId: 'canonical-project',
+			});
+		});
+
+	test('keeps authoritative project ownership when MRU persistence fails',
+		async () => {
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				{
+					async getProjects() {
+						return [{
+							id: 'authoritative-project',
+							worktrees: [{ path: '/tmp/project-target' }],
+						}];
+					},
+					async setLastActiveWorktree() {
+						throw new Error('persistence unavailable');
+					},
+				}
+			);
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/project-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+
+			assert.strictEqual(await child.shell.navigateToFolder({
+				folderUri: URI.file('/tmp/project-target').toJSON(),
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			const state = await service.getWindowState(browser.windowId);
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId);
+			assert.deepStrictEqual({
+				path: active?.worktreePath,
+				projectId: active?.projectId,
+			}, {
+				path: '/tmp/project-target',
+				projectId: 'authoritative-project',
+			});
+		});
+
+	test('keeps a reconnected workbench after an old capability close',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/reconnected-during-capability-close'
+			);
+			assert.ok(opened.activeInstanceId);
+			const oldChild = connectCurrentChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+			const prepareStarted = new DeferredPromise<void>();
+			const prepareGate = new DeferredPromise<boolean>();
+			oldChild.workbench.onPrepareUnload = () => {
+				void prepareStarted.complete();
+			};
+			oldChild.workbench.prepareUnloadResult = prepareGate.p;
+
+			// The old document is gone after reconnection. Its retained test
+			// client need not receive a reply, but its admitted operation must
+			// not commit against the replacement document.
+			void oldChild.shell.closeSelf().catch(() => undefined);
+			await prepareStarted.p;
+			const replacement = connectCurrentChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+			await prepareGate.complete(true);
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				state.instances.map(instance => instance.instanceId),
+				[opened.activeInstanceId]
+			);
+			assert.strictEqual(oldChild.workbench.commitUnloadCalls, 0);
+			assert.strictEqual((await replacement.shell.getState()).available, true);
+		});
+
+	test('keeps a reconnected workbench after a stale legacy close',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/reconnected-during-legacy-close'
+			);
+			assert.ok(opened.activeInstanceId);
+			const oldChild = connectChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+			const prepareStarted = new DeferredPromise<void>();
+			const prepareGate = new DeferredPromise<boolean>();
+			oldChild.workbench.onPrepareUnload = () => {
+				void prepareStarted.complete();
+			};
+			oldChild.workbench.prepareUnloadResult = prepareGate.p;
+
+			void oldChild.shell.closeWorkspace(
+				999,
+				'caller-controlled-instance'
+			).catch(() => undefined);
+			await prepareStarted.p;
+			const replacement = connectChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+			await prepareGate.complete(true);
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+			const state = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				state.instances.map(instance => instance.instanceId),
+				[opened.activeInstanceId]
+			);
+			assert.strictEqual(oldChild.workbench.commitUnloadCalls, 0);
+			assert.strictEqual((await replacement.shell.getWindowState(
+				browser.windowId
+			)).instances.length, 1);
+		});
+
+	test('fails closed on an explicit hosted capability mismatch', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/mismatched-child'
+		);
+		assert.ok(opened.activeInstanceId);
+		markHostedCapabilityReady(
+			browser,
+			surface,
+			opened.activeInstanceId,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION + 1
+		);
+		const posted = browser.portMessages.at(-1);
+		assert.ok(posted);
+		assert.strictEqual(posted.hostedShellProtocolVersion, 0);
+		assert.strictEqual(posted.hostedShellCapabilities, undefined);
+	});
 
 	test('closes the requested instance through the shell channel', async () => {
 		const { service, surface, browser } = createService();
@@ -4898,6 +5505,8 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 interface IPostedPortMessage {
 	readonly instanceId: string;
 	readonly windowId: number;
+	readonly hostedShellProtocolVersion?: number;
+	readonly hostedShellCapabilities?: readonly string[];
 	readonly port: MessagePort;
 }
 
@@ -4957,10 +5566,15 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		const portMessage = message as {
 			readonly instanceId: string;
 			readonly windowId: number;
+			readonly hostedShellProtocolVersion?: number;
+			readonly hostedShellCapabilities?: readonly string[];
 		};
 		this.portMessages.push({
 			instanceId: portMessage.instanceId,
 			windowId: portMessage.windowId,
+			hostedShellProtocolVersion:
+				portMessage.hostedShellProtocolVersion,
+			hostedShellCapabilities: portMessage.hostedShellCapabilities,
 			port,
 		});
 	}

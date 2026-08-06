@@ -19,6 +19,10 @@ import {
 	IWindowOpenable,
 	isFolderToOpen,
 } from '../../../../platform/window/common/window.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../../platform/window/common/hucodeHostedShellService.js';
 
 interface IHucodeBrowserOmniShellService {
 	readonly _serviceBrand: undefined;
@@ -73,8 +77,7 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	shellService: IHucodeBrowserOmniShellService,
 	projectManagerService: IHucodeOmniBrowserProjectManager
 ): Promise<boolean> {
-	if ((!environmentService.isOmniWindow &&
-		!environmentService.isHostedOmniWorkspace) ||
+	if (!environmentService.isOmniWindow ||
 		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow || options?.addMode || options?.removeMode ||
 		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||
@@ -129,14 +132,6 @@ export async function tryOpenHucodeOmniBrowserWindow(
 		onUnexpectedError(error);
 	}
 	const windowId = getWindowId(mainWindow);
-	if (environmentService.isHostedOmniWorkspace) {
-		await shellService.openAndFocusWorkspace(
-			windowId,
-			worktreePath,
-			projectId
-		);
-		return true;
-	}
 	try {
 		if (await shellService.focusHostedWorkspaceByPath(
 			worktreePath,
@@ -158,4 +153,27 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	await shellService.openWorkspace(windowId, worktreePath, projectId);
 	await shellService.focusWorkspace(windowId);
 	return true;
+}
+
+/** Routes a hosted web workbench folder open through its bound capability. */
+export async function tryNavigateHucodeHostedBrowserWindow(
+	toOpen: IWindowOpenable[],
+	options: IOpenWindowOptions | undefined,
+	environmentService: IHucodeOmniBrowserEnvironment,
+	hostedShellService: IHucodeHostedShellService
+): Promise<boolean> {
+	if (!environmentService.isHostedOmniWorkspace ||
+		environmentService.extensionDevelopmentLocationURI ||
+		options?.forceNewWindow || options?.addMode || options?.removeMode ||
+		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||
+		options?.waitMarkerFileURI || options?.forceProfile ||
+		options?.forceTempProfile || options?.chatSessionToOpen ||
+		toOpen.length !== 1 || !isFolderToOpen(toOpen[0])) {
+		return false;
+	}
+
+	const result = await hostedShellService.navigateToFolder({
+		folderUri: toOpen[0].folderUri.toJSON(),
+	});
+	return result !== HucodeHostedShellOperationOutcome.Unsupported;
 }

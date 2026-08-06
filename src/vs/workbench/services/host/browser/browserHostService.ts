@@ -47,8 +47,11 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from './toasts.js';
 import {
 	IHucodeBrowserOmniShellService,
+	tryNavigateHucodeHostedBrowserWindow,
 	tryOpenHucodeOmniBrowserWindow,
 } from './hucodeOmniBrowserOpen.js';
+import { IHucodeHostedShellService } from
+	'../../../../platform/window/common/hucodeHostedShellService.js';
 import { IProjectManagerService } from
 	'../../../../platform/projectManager/common/projectManager.js';
 
@@ -255,18 +258,24 @@ export class BrowserHostService extends Disposable implements IHostService {
 	}
 
 	private async doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
-		const hucodeHandled = (
-			this.environmentService.isOmniWindow ||
-			this.environmentService.isHostedOmniWorkspace
-		) ? await this.instantiationService.invokeFunction(async accessor =>
-			tryOpenHucodeOmniBrowserWindow(
-				toOpen,
-				options,
-				this.environmentService,
-				accessor.get(IHucodeBrowserOmniShellService),
-				accessor.get(IProjectManagerService)
-			)
-		) : false;
+		const hucodeHandled = this.environmentService.isHostedOmniWorkspace
+			? await this.instantiationService.invokeFunction(accessor =>
+				tryNavigateHucodeHostedBrowserWindow(
+					toOpen,
+					options,
+					this.environmentService,
+					accessor.get(IHucodeHostedShellService)
+				))
+			: this.environmentService.isOmniWindow
+				? await this.instantiationService.invokeFunction(async accessor =>
+					tryOpenHucodeOmniBrowserWindow(
+						toOpen,
+						options,
+						this.environmentService,
+						accessor.get(IHucodeBrowserOmniShellService),
+						accessor.get(IProjectManagerService)
+					)
+				) : false;
 		if (hucodeHandled) {
 			return;
 		}

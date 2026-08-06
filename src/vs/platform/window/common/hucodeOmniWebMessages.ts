@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { INativeOpenFileRequest } from './window.js';
+import { HucodeHostedShellCapability } from
+	'./hucodeHostedShellService.js';
 
 /**
  * Channel exposing the Omni web shell service to hosted iframe workbenches.
@@ -40,6 +42,9 @@ export interface IHucodeOmniWebPortMessage {
 	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
 	readonly windowId: number;
+	/** Negotiated independently from the hosted unload protocol. */
+	readonly hostedShellProtocolVersion?: number;
+	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 }
 
 /**
@@ -70,6 +75,11 @@ export interface IHucodeOmniWebReadyMessage {
 	 * it. Absent from workbenches built before the unload handshake split.
 	 */
 	readonly protocolVersion?: number;
+
+	/** Hosted shell capability version offered by this workbench. */
+	readonly hostedShellProtocolVersion?: number;
+	/** Hosted shell operation groups offered by this workbench. */
+	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 }
 
 /**
