@@ -126,6 +126,7 @@ suite('HostedShellMainService capability port', () => {
 			['instance-1']
 		);
 		assert.strictEqual(harness.connections.size, 0);
+		assert.deepStrictEqual(harness.transferredConnectionIds, []);
 		assert.deepStrictEqual(harness.responses.at(-1), {
 			channel: 'vscode:hucodeHostedShellPortResult',
 			nonce: 'replaced',
