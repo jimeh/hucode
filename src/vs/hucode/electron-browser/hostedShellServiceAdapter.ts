@@ -3,17 +3,18 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../base/common/async.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import {
 	Disposable,
 	DisposableStore,
+	IDisposable,
 	isDisposable,
+	MutableDisposable,
 } from '../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/common/ipc.mp.js';
-import { acquirePortOrUndefined } from
+import { acquirePortOrUndefinedCancellable } from
 	'../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
@@ -37,88 +38,90 @@ import {
 import { IRectangle } from '../../platform/window/common/window.js';
 import { INativeWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/electron-browser/environmentService.js';
-import { observeHucodeHostedShellState } from
-	'../browser/hostedShellStateObserver.js';
+
+/** One cancellable attempt to acquire the desktop hosted capability. */
+export interface IDesktopHostedShellConnectionAttempt extends IDisposable {
+	readonly promise: Promise<IHucodeHostedShellService | undefined>;
+}
 
 export type DesktopHostedShellConnector = () =>
-	Promise<IHucodeHostedShellService | undefined>;
+	IDesktopHostedShellConnectionAttempt;
+
+/** Timing seams for deterministic connection-lifecycle tests. */
+export interface IDesktopHostedShellConnectionOptions {
+	readonly acquisitionTimeoutMs: number;
+	readonly operationTimeoutMs: number;
+	readonly retryDelaysMs: readonly number[];
+	readonly setTimeout: (
+		callback: () => void,
+		delay: number
+	) => ReturnType<typeof setTimeout>;
+	readonly clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+const defaultConnectionOptions: IDesktopHostedShellConnectionOptions = {
+	acquisitionTimeoutMs: 5_000,
+	operationTimeoutMs: 15_000,
+	retryDelaysMs: [100, 250, 500, 1_000, 2_000],
+	setTimeout: (callback, delay) => setTimeout(callback, delay),
+	clearTimeout: handle => clearTimeout(handle),
+};
 
 /**
  * Desktop hosted-workbench client for the narrow, main-process-bound shell
- * capability. Connection is deliberately deferred and never falls back to the
- * broad legacy shell channel.
+ * capability. Connection establishment and calls are bounded, recover through
+ * reacquisition, and never fall back to the broad legacy shell channel.
  */
 export class DesktopHostedShellServiceAdapter extends Disposable
 	implements IHucodeHostedShellService {
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly connection =
-		new DeferredPromise<IHucodeHostedShellService | undefined>();
 	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
-	private connected = false;
+	private shell: IHucodeHostedShellService | undefined;
+	private readonly shellDisposables =
+		this._register(new MutableDisposable<DisposableStore>());
+	private connectionAttempt: IDesktopHostedShellConnectionAttempt | undefined;
+	private acquisitionTimer: ReturnType<typeof setTimeout> | undefined;
+	private retryTimer: ReturnType<typeof setTimeout> | undefined;
+	private retryIndex = 0;
+	private readyRequested = false;
+	private disposed = false;
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedShellState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
 
 	constructor(
-		connect: DesktopHostedShellConnector,
+		private readonly connect: DesktopHostedShellConnector,
 		@INativeWorkbenchEnvironmentService
-		environmentService: INativeWorkbenchEnvironmentService
+		environmentService: INativeWorkbenchEnvironmentService,
+		private readonly options = defaultConnectionOptions
 	) {
 		super();
 		withHucodeHostedShellCachedAvailability(
 			this,
-			() => this.connected
+			() => !!this.shell
 		);
+		this._register({ dispose: () => this.shutdown() });
 
 		if (!environmentService.isHostedOmniWorkspace ||
 			!environmentService.hostedInstanceId) {
-			void this.connection.complete(undefined);
 			return;
 		}
 
-		let disposed = false;
-		this._register({
-			dispose: () => {
-				disposed = true;
-				this.connected = false;
-				void this.connection.complete(undefined);
-			},
-		});
-		void connect().then(shell => {
-			if (disposed) {
-				if (isDisposable(shell)) {
-					shell.dispose();
-				}
-				return;
-			}
-			if (shell) {
-				this.connected = true;
-				if (isDisposable(shell)) {
-					this._register(shell);
-				}
-				this._register(observeHucodeHostedShellState(shell, state => {
-					this.state = state;
-					this._onDidChangeState.fire(state);
-				}));
-			}
-			void this.connection.complete(shell);
-		}, () => {
-			void this.connection.complete(undefined);
-		});
+		this.beginConnectionAttempt();
 	}
 
 	private async withShell<T>(
 		fallback: () => T,
 		run: (shell: IHucodeHostedShellService) => Promise<T>
 	): Promise<T> {
-		try {
-			const shell = await this.connection.p;
-			return shell ? await run(shell) : fallback();
-		} catch {
+		const shell = this.shell;
+		if (!shell) {
 			return fallback();
 		}
+		const result = await this.invokeBounded(shell, () => run(shell));
+		return result.ok ? result.value : fallback();
 	}
 
 	getState(): Promise<IHucodeHostedShellState> {
@@ -138,10 +141,25 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 	}
 
 	notifyReady(): Promise<IHucodeHostedReadyResult> {
-		return this.withShell(
-			() => ({ outcome: HucodeHostedShellOperationOutcome.Unavailable }),
-			shell => shell.notifyReady()
-		);
+		this.readyRequested = true;
+		const shell = this.shell;
+		if (!shell) {
+			return Promise.resolve({
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			});
+		}
+		return this.invokeBounded(shell, () => shell.notifyReady()).then(result => {
+			if (!result.ok) {
+				return {
+					outcome: HucodeHostedShellOperationOutcome.Unavailable,
+				};
+			}
+			if (result.value.outcome ===
+				HucodeHostedShellOperationOutcome.Stale) {
+				this.invalidateConnection(shell);
+			}
+			return result.value;
+		});
 	}
 
 	closeSelf() { return this.runOperation(shell => shell.closeSelf()); }
@@ -177,10 +195,19 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			shell: IHucodeHostedShellService
 		) => Promise<HucodeHostedShellOperationOutcome>
 	): Promise<HucodeHostedShellOperationOutcome> {
-		return this.withShell(
-			() => HucodeHostedShellOperationOutcome.Unavailable,
-			run
-		);
+		const shell = this.shell;
+		if (!shell) {
+			return Promise.resolve(HucodeHostedShellOperationOutcome.Unavailable);
+		}
+		return this.invokeBounded(shell, () => run(shell)).then(result => {
+			if (!result.ok) {
+				return HucodeHostedShellOperationOutcome.Unavailable;
+			}
+			if (result.value === HucodeHostedShellOperationOutcome.Stale) {
+				this.invalidateConnection(shell);
+			}
+			return result.value;
+		});
 	}
 
 	private markUnavailable(): IHucodeHostedShellState {
@@ -193,31 +220,214 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		}
 		return this.state;
 	}
+
+	private beginConnectionAttempt(): void {
+		if (this.disposed || this.connectionAttempt || this.shell) {
+			return;
+		}
+
+		let attempt: IDesktopHostedShellConnectionAttempt;
+		try {
+			attempt = this.connect();
+		} catch {
+			this.scheduleRetry();
+			return;
+		}
+		this.connectionAttempt = attempt;
+		this.acquisitionTimer = this.options.setTimeout(() => {
+			if (this.connectionAttempt !== attempt) {
+				return;
+			}
+			this.connectionAttempt = undefined;
+			this.acquisitionTimer = undefined;
+			attempt.dispose();
+			this.scheduleRetry();
+		}, this.options.acquisitionTimeoutMs);
+
+		void attempt.promise.then(shell => {
+			this.finishConnectionAttempt(attempt, shell);
+		}, () => {
+			this.finishConnectionAttempt(attempt, undefined);
+		});
+	}
+
+	private finishConnectionAttempt(
+		attempt: IDesktopHostedShellConnectionAttempt,
+		shell: IHucodeHostedShellService | undefined
+	): void {
+		if (this.connectionAttempt !== attempt) {
+			if (isDisposable(shell)) {
+				shell.dispose();
+			}
+			return;
+		}
+		this.connectionAttempt = undefined;
+		this.clearAcquisitionTimer();
+		attempt.dispose();
+		if (this.disposed || !shell) {
+			if (isDisposable(shell)) {
+				shell.dispose();
+			}
+			if (!this.disposed) {
+				this.scheduleRetry();
+			}
+			return;
+		}
+
+		this.installConnection(shell);
+	}
+
+	private installConnection(shell: IHucodeHostedShellService): void {
+		const disposables = new DisposableStore();
+		if (isDisposable(shell)) {
+			disposables.add(shell);
+		}
+		disposables.add(shell.onDidChangeState(state => {
+			if (this.shell === shell) {
+				this.updateState(state);
+			}
+		}));
+		this.shellDisposables.value = disposables;
+		this.shell = shell;
+		this.retryIndex = 0;
+		void this.refreshState(shell);
+		if (this.readyRequested) {
+			void this.retryReadiness(shell);
+		}
+	}
+
+	private async refreshState(shell: IHucodeHostedShellService): Promise<void> {
+		const result = await this.invokeBounded(shell, () => shell.getState());
+		if (result.ok && this.shell === shell) {
+			this.updateState(result.value);
+		}
+	}
+
+	private async retryReadiness(
+		shell: IHucodeHostedShellService
+	): Promise<void> {
+		const result = await this.invokeBounded(shell, () => shell.notifyReady());
+		if (result.ok && result.value.outcome ===
+			HucodeHostedShellOperationOutcome.Stale) {
+			this.invalidateConnection(shell);
+		}
+	}
+
+	private async invokeBounded<T>(
+		shell: IHucodeHostedShellService,
+		operation: () => Promise<T>
+	): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false }> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const operationResult = Promise.resolve().then(operation).then(
+				value => ({ kind: 'value' as const, value }),
+				() => ({ kind: 'failure' as const })
+			);
+			const timeoutResult = new Promise<{ readonly kind: 'timeout' }>(resolve => {
+				timer = this.options.setTimeout(
+					() => resolve({ kind: 'timeout' }),
+					this.options.operationTimeoutMs
+				);
+			});
+			const result = await Promise.race([operationResult, timeoutResult]);
+			if (result.kind === 'value' && this.shell === shell) {
+				return { ok: true, value: result.value };
+			}
+			this.invalidateConnection(shell);
+			return { ok: false };
+		} finally {
+			if (timer !== undefined) {
+				this.options.clearTimeout(timer);
+			}
+		}
+	}
+
+	private invalidateConnection(shell: IHucodeHostedShellService): void {
+		if (this.shell !== shell) {
+			return;
+		}
+		this.shell = undefined;
+		this.shellDisposables.clear();
+		this.markUnavailable();
+		this.scheduleRetry();
+	}
+
+	private scheduleRetry(): void {
+		if (this.disposed || this.retryTimer || this.shell ||
+			this.connectionAttempt) {
+			return;
+		}
+		const delays = this.options.retryDelaysMs;
+		const delay = delays.length === 0
+			? 0
+			: delays[Math.min(this.retryIndex, delays.length - 1)];
+		this.retryIndex++;
+		this.retryTimer = this.options.setTimeout(() => {
+			this.retryTimer = undefined;
+			this.beginConnectionAttempt();
+		}, delay);
+	}
+
+	private updateState(state: IHucodeHostedShellState): void {
+		if (areHucodeHostedShellStatesEqual(this.state, state)) {
+			return;
+		}
+		this.state = state;
+		this._onDidChangeState.fire(state);
+	}
+
+	private clearAcquisitionTimer(): void {
+		if (this.acquisitionTimer !== undefined) {
+			this.options.clearTimeout(this.acquisitionTimer);
+			this.acquisitionTimer = undefined;
+		}
+	}
+
+	private shutdown(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		this.clearAcquisitionTimer();
+		if (this.retryTimer !== undefined) {
+			this.options.clearTimeout(this.retryTimer);
+			this.retryTimer = undefined;
+		}
+		this.connectionAttempt?.dispose();
+		this.connectionAttempt = undefined;
+		this.shell = undefined;
+		this.shellDisposables.clear();
+		this.markUnavailable();
+	}
 }
 
-async function connectDesktopHostedShell():
-	Promise<IHucodeHostedShellService> {
-	const port = await acquirePortOrUndefined(
+function connectDesktopHostedShell(): IDesktopHostedShellConnectionAttempt {
+	const acquisition = acquirePortOrUndefinedCancellable(
 		HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 		HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL
 	);
-	if (!port) {
-		throw new Error('Desktop hosted shell capability was denied.');
-	}
-	const disposables = new DisposableStore();
-	const client = disposables.add(new MessagePortClient(
-		port,
-		'hucodeHostedDesktopWorkbench'
-	));
-	const shell = withHucodeHostedShellCachedAvailability(
-		createHucodeHostedShellClient(
-			client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL)
-		),
-		() => true
-	);
-	return Object.assign(shell, {
-		dispose: () => disposables.dispose(),
-	});
+	return {
+		promise: acquisition.promise.then(port => {
+			if (!port) {
+				return undefined;
+			}
+			const disposables = new DisposableStore();
+			const client = disposables.add(new MessagePortClient(
+				port,
+				'hucodeHostedDesktopWorkbench'
+			));
+			const shell = withHucodeHostedShellCachedAvailability(
+				createHucodeHostedShellClient(
+					client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL)
+				),
+				() => true
+			);
+			return Object.assign(shell, {
+				dispose: () => disposables.dispose(),
+			});
+		}),
+		dispose: () => acquisition.dispose(),
+	};
 }
 
 registerSingleton(

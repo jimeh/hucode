@@ -144,6 +144,9 @@ interface IHostedIframeInstance {
 	hostedShellProtocolVersion?: number;
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
+	bootstrapId?: string;
+	bootstrapAttempt?: number;
+	retiredBootstrapIds?: Set<string>;
 	pendingUnload?: Promise<boolean>;
 	pendingUnloadDisposition?: HostedUnloadDisposition;
 	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
@@ -1654,6 +1657,41 @@ export class WebHucodeShellController extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebChildMessageType.Ready:
+				if (message.connectionBootstrap !== undefined) {
+					if (instance.bootstrapId !==
+						message.connectionBootstrap.id &&
+						instance.retiredBootstrapIds?.has(
+							message.connectionBootstrap.id
+						)) {
+						return;
+					}
+					if (instance.bootstrapId === message.connectionBootstrap.id &&
+						instance.bootstrapAttempt !== undefined &&
+						message.connectionBootstrap.attempt <=
+						instance.bootstrapAttempt) {
+						return;
+					}
+					this.retireBootstrapDocument(
+						instance,
+						message.connectionBootstrap.id
+					);
+					instance.bootstrapId = message.connectionBootstrap.id;
+					instance.bootstrapAttempt =
+						message.connectionBootstrap.attempt;
+				} else if (message.connectionAttempt !== undefined) {
+					if (instance.bootstrapId === undefined &&
+						instance.bootstrapAttempt !== undefined &&
+						message.connectionAttempt <= instance.bootstrapAttempt) {
+						return;
+					}
+					this.retireBootstrapDocument(instance);
+					instance.bootstrapId = undefined;
+					instance.bootstrapAttempt = message.connectionAttempt;
+				} else {
+					this.retireBootstrapDocument(instance);
+					instance.bootstrapId = undefined;
+					instance.bootstrapAttempt = undefined;
+				}
 				// A workbench that announces nothing predates the two-phase
 				// unload handshake.
 				instance.protocolVersion = message.protocolVersion ?? 1;
@@ -1680,6 +1718,17 @@ export class WebHucodeShellController extends Disposable
 				}
 				break;
 		}
+	}
+
+	private retireBootstrapDocument(
+		instance: IHostedIframeInstance,
+		nextBootstrapId?: string
+	): void {
+		if (instance.bootstrapId === undefined ||
+			instance.bootstrapId === nextBootstrapId) {
+			return;
+		}
+		(instance.retiredBootstrapIds ??= new Set()).add(instance.bootstrapId);
 	}
 
 	/**
@@ -1736,6 +1785,16 @@ export class WebHucodeShellController extends Disposable
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
 			windowId: this.windowId,
+			...(instance.bootstrapId === undefined ? {} : {
+				connectionBootstrap: {
+					id: instance.bootstrapId,
+					attempt: instance.bootstrapAttempt!,
+				},
+			}),
+			...(instance.bootstrapId !== undefined ||
+				instance.bootstrapAttempt === undefined ? {} : {
+				connectionAttempt: instance.bootstrapAttempt,
+			}),
 			hostedShellProtocolVersion: negotiatedCapabilities
 				? HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
 				: instance.hostedShellProtocolVersion === undefined
@@ -2742,9 +2801,38 @@ function isHucodeOmniWebChildMessage(
 		return false;
 	}
 
-	const type = (value as { readonly type?: unknown }).type;
-	return type === HucodeOmniWebChildMessageType.Ready ||
-		type === HucodeOmniWebChildMessageType.Focus;
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+		readonly connectionBootstrap?: unknown;
+		readonly connectionAttempt?: unknown;
+		readonly focused?: unknown;
+	};
+	if (typeof message.instanceId !== 'string' || !message.instanceId) {
+		return false;
+	}
+	if (message.type === HucodeOmniWebChildMessageType.Ready) {
+		const bootstrap = message.connectionBootstrap &&
+			typeof message.connectionBootstrap === 'object'
+			? message.connectionBootstrap as {
+				readonly id?: unknown;
+				readonly attempt?: unknown;
+			} : undefined;
+		const hasCurrentBootstrap = message.connectionBootstrap !== undefined;
+		const hasLegacyAttempt = message.connectionAttempt !== undefined;
+		return !(hasCurrentBootstrap && hasLegacyAttempt) && (
+			hasCurrentBootstrap ? (!!bootstrap &&
+				typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
+				Number.isSafeInteger(bootstrap.attempt) &&
+				(bootstrap.attempt as number) > 0
+			) : !hasLegacyAttempt || (
+				Number.isSafeInteger(message.connectionAttempt) &&
+				(message.connectionAttempt as number) > 0
+			)
+		);
+	}
+	return message.type === HucodeOmniWebChildMessageType.Focus &&
+		typeof message.focused === 'boolean';
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {

@@ -99,16 +99,6 @@ class OmniWindowShellContribution extends Disposable
 			return;
 		}
 
-		this._register(registerOmniSmokeTestDriver({
-			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
-			enableSmokeTestDriver:
-				!!this.environmentService.enableSmokeTestDriver,
-			isOmniWindow: this.environmentService.isOmniWindow,
-			windowId: getWindowId(mainWindow),
-			suspendWorkspace: (_windowId, instanceId) =>
-				this.shellService.suspendWorkspace(instanceId),
-		}));
-
 		this._register(this.omniWindowUIService.registerDelegate({
 			focusProjectPane: () => {
 				this.layoutService.focusPart(Parts.SIDEBAR_PART);
@@ -152,6 +142,39 @@ class OmniWindowShellContribution extends Disposable
 		);
 	}
 }
+
+class OmniSmokeTestDriverContribution extends Disposable
+	implements IWorkbenchContribution {
+
+	static readonly ID = 'hucode.omniSmokeTestDriver';
+
+	constructor(
+		@IWorkbenchEnvironmentService
+		environmentService: IWorkbenchEnvironmentService,
+		@IHucodeShellControllerService
+		shellService: IHucodeShellControllerService,
+	) {
+		super();
+		this._register(registerOmniSmokeTestDriver({
+			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
+			enableSmokeTestDriver:
+				!!environmentService.enableSmokeTestDriver,
+			isOmniWindow: environmentService.isOmniWindow,
+			windowId: getWindowId(mainWindow),
+			openWorkspace: (_windowId, worktreePath) =>
+				shellService.openWorkspace(worktreePath),
+			suspendWorkspace: (_windowId, instanceId) =>
+				shellService.suspendWorkspace(instanceId),
+			reloadWorkspace: _windowId => shellService.reloadWorkspace(),
+		}));
+	}
+}
+
+registerWorkbenchContribution2(
+	OmniSmokeTestDriverContribution.ID,
+	OmniSmokeTestDriverContribution,
+	WorkbenchPhase.BlockRestore
+);
 
 registerWorkbenchContribution2(
 	OmniWindowShellContribution.ID,

@@ -288,7 +288,7 @@ jobs:
       - name: Install Chromium for serve-web smoke test
         run: node node_modules/@playwright/test/cli.js install --with-deps chromium
 
-      - name: Run server user-data Omni smoke test
+      - name: Run serve-web Omni hosted-command smoke test
         run: npm run hucode:smoke:web-server-user-data
 
       - name: Run Node unit tests
@@ -326,3 +326,18 @@ jobs:
           xvfb-run ./scripts/test.sh "${SUITES[@]/#/--run=}"
         env:
           VSCODE_SKIP_PRELAUNCH: 1
+
+      - name: Run Linux desktop Omni hosted-command smoke test
+        run: |
+          dbus-run-session -- xvfb-run -a \
+            npm run hucode:smoke:linux-omni -- \
+              --executable ./scripts/hucode.sh \
+              --timeout-ms 300000
+
+      - name: Upload Omni smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omni-hosted-command-smoke-diagnostics
+          path: .build/hucode-smoke-artifacts/
+          if-no-files-found: ignore

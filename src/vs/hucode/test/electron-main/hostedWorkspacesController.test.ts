@@ -4387,6 +4387,28 @@ suite('ResidentHostedWorkspacesController', () => {
 			assert.deepStrictEqual(hostedWebContents.closeCalls, []);
 		});
 
+	test('hosted close unloads the retained workbench', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller } = createController();
+
+		await controller.retainAndOpenWorkbench(URI.file(alpha));
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const binding = controller.acquireHostedShellBinding(1)!;
+
+		assert.strictEqual(
+			await controller.closeHostedShellSelf(binding),
+			true
+		);
+		assert.deepStrictEqual(controller.getState().instances, []);
+		assert.deepStrictEqual(
+			controller.getState().retainedWorkbenches?.map(record => ({
+				folderUri: URI.revive(record.folderUri).fsPath,
+				desiredState: record.desiredState,
+			})),
+			[{ folderUri: alpha, desiredState: 'unloaded' }]
+		);
+	});
+
 	test('hosted navigation focuses a workbench in another Omni window',
 		async () => {
 			const caller = createWorktree('cross-shell-caller');

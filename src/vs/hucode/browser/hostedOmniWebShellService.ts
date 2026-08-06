@@ -5,7 +5,8 @@
 
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter, Event } from '../../base/common/event.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable } from
+	'../../base/common/lifecycle.js';
 import { URI } from '../../base/common/uri.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { InstantiationType, registerSingleton } from
@@ -37,6 +38,7 @@ import { HUCODE_OMNI_WEB_SHELL_CHANNEL } from
 import { IWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/common/environmentService.js';
 import {
+	IHucodeHostedOmniWebConnection,
 	IHucodeHostedOmniWebConnectionService,
 } from './hostedOmniWebConnection.js';
 import {
@@ -81,9 +83,13 @@ export class HostedOmniWebShellService extends Disposable
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly connected: Promise<IHucodeHostedShellService> | undefined;
+	private shell: IHucodeHostedShellService | undefined;
+	private readonly shellDisposables =
+		this._register(new MutableDisposable<DisposableStore>());
 	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
 	private available = false;
+	private readyRequested = false;
+	private disposed = false;
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedShellState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
@@ -99,51 +105,74 @@ export class HostedOmniWebShellService extends Disposable
 			this,
 			() => this.available
 		);
-		this._register({ dispose: () => { this.available = false; } });
+		this._register({
+			dispose: () => {
+				this.disposed = true;
+				this.available = false;
+				this.shell = undefined;
+				this.shellDisposables.clear();
+			},
+		});
 
 		const instanceId = environmentService.hostedInstanceId;
 		if (!connectionService.isHosted || !instanceId) {
 			return;
 		}
 
-		let disposed = false;
-		this._register({ dispose: () => { disposed = true; } });
-		this.connected = connectionService.whenConnected().then(connection => {
-			const mode = getHostedOmniWebShellClientMode(
-				connection.hostedShellProtocolVersion,
-				connection.hostedShellCapabilities
-			);
-			const shell = mode === 'current'
-				? createHucodeHostedShellClient(connection.ipcClient.getChannel(
-					HUCODE_HOSTED_SHELL_CHANNEL
-				), connection.hostedShellCapabilities)
-				: mode === 'legacy'
-					? createLegacyHostedShellClient(
-						ProxyChannel.toService<IHucodeShellService>(
-							connection.ipcClient.getChannel(
-								HUCODE_OMNI_WEB_SHELL_CHANNEL
-							)
-						),
-						connection.shellWindowId,
-						instanceId
-					)
-					: createUnavailableHostedShellClient();
-			this.available = !disposed && mode !== 'unavailable';
-			if (!disposed) {
-				this._register(shell.onDidChangeState(state => {
-					this.state = state;
-					this._onDidChangeState.fire(state);
-				}));
+		this._register(connectionService.onDidConnect(connection => {
+			this.installConnection(connection, instanceId);
+		}));
+		void connectionService.whenConnected().then(connection => {
+			if (connection) {
+				this.installConnection(connection, instanceId);
 			}
-			return shell;
 		});
+	}
+
+	private installConnection(
+		connection: IHucodeHostedOmniWebConnection,
+		instanceId: string
+	): void {
+		if (this.disposed || this.shell) {
+			return;
+		}
+		const mode = getHostedOmniWebShellClientMode(
+			connection.hostedShellProtocolVersion,
+			connection.hostedShellCapabilities
+		);
+		const shell = mode === 'current'
+			? createHucodeHostedShellClient(connection.ipcClient.getChannel(
+				HUCODE_HOSTED_SHELL_CHANNEL
+			), connection.hostedShellCapabilities)
+			: mode === 'legacy'
+				? createLegacyHostedShellClient(
+					ProxyChannel.toService<IHucodeShellService>(
+						connection.ipcClient.getChannel(
+							HUCODE_OMNI_WEB_SHELL_CHANNEL
+						)
+					),
+					connection.shellWindowId,
+					instanceId
+				)
+				: createUnavailableHostedShellClient();
+		this.available = mode !== 'unavailable';
+		this.shell = shell;
+		const disposables = new DisposableStore();
+		disposables.add(shell.onDidChangeState(state => {
+			this.state = state;
+			this._onDidChangeState.fire(state);
+		}));
+		this.shellDisposables.value = disposables;
+		if (this.readyRequested && this.available) {
+			void shell.notifyReady().catch(() => undefined);
+		}
 	}
 
 	private async withShell<T>(
 		fallback: () => T,
 		run: (shell: IHucodeHostedShellService) => Promise<T>
 	): Promise<T> {
-		return this.connected ? run(await this.connected) : fallback();
+		return this.shell ? run(this.shell) : fallback();
 	}
 
 	async getState(): Promise<IHucodeHostedShellState> {
@@ -163,6 +192,7 @@ export class HostedOmniWebShellService extends Disposable
 	}
 
 	notifyReady(): Promise<IHucodeHostedReadyResult> {
+		this.readyRequested = true;
 		return this.withShell(
 			() => ({ outcome: HucodeHostedShellOperationOutcome.Unavailable }),
 			shell => shell.notifyReady()

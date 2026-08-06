@@ -27,6 +27,7 @@ import {
 import {
 	HucodeHostedOmniWebConnectionService,
 	IHucodeHostedOmniWebConnectionService,
+	IHostedOmniWebConnectionOptions,
 	IHostedOmniWebConnectionBrowserAdapter,
 } from '../../browser/hostedOmniWebConnection.js';
 import {
@@ -45,18 +46,23 @@ const INSTANCE_ID = 'hosted-instance';
 suite('HucodeHostedOmniWebConnectionService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createService(hasParent = true): {
+	function createService(
+		hasParent = true,
+		browser: FakeConnectionBrowserAdapter =
+			new FakeConnectionBrowserAdapter(hasParent),
+		options?: IHostedOmniWebConnectionOptions
+	): {
 		readonly service: HucodeHostedOmniWebConnectionService;
 		readonly browser: FakeConnectionBrowserAdapter;
 	} {
-		const browser = new FakeConnectionBrowserAdapter(hasParent);
 		const service = disposables.add(new HucodeHostedOmniWebConnectionService(
 			browser,
 			{
 				_serviceBrand: undefined,
 				isHostedOmniWorkspace: true,
 				hostedInstanceId: INSTANCE_ID,
-			}
+			},
+			options
 		));
 		return { service, browser };
 	}
@@ -65,17 +71,56 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		readonly instanceId?: string;
 		readonly windowId?: number;
 		readonly hostedShellProtocolVersion?: number;
+		readonly connectionBootstrap?: {
+			readonly id: string;
+			readonly attempt: number;
+		};
+		readonly connectionAttempt?: number;
 	}): object {
 		return {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: overrides?.instanceId ?? INSTANCE_ID,
 			windowId: overrides?.windowId ?? 7,
+			...(overrides?.connectionBootstrap === undefined ? {} : {
+				connectionBootstrap: overrides.connectionBootstrap,
+			}),
+			...(overrides?.connectionAttempt === undefined ? {} : {
+				connectionAttempt: overrides.connectionAttempt,
+			}),
 			...(overrides?.hostedShellProtocolVersion === undefined ? {} : {
 				hostedShellProtocolVersion:
 					overrides.hostedShellProtocolVersion,
 				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 			}),
 		};
+	}
+
+	function postedBootstrap(browser: FakeConnectionBrowserAdapter): {
+		readonly id: string;
+		readonly attempt: number;
+	} {
+		const ready = browser.postedMessages.at(-1) as {
+			readonly connectionBootstrap?: {
+				readonly id: string;
+				readonly attempt: number;
+			};
+		};
+		assert.ok(ready.connectionBootstrap);
+		return ready.connectionBootstrap;
+	}
+
+	function trackedPort(): {
+		readonly port: MessagePort;
+		readonly wasClosed: () => boolean;
+	} {
+		const port = new MessageChannel().port1;
+		const close = port.close.bind(port);
+		let closed = false;
+		port.close = () => {
+			closed = true;
+			close();
+		};
+		return { port, wasClosed: () => closed };
 	}
 
 	async function settled(): Promise<void> {
@@ -87,6 +132,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 
 		browser.emitFromParent(portMessage(), new MessageChannel().port1);
 		const connection = await service.whenConnected();
+		assert.ok(connection);
 
 		assert.strictEqual(connection.shellWindowId, 7);
 		assert.strictEqual(connection.hostedShellProtocolVersion, undefined);
@@ -96,6 +142,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 		}), new MessageChannel().port1);
 		const negotiated = await current.service.whenConnected();
+		assert.ok(negotiated);
 		assert.strictEqual(
 			negotiated.hostedShellProtocolVersion,
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
@@ -104,6 +151,16 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			negotiated.hostedShellCapabilities,
 			HUCODE_HOSTED_SHELL_CAPABILITIES
 		);
+	});
+
+	test('accepts a fully unstamped port from a cached parent', async () => {
+		const { service, browser } = createService();
+		service.signalReady();
+
+		browser.emitFromParent(portMessage({ windowId: 11 }),
+			new MessageChannel().port1);
+
+		assert.strictEqual((await service.whenConnected())?.shellWindowId, 11);
 	});
 
 	test('ignores port transfers from non-parent same-origin sources', async () => {
@@ -117,6 +174,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		browser.emitFromParent(portMessage(), new MessageChannel().port1);
 
 		const connection = await service.whenConnected();
+		assert.ok(connection);
 		assert.strictEqual(connection.shellWindowId, 7);
 	});
 
@@ -155,6 +213,13 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 
 		service.signalReady();
 		service.notifyFocus(false);
+		const bootstrap = (browser.postedMessages[0] as {
+			readonly connectionBootstrap: {
+				readonly id: string;
+				readonly attempt: number;
+			};
+		}).connectionBootstrap;
+		assert.ok(bootstrap.id);
 
 		// The shell decides how to unload a workbench from the version it
 		// announces here, so a ready signal without one reads as a workbench
@@ -163,6 +228,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			{
 				type: HucodeOmniWebChildMessageType.Ready,
 				instanceId: INSTANCE_ID,
+				connectionBootstrap: bootstrap,
 				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 				hostedShellProtocolVersion:
 					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
@@ -174,6 +240,99 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 				focused: false,
 			},
 		]);
+
+		const other = createService();
+		other.service.signalReady();
+		assert.notStrictEqual(postedBootstrap(other.browser).id, bootstrap.id);
+	});
+
+	test('bounds the initial wait while keeping retryable readiness alive',
+		async () => {
+			const browser = new ManualConnectionBrowserAdapter(true);
+			const { service } = createService(true, browser, {
+				initialConnectionTimeoutMs: 50,
+				readyRetryDelaysMs: [10],
+			});
+			service.signalReady();
+			browser.fireNext(50);
+			assert.strictEqual(await service.whenConnected(), undefined);
+			browser.fireNext(10);
+			assert.deepStrictEqual(
+				browser.postedMessages.map(message =>
+					(message as {
+						connectionBootstrap?: { readonly attempt: number };
+					}).connectionBootstrap?.attempt),
+				[1, 2]
+			);
+		});
+
+	test('rejects a stale retry port and adopts only the latest attempt',
+		async () => {
+			const browser = new ManualConnectionBrowserAdapter(true);
+			const { service } = createService(true, browser, {
+				initialConnectionTimeoutMs: 50,
+				readyRetryDelaysMs: [10],
+			});
+			service.signalReady();
+			const first = postedBootstrap(browser);
+			browser.fireNext(10);
+			const latestBootstrap = postedBootstrap(browser);
+			assert.strictEqual(first.id, latestBootstrap.id);
+			const stale = trackedPort();
+			browser.emitFromParent(portMessage({
+				connectionBootstrap: first,
+				windowId: 1,
+			}), stale.port);
+			assert.strictEqual(stale.wasClosed(), true);
+			const latest = new MessageChannel();
+			browser.emitFromParent(portMessage({
+				connectionBootstrap: latestBootstrap,
+				windowId: 2,
+			}), latest.port1);
+			const connection = await service.whenConnected();
+			assert.ok(connection);
+			assert.strictEqual(connection.shellWindowId, 2);
+		});
+
+	test('closes wrong-document and partial current bootstrap ports', async () => {
+		const browser = new ManualConnectionBrowserAdapter(true);
+		const { service } = createService(true, browser, {
+			initialConnectionTimeoutMs: 50,
+			readyRetryDelaysMs: [10],
+		});
+		service.signalReady();
+		const bootstrap = postedBootstrap(browser);
+
+		const wrongDocument = trackedPort();
+		browser.emitFromParent(portMessage({
+			connectionBootstrap: {
+				id: 'different-document',
+				attempt: bootstrap.attempt,
+			},
+		}), wrongDocument.port);
+		const partial = trackedPort();
+		browser.emitFromParent({
+			type: HucodeOmniWebParentMessageType.Port,
+			instanceId: INSTANCE_ID,
+			windowId: 7,
+			connectionBootstrap: { id: bootstrap.id },
+		}, partial.port);
+		const nullBootstrap = trackedPort();
+		browser.emitFromParent({
+			type: HucodeOmniWebParentMessageType.Port,
+			instanceId: INSTANCE_ID,
+			windowId: 7,
+			connectionBootstrap: null,
+		}, nullBootstrap.port);
+		assert.strictEqual(wrongDocument.wasClosed(), true);
+		assert.strictEqual(partial.wasClosed(), true);
+		assert.strictEqual(nullBootstrap.wasClosed(), true);
+
+		browser.emitFromParent(portMessage({
+			connectionBootstrap: bootstrap,
+			windowId: 9,
+		}), new MessageChannel().port1);
+		assert.strictEqual((await service.whenConnected())?.shellWindowId, 9);
 	});
 
 	test('selects legacy only for a parent without capability versioning', () => {
@@ -302,6 +461,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			const connectionService = {
 				_serviceBrand: undefined,
 				isHosted: true,
+				onDidConnect: Event.None,
 				async whenConnected() {
 					return {
 						ipcClient: {
@@ -391,6 +551,17 @@ class FakeConnectionBrowserAdapter
 		return toDisposable(() => this.listeners.delete(listener));
 	}
 
+	setTimeout(
+		callback: () => void,
+		delay: number
+	): ReturnType<typeof setTimeout> {
+		return setTimeout(callback, delay);
+	}
+
+	clearTimeout(handle: ReturnType<typeof setTimeout>): void {
+		clearTimeout(handle);
+	}
+
 	emitFromParent(data: object, port?: MessagePort): void {
 		this.emitMessage(data, mainWindow, port);
 	}
@@ -413,5 +584,35 @@ class FakeConnectionBrowserAdapter
 		for (const listener of this.listeners) {
 			listener(event);
 		}
+	}
+}
+
+class ManualConnectionBrowserAdapter extends FakeConnectionBrowserAdapter {
+	private nextHandle = 1;
+	private readonly timers = new Map<number, {
+		readonly callback: () => void;
+		readonly delay: number;
+	}>();
+
+	override setTimeout(
+		callback: () => void,
+		delay: number
+	): ReturnType<typeof setTimeout> {
+		const handle = this.nextHandle++;
+		this.timers.set(handle, { callback, delay });
+		return handle as unknown as ReturnType<typeof setTimeout>;
+	}
+
+	override clearTimeout(handle: ReturnType<typeof setTimeout>): void {
+		this.timers.delete(handle as unknown as number);
+	}
+
+	fireNext(delay: number): void {
+		const entry = [...this.timers.entries()].find(
+			([, timer]) => timer.delay === delay
+		);
+		assert.ok(entry, `Expected a pending ${delay}ms timer`);
+		this.timers.delete(entry[0]);
+		entry[1].callback();
 	}
 }

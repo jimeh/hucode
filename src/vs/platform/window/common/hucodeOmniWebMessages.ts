@@ -35,6 +35,12 @@ export const enum HucodeOmniWebChildMessageType {
 	Focus = 'hucode.omni.hostedWorkbenchFocus',
 }
 
+/** Identifies one hosted workbench document and one of its bootstrap retries. */
+export interface IHucodeOmniWebConnectionBootstrap {
+	readonly id: string;
+	readonly attempt: number;
+}
+
 /**
  * Message transferring the shell IPC port into a hosted iframe workbench.
  */
@@ -42,6 +48,10 @@ export interface IHucodeOmniWebPortMessage {
 	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
 	readonly windowId: number;
+	/** Correlates retryable bootstraps for current peers. */
+	readonly connectionBootstrap?: IHucodeOmniWebConnectionBootstrap;
+	/** Previous-generation retry metadata. */
+	readonly connectionAttempt?: number;
 	/** Negotiated independently from the hosted unload protocol. */
 	readonly hostedShellProtocolVersion?: number;
 	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
@@ -69,6 +79,15 @@ export const HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION = 2;
 export interface IHucodeOmniWebReadyMessage {
 	readonly type: HucodeOmniWebChildMessageType.Ready;
 	readonly instanceId: string;
+
+	/** Current document identity and its monotonic bootstrap attempt. */
+	readonly connectionBootstrap?: IHucodeOmniWebConnectionBootstrap;
+
+	/**
+	 * Previous-generation monotonic bootstrap attempt. Current children use
+	 * {@link connectionBootstrap}; this stays for cached children.
+	 */
+	readonly connectionAttempt?: number;
 
 	/**
 	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows

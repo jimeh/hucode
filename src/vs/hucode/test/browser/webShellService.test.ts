@@ -230,10 +230,19 @@ suite('WebHucodeShellService', () => {
 		surface: HTMLElement,
 		instanceId: string,
 		protocolVersion = HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-		capabilities: readonly string[] = HUCODE_HOSTED_SHELL_CAPABILITIES
+		capabilities: readonly string[] = HUCODE_HOSTED_SHELL_CAPABILITIES,
+		connectionBootstrap?: number | {
+			readonly id: string;
+			readonly attempt: number;
+		}
 	): void {
 		postMessage(browser, surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
+			...(typeof connectionBootstrap === 'number' ? {
+				connectionAttempt: connectionBootstrap,
+			} : connectionBootstrap === undefined ? {} : {
+				connectionBootstrap,
+			}),
 			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 			hostedShellProtocolVersion: protocolVersion,
 			hostedShellCapabilities: capabilities,
@@ -2253,6 +2262,122 @@ suite('WebHucodeShellService', () => {
 		assert.ok(posted);
 		assert.strictEqual(posted.hostedShellProtocolVersion, 0);
 		assert.strictEqual(posted.hostedShellCapabilities, undefined);
+	});
+
+	test('deduplicates attempts per bootstrap document and accepts a new one',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/bootstrap-attempt-child'
+			);
+			assert.ok(opened.activeInstanceId);
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				opened.activeInstanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-a', attempt: 2 }
+			);
+			assert.deepStrictEqual(
+				browser.portMessages.at(-1)?.connectionBootstrap,
+				{ id: 'document-a', attempt: 2 }
+			);
+			const count = browser.portMessages.length;
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				opened.activeInstanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-a', attempt: 1 }
+			);
+			assert.strictEqual(browser.portMessages.length, count);
+
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				opened.activeInstanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-b', attempt: 1 }
+			);
+			assert.strictEqual(browser.portMessages.length, count + 1);
+			assert.deepStrictEqual(
+				browser.portMessages.at(-1)?.connectionBootstrap,
+				{ id: 'document-b', attempt: 1 }
+			);
+
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				opened.activeInstanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-a', attempt: 3 }
+			);
+			assert.strictEqual(browser.portMessages.length, count + 1);
+			assert.deepStrictEqual(
+				browser.portMessages.at(-1)?.connectionBootstrap,
+				{ id: 'document-b', attempt: 1 }
+			);
+		});
+
+	test('echoes previous-generation attempts for cached children', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/legacy-bootstrap-attempt-child'
+		);
+		assert.ok(opened.activeInstanceId);
+		markHostedCapabilityReady(
+			browser,
+			surface,
+			opened.activeInstanceId,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CAPABILITIES,
+			2
+		);
+		assert.strictEqual(browser.portMessages.at(-1)?.connectionAttempt, 2);
+		assert.strictEqual(
+			browser.portMessages.at(-1)?.connectionBootstrap,
+			undefined
+		);
+	});
+
+	test('rejects partial and mixed current bootstrap metadata', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/invalid-bootstrap-child'
+		);
+		assert.ok(opened.activeInstanceId);
+
+		postMessage(browser, surface, opened.activeInstanceId, {
+			type: HucodeOmniWebChildMessageType.Ready,
+			connectionBootstrap: { id: 'document-a' },
+		});
+		postMessage(browser, surface, opened.activeInstanceId, {
+			type: HucodeOmniWebChildMessageType.Ready,
+			connectionBootstrap: null,
+		});
+		postMessage(browser, surface, opened.activeInstanceId, {
+			type: HucodeOmniWebChildMessageType.Ready,
+			connectionBootstrap: { id: 'document-a', attempt: 1 },
+			connectionAttempt: 1,
+		});
+		assert.deepStrictEqual(browser.portMessages, []);
+
+		markHostedCapabilityReady(
+			browser,
+			surface,
+			opened.activeInstanceId,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CAPABILITIES,
+			{ id: 'document-a', attempt: 1 }
+		);
+		assert.strictEqual(browser.portMessages.length, 1);
 	});
 
 	test('closes the requested instance through the shell channel', async () => {
@@ -5545,6 +5670,11 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 interface IPostedPortMessage {
 	readonly instanceId: string;
 	readonly windowId: number;
+	readonly connectionBootstrap?: {
+		readonly id: string;
+		readonly attempt: number;
+	};
+	readonly connectionAttempt?: number;
 	readonly hostedShellProtocolVersion?: number;
 	readonly hostedShellCapabilities?: readonly string[];
 	readonly port: MessagePort;
@@ -5606,12 +5736,19 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		const portMessage = message as {
 			readonly instanceId: string;
 			readonly windowId: number;
+			readonly connectionBootstrap?: {
+				readonly id: string;
+				readonly attempt: number;
+			};
+			readonly connectionAttempt?: number;
 			readonly hostedShellProtocolVersion?: number;
 			readonly hostedShellCapabilities?: readonly string[];
 		};
 		this.portMessages.push({
 			instanceId: portMessage.instanceId,
 			windowId: portMessage.windowId,
+			connectionBootstrap: portMessage.connectionBootstrap,
+			connectionAttempt: portMessage.connectionAttempt,
 			hostedShellProtocolVersion:
 				portMessage.hostedShellProtocolVersion,
 			hostedShellCapabilities: portMessage.hostedShellCapabilities,

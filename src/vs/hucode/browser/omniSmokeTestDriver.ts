@@ -15,7 +15,9 @@ export const HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY =
 
 /** Smoke-only operations exposed to packaged Omni lifecycle automation. */
 export interface IHucodeOmniSmokeTestDriver {
+	openWorkspace(worktreePath: string): Promise<void>;
 	suspendWorkspace(instanceId: string): Promise<void>;
+	reloadActiveWorkspace(): Promise<void>;
 }
 
 /** Window-like target capable of holding the Omni smoke-test driver. */
@@ -35,12 +37,25 @@ export function registerOmniSmokeTestDriver(options: {
 		windowId: number,
 		instanceId: string
 	) => Promise<unknown>;
+	readonly openWorkspace: (
+		windowId: number,
+		worktreePath: string
+	) => Promise<unknown>;
+	readonly reloadWorkspace: (windowId: number) => Promise<unknown>;
 }): IDisposable {
 	if (!options.enableSmokeTestDriver || !options.isOmniWindow) {
 		return Disposable.None;
 	}
 
 	const driver: IHucodeOmniSmokeTestDriver = {
+		async openWorkspace(worktreePath): Promise<void> {
+			if (!worktreePath) {
+				throw new Error(
+					'The Omni smoke-test driver requires a worktree path.'
+				);
+			}
+			await options.openWorkspace(options.windowId, worktreePath);
+		},
 		async suspendWorkspace(instanceId): Promise<void> {
 			if (!instanceId) {
 				throw new Error(
@@ -48,6 +63,9 @@ export function registerOmniSmokeTestDriver(options: {
 				);
 			}
 			await options.suspendWorkspace(options.windowId, instanceId);
+		},
+		async reloadActiveWorkspace(): Promise<void> {
+			await options.reloadWorkspace(options.windowId);
 		},
 	};
 	options.target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY] = driver;

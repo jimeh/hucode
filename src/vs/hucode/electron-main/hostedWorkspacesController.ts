@@ -1994,10 +1994,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (!instance) {
 			return false;
 		}
-		return this.closeInstance(
-			instance,
-			binding.connectionGeneration
+		const retained = this.retainedWorkbenches.getByUri(
+			URI.file(instance.worktreePath)
 		);
+		return this.deferStateEmission(async () => {
+			const closed = await this.closeInstance(
+				instance,
+				binding.connectionGeneration
+			);
+			if (closed && retained) {
+				this.retainedWorkbenches.update(retained.id, {
+					desiredState: 'unloaded',
+				});
+				this.emitState();
+			}
+			return closed;
+		});
 	}
 
 	private async closeInstance(
