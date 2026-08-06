@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { errorHandler } from '../../../../../base/common/errors.js';
 import { Event } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -239,12 +240,31 @@ suite('HucodeOmniBrowserOpen', () => {
 
 	test('fails closed when a hosted folder capability is unavailable',
 		async () => {
-			for (const outcome of [
-				HucodeHostedShellOperationOutcome.Unavailable,
-				HucodeHostedShellOperationOutcome.Rejected,
-				HucodeHostedShellOperationOutcome.Stale,
-				HucodeHostedShellOperationOutcome.Superseded,
-			]) {
+			const originalHandler = errorHandler.getUnexpectedErrorHandler();
+			const errors: unknown[] = [];
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				for (const outcome of [
+					HucodeHostedShellOperationOutcome.Unavailable,
+					HucodeHostedShellOperationOutcome.Rejected,
+					HucodeHostedShellOperationOutcome.Stale,
+				]) {
+					const expectedErrorCount = errors.length + 1;
+					assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+						[{ folderUri: URI.file('/scratch') }],
+						undefined,
+						environment({ isHostedOmniWorkspace: true }),
+						{
+							_serviceBrand: undefined,
+							onDidChangeState: Event.None,
+							async navigateToFolder() { return outcome; },
+						} as Partial<IHucodeHostedShellService> as
+						IHucodeHostedShellService
+					), true);
+					assert.strictEqual(errors.length, expectedErrorCount);
+					assert.match(String(errors.at(-1)), new RegExp(outcome));
+				}
+
 				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
 					[{ folderUri: URI.file('/scratch') }],
 					undefined,
@@ -252,24 +272,35 @@ suite('HucodeOmniBrowserOpen', () => {
 					{
 						_serviceBrand: undefined,
 						onDidChangeState: Event.None,
-						async navigateToFolder() { return outcome; },
+						async navigateToFolder() {
+							return HucodeHostedShellOperationOutcome.Superseded;
+						},
 					} as Partial<IHucodeHostedShellService> as
 					IHucodeHostedShellService
 				), true);
+				assert.strictEqual(errors.length, 3);
+
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{
+						folderUri: URI.from({
+							scheme: 'memfs', path: '/scratch',
+						}),
+					}],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					{
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() {
+							return HucodeHostedShellOperationOutcome.Unsupported;
+						},
+					} as Partial<IHucodeHostedShellService> as
+					IHucodeHostedShellService
+				), false);
+				assert.strictEqual(errors.length, 3);
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(originalHandler);
 			}
-			assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
-				[{ folderUri: URI.from({ scheme: 'memfs', path: '/scratch' }) }],
-				undefined,
-				environment({ isHostedOmniWorkspace: true }),
-				{
-					_serviceBrand: undefined,
-					onDidChangeState: Event.None,
-					async navigateToFolder() {
-						return HucodeHostedShellOperationOutcome.Unsupported;
-					},
-				} as Partial<IHucodeHostedShellService> as
-				IHucodeHostedShellService
-			), false);
 		});
 
 	test('routes folders for the current remote authority', async () => {

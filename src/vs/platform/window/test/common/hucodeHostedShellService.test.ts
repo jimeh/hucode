@@ -6,10 +6,12 @@
 import assert from 'assert';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
 	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellClient,
 	createHucodeHostedShellServerChannel,
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_CORE_CAPABILITIES,
@@ -82,6 +84,25 @@ suite('HucodeHostedShellService', () => {
 			[...HUCODE_HOSTED_SHELL_CAPABILITIES, 'futureGroup']
 		), HUCODE_HOSTED_SHELL_CAPABILITIES);
 	});
+
+	test('core-only clients do not call the optional snapshot method',
+		async () => {
+			const calls: string[] = [];
+			const channel: IChannel = {
+				call: async <T>(command: string) => {
+					calls.push(command);
+					return undefined as T;
+				},
+				listen: () => Event.None,
+			};
+			const client = createHucodeHostedShellClient(
+				channel,
+				HUCODE_HOSTED_SHELL_CORE_CAPABILITIES
+			);
+
+			assert.strictEqual(await client.getNavigationSnapshot!(), undefined);
+			assert.deepStrictEqual(calls, []);
+		});
 
 	test('projects only bound self state and rejects inactive actions', async () => {
 		const binding: IHucodeHostedShellBinding = {

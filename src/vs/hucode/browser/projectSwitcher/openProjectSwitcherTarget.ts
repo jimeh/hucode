@@ -89,6 +89,11 @@ export async function openProjectSwitcherTargetInWindow(
 				throw new Error(hostedFolderNavigationRejected);
 			case HucodeHostedShellOperationOutcome.Unavailable:
 				throw new Error(hostedShellCapabilityUnavailable);
+			default:
+				throw new Error(localize(
+					'hostedFolderNavigationUnknown',
+					'The Omni shell returned an unrecognized workbench switch result.'
+				));
 		}
 	}
 

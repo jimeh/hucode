@@ -73,7 +73,6 @@ suite('SwitchProjectWorktreeModel', () => {
 				section: 'workbenches',
 				order: 7,
 				label: 'Arbitrary',
-				pathLabel: '/arbitrary',
 			}, {
 				folderUri: URI.file('/project').toJSON(),
 				lifecycleState: 'active',

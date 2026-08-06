@@ -293,6 +293,23 @@ suite('OpenProjectSwitcherTarget', () => {
 			));
 			assert.deepStrictEqual(calls, []);
 		});
+
+	test('rejects unknown hosted outcomes without fallback navigation',
+		async () => {
+			const calls: string[] = [];
+			await assert.rejects(() => openProjectSwitcherTargetInWindow(
+				target,
+				projectManager(calls),
+				environment({ isHostedOmniWorkspace: true }),
+				shell(calls, false),
+				host(calls),
+				hostedShell(
+					calls,
+					'future-outcome' as HucodeHostedShellOperationOutcome
+				)
+			), /unrecognized workbench switch result/);
+			assert.deepStrictEqual(calls, ['navigate:/repo']);
+		});
 });
 
 function createProject(): ProjectRecord {

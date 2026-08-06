@@ -185,9 +185,15 @@ export async function tryNavigateHucodeHostedBrowserWindow(
 			return false;
 		case HucodeHostedShellOperationOutcome.Accepted:
 		case HucodeHostedShellOperationOutcome.Superseded:
+			return true;
 		case HucodeHostedShellOperationOutcome.Rejected:
 		case HucodeHostedShellOperationOutcome.Stale:
 		case HucodeHostedShellOperationOutcome.Unavailable:
+		default:
+			onUnexpectedError(new Error(
+				'Hosted Omni folder navigation was not accepted for ' +
+				`${toOpen[0].folderUri.toString(true)}: ${result}.`
+			));
 			return true;
 	}
 }

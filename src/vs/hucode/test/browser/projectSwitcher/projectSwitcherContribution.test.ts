@@ -65,6 +65,8 @@ import {
 	'../../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IHucodeRetainedWorkbench } from
 	'../../../common/retainedWorkbench.js';
+import { filterSwitchWorktreePicks } from
+	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
 	PROJECTS_SECTION_HANDLE,
 	ProjectSwitcherItem,
@@ -247,7 +249,12 @@ suite('ProjectSwitcherContribution', () => {
 			notifyHucodeHostedOperationOutcome(
 				'Test operation', outcome, notificationService);
 		}
-		assert.strictEqual(errors.length, 4);
+		assert.deepStrictEqual(errors, [
+			'Test operation was rejected by the Omni shell.',
+			'Test operation could not run because this workbench is no longer connected to the current Omni shell.',
+			'Test operation could not run because the Omni shell connection is unavailable.',
+			'Test operation is not supported by this Omni shell.',
+		]);
 	});
 
 	test('keeps complete project catalog reconciliation in the shell',
@@ -448,7 +455,6 @@ suite('ProjectSwitcherContribution', () => {
 					section: 'workbenches' as const,
 					order: 0,
 					label: 'Arbitrary',
-					pathLabel: '/arbitrary',
 				}, {
 					folderUri: URI.file('/repo/previous').toJSON(),
 					lifecycleState: 'loaded' as const,
@@ -472,7 +478,9 @@ suite('ProjectSwitcherContribution', () => {
 					lastActiveAt: target.lastActiveAt,
 				})),
 				{
-					getUriLabel: resource => resource.fsPath,
+					getUriLabel: resource => resource.fsPath === '/arbitrary'
+						? 'Formatted arbitrary path'
+						: resource.fsPath,
 				} as ILabelService,
 				snapshot.sectionOrder,
 				snapshot
@@ -493,6 +501,20 @@ suite('ProjectSwitcherContribution', () => {
 				path: '/repo/previous', current: false, loaded: true,
 				lastVisitedAt: 20,
 			}]);
+			const arbitrary = picks.find(pick =>
+				pick.worktreePath === '/arbitrary')!;
+			assert.deepStrictEqual({
+				detail: arbitrary.detail,
+				tooltip: arbitrary.tooltip,
+			}, {
+				detail: 'Formatted arbitrary path',
+				tooltip: '/arbitrary',
+			});
+			assert.deepStrictEqual(
+				filterSwitchWorktreePicks(picks, '/arbitrary')
+					.map(pick => pick.worktreePath),
+				['/arbitrary']
+			);
 		});
 
 	test('renders independent name branch and path fields in source order', () => {

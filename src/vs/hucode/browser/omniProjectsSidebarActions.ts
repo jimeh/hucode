@@ -77,16 +77,47 @@ export function notifyHucodeHostedOperationOutcome(
 	outcome: HucodeHostedShellOperationOutcome,
 	notificationService: INotificationService
 ): void {
-	if (outcome === HucodeHostedShellOperationOutcome.Accepted ||
-		outcome === HucodeHostedShellOperationOutcome.Superseded) {
-		return;
+	let message: string;
+	switch (outcome) {
+		case HucodeHostedShellOperationOutcome.Accepted:
+		case HucodeHostedShellOperationOutcome.Superseded:
+			return;
+		case HucodeHostedShellOperationOutcome.Rejected:
+			message = localize(
+				'hostedShellOperationRejected',
+				'{0} was rejected by the Omni shell.',
+				operation
+			);
+			break;
+		case HucodeHostedShellOperationOutcome.Stale:
+			message = localize(
+				'hostedShellOperationStale',
+				'{0} could not run because this workbench is no longer connected to the current Omni shell.',
+				operation
+			);
+			break;
+		case HucodeHostedShellOperationOutcome.Unavailable:
+			message = localize(
+				'hostedShellOperationUnavailable',
+				'{0} could not run because the Omni shell connection is unavailable.',
+				operation
+			);
+			break;
+		case HucodeHostedShellOperationOutcome.Unsupported:
+			message = localize(
+				'hostedShellOperationUnsupported',
+				'{0} is not supported by this Omni shell.',
+				operation
+			);
+			break;
+		default:
+			message = localize(
+				'hostedShellOperationUnknown',
+				'{0} could not be completed.',
+				operation
+			);
 	}
-	notificationService.error(localize(
-		'hostedShellOperationFailed',
-		"{0} failed because the Omni shell operation was {1}.",
-		operation,
-		outcome
-	));
+	notificationService.error(message);
 }
 
 registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {

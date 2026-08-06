@@ -57,7 +57,6 @@ export function createHucodeHostedNavigationSnapshot(
 			section: 'workbenches',
 			order: record.order,
 			label: record.label ?? basename(path),
-			pathLabel: path,
 		});
 	}
 
@@ -76,7 +75,6 @@ export function createHucodeHostedNavigationSnapshot(
 			order,
 			...(instance.projectId ? {} : {
 				label: basename(instance.worktreePath),
-				pathLabel: instance.worktreePath,
 			}),
 		});
 	}
