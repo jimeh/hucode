@@ -6,7 +6,18 @@
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter, Event } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
-import { Disposable } from '../../base/common/lifecycle.js';
+import {
+	Disposable,
+	DisposableMap,
+	DisposableStore,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
+import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
+import { Client as MessagePortClient } from
+	'../../base/parts/ipc/electron-main/ipc.mp.js';
+import { validatedIpcMain } from
+	'../../base/parts/ipc/electron-main/ipcMain.js';
+import { MessageChannelMain } from 'electron';
 import { isLinux } from '../../base/common/platform.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
 import { IEnvironmentMainService } from
@@ -56,6 +67,18 @@ import {
 } from
 	'../common/retainedWorkbench.js';
 import { ShellControllerStore } from '../common/shellControllerStore.js';
+import {
+	createBoundHucodeHostedShellFacade,
+	HUCODE_HOSTED_SHELL_CHANNEL,
+	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+	IHucodeHostedShellBinding,
+	IHucodeHostedShellDelegate,
+	IHucodeHostedShellService,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import {
+	acceptHucodeHostedShellPortRequest,
+	IHucodeHostedShellPortConnection,
+} from './hostedShellPortAcceptor.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -77,6 +100,13 @@ export class HucodeShellMainService extends Disposable
 	private readonly trustedHostedWorkspaceProcessIds = new Map<number, number>();
 	private readonly trustedHostedWorkspaceWebContentsIds =
 		new Map<number, number>();
+	private readonly hostedWorkspaceOwnersByWebContentsId = new Map<
+		number,
+		{ readonly windowId: number; readonly instanceId: string }
+	>();
+	private readonly hostedShellConnections = this._register(
+		new DisposableMap<number>()
+	);
 
 	constructor(
 		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
@@ -103,6 +133,19 @@ export class HucodeShellMainService extends Disposable
 				window => window.id
 			)
 		));
+
+		const onHostedShellPortRequest = (
+			event: Electron.IpcMainEvent,
+			nonce: unknown
+		) => this.acceptHostedShellPort(event, nonce);
+		validatedIpcMain.on(
+			HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+			onHostedShellPortRequest
+		);
+		this._register(toDisposable(() => validatedIpcMain.removeListener(
+			HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+			onHostedShellPortRequest
+		)));
 	}
 
 	isTrustedHostedWorkspaceRequest(
@@ -112,6 +155,134 @@ export class HucodeShellMainService extends Disposable
 		return this.trustedHostedWorkspaceProcessIds.has(processId) ||
 			(typeof webContentsId === 'number' &&
 				this.trustedHostedWorkspaceWebContentsIds.has(webContentsId));
+	}
+
+	/** Accepts a sender-derived hosted-shell capability request. */
+	private acceptHostedShellPort(
+		event: Electron.IpcMainEvent,
+		nonce: unknown
+	): void {
+		acceptHucodeHostedShellPortRequest({
+			ownersByWebContentsId:
+				this.hostedWorkspaceOwnersByWebContentsId,
+			getController: windowId => this.controllers.get(windowId),
+			connections: this.hostedShellConnections,
+			createConnection: (controller, binding) =>
+				this.createHostedShellPortConnection(controller, binding),
+			logRefusal: reason => this.logService.debug(
+				'[HucodeShellMainService] Refused hosted shell port: ' + reason
+			),
+			logFailure: error => this.logService.warn(
+				'[HucodeShellMainService] Failed to transfer hosted shell port: ' +
+				`${error}`
+			),
+		}, event, nonce);
+	}
+
+	/** Creates and owns the MessagePort connection for one bound instance. */
+	private createHostedShellPortConnection(
+		controller: ResidentHostedWorkspacesController,
+		binding: IHucodeHostedShellBinding
+	): IHucodeHostedShellPortConnection {
+		const connection = new DisposableStore();
+		const { port1, port2 } = new MessageChannelMain();
+		let portTransferred = false;
+		connection.add(toDisposable(() => {
+			if (!portTransferred) {
+				port2.close();
+			}
+		}));
+		const client = connection.add(new MessagePortClient(
+			port1,
+			`hucodeHostedDesktop:${binding.instanceId}`
+		));
+		client.registerChannel(
+			HUCODE_HOSTED_SHELL_CHANNEL,
+			ProxyChannel.fromService(
+				this.createHostedShellFacade(controller, binding),
+				connection
+			)
+		);
+		return Object.assign(connection, {
+			transferPort: port2,
+			markTransferred: () => portTransferred = true,
+		});
+	}
+
+	/** Exposes only operations scoped to the supplied hosted-shell binding. */
+	private createHostedShellFacade(
+		controller: ResidentHostedWorkspacesController,
+		binding: IHucodeHostedShellBinding
+	): IHucodeHostedShellService {
+		const delegate: IHucodeHostedShellDelegate = {
+			onDidChangeState: Event.map(
+				Event.filter(this.onDidChangeWindowState, change =>
+					change.windowId === binding.windowId),
+				() => controller.getHostedShellAuthorityState(binding)
+			),
+			getState: async () =>
+				controller.getHostedShellAuthorityState(binding),
+			notifyReady: async current => {
+				controller.notifyHostedShellReady(current);
+			},
+			closeSelf: current => controller.closeHostedShellSelf(current),
+			reopenSelfInNormalWindow: current =>
+				this.reopenHostedShellSelf(controller, current),
+			reloadSelf: async current =>
+				controller.reloadHostedShellSelf(current),
+			focusSelf: async current =>
+				controller.focusHostedShellSelf(current),
+			focusShell: async current =>
+				controller.focusShellFromHosted(current),
+			requestShellAction: async (current, action) =>
+				controller.runHostedShellAction(current, action),
+			navigateToFolder: (current, request, authorization) =>
+				controller.navigateHostedShellToFolder(
+					current,
+					request,
+					authorization
+				),
+			triggerPasteInSelf: async current =>
+				controller.triggerPasteInHostedShellSelf(current),
+			captureSelfScreenshot: (current, rect, quality) =>
+				controller.captureHostedShellSelfScreenshot(
+					current,
+					rect,
+					quality
+				),
+		};
+		return createBoundHucodeHostedShellFacade(binding, delegate);
+	}
+
+	/** Reopens only the workspace identified by the bound capability. */
+	private async reopenHostedShellSelf(
+		controller: ResidentHostedWorkspacesController,
+		binding: IHucodeHostedShellBinding
+	): Promise<boolean> {
+		if (controller.getHostedShellAuthorityState(binding).disposed) {
+			return false;
+		}
+		return reopenHucodeHostedWorkspaceInNormalWindow({
+			getState: () => controller.getState(),
+			closeWorkspace: async targetInstanceId => {
+				if (targetInstanceId === binding.instanceId) {
+					await controller.closeHostedShellSelf(binding);
+				}
+			},
+			focusNormalWindowByPath: worktreePath =>
+				this.focusNormalWindowByPath(worktreePath),
+			openNormalWindow: async worktreePath => {
+				await this.windowsMainService.open({
+					context: OpenContext.API,
+					cli: {
+						...this.environmentMainService.args,
+						_: [],
+					},
+					urisToOpen: [{ folderUri: URI.file(worktreePath) }],
+					forceNewWindow: true,
+				});
+			},
+		}, binding.instanceId);
 	}
 
 	async getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState> {
@@ -526,15 +697,39 @@ export class HucodeShellMainService extends Disposable
 					processId,
 					-1
 				),
-				webContentsId => this.trackTrust(
-					this.trustedHostedWorkspaceWebContentsIds,
-					webContentsId,
-					1
-				),
-				webContentsId => this.trackTrust(
-					this.trustedHostedWorkspaceWebContentsIds,
-					webContentsId,
-					-1
+				(webContentsId, instanceId) => {
+					this.trackTrust(
+						this.trustedHostedWorkspaceWebContentsIds,
+						webContentsId,
+						1
+					);
+					this.hostedWorkspaceOwnersByWebContentsId.set(
+						webContentsId,
+						{ windowId, instanceId }
+					);
+				},
+				(webContentsId, instanceId) => {
+					this.trackTrust(
+						this.trustedHostedWorkspaceWebContentsIds,
+						webContentsId,
+						-1
+					);
+					const owner =
+						this.hostedWorkspaceOwnersByWebContentsId.get(
+							webContentsId
+						);
+					if (owner?.windowId === windowId &&
+						owner.instanceId === instanceId) {
+						this.hostedWorkspaceOwnersByWebContentsId.delete(
+							webContentsId
+						);
+					}
+					this.hostedShellConnections.deleteAndDispose(
+						webContentsId
+					);
+				},
+				webContentsId => this.hostedShellConnections.deleteAndDispose(
+					webContentsId
 				),
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),

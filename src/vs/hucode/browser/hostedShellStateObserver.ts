@@ -28,6 +28,10 @@ export function observeHucodeHostedShellState(
 		if (!didReceiveStateChange) {
 			listener(state);
 		}
+	}, () => {
+		// A disposed MessagePort can reject the initial snapshot while the
+		// hosting document is already tearing down. State events, if any, remain
+		// authoritative and the rejection must not escape as an unhandled promise.
 	});
 
 	return subscription;

@@ -3,13 +3,28 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { DeferredPromise } from '../../base/common/async.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
-import { Disposable } from '../../base/common/lifecycle.js';
-import { InstantiationType, registerSingleton } from
+import {
+	Disposable,
+	DisposableStore,
+	isDisposable,
+} from '../../base/common/lifecycle.js';
+import { Client as MessagePortClient } from
+	'../../base/parts/ipc/common/ipc.mp.js';
+import { acquirePortOrUndefined } from
+	'../../base/parts/ipc/electron-browser/ipc.mp.js';
+import { registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
+import { SyncDescriptor } from
+	'../../platform/instantiation/common/descriptors.js';
 import {
 	areHucodeHostedShellStatesEqual,
+	createHucodeHostedShellClient,
+	HUCODE_HOSTED_SHELL_CHANNEL,
+	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+	HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL,
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
@@ -17,196 +32,178 @@ import {
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
 } from '../../platform/window/common/hucodeHostedShellService.js';
-import {
-	createLegacyHucodeHostedShellActionRequest,
-	isHucodeHostedShellAction,
-} from
-	'../../platform/window/common/hucodeHostedShellActions.js';
 import { IRectangle } from '../../platform/window/common/window.js';
 import { INativeWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/electron-browser/environmentService.js';
-import {
-	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
-} from '../common/omniWindow.js';
+import { observeHucodeHostedShellState } from
+	'../browser/hostedShellStateObserver.js';
+
+export type DesktopHostedShellConnector = () =>
+	Promise<IHucodeHostedShellService | undefined>;
 
 /**
- * Temporary desktop adapter used until the per-instance port lands in PR 3.
- * It exposes only the shared narrow service and never forwards caller-selected
- * identities, command IDs, paste targets, or screenshot targets.
+ * Desktop hosted-workbench client for the narrow, main-process-bound shell
+ * capability. Connection is deliberately deferred and never falls back to the
+ * broad legacy shell channel.
  */
 export class DesktopHostedShellServiceAdapter extends Disposable
 	implements IHucodeHostedShellService {
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly windowId: number;
-	private readonly instanceId: string | undefined;
+	private readonly connection =
+		new DeferredPromise<IHucodeHostedShellService | undefined>();
+	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedShellState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
 
 	constructor(
+		connect: DesktopHostedShellConnector,
 		@INativeWorkbenchEnvironmentService
-		environmentService: INativeWorkbenchEnvironmentService,
-		@IHucodeShellService private readonly shellService: IHucodeShellService,
+		environmentService: INativeWorkbenchEnvironmentService
 	) {
 		super();
-		this.windowId = environmentService.window.id;
-		this.instanceId = environmentService.isHostedOmniWorkspace
-			? environmentService.hostedInstanceId
-			: undefined;
-		if (!this.instanceId) {
+
+		if (!environmentService.isHostedOmniWorkspace ||
+			!environmentService.hostedInstanceId) {
+			void this.connection.complete(undefined);
 			return;
 		}
-		let last = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
-		this._register(shellService.onDidChangeWindowState(change => {
-			if (change.windowId !== this.windowId) {
+
+		let disposed = false;
+		this._register({
+			dispose: () => {
+				disposed = true;
+				void this.connection.complete(undefined);
+			},
+		});
+		void connect().then(shell => {
+			if (disposed) {
+				if (isDisposable(shell)) {
+					shell.dispose();
+				}
 				return;
 			}
-			const next = this.project(change.state);
-			if (!areHucodeHostedShellStatesEqual(last, next)) {
-				last = next;
-				this._onDidChangeState.fire(next);
+			if (shell) {
+				if (isDisposable(shell)) {
+					this._register(shell);
+				}
+				this._register(observeHucodeHostedShellState(shell, state => {
+					this.state = state;
+					this._onDidChangeState.fire(state);
+				}));
 			}
-		}));
+			void this.connection.complete(shell);
+		}, () => {
+			void this.connection.complete(undefined);
+		});
 	}
 
-	async getState(): Promise<IHucodeHostedShellState> {
-		return this.instanceId
-			? this.project(await this.shellService.getWindowState(this.windowId))
-			: HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
-	}
-
-	async notifyReady(): Promise<IHucodeHostedReadyResult> {
-		if (!this.instanceId) {
-			return { outcome: HucodeHostedShellOperationOutcome.Unavailable };
+	private async withShell<T>(
+		fallback: () => T,
+		run: (shell: IHucodeHostedShellService) => Promise<T>
+	): Promise<T> {
+		try {
+			const shell = await this.connection.p;
+			return shell ? await run(shell) : fallback();
+		} catch {
+			return fallback();
 		}
-		await this.shellService.notifyHostedWorkspaceReady(
-			this.windowId,
-			this.instanceId
+	}
+
+	getState(): Promise<IHucodeHostedShellState> {
+		return this.withShell(() => this.markUnavailable(), async shell => {
+			this.state = await shell.getState();
+			return this.state;
+		});
+	}
+
+	notifyReady(): Promise<IHucodeHostedReadyResult> {
+		return this.withShell(
+			() => ({ outcome: HucodeHostedShellOperationOutcome.Unavailable }),
+			shell => shell.notifyReady()
 		);
-		const state = await this.getState();
-		return {
-			outcome: state.available
-				? HucodeHostedShellOperationOutcome.Accepted
-				: HucodeHostedShellOperationOutcome.Unavailable,
-			state: state.available ? state : undefined,
-		};
 	}
 
-	async closeSelf() {
-		if (!this.instanceId || !(await this.getState()).available) {
-			return HucodeHostedShellOperationOutcome.Unavailable;
-		}
-		await this.shellService.closeWorkspace(this.windowId, this.instanceId);
-		return HucodeHostedShellOperationOutcome.Accepted;
+	closeSelf() { return this.runOperation(shell => shell.closeSelf()); }
+	reopenSelfInNormalWindow() {
+		return this.runOperation(shell => shell.reopenSelfInNormalWindow());
 	}
-
-	async reopenSelfInNormalWindow() {
-		return this.instanceId && await this.shellService
-			.reopenWorkspaceInNormalWindow(this.windowId, this.instanceId)
-			? HucodeHostedShellOperationOutcome.Accepted
-			: HucodeHostedShellOperationOutcome.Unavailable;
-	}
-
-	async reloadSelf() {
-		const state = await this.getState();
-		if (!state.active || !state.visible) {
-			return HucodeHostedShellOperationOutcome.Rejected;
-		}
-		// While this adapter uses the broad desktop wire, guard-to-call TOCTOU
-		// is unavoidable: the shell reloads whichever instance is active then.
-		await this.shellService.reloadWorkspace(this.windowId);
-		return HucodeHostedShellOperationOutcome.Accepted;
-	}
-
-	async focusSelf() {
-		if (!this.instanceId) {
-			return HucodeHostedShellOperationOutcome.Unavailable;
-		}
-		const state = await this.shellService.getWindowState(this.windowId);
-		const self = state.instances.find(instance =>
-			instance.instanceId === this.instanceId);
-		if (!self) {
-			return HucodeHostedShellOperationOutcome.Unavailable;
-		}
-		if (!state.activeInstanceId || state.activeInstanceId !== self.instanceId) {
-			if (!await this.shellService.focusHostedWorkspaceByPath(
-				self.worktreePath,
-				self.projectId
-			)) {
-				return HucodeHostedShellOperationOutcome.Unavailable;
-			}
-		}
-		await this.shellService.focusWorkspace(this.windowId);
-		return HucodeHostedShellOperationOutcome.Accepted;
-	}
-
-	async focusShell() {
-		if (!await this.isActiveVisible()) {
-			return HucodeHostedShellOperationOutcome.Rejected;
-		}
-		await this.shellService.focusShell(this.windowId);
-		return HucodeHostedShellOperationOutcome.Accepted;
-	}
-
-	async requestShellAction(action: Parameters<
+	reloadSelf() { return this.runOperation(shell => shell.reloadSelf()); }
+	focusSelf() { return this.runOperation(shell => shell.focusSelf()); }
+	focusShell() { return this.runOperation(shell => shell.focusShell()); }
+	requestShellAction(action: Parameters<
 		IHucodeHostedShellService['requestShellAction']
 	>[0]) {
-		if (!isHucodeHostedShellAction(action)) {
-			return HucodeHostedShellOperationOutcome.Unsupported;
-		}
-		if (!await this.isActiveVisible()) {
-			return HucodeHostedShellOperationOutcome.Rejected;
-		}
-		return await this.shellService.runActionInShell(
-			this.windowId,
-			createLegacyHucodeHostedShellActionRequest(action)
-		)
-			? HucodeHostedShellOperationOutcome.Accepted
-			: HucodeHostedShellOperationOutcome.Unavailable;
+		return this.runOperation(shell => shell.requestShellAction(action));
 	}
-
-	navigateToFolder(
-		_request: IHucodeHostedNavigationRequest
-	): Promise<HucodeHostedShellOperationOutcome> {
-		return Promise.resolve(HucodeHostedShellOperationOutcome.Unavailable);
+	navigateToFolder(request: IHucodeHostedNavigationRequest) {
+		return this.runOperation(shell => shell.navigateToFolder(request));
 	}
-
-	triggerPasteInSelf(): Promise<HucodeHostedShellOperationOutcome> {
-		return Promise.resolve(HucodeHostedShellOperationOutcome.Unavailable);
+	triggerPasteInSelf() {
+		return this.runOperation(shell => shell.triggerPasteInSelf());
 	}
-
 	captureSelfScreenshot(
-		_rect?: IRectangle,
-		_quality?: number
+		rect?: IRectangle,
+		quality?: number
 	): Promise<VSBuffer | undefined> {
-		return Promise.resolve(undefined);
+		return this.withShell(
+			() => undefined,
+			shell => shell.captureSelfScreenshot(rect, quality)
+		);
 	}
 
-	private async isActiveVisible(): Promise<boolean> {
-		const state = await this.getState();
-		return state.available && state.active && state.visible;
+	private runOperation(
+		run: (
+			shell: IHucodeHostedShellService
+		) => Promise<HucodeHostedShellOperationOutcome>
+	): Promise<HucodeHostedShellOperationOutcome> {
+		return this.withShell(
+			() => HucodeHostedShellOperationOutcome.Unavailable,
+			run
+		);
 	}
 
-	private project(state: IHucodeHostedWorkspaceState): IHucodeHostedShellState {
-		const self = state.instances.find(instance =>
-			instance.instanceId === this.instanceId);
-		return self ? {
-			available: true,
-			projectsSidebarVisible: state.projectsSidebarVisible,
-			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
-			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
-			lifecycleState: self.state,
-			active: state.activeInstanceId === self.instanceId,
-			visible: self.visible,
-		} : HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	private markUnavailable(): IHucodeHostedShellState {
+		if (!areHucodeHostedShellStatesEqual(
+			this.state,
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+		)) {
+			this.state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+			this._onDidChangeState.fire(this.state);
+		}
+		return this.state;
 	}
+}
+
+async function connectDesktopHostedShell():
+	Promise<IHucodeHostedShellService> {
+	const port = await acquirePortOrUndefined(
+		HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+		HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL
+	);
+	if (!port) {
+		throw new Error('Desktop hosted shell capability was denied.');
+	}
+	const disposables = new DisposableStore();
+	const client = disposables.add(new MessagePortClient(
+		port,
+		'hucodeHostedDesktopWorkbench'
+	));
+	const shell = createHucodeHostedShellClient(
+		client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL)
+	);
+	return Object.assign(shell, {
+		dispose: () => disposables.dispose(),
+	});
 }
 
 registerSingleton(
 	IHucodeHostedShellService,
-	DesktopHostedShellServiceAdapter,
-	InstantiationType.Delayed
+	new SyncDescriptor(
+		DesktopHostedShellServiceAdapter,
+		[connectDesktopHostedShell],
+		true
+	)
 );

@@ -36,9 +36,17 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	createLegacyHucodeHostedShellActionRequest,
+	HucodeHostedShellAction,
 	formatHucodeHostedShellActionCommandIdForLog,
 	getHucodeHostedShellAction,
 } from '../../platform/window/common/hucodeHostedShellActions.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedNavigationRequest,
+	IHucodeHostedShellAuthorityState,
+	IHucodeHostedShellBinding,
+	IHucodeHostedShellContinuationAuthorization,
+} from '../../platform/window/common/hucodeHostedShellService.js';
 import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
 import { getProjectManagerPathComparisonKey } from
@@ -128,6 +136,7 @@ interface IHostedWorkbenchInstance {
 	focused: boolean;
 	lastActiveAt?: number;
 	lifecycleGeneration: number;
+	connectionGeneration: number;
 	interruptedUnloadReloadGeneration?: number;
 	disposed: boolean;
 }
@@ -226,8 +235,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		private readonly untrustHostedWorkspaceProcess:
 			(processId: number) => void,
 		private readonly trustHostedWorkspaceWebContents:
-			(webContentsId: number) => void,
+			(webContentsId: number, instanceId: string) => void,
 		private readonly untrustHostedWorkspaceWebContents:
+			(webContentsId: number, instanceId: string) => void,
+		private readonly invalidateHostedShellConnection:
 			(webContentsId: number) => void,
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
 		options: IResidentHostedWorkspacesControllerOptions = {},
@@ -295,6 +306,56 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				instance => this.toExternalInstance(instance)
 			),
 			retainedWorkbenches: this.retainedWorkbenches.all,
+		};
+	}
+
+	acquireHostedShellBinding(
+		webContentsId: number
+	): IHucodeHostedShellBinding | undefined {
+		const instance = Array.from(this.instancesById.values()).find(candidate =>
+			candidate.trustedWebContentsId === webContentsId &&
+			this.getLiveWebContents(candidate)?.id === webContentsId
+		);
+		if (!instance || instance.disposed) {
+			return undefined;
+		}
+
+		this.invalidateHostedShellBinding(instance);
+		return {
+			windowId: this.window.id,
+			instanceId: instance.instanceId,
+			connectionGeneration: instance.connectionGeneration,
+		};
+	}
+
+	releaseHostedShellBinding(binding: IHucodeHostedShellBinding): void {
+		const instance = this.instancesById.get(binding.instanceId);
+		if (instance && this.isCurrentHostedShellBinding(instance, binding)) {
+			this.invalidateHostedShellBinding(instance);
+		}
+	}
+
+	getHostedShellAuthorityState(
+		binding: IHucodeHostedShellBinding
+	): IHucodeHostedShellAuthorityState {
+		const instance = this.instancesById.get(binding.instanceId);
+		const bindingIsCurrent = !!instance &&
+			this.isCurrentHostedShellBinding(instance, binding);
+		const state = this.getState();
+		return {
+			connectionGeneration: bindingIsCurrent
+				? instance.connectionGeneration
+				: -1,
+			disposed: !bindingIsCurrent,
+			projectsSidebarVisible: state.projectsSidebarVisible,
+			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
+			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
+			activeInstanceId: state.activeInstanceId,
+			instances: state.instances.map(candidate => ({
+				instanceId: candidate.instanceId,
+				state: candidate.state,
+				visible: candidate.visible,
+			})),
 		};
 	}
 
@@ -432,6 +493,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (state === 'active') {
 			this.reconcileViewVisibility('ready:active');
 		}
+	}
+
+	notifyHostedShellReady(binding: IHucodeHostedShellBinding): boolean {
+		const instance = this.getBoundHostedShellInstance(binding);
+		if (!instance) {
+			return false;
+		}
+		this.notifyHostedWorkspaceReady(instance.instanceId);
+		return true;
 	}
 
 	private setViewVisible(
@@ -633,7 +703,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		if (instance.trustedWebContentsId !== view.webContents.id) {
 			instance.trustedWebContentsId = view.webContents.id;
-			this.trustHostedWorkspaceWebContents(view.webContents.id);
+			this.trustHostedWorkspaceWebContents(
+				view.webContents.id,
+				instance.instanceId
+			);
 		}
 
 		const processId = view.webContents.getProcessId();
@@ -644,8 +717,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private untrustView(instance: IHostedWorkbenchInstance): void {
+		this.invalidateHostedShellBinding(instance);
 		if (typeof instance.trustedWebContentsId === 'number') {
-			this.untrustHostedWorkspaceWebContents(instance.trustedWebContentsId);
+			this.untrustHostedWorkspaceWebContents(
+				instance.trustedWebContentsId,
+				instance.instanceId
+			);
 			instance.trustedWebContentsId = undefined;
 		}
 
@@ -654,6 +731,46 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		instance.trustedProcessIds.clear();
+	}
+
+	private invalidateHostedShellBinding(
+		instance: IHostedWorkbenchInstance
+	): void {
+		instance.connectionGeneration++;
+		const webContentsId = instance.trustedWebContentsId ??
+			instance.view?.webContents.id;
+		if (typeof webContentsId === 'number') {
+			this.invalidateHostedShellConnection(webContentsId);
+		}
+	}
+
+	private isCurrentHostedShellBinding(
+		instance: IHostedWorkbenchInstance,
+		binding: IHucodeHostedShellBinding
+	): boolean {
+		return binding.windowId === this.window.id &&
+			binding.instanceId === instance.instanceId &&
+			binding.connectionGeneration === instance.connectionGeneration &&
+			this.instancesById.get(instance.instanceId) === instance &&
+			!instance.disposed &&
+			instance.trustedWebContentsId === instance.view?.webContents.id;
+	}
+
+	private getBoundHostedShellInstance(
+		binding: IHucodeHostedShellBinding,
+		requireActiveVisible = false
+	): IHostedWorkbenchInstance | undefined {
+		const instance = this.instancesById.get(binding.instanceId);
+		if (!instance || !this.isCurrentHostedShellBinding(instance, binding)) {
+			return undefined;
+		}
+		if (requireActiveVisible && (
+			this.activeInstanceId !== instance.instanceId ||
+			!instance.visible
+		)) {
+			return undefined;
+		}
+		return instance;
 	}
 
 	async ensureRestored(): Promise<void> {
@@ -798,6 +915,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				focused: false,
 				lastActiveAt: entry.lastActiveAt,
 				lifecycleGeneration: 0,
+				connectionGeneration: 0,
 				disposed: false,
 			});
 		}
@@ -845,6 +963,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					? this.now()
 					: entry.lastActiveAt,
 				lifecycleGeneration: 0,
+				connectionGeneration: 0,
 				disposed: false,
 			};
 			this.hostedWorkspaces.addInstance(instance);
@@ -859,17 +978,25 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	async openWorkspace(
 		worktreePath: string,
-		projectId?: string
+		projectId?: string,
+		canActivate: () => boolean = () => true,
+		canApply: () => boolean = () => true
 	): Promise<void> {
 		if (this.shuttingDown) {
 			return;
 		}
 
 		await this.ensureRestored();
-		if (this.shuttingDown) {
+		if (this.shuttingDown || !canApply()) {
 			return;
 		}
 
+		const retainedBeforeOpen = this.retainedWorkbenches.getByUri(
+			URI.file(worktreePath)
+		);
+		const retainedSnapshot = retainedBeforeOpen && {
+			...retainedBeforeOpen,
+		};
 		const activationIntent = ++this.activationIntentGeneration;
 		let existing = this.hostedWorkspaces.getInstanceByPath(worktreePath);
 		const instanceBeforeTeardown = existing;
@@ -897,12 +1024,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					);
 				}
 				existing.projectId = effectiveProjectId;
-				this.activateInstance(existing);
+				if (canActivate()) {
+					this.activateInstance(existing, activationIntent);
+				}
 				return;
 			}
 
 			if (existing.state !== 'dormant') {
 				await this.destroyInstance(existing, true, false);
+				if (!canApply()) {
+					this.emitState();
+					return;
+				}
 			}
 		}
 
@@ -931,22 +1064,89 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			existing.state !== 'dormant'
 		)) {
 			existing.projectId = effectiveProjectId;
-			if (activationIntent === this.activationIntentGeneration) {
-				this.activateInstance(existing);
+			if (activationIntent === this.activationIntentGeneration &&
+				canActivate()) {
+				this.activateInstance(existing, activationIntent);
 			}
 			return;
 		}
 
+		let supersededOpenRolledBack = false;
 		await this.createOrRestoreInstance(
 			worktreePath,
 			effectiveProjectId,
 			true,
-			activationIntent
+			activationIntent,
+			canActivate,
+			canApply,
+			() => supersededOpenRolledBack = true
 		);
+		if (supersededOpenRolledBack) {
+			if (retainedSnapshot) {
+				const restored = this.retainedWorkbenches.update(
+					retainedSnapshot.id,
+					{
+						desiredState: retainedSnapshot.desiredState,
+						folderStatus: retainedSnapshot.folderStatus,
+						lastActiveAt: retainedSnapshot.lastActiveAt,
+					}
+				);
+				if (!restored) {
+					this.retainedWorkbenches.restore(retainedSnapshot);
+				}
+			} else if (!retained &&
+				!this.hostedWorkspaces.getInstanceByPath(worktreePath)) {
+				const createdRetained = this.retainedWorkbenches.getByUri(
+					URI.file(worktreePath)
+				);
+				if (createdRetained) {
+					this.retainedWorkbenches.dismiss(createdRetained.id);
+				}
+			}
+			this.emitState();
+		}
 	}
 
 	async retainAndOpenWorkbench(folderUri: URI): Promise<void> {
 		await this.openWorkspace(folderUri.fsPath);
+	}
+
+	async navigateHostedShellToFolder(
+		binding: IHucodeHostedShellBinding,
+		request: IHucodeHostedNavigationRequest,
+		authorization: IHucodeHostedShellContinuationAuthorization
+	): Promise<HucodeHostedShellOperationOutcome> {
+		const resource = URI.revive(request.folderUri);
+		if (resource.scheme !== 'file') {
+			return HucodeHostedShellOperationOutcome.Unsupported;
+		}
+		if (!this.getBoundHostedShellInstance(binding, true)) {
+			return HucodeHostedShellOperationOutcome.Rejected;
+		}
+
+		await this.ensureRestored();
+		if (!await authorization.isCurrentAndActiveVisible()) {
+			return HucodeHostedShellOperationOutcome.Superseded;
+		}
+		const canApply = () =>
+			!!this.getBoundHostedShellInstance(binding, true);
+		let activationAuthorized = false;
+		const canActivate = () => {
+			activationAuthorized = canApply();
+			return activationAuthorized;
+		};
+		await this.openWorkspace(
+			resource.fsPath,
+			undefined,
+			canActivate,
+			canApply
+		);
+		const active = this.getActiveInstance();
+		return activationAuthorized && active &&
+			this.hostedWorkspaces.getInstanceByPath(resource.fsPath) === active &&
+			this.getBoundHostedShellInstance(binding)
+			? HucodeHostedShellOperationOutcome.Accepted
+			: HucodeHostedShellOperationOutcome.Superseded;
 	}
 
 	/** Gracefully unloads a ready renderer and leaves it dormant. */
@@ -984,6 +1184,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				focused: false,
 				lastActiveAt: instance.lastActiveAt,
 				lifecycleGeneration: 0,
+				connectionGeneration: 0,
 				disposed: false,
 			});
 
@@ -1281,9 +1482,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		worktreePath: string,
 		projectId: string | undefined,
 		makeActive: boolean,
-		activationIntent?: number
+		activationIntent?: number,
+		canActivate: () => boolean = () => true,
+		canApply: () => boolean = () => true,
+		onSupersededRollback: () => void = () => { }
 	): Promise<IHostedWorkbenchInstance | undefined> {
-		if (this.shuttingDown) {
+		if (this.shuttingDown || !canApply()) {
 			return undefined;
 		}
 
@@ -1323,9 +1527,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			});
 		}
 		const previousActiveInstanceId = this.activeInstanceId;
-		const instance: IHostedWorkbenchInstance =
+		const reusedPendingInstance =
 			pendingInstance?.state === 'restore-pending' ||
-				pendingInstance?.state === 'dormant'
+			pendingInstance?.state === 'dormant';
+		const pendingSnapshot = reusedPendingInstance && pendingInstance ? {
+			instanceId: pendingInstance.instanceId,
+			projectId: pendingInstance.projectId,
+			state: pendingInstance.state,
+			visible: pendingInstance.visible,
+			focused: pendingInstance.focused,
+			lastActiveAt: pendingInstance.lastActiveAt,
+			lifecycleGeneration: pendingInstance.lifecycleGeneration,
+			connectionGeneration: pendingInstance.connectionGeneration,
+		} : undefined;
+		const instance: IHostedWorkbenchInstance =
+			reusedPendingInstance
 				? pendingInstance
 				: {
 					instanceId: this.createInstanceId(),
@@ -1338,6 +1554,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					focused: false,
 					lastActiveAt: makeActive ? this.now() : undefined,
 					lifecycleGeneration: 0,
+					connectionGeneration: 0,
 					disposed: false,
 				};
 
@@ -1365,16 +1582,49 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			) {
 				return undefined;
 			}
+			if (!canApply()) {
+				const requestStillOwnsInstance =
+					instance.lifecycleGeneration ===
+					(pendingSnapshot?.lifecycleGeneration ?? 0) &&
+					this.activeInstanceId !== instance.instanceId;
+				if (requestStillOwnsInstance) {
+					await this.destroyInstance(
+						instance,
+						true,
+						false
+					);
+					if (pendingSnapshot) {
+						this.hostedWorkspaces.addInstance({
+							instanceId: pendingSnapshot.instanceId,
+							projectId: pendingSnapshot.projectId,
+							worktreePath,
+							trustedProcessIds: new Set<number>(),
+							attached: false,
+							state: pendingSnapshot.state,
+							visible: pendingSnapshot.visible,
+							focused: pendingSnapshot.focused,
+							lastActiveAt: pendingSnapshot.lastActiveAt,
+							lifecycleGeneration:
+								pendingSnapshot.lifecycleGeneration,
+							connectionGeneration:
+								pendingSnapshot.connectionGeneration,
+							disposed: false,
+						});
+					}
+					onSupersededRollback();
+				}
+				return undefined;
+			}
 
 			this.traceRestore(
 				`instance:attached makeActive=${makeActive} state=${instance.state}`,
 				instance
 			);
-			if (makeActive && (
+			if (makeActive && canActivate() && (
 				activationIntent === undefined ||
 				activationIntent === this.activationIntentGeneration
 			)) {
-				this.activateInstance(instance);
+				this.activateInstance(instance, activationIntent);
 			} else {
 				if (instance.instanceId !== this.activeInstanceId) {
 					instance.visible = false;
@@ -1465,6 +1715,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.triggerPasteInWorkspace();
 		});
 		view.webContents.on('did-start-loading', () => {
+			this.invalidateHostedShellBinding(instance);
 			this.trustView(instance);
 		});
 		view.webContents.on('did-start-navigation', () => {
@@ -1603,7 +1854,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		};
 	}
 
-	private activateInstance(instance: IHostedWorkbenchInstance): void {
+	private activateInstance(
+		instance: IHostedWorkbenchInstance,
+		activationIntent?: number
+	): boolean {
+		if (activationIntent === undefined) {
+			activationIntent = ++this.activationIntentGeneration;
+		} else if (activationIntent !== this.activationIntentGeneration) {
+			return false;
+		}
 		instance.lifecycleGeneration = ++this.lifecycleGeneration;
 		this.traceRestore(
 			`activate:start previousActive=${this.activeInstanceId ?? '<none>'}`,
@@ -1635,6 +1894,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			lastActiveAt: instance.lastActiveAt,
 		});
 		this.traceRestore(`activate:complete state=${instance.state}`, instance);
+		return true;
 	}
 
 	layout(bounds: IRectangle): void {
@@ -1675,8 +1935,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		});
 	}
 
+	async closeHostedShellSelf(
+		binding: IHucodeHostedShellBinding
+	): Promise<boolean> {
+		const instance = this.getBoundHostedShellInstance(binding);
+		if (!instance) {
+			return false;
+		}
+		return this.closeInstance(
+			instance,
+			binding.connectionGeneration
+		);
+	}
+
 	private async closeInstance(
-		target: IHostedWorkbenchInstance
+		target: IHostedWorkbenchInstance,
+		expectedConnectionGeneration?: number
 	): Promise<boolean> {
 		const lifecycleGeneration = target.lifecycleGeneration;
 		const closed = await this.destroyInstance(
@@ -1685,7 +1959,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			true,
 			UnloadReason.CLOSE,
 			false,
-			lifecycleGeneration
+			lifecycleGeneration,
+			expectedConnectionGeneration
 		);
 		if (!closed) {
 			return false;
@@ -1714,20 +1989,28 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		graceful: boolean = true,
 		reason: UnloadReason = UnloadReason.CLOSE,
 		ignoreUnloadVeto: boolean = false,
-		expectedLifecycleGeneration?: number
+		expectedLifecycleGeneration?: number,
+		expectedConnectionGeneration?: number
 	): Promise<boolean> {
 		if (graceful) {
 			const unloadResult = await this.unloadInRenderer(
 				instance,
 				reason,
 				ignoreUnloadVeto,
-				() => expectedLifecycleGeneration !== undefined && (
-					instance.lifecycleGeneration !== expectedLifecycleGeneration ||
-					instance.disposed ||
-					this.hostedWorkspaces.getInstanceByPath(
-						instance.worktreePath
-					) !== instance
-				)
+				() => (
+					expectedLifecycleGeneration !== undefined && (
+						instance.lifecycleGeneration !==
+						expectedLifecycleGeneration ||
+						instance.disposed ||
+						this.hostedWorkspaces.getInstanceByPath(
+							instance.worktreePath
+						) !== instance
+					)
+				) || (
+						expectedConnectionGeneration !== undefined &&
+						instance.connectionGeneration !==
+						expectedConnectionGeneration
+					)
 			);
 			if (unloadResult === 'reload-required') {
 				this.reloadInstanceAfterInterruptedUnload(instance);
@@ -2236,9 +2519,29 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		activeInstance.view.webContents.focus();
 	}
 
+	focusHostedShellSelf(binding: IHucodeHostedShellBinding): boolean {
+		const instance = this.getBoundHostedShellInstance(binding);
+		if (!instance?.view || instance.view.webContents.isDestroyed()) {
+			return false;
+		}
+		this.activateInstance(instance);
+		this.lastFocusedSurface = 'workspace';
+		this.bringInstanceToFront(instance);
+		instance.view.webContents.focus();
+		return true;
+	}
+
 	focusShell(): void {
 		this.lastFocusedSurface = 'shell';
 		this.window.win?.webContents.focus();
+	}
+
+	focusShellFromHosted(binding: IHucodeHostedShellBinding): boolean {
+		if (!this.getBoundHostedShellInstance(binding, true)) {
+			return false;
+		}
+		this.focusShell();
+		return true;
 	}
 
 	setProjectsSidebarVisible(visible: boolean): void {
@@ -2313,8 +2616,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
+	runHostedShellAction(
+		binding: IHucodeHostedShellBinding,
+		action: HucodeHostedShellAction
+	): boolean {
+		if (!this.getBoundHostedShellInstance(binding, true)) {
+			return false;
+		}
+		return this.runActionInShell(
+			createLegacyHucodeHostedShellActionRequest(action)
+		);
+	}
+
 	reloadWorkspace(): void {
 		this.getActiveInstance()?.view?.webContents.reload();
+	}
+
+	reloadHostedShellSelf(binding: IHucodeHostedShellBinding): boolean {
+		const webContents = this.getBoundHostedShellInstance(binding)
+			?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return false;
+		}
+		webContents.reload();
+		return true;
 	}
 
 	toggleWorkspaceDevTools(): boolean {
@@ -2344,6 +2669,34 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		} catch (error) {
 			this.logService.warn(
 				'[HucodeShellMainService] Failed to capture hosted ' +
+				`workspace screenshot: ${error}`
+			);
+			return undefined;
+		}
+	}
+
+	async captureHostedShellSelfScreenshot(
+		binding: IHucodeHostedShellBinding,
+		rect?: IRectangle,
+		quality: number = 80
+	): Promise<VSBuffer | undefined> {
+		const webContents = this.getBoundHostedShellInstance(binding, true)
+			?.view?.webContents;
+		if (!webContents || webContents.isDestroyed()) {
+			return undefined;
+		}
+
+		try {
+			const image = await webContents.capturePage(rect, {
+				stayHidden: true,
+			});
+			if (!this.getBoundHostedShellInstance(binding, true)) {
+				return undefined;
+			}
+			return VSBuffer.wrap(image.toJPEG(quality));
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to capture bound hosted ' +
 				`workspace screenshot: ${error}`
 			);
 			return undefined;
@@ -2405,6 +2758,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		} catch (error) {
 			this.logService.warn(
 				'[HucodeShellMainService] Failed to trigger hosted ' +
+				`workspace paste: ${error}`
+			);
+			return false;
+		}
+	}
+
+	triggerPasteInHostedShellSelf(
+		binding: IHucodeHostedShellBinding
+	): boolean {
+		const instance = this.getBoundHostedShellInstance(binding, true);
+		const webContents = instance?.view?.webContents;
+		if (!instance || !webContents || webContents.isDestroyed()) {
+			return false;
+		}
+
+		try {
+			this.lastFocusedSurface = 'workspace';
+			this.bringInstanceToFront(instance);
+			webContents.focus();
+			webContents.paste();
+			return true;
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to trigger bound hosted ' +
 				`workspace paste: ${error}`
 			);
 			return false;
