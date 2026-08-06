@@ -208,11 +208,6 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			focusShell: async () => { calls.push('focusShell'); },
 			runActionInShell: async () => { calls.push('action'); return true; },
 			openAndFocusWorkspace: async () => { calls.push('navigate'); return state; },
-			triggerPasteInWorkspace: async () => { calls.push('paste'); return true; },
-			captureWorkspaceScreenshot: async () => {
-				calls.push('screenshot');
-				return undefined;
-			},
 			focusHostedWorkspaceByPath: async path => {
 				calls.push(`focusPath:${path}`);
 				state = legacyState('self');
@@ -254,12 +249,19 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			folderUri: URI.file('/target').toJSON(),
 		}), HucodeHostedShellOperationOutcome.Rejected);
 		assert.strictEqual(await client.triggerPasteInSelf(),
-			HucodeHostedShellOperationOutcome.Rejected);
+			HucodeHostedShellOperationOutcome.Unavailable);
 		assert.strictEqual(await client.captureSelfScreenshot(), undefined);
 		assert.deepStrictEqual(calls, []);
 
 		assert.strictEqual(await client.focusSelf(),
 			HucodeHostedShellOperationOutcome.Accepted);
+		assert.deepStrictEqual(calls, [
+			'focusPath:/self',
+			'focusWorkspace',
+		]);
+		assert.strictEqual(await client.triggerPasteInSelf(),
+			HucodeHostedShellOperationOutcome.Unavailable);
+		assert.strictEqual(await client.captureSelfScreenshot(), undefined);
 		assert.deepStrictEqual(calls, [
 			'focusPath:/self',
 			'focusWorkspace',

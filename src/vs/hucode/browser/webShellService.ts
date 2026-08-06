@@ -671,7 +671,7 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		const activationIntent = ++this.activationIntentGeneration;
-		const worktreePath = resource.fsPath;
+		let worktreePath = resource.fsPath;
 		let projectId: string | undefined;
 		if (this.navigationProjectManager) {
 			let projects: Awaited<ReturnType<
@@ -693,6 +693,7 @@ export class WebHucodeShellController extends Disposable
 					this.toPathKey(candidate.path) === pathKey);
 				if (worktree) {
 					projectId = project.id;
+					worktreePath = worktree.path;
 					try {
 						await this.navigationProjectManager.setLastActiveWorktree(
 							project.id,
@@ -715,11 +716,17 @@ export class WebHucodeShellController extends Disposable
 			activationIntent !== this.activationIntentGeneration) {
 			return HucodeHostedShellOperationOutcome.Superseded;
 		}
+		const folderExists = await this.folderAccess.exists(worktreePath);
+		if (!await authorization.isCurrentAndActiveVisible() ||
+			activationIntent !== this.activationIntentGeneration) {
+			return HucodeHostedShellOperationOutcome.Superseded;
+		}
+		const canApply = () =>
+			activationIntent === this.activationIntentGeneration &&
+			this.isBoundInstanceActiveVisible(instance, binding);
 		let activationAuthorized = false;
 		const canActivate = () => {
-			activationAuthorized =
-				activationIntent === this.activationIntentGeneration &&
-				this.isBoundInstanceActiveVisible(instance, binding);
+			activationAuthorized = canApply();
 			return activationAuthorized;
 		};
 		await this.doOpenWorkspace(
@@ -728,7 +735,9 @@ export class WebHucodeShellController extends Disposable
 			projectId,
 			true,
 			activationIntent,
-			canActivate
+			canActivate,
+			folderExists,
+			canApply
 		);
 		return activationAuthorized &&
 			activationIntent === this.activationIntentGeneration
@@ -751,10 +760,15 @@ export class WebHucodeShellController extends Disposable
 		projectId: string | undefined,
 		focus: boolean,
 		activationIntent = ++this.activationIntentGeneration,
-		canActivate: () => boolean = () => true
+		canActivate: () => boolean = () => true,
+		knownFolderExists: boolean | undefined = undefined,
+		canApply: () => boolean = () => true
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId !== this.windowId) {
+			return this.getState();
+		}
+		if (!canApply()) {
 			return this.getState();
 		}
 		const existing = this.getInstanceByPath(worktreePath);
@@ -799,7 +813,11 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		const folderExists = await this.folderAccess.exists(worktreePath);
+		const folderExists = knownFolderExists ??
+			await this.folderAccess.exists(worktreePath);
+		if (!canApply()) {
+			return this.getState();
+		}
 		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
 		const currentInstance = this.getInstanceByPath(worktreePath);
 		effectiveProjectId = this.resolveProjectIdAgainstCatalog(

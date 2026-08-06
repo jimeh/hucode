@@ -300,6 +300,8 @@ export function createLegacyHostedShellClient(
 			if (!await isActiveVisible()) {
 				return HucodeHostedShellOperationOutcome.Rejected;
 			}
+			// This one-generation adapter has an unavoidable guard-to-call TOCTOU:
+			// the old wire reloads whichever instance is active when processed.
 			await legacy.reloadWorkspace(windowId);
 			return HucodeHostedShellOperationOutcome.Accepted;
 		},
@@ -353,17 +355,9 @@ export function createLegacyHostedShellClient(
 			);
 			return HucodeHostedShellOperationOutcome.Accepted;
 		},
-		async triggerPasteInSelf() {
-			if (!await isActiveVisible()) {
-				return HucodeHostedShellOperationOutcome.Rejected;
-			}
-			return accepted(await legacy.triggerPasteInWorkspace(windowId));
-		},
-		async captureSelfScreenshot(rect, quality) {
-			return await isActiveVisible()
-				? legacy.captureWorkspaceScreenshot(windowId, rect, quality)
-				: undefined;
-		},
+		triggerPasteInSelf: async () =>
+			HucodeHostedShellOperationOutcome.Unavailable,
+		captureSelfScreenshot: async () => undefined,
 	};
 }
 

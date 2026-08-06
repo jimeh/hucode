@@ -115,6 +115,8 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		if (!state.active || !state.visible) {
 			return HucodeHostedShellOperationOutcome.Rejected;
 		}
+		// While this adapter uses the broad desktop wire, guard-to-call TOCTOU
+		// is unavoidable: the shell reloads whichever instance is active then.
 		await this.shellService.reloadWorkspace(this.windowId);
 		return HucodeHostedShellOperationOutcome.Accepted;
 	}

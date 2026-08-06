@@ -158,7 +158,8 @@ suite('WebHucodeShellService', () => {
 				...args: unknown[]
 			): Promise<T>;
 		} = { async executeCommand<T>() { return undefined as T; } },
-		navigationProjectManager?: IWebHucodeHostedNavigationProjectManager
+		navigationProjectManager?: IWebHucodeHostedNavigationProjectManager,
+		serverPathCaseSensitive = true
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -173,7 +174,7 @@ suite('WebHucodeShellService', () => {
 			{
 				workbenchRoute: '/workbench',
 				hostedWorkbenchRoute: '/omni/workbench',
-				serverPathCaseSensitive: true,
+				serverPathCaseSensitive,
 			},
 			commandService,
 			{
@@ -1961,6 +1962,61 @@ suite('WebHucodeShellService', () => {
 					instance.instanceId === state.activeInstanceId)?.worktreePath,
 				'/tmp/newer-target'
 			);
+			assert.strictEqual(state.instances.some(instance =>
+				instance.worktreePath === '/tmp/preflight-target'), false);
+			assert.strictEqual(state.retainedWorkbenches?.some(record =>
+				URI.revive(record.folderUri).fsPath === '/tmp/preflight-target'), false);
+			assert.strictEqual(Array.from(
+				surface.querySelectorAll<HTMLIFrameElement>('iframe')
+			).some(iframe => new URL(iframe.src).searchParams.get('folder') ===
+				'/tmp/preflight-target'), false);
+		});
+
+	test('uses canonical catalog path for case-insensitive hosted navigation',
+		async () => {
+			const canonicalPath = '/tmp/Canonical-Target';
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				{
+					async getProjects() {
+						return [{
+							id: 'canonical-project',
+							worktrees: [{ path: canonicalPath }],
+						}];
+					},
+					async setLastActiveWorktree() { },
+				},
+				false
+			);
+			const caller = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/canonical-caller'
+			);
+			assert.ok(caller.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				caller.activeInstanceId
+			);
+
+			assert.strictEqual(await child.shell.navigateToFolder({
+				folderUri: URI.file('/TMP/CANONICAL-TARGET').toJSON(),
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			const state = await service.getWindowState(browser.windowId);
+			const active = state.instances.find(instance =>
+				instance.instanceId === state.activeInstanceId);
+			assert.deepStrictEqual({
+				path: active?.worktreePath,
+				projectId: active?.projectId,
+			}, {
+				path: canonicalPath,
+				projectId: 'canonical-project',
+			});
 		});
 
 	test('keeps authoritative project ownership when MRU persistence fails',
