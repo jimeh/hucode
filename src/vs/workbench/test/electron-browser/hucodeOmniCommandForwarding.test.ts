@@ -10,7 +10,10 @@ import { URI } from '../../../base/common/uri.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
-import { IHucodeShellControllerService } from
+import {
+	HucodeShellControllerUnavailableError,
+	IHucodeShellControllerService,
+} from
 	'../../../platform/window/common/hucodeShellControllerService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
@@ -491,31 +494,56 @@ suite('HucodeOmniCommandForwarding', () => {
 		);
 	});
 
-	test('runs clipboard commands locally when forwarding rejects', async () => {
-		const fixture = createFixture({
-			isOmniWindow: true,
-			channelError: new Error('forwarding unavailable')
-		});
-		const event = new mainWindow.Event('cut', {
-			cancelable: true,
-			bubbles: true
+	test('does not retry clipboard commands after ambiguous forwarding failure',
+		async () => {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelError: new Error('connection closed after dispatch')
+			});
+			const event = new mainWindow.Event('cut', {
+				cancelable: true,
+				bubbles: true
+			});
+
+			await fixture.forwarding.handleClipboardEvent(
+				event,
+				'editor.action.clipboardCutAction',
+				fixture.handlers
+			);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.deepStrictEqual(fixture.commandCalls, []);
+			assert.deepStrictEqual(fixture.commandSuppressionStates, []);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.actionErrorCalls, []);
 		});
 
-		await fixture.forwarding.handleClipboardEvent(
-			event,
-			'editor.action.clipboardCutAction',
-			fixture.handlers
-		);
+	test('runs clipboard commands locally before dispatch is available',
+		async () => {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelError: new HucodeShellControllerUnavailableError()
+			});
+			const event = new mainWindow.Event('copy', {
+				cancelable: true,
+				bubbles: true
+			});
 
-		assert.strictEqual(event.defaultPrevented, true);
-		assert.deepStrictEqual(fixture.commandCalls, [{
-			commandId: 'editor.action.clipboardCutAction',
-			args: []
-		}]);
-		assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
-		assert.strictEqual(fixture.channel.calls.length, 1);
-		assert.deepStrictEqual(fixture.actionErrorCalls, []);
-	});
+			await fixture.forwarding.handleClipboardEvent(
+				event,
+				'editor.action.clipboardCopyAction',
+				fixture.handlers
+			);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.deepStrictEqual(fixture.commandCalls, [{
+				commandId: 'editor.action.clipboardCopyAction',
+				args: []
+			}]);
+			assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.actionErrorCalls, []);
+		});
 
 	test('disposes registered window IPC listeners', () => {
 		const fixture = createFixture({ isOmniWindow: false });

@@ -78,8 +78,13 @@ export const HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL =
 export const HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL =
 	'vscode:hucodeShellControllerPortResult';
 
-/** Current same-build desktop shell capability contract version. */
-export const HUCODE_SHELL_CONTROLLER_PROTOCOL_VERSION = 1;
+/** A privileged shell call could not be dispatched to a bound controller. */
+export class HucodeShellControllerUnavailableError extends Error {
+	constructor() {
+		super('Desktop Omni shell capability is unavailable.');
+		this.name = 'HucodeShellControllerUnavailableError';
+	}
+}
 
 /** Path-scoped preparation before a shell opens a folder standalone. */
 export interface IHucodeStandaloneWorkspaceRequest {

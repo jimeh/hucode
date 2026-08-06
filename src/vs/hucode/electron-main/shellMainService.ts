@@ -89,6 +89,7 @@ import {
 	acceptHucodeShellControllerPortRequest,
 	IHucodeShellControllerPortConnection,
 	IHucodeShellControllerPortOwner,
+	registerHucodeShellControllerOwnerLifecycle,
 } from './shellControllerPortAcceptor.js';
 
 /**
@@ -361,14 +362,10 @@ export class HucodeShellMainService extends Disposable
 		const connection = new DisposableStore();
 		const disposeConnection = () =>
 			this.shellControllerConnections.deleteAndDispose(owner.windowId);
-		webContents.once('did-start-loading', disposeConnection);
-		webContents.once('render-process-gone', disposeConnection);
-		webContents.once('destroyed', disposeConnection);
-		connection.add(toDisposable(() => {
-			webContents.removeListener('did-start-loading', disposeConnection);
-			webContents.removeListener('render-process-gone', disposeConnection);
-			webContents.removeListener('destroyed', disposeConnection);
-		}));
+		connection.add(registerHucodeShellControllerOwnerLifecycle(
+			webContents,
+			disposeConnection
+		));
 
 		const { port1, port2 } = new MessageChannelMain();
 		let portTransferred = false;
@@ -961,6 +958,7 @@ export class HucodeShellMainService extends Disposable
 				webContentsId => this.hostedShellConnections.deleteAndDispose(
 					webContentsId
 				),
+				worktreePath => this.focusNormalWindowByPath(worktreePath),
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),
 				{

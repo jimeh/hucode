@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { EventEmitter } from 'events';
 import { DisposableMap } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
 	acceptHucodeShellControllerPortRequest,
 	IHucodeShellControllerPortOwner,
+	registerHucodeShellControllerOwnerLifecycle,
 } from '../../electron-main/shellControllerPortAcceptor.js';
 
 suite('ShellControllerMainService capability port', () => {
@@ -75,6 +77,30 @@ suite('ShellControllerMainService capability port', () => {
 			nonce: 'replaced',
 			ports: [],
 		});
+	});
+
+	test('keeps the connection across subframe loading', () => {
+		const webContents = new EventEmitter() as EventEmitter & {
+			isLoadingMainFrame(): boolean;
+		};
+		let isLoadingMainFrame = false;
+		webContents.isLoadingMainFrame = () => isLoadingMainFrame;
+		let disposeCalls = 0;
+		const registration = disposables.add(
+			registerHucodeShellControllerOwnerLifecycle(
+				webContents as unknown as Electron.WebContents,
+				() => disposeCalls++
+			)
+		);
+
+		webContents.emit('did-start-loading');
+		assert.strictEqual(disposeCalls, 0);
+		isLoadingMainFrame = true;
+		webContents.emit('did-start-loading');
+		assert.strictEqual(disposeCalls, 1);
+		registration.dispose();
+		webContents.emit('render-process-gone');
+		assert.strictEqual(disposeCalls, 1);
 	});
 });
 

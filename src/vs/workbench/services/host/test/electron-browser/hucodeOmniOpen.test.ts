@@ -145,29 +145,33 @@ suite('HucodeOmniOpen', () => {
 		};
 	};
 
-	const hostedNavigationCalls: URI[] = [];
 	const unavailable = async () =>
 		HucodeHostedShellOperationOutcome.Unavailable;
-	const hostedShellService = {
-		_serviceBrand: undefined,
-		onDidChangeState: Event.None,
-		getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
-		notifyReady: async () => ({
-			outcome: HucodeHostedShellOperationOutcome.Unavailable,
-		}),
-		closeSelf: unavailable,
-		reopenSelfInNormalWindow: unavailable,
-		reloadSelf: unavailable,
-		focusSelf: unavailable,
-		focusShell: unavailable,
-		requestShellAction: unavailable,
-		async navigateToFolder(request) {
-			hostedNavigationCalls.push(URI.revive(request.folderUri));
-			return HucodeHostedShellOperationOutcome.Accepted;
-		},
-		triggerPasteInSelf: unavailable,
-		captureSelfScreenshot: async () => undefined,
-	} satisfies IHucodeHostedShellService;
+	let hostedNavigationCalls: URI[];
+	let hostedShellService: IHucodeHostedShellService;
+	setup(() => {
+		hostedNavigationCalls = [];
+		hostedShellService = {
+			_serviceBrand: undefined,
+			onDidChangeState: Event.None,
+			getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+			notifyReady: async () => ({
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			}),
+			closeSelf: unavailable,
+			reopenSelfInNormalWindow: unavailable,
+			reloadSelf: unavailable,
+			focusSelf: unavailable,
+			focusShell: unavailable,
+			requestShellAction: unavailable,
+			async navigateToFolder(request) {
+				hostedNavigationCalls.push(URI.revive(request.folderUri));
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
+			triggerPasteInSelf: unavailable,
+			captureSelfScreenshot: async () => undefined,
+		};
+	});
 
 	const environment = (
 		options: {

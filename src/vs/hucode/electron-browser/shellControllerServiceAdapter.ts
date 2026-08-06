@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../base/common/async.js';
 import { Emitter } from '../../base/common/event.js';
 import {
 	Disposable,
@@ -25,11 +25,17 @@ import {
 	HUCODE_SHELL_CONTROLLER_CHANNEL,
 	HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
 	HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL,
+	HucodeShellControllerUnavailableError,
 	IHucodeShellControllerService,
 } from '../../platform/window/common/hucodeShellControllerService.js';
 
 export type DesktopShellControllerConnector = () =>
 	Promise<IHucodeShellControllerService | undefined>;
+
+interface IDesktopShellControllerAdapterOptions {
+	readonly connectionTimeoutMs?: number;
+	readonly shutdownConnectionTimeoutMs?: number;
+}
 
 /** Desktop client for the privileged capability bound to one Omni shell. */
 export class DesktopShellControllerServiceAdapter extends Disposable
@@ -40,6 +46,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 
 	private readonly connection =
 		new DeferredPromise<IHucodeShellControllerService | undefined>();
+	private readonly shutdownConnectionTimeoutMs: number;
 	private readonly _onDidChangeState = this._register(new Emitter<
 		Awaited<ReturnType<IHucodeShellControllerService['getState']>>
 	>());
@@ -48,9 +55,12 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	constructor(
 		connect: DesktopShellControllerConnector,
 		@INativeWorkbenchEnvironmentService
-		environmentService: INativeWorkbenchEnvironmentService
+		environmentService: INativeWorkbenchEnvironmentService,
+		options: IDesktopShellControllerAdapterOptions = {}
 	) {
 		super();
+		this.shutdownConnectionTimeoutMs =
+			options.shutdownConnectionTimeoutMs ?? 1000;
 		this.supportsWorkspaceScreenshotOverlay =
 			!!environmentService.isOmniShellWindow;
 		if (!environmentService.isOmniShellWindow) {
@@ -59,19 +69,29 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		}
 
 		let disposed = false;
+		let connectionSettled = false;
 		this._register({
 			dispose: () => {
 				disposed = true;
+				connectionSettled = true;
 				void this.connection.complete(undefined);
 			},
 		});
-		void connect().then(shell => {
-			if (disposed) {
+		const connectionAttempt = connect();
+		const connectionTimeout = setTimeout(() => {
+			connectionSettled = true;
+			void this.connection.complete(undefined);
+		}, options.connectionTimeoutMs ?? 10000);
+		this._register({ dispose: () => clearTimeout(connectionTimeout) });
+		void connectionAttempt.then(shell => {
+			if (disposed || connectionSettled) {
 				if (isDisposable(shell)) {
 					shell.dispose();
 				}
 				return;
 			}
+			connectionSettled = true;
+			clearTimeout(connectionTimeout);
 			if (shell) {
 				if (isDisposable(shell)) {
 					this._register(shell);
@@ -81,7 +101,11 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 				));
 			}
 			void this.connection.complete(shell);
-		}, () => void this.connection.complete(undefined));
+		}, () => {
+			connectionSettled = true;
+			clearTimeout(connectionTimeout);
+			void this.connection.complete(undefined);
+		});
 	}
 
 	private async withShell<T>(
@@ -89,7 +113,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	): Promise<T> {
 		const shell = await this.connection.p;
 		if (!shell) {
-			throw new Error('Desktop Omni shell capability is unavailable.');
+			throw new HucodeShellControllerUnavailableError();
 		}
 		return run(shell);
 	}
@@ -224,7 +248,11 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]): Promise<void> {
 		try {
-			await this.withShell(shell => shell.shutdownWindowWorkspaces(reason));
+			const shell = await raceTimeout(
+				this.connection.p,
+				this.shutdownConnectionTimeoutMs
+			);
+			await shell?.shutdownWindowWorkspaces(reason);
 		} catch {
 			// A renderer teardown can dispose the port before shutdown joins settle.
 		}

@@ -3,7 +3,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DisposableMap, IDisposable } from '../../base/common/lifecycle.js';
+import {
+	DisposableMap,
+	IDisposable,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
 import { HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL } from
 	'../../platform/window/common/hucodeShellControllerService.js';
 
@@ -27,6 +31,26 @@ interface IHucodeShellControllerPortRequestDependencies {
 	) => IHucodeShellControllerPortConnection;
 	readonly logRefusal: (reason: string) => void;
 	readonly logFailure: (error: unknown) => void;
+}
+
+/** Disposes a bound shell port only when its owning main frame goes away. */
+export function registerHucodeShellControllerOwnerLifecycle(
+	webContents: Electron.WebContents,
+	disposeConnection: () => void
+): IDisposable {
+	const onDidStartLoading = () => {
+		if (webContents.isLoadingMainFrame()) {
+			disposeConnection();
+		}
+	};
+	webContents.on('did-start-loading', onDidStartLoading);
+	webContents.on('render-process-gone', disposeConnection);
+	webContents.on('destroyed', disposeConnection);
+	return toDisposable(() => {
+		webContents.removeListener('did-start-loading', onDidStartLoading);
+		webContents.removeListener('render-process-gone', disposeConnection);
+		webContents.removeListener('destroyed', disposeConnection);
+	});
 }
 
 /** Accepts a privileged shell port only for the exact owning WebContents. */

@@ -8,7 +8,10 @@ import { URI } from '../../base/common/uri.js';
 import { DisposableStore, IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { ipcRenderer } from '../../base/parts/sandbox/electron-browser/globals.js';
-import { IHucodeShellControllerService } from
+import {
+	HucodeShellControllerUnavailableError,
+	IHucodeShellControllerService,
+} from
 	'../../platform/window/common/hucodeShellControllerService.js';
 import {
 	HucodeOmniCommandForwardingContext,
@@ -250,6 +253,23 @@ export class HucodeOmniCommandForwarding {
 		}
 	}
 
+	private async tryForwardClipboardActionToWorkspace(
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		try {
+			return await this.shellControllerService
+				.runActionInWorkspace(request);
+		} catch (error) {
+			this.logService.warn(
+				`Failed to forward Omni shell action ${request.id}: ${error}`
+			);
+			// Once dispatch begins, a transport failure is ambiguous: the hosted
+			// workbench may already have applied copy or cut. Only a definitive
+			// pre-dispatch absence is safe to retry in the shell.
+			return !(error instanceof HucodeShellControllerUnavailableError);
+		}
+	}
+
 	private async tryForwardKeybindingToWorkspace(
 		request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
@@ -274,14 +294,13 @@ export class HucodeOmniCommandForwarding {
 			return;
 		}
 
-		// Clipboard cancellation must happen during event dispatch. Once this
-		// path is selected, a failed async forward is recovered locally below.
+		// Clipboard cancellation must happen during event dispatch.
 		EventHelper.stop(event, true);
 		const request: INativeRunActionInWindowRequest = {
 			id: actionId,
 			from: 'menu'
 		};
-		if (await this.forwardActionToWorkspace(request)) {
+		if (await this.tryForwardClipboardActionToWorkspace(request)) {
 			return;
 		}
 

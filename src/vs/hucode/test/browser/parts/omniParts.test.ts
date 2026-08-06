@@ -361,9 +361,8 @@ suite('Omni Parts', () => {
 			},
 			shellService: {
 				layoutWorkspace: async (
-					windowId: number,
 					bounds: { x: number; y: number; width: number; height: number }
-				) => layouts.push({ windowId, bounds }),
+				) => layouts.push({ windowId: 7, bounds }),
 			},
 			layoutScreenshot: (left: number, width: number, height: number) =>
 				screenshots.push({ left, width, height }),
@@ -423,7 +422,6 @@ suite('Omni Parts', () => {
 			layoutService: { isVisible: () => true },
 			shellService: {
 				layoutWorkspace: async (
-					_windowId: number,
 					bounds: {
 						x: number;
 						y: number;

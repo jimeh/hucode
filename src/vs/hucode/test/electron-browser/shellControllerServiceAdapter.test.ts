@@ -120,6 +120,42 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			assert.strictEqual(connectionDisposed, true);
 		}
 	);
+
+	test('shutdown does not wait for a pending connection', async () => {
+		const connection =
+			new DeferredPromise<IHucodeShellControllerService | undefined>();
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connection.p,
+			shellEnvironment(true),
+			{
+				connectionTimeoutMs: 1000,
+				shutdownConnectionTimeoutMs: 5,
+			}
+		));
+
+		await adapter.shutdownWindowWorkspaces(4);
+		assert.strictEqual(connection.isSettled, false);
+	});
+
+	test('times out acquisition and disposes a late connection', async () => {
+		const connection =
+			new DeferredPromise<IHucodeShellControllerService | undefined>();
+		let connectionDisposed = false;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connection.p,
+			shellEnvironment(true),
+			{ connectionTimeoutMs: 5 }
+		));
+
+		await assert.rejects(adapter.getState(), /capability is unavailable/);
+		void connection.complete(Object.assign({
+			onDidChangeState: () => ({ dispose() { } }),
+		} as unknown as IHucodeShellControllerService, {
+			dispose: () => connectionDisposed = true,
+		}));
+		await Promise.resolve();
+		assert.strictEqual(connectionDisposed, true);
+	});
 });
 
 function shellEnvironment(
