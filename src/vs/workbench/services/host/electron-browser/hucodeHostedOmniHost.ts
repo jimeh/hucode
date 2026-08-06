@@ -61,6 +61,8 @@ export class HucodeHostedOmniFocusTracker extends Disposable {
 
 	private ownerWindowFocused: boolean;
 	private instanceActiveAndVisible = false;
+	private ownerWindowFocusGeneration = 0;
+	private instanceStateGeneration = 0;
 
 	constructor(
 		private readonly nativeHostService: INativeHostService,
@@ -88,15 +90,8 @@ export class HucodeHostedOmniFocusTracker extends Disposable {
 			return undefined;
 		}
 
-		const activeWindowId = await this.nativeHostService.getActiveWindowId();
-		if (typeof activeWindowId === 'undefined') {
-			return false;
-		}
-
-		const windowHadLastFocus =
-			activeWindowId === this.nativeHostService.windowId;
-		this.updateOwnerWindowFocus(windowHadLastFocus);
-		if (!windowHadLastFocus) {
+		await this.updateOwnerWindowFocusFromSnapshot();
+		if (!this.ownerWindowFocused) {
 			return false;
 		}
 
@@ -113,25 +108,39 @@ export class HucodeHostedOmniFocusTracker extends Disposable {
 			this.nativeHostService.onDidFocusMainOrAuxiliaryWindow,
 			id => id === this.nativeHostService.windowId,
 			this._store
-		)(() => this.updateOwnerWindowFocus(true)));
+		)(() => {
+			this.ownerWindowFocusGeneration++;
+			this.updateOwnerWindowFocus(true);
+		}));
 
 		this._register(Event.filter(
 			this.nativeHostService.onDidBlurMainOrAuxiliaryWindow,
 			id => id === this.nativeHostService.windowId,
 			this._store
-		)(() => this.updateOwnerWindowFocus(false)));
+		)(() => {
+			this.ownerWindowFocusGeneration++;
+			this.updateOwnerWindowFocus(false);
+		}));
 
-		this._register(this.hostedShellService.onDidChangeState(state =>
-			this.updateInstanceState(state)
-		));
+		this._register(this.hostedShellService.onDidChangeState(state => {
+			this.instanceStateGeneration++;
+			this.updateInstanceState(state);
+		}));
 
-		void this.nativeHostService.getActiveWindowId().then(activeWindowId => {
-			this.updateOwnerWindowFocus(
-				activeWindowId === this.nativeHostService.windowId
-			);
-		}).catch(onUnexpectedError);
+		void this.updateOwnerWindowFocusFromSnapshot().catch(onUnexpectedError);
 
 		void this.updateWorkspaceState().catch(onUnexpectedError);
+	}
+
+	private async updateOwnerWindowFocusFromSnapshot(): Promise<void> {
+		const generation = ++this.ownerWindowFocusGeneration;
+		const activeWindowId = await this.nativeHostService.getActiveWindowId();
+		if (generation !== this.ownerWindowFocusGeneration) {
+			return;
+		}
+		this.updateOwnerWindowFocus(
+			activeWindowId === this.nativeHostService.windowId
+		);
 	}
 
 	private async updateWorkspaceState(): Promise<void> {
@@ -139,7 +148,11 @@ export class HucodeHostedOmniFocusTracker extends Disposable {
 			return;
 		}
 
+		const generation = ++this.instanceStateGeneration;
 		const state = await this.hostedShellService.getState();
+		if (generation !== this.instanceStateGeneration) {
+			return;
+		}
 		this.updateInstanceState(state);
 	}
 

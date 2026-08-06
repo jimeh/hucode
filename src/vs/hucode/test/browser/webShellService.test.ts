@@ -1512,8 +1512,12 @@ suite('WebHucodeShellService', () => {
 			worktreePath: instance.worktreePath,
 		})), [{
 			instanceId: firstInstanceId,
-			worktreePath: '',
+			worktreePath: '/tmp/hucode-worktree-one',
 		}]);
+		assert.strictEqual(
+			await firstChild.shell.focusNormalWindowByPath('/tmp/standalone'),
+			false
+		);
 
 		await firstChild.shell.closeWorkspace(
 			firstChild.shellWindowId,
@@ -1586,7 +1590,7 @@ suite('WebHucodeShellService', () => {
 				focused: ['/tmp/target'],
 				returnedInstances: [{
 					instanceId: callerInstanceId,
-					worktreePath: '',
+					worktreePath: '/tmp/caller',
 				}],
 			});
 			assert.deepStrictEqual(mruCalls, [{
@@ -1695,7 +1699,6 @@ suite('WebHucodeShellService', () => {
 			'getState',
 			'findHostedWorkspaceByPath',
 			'focusHostedWorkspaceByPath',
-			'focusNormalWindowByPath',
 			'openWorkspace',
 		]) {
 			await assert.rejects(
@@ -1865,6 +1868,10 @@ suite('WebHucodeShellService', () => {
 			await assert.rejects(
 				child.shellChannel.call('getWindowState', [browser.windowId]),
 				/Method not found|Unknown channel command|getWindowState/
+			);
+			await assert.rejects(
+				child.shellChannel.call('constructor'),
+				/Method not found: constructor/
 			);
 		});
 

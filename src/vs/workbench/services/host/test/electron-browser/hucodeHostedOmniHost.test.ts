@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -37,13 +37,14 @@ suite('HucodeHostedOmniHost', () => {
 		const focusEmitter = disposables.add(new Emitter<number>());
 		const blurEmitter = disposables.add(new Emitter<number>());
 		let activeWindowId: number | undefined;
+		let getActiveWindowId = async () => activeWindowId;
 
 		const service = {
 			windowId,
 			onDidFocusMainOrAuxiliaryWindow: focusEmitter.event,
 			onDidBlurMainOrAuxiliaryWindow: blurEmitter.event,
 			async getActiveWindowId(): Promise<number | undefined> {
-				return activeWindowId;
+				return getActiveWindowId();
 			}
 		} as Partial<INativeHostService> as INativeHostService;
 
@@ -53,6 +54,11 @@ suite('HucodeHostedOmniHost', () => {
 			blurEmitter,
 			setActiveWindowId(id: number | undefined): void {
 				activeWindowId = id;
+			},
+			setGetActiveWindowId(
+				get: () => Promise<number | undefined>
+			): void {
+				getActiveWindowId = get;
 			}
 		};
 	};
@@ -66,12 +72,13 @@ suite('HucodeHostedOmniHost', () => {
 		const screenshots: { rect?: IRectangle }[] = [];
 		const unavailable = async () =>
 			HucodeHostedShellOperationOutcome.Unavailable;
+		let getState = async () => state;
 
 		const service = {
 			_serviceBrand: undefined,
 			onDidChangeState: stateEmitter.event,
 			async getState(): Promise<IHucodeHostedShellState> {
-				return state;
+				return getState();
 			},
 			notifyReady: async () => ({
 				outcome: HucodeHostedShellOperationOutcome.Unavailable,
@@ -98,6 +105,11 @@ suite('HucodeHostedOmniHost', () => {
 			screenshots,
 			setState(nextState: IHucodeHostedShellState): void {
 				state = nextState;
+			},
+			setGetState(
+				get: () => Promise<IHucodeHostedShellState>
+			): void {
+				getState = get;
 			}
 		};
 	};
@@ -174,6 +186,73 @@ suite('HucodeHostedOmniHost', () => {
 		nativeHost.setActiveWindowId(1);
 		assert.strictEqual(await tracker.hadLastFocus(), true);
 	});
+
+	test('live focus state supersedes delayed initialization snapshots',
+		async () => {
+			const activeWindowSnapshot =
+				new DeferredPromise<number | undefined>();
+			const hostedSnapshot =
+				new DeferredPromise<IHucodeHostedShellState>();
+			const nativeHost = createNativeHostService(1);
+			const shell = createShellService();
+			nativeHost.setGetActiveWindowId(() => activeWindowSnapshot.p);
+			shell.setGetState(() => hostedSnapshot.p);
+			const tracker = disposables.add(new HucodeHostedOmniFocusTracker(
+				nativeHost.service,
+				environment({ isHostedOmniWorkspace: true }),
+				shell.service,
+				() => false
+			));
+
+			nativeHost.focusEmitter.fire(1);
+			shell.stateEmitter.fire(hostedState(true, true));
+			activeWindowSnapshot.complete(2);
+			hostedSnapshot.complete(hostedState(false, false));
+			await timeout(0);
+
+			assert.strictEqual(tracker.hasFocus, true);
+		}
+	);
+
+	test('live focus state supersedes delayed last-focus refreshes',
+		async () => {
+			const nativeHost = createNativeHostService(1);
+			nativeHost.setActiveWindowId(1);
+			const shell = createShellService(hostedState(true, true));
+			const tracker = disposables.add(new HucodeHostedOmniFocusTracker(
+				nativeHost.service,
+				environment({ isHostedOmniWorkspace: true }),
+				shell.service,
+				() => false
+			));
+			await timeout(0);
+
+			const activeWindowSnapshot =
+				new DeferredPromise<number | undefined>();
+			nativeHost.setGetActiveWindowId(() => activeWindowSnapshot.p);
+			const blurred = tracker.hadLastFocus();
+			nativeHost.blurEmitter.fire(1);
+			activeWindowSnapshot.complete(1);
+			assert.strictEqual(await blurred, false);
+
+			nativeHost.setActiveWindowId(1);
+			nativeHost.setGetActiveWindowId(async () => 1);
+			nativeHost.focusEmitter.fire(1);
+			const hostedSnapshot =
+				new DeferredPromise<IHucodeHostedShellState>();
+			const hostedSnapshotStarted = new DeferredPromise<void>();
+			shell.setGetState(() => {
+				hostedSnapshotStarted.complete();
+				return hostedSnapshot.p;
+			});
+			const hidden = tracker.hadLastFocus();
+			await hostedSnapshotStarted.p;
+			shell.stateEmitter.fire(hostedState(false, false));
+			hostedSnapshot.complete(hostedState(true, true));
+
+			assert.strictEqual(await hidden, false);
+		}
+	);
 
 	test('routes hosted screenshots through the bound capability', async () => {
 		const shell = createShellService();

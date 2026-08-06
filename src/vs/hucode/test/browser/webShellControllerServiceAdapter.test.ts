@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Emitter } from '../../../base/common/event.js';
+import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -65,6 +66,32 @@ suite('WebShellControllerServiceAdapter', () => {
 				observed.map(value => value.activeInstanceId),
 				['same']
 			);
+		}
+	);
+
+	test('rejects non-file standalone opens before changing shell state',
+		async () => {
+			const changes = disposables.add(
+				new Emitter<IHucodeShellWindowStateChange>()
+			);
+			const calls: string[] = [];
+			const shell = {
+				supportsWorkspaceScreenshotOverlay: false,
+				onDidChangeWindowState: changes.event,
+				async findHostedWorkspaceByPath(path: string) {
+					calls.push(`find:${path}`);
+					return undefined;
+				},
+			} as unknown as IHucodeShellService;
+			const adapter = new WebShellControllerServiceAdapter(shell);
+
+			assert.strictEqual(
+				await adapter.prepareWorkspaceForStandaloneOpen({
+					folderUri: URI.parse('https://example.test/repo').toJSON(),
+				}),
+				false
+			);
+			assert.deepStrictEqual(calls, []);
 		}
 	);
 });

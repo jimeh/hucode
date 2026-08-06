@@ -247,6 +247,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			) => Promise<HucodeHostedShellOperationOutcome>,
 		private readonly focusNormalWindowByPath:
 			(worktreePath: string) => Promise<boolean>,
+		private readonly recordLastActiveWorktreeByPath:
+			(worktreePath: string) => Promise<void>,
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
 		options: IResidentHostedWorkspacesControllerOptions = {},
 	) {
@@ -773,7 +775,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		if (requireActiveVisible && (
 			this.activeInstanceId !== instance.instanceId ||
-			!instance.visible
+			!instance.visible ||
+			this.overlayOccluded
 		)) {
 			return undefined;
 		}
@@ -1143,10 +1146,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 		if (hostedFocusOutcome !==
 			HucodeHostedShellOperationOutcome.Unavailable) {
+			await this.recordAcceptedHostedNavigation(
+				resource.fsPath,
+				hostedFocusOutcome
+			);
 			return hostedFocusOutcome;
 		}
 		if (canApply() &&
 			await this.focusNormalWindowByPath(resource.fsPath)) {
+			await this.recordAcceptedHostedNavigation(
+				resource.fsPath,
+				HucodeHostedShellOperationOutcome.Accepted
+			);
 			return HucodeHostedShellOperationOutcome.Accepted;
 		}
 		let activationAuthorized = false;
@@ -1161,11 +1172,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			canApply
 		);
 		const active = this.getActiveInstance();
-		return activationAuthorized && active &&
+		const outcome = activationAuthorized && active &&
 			this.hostedWorkspaces.getInstanceByPath(resource.fsPath) === active &&
 			this.getBoundHostedShellInstance(binding)
 			? HucodeHostedShellOperationOutcome.Accepted
 			: HucodeHostedShellOperationOutcome.Superseded;
+		await this.recordAcceptedHostedNavigation(resource.fsPath, outcome);
+		return outcome;
+	}
+
+	private async recordAcceptedHostedNavigation(
+		worktreePath: string,
+		outcome: HucodeHostedShellOperationOutcome
+	): Promise<void> {
+		if (outcome !== HucodeHostedShellOperationOutcome.Accepted) {
+			return;
+		}
+		try {
+			await this.recordLastActiveWorktreeByPath(worktreePath);
+		} catch (error) {
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to record the last-active ' +
+				`worktree for ${worktreePath}: ${error}`
+			);
+		}
 	}
 
 	/** Gracefully unloads a ready renderer and leaves it dormant. */

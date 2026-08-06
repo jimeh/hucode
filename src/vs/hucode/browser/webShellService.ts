@@ -46,6 +46,7 @@ import {
 } from '../../platform/window/common/hucodeHostedShellActions.js';
 import {
 	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellServerChannel,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellCapability,
@@ -359,6 +360,7 @@ type IHucodeHostedWebShellConnectionFacade = Pick<
 	| 'onDidChangeWindowState'
 	| 'getWindowState'
 	| 'openAndFocusWorkspace'
+	| 'focusNormalWindowByPath'
 	| 'closeWorkspace'
 	| 'reopenWorkspaceInNormalWindow'
 	| 'notifyHostedWorkspaceReady'
@@ -694,19 +696,6 @@ export class WebHucodeShellController extends Disposable
 				if (worktree) {
 					projectId = project.id;
 					worktreePath = worktree.path;
-					try {
-						await this.navigationProjectManager.setLastActiveWorktree(
-							project.id,
-							worktree.path
-						);
-					} catch {
-						// MRU persistence is best-effort; ownership remains the
-						// authoritative catalog match above.
-					}
-					if (!await authorization.isCurrentAndActiveVisible() ||
-						activationIntent !== this.activationIntentGeneration) {
-						return HucodeHostedShellOperationOutcome.Superseded;
-					}
 					break;
 				}
 			}
@@ -741,10 +730,23 @@ export class WebHucodeShellController extends Disposable
 			folderExists,
 			canApply
 		);
-		return activationAuthorized &&
+		const outcome = activationAuthorized &&
 			activationIntent === this.activationIntentGeneration
 			? HucodeHostedShellOperationOutcome.Accepted
 			: HucodeHostedShellOperationOutcome.Superseded;
+		if (outcome === HucodeHostedShellOperationOutcome.Accepted &&
+			projectId && this.navigationProjectManager) {
+			try {
+				await this.navigationProjectManager.setLastActiveWorktree(
+					projectId,
+					worktreePath
+				);
+			} catch {
+				// MRU persistence is best-effort; ownership remains the
+				// authoritative catalog match above.
+			}
+		}
+		return outcome;
 	}
 
 	private optionsRemoteAuthorityMatches(resource: URI): boolean {
@@ -1701,7 +1703,7 @@ export class WebHucodeShellController extends Disposable
 		if (negotiatedCapabilities) {
 			client.registerChannel(
 				HUCODE_HOSTED_SHELL_CHANNEL,
-				ProxyChannel.fromService(
+				createHucodeHostedShellServerChannel(
 					this.createHostedConnectionFacade(instance),
 					disposables
 				)
@@ -1913,7 +1915,7 @@ export class WebHucodeShellController extends Disposable
 			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
 			instances: state.available ? [{
 				instanceId: instance.instanceId,
-				worktreePath: '',
+				worktreePath: instance.worktreePath,
 				state: state.lifecycleState ?? 'loading',
 				visible: state.visible,
 				focused: false,
@@ -1936,6 +1938,7 @@ export class WebHucodeShellController extends Disposable
 				});
 				return getLegacyState();
 			},
+			focusNormalWindowByPath: async _worktreePath => false,
 			closeWorkspace: async _windowId => {
 				await hosted.closeSelf();
 				return getLegacyState();

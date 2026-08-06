@@ -437,6 +437,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const invalidatedHostedShellWebContentsIds: number[] = [];
 		const focusHostedWorkspaceByPathCalls: string[] = [];
 		const focusNormalWindowByPathCalls: string[] = [];
+		const lastActiveWorktreePathCalls: string[] = [];
 		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
 			ResidentHostedWorkspacesController['getState']
@@ -495,6 +496,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				focusNormalWindowByPathCalls.push(path);
 				return options.normalWindowPaths?.includes(path) ?? false;
 			},
+			async path => {
+				lastActiveWorktreePathCalls.push(path);
+			},
 			state => stateChanges.push(state),
 			{
 				restorePolicy: options.restorePolicy,
@@ -517,6 +521,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			focusNormalWindowByPathCalls,
 			ipcMain,
 			invalidatedHostedShellWebContentsIds,
+			lastActiveWorktreePathCalls,
 			logService,
 			protocolMainService,
 			stateChanges,
@@ -4229,6 +4234,23 @@ suite('ResidentHostedWorkspacesController', () => {
 				))?.toString(),
 				'test'
 			);
+			controller.setWorkspaceOverlayOcclusion(true);
+			assert.strictEqual(
+				controller.triggerPasteInHostedShellSelf(bravoBinding),
+				false
+			);
+			assert.strictEqual(
+				await controller.captureHostedShellSelfScreenshot(bravoBinding),
+				undefined
+			);
+			assert.strictEqual(
+				controller.runHostedShellAction(
+					bravoBinding,
+					HucodeHostedShellAction.AddProject
+				),
+				false
+			);
+			controller.setWorkspaceOverlayOcclusion(false);
 			assert.strictEqual(
 				controller.focusHostedShellSelf(alphaBinding),
 				true
@@ -4363,6 +4385,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				controller,
 				focusHostedWorkspaceByPathCalls,
 				focusNormalWindowByPathCalls,
+				lastActiveWorktreePathCalls,
 				viewFactory,
 			} = createController({ hostedWindowPaths: [target] });
 
@@ -4380,6 +4403,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
 			assert.deepStrictEqual(focusNormalWindowByPathCalls, []);
+			assert.deepStrictEqual(lastActiveWorktreePathCalls, [target]);
 			assert.strictEqual(viewFactory.views.length, 1);
 			assert.strictEqual(
 				controller.getState().instances.some(instance =>
@@ -4395,6 +4419,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const {
 				controller,
 				focusHostedWorkspaceByPathCalls,
+				lastActiveWorktreePathCalls,
 				viewFactory,
 			} = createController();
 
@@ -4413,6 +4438,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				HucodeHostedShellOperationOutcome.Accepted
 			);
 			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.deepStrictEqual(lastActiveWorktreePathCalls, [target]);
 			assert.strictEqual(
 				controller.getState().activeInstanceId,
 				'instance-1'
@@ -4427,6 +4453,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const {
 				controller,
 				focusHostedWorkspaceByPathCalls,
+				lastActiveWorktreePathCalls,
 				viewFactory,
 			} = createController({
 				hostedWindowPaths: [target],
@@ -4447,6 +4474,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				HucodeHostedShellOperationOutcome.Superseded
 			);
 			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.deepStrictEqual(lastActiveWorktreePathCalls, []);
 			assert.strictEqual(viewFactory.views.length, 1);
 			assert.strictEqual(
 				controller.getState().instances.some(instance =>

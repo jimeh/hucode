@@ -118,6 +118,10 @@ export class WebShellControllerServiceAdapter
 	async prepareWorkspaceForStandaloneOpen(request: Parameters<
 		IHucodeShellControllerService['prepareWorkspaceForStandaloneOpen']
 	>[0]): Promise<boolean> {
+		const folderUri = URI.revive(request.folderUri);
+		if (!folderUri || folderUri.scheme !== 'file') {
+			return false;
+		}
 		if (request.retainedWorkbenchId) {
 			const state = await this.unloadRetainedWorkbench(
 				request.retainedWorkbenchId
@@ -128,7 +132,7 @@ export class WebShellControllerServiceAdapter
 				return false;
 			}
 		}
-		const path = URI.revive(request.folderUri).fsPath;
+		const path = folderUri.fsPath;
 		const owner = await this.shell.findHostedWorkspaceByPath(path);
 		if (!owner) {
 			return true;

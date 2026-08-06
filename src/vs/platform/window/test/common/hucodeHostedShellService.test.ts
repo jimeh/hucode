@@ -5,10 +5,12 @@
 
 import assert from 'assert';
 import { Emitter, Event } from '../../../../base/common/event.js';
+import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
 	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellServerChannel,
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HUCODE_HOSTED_SHELL_REMOTE_MEMBERS,
@@ -138,6 +140,20 @@ suite('HucodeHostedShellService', () => {
 			Object.keys(facade).filter(key => key !== '_serviceBrand'),
 			HUCODE_HOSTED_SHELL_REMOTE_MEMBERS
 		);
+		const channelDisposables = new DisposableStore();
+		const channel = createHucodeHostedShellServerChannel(
+			facade,
+			channelDisposables
+		);
+		await assert.rejects(
+			channel.call('test', 'constructor'),
+			/Method not found: constructor/
+		);
+		assert.throws(
+			() => channel.listen('test', 'toString'),
+			/Event not found: toString/
+		);
+		channelDisposables.dispose();
 
 		assert.deepStrictEqual(await facade.getState(), {
 			available: true,
@@ -329,6 +345,11 @@ suite('HucodeHostedShellService', () => {
 			instanceId: 'self',
 			connectionGeneration: 2,
 		};
+		let delegateCalls = 0;
+		const accept = async () => {
+			delegateCalls++;
+			return true;
+		};
 		const delegate: IHucodeHostedShellDelegate = {
 			onDidChangeState: Event.None,
 			getState: async () => ({
@@ -344,27 +365,64 @@ suite('HucodeHostedShellService', () => {
 					visible: true,
 				}],
 			}),
-			notifyReady: async () => undefined,
-			closeSelf: async () => true,
-			reopenSelfInNormalWindow: async () => true,
-			reloadSelf: async () => true,
-			focusSelf: async () => true,
-			focusShell: async () => true,
-			requestShellAction: async () => true,
-			navigateToFolder: async () => HucodeHostedShellOperationOutcome.Accepted,
-			triggerPasteInSelf: async () => true,
-			captureSelfScreenshot: async () => undefined,
+			notifyReady: async () => { delegateCalls++; },
+			closeSelf: accept,
+			reopenSelfInNormalWindow: accept,
+			reloadSelf: accept,
+			focusSelf: accept,
+			focusShell: accept,
+			requestShellAction: accept,
+			navigateToFolder: async () => {
+				delegateCalls++;
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
+			triggerPasteInSelf: accept,
+			captureSelfScreenshot: async () => {
+				delegateCalls++;
+				return undefined;
+			},
 		};
 		const facade = createBoundHucodeHostedShellFacade(binding, delegate);
+		const assertFacadeStale = async (staleFacade: typeof facade) => {
+			assert.strictEqual(
+				(await staleFacade.notifyReady()).outcome,
+				HucodeHostedShellOperationOutcome.Stale
+			);
+			assert.strictEqual(
+				await staleFacade.navigateToFolder({ folderUri: URI.file('/folder').toJSON() }),
+				HucodeHostedShellOperationOutcome.Stale
+			);
+			for (const run of [
+				() => staleFacade.closeSelf(),
+				() => staleFacade.reopenSelfInNormalWindow(),
+				() => staleFacade.reloadSelf(),
+				() => staleFacade.focusSelf(),
+				() => staleFacade.focusShell(),
+				() => staleFacade.requestShellAction(HucodeHostedShellAction.AddProject),
+				() => staleFacade.triggerPasteInSelf(),
+			]) {
+				assert.strictEqual(
+					await run(),
+					HucodeHostedShellOperationOutcome.Stale
+				);
+			}
+			assert.strictEqual(await staleFacade.captureSelfScreenshot(), undefined);
+		};
 
-		assert.strictEqual(
-			(await facade.notifyReady()).outcome,
-			HucodeHostedShellOperationOutcome.Stale
+		await assertFacadeStale(facade);
+		const disposedFacade = createBoundHucodeHostedShellFacade(
+			{ ...binding, connectionGeneration: 3 },
+			{
+				...delegate,
+				getState: async () => ({
+					...(await delegate.getState(binding)),
+					connectionGeneration: 3,
+					disposed: true,
+				}),
+			}
 		);
-		assert.strictEqual(
-			await facade.navigateToFolder({ folderUri: URI.file('/folder').toJSON() }),
-			HucodeHostedShellOperationOutcome.Stale
-		);
+		await assertFacadeStale(disposedFacade);
+		assert.strictEqual(delegateCalls, 0);
 
 		const currentFacade = createBoundHucodeHostedShellFacade(
 			{ ...binding, connectionGeneration: 3 },

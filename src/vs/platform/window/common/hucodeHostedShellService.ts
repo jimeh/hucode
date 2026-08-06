@@ -5,9 +5,14 @@
 
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { Event } from '../../../base/common/event.js';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { Schemas } from '../../../base/common/network.js';
 import { URI, UriComponents } from '../../../base/common/uri.js';
-import { IChannel, ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
+import {
+	IChannel,
+	IServerChannel,
+	ProxyChannel,
+} from '../../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { HucodeHostedShellAction, isHucodeHostedShellAction } from
 	'./hucodeHostedShellActions.js';
@@ -66,6 +71,33 @@ type MissingHostedShellRemoteMember = Exclude<
 const hostedShellRemoteMembersAreExhaustive:
 	MissingHostedShellRemoteMember extends never ? true : never = true;
 void hostedShellRemoteMembersAreExhaustive;
+
+const hucodeHostedShellRemoteMemberSet = new Set<string>(
+	HUCODE_HOSTED_SHELL_REMOTE_MEMBERS
+);
+
+/** Creates a server channel that rejects inherited or undeclared members. */
+export function createHucodeHostedShellServerChannel(
+	service: IHucodeHostedShellService,
+	disposables: DisposableStore
+): IServerChannel {
+	const channel = ProxyChannel.fromService(service, disposables);
+	return {
+		listen(context, event, arg) {
+			if (event !== 'onDidChangeState') {
+				throw new Error(`Event not found: ${event}`);
+			}
+			return channel.listen(context, event, arg);
+		},
+		call(context, command, args) {
+			if (command === 'onDidChangeState' ||
+				!hucodeHostedShellRemoteMemberSet.has(command)) {
+				return Promise.reject(new Error(`Method not found: ${command}`));
+			}
+			return channel.call(context, command, args);
+		},
+	};
+}
 
 /** Observable outcomes shared by hosted shell operations. */
 export const HucodeHostedShellOperationOutcome = {
@@ -151,7 +183,11 @@ export interface IHucodeHostedShellAuthorityState {
 	readonly instances: readonly IHucodeHostedShellAuthorityInstanceState[];
 }
 
-/** Platform delegate invoked only with the facade's captured binding. */
+/**
+ * Platform delegate invoked only with the facade's captured binding.
+ * Side-effecting implementations must re-check that binding at their commit
+ * point because the facade's asynchronous policy preflight is not atomic.
+ */
 export interface IHucodeHostedShellDelegate {
 	readonly onDidChangeState: Event<IHucodeHostedShellAuthorityState>;
 	getState(

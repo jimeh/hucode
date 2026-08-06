@@ -27,6 +27,8 @@ import { IConfigurationService } from
 import { ILogService } from '../../platform/log/common/log.js';
 import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
+import { IProjectManagerMainService } from
+	'../../platform/projectManager/electron-main/projectManager.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
 import {
@@ -57,6 +59,7 @@ import { ShutdownReason } from '../../workbench/services/lifecycle/common/lifecy
 import { IBrowserViewMainService } from
 	'../../platform/browserView/electron-main/browserViewMainService.js';
 import { ResidentHostedWorkspacesController } from './hostedWorkspacesController.js';
+import { findHucodeProjectWorktreeByPath } from './omniWorkspaceOpen.js';
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'./omniWorkspaceReopen.js';
 import { isHostedWorkspaceRestorable } from
@@ -69,6 +72,7 @@ import {
 import { ShellControllerStore } from '../common/shellControllerStore.js';
 import {
 	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellServerChannel,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 	HucodeHostedShellOperationOutcome,
@@ -138,6 +142,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly browserViewMainService: IBrowserViewMainService,
 		@IConfigurationService
 		private readonly configurationService: IConfigurationService,
+		@IProjectManagerMainService
+		private readonly projectManagerMainService: IProjectManagerMainService,
 	) {
 		super();
 
@@ -230,7 +236,7 @@ export class HucodeShellMainService extends Disposable
 		));
 		client.registerChannel(
 			HUCODE_HOSTED_SHELL_CHANNEL,
-			ProxyChannel.fromService(
+			createHucodeHostedShellServerChannel(
 				this.createHostedShellFacade(controller, binding),
 				connection
 			)
@@ -1003,6 +1009,8 @@ export class HucodeShellMainService extends Disposable
 						windowId
 					),
 				worktreePath => this.focusNormalWindowByPath(worktreePath),
+				worktreePath =>
+					this.recordLastActiveWorktreeByPath(worktreePath),
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),
 				{
@@ -1013,6 +1021,21 @@ export class HucodeShellMainService extends Disposable
 				}
 			);
 		return controller;
+	}
+
+	private async recordLastActiveWorktreeByPath(
+		worktreePath: string
+	): Promise<void> {
+		const target = findHucodeProjectWorktreeByPath(
+			await this.projectManagerMainService.getProjects(),
+			worktreePath
+		);
+		if (target) {
+			await this.projectManagerMainService.setLastActiveWorktree(
+				target.projectId,
+				target.worktreePath
+			);
+		}
 	}
 
 	private trackTrust(

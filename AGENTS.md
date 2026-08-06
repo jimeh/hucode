@@ -236,6 +236,10 @@ as the required Hucode instruction set for work in this fork.
 - Complete project-catalog reconciliation is shell authority. Hosted
   workbenches may read combined state through `getWindowState`, but must not
   submit a supposedly complete catalog over their connection facade.
+- Hosted navigation authorities also own last-active-worktree persistence.
+  Resolve the canonical project worktree server-side, record it only after an
+  accepted navigation, and keep the bounded legacy web facade's self state
+  populated with its real `worktreePath` for cached clients.
 - Web shell restoration can block on remote folder checks. Page shutdown must
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
