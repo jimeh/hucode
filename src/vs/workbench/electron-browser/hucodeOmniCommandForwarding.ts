@@ -7,8 +7,12 @@ import { addDisposableListener, EventHelper, getActiveElement } from '../../base
 import { URI } from '../../base/common/uri.js';
 import { DisposableStore, IDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { ILogService } from '../../platform/log/common/log.js';
-import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { ipcRenderer } from '../../base/parts/sandbox/electron-browser/globals.js';
+import {
+	HucodeShellControllerUnavailableError,
+	IHucodeShellControllerService,
+} from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import {
 	HucodeOmniCommandForwardingContext,
 	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
@@ -25,8 +29,6 @@ import {
 	INativeRunKeybindingInWindowRequest,
 } from '../../platform/window/common/window.js';
 import { INativeWorkbenchEnvironmentService } from '../services/environment/electron-browser/environmentService.js';
-
-const HUCODE_SHELL_CHANNEL_NAME = 'hucodeShell';
 
 const HUCODE_OMNI_CLIPBOARD_ACTIONS = new Map<string, string>([
 	['copy', 'editor.action.clipboardCopyAction'],
@@ -59,7 +61,8 @@ export class HucodeOmniCommandForwarding {
 	constructor(
 		private readonly nativeEnvironmentService:
 			INativeWorkbenchEnvironmentService,
-		private readonly mainProcessService: IMainProcessService,
+		private readonly shellControllerService:
+			IHucodeShellControllerService,
 		private readonly logService: ILogService,
 		private readonly commandForwardingScope:
 			IHucodeOmniCommandForwardingScope,
@@ -240,10 +243,8 @@ export class HucodeOmniCommandForwarding {
 		request: INativeRunActionInWindowRequest
 	): Promise<boolean> {
 		try {
-			return await this.callHucodeShellChannel<boolean>(
-				'runActionInWorkspace',
-				[this.nativeEnvironmentService.window.id, request]
-			);
+			return await this.shellControllerService
+				.runActionInWorkspace(request);
 		} catch (error) {
 			this.logService.warn(
 				`Failed to forward Omni shell action ${request.id}: ${error}`
@@ -252,14 +253,34 @@ export class HucodeOmniCommandForwarding {
 		}
 	}
 
+	/**
+	 * Forwards copy or cut, retrying locally only when dispatch definitely did
+	 * not start; ambiguous transport failures are consumed for at-most-once use.
+	 */
+	private async tryForwardClipboardActionToWorkspace(
+		request: INativeRunActionInWindowRequest
+	): Promise<boolean> {
+		try {
+			return await this.shellControllerService
+				.runActionInWorkspace(request);
+		} catch (error) {
+			this.logService.warn(
+				`Failed to forward Omni shell action ${request.id}: ${error}`
+			);
+			// Once dispatch begins, a transport failure is ambiguous: the hosted
+			// workbench may already have applied copy or cut. Only a definitive
+			// pre-dispatch absence is safe to retry in the shell.
+			return !(error instanceof HucodeShellControllerUnavailableError);
+		}
+	}
+
+	/** Forwards a keybinding and permits local fallback after any failure. */
 	private async tryForwardKeybindingToWorkspace(
 		request: INativeRunKeybindingInWindowRequest
 	): Promise<boolean> {
 		try {
-			return await this.callHucodeShellChannel<boolean>(
-				'runKeybindingInWorkspace',
-				[this.nativeEnvironmentService.window.id, request]
-			);
+			return await this.shellControllerService
+				.runKeybindingInWorkspace(request);
 		} catch (error) {
 			this.logService.warn(
 				'Failed to forward Omni shell keybinding ' +
@@ -267,15 +288,6 @@ export class HucodeOmniCommandForwarding {
 			);
 			return false;
 		}
-	}
-
-	private async callHucodeShellChannel<T>(
-		command: string,
-		args: unknown[]
-	): Promise<T> {
-		return this.mainProcessService
-			.getChannel(HUCODE_SHELL_CHANNEL_NAME)
-			.call<T>(command, args);
 	}
 
 	async handleClipboardEvent(
@@ -287,14 +299,13 @@ export class HucodeOmniCommandForwarding {
 			return;
 		}
 
-		// Clipboard cancellation must happen during event dispatch. Once this
-		// path is selected, a failed async forward is recovered locally below.
+		// Clipboard cancellation must happen during event dispatch.
 		EventHelper.stop(event, true);
 		const request: INativeRunActionInWindowRequest = {
 			id: actionId,
 			from: 'menu'
 		};
-		if (await this.forwardActionToWorkspace(request)) {
+		if (await this.tryForwardClipboardActionToWorkspace(request)) {
 			return;
 		}
 

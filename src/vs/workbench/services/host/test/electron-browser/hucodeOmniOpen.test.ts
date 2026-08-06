@@ -5,11 +5,17 @@
 
 import assert from 'assert';
 import { errorHandler } from '../../../../../base/common/errors.js';
+import { Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { INativeHostService } from '../../../../../platform/native/common/native.js';
 import { IProjectManagerService, ProjectRecord, WorktreeRecord } from '../../../../../platform/projectManager/common/projectManager.js';
 import { IOpenWindowOptions, IWindowOpenable } from '../../../../../platform/window/common/window.js';
+import {
+	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { IHucodeOmniOpenShellService, tryOpenHucodeOmniWindow } from '../../electron-browser/hucodeOmniOpen.js';
 
@@ -85,11 +91,10 @@ suite('HucodeOmniOpen', () => {
 
 	const createShellService = () => {
 		const openWorkspaceCalls: {
-			windowId: number;
 			worktreePath: string;
 			projectId?: string;
 		}[] = [];
-		const focusWorkspaceCalls: number[] = [];
+		const focusWorkspaceCalls: string[] = [];
 		const focusHostedWorkspaceByPathCalls: string[] = [];
 		const focusNormalWindowByPathCalls: string[] = [];
 		const hostedWorkspacePaths = new Set<string>();
@@ -115,19 +120,17 @@ suite('HucodeOmniOpen', () => {
 					return normalWindowPaths.has(worktreePath);
 				},
 				async openWorkspace(
-					windowId: number,
 					worktreePath: string,
 					projectId?: string
 				): Promise<unknown> {
 					openWorkspaceCalls.push({
-						windowId,
 						worktreePath,
 						projectId
 					});
 					return {};
 				},
-				async focusWorkspace(windowId: number): Promise<void> {
-					focusWorkspaceCalls.push(windowId);
+				async focusWorkspace(): Promise<void> {
+					focusWorkspaceCalls.push('focus');
 				}
 			} satisfies IHucodeOmniOpenShellService,
 			openWorkspaceCalls,
@@ -141,6 +144,34 @@ suite('HucodeOmniOpen', () => {
 			},
 		};
 	};
+
+	const unavailable = async () =>
+		HucodeHostedShellOperationOutcome.Unavailable;
+	let hostedNavigationCalls: URI[];
+	let hostedShellService: IHucodeHostedShellService;
+	setup(() => {
+		hostedNavigationCalls = [];
+		hostedShellService = {
+			_serviceBrand: undefined,
+			onDidChangeState: Event.None,
+			getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+			notifyReady: async () => ({
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			}),
+			closeSelf: unavailable,
+			reopenSelfInNormalWindow: unavailable,
+			reloadSelf: unavailable,
+			focusSelf: unavailable,
+			focusShell: unavailable,
+			requestShellAction: unavailable,
+			async navigateToFolder(request) {
+				hostedNavigationCalls.push(URI.revive(request.folderUri));
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
+			triggerPasteInSelf: unavailable,
+			captureSelfScreenshot: async () => undefined,
+		};
+	});
 
 	const environment = (
 		options: {
@@ -179,6 +210,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({}),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			false
@@ -202,6 +234,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			true
@@ -215,13 +248,12 @@ suite('HucodeOmniOpen', () => {
 			[{ projectId: 'project', worktreePath: '/repo' }]
 		);
 		assert.deepStrictEqual(shell.openWorkspaceCalls, [{
-			windowId: nativeHost.service.windowId,
 			worktreePath: '/repo',
 			projectId: 'project'
 		}]);
 		assert.deepStrictEqual(
 			shell.focusWorkspaceCalls,
-			[nativeHost.service.windowId]
+			['focus']
 		);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
@@ -241,6 +273,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			true
@@ -270,6 +303,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			);
 			assert.deepStrictEqual({
@@ -306,6 +340,7 @@ suite('HucodeOmniOpen', () => {
 					nativeHost.service,
 					environment({ isOmniWindow: true }),
 					shell.service,
+					hostedShellService,
 					projectManager.service
 				),
 				true
@@ -313,14 +348,13 @@ suite('HucodeOmniOpen', () => {
 		);
 		assert.deepStrictEqual(shell.focusNormalWindowByPathCalls, ['/repo']);
 		assert.deepStrictEqual(shell.openWorkspaceCalls, [{
-			windowId: nativeHost.service.windowId,
 			worktreePath: '/repo',
 			projectId: 'project'
 		}]);
 		assert.deepStrictEqual(nativeHost.openWindowCalls, []);
 	});
 
-	test('opens unknown folders as retained Omni workbenches', async () => {
+	test('routes hosted folder opens through the bound capability', async () => {
 		const nativeHost = createNativeHostService();
 		const projectManager = createProjectManagerService([]);
 		const shell = createShellService();
@@ -332,21 +366,20 @@ suite('HucodeOmniOpen', () => {
 			nativeHost.service,
 			environment({ isHostedOmniWorkspace: true }),
 			shell.service,
+			hostedShellService,
 			projectManager.service
 		);
 		assert.deepStrictEqual({
 			handled,
+			hostedNavigation: hostedNavigationCalls.map(uri => uri.fsPath),
 			openWorkspace: shell.openWorkspaceCalls,
 			focusWorkspace: shell.focusWorkspaceCalls,
 			openWindow: nativeHost.openWindowCalls,
 		}, {
 			handled: true,
-			openWorkspace: [{
-				windowId: nativeHost.service.windowId,
-				worktreePath: '/outside',
-				projectId: undefined,
-			}],
-			focusWorkspace: [nativeHost.service.windowId],
+			hostedNavigation: ['/outside'],
+			openWorkspace: [],
+			focusWorkspace: [],
 			openWindow: [],
 		});
 	});
@@ -366,6 +399,7 @@ suite('HucodeOmniOpen', () => {
 			nativeHost.service,
 			environment({ isOmniWindow: true }),
 			shell.service,
+			hostedShellService,
 			projectManager.service
 		);
 		assert.deepStrictEqual({
@@ -398,6 +432,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			true
@@ -435,6 +470,7 @@ suite('HucodeOmniOpen', () => {
 					nativeHost.service,
 					environment({ isOmniWindow: true }),
 					shell.service,
+					hostedShellService,
 					projectManager.service
 				),
 				false
@@ -451,6 +487,7 @@ suite('HucodeOmniOpen', () => {
 				nativeHost.service,
 				environment({ isOmniWindow: true }),
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			false
@@ -468,6 +505,7 @@ suite('HucodeOmniOpen', () => {
 					],
 				},
 				shell.service,
+				hostedShellService,
 				projectManager.service
 			),
 			false

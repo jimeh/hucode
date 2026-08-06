@@ -11,3 +11,4 @@ import './projectManager/webProjectManagerService.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './webShellService.js';
+import './webShellControllerServiceAdapter.js';

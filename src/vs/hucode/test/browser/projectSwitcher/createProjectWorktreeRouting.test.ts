@@ -22,8 +22,8 @@ import type { INativeRunActionInWindowRequest } from
 	'../../../../platform/window/common/window.js';
 import type { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
-import type { IHucodeShellService } from
-	'../../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
 import {
 	WebProjectManagerClient,
 	WebProjectManagerFetch,
@@ -46,7 +46,6 @@ suite('CreateProjectWorktreeRouting', () => {
 		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
 			{ isOmniWindow: true, isWebClient: true },
 			shell(calls),
-			7,
 			handle
 		), false);
 
@@ -59,12 +58,10 @@ suite('CreateProjectWorktreeRouting', () => {
 		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
 			{ isOmniWindow: true, isWebClient: false },
 			shell(calls),
-			7,
 			handle
 		), true);
 
 		assert.deepStrictEqual(calls, [{
-			windowId: 7,
 			request: {
 				id: CREATE_WORKTREE_COMMAND_ID,
 				from: 'mouse',
@@ -77,11 +74,9 @@ suite('CreateProjectWorktreeRouting', () => {
 		const calls: IForwardedAction[] = [];
 		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
 			{ isOmniWindow: true, isWebClient: false },
-			shell(calls, false),
-			7
+			shell(calls, false)
 		), false);
 		assert.deepStrictEqual(calls, [{
-			windowId: 7,
 			request: {
 				id: CREATE_WORKTREE_COMMAND_ID,
 				from: 'mouse',
@@ -94,8 +89,7 @@ suite('CreateProjectWorktreeRouting', () => {
 		const calls: IForwardedAction[] = [];
 		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
 			{ isOmniWindow: false, isWebClient: false },
-			shell(calls),
-			7
+			shell(calls)
 		), false);
 		assert.deepStrictEqual(calls, []);
 	});
@@ -169,7 +163,7 @@ suite('CreateProjectWorktreeRouting', () => {
 					getValue: () => 'committerdate',
 				} as Partial<IConfigurationService> as IConfigurationService,
 				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-				{} as IHucodeShellService,
+				{} as IHucodeShellControllerService,
 				true
 			);
 
@@ -217,7 +211,7 @@ suite('CreateProjectWorktreeRouting', () => {
 					} as Partial<IConfigurationService> as
 					IConfigurationService,
 					{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-					{} as IHucodeShellService,
+					{} as IHucodeShellControllerService,
 					false
 				),
 				error => error === failure
@@ -255,7 +249,7 @@ suite('CreateProjectWorktreeRouting', () => {
 						IConfigurationService,
 						{ isOmniWindow: false } as
 						IWorkbenchEnvironmentService,
-						{} as IHucodeShellService,
+						{} as IHucodeShellControllerService,
 						false
 					),
 					timeout,
@@ -302,7 +296,7 @@ suite('CreateProjectWorktreeRouting', () => {
 					getValue: () => 'committerdate',
 				} as Partial<IConfigurationService> as IConfigurationService,
 				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-				{} as IHucodeShellService
+				{} as IHucodeShellControllerService
 			);
 			await pickCreateWorktreeBranchName(
 				'project',
@@ -310,7 +304,7 @@ suite('CreateProjectWorktreeRouting', () => {
 				projectManagerService,
 				quickInputService,
 				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-				{} as IHucodeShellService
+				{} as IHucodeShellControllerService
 			);
 
 			assert.deepStrictEqual(
@@ -360,7 +354,7 @@ suite('CreateProjectWorktreeRouting', () => {
 				projectManagerService,
 				quickInputService,
 				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-				{} as IHucodeShellService,
+				{} as IHucodeShellControllerService,
 				true
 			);
 
@@ -409,7 +403,7 @@ suite('CreateProjectWorktreeRouting', () => {
 			projectManagerService,
 			quickInputService,
 			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
-			{} as IHucodeShellService,
+			{} as IHucodeShellControllerService,
 			false
 		);
 		validations[1](true);
@@ -422,7 +416,6 @@ suite('CreateProjectWorktreeRouting', () => {
 
 /** Records a forwarded shell action for routing assertions. */
 interface IForwardedAction {
-	readonly windowId: number;
 	readonly request: INativeRunActionInWindowRequest;
 }
 
@@ -430,10 +423,10 @@ interface IForwardedAction {
 function shell(
 	calls: IForwardedAction[],
 	result = true
-): Pick<IHucodeShellService, 'runActionInWorkspace'> {
+): Pick<IHucodeShellControllerService, 'runActionInWorkspace'> {
 	return {
-		async runActionInWorkspace(windowId, request) {
-			calls.push({ windowId, request });
+		async runActionInWorkspace(request) {
+			calls.push({ request });
 			return result;
 		},
 	};

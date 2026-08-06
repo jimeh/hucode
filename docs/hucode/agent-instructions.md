@@ -653,6 +653,9 @@ human-facing guides rather than replacing them.
   `getWindowState()` is called by multiple shell parts during startup, and a
   partial restore snapshot makes Projects miss loaded worktrees and unload
   actions.
+- Shell-state consumers that subscribe before fetching their initial snapshot
+  must not apply that snapshot after an `onDidChangeState` event arrives. The
+  late snapshot can be older and overwrite live host or Projects state.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.

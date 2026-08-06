@@ -71,6 +71,7 @@ import {
 	createBoundHucodeHostedShellFacade,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellDelegate,
 	IHucodeHostedShellService,
@@ -79,6 +80,18 @@ import {
 	acceptHucodeHostedShellPortRequest,
 	IHucodeHostedShellPortConnection,
 } from './hostedShellPortAcceptor.js';
+import {
+	HUCODE_SHELL_CONTROLLER_CHANNEL,
+	HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
+	IHucodeShellControllerService,
+	IHucodeStandaloneWorkspaceRequest,
+} from '../../platform/window/common/hucodeShellControllerService.js';
+import {
+	acceptHucodeShellControllerPortRequest,
+	IHucodeShellControllerPortConnection,
+	IHucodeShellControllerPortOwner,
+	registerHucodeShellControllerOwnerLifecycle,
+} from './shellControllerPortAcceptor.js';
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -105,6 +118,9 @@ export class HucodeShellMainService extends Disposable
 		{ readonly windowId: number; readonly instanceId: string }
 	>();
 	private readonly hostedShellConnections = this._register(
+		new DisposableMap<number>()
+	);
+	private readonly shellControllerConnections = this._register(
 		new DisposableMap<number>()
 	);
 
@@ -146,6 +162,22 @@ export class HucodeShellMainService extends Disposable
 			HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
 			onHostedShellPortRequest
 		)));
+
+		const onShellControllerPortRequest = (
+			event: Electron.IpcMainEvent,
+			nonce: unknown
+		) => this.acceptShellControllerPort(event, nonce);
+		validatedIpcMain.on(
+			HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
+			onShellControllerPortRequest
+		);
+		this._register(toDisposable(() => validatedIpcMain.removeListener(
+			HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
+			onShellControllerPortRequest
+		)));
+		this._register(this.windowsMainService.onDidDestroyWindow(window =>
+			this.shellControllerConnections.deleteAndDispose(window.id)
+		));
 	}
 
 	isTrustedHostedWorkspaceRequest(
@@ -285,6 +317,204 @@ export class HucodeShellMainService extends Disposable
 		}, binding.instanceId);
 	}
 
+	/** Accepts a privileged port only from an Omni shell's owner renderer. */
+	private acceptShellControllerPort(
+		event: Electron.IpcMainEvent,
+		nonce: unknown
+	): void {
+		acceptHucodeShellControllerPortRequest({
+			resolveOwner: sender => this.resolveShellControllerPortOwner(sender),
+			connections: this.shellControllerConnections,
+			createConnection: owner =>
+				this.createShellControllerPortConnection(owner),
+			logRefusal: reason => this.logService.debug(
+				'[HucodeShellMainService] Refused shell controller port: ' +
+				reason
+			),
+			logFailure: error => this.logService.warn(
+				'[HucodeShellMainService] Failed to transfer shell controller ' +
+				`port: ${error}`
+			),
+		}, event, nonce);
+	}
+
+	private resolveShellControllerPortOwner(
+		sender: Electron.WebContents
+	): IHucodeShellControllerPortOwner | undefined {
+		const window = this.windowsMainService.getWindowByWebContents(sender);
+		if (!window?.isOmniWindow ||
+			window.win?.webContents.id !== sender.id) {
+			return undefined;
+		}
+		return { windowId: window.id, webContentsId: sender.id };
+	}
+
+	/** Creates one owner-bound privileged port and its reload/crash cleanup. */
+	private createShellControllerPortConnection(
+		owner: IHucodeShellControllerPortOwner
+	): IHucodeShellControllerPortConnection {
+		const window = this.windowsMainService.getWindowById(owner.windowId);
+		const webContents = window?.win?.webContents;
+		if (!window?.isOmniWindow || !webContents ||
+			webContents.id !== owner.webContentsId || webContents.isDestroyed()) {
+			throw new Error('Omni shell owner is no longer available.');
+		}
+
+		const connection = new DisposableStore();
+		const disposeConnection = () =>
+			this.shellControllerConnections.deleteAndDispose(owner.windowId);
+		connection.add(registerHucodeShellControllerOwnerLifecycle(
+			webContents,
+			disposeConnection
+		));
+
+		const { port1, port2 } = new MessageChannelMain();
+		let portTransferred = false;
+		connection.add(toDisposable(() => {
+			if (!portTransferred) {
+				port2.close();
+			}
+		}));
+		const client = connection.add(new MessagePortClient(
+			port1,
+			`hucodeShellController:${owner.windowId}`
+		));
+		client.registerChannel(
+			HUCODE_SHELL_CONTROLLER_CHANNEL,
+			ProxyChannel.fromService(
+				this.createShellControllerFacade(owner.windowId),
+				connection
+			)
+		);
+		return Object.assign(connection, {
+			transferPort: port2,
+			markTransferred: () => portTransferred = true,
+		});
+	}
+
+	/** Maps the no-identity wire contract onto one authoritative shell window. */
+	private createShellControllerFacade(
+		windowId: number
+	): IHucodeShellControllerService {
+		return {
+			_serviceBrand: undefined,
+			supportsWorkspaceScreenshotOverlay: true,
+			onDidChangeState: Event.map(
+				Event.filter(this.onDidChangeWindowState, change =>
+					change.windowId === windowId),
+				change => change.state
+			),
+			getState: () => this.getWindowState(windowId),
+			// These searches intentionally span windows so existing workbenches are
+			// reused instead of duplicated in the requesting shell.
+			focusHostedWorkspaceByPath: (path, projectId) =>
+				this.focusHostedWorkspaceByPath(path, projectId),
+			focusNormalWindowByPath: path =>
+				this.focusNormalWindowByPath(path),
+			openWorkspace: (path, projectId) =>
+				this.openWorkspace(windowId, path, projectId),
+			openAndFocusWorkspace: (path, projectId) =>
+				this.openAndFocusWorkspace(windowId, path, projectId),
+			suspendWorkspace: instanceId =>
+				this.suspendWorkspace(windowId, instanceId),
+			retainAndOpenWorkbench: folderUri =>
+				this.retainAndOpenWorkbench(windowId, folderUri),
+			unloadRetainedWorkbench: workbenchId =>
+				this.unloadRetainedWorkbench(windowId, workbenchId),
+			dismissRetainedWorkbench: workbenchId =>
+				this.dismissRetainedWorkbench(windowId, workbenchId),
+			reorderRetainedWorkbenches: ids =>
+				this.reorderRetainedWorkbenches(windowId, ids),
+			setRetainedWorkbenchLabel: (workbenchId, label) =>
+				this.setRetainedWorkbenchLabel(windowId, workbenchId, label),
+			reconcileRetainedWorkbenchesWithCompleteProjectCatalog: projects =>
+				this.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
+					windowId,
+					projects
+				),
+			promoteRetainedWorkbenchProjectFolders: projectFolders =>
+				this.promoteRetainedWorkbenchProjectFolders(
+					windowId,
+					projectFolders
+				),
+			setHostedWorkbenchRestorePolicy: policy =>
+				this.setHostedWorkbenchRestorePolicy(windowId, policy),
+			openFilesInWorkspace: (path, request, projectId) =>
+				this.openFilesInWorkspace(windowId, path, request, projectId),
+			openFilesInActiveWorkspace: request =>
+				this.openFilesInActiveWorkspace(windowId, request),
+			closeWorkspace: instanceId =>
+				this.closeWorkspace(windowId, instanceId),
+			reopenWorkspaceInNormalWindow: instanceId =>
+				this.reopenWorkspaceInNormalWindow(windowId, instanceId),
+			prepareWorkspaceForStandaloneOpen: request =>
+				this.prepareWorkspaceForStandaloneOpen(windowId, request),
+			focusWorkspace: () => this.focusWorkspace(windowId),
+			focusShell: () => this.focusShell(windowId),
+			setProjectsSidebarVisible: visible =>
+				this.setProjectsSidebarVisible(windowId, visible),
+			setProjectSwitcherNavigationState: (canGoBack, canGoForward) =>
+				this.setProjectSwitcherNavigationState(
+					windowId,
+					canGoBack,
+					canGoForward
+				),
+			setProjectSwitcherSectionOrder: order =>
+				this.setProjectSwitcherSectionOrder(windowId, order),
+			runActionInWorkspace: request =>
+				this.runActionInWorkspace(windowId, request),
+			runKeybindingInWorkspace: request =>
+				this.runKeybindingInWorkspace(windowId, request),
+			triggerPasteInWorkspace: () =>
+				this.triggerPasteInWorkspace(windowId),
+			reloadWorkspace: () => this.reloadWorkspace(windowId),
+			toggleWorkspaceDevTools: () =>
+				this.toggleWorkspaceDevTools(windowId),
+			layoutWorkspace: bounds => this.layoutWorkspace(windowId, bounds),
+			captureWorkspaceScreenshot: (rect, quality) =>
+				this.captureWorkspaceScreenshot(windowId, rect, quality),
+			setWorkspaceOverlayOcclusion: occluded =>
+				this.setWorkspaceOverlayOcclusion(windowId, occluded),
+			shutdownWindowWorkspaces: reason =>
+				this.shutdownWindowWorkspaces(windowId, reason),
+		};
+	}
+
+	/** Releases any hosted owner before the shell opens a path standalone. */
+	private async prepareWorkspaceForStandaloneOpen(
+		windowId: number,
+		request: IHucodeStandaloneWorkspaceRequest
+	): Promise<boolean> {
+		const folderUri = URI.revive(request.folderUri);
+		if (!folderUri || folderUri.scheme !== 'file') {
+			return false;
+		}
+		if (request.retainedWorkbenchId) {
+			const state = await this.unloadRetainedWorkbench(
+				windowId,
+				request.retainedWorkbenchId
+			);
+			const retained = state.retainedWorkbenches?.find(record =>
+				record.id === request.retainedWorkbenchId
+			);
+			if (retained && retained.desiredState !== 'unloaded') {
+				return false;
+			}
+		}
+
+		const owner = await this.findHostedWorkspaceByPath(folderUri.fsPath);
+		if (!owner) {
+			return true;
+		}
+		const state = await this.closeWorkspace(
+			owner.windowId,
+			owner.instanceId
+		);
+		return !state.instances.some(instance =>
+			instance.instanceId === owner.instanceId
+		);
+	}
+
 	async getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
 		await controller.ensureRestored();
@@ -294,8 +524,16 @@ export class HucodeShellMainService extends Disposable
 	async findHostedWorkspaceByPath(
 		worktreePath: string
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
+		return this.findHostedWorkspaceByPathInWindows(worktreePath);
+	}
+
+	private async findHostedWorkspaceByPathInWindows(
+		worktreePath: string,
+		excludedWindowId?: number
+	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
 		const omniWindows = this.windowsMainService.getWindows()
-			.filter(window => window.isOmniWindow)
+			.filter(window => window.isOmniWindow &&
+				window.id !== excludedWindowId)
 			.toSorted((a, b) => b.lastFocusTime - a.lastFocusTime);
 
 		for (const window of omniWindows) {
@@ -322,24 +560,50 @@ export class HucodeShellMainService extends Disposable
 		worktreePath: string,
 		projectId?: string
 	): Promise<boolean> {
-		const owner = await this.findHostedWorkspaceByPath(worktreePath);
+		return await this.focusHostedWorkspaceByPathWithContinuation(
+			worktreePath,
+			projectId,
+			() => true
+		) === HucodeHostedShellOperationOutcome.Accepted;
+	}
+
+	private async focusHostedWorkspaceByPathWithContinuation(
+		worktreePath: string,
+		projectId: string | undefined,
+		canApply: () => boolean,
+		excludedWindowId?: number
+	): Promise<HucodeHostedShellOperationOutcome> {
+		const owner = await this.findHostedWorkspaceByPathInWindows(
+			worktreePath,
+			excludedWindowId
+		);
 		if (!owner) {
-			return false;
+			return HucodeHostedShellOperationOutcome.Unavailable;
+		}
+		if (!canApply()) {
+			return HucodeHostedShellOperationOutcome.Superseded;
 		}
 
 		const window = this.windowsMainService.getWindowById(owner.windowId);
 		if (!window?.isOmniWindow) {
-			return false;
+			return HucodeHostedShellOperationOutcome.Superseded;
+		}
+
+		const controller = this.getOrCreateController(owner.windowId);
+		await controller.openWorkspace(
+			owner.worktreePath,
+			projectId ?? owner.projectId,
+			canApply,
+			canApply
+		);
+		if (!canApply() ||
+			controller.getState().activeInstanceId !== owner.instanceId) {
+			return HucodeHostedShellOperationOutcome.Superseded;
 		}
 
 		window.focus();
-		await this.openWorkspace(
-			owner.windowId,
-			owner.worktreePath,
-			projectId ?? owner.projectId
-		);
-		await this.focusWorkspace(owner.windowId);
-		return true;
+		controller.focusWorkspace();
+		return HucodeHostedShellOperationOutcome.Accepted;
 	}
 
 	async focusNormalWindowByPath(worktreePath: string): Promise<boolean> {
@@ -731,6 +995,14 @@ export class HucodeShellMainService extends Disposable
 				webContentsId => this.hostedShellConnections.deleteAndDispose(
 					webContentsId
 				),
+				(worktreePath, canApply) =>
+					this.focusHostedWorkspaceByPathWithContinuation(
+						worktreePath,
+						undefined,
+						canApply,
+						windowId
+					),
+				worktreePath => this.focusNormalWindowByPath(worktreePath),
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),
 				{

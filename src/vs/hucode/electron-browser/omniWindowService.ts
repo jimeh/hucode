@@ -9,6 +9,7 @@ import {
 	IHucodeShellService
 } from '../common/omniWindow.js';
 import './hostedShellServiceAdapter.js';
+import './shellControllerServiceAdapter.js';
 
 registerMainProcessRemoteService(
 	IHucodeShellService,

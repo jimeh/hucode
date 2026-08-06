@@ -417,6 +417,9 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly restorePolicy?: 'active' | 'all' | 'none';
 		readonly willUnloadTimeoutMs?: number;
 		readonly windowId?: number;
+		readonly hostedWindowPaths?: readonly string[];
+		readonly hostedWindowFocusOutcome?: HucodeHostedShellOperationOutcome;
+		readonly normalWindowPaths?: readonly string[];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -432,6 +435,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const trustedWebContentsIds: number[] = [];
 		const untrustedWebContentsIds: number[] = [];
 		const invalidatedHostedShellWebContentsIds: number[] = [];
+		const focusHostedWorkspaceByPathCalls: string[] = [];
+		const focusNormalWindowByPathCalls: string[] = [];
 		const logService = new RecordingLogService();
 		const stateChanges: ReturnType<
 			ResidentHostedWorkspacesController['getState']
@@ -476,6 +481,20 @@ suite('ResidentHostedWorkspacesController', () => {
 			id => trustedWebContentsIds.push(id),
 			id => untrustedWebContentsIds.push(id),
 			id => invalidatedHostedShellWebContentsIds.push(id),
+			async (path, canApply) => {
+				focusHostedWorkspaceByPathCalls.push(path);
+				if (!canApply()) {
+					return HucodeHostedShellOperationOutcome.Superseded;
+				}
+				return options.hostedWindowPaths?.includes(path)
+					? options.hostedWindowFocusOutcome ??
+					HucodeHostedShellOperationOutcome.Accepted
+					: HucodeHostedShellOperationOutcome.Unavailable;
+			},
+			async path => {
+				focusNormalWindowByPathCalls.push(path);
+				return options.normalWindowPaths?.includes(path) ?? false;
+			},
 			state => stateChanges.push(state),
 			{
 				restorePolicy: options.restorePolicy,
@@ -494,6 +513,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		return {
 			browserViewMainService,
 			controller,
+			focusHostedWorkspaceByPathCalls,
+			focusNormalWindowByPathCalls,
 			ipcMain,
 			invalidatedHostedShellWebContentsIds,
 			logService,
@@ -4333,6 +4354,136 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 			assert.deepStrictEqual(hostedWebContents.closeCalls, []);
 		});
+
+	test('hosted navigation focuses a workbench in another Omni window',
+		async () => {
+			const caller = createWorktree('cross-shell-caller');
+			const target = createWorktree('cross-shell-target');
+			const {
+				controller,
+				focusHostedWorkspaceByPathCalls,
+				focusNormalWindowByPathCalls,
+				viewFactory,
+			} = createController({ hostedWindowPaths: [target] });
+
+			await controller.openWorkspace(caller, 'project-caller');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+
+			assert.strictEqual(
+				await controller.navigateHostedShellToFolder(
+					binding,
+					{ folderUri: URI.file(target).toJSON() },
+					{ isCurrentAndActiveVisible: async () => true }
+				),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.deepStrictEqual(focusNormalWindowByPathCalls, []);
+			assert.strictEqual(viewFactory.views.length, 1);
+			assert.strictEqual(
+				controller.getState().instances.some(instance =>
+					instance.worktreePath === target),
+				false
+			);
+		});
+
+	test('hosted navigation reuses a sibling in the same Omni window',
+		async () => {
+			const target = createWorktree('same-shell-target');
+			const caller = createWorktree('same-shell-caller');
+			const {
+				controller,
+				focusHostedWorkspaceByPathCalls,
+				viewFactory,
+			} = createController();
+
+			await controller.openWorkspace(target, 'project-target');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openWorkspace(caller, 'project-caller');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			const binding = controller.acquireHostedShellBinding(2)!;
+
+			assert.strictEqual(
+				await controller.navigateHostedShellToFolder(
+					binding,
+					{ folderUri: URI.file(target).toJSON() },
+					{ isCurrentAndActiveVisible: async () => true }
+				),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.strictEqual(
+				controller.getState().activeInstanceId,
+				'instance-1'
+			);
+			assert.strictEqual(viewFactory.views.length, 2);
+		});
+
+	test('superseded cross-shell focus does not open a local duplicate',
+		async () => {
+			const caller = createWorktree('cross-shell-stale-caller');
+			const target = createWorktree('cross-shell-stale-target');
+			const {
+				controller,
+				focusHostedWorkspaceByPathCalls,
+				viewFactory,
+			} = createController({
+				hostedWindowPaths: [target],
+				hostedWindowFocusOutcome:
+					HucodeHostedShellOperationOutcome.Superseded,
+			});
+
+			await controller.openWorkspace(caller, 'project-caller');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+
+			assert.strictEqual(
+				await controller.navigateHostedShellToFolder(
+					binding,
+					{ folderUri: URI.file(target).toJSON() },
+					{ isCurrentAndActiveVisible: async () => true }
+				),
+				HucodeHostedShellOperationOutcome.Superseded
+			);
+			assert.deepStrictEqual(focusHostedWorkspaceByPathCalls, [target]);
+			assert.strictEqual(viewFactory.views.length, 1);
+			assert.strictEqual(
+				controller.getState().instances.some(instance =>
+					instance.worktreePath === target),
+				false
+			);
+		});
+
+	test('hosted navigation focuses an existing standalone window', async () => {
+		const caller = createWorktree('standalone-caller');
+		const target = createWorktree('standalone-target');
+		const {
+			controller,
+			focusNormalWindowByPathCalls,
+			viewFactory,
+		} = createController({ normalWindowPaths: [target] });
+
+		await controller.openWorkspace(caller, 'project-caller');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const binding = controller.acquireHostedShellBinding(1)!;
+
+		assert.strictEqual(
+			await controller.navigateHostedShellToFolder(
+				binding,
+				{ folderUri: URI.file(target).toJSON() },
+				{ isCurrentAndActiveVisible: async () => true }
+			),
+			HucodeHostedShellOperationOutcome.Accepted
+		);
+		assert.deepStrictEqual(focusNormalWindowByPathCalls, [target]);
+		assert.strictEqual(viewFactory.views.length, 1);
+		assert.strictEqual(
+			controller.getState().instances.some(instance =>
+				instance.worktreePath === target),
+			false
+		);
+	});
 
 	test('superseded hosted navigation cannot regain activation', async () => {
 		const alpha = createWorktree('alpha');

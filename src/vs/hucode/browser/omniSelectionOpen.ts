@@ -12,8 +12,9 @@ import { IProjectManagerService } from
 import { IHostService } from '../../workbench/services/host/browser/host.js';
 import {
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { setLastActiveWorktreeBestEffort } from
@@ -24,8 +25,7 @@ import { setLastActiveWorktreeBestEffort } from
  */
 export async function openSelectionInOmniWindow(
 	selection: IProjectSwitcherSelectionTarget | undefined,
-	windowId: number,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService,
 	noSelectionMessage: string
@@ -49,7 +49,6 @@ export async function openSelectionInOmniWindow(
 	}
 
 	return shellService.openWorkspace(
-		windowId,
 		selection.worktreePath,
 		selection.projectId
 	);
@@ -61,12 +60,11 @@ export async function openSelectionInOmniWindow(
 export async function openSelectionInStandaloneWindow(
 	selection: IProjectSwitcherSelectionTarget | undefined,
 	hostService: IHostService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService,
 	noSelectionMessage: string,
 	retainedWorkbench?: {
-		readonly windowId: number;
 		readonly id: string;
 	}
 ): Promise<void> {
@@ -80,33 +78,11 @@ export async function openSelectionInStandaloneWindow(
 		selection.projectId,
 		selection.worktreePath
 	);
-	if (retainedWorkbench) {
-		const state = await shellService.unloadRetainedWorkbench(
-			retainedWorkbench.windowId,
-			retainedWorkbench.id
-		);
-		const retained = state.retainedWorkbenches?.find(record =>
-			record.id === retainedWorkbench.id
-		);
-		if (retained && retained.desiredState !== 'unloaded') {
-			return;
-		}
-	}
-
-	const owner = await shellService.findHostedWorkspaceByPath(
-		selection.worktreePath
-	);
-	if (owner) {
-		const state = await shellService.closeWorkspace(
-			owner.windowId,
-			owner.instanceId
-		);
-		const closed = !state.instances.some(instance =>
-			instance.instanceId === owner.instanceId
-		);
-		if (!closed) {
-			return;
-		}
+	if (!await shellService.prepareWorkspaceForStandaloneOpen({
+		folderUri: URI.file(selection.worktreePath).toJSON(),
+		retainedWorkbenchId: retainedWorkbench?.id,
+	})) {
+		return;
 	}
 
 	if (await focusNormalWindowByPathBestEffort(
@@ -123,7 +99,7 @@ export async function openSelectionInStandaloneWindow(
 }
 
 async function focusNormalWindowByPathBestEffort(
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	worktreePath: string
 ): Promise<boolean> {
 	try {

@@ -6,15 +6,19 @@
 import { onUnexpectedError } from
 	'../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
+import { localize } from '../../../nls.js';
 import { IProjectManagerService } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
 	'../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
-import { IHucodeShellService } from '../../common/omniWindow.js';
-import { focusWorkspaceBestEffort } from
-	'../../common/omniWindowFocus.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import {
 	canonicalizeProjectSwitcherTarget,
 	IProjectSwitcherSelectionTarget,
@@ -22,16 +26,29 @@ import {
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { pathsEqual } from './projectSwitcherCommon.js';
 
+const hostedShellCapabilityUnavailable = localize(
+	'hostedShellCapabilityUnavailable',
+	'Hosted shell capability is unavailable.'
+);
+const hostedFolderNavigationUnsupported = localize(
+	'hostedFolderNavigationUnsupported',
+	'Hosted folder navigation is unsupported.'
+);
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
+
 /**
  * Opens a project switcher target in the current workbench context.
  */
 export async function openProjectSwitcherTargetInWindow(
 	target: IProjectSwitcherSelectionTarget,
-	windowId: number,
 	projectManagerService: IProjectManagerService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
-	hostService: IHostService
+	shellService: IHucodeShellControllerService | undefined,
+	hostService: IHostService,
+	hostedShellService?: IHucodeHostedShellService
 ): Promise<void> {
 	let canonicalTarget = target;
 	try {
@@ -49,10 +66,23 @@ export async function openProjectSwitcherTargetInWindow(
 		canonicalTarget.worktreePath
 	);
 
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
+	if (environmentService.isHostedOmniWorkspace) {
+		if (!hostedShellService) {
+			throw new Error(hostedShellCapabilityUnavailable);
+		}
+		const outcome = await hostedShellService.navigateToFolder({
+			folderUri: URI.file(canonicalTarget.worktreePath).toJSON(),
+		});
+		if (outcome === HucodeHostedShellOperationOutcome.Unsupported) {
+			throw new Error(hostedFolderNavigationUnsupported);
+		}
+		return;
+	}
+
+	if (environmentService.isOmniWindow) {
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
 			canonicalTarget.worktreePath
@@ -60,20 +90,11 @@ export async function openProjectSwitcherTargetInWindow(
 			return;
 		}
 
-		if (environmentService.isHostedOmniWorkspace) {
-			await shellService.openAndFocusWorkspace(
-				windowId,
-				canonicalTarget.worktreePath,
-				canonicalTarget.projectId
-			);
-		} else {
-			await shellService.openWorkspace(
-				windowId,
-				canonicalTarget.worktreePath,
-				canonicalTarget.projectId
-			);
-			await focusWorkspaceBestEffort(shellService, windowId);
-		}
+		await shellService.openWorkspace(
+			canonicalTarget.worktreePath,
+			canonicalTarget.projectId
+		);
+		await focusWorkspaceBestEffort(shellService);
 		return;
 	}
 
@@ -84,7 +105,7 @@ export async function openProjectSwitcherTargetInWindow(
 }
 
 async function focusNormalWindowByPathBestEffort(
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	worktreePath: string
 ): Promise<boolean> {
 	try {
@@ -92,6 +113,17 @@ async function focusNormalWindowByPathBestEffort(
 	} catch (error) {
 		onUnexpectedError(error);
 		return false;
+	}
+}
+
+/** Focuses the opened workspace without failing the completed navigation. */
+async function focusWorkspaceBestEffort(
+	shellService: IHucodeShellControllerService
+): Promise<void> {
+	try {
+		await shellService.focusWorkspace();
+	} catch (error) {
+		onUnexpectedError(error);
 	}
 }
 

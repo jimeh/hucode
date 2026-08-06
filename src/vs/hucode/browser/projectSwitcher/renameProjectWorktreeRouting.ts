@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IHucodeShellService } from '../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 
 /**
  * Forwards a rename command from native Omni to its hosted workbench. Web Omni
@@ -15,8 +16,7 @@ export async function tryForwardShellRenameCommand(
 		readonly isOmniWindow: boolean;
 		readonly isWebClient: boolean;
 	},
-	shellService: Pick<IHucodeShellService, 'runActionInWorkspace'>,
-	windowId: number,
+	shellService: Pick<IHucodeShellControllerService, 'runActionInWorkspace'>,
 	commandId: string,
 	handle?: unknown
 ): Promise<boolean> {
@@ -24,7 +24,7 @@ export async function tryForwardShellRenameCommand(
 		return false;
 	}
 
-	return shellService.runActionInWorkspace(windowId, {
+	return shellService.runActionInWorkspace({
 		id: commandId,
 		from: 'mouse',
 		args: handle !== undefined ? [handle] : undefined,

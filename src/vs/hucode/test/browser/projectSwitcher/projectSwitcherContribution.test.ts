@@ -13,7 +13,7 @@ import { ElementsDragAndDropData, ListViewTargetSector } from
 	'../../../../base/browser/ui/list/listView.js';
 import { ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { timeout } from '../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -45,9 +45,9 @@ import { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
 import {
 	IHucodeHostedWorkspaceState,
-	IHucodeShellWindowStateChange,
-	IHucodeShellService,
 } from '../../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
 import { IHucodeRetainedWorkbench } from
 	'../../../common/retainedWorkbench.js';
 import {
@@ -118,20 +118,14 @@ suite('ProjectSwitcherContribution', () => {
 	test('keeps complete project catalog reconciliation in the shell',
 		async () => {
 			const calls: string[] = [];
-			const hosted = hostedState('hosted');
 			const reconciled = hostedState('reconciled');
 			const shellService = {
-				async getWindowState(windowId: number) {
-					calls.push(`get:${windowId}`);
-					return hosted;
-				},
 				async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-					windowId: number
 				) {
-					calls.push(`reconcile:${windowId}`);
+					calls.push('reconcile');
 					return reconciled;
 				},
-			} as unknown as IHucodeShellService;
+			} as unknown as IHucodeShellControllerService;
 
 			const fromHosted = await getOmniHostedWorkspaceState(
 				{
@@ -167,47 +161,45 @@ suite('ProjectSwitcherContribution', () => {
 				fromShell: fromShell?.activeInstanceId,
 				fromUntrustedWindow,
 			}, {
-				calls: [
-					`get:${getWindowId(mainWindow)}`,
-					`reconcile:${getWindowId(mainWindow)}`,
-				],
-				fromHosted: 'hosted',
+				calls: ['reconcile'],
+				fromHosted: undefined,
 				fromShell: 'reconciled',
 				fromUntrustedWindow: undefined,
 			});
 		});
 
-	test('resolves the active hosted web workbench from shell state', async () => {
-		const activePath = await getActiveWorkbenchWorktreePath(
-			{
-				isOmniWindow: false,
-				isHostedOmniWorkspace: true,
-			} as IWorkbenchEnvironmentService,
-			{
-				getWorkbenchState: () => WorkbenchState.FOLDER,
-				getWorkspace: () => ({
-					id: 'hosted',
-					folders: [{
-						uri: URI.parse('vscode-remote://host/repo'),
-					}],
-				}),
-			} as unknown as IWorkspaceContextService,
-			{
-				async getWindowState() {
-					return {
-						activeInstanceId: 'active',
-						instances: [{
-							instanceId: 'active',
-							worktreePath: '/repo',
-							state: 'active',
+	test('resolves the active hosted web workbench from workspace context',
+		async () => {
+			const activePath = await getActiveWorkbenchWorktreePath(
+				{
+					isOmniWindow: false,
+					isHostedOmniWorkspace: true,
+				} as IWorkbenchEnvironmentService,
+				{
+					getWorkbenchState: () => WorkbenchState.FOLDER,
+					getWorkspace: () => ({
+						id: 'hosted',
+						folders: [{
+							uri: URI.parse('vscode-remote://host/repo'),
 						}],
-					};
-				},
-			} as unknown as IHucodeShellService
-		);
+					}),
+				} as unknown as IWorkspaceContextService,
+				{
+					async getState() {
+						return {
+							activeInstanceId: 'active',
+							instances: [{
+								instanceId: 'active',
+								worktreePath: '/repo',
+								state: 'active',
+							}],
+						};
+					},
+				} as unknown as IHucodeShellControllerService
+			);
 
-		assert.strictEqual(activePath, '/repo');
-	});
+			assert.strictEqual(activePath, '/repo');
+		});
 
 	test('recycled rows clear active ARIA and actions before rendering a section', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];
@@ -635,7 +627,7 @@ suite('ProjectSwitcherContribution', () => {
 		const workspaceStateChanges = disposables.add(new Emitter<void>());
 		const hostFocusChanges = disposables.add(new Emitter<boolean>());
 		const shellStateChanges = disposables.add(
-			new Emitter<IHucodeShellWindowStateChange>()
+			new Emitter<IHucodeHostedWorkspaceState>()
 		);
 		const configurationChanges = disposables.add(
 			new Emitter<IConfigurationChangeEvent>()
@@ -713,7 +705,7 @@ suite('ProjectSwitcherContribution', () => {
 							onDidChangeProjects: Event.None,
 						} as unknown as IProjectManagerService,
 						{} as unknown as INotificationService,
-						{} as unknown as IHucodeShellService
+						{} as unknown as IHucodeShellControllerService
 					);
 				}
 				if (ctor === WorkbenchObjectTree) {
@@ -773,8 +765,8 @@ suite('ProjectSwitcherContribution', () => {
 			} as unknown as IStorageService,
 			{ isOmniWindow: true } as IWorkbenchEnvironmentService,
 			{
-				onDidChangeWindowState: (
-					listener: (change: IHucodeShellWindowStateChange) => void
+				onDidChangeState: (
+					listener: (state: IHucodeHostedWorkspaceState) => void
 				) => {
 					subscriptions.push('shell-state');
 					return shellStateChanges.event(listener);
@@ -782,9 +774,9 @@ suite('ProjectSwitcherContribution', () => {
 				setProjectSwitcherNavigationState: async () => undefined,
 				setProjectSwitcherSectionOrder: async () => undefined,
 				setHostedWorkbenchRestorePolicy: async () => undefined,
-				getWindowState: () =>
+				getState: () =>
 					new Promise<IHucodeHostedWorkspaceState>(() => undefined),
-			} as unknown as IHucodeShellService,
+			} as unknown as IHucodeShellControllerService,
 			{
 				onDidChangeFocus: (listener: (focused: boolean) => void) => {
 					subscriptions.push('focus');
@@ -1143,7 +1135,7 @@ suite('ProjectSwitcherContribution', () => {
 					retainedRecord('c', '/c', 2),
 				],
 			},
-			reorderRetainedWorkbenches: async (_windowId, ids) => {
+			reorderRetainedWorkbenches: async ids => {
 				reorderings.push([...ids]);
 			},
 		});
@@ -1588,9 +1580,9 @@ suite('ProjectSwitcherContribution', () => {
 		});
 	});
 
-	test('ignores hosted state notifications for another window', () => {
+	test('applies state notifications from the bound shell controller', () => {
 		let fireState:
-			| ((change: { windowId: number; state: IHucodeHostedWorkspaceState }) => void)
+			| ((state: IHucodeHostedWorkspaceState) => void)
 			| undefined;
 		const initialState = hostedState('initial');
 		const widget = disposables.add(new ProjectSwitcherWidget(
@@ -1622,14 +1614,14 @@ suite('ProjectSwitcherContribution', () => {
 			} as unknown as IStorageService,
 			{ isOmniWindow: true } as IWorkbenchEnvironmentService,
 			{
-				onDidChangeWindowState: (
-					listener: (change: IHucodeShellWindowStateChange) => void
+				onDidChangeState: (
+					listener: (state: IHucodeHostedWorkspaceState) => void
 				) => {
 					fireState = listener;
 					return { dispose: () => undefined };
 				},
 				setProjectSwitcherNavigationState: async () => undefined,
-			} as unknown as IHucodeShellService,
+			} as unknown as IHucodeShellControllerService,
 			{ onDidChangeFocus: Event.None } as unknown as IHostService,
 			{} as never,
 			{
@@ -1640,29 +1632,51 @@ suite('ProjectSwitcherContribution', () => {
 		));
 		Reflect.set(widget, 'omniHostedWorkspaceState', initialState);
 
-		fireState?.({
-			windowId: mainWindow.vscodeWindowId + 1,
-			state: hostedState('other'),
-		});
-		const afterOtherWindow = (Reflect.get(
-			widget,
-			'omniHostedWorkspaceState'
-		) as IHucodeHostedWorkspaceState).activeInstanceId;
-		fireState?.({
-			windowId: getWindowId(mainWindow),
-			state: hostedState('same'),
-		});
+		fireState?.(hostedState('same'));
 
 		assert.deepStrictEqual({
-			afterOtherWindow,
 			afterSameWindow: (Reflect.get(
 				widget,
 				'omniHostedWorkspaceState'
 			) as IHucodeHostedWorkspaceState).activeInstanceId,
 		}, {
-			afterOtherWindow: 'initial',
 			afterSameWindow: 'same',
 		});
+	});
+
+	test('keeps live shell state over a late initial snapshot', async () => {
+		const snapshotReady = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const liveState = hostedState('live');
+		const appliedStates: IHucodeHostedWorkspaceState[] = [];
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			omniSectionOrder: [],
+			didReceiveOmniHostedWorkspaceStateChange: false,
+			shellService: {
+				setProjectSwitcherSectionOrder: async () => undefined,
+				setHostedWorkbenchRestorePolicy: async () => undefined,
+				getState: () => snapshotReady.p,
+			},
+			configurationService: { getValue: () => 'active' },
+			updateOmniHostedWorkspaceState: (
+				state: IHucodeHostedWorkspaceState
+			) => appliedStates.push(state),
+			notificationService: {
+				error: (error: unknown) => assert.fail(String(error)),
+			},
+		});
+		const initialize = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'initializeOmniHostedWorkspaceState'
+		) as (this: object) => Promise<void>;
+
+		const initialization = initialize.call(host);
+		await Promise.resolve();
+		Reflect.set(host, 'didReceiveOmniHostedWorkspaceStateChange', true);
+		appliedStates.push(liveState);
+		snapshotReady.complete(hostedState('snapshot'));
+		await initialization;
+
+		assert.deepStrictEqual(appliedStates, [liveState]);
 	});
 });
 
@@ -1746,7 +1760,6 @@ function createDragAndDrop(options: {
 	readonly projects?: readonly ProjectRecord[];
 	readonly windowState?: IHucodeHostedWorkspaceState;
 	readonly reorderRetainedWorkbenches?: (
-		windowId: number,
 		ids: readonly string[]
 	) => Promise<void>;
 } = {}): ProjectSwitcherDragAndDrop {
@@ -1763,12 +1776,12 @@ function createDragAndDrop(options: {
 			error: options.error ?? (() => undefined),
 		} as unknown as INotificationService,
 		{
-			getWindowState: async () =>
+			getState: async () =>
 				options.windowState ?? hostedState(),
 			reorderRetainedWorkbenches:
 				options.reorderRetainedWorkbenches ??
 				(async () => undefined),
-		} as unknown as IHucodeShellService
+		} as unknown as IHucodeShellControllerService
 	);
 }
 

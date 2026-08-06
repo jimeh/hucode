@@ -90,8 +90,9 @@ import {
 import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import {
 	CREATE_WORKTREE_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
@@ -299,19 +300,18 @@ function toHandleArg(item: ProjectSwitcherItem): TreeViewItemHandleArg {
 
 async function runRetainedWorkbenchQuickInput<T>(
 	quickInputService: IQuickInputService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	callback: () => Promise<T>
 ): Promise<T> {
-	const windowId = dom.getWindowId(mainWindow);
-	await shellService.focusShell(windowId);
+	await shellService.focusShell();
 	try {
-		await shellService.setWorkspaceOverlayOcclusion(windowId, true);
+		await shellService.setWorkspaceOverlayOcclusion(true);
 		const result = callback();
 		mainWindow.requestAnimationFrame(() => quickInputService.focus());
 		mainWindow.setTimeout(() => quickInputService.focus(), 0);
 		return await result;
 	} finally {
-		await shellService.setWorkspaceOverlayOcclusion(windowId, false);
+		await shellService.setWorkspaceOverlayOcclusion(false);
 	}
 }
 
@@ -854,8 +854,8 @@ export class ProjectSwitcherDragAndDrop
 		private readonly projectManagerService: IProjectManagerService,
 		@INotificationService
 		private readonly notificationService: INotificationService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IHucodeShellControllerService
+		private readonly shellService: IHucodeShellControllerService,
 	) {
 	}
 
@@ -1134,9 +1134,7 @@ export class ProjectSwitcherDragAndDrop
 		) {
 			return;
 		}
-		const state = await this.shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+		const state = await this.shellService.getState();
 		const orderedIds = (state.retainedWorkbenches ?? [])
 			.toSorted((a, b) => a.order - b.order)
 			.map(record => record.id)
@@ -1151,7 +1149,6 @@ export class ProjectSwitcherDragAndDrop
 			source.retainedWorkbenchId
 		);
 		await this.shellService.reorderRetainedWorkbenches(
-			dom.getWindowId(mainWindow),
 			orderedIds
 		);
 	}
@@ -1192,6 +1189,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+	private didReceiveOmniHostedWorkspaceStateChange = false;
 
 	constructor(
 		@IInstantiationService
@@ -1212,8 +1210,8 @@ export class ProjectSwitcherWidget extends Disposable {
 		private readonly storageService: IStorageService,
 		@IWorkbenchEnvironmentService
 		private readonly environmentService: IWorkbenchEnvironmentService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IHucodeShellControllerService
+		private readonly shellService: IHucodeShellControllerService,
 		@IHostService
 		private readonly hostService: IHostService,
 		@ILabelService
@@ -1236,7 +1234,6 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.canGoForwardContext.set(false);
 			if (this.environmentService.isOmniWindow) {
 				void this.shellService.setProjectSwitcherNavigationState(
-					this.windowId,
 					false,
 					false
 				);
@@ -1283,12 +1280,9 @@ export class ProjectSwitcherWidget extends Disposable {
 					void this.refreshProjectsIfStale();
 				}
 			}));
-			this._register(this.shellService.onDidChangeWindowState(change => {
-				if (change.windowId !== this.windowId) {
-					return;
-				}
-
-				this.updateOmniHostedWorkspaceState(change.state);
+			this._register(this.shellService.onDidChangeState(state => {
+				this.didReceiveOmniHostedWorkspaceStateChange = true;
+				this.updateOmniHostedWorkspaceState(state);
 			}));
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
@@ -1351,7 +1345,6 @@ export class ProjectSwitcherWidget extends Disposable {
 			target
 		);
 		void this.shellService.setProjectSwitcherSectionOrder(
-			this.windowId,
 			this.omniSectionOrder
 		);
 		this.saveState();
@@ -1723,20 +1716,17 @@ export class ProjectSwitcherWidget extends Disposable {
 	private async initializeOmniHostedWorkspaceState(): Promise<void> {
 		try {
 			await this.shellService.setProjectSwitcherSectionOrder(
-				this.windowId,
 				this.omniSectionOrder
 			);
 			await this.shellService.setHostedWorkbenchRestorePolicy(
-				this.windowId,
 				this.configurationService.getValue<
 					HucodeHostedWorkbenchRestorePolicy
 				>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ?? 'active'
 			);
-			this.updateOmniHostedWorkspaceState(
-				await this.shellService.getWindowState(
-					this.windowId
-				)
-			);
+			const initialState = await this.shellService.getState();
+			if (!this.didReceiveOmniHostedWorkspaceStateChange) {
+				this.updateOmniHostedWorkspaceState(initialState);
+			}
 		} catch (error) {
 			this.notificationService.error(String(error));
 		}
@@ -1947,7 +1937,6 @@ export class ProjectSwitcherWidget extends Disposable {
 							'Select a workbench first.'
 						),
 						{
-							windowId: this.windowId,
 							id: item.retainedWorkbenchId,
 						}
 					),
@@ -2436,7 +2425,6 @@ export class ProjectSwitcherWidget extends Disposable {
 		this.canGoForwardContext.set(canGoForward);
 		if (this.environmentService.isOmniWindow) {
 			void this.shellService.setProjectSwitcherNavigationState(
-				this.windowId,
 				canGoBack,
 				canGoForward
 			);
@@ -2560,7 +2548,7 @@ registerAction2(class extends Action2 {
 		const fileDialogService = accessor.get(IFileDialogService);
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const notificationService = accessor.get(INotificationService);
 
 		try {
@@ -2578,7 +2566,6 @@ registerAction2(class extends Action2 {
 			const project = await projectManagerService.addProject(folder[0]);
 			if (environmentService.isOmniShellWindow) {
 				await shellService.promoteRetainedWorkbenchProjectFolders(
-					dom.getWindowId(mainWindow),
 					project.worktrees.map(worktree => ({
 						projectId: project.id,
 						folderUri: URI.file(worktree.path).toJSON(),
@@ -2607,12 +2594,11 @@ registerAction2(class extends Action2 {
 		if (!workbenchId) {
 			return;
 		}
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const quickInputService = accessor.get(IQuickInputService);
 		const notificationService = accessor.get(INotificationService);
-		const windowId = dom.getWindowId(mainWindow);
 		try {
-			const record = (await shellService.getWindowState(windowId))
+			const record = (await shellService.getState())
 				.retainedWorkbenches?.find(candidate =>
 					candidate.id === workbenchId
 				);
@@ -2644,7 +2630,6 @@ registerAction2(class extends Action2 {
 			}
 
 			await shellService.setRetainedWorkbenchLabel(
-				windowId,
 				workbenchId,
 				label
 			);
@@ -2671,11 +2656,11 @@ registerAction2(class extends Action2 {
 	): Promise<unknown> {
 		const id = parseWorkbenchHandle(handle.$treeItemHandle);
 		return id
-			? accessor.get(IHucodeShellService).setRetainedWorkbenchLabel(
-				dom.getWindowId(mainWindow),
-				id,
-				undefined
-			)
+			? accessor.get(IHucodeShellControllerService)
+				.setRetainedWorkbenchLabel(
+					id,
+					undefined
+				)
 			: Promise.resolve();
 	}
 });
@@ -2693,7 +2678,7 @@ registerAction2(class extends Action2 {
 
 	async run(accessor: ServicesAccessor): Promise<void> {
 		const fileDialogService = accessor.get(IFileDialogService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const notificationService = accessor.get(INotificationService);
 		try {
@@ -2725,17 +2710,15 @@ registerAction2(class extends Action2 {
 			) {
 				return;
 			}
-			const windowId = dom.getWindowId(mainWindow);
 			if (target.projectId) {
 				await shellService.openWorkspace(
-					windowId,
 					target.worktreePath,
 					target.projectId
 				);
 			} else {
-				await shellService.retainAndOpenWorkbench(windowId, uri.toJSON());
+				await shellService.retainAndOpenWorkbench(uri.toJSON());
 			}
-			await shellService.focusWorkspace(windowId);
+			await shellService.focusWorkspace();
 		} catch (error) {
 			notificationService.error(String(error));
 		}
@@ -2758,13 +2741,11 @@ registerAction2(class extends Action2 {
 		if (!workbenchId) {
 			return;
 		}
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const hostService = accessor.get(IHostService);
-		const state = await shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+		const state = await shellService.getState();
 		const record = state.retainedWorkbenches?.find(candidate =>
 			candidate.id === workbenchId
 		);
@@ -2799,11 +2780,10 @@ registerAction2(class extends Action2 {
 		if (!workbenchId) {
 			return;
 		}
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const notificationService = accessor.get(INotificationService);
-		const windowId = dom.getWindowId(mainWindow);
 		try {
-			const state = await shellService.getWindowState(windowId);
+			const state = await shellService.getState();
 			const record = state.retainedWorkbenches?.find(candidate =>
 				candidate.id === workbenchId
 			);
@@ -2815,10 +2795,7 @@ registerAction2(class extends Action2 {
 				pathsEqual(candidate.worktreePath, worktreePath)
 			);
 			if (instance && canSuspendHostedWorkbench(instance.state)) {
-				await shellService.suspendWorkspace(
-					windowId,
-					instance.instanceId
-				);
+				await shellService.suspendWorkspace(instance.instanceId);
 			}
 		} catch (error) {
 			notificationService.error(String(error));
@@ -2837,10 +2814,8 @@ registerAction2(class extends Action2 {
 	run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<unknown> {
 		const id = parseWorkbenchHandle(handle.$treeItemHandle);
 		return id
-			? accessor.get(IHucodeShellService).unloadRetainedWorkbench(
-				dom.getWindowId(mainWindow),
-				id
-			)
+			? accessor.get(IHucodeShellControllerService)
+				.unloadRetainedWorkbench(id)
 			: Promise.resolve();
 	}
 });
@@ -2856,10 +2831,8 @@ registerAction2(class extends Action2 {
 	run(accessor: ServicesAccessor, handle: TreeViewItemHandleArg): Promise<unknown> {
 		const id = parseWorkbenchHandle(handle.$treeItemHandle);
 		return id
-			? accessor.get(IHucodeShellService).dismissRetainedWorkbench(
-				dom.getWindowId(mainWindow),
-				id
-			)
+			? accessor.get(IHucodeShellControllerService)
+				.dismissRetainedWorkbench(id)
 			: Promise.resolve();
 	}
 });
@@ -2979,7 +2952,7 @@ registerAction2(class extends Action2 {
 	): Promise<void> {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const hostService = accessor.get(IHostService);
 		const notificationService = accessor.get(INotificationService);
 
@@ -3032,7 +3005,7 @@ registerAction2(class extends Action2 {
 	): Promise<void> {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const hostService = accessor.get(IHostService);
 		const notificationService = accessor.get(INotificationService);
 
@@ -3220,7 +3193,7 @@ registerAction2(class extends Action2 {
 		const dialogService = accessor.get(IDialogService);
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 
 		try {
 			const projectId = parseProjectHandle(handle.$treeItemHandle);
@@ -3232,7 +3205,6 @@ registerAction2(class extends Action2 {
 				projectId,
 				{
 					isOmniWindow: environmentService.isOmniWindow,
-					windowId: dom.getWindowId(mainWindow),
 				},
 				projectManagerService,
 				shellService,
@@ -3333,19 +3305,15 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const notificationService = accessor.get(INotificationService);
-		const windowId = dom.getWindowId(mainWindow);
 		try {
-			const state = await shellService.getWindowState(windowId);
+			const state = await shellService.getState();
 			const instance = state.instances.find(candidate =>
 				pathsEqual(candidate.worktreePath, parsed.worktreePath)
 			);
 			if (instance && canSuspendHostedWorkbench(instance.state)) {
-				await shellService.suspendWorkspace(
-					windowId,
-					instance.instanceId
-				);
+				await shellService.suspendWorkspace(instance.instanceId);
 			}
 		} catch (error) {
 			notificationService.error(String(error));
@@ -3375,13 +3343,11 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = accessor.get(IHucodeShellControllerService);
 		const notificationService = accessor.get(INotificationService);
 
 		try {
-			const state = await shellService.getWindowState(
-				dom.getWindowId(mainWindow)
-			);
+			const state = await shellService.getState();
 			const instance = state.instances.find(entry =>
 				pathsEqual(entry.worktreePath, parsed.worktreePath)
 			);
@@ -3389,10 +3355,7 @@ registerAction2(class extends Action2 {
 				return;
 			}
 
-			await shellService.closeWorkspace(
-				dom.getWindowId(mainWindow),
-				instance.instanceId
-			);
+			await shellService.closeWorkspace(instance.instanceId);
 		} catch (error) {
 			notificationService.error(String(error));
 		}

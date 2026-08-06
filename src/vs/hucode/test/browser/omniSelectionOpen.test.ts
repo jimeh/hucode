@@ -14,7 +14,8 @@ import { IProjectManagerService } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
 	'../../../workbench/services/host/browser/host.js';
-import { IHucodeShellService } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
@@ -59,12 +60,9 @@ suite('OmniSelectionOpen', () => {
 		calls: string[],
 		options: {
 			readonly focusNormalResult?: boolean | Error;
-			readonly hostedOwner?: boolean;
-			readonly closeRemovesHostedOwner?: boolean;
-			readonly retainedDismissed?: boolean;
-			readonly retainedUnloadSucceeds?: boolean;
+			readonly prepareSucceeds?: boolean;
 		} = {}
-	): IHucodeShellService {
+	): IHucodeShellControllerService {
 		const focusNormalResult = options.focusNormalResult ?? false;
 		return {
 			async focusNormalWindowByPath(worktreePath: string) {
@@ -75,11 +73,10 @@ suite('OmniSelectionOpen', () => {
 				return focusNormalResult;
 			},
 			async openWorkspace(
-				windowId: number,
 				worktreePath: string,
 				projectId?: string
 			) {
-				calls.push(`openWorkspace:${windowId}:${worktreePath}:${projectId}`);
+				calls.push(`openWorkspace:${worktreePath}:${projectId}`);
 				return {
 					projectsSidebarVisible: false,
 					projectSwitcherCanGoBack: false,
@@ -87,54 +84,18 @@ suite('OmniSelectionOpen', () => {
 					instances: [],
 				};
 			},
-			async findHostedWorkspaceByPath(worktreePath: string) {
-				calls.push(`findHosted:${worktreePath}`);
-				if (!options.hostedOwner) {
-					return undefined;
-				}
-				return {
-					windowId: 3,
-					instanceId: 'instance',
-					projectId: 'project',
-					worktreePath,
-				};
+			async prepareWorkspaceForStandaloneOpen(request: Parameters<
+				IHucodeShellControllerService[
+				'prepareWorkspaceForStandaloneOpen'
+				]
+			>[0]) {
+				calls.push(
+					`prepare:${URI.revive(request.folderUri).fsPath}:` +
+					`${request.retainedWorkbenchId ?? ''}`
+				);
+				return options.prepareSucceeds ?? true;
 			},
-			async closeWorkspace(windowId: number, instanceId?: string) {
-				calls.push(`closeWorkspace:${windowId}:${instanceId}`);
-				return {
-					projectsSidebarVisible: false,
-					projectSwitcherCanGoBack: false,
-					projectSwitcherCanGoForward: false,
-					instances: options.closeRemovesHostedOwner
-						? []
-						: [{
-							instanceId: 'instance',
-							projectId: 'project',
-							worktreePath: '/repo',
-							state: 'active',
-							visible: true,
-							focused: true,
-						}],
-				};
-			},
-			async unloadRetainedWorkbench(windowId: number, workbenchId: string) {
-				calls.push(`unloadRetained:${windowId}:${workbenchId}`);
-				return {
-					projectsSidebarVisible: false,
-					projectSwitcherCanGoBack: false,
-					projectSwitcherCanGoForward: false,
-					instances: [],
-					retainedWorkbenches: options.retainedDismissed ? [] : [{
-						id: workbenchId,
-						folderUri: URI.file('/repo').toJSON(),
-						desiredState: options.retainedUnloadSucceeds === false
-							? 'loaded'
-							: 'unloaded',
-						order: 0,
-					}],
-				};
-			},
-		} as unknown as IHucodeShellService;
+		} as unknown as IHucodeShellControllerService;
 	}
 
 	const withExpectedUnexpectedError = async <T>(
@@ -158,7 +119,6 @@ suite('OmniSelectionOpen', () => {
 
 		const result = await openSelectionInOmniWindow(
 			undefined,
-			7,
 			shell(calls),
 			projectManager(calls),
 			notifications(messages),
@@ -176,7 +136,6 @@ suite('OmniSelectionOpen', () => {
 
 			const result = await openSelectionInOmniWindow(
 				selection,
-				7,
 				shell(calls, { focusNormalResult: true }),
 				projectManager(calls),
 				notifications([]),
@@ -196,7 +155,6 @@ suite('OmniSelectionOpen', () => {
 
 		await withExpectedUnexpectedError(() => openSelectionInOmniWindow(
 			selection,
-			7,
 			shell(calls, { focusNormalResult: new Error('lookup failed') }),
 			projectManager(calls),
 			notifications([]),
@@ -206,19 +164,17 @@ suite('OmniSelectionOpen', () => {
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
 			'focusNormal:/repo',
-			'openWorkspace:7:/repo:project',
+			'openWorkspace:/repo:project',
 		]);
 	});
 
-	test('closes hosted owner before focusing standalone window', async () => {
+	test('prepares ownership before focusing standalone window', async () => {
 		const calls: string[] = [];
 
 		await openSelectionInStandaloneWindow(
 			selection,
 			host(calls),
 			shell(calls, {
-				hostedOwner: true,
-				closeRemovesHostedOwner: true,
 				focusNormalResult: true,
 			}),
 			projectManager(calls),
@@ -228,8 +184,7 @@ suite('OmniSelectionOpen', () => {
 
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
-			'findHosted:/repo',
-			'closeWorkspace:3:instance',
+			'prepare:/repo:',
 			'focusNormal:/repo',
 		]);
 	});
@@ -251,7 +206,7 @@ suite('OmniSelectionOpen', () => {
 		assert.deepStrictEqual(calls, []);
 	});
 
-	test('does not open standalone window when hosted close is vetoed',
+	test('does not open standalone window when ownership preparation fails',
 		async () => {
 			const calls: string[] = [];
 
@@ -259,9 +214,7 @@ suite('OmniSelectionOpen', () => {
 				selection,
 				host(calls),
 				shell(calls, {
-					hostedOwner: true,
-					closeRemovesHostedOwner: false,
-					focusNormalResult: true,
+					prepareSucceeds: false,
 				}),
 				projectManager(calls),
 				notifications([]),
@@ -270,8 +223,7 @@ suite('OmniSelectionOpen', () => {
 
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
-				'findHosted:/repo',
-				'closeWorkspace:3:instance',
+				'prepare:/repo:',
 			]);
 		}
 	);
@@ -286,12 +238,11 @@ suite('OmniSelectionOpen', () => {
 			projectManager(calls),
 			notifications([]),
 			'Select first',
-			{ windowId: 4, id: 'retained' }
+			{ id: 'retained' }
 		);
 
 		assert.deepStrictEqual(calls, [
-			'unloadRetained:4:retained',
-			'findHosted:/repo',
+			'prepare:/repo:retained',
 			'focusNormal:/repo',
 			'hostOpen',
 			JSON.stringify({
@@ -307,14 +258,14 @@ suite('OmniSelectionOpen', () => {
 		await openSelectionInStandaloneWindow(
 			{ worktreePath: '/repo' },
 			host(calls),
-			shell(calls, { retainedUnloadSucceeds: false }),
+			shell(calls, { prepareSucceeds: false }),
 			projectManager(calls),
 			notifications([]),
 			'Select first',
-			{ windowId: 4, id: 'retained' }
+			{ id: 'retained' }
 		);
 
-		assert.deepStrictEqual(calls, ['unloadRetained:4:retained']);
+		assert.deepStrictEqual(calls, ['prepare:/repo:retained']);
 	});
 
 	test('opens standalone when retained workbench was already dismissed',
@@ -324,16 +275,15 @@ suite('OmniSelectionOpen', () => {
 			await openSelectionInStandaloneWindow(
 				{ worktreePath: '/repo' },
 				host(calls),
-				shell(calls, { retainedDismissed: true }),
+				shell(calls),
 				projectManager(calls),
 				notifications([]),
 				'Select first',
-				{ windowId: 4, id: 'retained' }
+				{ id: 'retained' }
 			);
 
 			assert.deepStrictEqual(calls, [
-				'unloadRetained:4:retained',
-				'findHosted:/repo',
+				'prepare:/repo:retained',
 				'focusNormal:/repo',
 				'hostOpen',
 				JSON.stringify({
@@ -359,7 +309,7 @@ suite('OmniSelectionOpen', () => {
 
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
-				'findHosted:/repo',
+				'prepare:/repo:',
 				'focusNormal:/repo',
 				'hostOpen',
 				JSON.stringify({
@@ -389,7 +339,7 @@ suite('OmniSelectionOpen', () => {
 
 			assert.deepStrictEqual(calls, [
 				'setLastActive:project:/repo',
-				'findHosted:/repo',
+				'prepare:/repo:',
 				'focusNormal:/repo',
 				'hostOpen',
 				JSON.stringify({

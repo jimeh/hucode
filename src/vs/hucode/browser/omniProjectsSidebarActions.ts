@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
@@ -29,11 +28,12 @@ import {
 	IWorkbenchLayoutService,
 	Parts,
 } from '../../workbench/services/layout/browser/layoutService.js';
-import { IHucodeShellService } from '../common/omniWindow.js';
+import { HucodeHostedShellAction } from
+	'../../platform/window/common/hucodeHostedShellActions.js';
 import {
-	createLegacyHucodeHostedShellActionRequest,
-	HucodeHostedShellAction,
-} from '../../platform/window/common/hucodeHostedShellActions.js';
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../platform/window/common/hucodeHostedShellService.js';
 import { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID } from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { Menus } from './menus.js';
@@ -129,13 +129,11 @@ registerAction2(class extends Action2 {
 				projectsSidebarHidden.set(false);
 			}
 
-			const didForward = await accessor.get(IHucodeShellService).runActionInShell(
-				getWindowId(mainWindow),
-				createLegacyHucodeHostedShellActionRequest(
+			const outcome = await accessor.get(IHucodeHostedShellService)
+				.requestShellAction(
 					HucodeHostedShellAction.ToggleProjectsSidebar
-				)
-			);
-			if (!didForward) {
+				);
+			if (outcome !== HucodeHostedShellOperationOutcome.Accepted) {
 				projectsSidebarHidden.set(wasHidden);
 				return;
 			}

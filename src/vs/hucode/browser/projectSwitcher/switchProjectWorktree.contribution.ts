@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Codicon } from '../../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
@@ -35,6 +34,8 @@ import {
 } from '../../../platform/projectManager/common/projectManager.js';
 import { IQuickInputService, IQuickNavigateConfiguration } from
 	'../../../platform/quickinput/common/quickInput.js';
+import { IHucodeHostedShellService } from
+	'../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkspaceContextService, WorkbenchState } from
 	'../../../platform/workspace/common/workspace.js';
 import { getQuickNavigateHandler, inQuickPickContext } from
@@ -71,8 +72,9 @@ import { getRetainedWorkbenchPresentation } from
 	'../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { isHostedWorkspaceAvailable } from
 	'../../common/hostedWorkspaceState.js';
 import { Menus } from '../menus.js';
@@ -102,6 +104,11 @@ import {
 export type { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 export { setLastActiveWorktreeBestEffort } from './openProjectSwitcherTarget.js';
+
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
 
 interface ILoadedWorkbenchWorktree {
 	readonly path: string;
@@ -281,18 +288,19 @@ function getRetainedWorkbenchPicks(
  */
 export async function getOmniHostedWorkspaceState(
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	projects: readonly ProjectRecord[]
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
-	const windowId = dom.getWindowId(mainWindow);
 	if (environmentService.isHostedOmniWorkspace) {
-		return shellService.getWindowState(windowId);
+		return undefined;
 	}
 	if (!environmentService.isOmniShellWindow) {
 		return undefined;
 	}
+	if (!shellService) {
+		throw new Error(omniShellControllerUnavailable);
+	}
 	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-		windowId,
 		projects.map(project => ({
 			projectId: project.id,
 			folderUris: project.worktrees.map(worktree =>
@@ -358,18 +366,19 @@ function getCombinedSwitchWorkbenchPicks(
 export async function getActiveWorkbenchWorktreePath(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<string | undefined> {
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
-		const state = await shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+	if (environmentService.isOmniWindow) {
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
+		const state = await shellService.getState();
 		return state.instances.find(instance =>
 			instance.instanceId === state.activeInstanceId
 		)?.worktreePath;
+	}
+	if (environmentService.isHostedOmniWorkspace) {
+		return workspaceContextService.getWorkspace().folders[0]?.uri.fsPath;
 	}
 
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
@@ -383,7 +392,7 @@ export async function getActiveWorkbenchWorktreePath(
 async function getLoadedWorkbenchWorktreePaths(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<readonly string[]> {
 	return (await getLoadedWorkbenchWorktrees(
 		environmentService,
@@ -395,21 +404,23 @@ async function getLoadedWorkbenchWorktreePaths(
 async function getLoadedWorkbenchWorktrees(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<readonly ILoadedWorkbenchWorktree[]> {
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
-		const state = await shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+	if (environmentService.isOmniWindow) {
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
+		const state = await shellService.getState();
 		return state.instances
 			.filter(isHostedWorkspaceAvailable)
 			.map(instance => ({
 				path: instance.worktreePath,
 				lastActiveAt: instance.lastActiveAt,
 			}));
+	}
+	if (environmentService.isHostedOmniWorkspace) {
+		const folderUri = workspaceContextService.getWorkspace().folders[0]?.uri;
+		return folderUri ? [{ path: folderUri.fsPath }] : [];
 	}
 
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
@@ -424,16 +435,17 @@ export async function openProjectSwitcherTarget(
 	target: IProjectSwitcherSelectionTarget,
 	projectManagerService: IProjectManagerService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
-	hostService: IHostService
+	shellService: IHucodeShellControllerService | undefined,
+	hostService: IHostService,
+	hostedShellService?: IHucodeHostedShellService
 ): Promise<void> {
 	await openProjectSwitcherTargetInWindow(
 		target,
-		dom.getWindowId(mainWindow),
 		projectManagerService,
 		environmentService,
 		shellService,
-		hostService
+		hostService,
+		hostedShellService
 	);
 }
 
@@ -502,16 +514,19 @@ function pickSwitchWorktree(
 async function tryForwardShellSwitchCommand(
 	commandId: string,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<boolean> {
 	if (!environmentService.isOmniWindow) {
 		return false;
 	}
+	if (!shellService) {
+		throw new Error(omniShellControllerUnavailable);
+	}
 
-	return shellService.runActionInWorkspace(
-		dom.getWindowId(mainWindow),
-		{ id: commandId, from: 'keybinding' }
-	);
+	return shellService.runActionInWorkspace({
+		id: commandId,
+		from: 'keybinding',
+	});
 }
 
 async function switchAdjacentProjectWorktree(
@@ -524,8 +539,13 @@ async function switchAdjacentProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
 		const forwarded = await tryForwardShellSwitchCommand(
@@ -588,7 +608,8 @@ async function switchAdjacentProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -603,8 +624,13 @@ async function switchLastActiveProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
 		const forwarded = await tryForwardShellSwitchCommand(
@@ -654,7 +680,8 @@ async function switchLastActiveProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -671,12 +698,19 @@ async function quickSwitchLoadedProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
 		if (environmentService.isOmniWindow) {
-			const windowId = dom.getWindowId(mainWindow);
+			if (!shellService) {
+				throw new Error(omniShellControllerUnavailable);
+			}
 			const forwarded = await tryForwardShellSwitchCommand(
 				QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
 				environmentService,
@@ -686,7 +720,7 @@ async function quickSwitchLoadedProjectWorktree(
 				return;
 			}
 
-			await shellService.focusShell(windowId);
+			await shellService.focusShell();
 		}
 
 		const projects = await projectManagerService.getProjects();
@@ -743,7 +777,8 @@ async function quickSwitchLoadedProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -795,12 +830,19 @@ registerAction2(class extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const workspaceContextService = accessor.get(IWorkspaceContextService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = environmentService.isOmniWindow
+			? accessor.get(IHucodeShellControllerService)
+			: undefined;
 		const hostService = accessor.get(IHostService);
+		const hostedShellService = environmentService.isHostedOmniWorkspace
+			? accessor.get(IHucodeHostedShellService)
+			: undefined;
 
 		try {
 			if (environmentService.isOmniWindow) {
-				const windowId = dom.getWindowId(mainWindow);
+				if (!shellService) {
+					throw new Error(omniShellControllerUnavailable);
+				}
 				const forwarded = await tryForwardShellSwitchCommand(
 					SWITCH_WORKTREE_COMMAND_ID,
 					environmentService,
@@ -810,7 +852,7 @@ registerAction2(class extends Action2 {
 					return;
 				}
 
-				await shellService.focusShell(windowId);
+				await shellService.focusShell();
 			}
 
 			const projects = await projectManagerService.getProjects();
@@ -858,7 +900,8 @@ registerAction2(class extends Action2 {
 				projectManagerService,
 				environmentService,
 				shellService,
-				hostService
+				hostService,
+				hostedShellService
 			);
 		} catch (error) {
 			notificationService.error(String(error));

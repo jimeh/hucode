@@ -240,6 +240,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			(webContentsId: number, instanceId: string) => void,
 		private readonly invalidateHostedShellConnection:
 			(webContentsId: number) => void,
+		private readonly focusHostedWorkspaceByPath:
+			(
+				worktreePath: string,
+				canApply: () => boolean
+			) => Promise<HucodeHostedShellOperationOutcome>,
+		private readonly focusNormalWindowByPath:
+			(worktreePath: string) => Promise<boolean>,
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
 		options: IResidentHostedWorkspacesControllerOptions = {},
 	) {
@@ -1130,6 +1137,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		const canApply = () =>
 			!!this.getBoundHostedShellInstance(binding, true);
+		const hostedFocusOutcome = await this.focusHostedWorkspaceByPath(
+			resource.fsPath,
+			canApply
+		);
+		if (hostedFocusOutcome !==
+			HucodeHostedShellOperationOutcome.Unavailable) {
+			return hostedFocusOutcome;
+		}
+		if (canApply() &&
+			await this.focusNormalWindowByPath(resource.fsPath)) {
+			return HucodeHostedShellOperationOutcome.Accepted;
+		}
 		let activationAuthorized = false;
 		const canActivate = () => {
 			activationAuthorized = canApply();
