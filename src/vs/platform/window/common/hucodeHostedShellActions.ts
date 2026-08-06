@@ -55,6 +55,8 @@ const HUCODE_HOSTED_SHELL_ACTIONS_BY_COMMAND_ID = new Map(
 	)
 );
 
+const HUCODE_HOSTED_SHELL_ACTION_LOG_ID_LIMIT = 80;
+
 /** Returns whether a value is a supported semantic hosted shell action. */
 export function isHucodeHostedShellAction(
 	value: unknown
@@ -65,9 +67,29 @@ export function isHucodeHostedShellAction(
 
 /** Resolves an authorized legacy command ID to its semantic hosted action. */
 export function getHucodeHostedShellAction(
-	commandId: string
+	commandId: unknown
 ): HucodeHostedShellAction | undefined {
-	return HUCODE_HOSTED_SHELL_ACTIONS_BY_COMMAND_ID.get(commandId);
+	return typeof commandId === 'string'
+		? HUCODE_HOSTED_SHELL_ACTIONS_BY_COMMAND_ID.get(commandId)
+		: undefined;
+}
+
+/** Returns a bounded, single-line command ID label safe for rejection logs. */
+export function formatHucodeHostedShellActionCommandIdForLog(
+	commandId: unknown
+): string {
+	if (typeof commandId !== 'string') {
+		return '<non-string>';
+	}
+
+	const truncated = commandId.slice(0, HUCODE_HOSTED_SHELL_ACTION_LOG_ID_LIMIT);
+	const sanitized = truncated.replace(/[^A-Za-z0-9._-]/g, '?');
+	if (!sanitized) {
+		return '<empty>';
+	}
+	return commandId.length > HUCODE_HOSTED_SHELL_ACTION_LOG_ID_LIMIT
+		? `${sanitized}...`
+		: sanitized;
 }
 
 /** Resolves a semantic hosted action to its shell-owned command ID. */

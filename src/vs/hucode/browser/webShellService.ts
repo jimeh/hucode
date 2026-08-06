@@ -40,6 +40,7 @@ import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
+	formatHucodeHostedShellActionCommandIdForLog,
 	getHucodeHostedShellAction,
 	getHucodeHostedShellActionCommandId,
 } from '../../platform/window/common/hucodeHostedShellActions.js';
@@ -1624,7 +1625,8 @@ export class WebHucodeShellController extends Disposable
 					this.logService.warn(
 						'[hucode] Rejected hosted shell action for ' +
 						`window ${this.windowId}, instance ${instance.instanceId}: ` +
-						'unsupported command id.'
+						'unsupported command id ' +
+						`${formatHucodeHostedShellActionCommandIdForLog(request.id)}.`
 					);
 					return false;
 				}

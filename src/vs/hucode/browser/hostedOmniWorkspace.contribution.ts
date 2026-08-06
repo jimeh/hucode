@@ -64,6 +64,7 @@ import {
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
 	createLegacyHucodeHostedShellActionRequest,
+	getHucodeHostedShellActionCommandId,
 	HucodeHostedShellAction,
 } from '../../platform/window/common/hucodeHostedShellActions.js';
 import {
@@ -73,13 +74,8 @@ import {
 	ProjectsTitleBarControlsEnabledContext,
 } from './omniProjectsSidebarActions.js';
 import {
-	ADD_PROJECT_COMMAND_ID,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	GO_BACK_WORKTREE_COMMAND_ID,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
-	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcher/projectSwitcherCommon.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
@@ -383,9 +379,9 @@ registerWorkbenchContribution2(
 
 function registerHostedProjectSidebarCommand(
 	action: HucodeHostedShellAction,
-	id: string,
 	title: ReturnType<typeof localize2>
 ): void {
+	const id = getHucodeHostedShellActionCommandId(action);
 	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
@@ -412,19 +408,16 @@ function registerHostedProjectSidebarCommand(
 
 registerHostedProjectSidebarCommand(
 	HucodeHostedShellAction.AddProject,
-	ADD_PROJECT_COMMAND_ID,
 	localize2('addProject', 'Add Project')
 );
 
 registerHostedProjectSidebarCommand(
 	HucodeHostedShellAction.RefreshProjects,
-	REFRESH_PROJECTS_COMMAND_ID,
 	localize2('refreshProjects', 'Refresh Projects')
 );
 
 registerHostedProjectSidebarCommand(
 	HucodeHostedShellAction.CollapseProjects,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	localize2('collapseAllProjects', 'Collapse All')
 );
 
@@ -494,12 +487,12 @@ registerAction2(class extends Action2 {
 
 function registerHostedProjectNavigationAction(
 	action: HucodeHostedShellAction,
-	id: string,
 	title: ReturnType<typeof localize2>,
 	icon: ThemeIcon,
 	enabledContext: ContextKeyExpression,
 	order: number
 ): void {
+	const id = getHucodeHostedShellActionCommandId(action);
 	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
@@ -536,7 +529,6 @@ function registerHostedProjectNavigationAction(
 
 registerHostedProjectNavigationAction(
 	HucodeHostedShellAction.NavigateBack,
-	GO_BACK_WORKTREE_COMMAND_ID,
 	localize2('hostedOmniGoBackWorktree', 'Go Back Project Worktree'),
 	Codicon.arrowLeft,
 	ProjectSwitcherCanGoBackContext,
@@ -545,7 +537,6 @@ registerHostedProjectNavigationAction(
 
 registerHostedProjectNavigationAction(
 	HucodeHostedShellAction.NavigateForward,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
 	localize2('hostedOmniGoForwardWorktree', 'Go Forward Project Worktree'),
 	Codicon.arrowRight,
 	ProjectSwitcherCanGoForwardContext,

@@ -1539,12 +1539,13 @@ suite('WebHucodeShellService', () => {
 	test('allows registered shell actions and rejects lookalike commands',
 		async () => {
 			const commandCalls: { id: string; args: unknown[] }[] = [];
+			const logService = new RecordingLogService();
 			const { service, surface, browser } = createService(
 				new FakeBrowserAdapter(),
 				undefined,
 				'active',
 				undefined,
-				new RecordingLogService(),
+				logService,
 				{
 					async executeCommand<T = unknown>(
 						commandId: string,
@@ -1598,6 +1599,13 @@ suite('WebHucodeShellService', () => {
 				{ id: FOCUS_PROJECT_PANE_COMMAND_ID, args: [] },
 				...allowedCommands.map(id => ({ id, args: [] })),
 			]);
+			for (const id of [
+				'hucode.unregistered',
+				'hucode.projectSwitcher.dismissWorkbench',
+				FOCUS_PROJECT_PANE_COMMAND_ID,
+			]) {
+				assert.ok(logService.warnings.some(warning => warning.includes(id)));
+			}
 		});
 
 	test('closes the requested instance through the shell channel', async () => {

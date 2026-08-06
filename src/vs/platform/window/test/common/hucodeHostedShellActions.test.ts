@@ -9,6 +9,7 @@ import {
 	ADD_PROJECT_COMMAND_ID,
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
 	createLegacyHucodeHostedShellActionRequest,
+	formatHucodeHostedShellActionCommandIdForLog,
 	getHucodeHostedShellAction,
 	getHucodeHostedShellActionCommandId,
 	GO_BACK_WORKTREE_COMMAND_ID,
@@ -78,9 +79,26 @@ suite('HucodeHostedShellActions', () => {
 			'hucode.projectSwitcher.dismissWorkbench',
 			`${ADD_PROJECT_COMMAND_ID}.lookalike`,
 			'workbench.action.omniWindow.focusProjectPane',
+			undefined,
+			null,
 		]) {
 			assert.strictEqual(getHucodeHostedShellAction(commandId), undefined);
 		}
+	});
+
+	test('formats rejected command ids as bounded single-line labels', () => {
+		assert.strictEqual(
+			formatHucodeHostedShellActionCommandIdForLog('bad\nid/with space'),
+			'bad?id?with?space'
+		);
+		assert.strictEqual(
+			formatHucodeHostedShellActionCommandIdForLog('x'.repeat(81)),
+			`${'x'.repeat(80)}...`
+		);
+		assert.strictEqual(
+			formatHucodeHostedShellActionCommandIdForLog(undefined),
+			'<non-string>'
+		);
 	});
 
 	test('creates a server-owned legacy request without caller fields', () => {

@@ -36,6 +36,7 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	createLegacyHucodeHostedShellActionRequest,
+	formatHucodeHostedShellActionCommandIdForLog,
 	getHucodeHostedShellAction,
 } from '../../platform/window/common/hucodeHostedShellActions.js';
 import { getSingleFolderWorkspaceIdentifier } from
@@ -2284,7 +2285,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.logService.warn(
 				'[HucodeShellMainService] Rejected hosted shell action from ' +
 				`legacy desktop connection for Omni window ${this.window.id}: ` +
-				'unsupported command id.'
+				'unsupported command id ' +
+				`${formatHucodeHostedShellActionCommandIdForLog(request.id)}.`
 			);
 			return false;
 		}

@@ -3975,11 +3975,12 @@ suite('ResidentHostedWorkspacesController', () => {
 			},
 		})));
 
-		for (const id of [
+		const rejectedCommands = [
 			'hucode.projectSwitcher.dismissWorkbench',
 			`${ADD_PROJECT_COMMAND_ID}.lookalike`,
 			FOCUS_PROJECT_PANE_COMMAND_ID,
-		]) {
+		];
+		for (const id of rejectedCommands) {
 			assert.strictEqual(controller.runActionInShell({
 				id,
 				from: 'menu',
@@ -3988,6 +3989,9 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 		assert.strictEqual(shellWebContents.sent.length, allowedCommands.length);
 		assert.strictEqual(logService.warnings.length, 3);
+		for (const id of rejectedCommands) {
+			assert.ok(logService.warnings.some(warning => warning.includes(id)));
+		}
 		assert.ok(logService.warnings.every(warning =>
 			warning.includes('Rejected hosted shell action') &&
 			!warning.includes('arbitrary')
