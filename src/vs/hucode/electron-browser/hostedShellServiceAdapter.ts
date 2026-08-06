@@ -28,9 +28,11 @@ import {
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
+	IHucodeHostedNavigationSnapshot,
 	IHucodeHostedReadyResult,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
+	withHucodeHostedShellCachedAvailability,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import { IRectangle } from '../../platform/window/common/window.js';
 import { INativeWorkbenchEnvironmentService } from
@@ -54,6 +56,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 	private readonly connection =
 		new DeferredPromise<IHucodeHostedShellService | undefined>();
 	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	private connected = false;
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedShellState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
@@ -64,6 +67,10 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		environmentService: INativeWorkbenchEnvironmentService
 	) {
 		super();
+		withHucodeHostedShellCachedAvailability(
+			this,
+			() => this.connected
+		);
 
 		if (!environmentService.isHostedOmniWorkspace ||
 			!environmentService.hostedInstanceId) {
@@ -75,6 +82,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		this._register({
 			dispose: () => {
 				disposed = true;
+				this.connected = false;
 				void this.connection.complete(undefined);
 			},
 		});
@@ -86,6 +94,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 				return;
 			}
 			if (shell) {
+				this.connected = true;
 				if (isDisposable(shell)) {
 					this._register(shell);
 				}
@@ -117,6 +126,15 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			this.state = await shell.getState();
 			return this.state;
 		});
+	}
+
+	getNavigationSnapshot(): Promise<
+		IHucodeHostedNavigationSnapshot | undefined
+	> {
+		return this.withShell(
+			() => undefined,
+			shell => shell.getNavigationSnapshot?.() ?? Promise.resolve(undefined)
+		);
 	}
 
 	notifyReady(): Promise<IHucodeHostedReadyResult> {
@@ -191,8 +209,11 @@ async function connectDesktopHostedShell():
 		port,
 		'hucodeHostedDesktopWorkbench'
 	));
-	const shell = createHucodeHostedShellClient(
-		client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL)
+	const shell = withHucodeHostedShellCachedAvailability(
+		createHucodeHostedShellClient(
+			client.getChannel(HUCODE_HOSTED_SHELL_CHANNEL)
+		),
+		() => true
 	);
 	return Object.assign(shell, {
 		dispose: () => disposables.dispose(),

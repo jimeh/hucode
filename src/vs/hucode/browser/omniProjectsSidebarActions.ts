@@ -6,7 +6,7 @@
 import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../base/common/keyCodes.js';
-import { localize2 } from '../../nls.js';
+import { localize, localize2 } from '../../nls.js';
 import { Categories } from '../../platform/action/common/actionCommonCategories.js';
 import { Action2, registerAction2 } from
 	'../../platform/actions/common/actions.js';
@@ -16,6 +16,9 @@ import { ContextKeyExpr, IContextKeyService, RawContextKey } from
 	'../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
+import { ICommandService } from '../../platform/commands/common/commands.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import { KeybindingWeight } from
 	'../../platform/keybinding/common/keybindingsRegistry.js';
 import {
@@ -33,10 +36,17 @@ import { HucodeHostedShellAction } from
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 } from '../../platform/window/common/hucodeHostedShellService.js';
-import { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID } from
+import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { Menus } from './menus.js';
+import { registerOmniShellAction2 } from
+	'./omniShellCommandRegistration.js';
 
 export { TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID };
 
@@ -52,6 +62,78 @@ export const HasLoadedWorkbenchContext = new RawContextKey<boolean>(
 	'hucode.hasLoadedWorkbench',
 	false
 );
+
+const hostedShellCapabilityUnavailable = localize(
+	'hostedShellCapabilityUnavailable',
+	'Hosted shell capability is unavailable.'
+);
+const noCurrentWorktreeToUnload = localize(
+	'noCurrentWorktreeToUnload',
+	'There is no current worktree to unload.'
+);
+
+export function notifyHucodeHostedOperationOutcome(
+	operation: string,
+	outcome: HucodeHostedShellOperationOutcome,
+	notificationService: INotificationService
+): void {
+	if (outcome === HucodeHostedShellOperationOutcome.Accepted ||
+		outcome === HucodeHostedShellOperationOutcome.Superseded) {
+		return;
+	}
+	notificationService.error(localize(
+		'hostedShellOperationFailed',
+		"{0} failed because the Omni shell operation was {1}.",
+		operation,
+		outcome
+	));
+}
+
+registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
+	constructor() {
+		super({
+			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+			title: localize2(
+				'omniWindowUnloadCurrentWorktree',
+				'Omni-Window: Unload Current Worktree'
+			),
+			f1: true,
+			precondition: ContextKeyExpr.or(
+				IsOmniWindowContext,
+				IsHostedOmniWorkspaceContext
+			),
+		});
+	}
+
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		const contextKeyService = accessor.get(IContextKeyService);
+		const notificationService = accessor.get(INotificationService);
+		if (environmentService.isHostedOmniWorkspace) {
+			const shellService = accessor.get(IHucodeHostedShellService);
+			if (!isHucodeHostedShellServiceAvailable(shellService)) {
+				notificationService.error(hostedShellCapabilityUnavailable);
+				return;
+			}
+			notifyHucodeHostedOperationOutcome(
+				localize('unloadCurrentWorkbench', 'Unload Current Worktree'),
+				await shellService.closeSelf(),
+				notificationService
+			);
+			return;
+		}
+		if (!environmentService.isOmniWindow) {
+			return;
+		}
+		if (HasLoadedWorkbenchContext.getValue(contextKeyService) !== true) {
+			notificationService.error(noCurrentWorktreeToUnload);
+			return;
+		}
+		await accessor.get(ICommandService).executeCommand(
+			CLOSE_WORKSPACE_COMMAND_ID
+		);
+	}
+});
 
 export const ProjectsTitleBarControlsEnabledContext = ContextKeyExpr.equals(
 	`config.${PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING}`,
@@ -113,6 +195,7 @@ registerAction2(class extends Action2 {
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const contextKeyService = accessor.get(IContextKeyService);
+		const notificationService = accessor.get(INotificationService);
 
 		if (
 			HasLoadedWorkbenchContext.getValue(contextKeyService) !== true
@@ -121,6 +204,11 @@ registerAction2(class extends Action2 {
 		}
 
 		if (environmentService.isHostedOmniWorkspace) {
+			const shellService = accessor.get(IHucodeHostedShellService);
+			if (!isHucodeHostedShellServiceAvailable(shellService)) {
+				notificationService.error(hostedShellCapabilityUnavailable);
+				return;
+			}
 			const wasHidden =
 				ProjectsSidebarHiddenContext.getValue(contextKeyService) === true;
 			const projectsSidebarHidden =
@@ -129,12 +217,16 @@ registerAction2(class extends Action2 {
 				projectsSidebarHidden.set(false);
 			}
 
-			const outcome = await accessor.get(IHucodeHostedShellService)
-				.requestShellAction(
-					HucodeHostedShellAction.ToggleProjectsSidebar
-				);
+			const outcome = await shellService.requestShellAction(
+				HucodeHostedShellAction.ToggleProjectsSidebar
+			);
 			if (outcome !== HucodeHostedShellOperationOutcome.Accepted) {
 				projectsSidebarHidden.set(wasHidden);
+				notifyHucodeHostedOperationOutcome(
+					localize('toggleProjectsSidebar', 'Toggle Projects Sidebar'),
+					outcome,
+					notificationService
+				);
 				return;
 			}
 

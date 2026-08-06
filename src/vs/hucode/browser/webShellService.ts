@@ -59,6 +59,8 @@ import {
 	IHucodeHostedShellState,
 	negotiateHucodeHostedShellCapabilities,
 } from '../../platform/window/common/hucodeHostedShellService.js';
+import { createHucodeHostedNavigationSnapshot } from
+	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserWorkbenchEnvironmentService } from
@@ -1705,7 +1707,8 @@ export class WebHucodeShellController extends Disposable
 				HUCODE_HOSTED_SHELL_CHANNEL,
 				createHucodeHostedShellServerChannel(
 					this.createHostedConnectionFacade(instance),
-					disposables
+					disposables,
+					negotiatedCapabilities
 				)
 			);
 		} else if (instance.hostedShellProtocolVersion === undefined) {
@@ -1870,6 +1873,7 @@ export class WebHucodeShellController extends Disposable
 				state: candidate.state,
 				visible: candidate.visible,
 			})),
+			navigationSnapshot: createHucodeHostedNavigationSnapshot(state),
 		};
 	}
 

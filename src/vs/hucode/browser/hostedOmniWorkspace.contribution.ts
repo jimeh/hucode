@@ -21,6 +21,8 @@ import { Categories } from
 	'../../platform/action/common/actionCommonCategories.js';
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import {
 	ConfigurationScope,
 	Extensions as ConfigurationExtensions,
@@ -42,12 +44,10 @@ import {
 } from
 	'../../workbench/common/contextkeys.js';
 import {
-	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-} from '../common/omniWindow.js';
-import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
+	isHucodeHostedShellServiceAvailable,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import { ToggleTitleBarConfigAction } from
 	'../../workbench/browser/parts/titlebar/titlebarActions.js';
@@ -68,6 +68,7 @@ import { getHucodeHostedShellActionCommandId, HucodeHostedShellAction } from
 	'../../platform/window/common/hucodeHostedShellActions.js';
 import {
 	HasLoadedWorkbenchContext,
+	notifyHucodeHostedOperationOutcome,
 	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
 	ProjectsSidebarHiddenContext,
 	ProjectsTitleBarControlsEnabledContext,
@@ -335,6 +336,30 @@ registerWorkbenchContribution2(
 	WorkbenchPhase.AfterRestored
 );
 
+async function runHostedShellOperation(
+	accessor: ServicesAccessor,
+	operation: string,
+	run: (
+		shellService: IHucodeHostedShellService
+	) => Promise<HucodeHostedShellOperationOutcome>
+): Promise<void> {
+	const shellService = accessor.get(IHucodeHostedShellService);
+	const notificationService = accessor.get(INotificationService);
+	if (!isHucodeHostedShellServiceAvailable(shellService)) {
+		notifyHucodeHostedOperationOutcome(
+			operation,
+			HucodeHostedShellOperationOutcome.Unavailable,
+			notificationService
+		);
+		return;
+	}
+	notifyHucodeHostedOperationOutcome(
+		operation,
+		await run(shellService),
+		notificationService
+	);
+}
+
 function registerHostedProjectSidebarCommand(
 	action: HucodeHostedShellAction,
 	title: ReturnType<typeof localize2>
@@ -356,8 +381,11 @@ function registerHostedProjectSidebarCommand(
 				return;
 			}
 
-			await accessor.get(IHucodeHostedShellService)
-				.requestShellAction(action);
+			await runHostedShellOperation(
+				accessor,
+				title.value,
+				shellService => shellService.requestShellAction(action)
+			);
 		}
 	});
 }
@@ -376,35 +404,6 @@ registerHostedProjectSidebarCommand(
 	HucodeHostedShellAction.CollapseProjects,
 	localize2('collapseAllProjects', 'Collapse All')
 );
-
-registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
-	constructor() {
-		super({
-			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-			title: localize2(
-				'hostedOmniUnloadCurrentWorktree',
-				'Omni-Window: Unload Current Worktree'
-			),
-			f1: true,
-			precondition: ContextKeyExpr.and(
-				IsHostedOmniWorkspaceContext,
-				HasLoadedWorkbenchContext
-			),
-		});
-	}
-
-	override async run(accessor: ServicesAccessor): Promise<void> {
-		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		if (
-			!environmentService.isHostedOmniWorkspace ||
-			!environmentService.hostedInstanceId
-		) {
-			return;
-		}
-
-		await accessor.get(IHucodeHostedShellService).closeSelf();
-	}
-});
 
 registerAction2(class extends Action2 {
 	constructor() {
@@ -431,8 +430,11 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
-		await accessor.get(IHucodeHostedShellService)
-			.reopenSelfInNormalWindow();
+		await runHostedShellOperation(
+			accessor,
+			localize('reopenCurrentWorkbench', 'Re-open Current Worktree'),
+			shellService => shellService.reopenSelfInNormalWindow()
+		);
 	}
 });
 
@@ -470,8 +472,11 @@ function registerHostedProjectNavigationAction(
 		}
 
 		override async run(accessor: ServicesAccessor): Promise<void> {
-			await accessor.get(IHucodeHostedShellService)
-				.requestShellAction(action);
+			await runHostedShellOperation(
+				accessor,
+				title.value,
+				shellService => shellService.requestShellAction(action)
+			);
 		}
 	});
 }
@@ -515,7 +520,10 @@ registerAction2(class extends Action2 {
 	}
 
 	override run(accessor: ServicesAccessor): Promise<void> {
-		return accessor.get(IHucodeHostedShellService).reloadSelf()
-			.then(() => undefined);
+		return runHostedShellOperation(
+			accessor,
+			localize('reloadHostedWorkbench', 'Reload Hosted Workbench'),
+			shellService => shellService.reloadSelf()
+		);
 	}
 });

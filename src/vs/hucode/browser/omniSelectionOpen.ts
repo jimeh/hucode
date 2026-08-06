@@ -35,23 +35,28 @@ export async function openSelectionInOmniWindow(
 		return undefined;
 	}
 
+	if (await focusNormalWindowByPathBestEffort(
+		shellService,
+		selection.worktreePath
+	)) {
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			selection.projectId,
+			selection.worktreePath
+		);
+		return undefined;
+	}
+
+	const state = await shellService.openWorkspace(
+		selection.worktreePath,
+		selection.projectId
+	);
 	await setLastActiveWorktreeBestEffort(
 		projectManagerService,
 		selection.projectId,
 		selection.worktreePath
 	);
-
-	if (await focusNormalWindowByPathBestEffort(
-		shellService,
-		selection.worktreePath
-	)) {
-		return undefined;
-	}
-
-	return shellService.openWorkspace(
-		selection.worktreePath,
-		selection.projectId
-	);
+	return state;
 }
 
 /**
@@ -73,11 +78,6 @@ export async function openSelectionInStandaloneWindow(
 		return;
 	}
 
-	await setLastActiveWorktreeBestEffort(
-		projectManagerService,
-		selection.projectId,
-		selection.worktreePath
-	);
 	if (!await shellService.prepareWorkspaceForStandaloneOpen({
 		folderUri: URI.file(selection.worktreePath).toJSON(),
 		retainedWorkbenchId: retainedWorkbench?.id,
@@ -89,12 +89,22 @@ export async function openSelectionInStandaloneWindow(
 		shellService,
 		selection.worktreePath
 	)) {
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			selection.projectId,
+			selection.worktreePath
+		);
 		return;
 	}
 
 	await hostService.openWindow(
 		[{ folderUri: URI.file(selection.worktreePath) }],
 		{ forceNewWindow: true }
+	);
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService,
+		selection.projectId,
+		selection.worktreePath
 	);
 }
 

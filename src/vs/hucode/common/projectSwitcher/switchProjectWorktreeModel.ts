@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IMatch } from '../../../base/common/filters.js';
+import { basename } from '../../../base/common/path.js';
+import { URI } from '../../../base/common/uri.js';
 import {
 	matchesFuzzyIconAware,
 	parseLabelWithIcons,
@@ -14,12 +16,77 @@ import {
 	IQuickPickItemHighlights,
 	IQuickPickSeparator,
 } from '../../../platform/quickinput/common/quickInput.js';
+import {
+	IHucodeHostedNavigationSnapshot,
+	IHucodeHostedNavigationTarget,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
 import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	ProjectSwitcherOmniSection,
 } from './projectSwitcherViewState.js';
+import { IHucodeHostedWorkspaceState } from '../omniWindow.js';
+
+/** Builds the identity-free hosted navigation projection owned by the shell. */
+export function createHucodeHostedNavigationSnapshot(
+	state: IHucodeHostedWorkspaceState
+): IHucodeHostedNavigationSnapshot {
+	const instancesByPath = new Map(state.instances.map(instance => [
+		instance.worktreePath,
+		instance,
+	]));
+	const retainedPaths = new Set<string>();
+	const targets: IHucodeHostedNavigationTarget[] = [];
+
+	for (const record of (state.retainedWorkbenches ?? [])
+		.toSorted((a, b) => a.order - b.order)) {
+		const path = URI.revive(record.folderUri).fsPath;
+		retainedPaths.add(path);
+		const instance = instancesByPath.get(path);
+		const lifecycleState = instance?.state ??
+			(record.folderStatus === 'missing'
+				? 'missing'
+				: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
+		targets.push({
+			folderUri: URI.file(path).toJSON(),
+			lifecycleState: lifecycleState === 'restore-pending'
+				? 'loading'
+				: lifecycleState,
+			lastActiveAt: instance?.lastActiveAt ?? record.lastActiveAt,
+			section: 'workbenches',
+			order: record.order,
+			label: record.label ?? basename(path),
+			pathLabel: path,
+		});
+	}
+
+	for (const [order, instance] of state.instances.entries()) {
+		if (retainedPaths.has(instance.worktreePath)) {
+			continue;
+		}
+		const lifecycleState = instance.state === 'restore-pending'
+			? 'loading'
+			: instance.state;
+		targets.push({
+			folderUri: URI.file(instance.worktreePath).toJSON(),
+			lifecycleState,
+			lastActiveAt: instance.lastActiveAt,
+			section: instance.projectId ? 'projects' : 'workbenches',
+			order,
+			...(instance.projectId ? {} : {
+				label: basename(instance.worktreePath),
+				pathLabel: instance.worktreePath,
+			}),
+		});
+	}
+
+	return {
+		targets,
+		sectionOrder: state.projectSwitcherSectionOrder ??
+			DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	};
+}
 
 export interface IProjectSwitcherSelectionTarget {
 	readonly projectId?: string;

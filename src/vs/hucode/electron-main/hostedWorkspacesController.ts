@@ -47,6 +47,8 @@ import {
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellContinuationAuthorization,
 } from '../../platform/window/common/hucodeHostedShellService.js';
+import { createHucodeHostedNavigationSnapshot } from
+	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
 import { getProjectManagerPathComparisonKey } from
@@ -365,6 +367,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				state: candidate.state,
 				visible: candidate.visible,
 			})),
+			navigationSnapshot: createHucodeHostedNavigationSnapshot(state),
 		};
 	}
 

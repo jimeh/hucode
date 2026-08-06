@@ -33,7 +33,7 @@ export const HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL =
 export const HUCODE_HOSTED_SHELL_PROTOCOL_VERSION = 1;
 
 /** Required operation groups in version 1 of the hosted shell capability. */
-export const HUCODE_HOSTED_SHELL_CAPABILITIES = Object.freeze([
+export const HUCODE_HOSTED_SHELL_CORE_CAPABILITIES = Object.freeze([
 	'state',
 	'ready',
 	'selfLifecycle',
@@ -44,14 +44,54 @@ export const HUCODE_HOSTED_SHELL_CAPABILITIES = Object.freeze([
 	'screenshot',
 ] as const);
 
+/** Optional operation groups understood by the current version 1 peers. */
+export const HUCODE_HOSTED_SHELL_OPTIONAL_CAPABILITIES = Object.freeze([
+	'navigationSnapshot',
+] as const);
+
+/** Complete capability offer made by current hosted workbenches. */
+export const HUCODE_HOSTED_SHELL_CAPABILITIES = Object.freeze([
+	...HUCODE_HOSTED_SHELL_CORE_CAPABILITIES,
+	...HUCODE_HOSTED_SHELL_OPTIONAL_CAPABILITIES,
+] as const);
+
 /** One operation group named by the hosted shell capability handshake. */
 export type HucodeHostedShellCapability =
 	typeof HUCODE_HOSTED_SHELL_CAPABILITIES[number];
+
+const hucodeHostedShellCachedAvailability = Symbol(
+	'hucodeHostedShellCachedAvailability'
+);
+
+/** Local-only synchronous availability metadata, never exposed over IPC. */
+export type HucodeHostedShellCachedAvailability = {
+	readonly [hucodeHostedShellCachedAvailability]?: () => boolean;
+};
+
+/** Reads transport availability without awaiting a pending connection. */
+export function isHucodeHostedShellServiceAvailable(
+	service: IHucodeHostedShellService
+): boolean {
+	return (service as IHucodeHostedShellService &
+		HucodeHostedShellCachedAvailability
+	)[hucodeHostedShellCachedAvailability]?.() ?? true;
+}
+
+/** Attaches local availability metadata without widening the remote surface. */
+export function withHucodeHostedShellCachedAvailability<
+	T extends IHucodeHostedShellService
+>(service: T, available: () => boolean): T {
+	Object.defineProperty(service, hucodeHostedShellCachedAvailability, {
+		value: available,
+	});
+	return service;
+}
 
 /** Exact remotely exposed surface of {@link IHucodeHostedShellService}. */
 export const HUCODE_HOSTED_SHELL_REMOTE_MEMBERS = Object.freeze([
 	'onDidChangeState',
 	'getState',
+	'getNavigationSnapshot',
 	'notifyReady',
 	'closeSelf',
 	'reopenSelfInNormalWindow',
@@ -79,9 +119,14 @@ const hucodeHostedShellRemoteMemberSet = new Set<string>(
 /** Creates a server channel that rejects inherited or undeclared members. */
 export function createHucodeHostedShellServerChannel(
 	service: IHucodeHostedShellService,
-	disposables: DisposableStore
+	disposables: DisposableStore,
+	capabilities: readonly HucodeHostedShellCapability[] =
+		HUCODE_HOSTED_SHELL_CAPABILITIES
 ): IServerChannel {
 	const channel = ProxyChannel.fromService(service, disposables);
+	const navigationSnapshotEnabled = capabilities.includes(
+		'navigationSnapshot'
+	);
 	return {
 		listen(context, event, arg) {
 			if (event !== 'onDidChangeState') {
@@ -91,6 +136,8 @@ export function createHucodeHostedShellServerChannel(
 		},
 		call(context, command, args) {
 			if (command === 'onDidChangeState' ||
+				(command === 'getNavigationSnapshot' &&
+					!navigationSnapshotEnabled) ||
 				!hucodeHostedShellRemoteMemberSet.has(command)) {
 				return Promise.reject(new Error(`Method not found: ${command}`));
 			}
@@ -158,6 +205,29 @@ export interface IHucodeHostedNavigationRequest {
 	readonly folderUri: UriComponents;
 }
 
+/** Sanitized visual section containing one hosted navigation target. */
+export type HucodeHostedNavigationSection = 'workbenches' | 'projects';
+
+/** Read-only sibling target exposed without controller identity. */
+export interface IHucodeHostedNavigationTarget {
+	readonly folderUri: UriComponents;
+	readonly lifecycleState: Exclude<
+		HucodeHostedSelfLifecycleState,
+		'restore-pending'
+	>;
+	readonly lastActiveAt?: number;
+	readonly section: HucodeHostedNavigationSection;
+	readonly order: number;
+	readonly label?: string;
+	readonly pathLabel?: string;
+}
+
+/** On-demand read model used by hosted workbench-switching commands. */
+export interface IHucodeHostedNavigationSnapshot {
+	readonly targets: readonly IHucodeHostedNavigationTarget[];
+	readonly sectionOrder: readonly HucodeHostedNavigationSection[];
+}
+
 /** Authoritative identity captured when a hosted connection is created. */
 export interface IHucodeHostedShellBinding {
 	readonly windowId: number;
@@ -181,6 +251,7 @@ export interface IHucodeHostedShellAuthorityState {
 	readonly projectSwitcherCanGoForward: boolean;
 	readonly activeInstanceId?: string;
 	readonly instances: readonly IHucodeHostedShellAuthorityInstanceState[];
+	readonly navigationSnapshot?: IHucodeHostedNavigationSnapshot;
 }
 
 /**
@@ -231,6 +302,9 @@ export interface IHucodeHostedShellService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeState: Event<IHucodeHostedShellState>;
 	getState(): Promise<IHucodeHostedShellState>;
+	getNavigationSnapshot?(): Promise<
+		IHucodeHostedNavigationSnapshot | undefined
+	>;
 	notifyReady(): Promise<IHucodeHostedReadyResult>;
 	closeSelf(): Promise<HucodeHostedShellOperationOutcome>;
 	reopenSelfInNormalWindow(): Promise<HucodeHostedShellOperationOutcome>;
@@ -269,10 +343,14 @@ export function negotiateHucodeHostedShellCapabilities(
 	const offered = new Set(capabilities.filter(
 		(value): value is string => typeof value === 'string'
 	));
-	return HUCODE_HOSTED_SHELL_CAPABILITIES.every(capability =>
+	if (!HUCODE_HOSTED_SHELL_CORE_CAPABILITIES.every(capability =>
 		offered.has(capability))
-		? HUCODE_HOSTED_SHELL_CAPABILITIES
-		: undefined;
+	) {
+		return undefined;
+	}
+	return HUCODE_HOSTED_SHELL_CAPABILITIES.filter(capability =>
+		offered.has(capability)
+	);
 }
 
 /** Creates the sole policy facade for one authoritatively bound connection. */
@@ -319,6 +397,12 @@ export function createBoundHucodeHostedShellFacade(
 			return isCurrentBinding(binding, state) && getBoundSelf(binding, state)
 				? project(state)
 				: HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+		},
+		async getNavigationSnapshot() {
+			const state = await getAuthorityState();
+			return isCurrentBinding(binding, state) && getBoundSelf(binding, state)
+				? state.navigationSnapshot
+				: undefined;
 		},
 		async notifyReady() {
 			const state = await getAuthorityState();
@@ -398,13 +482,18 @@ export function createBoundHucodeHostedShellFacade(
 
 /** Creates a typed client whose methods exactly mirror the hosted facade. */
 export function createHucodeHostedShellClient(
-	channel: IChannel
+	channel: IChannel,
+	capabilities: readonly HucodeHostedShellCapability[] =
+		HUCODE_HOSTED_SHELL_CAPABILITIES
 ): IHucodeHostedShellService {
 	const remote = ProxyChannel.toService<IHucodeHostedShellService>(channel);
 	return {
 		_serviceBrand: undefined,
 		onDidChangeState: remote.onDidChangeState,
 		getState: () => remote.getState(),
+		getNavigationSnapshot: capabilities.includes('navigationSnapshot')
+			? () => remote.getNavigationSnapshot!()
+			: async () => undefined,
 		notifyReady: () => remote.notifyReady(),
 		closeSelf: () => remote.closeSelf(),
 		reopenSelfInNormalWindow: () => remote.reopenSelfInNormalWindow(),

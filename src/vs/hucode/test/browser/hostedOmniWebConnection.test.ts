@@ -5,15 +5,17 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { URI } from '../../../base/common/uri.js';
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
+	HUCODE_HOSTED_SHELL_CORE_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellOperationOutcome,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../platform/window/common/hucodeHostedShellService.js';
 import { HucodeHostedShellAction } from
 	'../../../platform/window/common/hucodeHostedShellActions.js';
@@ -24,11 +26,13 @@ import {
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
 import {
 	HucodeHostedOmniWebConnectionService,
+	IHucodeHostedOmniWebConnectionService,
 	IHostedOmniWebConnectionBrowserAdapter,
 } from '../../browser/hostedOmniWebConnection.js';
 import {
 	createLegacyHostedShellClient,
 	getHostedOmniWebShellClientMode,
+	HostedOmniWebShellService,
 } from
 	'../../browser/hostedOmniWebShellService.js';
 import {
@@ -191,7 +195,11 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		), 'unavailable');
 		assert.strictEqual(getHostedOmniWebShellClientMode(
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-			HUCODE_HOSTED_SHELL_CAPABILITIES.slice(0, -1)
+			HUCODE_HOSTED_SHELL_CORE_CAPABILITIES
+		), 'current');
+		assert.strictEqual(getHostedOmniWebShellClientMode(
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CORE_CAPABILITIES.slice(0, -1)
 		), 'unavailable');
 	});
 
@@ -236,6 +244,16 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		assert.deepStrictEqual(projectedChanges, []);
 
 		assert.strictEqual((await client.getState()).active, false);
+		assert.deepStrictEqual(
+			(await client.getNavigationSnapshot!())?.targets.map(target => ({
+				path: URI.revive(target.folderUri).fsPath,
+				lifecycleState: target.lifecycleState,
+			})),
+			[
+				{ path: '/self', lifecycleState: 'loaded' },
+				{ path: '/other', lifecycleState: 'active' },
+			]
+		);
 		assert.strictEqual(await client.reloadSelf(),
 			HucodeHostedShellOperationOutcome.Rejected);
 		assert.strictEqual(await client.focusShell(),
@@ -278,6 +296,48 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		assert.strictEqual((await client.notifyReady()).outcome,
 			HucodeHostedShellOperationOutcome.Unavailable);
 	});
+
+	test('keeps cached availability false after disposal during connection',
+		async () => {
+			const connectionService = {
+				_serviceBrand: undefined,
+				isHosted: true,
+				async whenConnected() {
+					return {
+						ipcClient: {
+							getChannel: () => ({
+								call: async () => undefined,
+								listen: () => Event.None,
+							}),
+						} as never,
+						shellWindowId: 7,
+						hostedShellProtocolVersion:
+							HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+						hostedShellCapabilities:
+							HUCODE_HOSTED_SHELL_CAPABILITIES,
+					};
+				},
+			} as Partial<IHucodeHostedOmniWebConnectionService> as
+				IHucodeHostedOmniWebConnectionService;
+			const service = new HostedOmniWebShellService(
+				connectionService,
+				{
+					isHostedOmniWorkspace: true,
+					hostedInstanceId: INSTANCE_ID,
+				} as never
+			);
+
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(service),
+				false
+			);
+			service.dispose();
+			await settled();
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(service),
+				false
+			);
+		});
 });
 
 function legacyState(

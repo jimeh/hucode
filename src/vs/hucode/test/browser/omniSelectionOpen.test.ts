@@ -144,8 +144,8 @@ suite('OmniSelectionOpen', () => {
 
 			assert.strictEqual(result, undefined);
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'focusNormal:/repo',
+				'setLastActive:project:/repo',
 			]);
 		}
 	);
@@ -162,9 +162,9 @@ suite('OmniSelectionOpen', () => {
 		));
 
 		assert.deepStrictEqual(calls, [
-			'setLastActive:project:/repo',
 			'focusNormal:/repo',
 			'openWorkspace:/repo:project',
+			'setLastActive:project:/repo',
 		]);
 	});
 
@@ -183,9 +183,9 @@ suite('OmniSelectionOpen', () => {
 		);
 
 		assert.deepStrictEqual(calls, [
-			'setLastActive:project:/repo',
 			'prepare:/repo:',
 			'focusNormal:/repo',
+			'setLastActive:project:/repo',
 		]);
 	});
 
@@ -222,7 +222,6 @@ suite('OmniSelectionOpen', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'prepare:/repo:',
 			]);
 		}
@@ -308,7 +307,6 @@ suite('OmniSelectionOpen', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'prepare:/repo:',
 				'focusNormal:/repo',
 				'hostOpen',
@@ -316,6 +314,7 @@ suite('OmniSelectionOpen', () => {
 					toOpen: [{ folderUri: URI.file('/repo') }],
 					options: { forceNewWindow: true },
 				}),
+				'setLastActive:project:/repo',
 			]);
 		}
 	);
@@ -338,7 +337,6 @@ suite('OmniSelectionOpen', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'prepare:/repo:',
 				'focusNormal:/repo',
 				'hostOpen',
@@ -346,6 +344,7 @@ suite('OmniSelectionOpen', () => {
 					toOpen: [{ folderUri: URI.file('/repo') }],
 					options: { forceNewWindow: true },
 				}),
+				'setLastActive:project:/repo',
 			]);
 		}
 	);

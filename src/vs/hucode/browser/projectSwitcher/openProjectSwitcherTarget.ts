@@ -16,6 +16,7 @@ import { IWorkbenchEnvironmentService } from
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../platform/window/common/hucodeHostedShellService.js';
 import { IHucodeShellControllerService } from
 	'../../../platform/window/common/hucodeShellControllerService.js';
@@ -33,6 +34,14 @@ const hostedShellCapabilityUnavailable = localize(
 const hostedFolderNavigationUnsupported = localize(
 	'hostedFolderNavigationUnsupported',
 	'Hosted folder navigation is unsupported.'
+);
+const hostedFolderNavigationRejected = localize(
+	'hostedFolderNavigationRejected',
+	'The Omni shell rejected this workbench switch.'
+);
+const hostedFolderNavigationStale = localize(
+	'hostedFolderNavigationStale',
+	'This workbench is no longer connected to the current Omni shell instance.'
 );
 const omniShellControllerUnavailable = localize(
 	'omniShellControllerUnavailable',
@@ -60,23 +69,27 @@ export async function openProjectSwitcherTargetInWindow(
 	} catch (error) {
 		onUnexpectedError(error);
 	}
-	await setLastActiveWorktreeBestEffort(
-		projectManagerService,
-		canonicalTarget.projectId,
-		canonicalTarget.worktreePath
-	);
-
 	if (environmentService.isHostedOmniWorkspace) {
-		if (!hostedShellService) {
+		if (!hostedShellService ||
+			!isHucodeHostedShellServiceAvailable(hostedShellService)) {
 			throw new Error(hostedShellCapabilityUnavailable);
 		}
 		const outcome = await hostedShellService.navigateToFolder({
 			folderUri: URI.file(canonicalTarget.worktreePath).toJSON(),
 		});
-		if (outcome === HucodeHostedShellOperationOutcome.Unsupported) {
-			throw new Error(hostedFolderNavigationUnsupported);
+		switch (outcome) {
+			case HucodeHostedShellOperationOutcome.Accepted:
+			case HucodeHostedShellOperationOutcome.Superseded:
+				return;
+			case HucodeHostedShellOperationOutcome.Unsupported:
+				throw new Error(hostedFolderNavigationUnsupported);
+			case HucodeHostedShellOperationOutcome.Stale:
+				throw new Error(hostedFolderNavigationStale);
+			case HucodeHostedShellOperationOutcome.Rejected:
+				throw new Error(hostedFolderNavigationRejected);
+			case HucodeHostedShellOperationOutcome.Unavailable:
+				throw new Error(hostedShellCapabilityUnavailable);
 		}
-		return;
 	}
 
 	if (environmentService.isOmniWindow) {
@@ -87,6 +100,11 @@ export async function openProjectSwitcherTargetInWindow(
 			shellService,
 			canonicalTarget.worktreePath
 		)) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService,
+				canonicalTarget.projectId,
+				canonicalTarget.worktreePath
+			);
 			return;
 		}
 
@@ -95,12 +113,22 @@ export async function openProjectSwitcherTargetInWindow(
 			canonicalTarget.projectId
 		);
 		await focusWorkspaceBestEffort(shellService);
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			canonicalTarget.projectId,
+			canonicalTarget.worktreePath
+		);
 		return;
 	}
 
 	await hostService.openWindow(
 		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],
 		{ forceReuseWindow: true }
+	);
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService,
+		canonicalTarget.projectId,
+		canonicalTarget.worktreePath
 	);
 }
 

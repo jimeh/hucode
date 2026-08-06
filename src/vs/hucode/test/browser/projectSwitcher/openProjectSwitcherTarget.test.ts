@@ -20,6 +20,7 @@ import { IHucodeShellControllerService } from
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	withHucodeHostedShellCachedAvailability,
 } from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -104,15 +105,20 @@ suite('OpenProjectSwitcherTarget', () => {
 		} as unknown as IHucodeShellControllerService;
 	}
 
-	function hostedShell(calls: string[]): IHucodeHostedShellService {
-		return {
+	function hostedShell(
+		calls: string[],
+		outcome: HucodeHostedShellOperationOutcome =
+			HucodeHostedShellOperationOutcome.Accepted,
+		available = true
+	): IHucodeHostedShellService {
+		return withHucodeHostedShellCachedAvailability({
 			async navigateToFolder(request: Parameters<
 				IHucodeHostedShellService['navigateToFolder']
 			>[0]) {
 				calls.push(`navigate:${URI.revive(request.folderUri).fsPath}`);
-				return HucodeHostedShellOperationOutcome.Accepted;
+				return outcome;
 			},
-		} as unknown as IHucodeHostedShellService;
+		} as unknown as IHucodeHostedShellService, () => available);
 	}
 
 	test('focuses existing normal window instead of opening in Omni',
@@ -128,8 +134,8 @@ suite('OpenProjectSwitcherTarget', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'focusNormal:/repo',
+				'setLastActive:project:/repo',
 			]);
 		}
 	);
@@ -147,10 +153,10 @@ suite('OpenProjectSwitcherTarget', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'focusNormal:/repo',
 				'openWorkspace:/repo:project',
 				'focusWorkspace',
+				'setLastActive:project:/repo',
 			]);
 		}
 	);
@@ -167,10 +173,10 @@ suite('OpenProjectSwitcherTarget', () => {
 		);
 
 		assert.deepStrictEqual(calls, [
-			'setLastActive:project:/repo',
 			'focusNormal:/repo',
 			'openWorkspace:/repo:project',
 			'focusWorkspace',
+			'setLastActive:project:/repo',
 		]);
 	});
 
@@ -188,7 +194,6 @@ suite('OpenProjectSwitcherTarget', () => {
 			);
 
 			assert.deepStrictEqual(calls, [
-				'setLastActive:project:/repo',
 				'navigate:/repo',
 			]);
 		}
@@ -207,7 +212,6 @@ suite('OpenProjectSwitcherTarget', () => {
 		);
 
 		assert.deepStrictEqual(calls, [
-			'setLastActive:project:/repo',
 			'navigate:/repo',
 		]);
 	});
@@ -233,12 +237,62 @@ suite('OpenProjectSwitcherTarget', () => {
 		);
 
 		assert.deepStrictEqual(calls, [
-			'setLastActive:project:/repo',
 			'hostOpen',
+			'setLastActive:project:/repo',
 		]);
 		assert.deepStrictEqual(opened, [{ folderUri: URI.file('/repo') }]);
 		assert.deepStrictEqual(openOptions, { forceReuseWindow: true });
 	});
+
+	test('handles every hosted navigation outcome without caller MRU writes',
+		async () => {
+			for (const outcome of [
+				HucodeHostedShellOperationOutcome.Rejected,
+				HucodeHostedShellOperationOutcome.Stale,
+				HucodeHostedShellOperationOutcome.Unavailable,
+				HucodeHostedShellOperationOutcome.Unsupported,
+			]) {
+				const calls: string[] = [];
+				await assert.rejects(() => openProjectSwitcherTargetInWindow(
+					target,
+					projectManager(calls),
+					environment({ isHostedOmniWorkspace: true }),
+					shell(calls, false),
+					host(calls),
+					hostedShell(calls, outcome)
+				));
+				assert.deepStrictEqual(calls, ['navigate:/repo']);
+			}
+
+			const supersededCalls: string[] = [];
+			await openProjectSwitcherTargetInWindow(
+				target,
+				projectManager(supersededCalls),
+				environment({ isHostedOmniWorkspace: true }),
+				shell(supersededCalls, false),
+				host(supersededCalls),
+				hostedShell(
+					supersededCalls,
+					HucodeHostedShellOperationOutcome.Superseded
+				)
+			);
+			assert.deepStrictEqual(supersededCalls, ['navigate:/repo']);
+		});
+
+	test('does not await hosted navigation while transport is unavailable',
+		async () => {
+			const calls: string[] = [];
+			await assert.rejects(() => openProjectSwitcherTargetInWindow(
+				target,
+				projectManager(calls),
+				environment({ isHostedOmniWorkspace: true }),
+				shell(calls, false),
+				host(calls),
+				hostedShell(calls,
+					HucodeHostedShellOperationOutcome.Accepted, false)
+			));
+			assert.deepStrictEqual(calls, []);
+		});
 });
 
 function createProject(): ProjectRecord {

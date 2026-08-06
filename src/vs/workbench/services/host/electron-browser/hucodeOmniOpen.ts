@@ -20,6 +20,7 @@ import {
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
@@ -79,6 +80,12 @@ export async function tryOpenHucodeOmniWindow(
 			return false;
 		}
 		if (environmentService.isHostedOmniWorkspace) {
+			if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+				onUnexpectedError(new Error(
+					'Hosted Omni folder navigation is unavailable.'
+				));
+				return true;
+			}
 			const outcome = await hostedShellService.navigateToFolder({
 				folderUri: openable.folderUri.toJSON(),
 			});
@@ -97,24 +104,19 @@ export async function tryOpenHucodeOmniWindow(
 			openable.folderUri.fsPath
 		);
 		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
-		if (target) {
-			await setLastActiveWorktreeBestEffort(
-				projectManagerService,
-				target.projectId,
-				target.worktreePath
-			);
-		}
 		if (await focusHostedWorkspaceByPathBestEffort(
 			shellService,
 			worktreePath,
 			target?.projectId
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
 			worktreePath
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		await shellService.openWorkspace(
@@ -122,6 +124,7 @@ export async function tryOpenHucodeOmniWindow(
 			target?.projectId
 		);
 		await focusWorkspaceBestEffort(shellService);
+		await recordTargetLastActive(projectManagerService, target);
 		return true;
 	}
 
@@ -199,6 +202,20 @@ async function setLastActiveWorktreeBestEffort(
 		);
 	} catch (error) {
 		onUnexpectedError(error);
+	}
+}
+
+async function recordTargetLastActive(
+	projectManagerService: IProjectManagerService,
+	target: { readonly projectId: string; readonly worktreePath: string } |
+		undefined
+): Promise<void> {
+	if (target) {
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			target.projectId,
+			target.worktreePath
+		);
 	}
 }
 

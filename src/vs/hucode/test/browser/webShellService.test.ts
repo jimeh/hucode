@@ -1851,6 +1851,26 @@ suite('WebHucodeShellService', () => {
 				visible: true,
 			});
 			assert.strictEqual(JSON.stringify(state).includes('/tmp/'), false);
+			const navigationSnapshot =
+				await child.shell.getNavigationSnapshot!();
+			assert.deepStrictEqual(
+				navigationSnapshot?.targets.map(target => ({
+					path: URI.revive(target.folderUri).fsPath,
+					lifecycleState: target.lifecycleState,
+					section: target.section,
+				})),
+				[{
+					path: '/tmp/current-child',
+					lifecycleState: 'active',
+					section: 'projects',
+				}]
+			);
+			for (const forbidden of [
+				'instanceId', 'projectId', 'windowId', 'connectionGeneration',
+			]) {
+				assert.strictEqual(JSON.stringify(navigationSnapshot)
+					.includes(forbidden), false);
+			}
 			for (const action of HUCODE_HOSTED_SHELL_ACTIONS) {
 				assert.strictEqual(
 					await child.shell.requestShellAction(action),
