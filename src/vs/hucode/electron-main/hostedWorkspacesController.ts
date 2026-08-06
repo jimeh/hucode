@@ -241,7 +241,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		private readonly invalidateHostedShellConnection:
 			(webContentsId: number) => void,
 		private readonly focusHostedWorkspaceByPath:
-			(worktreePath: string, canApply: () => boolean) => Promise<boolean>,
+			(
+				worktreePath: string,
+				canApply: () => boolean
+			) => Promise<HucodeHostedShellOperationOutcome>,
 		private readonly focusNormalWindowByPath:
 			(worktreePath: string) => Promise<boolean>,
 		private readonly onStateChange: (state: IHucodeHostedWorkspaceState) => void,
@@ -1134,8 +1137,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 		const canApply = () =>
 			!!this.getBoundHostedShellInstance(binding, true);
-		if (await this.focusHostedWorkspaceByPath(resource.fsPath, canApply)) {
-			return HucodeHostedShellOperationOutcome.Accepted;
+		const hostedFocusOutcome = await this.focusHostedWorkspaceByPath(
+			resource.fsPath,
+			canApply
+		);
+		if (hostedFocusOutcome !==
+			HucodeHostedShellOperationOutcome.Unavailable) {
+			return hostedFocusOutcome;
 		}
 		if (canApply() &&
 			await this.focusNormalWindowByPath(resource.fsPath)) {

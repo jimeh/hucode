@@ -71,6 +71,7 @@ import {
 	createBoundHucodeHostedShellFacade,
 	HUCODE_HOSTED_SHELL_CHANNEL,
 	HUCODE_HOSTED_SHELL_PORT_REQUEST_CHANNEL,
+	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellDelegate,
 	IHucodeHostedShellService,
@@ -521,8 +522,16 @@ export class HucodeShellMainService extends Disposable
 	async findHostedWorkspaceByPath(
 		worktreePath: string
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
+		return this.findHostedWorkspaceByPathInWindows(worktreePath);
+	}
+
+	private async findHostedWorkspaceByPathInWindows(
+		worktreePath: string,
+		excludedWindowId?: number
+	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
 		const omniWindows = this.windowsMainService.getWindows()
-			.filter(window => window.isOmniWindow)
+			.filter(window => window.isOmniWindow &&
+				window.id !== excludedWindowId)
 			.toSorted((a, b) => b.lastFocusTime - a.lastFocusTime);
 
 		for (const window of omniWindows) {
@@ -547,17 +556,35 @@ export class HucodeShellMainService extends Disposable
 
 	async focusHostedWorkspaceByPath(
 		worktreePath: string,
-		projectId?: string,
-		canApply: () => boolean = () => true
+		projectId?: string
 	): Promise<boolean> {
-		const owner = await this.findHostedWorkspaceByPath(worktreePath);
-		if (!owner || !canApply()) {
-			return false;
+		return await this.focusHostedWorkspaceByPathWithContinuation(
+			worktreePath,
+			projectId,
+			() => true
+		) === HucodeHostedShellOperationOutcome.Accepted;
+	}
+
+	private async focusHostedWorkspaceByPathWithContinuation(
+		worktreePath: string,
+		projectId: string | undefined,
+		canApply: () => boolean,
+		excludedWindowId?: number
+	): Promise<HucodeHostedShellOperationOutcome> {
+		const owner = await this.findHostedWorkspaceByPathInWindows(
+			worktreePath,
+			excludedWindowId
+		);
+		if (!owner) {
+			return HucodeHostedShellOperationOutcome.Unavailable;
+		}
+		if (!canApply()) {
+			return HucodeHostedShellOperationOutcome.Superseded;
 		}
 
 		const window = this.windowsMainService.getWindowById(owner.windowId);
 		if (!window?.isOmniWindow) {
-			return false;
+			return HucodeHostedShellOperationOutcome.Superseded;
 		}
 
 		const controller = this.getOrCreateController(owner.windowId);
@@ -569,12 +596,12 @@ export class HucodeShellMainService extends Disposable
 		);
 		if (!canApply() ||
 			controller.getState().activeInstanceId !== owner.instanceId) {
-			return false;
+			return HucodeHostedShellOperationOutcome.Superseded;
 		}
 
 		window.focus();
 		controller.focusWorkspace();
-		return true;
+		return HucodeHostedShellOperationOutcome.Accepted;
 	}
 
 	async focusNormalWindowByPath(worktreePath: string): Promise<boolean> {
@@ -966,11 +993,13 @@ export class HucodeShellMainService extends Disposable
 				webContentsId => this.hostedShellConnections.deleteAndDispose(
 					webContentsId
 				),
-				(worktreePath, canApply) => this.focusHostedWorkspaceByPath(
-					worktreePath,
-					undefined,
-					canApply
-				),
+				(worktreePath, canApply) =>
+					this.focusHostedWorkspaceByPathWithContinuation(
+						worktreePath,
+						undefined,
+						canApply,
+						windowId
+					),
 				worktreePath => this.focusNormalWindowByPath(worktreePath),
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),
