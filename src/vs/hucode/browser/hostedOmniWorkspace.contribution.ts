@@ -192,7 +192,7 @@ class ToggleProjectTitleBarControls extends ToggleTitleBarConfigAction {
 
 registerAction2(ToggleProjectTitleBarControls);
 
-class HostedOmniWorkspaceReadyContribution extends Disposable
+export class HostedOmniWorkspaceReadyContribution extends Disposable
 	implements IWorkbenchContribution {
 
 	static readonly ID = 'hucode.hostedOmniWorkspaceReady';
@@ -245,11 +245,17 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);
 		};
 
-		void shellService.getState().then(state => {
+		let didReceiveStateChange = false;
+		this._register(shellService.onDidChangeState(state => {
+			didReceiveStateChange = true;
 			updateShellStateContexts(state);
-		});
+		}));
 
-		this._register(shellService.onDidChangeState(updateShellStateContexts));
+		void shellService.getState().then(state => {
+			if (!didReceiveStateChange) {
+				updateShellStateContexts(state);
+			}
+		});
 	}
 
 	override dispose(): void {

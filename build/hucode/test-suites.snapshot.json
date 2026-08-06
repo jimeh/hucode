@@ -4,6 +4,7 @@
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
+		"src/vs/hucode/test/browser/hostedOmniWorkspaceContribution.test.ts",
 		"src/vs/hucode/test/browser/omniConfigurationService.test.ts",
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",
