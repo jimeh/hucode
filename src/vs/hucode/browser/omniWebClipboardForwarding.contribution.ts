@@ -8,10 +8,8 @@ import { mainWindow } from '../../base/browser/window.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { ILogService } from '../../platform/log/common/log.js';
-import {
-	HucodeShellControllerUnavailableError,
-	IHucodeShellControllerService,
-} from '../../platform/window/common/hucodeShellControllerService.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import {
 	HUCODE_OMNI_CLIPBOARD_ACTIONS,
 	IHucodeOmniCommandForwardingContext,
@@ -94,9 +92,7 @@ export class OmniWebClipboardForwardingContribution extends Disposable
 			);
 			// A transport error after dispatch has ambiguous delivery. Retrying
 			// paste or a destructive cut could apply it twice.
-			if (!(error instanceof HucodeShellControllerUnavailableError)) {
-				return;
-			}
+			return;
 		}
 
 		try {

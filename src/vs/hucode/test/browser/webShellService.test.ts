@@ -532,13 +532,20 @@ suite('WebHucodeShellService', () => {
 		windowId: number,
 		instanceId: string
 	): Promise<void> {
-		const commandCount = workbench.commands.length;
-		workbench.runCommandResult = true;
-		await service.reloadWorkspace(windowId);
-		await waitFor(
-			() => workbench.commands.length === commandCount + 1,
-			'expected reload command delivery before simulated failure'
+		await waitForInstanceState(
+			service,
+			windowId,
+			instanceId,
+			'active'
 		);
+		const internals = service as unknown as {
+			readonly instancesById: Map<string, {
+				state: IHucodeHostedWorkspaceState['instances'][number]['state'];
+			}>;
+		};
+		const instance = internals.instancesById.get(instanceId);
+		assert.ok(instance);
+		instance.state = 'loading';
 		workbench.runCommandResult = false;
 		await service.runActionInWorkspace(windowId, {
 			id: 'hucode.test.simulated-load-failure',
@@ -3697,14 +3704,26 @@ suite('WebHucodeShellService', () => {
 			from: 'menu',
 			args: ['payload'],
 		});
+		const copied = await service.runActionInWorkspace(windowId, {
+			id: 'editor.action.clipboardCopyAction',
+			from: 'menu',
+		});
 
 		assert.deepStrictEqual({
 			ran,
+			copied,
 			commands: child.workbench.commands,
 			contentFocusCalls: browser.contentFocusCalls - contentFocusCalls,
 		}, {
 			ran: true,
-			commands: [{ commandId: 'test.command', args: ['payload'] }],
+			copied: true,
+			commands: [
+				{ commandId: 'test.command', args: ['payload'] },
+				{
+					commandId: 'editor.action.clipboardCopyAction',
+					args: [],
+				},
+			],
 			contentFocusCalls: 1,
 		});
 	});
@@ -3748,35 +3767,47 @@ suite('WebHucodeShellService', () => {
 			await commandResult.complete(false);
 		});
 
-	test('declines clipboard forwarding on definitive failure', async () => {
-		const { service, surface, browser } = createService();
-		const state = await service.openWorkspace(
-			browser.windowId,
-			'/tmp/hucode-worktree',
-			'project'
-		);
-		const instanceId = state.activeInstanceId;
-		assert.ok(instanceId);
-		const child = connectChild(browser, surface, instanceId);
-		child.workbench.runCommandResult = false;
+	test('consumes rejected clipboard delivery but declines explicit false',
+		async () => {
+			const logService = new RecordingLogService();
+			const { service, surface, browser } = createService(
+				undefined,
+				undefined,
+				'active',
+				undefined,
+				logService
+			);
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectChild(browser, surface, instanceId);
+			child.workbench.runCommandRejects = true;
 
-		assert.strictEqual(await service.runActionInWorkspace(
-			browser.windowId,
-			{
-				id: 'editor.action.clipboardCopyAction',
-				from: 'menu',
-			}
-		), false);
+			assert.strictEqual(await service.runActionInWorkspace(
+				browser.windowId,
+				{
+					id: 'editor.action.clipboardPasteAction',
+					from: 'menu',
+				}
+			), true);
+			assert.ok(logService.warnings.some(message =>
+				message.includes('delivery is unconfirmed')
+			));
 
-		child.workbench.runCommandRejects = true;
-		assert.strictEqual(await service.runActionInWorkspace(
-			browser.windowId,
-			{
-				id: 'editor.action.clipboardCutAction',
-				from: 'menu',
-			}
-		), false);
-	});
+			child.workbench.runCommandRejects = false;
+			child.workbench.runCommandResult = false;
+			assert.strictEqual(await service.runActionInWorkspace(
+				browser.windowId,
+				{
+					id: 'editor.action.clipboardCopyAction',
+					from: 'menu',
+				}
+			), false);
+		});
 
 	test('recreates a crashed iframe when reopening the same worktree', async () => {
 		const { service, surface, browser } = createService();
@@ -3847,6 +3878,64 @@ suite('WebHucodeShellService', () => {
 			);
 
 			assert.strictEqual(reloaded.instances[0].state, 'active');
+		});
+
+	test('isolates the reloading connection until replacement Ready',
+		async () => {
+			const { service, surface, browser } = createService();
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const oldChild = connectChild(browser, surface, instanceId);
+			const oldCommandResult = new DeferredPromise<boolean>();
+			oldChild.workbench.runCommandResult = oldCommandResult.p;
+			const oldCommand = service.runActionInWorkspace(browser.windowId, {
+				id: 'test.command.beforeReload',
+				from: 'menu',
+			});
+			await waitFor(
+				() => oldChild.workbench.commands.length === 1,
+				'expected pre-reload command delivery'
+			);
+
+			oldChild.workbench.runCommandResult = true;
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => oldChild.workbench.commands.length === 2,
+				'expected reload command delivery'
+			);
+			await oldCommandResult.complete(true);
+			assert.strictEqual(await oldCommand, true);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances[0].state,
+				'loading'
+			);
+
+			assert.strictEqual(await service.runActionInWorkspace(
+				browser.windowId,
+				{ id: 'test.command.duringReload', from: 'menu' }
+			), false);
+			await service.reloadWorkspace(browser.windowId);
+			assert.strictEqual(oldChild.workbench.commands.length, 2);
+
+			const replacement = connectChild(browser, surface, instanceId);
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				instanceId,
+				'active'
+			);
+			assert.strictEqual(await service.runActionInWorkspace(
+				browser.windowId,
+				{ id: 'test.command.afterReload', from: 'menu' }
+			), true);
+			assert.deepStrictEqual(replacement.workbench.commands, [{
+				commandId: 'test.command.afterReload',
+				args: [],
+			}]);
 		});
 
 	test('falls back to iframe reload when the reload command is declined',

@@ -284,6 +284,7 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 		options.shellPage,
 		options.timeoutMs
 	);
+	await options.writeClipboardText('hucode-copy-sentinel');
 	await options.shellPage.keyboard.press('Control+C');
 	await waitForClipboardText(
 		options.readClipboardText,

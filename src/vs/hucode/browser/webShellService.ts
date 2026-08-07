@@ -146,6 +146,7 @@ interface IHostedIframeInstance {
 	hostedShellProtocolVersion?: number;
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
+	pendingReloadConnectionGeneration?: number;
 	bootstrapId?: string;
 	bootstrapAttempt?: number;
 	retiredBootstrapIds?: Set<string>;
@@ -1341,7 +1342,9 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
-		this.hostedWorkspaces.markInstanceReady(instance);
+		if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+			return;
+		}
 		this.emitState();
 	}
 
@@ -1414,11 +1417,14 @@ export class WebHucodeShellController extends Disposable
 	): Promise<boolean> {
 		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
-		if (!instance) {
+		if (!instance ||
+			instance.pendingReloadConnectionGeneration !== undefined) {
 			return false;
 		}
 
-		this.focusIframe(instance);
+		if (isHucodeOmniClipboardAction(request.id)) {
+			this.focusIframe(instance);
+		}
 		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
@@ -1474,6 +1480,12 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
+		if (instance.pendingReloadConnectionGeneration !== undefined) {
+			return;
+		}
+		const reloadConnectionGeneration = instance.connectionGeneration;
+		instance.pendingReloadConnectionGeneration =
+			reloadConnectionGeneration;
 		instance.state = 'loading';
 		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
@@ -1486,6 +1498,8 @@ export class WebHucodeShellController extends Disposable
 		});
 		this.browser.setTimeout(() => {
 			if (
+				instance.pendingReloadConnectionGeneration ===
+				reloadConnectionGeneration &&
 				instance.state === 'loading' &&
 				!reloadCommandAccepted &&
 				instance.iframe
@@ -1841,7 +1855,9 @@ export class WebHucodeShellController extends Disposable
 					!isHostedWorkspaceAvailable(instance)) {
 					return;
 				}
-				this.hostedWorkspaces.markInstanceReady(instance);
+				if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+					return;
+				}
 				this.emitState();
 			},
 			closeSelf: async current => {
@@ -1961,6 +1977,22 @@ export class WebHucodeShellController extends Disposable
 			binding.connectionGeneration === instance.connectionGeneration &&
 			this.instancesById.get(instance.instanceId) === instance &&
 			!!instance.connection;
+	}
+
+	private markInstanceReadyFromCurrentConnection(
+		instance: IHostedIframeInstance
+	): boolean {
+		const pendingReloadGeneration =
+			instance.pendingReloadConnectionGeneration;
+		if (pendingReloadGeneration !== undefined) {
+			if (pendingReloadGeneration === instance.connectionGeneration) {
+				return false;
+			}
+			instance.pendingReloadConnectionGeneration = undefined;
+		}
+
+		this.hostedWorkspaces.markInstanceReady(instance);
+		return true;
 	}
 
 	private isBoundInstanceActiveVisible(
@@ -2643,16 +2675,28 @@ export class WebHucodeShellController extends Disposable
 		if (!workbench) {
 			return false;
 		}
+		const connectionGeneration = instance.connectionGeneration;
 
-		const result = await this.raceTimeout(
-			workbench.runCommand(commandId, args).catch(() => false),
+		const result = await this.raceTimeout<
+			boolean | typeof COMMAND_DELIVERY_UNKNOWN
+		>(
+			workbench.runCommand(commandId, args).catch(
+				() => COMMAND_DELIVERY_UNKNOWN
+			),
 			WebHucodeShellController.COMMAND_TIMEOUT_MS
 		);
-		if (result === REQUEST_TIMEOUT) {
+		if (result === REQUEST_TIMEOUT ||
+			result === COMMAND_DELIVERY_UNKNOWN) {
 			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
-		if (instance.state === 'loading' && settleLoadingState) {
+		if (
+			instance.state === 'loading' &&
+			settleLoadingState &&
+			instance.connectionGeneration === connectionGeneration &&
+			instance.connection?.workbench === workbench &&
+			instance.pendingReloadConnectionGeneration !== connectionGeneration
+		) {
 			if (result) {
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {

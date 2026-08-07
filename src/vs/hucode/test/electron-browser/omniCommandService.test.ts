@@ -26,7 +26,6 @@ import { NullExtensionService } from
 import type { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
 import {
-	HucodeShellControllerUnavailableError,
 	IHucodeShellControllerService,
 } from
 	'../../../platform/window/common/hucodeShellControllerService.js';
@@ -373,7 +372,7 @@ suite('OmniCommandService', () => {
 		}
 	});
 
-	test('falls back locally only before clipboard dispatch is available',
+	test('falls back locally only after explicit forwarding refusal',
 		async () => {
 			const commandForwardingContext =
 				new HucodeOmniCommandForwardingContext();
@@ -386,9 +385,7 @@ suite('OmniCommandService', () => {
 				} as IWorkbenchEnvironmentService,
 				{
 					runActionInWorkspace(): Promise<boolean> {
-						return Promise.reject(
-							new HucodeShellControllerUnavailableError()
-						);
+						return Promise.resolve(false);
 					},
 				} as unknown as IHucodeShellControllerService,
 				{

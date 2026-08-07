@@ -36,6 +36,9 @@ suite('HucodeOmniSmokeTestDriver', () => {
 				reloadWorkspace: async () => {
 					throw new Error('disabled driver forwarded');
 				},
+				focusWorkspace: async () => {
+					throw new Error('disabled driver forwarded');
+				},
 			}));
 			assert.strictEqual(
 				target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY],
@@ -62,12 +65,16 @@ suite('HucodeOmniSmokeTestDriver', () => {
 				reloadWorkspace: async windowId => {
 					calls.push(`reload:${windowId}`);
 				},
+				focusWorkspace: async windowId => {
+					calls.push(`focus:${windowId}`);
+				},
 			}));
 			const driver =
 				target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY];
 
 			assert.ok(driver);
 			assert.deepStrictEqual(Object.keys(driver).sort(), [
+				'focusActiveWorkspace',
 				'openWorkspace',
 				'reloadActiveWorkspace',
 				'suspendWorkspace',
@@ -75,10 +82,12 @@ suite('HucodeOmniSmokeTestDriver', () => {
 			await driver.openWorkspace('/tmp/Alpha');
 			await driver.suspendWorkspace('bravo-instance');
 			await driver.reloadActiveWorkspace();
+			await driver.focusActiveWorkspace();
 			assert.deepStrictEqual(calls, [
 				'open:7:/tmp/Alpha',
 				'suspend:7:bravo-instance',
 				'reload:7',
+				'focus:7',
 			]);
 			await assert.rejects(
 				driver.openWorkspace(''),
@@ -107,11 +116,13 @@ suite('HucodeOmniSmokeTestDriver', () => {
 			openWorkspace: async () => undefined,
 			suspendWorkspace: async () => undefined,
 			reloadWorkspace: async () => undefined,
+			focusWorkspace: async () => undefined,
 		}));
 		const replacement: IHucodeOmniSmokeTestDriver = {
 			openWorkspace: async () => undefined,
 			suspendWorkspace: async () => undefined,
 			reloadActiveWorkspace: async () => undefined,
+			focusActiveWorkspace: async () => undefined,
 		};
 		target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY] = replacement;
 

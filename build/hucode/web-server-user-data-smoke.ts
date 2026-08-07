@@ -140,6 +140,12 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			{ label: 'Bravo', state: 'loaded', active: false },
 		]);
 		hostedFrame = await waitForHostedFrame(page, alphaPath, deadline);
+		await assertHostedWorkbenchSmokeCommandVisible(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.webHostedFocusWorkbench,
+			commandTimeout(deadline)
+		);
 		await runHostedWorkbenchSmokeCommand(
 			page,
 			hostedFrame,
@@ -150,12 +156,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			commandTimeout(deadline)
 		);
-		await runHostedWorkbenchSmokeCommand(
-			page,
-			hostedFrame,
-			hostedWorkbenchSmokeCommands.webHostedFocusWorkbench,
-			commandTimeout(deadline)
-		);
+		await focusWorkspaceThroughSmokeDriver(page, deadline);
 		await waitForHostedWorkbenchSmokeSurfaceFocus(
 			hostedFrame,
 			commandTimeout(deadline)
@@ -306,12 +307,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			commandTimeout(deadline)
 		);
-		await runHostedWorkbenchSmokeCommand(
-			page,
-			afterReload,
-			hostedWorkbenchSmokeCommands.webHostedFocusWorkbench,
-			commandTimeout(deadline)
-		);
+		await focusWorkspaceThroughSmokeDriver(page, deadline);
 		await waitForHostedWorkbenchSmokeSurfaceFocus(
 			afterReload,
 			commandTimeout(deadline)
@@ -542,6 +538,25 @@ async function openWorkspaceThroughSmokeDriver(
 		}
 		await target.__hucodeOmniSmokeTestDriver.openWorkspace(pathValue);
 	}, worktreePath), operationDeadline, `open ${worktreePath}`);
+}
+
+async function focusWorkspaceThroughSmokeDriver(
+	page: Page,
+	deadline: number
+): Promise<void> {
+	const timeout = commandTimeout(deadline);
+	await waitForOmniProjectsSmokeSurfaceFocus(page, timeout);
+	await withDeadline(page.evaluate(async () => {
+		const target = globalThis as unknown as {
+			readonly __hucodeOmniSmokeTestDriver?: {
+				focusActiveWorkspace(): Promise<void>;
+			};
+		};
+		if (!target.__hucodeOmniSmokeTestDriver) {
+			throw new Error('Omni smoke-test driver is unavailable');
+		}
+		await target.__hucodeOmniSmokeTestDriver.focusActiveWorkspace();
+	}), Date.now() + timeout, 'focus active workspace');
 }
 
 async function waitForWebWorkbenchState(

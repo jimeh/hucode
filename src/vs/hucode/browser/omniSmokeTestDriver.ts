@@ -18,6 +18,7 @@ export interface IHucodeOmniSmokeTestDriver {
 	openWorkspace(worktreePath: string): Promise<void>;
 	suspendWorkspace(instanceId: string): Promise<void>;
 	reloadActiveWorkspace(): Promise<void>;
+	focusActiveWorkspace(): Promise<void>;
 }
 
 /** Window-like target capable of holding the Omni smoke-test driver. */
@@ -42,6 +43,7 @@ export function registerOmniSmokeTestDriver(options: {
 		worktreePath: string
 	) => Promise<unknown>;
 	readonly reloadWorkspace: (windowId: number) => Promise<unknown>;
+	readonly focusWorkspace: (windowId: number) => Promise<unknown>;
 }): IDisposable {
 	if (!options.enableSmokeTestDriver || !options.isOmniShellWindow) {
 		return Disposable.None;
@@ -66,6 +68,9 @@ export function registerOmniSmokeTestDriver(options: {
 		},
 		async reloadActiveWorkspace(): Promise<void> {
 			await options.reloadWorkspace(options.windowId);
+		},
+		async focusActiveWorkspace(): Promise<void> {
+			await options.focusWorkspace(options.windowId);
 		},
 	};
 	options.target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY] = driver;
