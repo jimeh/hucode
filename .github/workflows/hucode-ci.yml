@@ -258,7 +258,6 @@ jobs:
           sudo apt-get install -y \
             bubblewrap \
             build-essential \
-            dbus-daemon \
             libgbm1 \
             libgtk-3-0 \
             libkrb5-dev \
@@ -285,12 +284,6 @@ jobs:
 
       - name: Compile Hucode
         run: npm run hucode:compile
-
-      - name: Install Chromium for serve-web smoke test
-        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
-
-      - name: Run serve-web Omni hosted-command smoke test
-        run: npm run hucode:smoke:web-server-user-data
 
       - name: Run Node unit tests
         run: npm run test-node
@@ -328,6 +321,75 @@ jobs:
         env:
           VSCODE_SKIP_PRELAUNCH: 1
 
+  serve-web-omni-smoke:
+    name: Omni Smoke (serve-web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Chromium user namespaces
+        run: |
+          USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
+          if sysctl -n "$USERNS_KEY" >/dev/null 2>&1; then
+            sudo sysctl -w "$USERNS_KEY=0"
+          fi
+
+      - name: Compile Hucode
+        run: npm run hucode:compile
+
+      - name: Install Chromium
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+
+      - name: Run serve-web Omni hosted-command smoke test
+        run: npm run hucode:smoke:web-server-user-data
+
+      - name: Upload serve-web Omni smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omni-serve-web-smoke-diagnostics
+          path: .build/hucode-smoke-artifacts/
+          if-no-files-found: ignore
+
+  desktop-omni-smoke:
+    name: Omni Smoke (desktop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Hucode Linux CI
+        uses: ./.github/actions/setup-hucode-linux
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          apt-packages: |
+            build-essential
+            dbus-daemon
+            libgbm1
+            libgtk-3-0
+            libkrb5-dev
+            libnotify-bin
+            libx11-dev
+            libx11-xcb-dev
+            libxkbfile-dev
+            pkg-config
+            xvfb
+
+      - name: Compile Hucode
+        run: npm run hucode:compile
+
       - name: Prepare Hucode Electron sandbox
         run: |
           npm run hucode:prepare
@@ -346,10 +408,10 @@ jobs:
         env:
           VSCODE_SKIP_PRELAUNCH: 1
 
-      - name: Upload Omni smoke diagnostics
+      - name: Upload desktop Omni smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: omni-hosted-command-smoke-diagnostics
+          name: omni-desktop-smoke-diagnostics
           path: .build/hucode-smoke-artifacts/
           if-no-files-found: ignore
