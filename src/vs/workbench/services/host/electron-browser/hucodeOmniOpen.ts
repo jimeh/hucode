@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { isEqual } from '../../../../base/common/extpath.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { isLinux } from '../../../../base/common/platform.js';
+import { localize } from '../../../../nls.js';
 import { INativeHostService } from
 	'../../../../platform/native/common/native.js';
 import { IProjectManagerService } from
@@ -20,6 +21,7 @@ import {
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
@@ -79,16 +81,25 @@ export async function tryOpenHucodeOmniWindow(
 			return false;
 		}
 		if (environmentService.isHostedOmniWorkspace) {
+			if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationUnavailable',
+					'Hosted Omni folder navigation is unavailable.'
+				)));
+				return true;
+			}
 			const outcome = await hostedShellService.navigateToFolder({
 				folderUri: openable.folderUri.toJSON(),
 			});
 			if (outcome !== HucodeHostedShellOperationOutcome.Accepted &&
 				outcome !== HucodeHostedShellOperationOutcome.Unsupported &&
 				outcome !== HucodeHostedShellOperationOutcome.Superseded) {
-				onUnexpectedError(new Error(
-					'Hosted Omni folder navigation was not accepted for ' +
-					`${openable.folderUri.toString(true)}: ${outcome}.`
-				));
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationNotAccepted',
+					'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+					openable.folderUri.toString(true),
+					outcome
+				)));
 			}
 			return outcome !== HucodeHostedShellOperationOutcome.Unsupported;
 		}
@@ -97,24 +108,19 @@ export async function tryOpenHucodeOmniWindow(
 			openable.folderUri.fsPath
 		);
 		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
-		if (target) {
-			await setLastActiveWorktreeBestEffort(
-				projectManagerService,
-				target.projectId,
-				target.worktreePath
-			);
-		}
 		if (await focusHostedWorkspaceByPathBestEffort(
 			shellService,
 			worktreePath,
 			target?.projectId
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
 			worktreePath
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		await shellService.openWorkspace(
@@ -122,6 +128,7 @@ export async function tryOpenHucodeOmniWindow(
 			target?.projectId
 		);
 		await focusWorkspaceBestEffort(shellService);
+		await recordTargetLastActive(projectManagerService, target);
 		return true;
 	}
 
@@ -199,6 +206,20 @@ async function setLastActiveWorktreeBestEffort(
 		);
 	} catch (error) {
 		onUnexpectedError(error);
+	}
+}
+
+async function recordTargetLastActive(
+	projectManagerService: IProjectManagerService,
+	target: { readonly projectId: string; readonly worktreePath: string } |
+		undefined
+): Promise<void> {
+	if (target) {
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			target.projectId,
+			target.worktreePath
+		);
 	}
 }
 

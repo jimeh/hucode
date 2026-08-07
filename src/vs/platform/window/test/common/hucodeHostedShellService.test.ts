@@ -6,12 +6,15 @@
 import assert from 'assert';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
 	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellClient,
 	createHucodeHostedShellServerChannel,
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
+	HUCODE_HOSTED_SHELL_CORE_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HUCODE_HOSTED_SHELL_REMOTE_MEMBERS,
 	HucodeHostedShellOperationOutcome,
@@ -40,10 +43,12 @@ suite('HucodeHostedShellService', () => {
 			'navigation',
 			'paste',
 			'screenshot',
+			'navigationSnapshot',
 		]);
 		assert.deepStrictEqual(HUCODE_HOSTED_SHELL_REMOTE_MEMBERS, [
 			'onDidChangeState',
 			'getState',
+			'getNavigationSnapshot',
 			'notifyReady',
 			'closeSelf',
 			'reopenSelfInNormalWindow',
@@ -66,15 +71,38 @@ suite('HucodeHostedShellService', () => {
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION + 1,
 			HUCODE_HOSTED_SHELL_CAPABILITIES
 		), undefined);
+		assert.deepStrictEqual(negotiateHucodeHostedShellCapabilities(
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CORE_CAPABILITIES
+		), HUCODE_HOSTED_SHELL_CORE_CAPABILITIES);
 		assert.strictEqual(negotiateHucodeHostedShellCapabilities(
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-			HUCODE_HOSTED_SHELL_CAPABILITIES.slice(0, -1)
+			HUCODE_HOSTED_SHELL_CORE_CAPABILITIES.slice(0, -1)
 		), undefined);
 		assert.deepStrictEqual(negotiateHucodeHostedShellCapabilities(
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			[...HUCODE_HOSTED_SHELL_CAPABILITIES, 'futureGroup']
 		), HUCODE_HOSTED_SHELL_CAPABILITIES);
 	});
+
+	test('core-only clients do not call the optional snapshot method',
+		async () => {
+			const calls: string[] = [];
+			const channel: IChannel = {
+				call: async <T>(command: string) => {
+					calls.push(command);
+					return undefined as T;
+				},
+				listen: () => Event.None,
+			};
+			const client = createHucodeHostedShellClient(
+				channel,
+				HUCODE_HOSTED_SHELL_CORE_CAPABILITIES
+			);
+
+			assert.strictEqual(await client.getNavigationSnapshot!(), undefined);
+			assert.deepStrictEqual(calls, []);
+		});
 
 	test('projects only bound self state and rejects inactive actions', async () => {
 		const binding: IHucodeHostedShellBinding = {
@@ -101,6 +129,16 @@ suite('HucodeHostedShellService', () => {
 					visible: true,
 				},
 			],
+			navigationSnapshot: {
+				sectionOrder: ['workbenches', 'projects'],
+				targets: [{
+					folderUri: URI.file('/sibling').toJSON(),
+					lifecycleState: 'loaded',
+					lastActiveAt: 42,
+					section: 'projects',
+					order: 0,
+				}],
+			},
 		};
 		const actions: HucodeHostedShellAction[] = [];
 		const operations: Array<{
@@ -164,6 +202,23 @@ suite('HucodeHostedShellService', () => {
 			active: false,
 			visible: false,
 		});
+		assert.deepStrictEqual(await facade.getNavigationSnapshot!(),
+			state.navigationSnapshot);
+		assert.strictEqual(JSON.stringify(
+			await facade.getNavigationSnapshot!()
+		).includes('instanceId'), false);
+
+		const coreOnlyDisposables = new DisposableStore();
+		const coreOnlyChannel = createHucodeHostedShellServerChannel(
+			facade,
+			coreOnlyDisposables,
+			HUCODE_HOSTED_SHELL_CORE_CAPABILITIES
+		);
+		await assert.rejects(
+			coreOnlyChannel.call('test', 'getNavigationSnapshot'),
+			/Method not found: getNavigationSnapshot/
+		);
+		coreOnlyDisposables.dispose();
 		for (const run of [
 			() => facade.closeSelf(),
 			() => facade.reopenSelfInNormalWindow(),

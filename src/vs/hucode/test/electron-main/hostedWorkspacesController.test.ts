@@ -4297,6 +4297,16 @@ suite('ResidentHostedWorkspacesController', () => {
 			await controller.openWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			const bravoBinding = controller.acquireHostedShellBinding(2)!;
+			const navigationSnapshot = controller
+				.getHostedShellAuthorityState(bravoBinding).navigationSnapshot;
+			assert.deepStrictEqual(navigationSnapshot?.targets.map(target => ({
+				path: URI.revive(target.folderUri).fsPath,
+				section: target.section,
+			})), [{ path: bravo, section: 'projects' }, {
+				path: alpha, section: 'projects',
+			}]);
+			assert.strictEqual(JSON.stringify(navigationSnapshot)
+				.includes('instanceId'), false);
 			assert.notStrictEqual(
 				alphaBinding.connectionGeneration,
 				bravoBinding.connectionGeneration

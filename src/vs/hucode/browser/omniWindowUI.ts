@@ -26,9 +26,7 @@ import {
 	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 	OPEN_SELECTED_IN_OMNI_WINDOW_COMMAND_ID,
 	RELOAD_WORKSPACE_COMMAND_ID,
-	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
-import { HasLoadedWorkbenchContext } from './omniProjectsSidebarActions.js';
 
 interface IHucodeOmniWindowUIDelegate {
 	focusProjectPane(): void;
@@ -220,27 +218,6 @@ registerOmniShellAction2(CLOSE_WORKSPACE_COMMAND_ID, class extends BaseOmniWindo
 				'Omni-Window: Close Workspace'
 			)
 		);
-	}
-
-	override run(accessor: ServicesAccessor): Promise<void> {
-		return accessor.get(IHucodeOmniWindowUIService).closeWorkspace();
-	}
-});
-
-registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
-	constructor() {
-		super({
-			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-			title: localize2(
-				'omniWindowUnloadCurrentWorktree',
-				'Omni-Window: Unload Current Worktree'
-			),
-			f1: true,
-			precondition: ContextKeyExpr.and(
-				IsOmniWindowContext,
-				HasLoadedWorkbenchContext
-			),
-		});
 	}
 
 	override run(accessor: ServicesAccessor): Promise<void> {

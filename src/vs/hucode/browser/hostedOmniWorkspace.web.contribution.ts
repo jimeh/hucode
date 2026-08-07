@@ -17,6 +17,8 @@ import {
 	ServicesAccessor,
 } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import {
 	INativeOpenFileRequest,
 } from '../../platform/window/common/window.js';
@@ -39,8 +41,13 @@ import { IHucodeHostedOmniWebConnectionService } from
 	'./hostedOmniWebConnection.js';
 import { HucodeHostedOmniWebUnloadCoordinator } from
 	'./hostedOmniWebUnload.js';
-import { IHucodeHostedShellService } from
-	'../../platform/window/common/hucodeHostedShellService.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import { notifyHucodeHostedOperationOutcome } from
+	'./omniProjectsSidebarActions.js';
 import { openHucodeFilesRequest } from
 	'../../workbench/browser/hucodeOpenFilesRequest.js';
 import './hostedOmniWebShellService.js';
@@ -152,7 +159,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellFocusProjects',
 				'Omni-Window: Focus Projects'
 			),
-			shellService => shellService.focusShell().then(() => undefined)
+			shellService => shellService.focusShell()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			FOCUS_WORKSPACE_COMMAND_ID,
@@ -160,7 +167,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellFocusWorkbench',
 				'Omni-Window: Focus Workbench'
 			),
-			shellService => shellService.focusSelf().then(() => undefined)
+			shellService => shellService.focusSelf()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			RELOAD_WORKSPACE_COMMAND_ID,
@@ -168,7 +175,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellReloadWorkbench',
 				'Omni-Window: Reload Workbench'
 			),
-			shellService => shellService.reloadSelf().then(() => undefined)
+			shellService => shellService.reloadSelf()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			CLOSE_WORKSPACE_COMMAND_ID,
@@ -176,7 +183,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellCloseWorkbench',
 				'Omni-Window: Close Workbench'
 			),
-			shellService => shellService.closeSelf().then(() => undefined)
+			shellService => shellService.closeSelf()
 		));
 	}
 }
@@ -198,7 +205,7 @@ function registerHostedOmniWebShellCommand(
 	title: ICommandActionTitle,
 	run: (
 		shellService: IHucodeHostedShellService
-	) => Promise<void>
+	) => Promise<HucodeHostedShellOperationOutcome>
 ) {
 	return registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
@@ -217,7 +224,16 @@ function registerHostedOmniWebShellCommand(
 				return;
 			}
 
-			await run(accessor.get(IHucodeHostedShellService));
+			const shellService = accessor.get(IHucodeHostedShellService);
+			const notificationService = accessor.get(INotificationService);
+			const outcome = isHucodeHostedShellServiceAvailable(shellService)
+				? await run(shellService)
+				: HucodeHostedShellOperationOutcome.Unavailable;
+			notifyHucodeHostedOperationOutcome(
+				title.value,
+				outcome,
+				notificationService
+			);
 		}
 	});
 }

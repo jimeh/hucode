@@ -19,14 +19,20 @@ import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
-import { ICommandService } from
+import { CommandsRegistry, ICommandService } from
 	'../../../../platform/commands/common/commands.js';
+import { isIMenuItem, MenuId, MenuRegistry } from
+	'../../../../platform/actions/common/actions.js';
 import { IConfigurationChangeEvent, IConfigurationService } from
 	'../../../../platform/configuration/common/configuration.js';
-import { IContextKeyService } from
+import { IContext, IContextKeyService } from
 	'../../../../platform/contextkey/common/contextkey.js';
+import { ServicesAccessor } from
+	'../../../../platform/instantiation/common/instantiation.js';
 import { INotificationService } from
 	'../../../../platform/notification/common/notification.js';
+import { ILabelService } from
+	'../../../../platform/label/common/label.js';
 import { WorkbenchObjectTree } from
 	'../../../../platform/list/browser/listService.js';
 import {
@@ -48,8 +54,19 @@ import {
 } from '../../../common/omniWindow.js';
 import { IHucodeShellControllerService } from
 	'../../../../platform/window/common/hucodeShellControllerService.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+} from '../../../../platform/window/common/hucodeHostedShellService.js';
+import {
+	CLOSE_WORKSPACE_COMMAND_ID,
+	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
+} from
+	'../../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IHucodeRetainedWorkbench } from
 	'../../../common/retainedWorkbench.js';
+import { filterSwitchWorktreePicks } from
+	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
 	PROJECTS_SECTION_HANDLE,
 	ProjectSwitcherItem,
@@ -68,9 +85,14 @@ import {
 	'../../../browser/projectSwitcher/projectSwitcher.contribution.js';
 import {
 	getActiveWorkbenchWorktreePath,
+	getCombinedSwitchWorkbenchPicks,
 	getOmniHostedWorkspaceState,
 } from
 	'../../../browser/projectSwitcher/switchProjectWorktree.contribution.js';
+import {
+	HasLoadedWorkbenchContext,
+	notifyHucodeHostedOperationOutcome,
+} from '../../../browser/omniProjectsSidebarActions.js';
 
 suite('ProjectSwitcherContribution', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -113,6 +135,132 @@ suite('ProjectSwitcherContribution', () => {
 			modernCompactItem: 22,
 			modernTwoLineItem: 44,
 		});
+	});
+
+	test('registers one F1-visible role-aware unload command', async () => {
+		assert.ok(CommandsRegistry.getCommand(
+			UNLOAD_CURRENT_WORKTREE_COMMAND_ID
+		));
+		const paletteItems = MenuRegistry.getMenuItems(MenuId.CommandPalette)
+			.filter(item => isIMenuItem(item) && item.command.id ===
+				UNLOAD_CURRENT_WORKTREE_COMMAND_ID);
+		assert.strictEqual(paletteItems.length, 1);
+		const paletteItem = paletteItems[0];
+		assert.ok(isIMenuItem(paletteItem));
+		const isPaletteVisible = (values: Record<string, boolean>) =>
+			paletteItem.when?.evaluate({
+				getValue: key => values[key],
+			} as IContext) ?? true;
+		assert.strictEqual(isPaletteVisible({
+			isHostedOmniWorkspace: true,
+			isOmniWindow: false,
+			[HasLoadedWorkbenchContext.key]: false,
+		}), true);
+		assert.strictEqual(isPaletteVisible({
+			isHostedOmniWorkspace: false,
+			isOmniWindow: true,
+			[HasLoadedWorkbenchContext.key]: false,
+		}), true);
+		assert.strictEqual(isPaletteVisible({
+			isHostedOmniWorkspace: false,
+			isOmniWindow: false,
+			[HasLoadedWorkbenchContext.key]: true,
+		}), false);
+
+		const registered = CommandsRegistry.getCommand(
+			UNLOAD_CURRENT_WORKTREE_COMMAND_ID
+		)!;
+		const notifications = { error: () => undefined } as unknown as
+			INotificationService;
+		let hostedCloseCalls = 0;
+		const hostedShellService = {
+			async closeSelf() {
+				hostedCloseCalls++;
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
+		} as Partial<IHucodeHostedShellService> as IHucodeHostedShellService;
+		const shellCommands: string[] = [];
+		const commandService = {
+			async executeCommand(id: string) { shellCommands.push(id); },
+		} as Partial<ICommandService> as ICommandService;
+		const loadedContextKeys = {
+			getContextKeyValue: (key: string) =>
+				key === HasLoadedWorkbenchContext.key ? true : undefined,
+		} as Partial<IContextKeyService> as IContextKeyService;
+		const createAccessor = (
+			environmentService: Partial<IWorkbenchEnvironmentService>
+		) => ({
+			get(service: unknown) {
+				if (service === IWorkbenchEnvironmentService) {
+					return environmentService;
+				}
+				if (service === IContextKeyService) {
+					return loadedContextKeys;
+				}
+				if (service === INotificationService) {
+					return notifications;
+				}
+				if (service === IHucodeHostedShellService) {
+					return hostedShellService;
+				}
+				if (service === ICommandService) {
+					return commandService;
+				}
+				throw new Error('Unexpected service');
+			},
+		}) as ServicesAccessor;
+
+		await registered.handler(createAccessor({
+			isHostedOmniWorkspace: true,
+			isOmniWindow: false,
+		}));
+		assert.strictEqual(hostedCloseCalls, 1);
+		assert.deepStrictEqual(shellCommands, []);
+
+		await registered.handler(createAccessor({
+			isHostedOmniWorkspace: false,
+			isOmniWindow: true,
+		}));
+		assert.strictEqual(hostedCloseCalls, 1);
+		assert.deepStrictEqual(shellCommands, [CLOSE_WORKSPACE_COMMAND_ID]);
+	});
+
+	test('reports every unsuccessful hosted operation outcome', () => {
+		const errors: unknown[] = [];
+		const notificationService = {
+			error: (error: unknown) => { errors.push(error); },
+		} as Partial<INotificationService> as INotificationService;
+
+		for (const outcome of [
+			HucodeHostedShellOperationOutcome.Accepted,
+			HucodeHostedShellOperationOutcome.Superseded,
+		]) {
+			notifyHucodeHostedOperationOutcome(
+				'Test operation', outcome, notificationService);
+		}
+		assert.deepStrictEqual(errors, []);
+
+		for (const outcome of [
+			HucodeHostedShellOperationOutcome.Rejected,
+			HucodeHostedShellOperationOutcome.Stale,
+			HucodeHostedShellOperationOutcome.Unavailable,
+			HucodeHostedShellOperationOutcome.Unsupported,
+		]) {
+			notifyHucodeHostedOperationOutcome(
+				'Test operation', outcome, notificationService);
+		}
+		notifyHucodeHostedOperationOutcome(
+			'Test operation',
+			'future-outcome' as HucodeHostedShellOperationOutcome,
+			notificationService
+		);
+		assert.deepStrictEqual(errors, [
+			'Test operation was rejected by the Omni shell.',
+			'Test operation could not run because this workbench is no longer connected to the current Omni shell.',
+			'Test operation could not run because the Omni shell connection is unavailable.',
+			'Test operation is not supported by this Omni shell.',
+			'Test operation could not be completed.',
+		]);
 	});
 
 	test('keeps complete project catalog reconciliation in the shell',
@@ -300,6 +448,80 @@ suite('ProjectSwitcherContribution', () => {
 
 		renderer.disposeTemplate(template);
 	});
+
+	test('builds hosted switcher picks from the sanitized navigation snapshot',
+		() => {
+			const projects = [projectRecord()];
+			const snapshot = {
+				sectionOrder: ['workbenches', 'projects'] as const,
+				targets: [{
+					folderUri: URI.file('/arbitrary').toJSON(),
+					lifecycleState: 'loaded' as const,
+					lastActiveAt: 30,
+					section: 'workbenches' as const,
+					order: 0,
+					label: 'Arbitrary',
+				}, {
+					folderUri: URI.file('/repo/previous').toJSON(),
+					lifecycleState: 'loaded' as const,
+					lastActiveAt: 20,
+					section: 'projects' as const,
+					order: 0,
+				}, {
+					folderUri: URI.file('/repo/current').toJSON(),
+					lifecycleState: 'active' as const,
+					lastActiveAt: 40,
+					section: 'projects' as const,
+					order: 1,
+				}],
+			};
+			const picks = getCombinedSwitchWorkbenchPicks(
+				projects,
+				undefined,
+				'/repo/current',
+				snapshot.targets.map(target => ({
+					path: URI.revive(target.folderUri).fsPath,
+					lastActiveAt: target.lastActiveAt,
+				})),
+				{
+					getUriLabel: resource => resource.fsPath === '/arbitrary'
+						? 'Formatted arbitrary path'
+						: resource.fsPath,
+				} as ILabelService,
+				snapshot.sectionOrder,
+				snapshot
+			);
+
+			assert.deepStrictEqual(picks.map(pick => ({
+				path: pick.worktreePath,
+				current: pick.isCurrent,
+				loaded: pick.isLoaded,
+				lastVisitedAt: pick.lastVisitedAt,
+			})), [{
+				path: '/repo/current', current: true, loaded: true,
+				lastVisitedAt: 40,
+			}, {
+				path: '/arbitrary', current: false, loaded: true,
+				lastVisitedAt: 30,
+			}, {
+				path: '/repo/previous', current: false, loaded: true,
+				lastVisitedAt: 20,
+			}]);
+			const arbitrary = picks.find(pick =>
+				pick.worktreePath === '/arbitrary')!;
+			assert.deepStrictEqual({
+				detail: arbitrary.detail,
+				tooltip: arbitrary.tooltip,
+			}, {
+				detail: 'Formatted arbitrary path',
+				tooltip: '/arbitrary',
+			});
+			assert.deepStrictEqual(
+				filterSwitchWorktreePicks(picks, '/arbitrary')
+					.map(pick => pick.worktreePath),
+				['/arbitrary']
+			);
+		});
 
 	test('renders independent name branch and path fields in source order', () => {
 		let layout: 'compact' | 'twoLine' = 'compact';

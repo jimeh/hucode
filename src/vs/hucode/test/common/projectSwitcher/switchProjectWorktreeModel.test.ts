@@ -13,6 +13,7 @@ import {
 	canonicalizeProjectSwitcherTarget,
 	combineProjectSwitcherTargets,
 	compareSwitchWorktreePicks,
+	createHucodeHostedNavigationSnapshot,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -28,6 +29,66 @@ import {
 
 suite('SwitchProjectWorktreeModel', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('projects a sanitized hosted navigation snapshot', () => {
+		const snapshot = createHucodeHostedNavigationSnapshot({
+			activeInstanceId: 'project-instance',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			projectSwitcherSectionOrder: ['projects', 'workbenches'],
+			instances: [{
+				instanceId: 'retained-instance',
+				worktreePath: '/arbitrary',
+				state: 'loaded',
+				visible: false,
+				focused: false,
+				webContentsId: 123,
+				processId: 456,
+				lastActiveAt: 10,
+			}, {
+				instanceId: 'project-instance',
+				projectId: 'secret-project-id',
+				worktreePath: '/project',
+				state: 'active',
+				visible: true,
+				focused: true,
+				lastActiveAt: 20,
+			}],
+			retainedWorkbenches: [{
+				id: 'retained-id',
+				folderUri: URI.file('/arbitrary').toJSON(),
+				desiredState: 'loaded',
+				order: 7,
+				label: 'Arbitrary',
+			}],
+		});
+
+		assert.deepStrictEqual(snapshot, {
+			sectionOrder: ['projects', 'workbenches'],
+			targets: [{
+				folderUri: URI.file('/arbitrary').toJSON(),
+				lifecycleState: 'loaded',
+				lastActiveAt: 10,
+				section: 'workbenches',
+				order: 7,
+				label: 'Arbitrary',
+			}, {
+				folderUri: URI.file('/project').toJSON(),
+				lifecycleState: 'active',
+				lastActiveAt: 20,
+				section: 'projects',
+				order: 1,
+			}],
+		});
+		const serialized = JSON.stringify(snapshot);
+		for (const forbidden of [
+			'instanceId', 'projectId', 'retainedWorkbenchId',
+			'webContentsId', 'processId', 'connectionGeneration',
+		]) {
+			assert.strictEqual(serialized.includes(forbidden), false);
+		}
+	});
 
 	test('matches query tokens across project and worktree fields', () => {
 		const picks = [

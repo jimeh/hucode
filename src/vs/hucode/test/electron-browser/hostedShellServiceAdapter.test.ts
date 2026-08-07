@@ -14,6 +14,7 @@ import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../platform/window/common/hucodeHostedShellService.js';
 import { HucodeHostedShellAction } from
 	'../../../platform/window/common/hucodeHostedShellActions.js';
@@ -79,8 +80,16 @@ suite('DesktopHostedShellServiceAdapter', () => {
 			));
 
 			const statePromise = adapter.getState();
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				false
+			);
 			void connection.complete(shell);
 			assert.deepStrictEqual(await statePromise, state);
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				true
+			);
 			state = {
 				...state,
 				projectsSidebarVisible: false,
@@ -113,6 +122,10 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		);
 		const operation = adapter.closeSelf();
 		adapter.dispose();
+		assert.strictEqual(
+			isHucodeHostedShellServiceAvailable(adapter),
+			false
+		);
 		assert.strictEqual(
 			await operation,
 			HucodeHostedShellOperationOutcome.Unavailable

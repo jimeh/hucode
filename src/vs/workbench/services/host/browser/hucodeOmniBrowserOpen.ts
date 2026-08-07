@@ -8,6 +8,7 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { createDecorator } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
@@ -22,6 +23,7 @@ import {
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 } from '../../../../platform/window/common/hucodeHostedShellService.js';
 
 interface IHucodeBrowserOmniShellService {
@@ -117,14 +119,6 @@ export async function tryOpenHucodeOmniBrowserWindow(
 			if (worktree) {
 				projectId = project.id;
 				worktreePath = worktree.path;
-				try {
-					await projectManagerService.setLastActiveWorktree(
-						project.id,
-						worktree.path
-					);
-				} catch (error) {
-					onUnexpectedError(error);
-				}
 				break;
 			}
 		}
@@ -137,6 +131,8 @@ export async function tryOpenHucodeOmniBrowserWindow(
 			worktreePath,
 			projectId
 		)) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService, projectId, worktreePath);
 			return true;
 		}
 	} catch (error) {
@@ -144,6 +140,8 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	}
 	try {
 		if (await shellService.focusNormalWindowByPath(worktreePath)) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService, projectId, worktreePath);
 			return true;
 		}
 	} catch (error) {
@@ -152,6 +150,8 @@ export async function tryOpenHucodeOmniBrowserWindow(
 
 	await shellService.openWorkspace(windowId, worktreePath, projectId);
 	await shellService.focusWorkspace(windowId);
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService, projectId, worktreePath);
 	return true;
 }
 
@@ -171,9 +171,51 @@ export async function tryNavigateHucodeHostedBrowserWindow(
 		toOpen.length !== 1 || !isFolderToOpen(toOpen[0])) {
 		return false;
 	}
+	if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+		onUnexpectedError(new Error(localize(
+			'hostedOmniFolderNavigationUnavailable',
+			'Hosted Omni folder navigation is unavailable.'
+		)));
+		return true;
+	}
 
 	const result = await hostedShellService.navigateToFolder({
 		folderUri: toOpen[0].folderUri.toJSON(),
 	});
-	return result !== HucodeHostedShellOperationOutcome.Unsupported;
+	switch (result) {
+		case HucodeHostedShellOperationOutcome.Unsupported:
+			return false;
+		case HucodeHostedShellOperationOutcome.Accepted:
+		case HucodeHostedShellOperationOutcome.Superseded:
+			return true;
+		case HucodeHostedShellOperationOutcome.Rejected:
+		case HucodeHostedShellOperationOutcome.Stale:
+		case HucodeHostedShellOperationOutcome.Unavailable:
+		default:
+			onUnexpectedError(new Error(localize(
+				'hostedOmniFolderNavigationNotAccepted',
+				'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+				toOpen[0].folderUri.toString(true),
+				result
+			)));
+			return true;
+	}
+}
+
+async function setLastActiveWorktreeBestEffort(
+	projectManagerService: IHucodeOmniBrowserProjectManager,
+	projectId: string | undefined,
+	worktreePath: string
+): Promise<void> {
+	if (!projectId) {
+		return;
+	}
+	try {
+		await projectManagerService.setLastActiveWorktree(
+			projectId,
+			worktreePath
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 }

@@ -18,11 +18,13 @@ import {
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
+	IHucodeHostedNavigationSnapshot,
 	IHucodeHostedReadyResult,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
 	isSupportedHucodeHostedNavigationRequest,
 	negotiateHucodeHostedShellCapabilities,
+	withHucodeHostedShellCachedAvailability,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import {
 	createLegacyHucodeHostedShellActionRequest,
@@ -41,6 +43,8 @@ import {
 	IHucodeHostedWorkspaceState,
 	IHucodeShellService,
 } from '../common/omniWindow.js';
+import { createHucodeHostedNavigationSnapshot } from
+	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 
 /** Client path selected from the parent shell's explicit handshake. */
 export type HostedOmniWebShellClientMode =
@@ -79,6 +83,7 @@ export class HostedOmniWebShellService extends Disposable
 
 	private readonly connected: Promise<IHucodeHostedShellService> | undefined;
 	private state = HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	private available = false;
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedShellState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
@@ -90,6 +95,11 @@ export class HostedOmniWebShellService extends Disposable
 		environmentService: IWorkbenchEnvironmentService,
 	) {
 		super();
+		withHucodeHostedShellCachedAvailability(
+			this,
+			() => this.available
+		);
+		this._register({ dispose: () => { this.available = false; } });
 
 		const instanceId = environmentService.hostedInstanceId;
 		if (!connectionService.isHosted || !instanceId) {
@@ -106,7 +116,7 @@ export class HostedOmniWebShellService extends Disposable
 			const shell = mode === 'current'
 				? createHucodeHostedShellClient(connection.ipcClient.getChannel(
 					HUCODE_HOSTED_SHELL_CHANNEL
-				))
+				), connection.hostedShellCapabilities)
 				: mode === 'legacy'
 					? createLegacyHostedShellClient(
 						ProxyChannel.toService<IHucodeShellService>(
@@ -118,6 +128,7 @@ export class HostedOmniWebShellService extends Disposable
 						instanceId
 					)
 					: createUnavailableHostedShellClient();
+			this.available = !disposed && mode !== 'unavailable';
 			if (!disposed) {
 				this._register(shell.onDidChangeState(state => {
 					this.state = state;
@@ -140,6 +151,15 @@ export class HostedOmniWebShellService extends Disposable
 			this.state = await shell.getState();
 			return this.state;
 		});
+	}
+
+	getNavigationSnapshot(): Promise<
+		IHucodeHostedNavigationSnapshot | undefined
+	> {
+		return this.withShell(
+			() => undefined,
+			shell => shell.getNavigationSnapshot?.() ?? Promise.resolve(undefined)
+		);
 	}
 
 	notifyReady(): Promise<IHucodeHostedReadyResult> {
@@ -213,6 +233,7 @@ function createUnavailableHostedShellClient(): IHucodeHostedShellService {
 		_serviceBrand: undefined,
 		onDidChangeState: Event.None,
 		getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
+		getNavigationSnapshot: async () => undefined,
 		notifyReady: async () => ({
 			outcome: HucodeHostedShellOperationOutcome.Unavailable,
 		}),
@@ -271,6 +292,10 @@ export function createLegacyHostedShellClient(
 		_serviceBrand: undefined,
 		onDidChangeState,
 		getState: async () => project(await getLegacyState()),
+		async getNavigationSnapshot() {
+			const state = await getLegacyState();
+			return createHucodeHostedNavigationSnapshot(state);
+		},
 		async notifyReady() {
 			await legacy.notifyHostedWorkspaceReady(windowId, instanceId);
 			const state = project(await getLegacyState());
