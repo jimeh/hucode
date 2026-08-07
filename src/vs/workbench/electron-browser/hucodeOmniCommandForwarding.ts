@@ -14,16 +14,14 @@ import {
 } from
 	'../../platform/window/common/hucodeShellControllerService.js';
 import {
-	HucodeOmniCommandForwardingContext,
 	HUCODE_OMNI_LOCAL_INPUT_SELECTOR,
 	HUCODE_OMNI_PROJECTS_SELECTOR,
-	IHucodeOmniCommandForwardingContext,
 	IHucodeOmniCommandForwardingScope,
 	isHucodeForwardedFromOmniShell,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
-import { InstantiationType, registerSingleton } from '../../platform/instantiation/common/extensions.js';
+import '../../platform/window/common/hucodeOmniCommandForwardingContext.js';
 import {
 	INativeRunActionInWindowRequest,
 	INativeRunKeybindingInWindowRequest,
@@ -353,9 +351,3 @@ export class HucodeOmniCommandForwarding {
 		return this.isActiveElementInside(HUCODE_OMNI_LOCAL_INPUT_SELECTOR);
 	}
 }
-
-registerSingleton(
-	IHucodeOmniCommandForwardingContext,
-	HucodeOmniCommandForwardingContext,
-	InstantiationType.Delayed
-);

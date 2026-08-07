@@ -523,8 +523,27 @@ suite('WebHucodeShellService', () => {
 		instanceId: string
 	): Promise<void> {
 		const child = connectChild(browser, surface, instanceId);
-		child.workbench.runCommandResult = false;
+		await crashConnectedInstance(service, child.workbench, windowId, instanceId);
+	}
+
+	async function crashConnectedInstance(
+		service: WebHucodeShellController,
+		workbench: FakeHostedWorkbench,
+		windowId: number,
+		instanceId: string
+	): Promise<void> {
+		const commandCount = workbench.commands.length;
+		workbench.runCommandResult = true;
 		await service.reloadWorkspace(windowId);
+		await waitFor(
+			() => workbench.commands.length === commandCount + 1,
+			'expected reload command delivery before simulated failure'
+		);
+		workbench.runCommandResult = false;
+		await service.runActionInWorkspace(windowId, {
+			id: 'hucode.test.simulated-load-failure',
+			from: 'menu',
+		});
 		await waitForInstanceState(service, windowId, instanceId, 'crashed');
 	}
 
@@ -2684,13 +2703,11 @@ suite('WebHucodeShellService', () => {
 			// The workbench crashes and is reopened while its commit is
 			// still outstanding, so a live replacement owns the path by the
 			// time the suspend gets its answer.
-			child.workbench.runCommandResult = false;
-			await service.reloadWorkspace(windowId);
-			await waitFor(
-				async () => (await service.getWindowState(windowId)).instances
-					.some(entry => entry.instanceId === instanceId &&
-						entry.state === 'crashed'),
-				'expected the workbench to crash'
+			await crashConnectedInstance(
+				service,
+				child.workbench,
+				windowId,
+				instanceId
 			);
 			const reopened = await service.openWorkspace(
 				windowId,
@@ -3673,6 +3690,7 @@ suite('WebHucodeShellService', () => {
 		);
 		const instanceId = state.instances[0].instanceId;
 		const child = connectChild(browser, surface, instanceId);
+		const contentFocusCalls = browser.contentFocusCalls;
 
 		const ran = await service.runActionInWorkspace(windowId, {
 			id: 'test.command',
@@ -3683,13 +3701,15 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual({
 			ran,
 			commands: child.workbench.commands,
+			contentFocusCalls: browser.contentFocusCalls - contentFocusCalls,
 		}, {
 			ran: true,
 			commands: [{ commandId: 'test.command', args: ['payload'] }],
+			contentFocusCalls: 1,
 		});
 	});
 
-	test('does not retry clipboard commands after ambiguous delivery timeout',
+	test('does not retry paste after ambiguous delivery timeout',
 		async () => {
 			const browser = new ManualTimeoutBrowserAdapter();
 			const logService = new RecordingLogService();
@@ -3712,7 +3732,7 @@ suite('WebHucodeShellService', () => {
 			child.workbench.runCommandResult = commandResult.p;
 
 			const forwarding = service.runActionInWorkspace(browser.windowId, {
-				id: 'editor.action.clipboardCutAction',
+				id: 'editor.action.clipboardPasteAction',
 				from: 'menu',
 			});
 			await waitFor(
@@ -3790,28 +3810,98 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(secondState.instances[0].state, 'loading');
 	});
 
-	test('restores the active state after a successful reload command', async () => {
-		const { service, surface, browser } = createService();
-		const windowId = browser.windowId;
-		const state = await service.openWorkspace(
-			windowId,
-			'/tmp/hucode-worktree',
-			'project'
-		);
-		const instanceId = state.instances[0].instanceId;
-		const child = connectChild(browser, surface, instanceId);
-		child.workbench.runCommandResult = true;
+	test('waits for the replacement document before completing reload',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			child.workbench.runCommandResult = true;
 
-		await service.reloadWorkspace(windowId);
-		const reloaded = await waitForInstanceState(
-			service,
-			windowId,
-			instanceId,
-			'active'
-		);
+			await service.reloadWorkspace(windowId);
+			await waitFor(
+				() => child.workbench.commands.length === 1,
+				'expected reload command delivery'
+			);
+			await waitFor(
+				() => browser.timeoutCount(5000) === 0,
+				'expected accepted reload response'
+			);
+			const loading = await service.getWindowState(windowId);
+			assert.strictEqual(loading.instances[0].state, 'loading');
+			browser.expireTimeouts(500);
+			assert.strictEqual(browser.reloadIframeCalls, 0);
 
-		assert.strictEqual(reloaded.instances[0].state, 'active');
-	});
+			markReady(browser, surface, instanceId);
+			const reloaded = await waitForInstanceState(
+				service,
+				windowId,
+				instanceId,
+				'active'
+			);
+
+			assert.strictEqual(reloaded.instances[0].state, 'active');
+		});
+
+	test('falls back to iframe reload when the reload command is declined',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			child.workbench.runCommandResult = false;
+
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => child.workbench.commands.length === 1,
+				'expected declined reload command delivery'
+			);
+			await waitFor(
+				() => browser.timeoutCount(5000) === 0,
+				'expected declined reload response'
+			);
+			browser.expireTimeouts(500);
+
+			assert.strictEqual(browser.reloadIframeCalls, 1);
+			const loading = await service.getWindowState(browser.windowId);
+			assert.strictEqual(loading.instances[0].state, 'loading');
+		});
+
+	test('falls back to iframe reload while command delivery is unconfirmed',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const state = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			const commandResult = new DeferredPromise<boolean>();
+			child.workbench.runCommandResult = commandResult.p;
+
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => child.workbench.commands.length === 1,
+				'expected pending reload command delivery'
+			);
+			browser.expireTimeouts(500);
+
+			assert.strictEqual(browser.reloadIframeCalls, 1);
+			await commandResult.complete(false);
+		});
 
 	test('does not surface or revive crashed iframe instances', async () => {
 		const { service, surface, browser } = createService();
@@ -4891,14 +4981,13 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(state.instances[0].projectId, 'project');
 		const instanceId = state.instances[0].instanceId;
 		const child = connectChild(browser, surface, instanceId);
-		child.workbench.runCommandResult = false;
-		await service.reloadWorkspace(browser.windowId);
-		const crashed = await waitForInstanceState(
+		await crashConnectedInstance(
 			service,
+			child.workbench,
 			browser.windowId,
-			instanceId,
-			'crashed'
+			instanceId
 		);
+		const crashed = await service.getWindowState(browser.windowId);
 		assert.strictEqual(
 			crashed.retainedWorkbenches?.[0].desiredState,
 			'unloaded'
@@ -5756,6 +5845,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly portMessages: IPostedPortMessage[] = [];
 	readonly iframeFocusCalls: string[] = [];
 	contentFocusCalls = 0;
+	reloadIframeCalls = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
 
@@ -5791,7 +5881,9 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		this.contentFocusCalls++;
 	}
 
-	reloadIframe(_iframe: HTMLIFrameElement): void { }
+	reloadIframe(_iframe: HTMLIFrameElement): void {
+		this.reloadIframeCalls++;
+	}
 
 	createMessageChannel(): MessageChannel {
 		return new MessageChannel();
@@ -5873,6 +5965,12 @@ class ManualTimeoutBrowserAdapter extends FakeBrowserAdapter {
 				pending.callback();
 			}
 		}
+	}
+
+	timeoutCount(timeout: number): number {
+		return [...this.timeouts.values()].filter(
+			pending => pending.timeout === timeout
+		).length;
 	}
 }
 

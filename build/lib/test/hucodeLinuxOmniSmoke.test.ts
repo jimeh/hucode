@@ -32,6 +32,11 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			lastActive: 'Switch to Last Active Workbench',
 			quickSwitchLoaded: 'Quick Switch Loaded Workbench',
 			unloadCurrent: 'Omni-Window: Unload Current Worktree',
+			toggleProjectsSidebar: 'Omni-Window: Toggle Projects Sidebar',
+			webHostedFocusProjects: 'Omni-Window: Focus Projects',
+			webHostedFocusWorkbench: 'Omni-Window: Focus Workbench',
+			reloadDesktop: 'Reload Hosted Workbench',
+			reloadWeb: 'Omni-Window: Reload Workbench',
 		});
 	});
 
@@ -311,6 +316,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			'initial restore',
 			'switch to Bravo',
 			'switch to Alpha',
+			'hosted reload Alpha',
 			'hosted full picker to Bravo',
 			'hosted previous loaded to Alpha',
 			'hosted next loaded to Bravo',
@@ -329,6 +335,24 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			'/tmp/smoke/Alpha',
 			'/tmp/smoke/Bravo'
 		);
+		assert.deepStrictEqual(expectations['hosted reload Alpha'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'loaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha', '/tmp/smoke/Bravo'],
+			crashedRendererCount: 0,
+		});
 		assert.deepStrictEqual(expectations['hosted unload Bravo'], {
 			rows: [
 				{

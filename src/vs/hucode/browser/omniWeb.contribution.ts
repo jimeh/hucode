@@ -5,6 +5,8 @@
 
 import './paneCompositePartService.js';
 import './layoutActions.js';
+import './omniCommandService.js';
+import './omniWebClipboardForwarding.contribution.js';
 import './omniHost.contribution.js';
 import './services/omniAgentHostService.js';
 import './projectManager/webProjectManagerService.js';

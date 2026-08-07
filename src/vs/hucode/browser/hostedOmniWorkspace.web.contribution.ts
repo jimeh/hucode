@@ -12,6 +12,10 @@ import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { IFileService } from '../../platform/files/common/files.js';
+import { ICodeEditorService } from
+	'../../editor/browser/services/codeEditorService.js';
+import { ICodeEditor } from '../../editor/browser/editorBrowser.js';
+import { Handler } from '../../editor/common/editorCommon.js';
 import {
 	IInstantiationService,
 	ServicesAccessor,
@@ -27,6 +31,7 @@ import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	FOCUS_WORKSPACE_COMMAND_ID,
+	isHucodeOmniClipboardAction,
 	RELOAD_WORKSPACE_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IsHostedOmniWorkspaceContext } from '../../workbench/common/contextkeys.js';
@@ -54,6 +59,37 @@ import './hostedOmniWebShellService.js';
 import './projectManager/webProjectManagerService.js';
 import './hostedOmniWorkspace.contribution.js';
 
+type IHostedOmniWebCodeEditor = Pick<ICodeEditor, 'focus' | 'trigger'>;
+type IHostedOmniWebCodeEditorService = {
+	getActiveCodeEditor(): IHostedOmniWebCodeEditor | null;
+};
+type IHostedOmniWebCommandService = {
+	executeCommand(commandId: string, ...args: unknown[]): Promise<unknown>;
+};
+
+/** Runs a remote command with the browser-specific editor clipboard behavior. */
+export async function runHostedOmniWebCommand(
+	commandId: string,
+	args: readonly unknown[],
+	commandService: IHostedOmniWebCommandService,
+	codeEditorService: IHostedOmniWebCodeEditorService
+): Promise<void> {
+	const editor = codeEditorService.getActiveCodeEditor();
+	if (isHucodeOmniClipboardAction(commandId)) {
+		editor?.focus();
+	}
+
+	if (commandId === 'editor.action.clipboardCutAction' && editor) {
+		await commandService.executeCommand(
+			'editor.action.clipboardCopyAction'
+		);
+		editor.trigger(undefined, Handler.Cut, undefined);
+		return;
+	}
+
+	await commandService.executeCommand(commandId, ...args);
+}
+
 /**
  * Connects a hosted iframe workbench to its Omni web shell: it exposes the
  * workbench-side channel, signals restore readiness, and relays focus.
@@ -71,6 +107,8 @@ class HostedOmniWebBridgeContribution extends Disposable
 		@IHucodeHostedOmniWebConnectionService
 		private readonly connectionService: IHucodeHostedOmniWebConnectionService,
 		@ICommandService private readonly commandService: ICommandService,
+		@ICodeEditorService
+		private readonly codeEditorService: ICodeEditorService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IFileService private readonly fileService: IFileService,
 		@IInstantiationService
@@ -114,7 +152,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 		args: readonly unknown[]
 	): Promise<boolean> {
 		try {
-			await this.commandService.executeCommand(commandId, ...args);
+			await runHostedOmniWebCommand(
+				commandId,
+				args,
+				this.commandService,
+				this.codeEditorService
+			);
 			return true;
 		} catch (error) {
 			this.logService.error(error);

@@ -38,6 +38,7 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
+	isHucodeOmniClipboardAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
 	formatHucodeHostedShellActionCommandIdForLog,
@@ -357,10 +358,6 @@ type IWebHucodeShellHostSurfaceService = Pick<
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
 const COMMAND_DELIVERY_UNKNOWN =
 	Symbol('hucodeOmniWebCommandDeliveryUnknown');
-const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
-	'editor.action.clipboardCopyAction',
-	'editor.action.clipboardCutAction',
-]);
 type IHucodeHostedWebShellConnectionFacade = Pick<
 	IHucodeShellService,
 	| 'onDidChangeWindowState'
@@ -1421,6 +1418,7 @@ export class WebHucodeShellController extends Disposable
 			return false;
 		}
 
+		this.focusIframe(instance);
 		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
@@ -1430,12 +1428,12 @@ export class WebHucodeShellController extends Disposable
 			return result;
 		}
 
-		if (!HUCODE_OMNI_CLIPBOARD_COMMANDS.has(request.id)) {
+		if (!isHucodeOmniClipboardAction(request.id)) {
 			return false;
 		}
 		// A timed-out request may still execute in the child after this point.
-		// Treat clipboard delivery as consumed: retrying copy/cut locally can
-		// duplicate a destructive cut. The tradeoff is that an actually lost
+		// Treat clipboard delivery as consumed: retrying it locally can duplicate
+		// a paste or destructive cut. The tradeoff is that an actually lost
 		// request leaves the clipboard operation unapplied.
 		this.logService.warn(
 			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
@@ -1477,13 +1475,21 @@ export class WebHucodeShellController extends Disposable
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
 		instance.state = 'loading';
+		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
 			instance,
 			'workbench.action.reloadWindow',
-			[]
-		);
+			[],
+			false
+		).then(result => {
+			reloadCommandAccepted = result === true;
+		});
 		this.browser.setTimeout(() => {
-			if (instance.state === 'loading' && instance.iframe) {
+			if (
+				instance.state === 'loading' &&
+				!reloadCommandAccepted &&
+				instance.iframe
+			) {
 				this.browser.reloadIframe(instance.iframe);
 			}
 		}, 500);
@@ -2622,15 +2628,16 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	/**
-	 * Runs a workbench command in an instance. Completed results also settle
-	 * a pending `loading` state: success marks the workbench ready, failure
-	 * marks it crashed. Timeouts leave the state untouched so an in-flight
-	 * reload keeps its iframe-level fallback.
+	 * Runs a workbench command in an instance. When requested, completed results
+	 * also settle a pending `loading` state: success marks the workbench ready
+	 * and failure marks it crashed. Reload command delivery deliberately leaves
+	 * that state untouched so Ready or the iframe fallback remains authoritative.
 	 */
 	private async runCommandInInstance(
 		instance: IHostedIframeInstance,
 		commandId: string,
-		args: readonly unknown[]
+		args: readonly unknown[],
+		settleLoadingState = true
 	): Promise<boolean | typeof COMMAND_DELIVERY_UNKNOWN> {
 		const workbench = instance.connection?.workbench;
 		if (!workbench) {
@@ -2645,7 +2652,7 @@ export class WebHucodeShellController extends Disposable
 			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
-		if (instance.state === 'loading') {
+		if (instance.state === 'loading' && settleLoadingState) {
 			if (result) {
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {
