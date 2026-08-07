@@ -148,6 +148,7 @@ interface IHostedIframeInstance {
 	connectionGeneration: number;
 	pendingReloadConnectionGeneration?: number;
 	pendingReloadIframe?: HTMLIFrameElement;
+	pendingReloadIframeReplaced?: boolean;
 	bootstrapId?: string;
 	bootstrapAttempt?: number;
 	retiredBootstrapIds?: Set<string>;
@@ -1492,6 +1493,7 @@ export class WebHucodeShellController extends Disposable
 		instance.pendingReloadConnectionGeneration =
 			reloadConnectionGeneration;
 		instance.pendingReloadIframe = reloadIframe;
+		instance.pendingReloadIframeReplaced = false;
 		instance.state = 'loading';
 		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
@@ -1702,6 +1704,10 @@ export class WebHucodeShellController extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebChildMessageType.Ready:
+				if (instance.pendingReloadConnectionGeneration !== undefined &&
+					!instance.pendingReloadIframeReplaced) {
+					return;
+				}
 				if (message.connectionBootstrap !== undefined) {
 					if (instance.bootstrapId !==
 						message.connectionBootstrap.id &&
@@ -2015,6 +2021,7 @@ export class WebHucodeShellController extends Disposable
 			}
 			instance.pendingReloadConnectionGeneration = undefined;
 			instance.pendingReloadIframe = undefined;
+			instance.pendingReloadIframeReplaced = undefined;
 		}
 
 		this.hostedWorkspaces.markInstanceReady(instance);
@@ -2297,6 +2304,7 @@ export class WebHucodeShellController extends Disposable
 		const restoreFocus = instance.visible && instance.focused;
 		instance.iframe = replacement;
 		instance.pendingReloadIframe = replacement;
+		instance.pendingReloadIframeReplaced = true;
 		this.retireBootstrapDocument(instance);
 		instance.bootstrapId = undefined;
 		instance.bootstrapAttempt = undefined;
@@ -2332,6 +2340,9 @@ export class WebHucodeShellController extends Disposable
 	private removeInstance(instance: IHostedIframeInstance): void {
 		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
+		instance.pendingReloadConnectionGeneration = undefined;
+		instance.pendingReloadIframe = undefined;
+		instance.pendingReloadIframeReplaced = undefined;
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);

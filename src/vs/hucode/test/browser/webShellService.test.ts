@@ -3965,6 +3965,73 @@ suite('WebHucodeShellService', () => {
 			);
 		});
 
+	test('rejects Ready from the current iframe until reload replaces it',
+		async () => {
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface } = createService(browser);
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/pre-swap-reload',
+				'project'
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const originalIframe = getIframe(surface, instanceId);
+			const oldChild = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				{ id: 'document-a', attempt: 1 }
+			);
+			const reloadResult = new DeferredPromise<boolean>();
+			oldChild.workbench.runCommandResult = reloadResult.p;
+
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => oldChild.workbench.commands.length === 1,
+				'expected pending reload command delivery'
+			);
+			const portCount = browser.portMessages.length;
+			for (const message of [{
+				type: HucodeOmniWebChildMessageType.Ready,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+				connectionBootstrap: { id: 'forged-document', attempt: 1 },
+			}, {
+				type: HucodeOmniWebChildMessageType.Ready,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+				connectionAttempt: 2,
+			}, {
+				type: HucodeOmniWebChildMessageType.Ready,
+			}]) {
+				postMessage(browser, surface, instanceId, message);
+			}
+
+			assert.strictEqual(browser.portMessages.length, portCount);
+			assert.strictEqual(getIframe(surface, instanceId), originalIframe);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances[0].state,
+				'loading'
+			);
+			assert.strictEqual((await oldChild.shell.getState()).available, false);
+
+			await reloadResult.complete(true);
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected accepted reload to replace the iframe'
+			);
+			const replacement = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				{ id: 'document-b', attempt: 1 }
+			);
+			assert.strictEqual((await replacement.shell.getState()).available, true);
+		});
+
 	test('rejects queued Ready messages from the replaced iframe WindowProxy',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -4338,6 +4405,13 @@ suite('WebHucodeShellService', () => {
 			);
 			const loading = await service.getWindowState(browser.windowId);
 			assert.strictEqual(loading.instances[0].state, 'loading');
+			markReady(browser, surface, instanceId);
+			await waitForInstanceState(
+				service,
+				browser.windowId,
+				instanceId,
+				'active'
+			);
 		});
 
 	test('falls back to iframe reload while command delivery is unconfirmed',
