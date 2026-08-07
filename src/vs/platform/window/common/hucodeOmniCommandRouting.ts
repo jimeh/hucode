@@ -67,6 +67,23 @@ export const HUCODE_OMNI_LOCAL_INPUT_SELECTOR = [
 	'[contenteditable="true"]',
 ].join(', ');
 
+export const HUCODE_OMNI_CLIPBOARD_ACTIONS: ReadonlyMap<string, string> =
+	new Map([
+		['copy', 'editor.action.clipboardCopyAction'],
+		['cut', 'editor.action.clipboardCutAction'],
+		['paste', 'editor.action.clipboardPasteAction'],
+	]);
+
+/** Returns whether a command is one of the browser clipboard actions. */
+export function isHucodeOmniClipboardAction(commandId: string): boolean {
+	for (const actionId of HUCODE_OMNI_CLIPBOARD_ACTIONS.values()) {
+		if (actionId === commandId) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export const IHucodeOmniCommandForwardingContext =
 	createDecorator<IHucodeOmniCommandForwardingContext>(
 		'hucodeOmniCommandForwardingContext'

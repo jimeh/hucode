@@ -26,6 +26,9 @@ import {
 } from './projectSwitcher/projectSwitcher.contribution.js';
 import { IHucodeShellControllerService } from
 	'../../platform/window/common/hucodeShellControllerService.js';
+import { ICommandService } from '../../platform/commands/common/commands.js';
+import { FOCUS_WORKSPACE_COMMAND_ID } from
+	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IHucodeOmniWindowUIService } from './omniWindowUI.js';
 import {
 	openSelectionInOmniWindow,
@@ -154,6 +157,7 @@ class OmniSmokeTestDriverContribution extends Disposable
 		environmentService: IWorkbenchEnvironmentService,
 		@IHucodeShellControllerService
 		shellService: IHucodeShellControllerService,
+		@ICommandService commandService: ICommandService,
 	) {
 		super();
 		this._register(registerOmniSmokeTestDriver({
@@ -167,6 +171,9 @@ class OmniSmokeTestDriverContribution extends Disposable
 			suspendWorkspace: (_windowId, instanceId) =>
 				shellService.suspendWorkspace(instanceId),
 			reloadWorkspace: _windowId => shellService.reloadWorkspace(),
+			focusWorkspace: _windowId => commandService.executeCommand(
+				FOCUS_WORKSPACE_COMMAND_ID
+			),
 		}));
 	}
 }

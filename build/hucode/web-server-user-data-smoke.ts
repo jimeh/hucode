@@ -20,7 +20,11 @@ import {
 	assertHostedWorkbenchSmokeCommandVisible,
 	hostedWorkbenchSmokeCommands,
 	readOmniWorkbenchSmokeRows,
+	runHostedWorkbenchClipboardBridgeSmoke,
 	runHostedWorkbenchSmokeCommand,
+	waitForHostedWorkbenchSmokeSurfaceFocus,
+	waitForOmniProjectsSmokeSurfaceFocus,
+	waitForOmniProjectsSidebarVisibility,
 } from './omni-hosted-command-smoke.ts';
 
 const timeoutMs = 180_000;
@@ -58,6 +62,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 	const serverDataDir = path.join(temporaryRoot, 'server-data');
 	const alphaPath = path.join(temporaryRoot, 'Alpha');
 	const bravoPath = path.join(temporaryRoot, 'Bravo');
+	const bridgeFileName = 'omni-bridge-smoke.txt';
 	let launch: IServerLaunch | undefined;
 	let browser: Browser | undefined;
 	let page: Page | undefined;
@@ -72,6 +77,10 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			fs.mkdir(alphaPath, { recursive: true }),
 			fs.mkdir(bravoPath, { recursive: true }),
 		]);
+		await fs.writeFile(
+			path.join(alphaPath, bridgeFileName),
+			'omni bridge smoke fixture'
+		);
 		const port = await getAvailablePort();
 		launch = launchServer(serverDataDir, port);
 		const deadline = Date.now() + timeoutMs;
@@ -82,6 +91,10 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			headless: true,
 		});
 		page = await browser.newPage();
+		await page.context().grantPermissions(
+			['clipboard-read', 'clipboard-write'],
+			{ origin: new URL(launch.url).origin }
+		);
 		page.on('pageerror', error => pageErrors.push(error.stack ?? error.message));
 		page.on('console', message => {
 			if (message.type() === 'error') {
@@ -126,8 +139,74 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			{ label: 'Alpha', state: 'active', active: true },
 			{ label: 'Bravo', state: 'loaded', active: false },
 		]);
-
 		hostedFrame = await waitForHostedFrame(page, alphaPath, deadline);
+		await assertHostedWorkbenchSmokeCommandVisible(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.webHostedFocusWorkbench,
+			commandTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.webHostedFocusProjects,
+			commandTimeout(deadline)
+		);
+		await waitForOmniProjectsSmokeSurfaceFocus(
+			page,
+			commandTimeout(deadline)
+		);
+		await focusWorkspaceThroughSmokeDriver(page, deadline);
+		await waitForHostedWorkbenchSmokeSurfaceFocus(
+			hostedFrame,
+			commandTimeout(deadline)
+		);
+		await runHostedWorkbenchClipboardBridgeSmoke({
+			keyboardPage: page,
+			shellPage: page,
+			surface: hostedFrame,
+			fileName: bridgeFileName,
+			timeoutMs: commandTimeout(deadline),
+			readClipboardText: () => page!.evaluate(() => (
+				globalThis as unknown as {
+					readonly navigator: {
+						readonly clipboard: { readText(): Promise<string> };
+					};
+				}
+			).navigator.clipboard.readText()),
+			writeClipboardText: text => page!.evaluate(value => (
+				globalThis as unknown as {
+					readonly navigator: {
+						readonly clipboard: {
+							writeText(text: string): Promise<void>;
+						};
+					};
+				}
+			).navigator.clipboard.writeText(value), text),
+		});
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			commandTimeout(deadline)
+		);
+		await waitForOmniProjectsSidebarVisibility(
+			page,
+			false,
+			commandTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			commandTimeout(deadline)
+		);
+		await waitForOmniProjectsSidebarVisibility(
+			page,
+			true,
+			commandTimeout(deadline)
+		);
+
 		await runHostedWorkbenchSmokeCommand(
 			page,
 			hostedFrame,
@@ -200,15 +279,18 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			{ label: 'Bravo', state: 'loaded', active: false },
 		]);
 		const beforeReload = await waitForHostedFrame(page, alphaPath, deadline);
-		const reloadNavigation = beforeReload.waitForNavigation({
-			waitUntil: 'domcontentloaded',
-			timeout: commandTimeout(deadline),
-		});
-		await Promise.all([
-			reloadActiveWorkspaceThroughSmokeDriver(page, deadline),
-			reloadNavigation,
-		]);
-		const afterReload = await waitForHostedFrame(page, alphaPath, deadline);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			beforeReload,
+			hostedWorkbenchSmokeCommands.reloadWeb,
+			commandTimeout(deadline)
+		);
+		const afterReload = await waitForHostedFrame(
+			page,
+			alphaPath,
+			deadline,
+			beforeReload
+		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
 			{ label: 'Bravo', state: 'loaded', active: false },
@@ -216,19 +298,25 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		await runHostedWorkbenchSmokeCommand(
 			page,
 			afterReload,
-			hostedWorkbenchSmokeCommands.nextLoaded,
+			hostedWorkbenchSmokeCommands.webHostedFocusProjects,
 			commandTimeout(deadline)
 		);
-		await waitForWebWorkbenchState(page, deadline, [
-			{ label: 'Alpha', state: 'loaded', active: false },
-			{ label: 'Bravo', state: 'active', active: true },
-		]);
+		await waitForOmniProjectsSmokeSurfaceFocus(
+			page,
+			commandTimeout(deadline)
+		);
+		await focusWorkspaceThroughSmokeDriver(page, deadline);
+		await waitForHostedWorkbenchSmokeSurfaceFocus(
+			afterReload,
+			commandTimeout(deadline)
+		);
 		targetInventory = await formatWebTargetInventory(page);
 
 		console.log(
 			`Hucode server user-data Omni smoke passed: observed GET ` +
-			`${bootstrap.pathname} (${bootstrap.status}); exercised six hosted ` +
-			`commands, unload, and connection recovery across Alpha and Bravo`
+			`${bootstrap.pathname} (${bootstrap.status}); exercised hosted ` +
+			`navigation, clipboard/focus bridging, a shell action, unload, and ` +
+			`command-driven connection recovery across Alpha and Bravo`
 		);
 	} catch (error) {
 		if (page) {
@@ -450,22 +538,23 @@ async function openWorkspaceThroughSmokeDriver(
 	}, worktreePath), operationDeadline, `open ${worktreePath}`);
 }
 
-async function reloadActiveWorkspaceThroughSmokeDriver(
+async function focusWorkspaceThroughSmokeDriver(
 	page: Page,
 	deadline: number
 ): Promise<void> {
-	const operationDeadline = Date.now() + commandTimeout(deadline);
+	const timeout = commandTimeout(deadline);
+	await waitForOmniProjectsSmokeSurfaceFocus(page, timeout);
 	await withDeadline(page.evaluate(async () => {
 		const target = globalThis as unknown as {
 			readonly __hucodeOmniSmokeTestDriver?: {
-				reloadActiveWorkspace(): Promise<void>;
+				focusActiveWorkspace(): Promise<void>;
 			};
 		};
 		if (!target.__hucodeOmniSmokeTestDriver) {
 			throw new Error('Omni smoke-test driver is unavailable');
 		}
-		await target.__hucodeOmniSmokeTestDriver.reloadActiveWorkspace();
-	}), operationDeadline, 'reload active workspace');
+		await target.__hucodeOmniSmokeTestDriver.focusActiveWorkspace();
+	}), Date.now() + timeout, 'focus active workspace');
 }
 
 async function waitForWebWorkbenchState(
@@ -504,7 +593,8 @@ async function waitForWebWorkbenchState(
 async function waitForHostedFrame(
 	page: Page,
 	worktreePath: string,
-	deadline: number
+	deadline: number,
+	excludedFrame?: Frame
 ): Promise<Frame> {
 	let lastInventory = '<not observed>';
 	const phaseDeadline = Date.now() + commandTimeout(deadline);
@@ -512,6 +602,9 @@ async function waitForHostedFrame(
 		const matches: Frame[] = [];
 		const inventory: unknown[] = [];
 		for (const frame of page.frames()) {
+			if (frame === excludedFrame) {
+				continue;
+			}
 			try {
 				const configuration = await readWebFrameConfiguration(frame);
 				const frameWorktreePath = getWebFrameWorktreePath(frame);

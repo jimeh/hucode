@@ -723,6 +723,14 @@ human-facing guides rather than replacing them.
   `NativeHostMainService.triggerPaste()` resolves that id to the shell
   `BrowserWindow.webContents`. Use the Hucode shell service to trigger native
   paste on the active hosted `WebContentsView`.
+- A serve-web hosted cut crosses an asynchronous `MessagePort` boundary before
+  the workbench handles it, so the browser's generic `document.execCommand`
+  path no longer has user activation. Keep the remote cut path narrowly scoped:
+  focus the active editor, run the normal copy command, then invoke the editor's
+  direct Cut handler once.
+- A hosted serve-web reload command returning only confirms that the old page
+  accepted the command. Keep the instance loading until the replacement page's
+  Ready message arrives; otherwise follow-up commands can target a stale port.
 - Do not catch shell `Cmd+V` in Electron `before-input-event`. That runs before
   the renderer can inspect focused DOM and will steal paste from shell
   QuickInput prompts. Let renderer keybinding/clipboard routing decide when

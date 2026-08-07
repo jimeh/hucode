@@ -38,6 +38,7 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
+	isHucodeOmniClipboardAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
 	formatHucodeHostedShellActionCommandIdForLog,
@@ -145,6 +146,9 @@ interface IHostedIframeInstance {
 	hostedShellProtocolVersion?: number;
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
+	pendingReloadConnectionGeneration?: number;
+	pendingReloadIframe?: HTMLIFrameElement;
+	pendingReloadIframeReplaced?: boolean;
 	bootstrapId?: string;
 	bootstrapAttempt?: number;
 	retiredBootstrapIds?: Set<string>;
@@ -357,10 +361,6 @@ type IWebHucodeShellHostSurfaceService = Pick<
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
 const COMMAND_DELIVERY_UNKNOWN =
 	Symbol('hucodeOmniWebCommandDeliveryUnknown');
-const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
-	'editor.action.clipboardCopyAction',
-	'editor.action.clipboardCutAction',
-]);
 type IHucodeHostedWebShellConnectionFacade = Pick<
 	IHucodeShellService,
 	| 'onDidChangeWindowState'
@@ -412,7 +412,6 @@ export interface IWebHucodeShellBrowserAdapter {
 	open(url: string): void;
 	focusIframe(iframe: HTMLIFrameElement): void;
 	focusIframeContent(iframe: HTMLIFrameElement): void;
-	reloadIframe(iframe: HTMLIFrameElement): void;
 	createMessageChannel(): MessageChannel;
 	postPortMessage(
 		iframe: HTMLIFrameElement,
@@ -440,7 +439,6 @@ function defaultWebHucodeShellBrowserAdapter():
 		},
 		focusIframe: iframe => iframe.focus(),
 		focusIframeContent: iframe => iframe.contentWindow?.focus(),
-		reloadIframe: iframe => iframe.contentWindow?.location.reload(),
 		createMessageChannel: () => new MessageChannel(),
 		postPortMessage: (iframe, message, port) => {
 			iframe.contentWindow?.postMessage(
@@ -1344,7 +1342,9 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
-		this.hostedWorkspaces.markInstanceReady(instance);
+		if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+			return;
+		}
 		this.emitState();
 	}
 
@@ -1417,10 +1417,14 @@ export class WebHucodeShellController extends Disposable
 	): Promise<boolean> {
 		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
-		if (!instance) {
+		if (!instance ||
+			instance.pendingReloadConnectionGeneration !== undefined) {
 			return false;
 		}
 
+		if (isHucodeOmniClipboardAction(request.id)) {
+			this.focusIframe(instance);
+		}
 		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
@@ -1430,12 +1434,12 @@ export class WebHucodeShellController extends Disposable
 			return result;
 		}
 
-		if (!HUCODE_OMNI_CLIPBOARD_COMMANDS.has(request.id)) {
+		if (!isHucodeOmniClipboardAction(request.id)) {
 			return false;
 		}
 		// A timed-out request may still execute in the child after this point.
-		// Treat clipboard delivery as consumed: retrying copy/cut locally can
-		// duplicate a destructive cut. The tradeoff is that an actually lost
+		// Treat clipboard delivery as consumed: retrying it locally can duplicate
+		// a paste or destructive cut. The tradeoff is that an actually lost
 		// request leaves the clipboard operation unapplied.
 		this.logService.warn(
 			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
@@ -1476,15 +1480,49 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
+		if (instance.pendingReloadConnectionGeneration !== undefined) {
+			this.replaceReloadingIframe(
+				instance,
+				instance.pendingReloadConnectionGeneration,
+				instance.pendingReloadIframe
+			);
+			return;
+		}
+		const reloadConnectionGeneration = instance.connectionGeneration;
+		const reloadIframe = instance.iframe;
+		instance.pendingReloadConnectionGeneration =
+			reloadConnectionGeneration;
+		instance.pendingReloadIframe = reloadIframe;
+		instance.pendingReloadIframeReplaced = false;
 		instance.state = 'loading';
+		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
 			instance,
 			'workbench.action.reloadWindow',
-			[]
-		);
+			[],
+			false
+		).then(result => {
+			reloadCommandAccepted = result === true;
+			if (reloadCommandAccepted) {
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
+			}
+		});
 		this.browser.setTimeout(() => {
-			if (instance.state === 'loading' && instance.iframe) {
-				this.browser.reloadIframe(instance.iframe);
+			if (
+				instance.pendingReloadConnectionGeneration ===
+				reloadConnectionGeneration &&
+				instance.state === 'loading' &&
+				!reloadCommandAccepted
+			) {
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
 			}
 		}, 500);
 		this.emitState();
@@ -1666,6 +1704,10 @@ export class WebHucodeShellController extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebChildMessageType.Ready:
+				if (instance.pendingReloadConnectionGeneration !== undefined &&
+					!instance.pendingReloadIframeReplaced) {
+					return;
+				}
 				if (message.connectionBootstrap !== undefined) {
 					if (instance.bootstrapId !==
 						message.connectionBootstrap.id &&
@@ -1835,7 +1877,9 @@ export class WebHucodeShellController extends Disposable
 					!isHostedWorkspaceAvailable(instance)) {
 					return;
 				}
-				this.hostedWorkspaces.markInstanceReady(instance);
+				if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+					return;
+				}
 				this.emitState();
 			},
 			closeSelf: async current => {
@@ -1932,7 +1976,8 @@ export class WebHucodeShellController extends Disposable
 		return {
 			connectionGeneration: instance.connectionGeneration,
 			disposed: this.instancesById.get(instance.instanceId) !== instance ||
-				!instance.connection,
+				!instance.connection ||
+				this.isCurrentConnectionPendingReload(instance),
 			projectsSidebarVisible: state.projectsSidebarVisible,
 			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
 			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
@@ -1954,7 +1999,33 @@ export class WebHucodeShellController extends Disposable
 			binding.instanceId === instance.instanceId &&
 			binding.connectionGeneration === instance.connectionGeneration &&
 			this.instancesById.get(instance.instanceId) === instance &&
-			!!instance.connection;
+			!!instance.connection &&
+			!this.isCurrentConnectionPendingReload(instance);
+	}
+
+	private isCurrentConnectionPendingReload(
+		instance: IHostedIframeInstance
+	): boolean {
+		return instance.pendingReloadConnectionGeneration ===
+			instance.connectionGeneration;
+	}
+
+	private markInstanceReadyFromCurrentConnection(
+		instance: IHostedIframeInstance
+	): boolean {
+		const pendingReloadGeneration =
+			instance.pendingReloadConnectionGeneration;
+		if (pendingReloadGeneration !== undefined) {
+			if (pendingReloadGeneration === instance.connectionGeneration) {
+				return false;
+			}
+			instance.pendingReloadConnectionGeneration = undefined;
+			instance.pendingReloadIframe = undefined;
+			instance.pendingReloadIframeReplaced = undefined;
+		}
+
+		this.hostedWorkspaces.markInstanceReady(instance);
+		return true;
 	}
 
 	private isBoundInstanceActiveVisible(
@@ -2185,11 +2256,6 @@ export class WebHucodeShellController extends Disposable
 		retainedWorkbenchId?: string
 	): IHostedIframeInstance {
 		const instanceId = generateUuid();
-		const iframe = this.browser.createIframe();
-		iframe.className = 'hucode-omni-host-iframe hidden';
-		iframe.title = worktreePath;
-		iframe.dataset.hucodeHostedInstanceId = instanceId;
-		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
 
 		return {
 			instanceId,
@@ -2197,12 +2263,57 @@ export class WebHucodeShellController extends Disposable
 			retainedWorkbenchId,
 			worktreePath,
 			state: 'loading',
-			iframe,
+			iframe: this.createHostedIframe(instanceId, worktreePath, false),
 			visible: false,
 			focused: false,
 			lifecycleGeneration: 0,
 			connectionGeneration: 0,
 		};
+	}
+
+	private createHostedIframe(
+		instanceId: string,
+		worktreePath: string,
+		visible: boolean
+	): HTMLIFrameElement {
+		const iframe = this.browser.createIframe();
+		iframe.className = 'hucode-omni-host-iframe';
+		iframe.classList.toggle('hidden', !visible);
+		iframe.title = worktreePath;
+		iframe.dataset.hucodeHostedInstanceId = instanceId;
+		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
+		return iframe;
+	}
+
+	private replaceReloadingIframe(
+		instance: IHostedIframeInstance,
+		connectionGeneration: number,
+		expectedIframe: HTMLIFrameElement | undefined
+	): boolean {
+		if (!expectedIframe ||
+			instance.pendingReloadConnectionGeneration !== connectionGeneration ||
+			instance.iframe !== expectedIframe) {
+			return false;
+		}
+
+		const replacement = this.createHostedIframe(
+			instance.instanceId,
+			instance.worktreePath,
+			instance.visible
+		);
+		const restoreFocus = instance.visible && instance.focused;
+		instance.iframe = replacement;
+		instance.pendingReloadIframe = replacement;
+		instance.pendingReloadIframeReplaced = true;
+		this.retireBootstrapDocument(instance);
+		instance.bootstrapId = undefined;
+		instance.bootstrapAttempt = undefined;
+		this.disposeConnection(instance);
+		expectedIframe.replaceWith(replacement);
+		if (restoreFocus) {
+			this.focusIframe(instance);
+		}
+		return true;
 	}
 
 	private activateInstance(instance: IHostedIframeInstance): void {
@@ -2229,6 +2340,9 @@ export class WebHucodeShellController extends Disposable
 	private removeInstance(instance: IHostedIframeInstance): void {
 		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
+		instance.pendingReloadConnectionGeneration = undefined;
+		instance.pendingReloadIframe = undefined;
+		instance.pendingReloadIframeReplaced = undefined;
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
@@ -2622,30 +2736,43 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	/**
-	 * Runs a workbench command in an instance. Completed results also settle
-	 * a pending `loading` state: success marks the workbench ready, failure
-	 * marks it crashed. Timeouts leave the state untouched so an in-flight
-	 * reload keeps its iframe-level fallback.
+	 * Runs a workbench command in an instance. When requested, completed results
+	 * also settle a pending `loading` state: success marks the workbench ready
+	 * and failure marks it crashed. Reload command delivery deliberately leaves
+	 * that state untouched so Ready or the iframe fallback remains authoritative.
 	 */
 	private async runCommandInInstance(
 		instance: IHostedIframeInstance,
 		commandId: string,
-		args: readonly unknown[]
+		args: readonly unknown[],
+		settleLoadingState = true
 	): Promise<boolean | typeof COMMAND_DELIVERY_UNKNOWN> {
 		const workbench = instance.connection?.workbench;
 		if (!workbench) {
 			return false;
 		}
+		const connectionGeneration = instance.connectionGeneration;
 
-		const result = await this.raceTimeout(
-			workbench.runCommand(commandId, args).catch(() => false),
+		const result = await this.raceTimeout<
+			boolean | typeof COMMAND_DELIVERY_UNKNOWN
+		>(
+			workbench.runCommand(commandId, args).catch(
+				() => COMMAND_DELIVERY_UNKNOWN
+			),
 			WebHucodeShellController.COMMAND_TIMEOUT_MS
 		);
-		if (result === REQUEST_TIMEOUT) {
+		if (result === REQUEST_TIMEOUT ||
+			result === COMMAND_DELIVERY_UNKNOWN) {
 			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
-		if (instance.state === 'loading') {
+		if (
+			instance.state === 'loading' &&
+			settleLoadingState &&
+			instance.connectionGeneration === connectionGeneration &&
+			instance.connection?.workbench === workbench &&
+			instance.pendingReloadConnectionGeneration !== connectionGeneration
+		) {
 			if (result) {
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {

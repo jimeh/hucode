@@ -101,7 +101,7 @@ const addedByOmniDesktop = new Map([
 		'Omni pane composite part service.',
 	],
 	[
-		'src/vs/hucode/electron-browser/omniCommandService.js',
+		'src/vs/hucode/browser/omniCommandService.js',
 		'Omni command service.',
 	],
 	[

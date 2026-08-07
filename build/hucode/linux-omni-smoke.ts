@@ -19,7 +19,9 @@ import {
 	assertHostedWorkbenchSmokeCommandVisible,
 	hostedWorkbenchSmokeCommands,
 	readOmniWorkbenchSmokeRows,
+	runHostedWorkbenchClipboardBridgeSmoke,
 	runHostedWorkbenchSmokeCommand,
+	waitForOmniProjectsSidebarVisibility,
 } from './omni-hosted-command-smoke.ts';
 
 const defaultTimeoutMs = 300_000;
@@ -159,6 +161,7 @@ export const linuxOmniLifecyclePhases = [
 	'initial restore',
 	'switch to Bravo',
 	'switch to Alpha',
+	'hosted reload Alpha',
 	'hosted full picker to Bravo',
 	'hosted previous loaded to Alpha',
 	'hosted next loaded to Bravo',
@@ -224,6 +227,24 @@ export function createLinuxOmniLifecycleExpectations(
 			crashedRendererCount: 0,
 		},
 		'switch to Alpha': {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'loaded',
+					active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted reload Alpha': {
 			rows: [
 				{
 					label: 'Alpha',
@@ -838,6 +859,7 @@ export async function runLinuxOmniSmoke(
 	const extensionsDir = path.join(temporaryRoot, 'extensions');
 	const alphaPath = path.join(temporaryRoot, 'Alpha');
 	const bravoPath = path.join(temporaryRoot, 'Bravo');
+	const bridgeFileName = 'omni-bridge-smoke.txt';
 	const fixture = createLinuxOmniSmokeFixture(alphaPath, bravoPath);
 	await Promise.all([
 		fs.mkdir(path.join(userDataDir, 'User', 'globalStorage'), {
@@ -848,6 +870,7 @@ export async function runLinuxOmniSmoke(
 		fs.mkdir(bravoPath, { recursive: true }),
 	]);
 	await Promise.all([
+		fs.writeFile(path.join(alphaPath, bridgeFileName), ''),
 		fs.writeFile(
 			path.join(userDataDir, 'User', 'globalStorage', 'storage.json'),
 			JSON.stringify(fixture.storage, null, 4)
@@ -944,6 +967,83 @@ export async function runLinuxOmniSmoke(
 		));
 
 		let hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await getPageContext(shellPage).grantPermissions([
+			'clipboard-read',
+			'clipboard-write',
+		]);
+		await runHostedWorkbenchClipboardBridgeSmoke({
+			keyboardPage: hostedPage,
+			shellPage,
+			surface: hostedPage,
+			fileName: bridgeFileName,
+			timeoutMs: getRemainingTimeout(deadline),
+			readClipboardText: () => hostedPage.evaluate(() => (
+				globalThis as unknown as {
+					readonly navigator: {
+						readonly clipboard: { readText(): Promise<string> };
+					};
+				}
+			).navigator.clipboard.readText()),
+			writeClipboardText: text => hostedPage.evaluate(value => (
+				globalThis as unknown as {
+					readonly navigator: {
+						readonly clipboard: {
+							writeText(text: string): Promise<void>;
+						};
+					};
+				}
+			).navigator.clipboard.writeText(value), text),
+		});
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			getRemainingTimeout(deadline)
+		);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			false,
+			getRemainingTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			getRemainingTimeout(deadline)
+		);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			true,
+			getRemainingTimeout(deadline)
+		);
+		const reloadNavigation = hostedPage.waitForNavigation({
+			waitUntil: 'domcontentloaded',
+			timeout: getRemainingTimeout(deadline),
+		});
+		await Promise.all([
+			runHostedWorkbenchSmokeCommand(
+				hostedPage,
+				hostedPage,
+				hostedWorkbenchSmokeCommands.reloadDesktop,
+				getRemainingTimeout(deadline)
+			),
+			reloadNavigation,
+		]);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted reload Alpha',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted reload Alpha'
+			)
+		);
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
 			runtime,
 			alphaPath
 		));
