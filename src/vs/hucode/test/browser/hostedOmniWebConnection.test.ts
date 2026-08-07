@@ -266,6 +266,53 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			);
 		});
 
+	test('sends readiness once when retries are disabled', async () => {
+		const browser = new ManualConnectionBrowserAdapter(true);
+		const { service } = createService(true, browser, {
+			initialConnectionTimeoutMs: 50,
+			readyRetryDelaysMs: [],
+		});
+		service.signalReady();
+
+		assert.strictEqual(browser.postedMessages.length, 1);
+		assert.deepStrictEqual(browser.pendingDelays, [50]);
+		browser.fireNext(50);
+		assert.strictEqual(await service.whenConnected(), undefined);
+		assert.strictEqual(browser.postedMessages.length, 1);
+	});
+
+	test('keeps readiness retries capped at the final delay', () => {
+		const browser = new ManualConnectionBrowserAdapter(true);
+		const { service } = createService(true, browser, {
+			initialConnectionTimeoutMs: 50,
+			readyRetryDelaysMs: [10, 20],
+		});
+		service.signalReady();
+
+		assert.deepStrictEqual(browser.pendingDelays, [50, 10]);
+		browser.fireNext(10);
+		assert.deepStrictEqual(browser.pendingDelays, [50, 20]);
+		browser.fireNext(20);
+		assert.deepStrictEqual(browser.pendingDelays, [50, 20]);
+		assert.strictEqual(browser.postedMessages.length, 3);
+	});
+
+	test('skips invalid readiness delays without disabling later retries', () => {
+		const browser = new ManualConnectionBrowserAdapter(true);
+		const { service } = createService(true, browser, {
+			initialConnectionTimeoutMs: 50,
+			readyRetryDelaysMs: [10, 0, Number.NaN, 20],
+		});
+		service.signalReady();
+
+		assert.deepStrictEqual(browser.pendingDelays, [50, 10]);
+		browser.fireNext(10);
+		assert.deepStrictEqual(browser.pendingDelays, [50, 20]);
+		browser.fireNext(20);
+		assert.deepStrictEqual(browser.pendingDelays, [50, 20]);
+		assert.strictEqual(browser.postedMessages.length, 3);
+	});
+
 	test('rejects a stale retry port and adopts only the latest attempt',
 		async () => {
 			const browser = new ManualConnectionBrowserAdapter(true);
@@ -593,6 +640,10 @@ class ManualConnectionBrowserAdapter extends FakeConnectionBrowserAdapter {
 		readonly callback: () => void;
 		readonly delay: number;
 	}>();
+
+	get pendingDelays(): readonly number[] {
+		return [...this.timers.values()].map(timer => timer.delay);
+	}
 
 	override setTimeout(
 		callback: () => void,

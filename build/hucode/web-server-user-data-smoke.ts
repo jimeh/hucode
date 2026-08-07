@@ -436,6 +436,7 @@ async function openWorkspaceThroughSmokeDriver(
 	worktreePath: string,
 	deadline: number
 ): Promise<void> {
+	const operationDeadline = Date.now() + commandTimeout(deadline);
 	await withDeadline(page.evaluate(async pathValue => {
 		const target = globalThis as unknown as {
 			readonly __hucodeOmniSmokeTestDriver?: {
@@ -446,13 +447,14 @@ async function openWorkspaceThroughSmokeDriver(
 			throw new Error('Omni smoke-test driver is unavailable');
 		}
 		await target.__hucodeOmniSmokeTestDriver.openWorkspace(pathValue);
-	}, worktreePath), deadline, `open ${worktreePath}`);
+	}, worktreePath), operationDeadline, `open ${worktreePath}`);
 }
 
 async function reloadActiveWorkspaceThroughSmokeDriver(
 	page: Page,
 	deadline: number
 ): Promise<void> {
+	const operationDeadline = Date.now() + commandTimeout(deadline);
 	await withDeadline(page.evaluate(async () => {
 		const target = globalThis as unknown as {
 			readonly __hucodeOmniSmokeTestDriver?: {
@@ -463,7 +465,7 @@ async function reloadActiveWorkspaceThroughSmokeDriver(
 			throw new Error('Omni smoke-test driver is unavailable');
 		}
 		await target.__hucodeOmniSmokeTestDriver.reloadActiveWorkspace();
-	}), deadline, 'reload active workspace');
+	}), operationDeadline, 'reload active workspace');
 }
 
 async function waitForWebWorkbenchState(
@@ -505,7 +507,8 @@ async function waitForHostedFrame(
 	deadline: number
 ): Promise<Frame> {
 	let lastInventory = '<not observed>';
-	while (Date.now() < deadline) {
+	const phaseDeadline = Date.now() + commandTimeout(deadline);
+	while (Date.now() < phaseDeadline) {
 		const matches: Frame[] = [];
 		const inventory: unknown[] = [];
 		for (const frame of page.frames()) {

@@ -41,6 +41,35 @@ export interface IHucodeOmniWebConnectionBootstrap {
 	readonly attempt: number;
 }
 
+/** Validates current, legacy, or unstamped connection-correlation metadata. */
+export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
+	readonly connectionBootstrap?: unknown;
+	readonly connectionAttempt?: unknown;
+}): boolean {
+	const hasCurrentBootstrap = value.connectionBootstrap !== undefined;
+	const hasLegacyAttempt = value.connectionAttempt !== undefined;
+	if (hasCurrentBootstrap && hasLegacyAttempt) {
+		return false;
+	}
+	if (hasCurrentBootstrap) {
+		if (!value.connectionBootstrap ||
+			typeof value.connectionBootstrap !== 'object') {
+			return false;
+		}
+		const bootstrap = value.connectionBootstrap as {
+			readonly id?: unknown;
+			readonly attempt?: unknown;
+		};
+		return typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
+			Number.isSafeInteger(bootstrap.attempt) &&
+			(bootstrap.attempt as number) > 0;
+	}
+	return !hasLegacyAttempt || (
+		Number.isSafeInteger(value.connectionAttempt) &&
+		(value.connectionAttempt as number) > 0
+	);
+}
+
 /**
  * Message transferring the shell IPC port into a hosted iframe workbench.
  */

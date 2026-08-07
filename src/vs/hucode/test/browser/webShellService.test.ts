@@ -1966,6 +1966,42 @@ suite('WebHucodeShellService', () => {
 			);
 		});
 
+	test('only one hosted reopen owns a concurrent close', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/current-reopen',
+			'project'
+		);
+		assert.ok(opened.activeInstanceId);
+		const child = connectCurrentChild(
+			browser,
+			surface,
+			opened.activeInstanceId
+		);
+		const prepareGate = new DeferredPromise<boolean>();
+		child.workbench.prepareUnloadResult = prepareGate.p;
+
+		const first = child.shell.reopenSelfInNormalWindow();
+		await waitFor(
+			() => child.workbench.prepareUnloadCalls === 1,
+			'expected the first hosted reopen to begin unloading'
+		);
+		const second = child.shell.reopenSelfInNormalWindow();
+		assert.strictEqual(
+			await second,
+			HucodeHostedShellOperationOutcome.Unavailable
+		);
+		await prepareGate.complete(true);
+
+		assert.strictEqual(
+			await first,
+			HucodeHostedShellOperationOutcome.Accepted
+		);
+		assert.strictEqual(browser.openedUrls.length, 1);
+		assert.strictEqual(child.workbench.prepareUnloadCalls, 1);
+	});
+
 	test('supersedes hosted navigation hidden during folder preflight',
 		async () => {
 			const preflightStarted = new DeferredPromise<void>();
@@ -3863,6 +3899,39 @@ suite('WebHucodeShellService', () => {
 			instances: 0,
 		});
 	});
+
+	test('only the reopen that owns a concurrent close opens a normal window',
+		async () => {
+			const { service, surface, browser } = createService();
+			const windowId = browser.windowId;
+			const state = await service.openWorkspace(
+				windowId,
+				'/tmp/hucode-worktree',
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+			const child = connectChild(browser, surface, instanceId);
+			const prepareGate = new DeferredPromise<boolean>();
+			child.workbench.prepareUnloadResult = prepareGate.p;
+
+			const first = service.reopenWorkspaceInNormalWindow(
+				windowId,
+				instanceId
+			);
+			await waitFor(
+				() => child.workbench.prepareUnloadCalls === 1,
+				'expected the first reopen to begin unloading'
+			);
+			const second = service.reopenWorkspaceInNormalWindow(
+				windowId,
+				instanceId
+			);
+			await prepareGate.complete(true);
+
+			assert.deepStrictEqual(await Promise.all([first, second]), [true, false]);
+			assert.strictEqual(browser.openedUrls.length, 1);
+			assert.strictEqual(child.workbench.prepareUnloadCalls, 1);
+		});
 
 	test('ignores child messages from the wrong iframe source', async () => {
 		const { service, surface, browser } = createService();

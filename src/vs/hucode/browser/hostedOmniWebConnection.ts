@@ -34,6 +34,7 @@ import {
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
+	isHucodeOmniWebConnectionBootstrapMetadata,
 	IHucodeOmniWebPortMessage,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
@@ -70,8 +71,9 @@ export interface IHucodeHostedOmniWebConnectionService {
 	readonly onDidConnect: Event<IHucodeHostedOmniWebConnection>;
 
 	/**
-	 * Resolves once the shell has transferred its IPC port. Never resolves
-	 * outside a hosted iframe.
+	 * Resolves with the first connection, or `undefined` outside a hosted iframe
+	 * and when the initial wait expires. Later connections are reported through
+	 * {@link onDidConnect}.
 	 */
 	whenConnected(): Promise<IHucodeHostedOmniWebConnection | undefined>;
 
@@ -160,6 +162,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	private readyStarted = false;
 	private connectionAttempt = 0;
 	private readyRetryIndex = 0;
+	private readonly readyRetryDelaysMs: readonly number[];
 	private readyRetryTimer: ReturnType<typeof setTimeout> | undefined;
 	private initialConnectionTimer: ReturnType<typeof setTimeout> | undefined;
 	private disposed = false;
@@ -174,6 +177,9 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		private readonly options = defaultConnectionOptions,
 	) {
 		super();
+		this.readyRetryDelaysMs = options.readyRetryDelaysMs.filter(delay =>
+			Number.isFinite(delay) && delay > 0
+		);
 
 		this.instanceId = environmentService.isHostedOmniWorkspace &&
 			this.browser.hasParent()
@@ -289,10 +295,15 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 		});
-		const delays = this.options.readyRetryDelaysMs;
-		const delay = delays.length === 0
-			? 0
-			: delays[Math.min(this.readyRetryIndex, delays.length - 1)];
+		const delays = this.readyRetryDelaysMs;
+		if (delays.length === 0) {
+			return;
+		}
+		// Keep retrying at the final capped delay so a late shell can recover.
+		const delay = delays[Math.min(
+			this.readyRetryIndex,
+			delays.length - 1
+		)];
 		this.readyRetryIndex++;
 		this.readyRetryTimer = this.browser.setTimeout(() => {
 			this.readyRetryTimer = undefined;
@@ -383,29 +394,10 @@ function isPortMessage(
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 	};
-	const bootstrap = message.connectionBootstrap &&
-		typeof message.connectionBootstrap === 'object'
-		? message.connectionBootstrap as {
-			readonly id?: unknown;
-			readonly attempt?: unknown;
-		} : undefined;
-	const hasCurrentBootstrap = message.connectionBootstrap !== undefined;
-	const hasLegacyAttempt = message.connectionAttempt !== undefined;
-	const validCurrentBootstrap = !hasCurrentBootstrap || (!!bootstrap &&
-		typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
-		Number.isSafeInteger(bootstrap.attempt) &&
-		(bootstrap.attempt as number) > 0
-	);
-	const validLegacyAttempt = !hasLegacyAttempt || (
-		Number.isSafeInteger(message.connectionAttempt) &&
-		(message.connectionAttempt as number) > 0
-	);
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
 		typeof message.windowId === 'number' &&
-		!(hasCurrentBootstrap && hasLegacyAttempt) &&
-		validCurrentBootstrap &&
-		validLegacyAttempt &&
+		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		(
 			message.hostedShellProtocolVersion === undefined ||
 			typeof message.hostedShellProtocolVersion === 'number'

@@ -94,6 +94,7 @@ import {
 	HucodeOmniWebParentMessageType,
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	IHucodeOmniWebWorkbenchClient,
+	isHucodeOmniWebConnectionBootstrapMetadata,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import {
 	getHucodeOmniHostedWorkbenchRoute,
@@ -1311,8 +1312,16 @@ export class WebHucodeShellController extends Disposable
 
 		return reopenHucodeHostedWorkspaceInNormalWindow({
 			getState: () => this.getState(),
-			closeWorkspace: targetInstanceId =>
-				this.closeWorkspace(this.windowId, targetInstanceId),
+			closeWorkspace: async targetInstanceId => {
+				const instance = this.instancesById.get(targetInstanceId);
+				if (!instance || instance.pendingUnload) {
+					return { committed: false };
+				}
+				const committed = await this.deferStateEmission(() =>
+					this.unloadAndRemoveInstance(instance, 'unload')
+				);
+				return { committed };
+			},
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
 			openNormalWindow: worktreePath => {
@@ -1851,17 +1860,18 @@ export class WebHucodeShellController extends Disposable
 					getState: () => this.getState(),
 					closeWorkspace: async targetInstanceId => {
 						if (targetInstanceId !== current.instanceId ||
-							!this.isCurrentHostedBinding(instance, current)) {
-							return this.getState();
+							!this.isCurrentHostedBinding(instance, current) ||
+							instance.pendingUnload) {
+							return { committed: false };
 						}
-						await this.deferStateEmission(() =>
+						const committed = await this.deferStateEmission(() =>
 							this.unloadAndRemoveInstance(
 								instance,
 								'unload',
 								current.connectionGeneration
 							)
 						);
-						return this.getState();
+						return { committed };
 					},
 					focusNormalWindowByPath: worktreePath =>
 						this.focusNormalWindowByPath(worktreePath),
@@ -2812,24 +2822,7 @@ function isHucodeOmniWebChildMessage(
 		return false;
 	}
 	if (message.type === HucodeOmniWebChildMessageType.Ready) {
-		const bootstrap = message.connectionBootstrap &&
-			typeof message.connectionBootstrap === 'object'
-			? message.connectionBootstrap as {
-				readonly id?: unknown;
-				readonly attempt?: unknown;
-			} : undefined;
-		const hasCurrentBootstrap = message.connectionBootstrap !== undefined;
-		const hasLegacyAttempt = message.connectionAttempt !== undefined;
-		return !(hasCurrentBootstrap && hasLegacyAttempt) && (
-			hasCurrentBootstrap ? (!!bootstrap &&
-				typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
-				Number.isSafeInteger(bootstrap.attempt) &&
-				(bootstrap.attempt as number) > 0
-			) : !hasLegacyAttempt || (
-				Number.isSafeInteger(message.connectionAttempt) &&
-				(message.connectionAttempt as number) > 0
-			)
-		);
+		return isHucodeOmniWebConnectionBootstrapMetadata(message);
 	}
 	return message.type === HucodeOmniWebChildMessageType.Focus &&
 		typeof message.focused === 'boolean';

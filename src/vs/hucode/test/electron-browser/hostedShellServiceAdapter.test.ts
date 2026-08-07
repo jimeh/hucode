@@ -229,11 +229,13 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		const never = new DeferredPromise<HucodeHostedShellOperationOutcome>();
 		let operationCalls = 0;
 		let attempts = 0;
+		let firstShellDisposed = false;
 		const firstShell = Object.assign(createAcceptedShell(), {
 			closeSelf: async () => {
 				operationCalls++;
 				return never.p;
 			},
+			dispose: () => firstShellDisposed = true,
 		});
 		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
 			() => createAttempt(Promise.resolve(
@@ -246,12 +248,13 @@ suite('DesktopHostedShellServiceAdapter', () => {
 
 		const operation = adapter.closeSelf();
 		await settled();
-		timers.fireNext(50);
+		timers.fireNext(70);
 		assert.strictEqual(
 			await operation,
 			HucodeHostedShellOperationOutcome.Unavailable
 		);
 		assert.strictEqual(operationCalls, 1);
+		assert.strictEqual(firstShellDisposed, true);
 		timers.fireNext(10);
 		await settled();
 		assert.strictEqual(attempts, 2);
@@ -303,7 +306,7 @@ suite('DesktopHostedShellServiceAdapter', () => {
 
 		const timedOutState = adapter.getState();
 		await settled();
-		timers.fireNext(50);
+		timers.fireNext(70);
 		assert.deepStrictEqual(
 			await timedOutState,
 			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
@@ -551,7 +554,7 @@ class ManualTimers {
 
 	readonly options: IDesktopHostedShellConnectionOptions = {
 		acquisitionTimeoutMs: 50,
-		operationTimeoutMs: 50,
+		operationTimeoutMs: 70,
 		retryDelaysMs: [10],
 		setTimeout: (callback, delay) => {
 			const handle = this.nextHandle++;

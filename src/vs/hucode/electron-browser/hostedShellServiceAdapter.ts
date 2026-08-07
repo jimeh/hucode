@@ -131,7 +131,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		}
 		const result = await this.invokeBounded(shell, () => shell.getState());
 		if (result.ok && this.shell === shell) {
-			this.state = result.value;
+			this.updateState(result.value);
 		}
 		return this.state;
 	}
@@ -145,26 +145,28 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		);
 	}
 
-	notifyReady(): Promise<IHucodeHostedReadyResult> {
+	async notifyReady(): Promise<IHucodeHostedReadyResult> {
 		this.readyRequested = true;
 		const shell = this.shell;
 		if (!shell) {
-			return Promise.resolve({
+			return {
 				outcome: HucodeHostedShellOperationOutcome.Unavailable,
-			});
+			};
 		}
-		return this.invokeBounded(shell, () => shell.notifyReady()).then(result => {
-			if (!result.ok) {
-				return {
-					outcome: HucodeHostedShellOperationOutcome.Unavailable,
-				};
-			}
-			if (result.value.outcome ===
-				HucodeHostedShellOperationOutcome.Stale) {
-				this.invalidateConnection(shell);
-			}
-			return result.value;
-		});
+		const result = await this.invokeBounded(
+			shell,
+			() => shell.notifyReady()
+		);
+		if (!result.ok) {
+			return {
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			};
+		}
+		if (result.value.outcome ===
+			HucodeHostedShellOperationOutcome.Stale) {
+			this.invalidateConnection(shell);
+		}
+		return result.value;
 	}
 
 	closeSelf() { return this.runOperation(shell => shell.closeSelf()); }
@@ -195,24 +197,23 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		);
 	}
 
-	private runOperation(
+	private async runOperation(
 		run: (
 			shell: IHucodeHostedShellService
 		) => Promise<HucodeHostedShellOperationOutcome>
 	): Promise<HucodeHostedShellOperationOutcome> {
 		const shell = this.shell;
 		if (!shell) {
-			return Promise.resolve(HucodeHostedShellOperationOutcome.Unavailable);
+			return HucodeHostedShellOperationOutcome.Unavailable;
 		}
-		return this.invokeBounded(shell, () => run(shell)).then(result => {
-			if (!result.ok) {
-				return HucodeHostedShellOperationOutcome.Unavailable;
-			}
-			if (result.value === HucodeHostedShellOperationOutcome.Stale) {
-				this.invalidateConnection(shell);
-			}
-			return result.value;
-		});
+		const result = await this.invokeBounded(shell, () => run(shell));
+		if (!result.ok) {
+			return HucodeHostedShellOperationOutcome.Unavailable;
+		}
+		if (result.value === HucodeHostedShellOperationOutcome.Stale) {
+			this.invalidateConnection(shell);
+		}
+		return result.value;
 	}
 
 	private markUnavailable(): IHucodeHostedShellState {

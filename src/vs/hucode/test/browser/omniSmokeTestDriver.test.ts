@@ -18,9 +18,9 @@ suite('HucodeOmniSmokeTestDriver', () => {
 
 	test('stays unavailable outside an Omni smoke-test window', () => {
 		for (const options of [
-			{ enableSmokeTestDriver: false, isOmniWindow: true },
-			{ enableSmokeTestDriver: true, isOmniWindow: false },
-			{ enableSmokeTestDriver: false, isOmniWindow: false },
+			{ enableSmokeTestDriver: false, isOmniShellWindow: true },
+			{ enableSmokeTestDriver: true, isOmniShellWindow: false },
+			{ enableSmokeTestDriver: false, isOmniShellWindow: false },
 		]) {
 			const target: IHucodeOmniSmokeTestDriverTarget = {};
 			disposables.add(registerOmniSmokeTestDriver({
@@ -51,7 +51,7 @@ suite('HucodeOmniSmokeTestDriver', () => {
 			const registration = disposables.add(registerOmniSmokeTestDriver({
 				target,
 				enableSmokeTestDriver: true,
-				isOmniWindow: true,
+				isOmniShellWindow: true,
 				windowId: 7,
 				openWorkspace: async (windowId, worktreePath) => {
 					calls.push(`open:${windowId}:${worktreePath}`);
@@ -67,10 +67,10 @@ suite('HucodeOmniSmokeTestDriver', () => {
 				target[HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY];
 
 			assert.ok(driver);
-			assert.deepStrictEqual(Object.keys(driver), [
+			assert.deepStrictEqual(Object.keys(driver).sort(), [
 				'openWorkspace',
-				'suspendWorkspace',
 				'reloadActiveWorkspace',
+				'suspendWorkspace',
 			]);
 			await driver.openWorkspace('/tmp/Alpha');
 			await driver.suspendWorkspace('bravo-instance');
@@ -102,7 +102,7 @@ suite('HucodeOmniSmokeTestDriver', () => {
 		const registration = disposables.add(registerOmniSmokeTestDriver({
 			target,
 			enableSmokeTestDriver: true,
-			isOmniWindow: true,
+			isOmniShellWindow: true,
 			windowId: 7,
 			openWorkspace: async () => undefined,
 			suspendWorkspace: async () => undefined,

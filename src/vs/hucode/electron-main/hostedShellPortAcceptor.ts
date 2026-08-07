@@ -3,7 +3,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DisposableMap, IDisposable } from '../../base/common/lifecycle.js';
+import {
+	DisposableMap,
+	IDisposable,
+	toDisposable,
+} from '../../base/common/lifecycle.js';
 import {
 	HUCODE_HOSTED_SHELL_PORT_RESPONSE_CHANNEL,
 	IHucodeHostedShellBinding,
@@ -24,6 +28,29 @@ export interface IHucodeHostedShellPortController {
 export interface IHucodeHostedShellPortConnection extends IDisposable {
 	readonly transferPort: Electron.MessagePortMain;
 	markTransferred(): void;
+}
+
+interface IHucodeHostedShellPortCloseSource {
+	on(event: 'close', listener: () => void): unknown;
+	removeListener(event: 'close', listener: () => void): unknown;
+}
+
+/** Releases a binding once when its remote MessagePort closes. */
+export function bindHucodeHostedShellPortLifetime(
+	port: IHucodeHostedShellPortCloseSource,
+	releaseBinding: () => void
+): IDisposable {
+	let released = false;
+	const onClose = (): void => {
+		if (released) {
+			return;
+		}
+		released = true;
+		port.removeListener('close', onClose);
+		releaseBinding();
+	};
+	port.on('close', onClose);
+	return toDisposable(() => port.removeListener('close', onClose));
 }
 
 interface IHucodeHostedShellPortRequestDependencies<

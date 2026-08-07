@@ -1961,29 +1961,30 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.bringActiveInstanceToFront();
 	}
 
-	async closeWorkspace(instanceId?: string): Promise<void> {
+	async closeWorkspace(instanceId?: string): Promise<boolean> {
 		await this.ensureRestored();
 
 		const target = instanceId
 			? this.instancesById.get(instanceId)
 			: this.getActiveInstance();
 		if (!target) {
-			return;
+			return false;
 		}
 		const retained = this.retainedWorkbenches.getByUri(
 			URI.file(target.worktreePath)
 		);
 		if (!retained) {
-			await this.closeInstance(target);
-			return;
+			return this.closeInstance(target);
 		}
-		await this.deferStateEmission(async () => {
-			if (await this.closeInstance(target)) {
+		return this.deferStateEmission(async () => {
+			const closed = await this.closeInstance(target);
+			if (closed) {
 				this.retainedWorkbenches.update(retained.id, {
 					desiredState: 'unloaded',
 				});
 				this.emitState();
 			}
+			return closed;
 		});
 	}
 

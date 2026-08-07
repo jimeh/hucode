@@ -11,6 +11,7 @@ import { IHucodeHostedShellBinding } from
 	'../../../platform/window/common/hucodeHostedShellService.js';
 import {
 	acceptHucodeHostedShellPortRequest,
+	bindHucodeHostedShellPortLifetime,
 	IHucodeHostedShellPortController,
 } from '../../electron-main/hostedShellPortAcceptor.js';
 
@@ -133,7 +134,56 @@ suite('HostedShellMainService capability port', () => {
 			ports: [],
 		});
 	});
+
+	test('releases a binding once when the remote port closes', () => {
+		const port = new FakePortCloseSource();
+		let releases = 0;
+		const listener = disposables.add(bindHucodeHostedShellPortLifetime(
+			port,
+			() => releases++
+		));
+
+		port.close();
+		port.close();
+		listener.dispose();
+		assert.strictEqual(releases, 1);
+		assert.strictEqual(port.listenerCount, 0);
+	});
+
+	test('removes the port-close listener when the connection is disposed', () => {
+		const port = new FakePortCloseSource();
+		let releases = 0;
+		const listener = bindHucodeHostedShellPortLifetime(
+			port,
+			() => releases++
+		);
+
+		listener.dispose();
+		port.close();
+		assert.strictEqual(releases, 0);
+		assert.strictEqual(port.listenerCount, 0);
+	});
 });
+
+class FakePortCloseSource {
+	private readonly listeners = new Set<() => void>();
+
+	get listenerCount(): number { return this.listeners.size; }
+
+	on(_event: 'close', listener: () => void): void {
+		this.listeners.add(listener);
+	}
+
+	removeListener(_event: 'close', listener: () => void): void {
+		this.listeners.delete(listener);
+	}
+
+	close(): void {
+		for (const listener of [...this.listeners]) {
+			listener();
+		}
+	}
+}
 
 function createHarness() {
 	const owners = new Map([[7, {

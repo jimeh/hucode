@@ -31,7 +31,7 @@ export interface IHucodeOmniSmokeTestDriverTarget {
 export function registerOmniSmokeTestDriver(options: {
 	readonly target: IHucodeOmniSmokeTestDriverTarget;
 	readonly enableSmokeTestDriver: boolean;
-	readonly isOmniWindow: boolean;
+	readonly isOmniShellWindow: boolean;
 	readonly windowId: number;
 	readonly suspendWorkspace: (
 		windowId: number,
@@ -43,7 +43,7 @@ export function registerOmniSmokeTestDriver(options: {
 	) => Promise<unknown>;
 	readonly reloadWorkspace: (windowId: number) => Promise<unknown>;
 }): IDisposable {
-	if (!options.enableSmokeTestDriver || !options.isOmniWindow) {
+	if (!options.enableSmokeTestDriver || !options.isOmniShellWindow) {
 		return Disposable.None;
 	}
 

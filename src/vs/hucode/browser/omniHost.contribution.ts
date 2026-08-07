@@ -143,6 +143,7 @@ class OmniWindowShellContribution extends Disposable
 	}
 }
 
+/** Registers the enabled smoke-test driver only in a trusted Omni shell. */
 class OmniSmokeTestDriverContribution extends Disposable
 	implements IWorkbenchContribution {
 
@@ -159,7 +160,7 @@ class OmniSmokeTestDriverContribution extends Disposable
 			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
 			enableSmokeTestDriver:
 				!!environmentService.enableSmokeTestDriver,
-			isOmniWindow: environmentService.isOmniWindow,
+			isOmniShellWindow: environmentService.isOmniShellWindow,
 			windowId: getWindowId(mainWindow),
 			openWorkspace: (_windowId, worktreePath) =>
 				shellService.openWorkspace(worktreePath),

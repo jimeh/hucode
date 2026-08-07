@@ -39,15 +39,26 @@ const smokeArtifactRoot = path.join(
 );
 
 type LinuxOmniWorkbenchLabel = typeof workbenchLabels[number];
-type LinuxOmniWorkbenchState =
-	| 'restore-pending'
-	| 'loading'
-	| 'active'
-	| 'loaded'
-	| 'dormant'
-	| 'unloaded'
-	| 'missing'
-	| 'crashed';
+const linuxOmniWorkbenchStates = [
+	'restore-pending',
+	'loading',
+	'active',
+	'loaded',
+	'dormant',
+	'unloaded',
+	'missing',
+	'crashed',
+] as const;
+type LinuxOmniWorkbenchState = typeof linuxOmniWorkbenchStates[number];
+const linuxOmniWorkbenchStateSet = new Set<string>(
+	linuxOmniWorkbenchStates
+);
+
+function isLinuxOmniWorkbenchState(
+	value: string
+): value is LinuxOmniWorkbenchState {
+	return linuxOmniWorkbenchStateSet.has(value);
+}
 
 interface ILinuxOmniResolvedConfiguration {
 	readonly isOmniWindow?: boolean;
@@ -1201,7 +1212,10 @@ export async function runLinuxOmniSmoke(
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
 		const inventory = launch
-			? await formatLinuxBrowserInventory(launch.browser)
+			? await formatLinuxBrowserInventory(launch.browser).catch(
+				inventoryError =>
+					`<inventory failed: ${formatError(inventoryError)}>`
+			)
 			: '<application not running>';
 		const screenshot = launch
 			? await captureLinuxSmokeScreenshot(launch.browser).catch(
@@ -1473,10 +1487,23 @@ async function readWorkbenchRows(
 	return runLinuxOmniBoundedProbe(
 		deadline,
 		`${phase} Projects row probe`,
-		async () => await readOmniWorkbenchSmokeRows(
-			shellPage,
-			workbenchLabels
-		) as ILinuxOmniWorkbenchRow[]
+		async () => {
+			const rows = await readOmniWorkbenchSmokeRows(
+				shellPage,
+				workbenchLabels
+			);
+			return rows.map(row => {
+				if (!isLinuxOmniWorkbenchState(row.state)) {
+					throw new Error(
+						`Unexpected Projects row state: ${row.state}`
+					);
+				}
+				return {
+					...row,
+					state: row.state,
+				};
+			});
+		}
 	);
 }
 
