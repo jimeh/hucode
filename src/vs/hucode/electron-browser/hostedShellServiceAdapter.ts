@@ -124,11 +124,16 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		return result.ok ? result.value : fallback();
 	}
 
-	getState(): Promise<IHucodeHostedShellState> {
-		return this.withShell(() => this.markUnavailable(), async shell => {
-			this.state = await shell.getState();
-			return this.state;
-		});
+	async getState(): Promise<IHucodeHostedShellState> {
+		const shell = this.shell;
+		if (!shell) {
+			return this.markUnavailable();
+		}
+		const result = await this.invokeBounded(shell, () => shell.getState());
+		if (result.ok && this.shell === shell) {
+			this.state = result.value;
+		}
+		return this.state;
 	}
 
 	getNavigationSnapshot(): Promise<

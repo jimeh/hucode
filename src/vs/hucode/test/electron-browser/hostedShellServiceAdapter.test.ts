@@ -262,6 +262,64 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		);
 	});
 
+	test('ignores a late state result from a timed-out connection', async () => {
+		const timers = new ManualTimers();
+		const lateState = new DeferredPromise<IHucodeHostedShellState>();
+		const secondChanges = disposables.add(new Emitter<IHucodeHostedShellState>());
+		const firstState: IHucodeHostedShellState = {
+			available: true,
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			lifecycleState: 'active',
+			active: true,
+			visible: true,
+		};
+		const secondState = {
+			...firstState,
+			projectsSidebarVisible: false,
+		};
+		let firstStateCalls = 0;
+		let attempts = 0;
+		const firstShell = Object.assign(createAcceptedShell(), {
+			getState: async () => ++firstStateCalls === 1
+				? firstState
+				: lateState.p,
+		});
+		const secondShell = Object.assign(createAcceptedShell(), {
+			onDidChangeState: secondChanges.event,
+			getState: async () => secondState,
+		});
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			() => createAttempt(Promise.resolve(
+				++attempts === 1 ? firstShell : secondShell
+			)),
+			createHostedEnvironment(),
+			timers.options
+		));
+		const forwardedStates: IHucodeHostedShellState[] = [];
+		disposables.add(adapter.onDidChangeState(state => forwardedStates.push(state)));
+		await settled();
+
+		const timedOutState = adapter.getState();
+		await settled();
+		timers.fireNext(50);
+		assert.deepStrictEqual(
+			await timedOutState,
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+		);
+		timers.fireNext(10);
+		await settled();
+		assert.strictEqual(attempts, 2);
+		assert.deepStrictEqual(await adapter.getState(), secondState);
+
+		const forwardedBeforeLateState = forwardedStates.length;
+		void lateState.complete(firstState);
+		await settled();
+		secondChanges.fire(secondState);
+		assert.strictEqual(forwardedStates.length, forwardedBeforeLateState);
+	});
+
 	test('stale generation outcome reacquires without replaying the operation',
 		async () => {
 			const timers = new ManualTimers();
