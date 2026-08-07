@@ -8,30 +8,57 @@ import {
 	type BrowserContext,
 	chromium,
 	type Page,
-} from 'playwright-core';
+} from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import { createServer } from 'net';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+	assertHostedWorkbenchSmokeCommandVisible,
+	hostedWorkbenchSmokeCommands,
+	readOmniWorkbenchSmokeRows,
+	runHostedWorkbenchSmokeCommand,
+} from './omni-hosted-command-smoke.ts';
 
 const defaultTimeoutMs = 300_000;
 const maximumLaunchAttempts = 3;
 const maximumLogLength = 64 * 1024;
 const pollIntervalMs = 100;
 const workbenchLabels = ['Alpha', 'Bravo'] as const;
+const repoRoot = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	'..',
+	'..'
+);
+const smokeArtifactRoot = path.join(
+	repoRoot,
+	'.build',
+	'hucode-smoke-artifacts'
+);
 
 type LinuxOmniWorkbenchLabel = typeof workbenchLabels[number];
-type LinuxOmniWorkbenchState =
-	| 'restore-pending'
-	| 'loading'
-	| 'active'
-	| 'loaded'
-	| 'dormant'
-	| 'unloaded'
-	| 'missing'
-	| 'crashed';
+const linuxOmniWorkbenchStates = [
+	'restore-pending',
+	'loading',
+	'active',
+	'loaded',
+	'dormant',
+	'unloaded',
+	'missing',
+	'crashed',
+] as const;
+type LinuxOmniWorkbenchState = typeof linuxOmniWorkbenchStates[number];
+const linuxOmniWorkbenchStateSet = new Set<string>(
+	linuxOmniWorkbenchStates
+);
+
+function isLinuxOmniWorkbenchState(
+	value: string
+): value is LinuxOmniWorkbenchState {
+	return linuxOmniWorkbenchStateSet.has(value);
+}
 
 interface ILinuxOmniResolvedConfiguration {
 	readonly isOmniWindow?: boolean;
@@ -132,6 +159,13 @@ export const linuxOmniLifecyclePhases = [
 	'initial restore',
 	'switch to Bravo',
 	'switch to Alpha',
+	'hosted full picker to Bravo',
+	'hosted previous loaded to Alpha',
+	'hosted next loaded to Bravo',
+	'hosted last active to Alpha',
+	'hosted quick switch to Bravo',
+	'hosted unload Bravo',
+	'restore Bravo after hosted unload',
 	'suspend Bravo',
 	'restore Bravo',
 	'crash Bravo',
@@ -201,6 +235,112 @@ export function createLinuxOmniLifecycleExpectations(
 					label: 'Bravo',
 					state: 'loaded',
 					active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted full picker to Bravo': {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted previous loaded to Alpha': {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo',
+					state: 'loaded',
+					active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted next loaded to Bravo': {
+			rows: [
+				{
+					label: 'Alpha', state: 'loaded', active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'active', active: true,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted last active to Alpha': {
+			rows: [
+				{
+					label: 'Alpha', state: 'active', active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'loaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted quick switch to Bravo': {
+			rows: [
+				{
+					label: 'Alpha', state: 'loaded', active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'active', active: true,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath, bravoPath],
+			crashedRendererCount: 0,
+		},
+		'hosted unload Bravo': {
+			rows: [
+				{
+					label: 'Alpha', state: 'active', active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'unloaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath],
+			crashedRendererCount: 0,
+		},
+		'restore Bravo after hosted unload': {
+			rows: [
+				{
+					label: 'Alpha', state: 'loaded', active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'active', active: true,
 					ariaDescription: bravoPath,
 				},
 			],
@@ -724,6 +864,9 @@ export async function runLinuxOmniSmoke(
 		bravoPath
 	);
 	const crashedPages = new Set<Page>();
+	const pageErrors: string[] = [];
+	const consoleErrors: string[] = [];
+	const attachedPages = new WeakSet<Page>();
 	let launch: ILinuxOmniLaunch | undefined;
 	let output = '';
 	const appendOutput = (chunk: Buffer): void => {
@@ -739,6 +882,12 @@ export async function runLinuxOmniSmoke(
 			deadline,
 			'initial restore',
 			appendOutput
+		);
+		captureLinuxPageDiagnostics(
+			launch.browser,
+			attachedPages,
+			pageErrors,
+			consoleErrors
 		);
 
 		let runtime = await waitForLinuxOmniPhase(
@@ -794,10 +943,175 @@ export async function runLinuxOmniSmoke(
 			bravoPath
 		));
 
+		let hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.switchWorkbench,
+			getRemainingTimeout(deadline),
+			'Bravo'
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted full picker to Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted full picker to Bravo'
+			)
+		);
+
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			bravoPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.previousLoaded,
+			getRemainingTimeout(deadline)
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted previous loaded to Alpha',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted previous loaded to Alpha'
+			)
+		);
+
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.nextLoaded,
+			getRemainingTimeout(deadline)
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted next loaded to Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted next loaded to Bravo'
+			)
+		);
+
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			bravoPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.lastActive,
+			getRemainingTimeout(deadline)
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted last active to Alpha',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted last active to Alpha'
+			)
+		);
+
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.quickSwitchLoaded,
+			getRemainingTimeout(deadline),
+			'Bravo'
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted quick switch to Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted quick switch to Bravo'
+			)
+		);
+
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			bravoPath
+		));
+		await assertHostedWorkbenchSmokeCommandVisible(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			getRemainingTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			getRemainingTimeout(deadline)
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'hosted unload Bravo',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'hosted unload Bravo'
+			)
+		);
+
+		shellPage = getShellPage(runtime);
+		await clickWorkbenchRow(
+			shellPage,
+			'Bravo',
+			deadline,
+			'restore Bravo after hosted unload'
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'restore Bravo after hosted unload',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'restore Bravo after hosted unload'
+			)
+		);
+		const commandRestoredBravo = getWorkbenchTarget(runtime, bravoPath);
+		assertNewInstance(
+			'hosted unload and restore Bravo',
+			firstBravo,
+			commandRestoredBravo
+		);
+
 		shellPage = getShellPage(runtime);
 		await suspendWorkbenchThroughSmokeDriver(
 			shellPage,
-			firstBravo.hostedInstanceId,
+			commandRestoredBravo.hostedInstanceId,
 			deadline
 		);
 		runtime = await waitForLinuxOmniPhase(
@@ -825,7 +1139,11 @@ export async function runLinuxOmniSmoke(
 			getLifecycleExpectation(lifecycleExpectations, 'restore Bravo')
 		);
 		const restoredBravo = getWorkbenchTarget(runtime, bravoPath);
-		assertNewInstance('suspend and restore Bravo', firstBravo, restoredBravo);
+		assertNewInstance(
+			'suspend and restore Bravo',
+			commandRestoredBravo,
+			restoredBravo
+		);
 
 		const bravoPage = getTargetPage(runtime, restoredBravo);
 		await crashLinuxOmniPage(bravoPage, deadline);
@@ -875,6 +1193,12 @@ export async function runLinuxOmniSmoke(
 			'relaunch restore',
 			appendOutput
 		);
+		captureLinuxPageDiagnostics(
+			launch.browser,
+			attachedPages,
+			pageErrors,
+			consoleErrors
+		);
 		await waitForLinuxOmniPhase(
 			launch,
 			deadline,
@@ -887,8 +1211,28 @@ export async function runLinuxOmniSmoke(
 		return summarizeLinuxOmniRenderers(getRendererUrls(launch.browser));
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
+		const inventory = launch
+			? await formatLinuxBrowserInventory(launch.browser).catch(
+				inventoryError =>
+					`<inventory failed: ${formatError(inventoryError)}>`
+			)
+			: '<application not running>';
+		const screenshot = launch
+			? await captureLinuxSmokeScreenshot(launch.browser).catch(
+				screenshotError =>
+					`<screenshot failed: ${formatError(screenshotError)}>`
+			)
+			: '<application not running>';
 		throw new Error(
-			`${detail}\nPackaged application output:\n${output || '<none>'}`
+			[
+				detail,
+				formatCappedDiagnostics('Browser page errors', pageErrors),
+				formatCappedDiagnostics('Browser console errors', consoleErrors),
+				`Target inventory:\n${inventory}`,
+				`Screenshot: ${screenshot}`,
+				`Packaged application output (last ${maximumLogLength} bytes):\n` +
+					(output || '<none>'),
+			].join('\n\n')
 		);
 	} finally {
 		await launch?.browser.close().catch(() => undefined);
@@ -1143,48 +1487,23 @@ async function readWorkbenchRows(
 	return runLinuxOmniBoundedProbe(
 		deadline,
 		`${phase} Projects row probe`,
-		() => shellPage.locator(
-			'.monaco-list-row:has(.hucode-project-switcher-workbench)'
-		).evaluateAll((elements, expectedLabels) => {
-			const rows: ILinuxOmniWorkbenchRow[] = [];
-			for (const element of elements) {
-				const item = element.querySelector(
-					'.hucode-project-switcher-workbench'
-				);
-				const label = item?.querySelector(
-					'.hucode-project-switcher-label'
-				)?.textContent?.trim();
-				if (
-					!item ||
-					!label ||
-					!expectedLabels.includes(
-						label as LinuxOmniWorkbenchLabel
-					)
-				) {
-					continue;
+		async () => {
+			const rows = await readOmniWorkbenchSmokeRows(
+				shellPage,
+				workbenchLabels
+			);
+			return rows.map(row => {
+				if (!isLinuxOmniWorkbenchState(row.state)) {
+					throw new Error(
+						`Unexpected Projects row state: ${row.state}`
+					);
 				}
-				const stateClass = [...item.classList].find(className =>
-					className.startsWith(
-						'hucode-project-switcher-workbench-'
-					)
-				);
-				const state = stateClass?.slice(
-					'hucode-project-switcher-workbench-'.length
-				) as LinuxOmniWorkbenchState | undefined;
-				if (!state) {
-					continue;
-				}
-				rows.push({
-					label,
-					state,
-					active:
-						element.getAttribute('aria-current') === 'true',
-					ariaLabel:
-						element.getAttribute('aria-label') ?? undefined,
-				});
-			}
-			return rows;
-		}, workbenchLabels)
+				return {
+					...row,
+					state: row.state,
+				};
+			});
+		}
 	);
 }
 
@@ -1540,6 +1859,74 @@ async function connectToCdp(
 	}
 
 	throw new Error(`Timed out connecting to CDP: ${lastError?.message}`);
+}
+
+function captureLinuxPageDiagnostics(
+	browser: Browser,
+	attachedPages: WeakSet<Page>,
+	pageErrors: string[],
+	consoleErrors: string[]
+): void {
+	const attach = (page: Page): void => {
+		if (attachedPages.has(page)) {
+			return;
+		}
+		attachedPages.add(page);
+		page.on('pageerror', error => {
+			pageErrors.push(`${page.url()}: ${error.stack ?? error.message}`);
+		});
+		page.on('console', message => {
+			if (message.type() === 'error') {
+				consoleErrors.push(`${page.url()}: ${message.text()}`);
+			}
+		});
+	};
+	for (const context of browser.contexts()) {
+		for (const page of context.pages()) {
+			attach(page);
+		}
+		context.on('page', attach);
+	}
+}
+
+async function formatLinuxBrowserInventory(browser: Browser): Promise<string> {
+	return JSON.stringify(browser.contexts().map((context, contextIndex) => ({
+		contextIndex,
+		pages: context.pages().map((page, pageIndex) => ({
+			pageIndex,
+			url: page.url(),
+			closed: page.isClosed(),
+		})),
+	})), undefined, 2);
+}
+
+async function captureLinuxSmokeScreenshot(browser: Browser): Promise<string> {
+	const pages = browser.contexts().flatMap(context => context.pages());
+	const page = pages.find(candidate => candidate.url().includes(
+		'/vs/hucode/electron-browser/omni.html'
+	)) ?? pages[0];
+	if (!page) {
+		throw new Error('No renderer page was available for a screenshot');
+	}
+	await fs.mkdir(smokeArtifactRoot, { recursive: true });
+	const screenshotPath = path.join(
+		smokeArtifactRoot,
+		'linux-desktop-hosted-command-smoke.png'
+	);
+	await page.screenshot({ path: screenshotPath, fullPage: true });
+	return screenshotPath;
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+function formatCappedDiagnostics(
+	label: string,
+	messages: readonly string[]
+): string {
+	const detail = messages.join('\n').slice(-maximumLogLength) || '<none>';
+	return `${label} (last ${maximumLogLength} characters):\n${detail}`;
 }
 
 function getRendererUrls(browser: Browser): string[] {

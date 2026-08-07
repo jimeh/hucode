@@ -5,7 +5,15 @@
 
 import { mainWindow } from '../../base/browser/window.js';
 import { DeferredPromise } from '../../base/common/async.js';
-import { Disposable, DisposableStore, IDisposable, toDisposable } from
+import { Emitter, Event } from '../../base/common/event.js';
+import { generateUuid } from '../../base/common/uuid.js';
+import {
+	Disposable,
+	DisposableStore,
+	IDisposable,
+	MutableDisposable,
+	toDisposable,
+} from
 	'../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/browser/ipc.mp.js';
@@ -26,6 +34,7 @@ import {
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
+	isHucodeOmniWebConnectionBootstrapMetadata,
 	IHucodeOmniWebPortMessage,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
@@ -59,12 +68,14 @@ export interface IHucodeHostedOmniWebConnectionService {
 	 * Whether this workbench runs as a hosted Omni iframe.
 	 */
 	readonly isHosted: boolean;
+	readonly onDidConnect: Event<IHucodeHostedOmniWebConnection>;
 
 	/**
-	 * Resolves once the shell has transferred its IPC port. Never resolves
-	 * outside a hosted iframe.
+	 * Resolves with the first connection, or `undefined` outside a hosted iframe
+	 * and when the initial wait expires. Later connections are reported through
+	 * {@link onDidConnect}.
 	 */
-	whenConnected(): Promise<IHucodeHostedOmniWebConnection>;
+	whenConnected(): Promise<IHucodeHostedOmniWebConnection | undefined>;
 
 	/**
 	 * Registers the workbench-side service callable by the shell.
@@ -92,7 +103,23 @@ export interface IHostedOmniWebConnectionBrowserAdapter {
 	isParentSource(source: MessageEventSource | null): boolean;
 	postToParent(message: object): void;
 	addMessageListener(listener: (event: MessageEvent) => void): IDisposable;
+	setTimeout(
+		callback: () => void,
+		delay: number
+	): ReturnType<typeof setTimeout>;
+	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 }
+
+/** Retry and deadline values for the hosted iframe bootstrap. */
+export interface IHostedOmniWebConnectionOptions {
+	readonly initialConnectionTimeoutMs: number;
+	readonly readyRetryDelaysMs: readonly number[];
+}
+
+const defaultConnectionOptions: IHostedOmniWebConnectionOptions = {
+	initialConnectionTimeoutMs: 5_000,
+	readyRetryDelaysMs: [250, 500, 1_000, 2_000],
+};
 
 function createMainWindowConnectionAdapter():
 	IHostedOmniWebConnectionBrowserAdapter {
@@ -109,6 +136,8 @@ function createMainWindowConnectionAdapter():
 			return toDisposable(() =>
 				mainWindow.removeEventListener('message', listener));
 		},
+		setTimeout: (callback, delay) => setTimeout(callback, delay),
+		clearTimeout: handle => clearTimeout(handle),
 	};
 }
 
@@ -123,46 +152,102 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	declare readonly _serviceBrand: undefined;
 
 	private readonly instanceId: string | undefined;
-	private readonly connection =
-		new DeferredPromise<IHucodeHostedOmniWebConnection>();
+	private readonly initialConnection =
+		new DeferredPromise<IHucodeHostedOmniWebConnection | undefined>();
+	private readonly connectionDisposables =
+		this._register(new MutableDisposable<DisposableStore>());
+	private connection: IHucodeHostedOmniWebConnection | undefined;
+	private workbenchClient: IHucodeOmniWebWorkbenchClient | undefined;
+	private readonly bootstrapId = generateUuid();
+	private readyStarted = false;
+	private connectionAttempt = 0;
+	private readyRetryIndex = 0;
+	private readonly readyRetryDelaysMs: readonly number[];
+	private readyRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	private initialConnectionTimer: ReturnType<typeof setTimeout> | undefined;
+	private disposed = false;
+	private readonly _onDidConnect =
+		this._register(new Emitter<IHucodeHostedOmniWebConnection>());
+	readonly onDidConnect = this._onDidConnect.event;
 
 	constructor(
 		private readonly browser: IHostedOmniWebConnectionBrowserAdapter,
 		@IWorkbenchEnvironmentService
 		environmentService: IHostedOmniWebConnectionEnvironment,
+		private readonly options = defaultConnectionOptions,
 	) {
 		super();
+		this.readyRetryDelaysMs = options.readyRetryDelaysMs.filter(delay =>
+			Number.isFinite(delay) && delay > 0
+		);
 
 		this.instanceId = environmentService.isHostedOmniWorkspace &&
 			this.browser.hasParent()
 			? environmentService.hostedInstanceId
 			: undefined;
 		if (!this.instanceId) {
+			void this.initialConnection.complete(undefined);
 			return;
 		}
+		this._register({ dispose: () => this.shutdown() });
+		this.initialConnectionTimer = this.browser.setTimeout(() => {
+			this.initialConnectionTimer = undefined;
+			void this.initialConnection.complete(undefined);
+		}, this.options.initialConnectionTimeoutMs);
 
 		this._register(this.browser.addMessageListener(event => {
 			if (
 				event.origin !== this.browser.origin ||
 				!this.browser.isParentSource(event.source) ||
-				!isPortMessage(event.data, this.instanceId!) ||
 				!(event.ports[0] instanceof MessagePort)
 			) {
 				return;
 			}
+			const port = event.ports[0];
+			if (!isPortMessage(event.data, this.instanceId!)) {
+				if (isPortMessageTarget(event.data, this.instanceId!)) {
+					port.close();
+				}
+				return;
+			}
+			const bootstrap = event.data.connectionBootstrap;
+			if (bootstrap ? (
+				bootstrap.id !== this.bootstrapId ||
+				bootstrap.attempt !== this.connectionAttempt
+			) : event.data.connectionAttempt !== undefined) {
+				port.close();
+				return;
+			}
+			if (this.connection) {
+				port.close();
+				return;
+			}
 
-			const ipcClient = this._register(new MessagePortClient(
-				event.ports[0],
+			this.clearReadyRetryTimer();
+			const disposables = new DisposableStore();
+			const ipcClient = disposables.add(new MessagePortClient(
+				port,
 				`hucodeHostedOmniWorkbench:${this.instanceId}`
 			));
-			void this.connection.complete({
+			if (this.workbenchClient) {
+				this.registerWorkbenchClientOnConnection(
+					ipcClient,
+					this.workbenchClient,
+					disposables
+				);
+			}
+			const connection = this.connection = {
 				ipcClient,
 				shellWindowId: event.data.windowId,
 				hostedShellProtocolVersion:
 					event.data.hostedShellProtocolVersion,
 				hostedShellCapabilities:
 					event.data.hostedShellCapabilities,
-			});
+			};
+			this.connectionDisposables.value = disposables;
+			this.clearInitialConnectionTimer();
+			void this.initialConnection.complete(connection);
+			this._onDidConnect.fire(connection);
 		}));
 	}
 
@@ -170,29 +255,60 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		return !!this.instanceId;
 	}
 
-	whenConnected(): Promise<IHucodeHostedOmniWebConnection> {
-		return this.connection.p;
+	whenConnected(): Promise<IHucodeHostedOmniWebConnection | undefined> {
+		return this.initialConnection.p;
 	}
 
 	registerWorkbenchClient(client: IHucodeOmniWebWorkbenchClient): void {
-		const disposables = this._register(new DisposableStore());
-		void this.connection.p.then(connection => {
-			connection.ipcClient.registerChannel(
-				HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
-				ProxyChannel.fromService(client, disposables)
+		this.workbenchClient = client;
+		if (this.connection) {
+			this.registerWorkbenchClientOnConnection(
+				this.connection.ipcClient,
+				client,
+				this.connectionDisposables.value!
 			);
-		});
+		}
 	}
 
 	signalReady(): void {
+		if (!this.instanceId || this.connection || this.readyStarted) {
+			return;
+		}
+		this.readyStarted = true;
+		this.sendReadyAttempt();
+	}
+
+	private sendReadyAttempt(): void {
+		if (this.disposed || this.connection) {
+			return;
+		}
+		this.connectionAttempt++;
 		this.postToShell({
 			type: HucodeOmniWebChildMessageType.Ready,
 			instanceId: this.instanceId,
+			connectionBootstrap: {
+				id: this.bootstrapId,
+				attempt: this.connectionAttempt,
+			},
 			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 			hostedShellProtocolVersion:
 				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 		});
+		const delays = this.readyRetryDelaysMs;
+		if (delays.length === 0) {
+			return;
+		}
+		// Keep retrying at the final capped delay so a late shell can recover.
+		const delay = delays[Math.min(
+			this.readyRetryIndex,
+			delays.length - 1
+		)];
+		this.readyRetryIndex++;
+		this.readyRetryTimer = this.browser.setTimeout(() => {
+			this.readyRetryTimer = undefined;
+			this.sendReadyAttempt();
+		}, delay);
 	}
 
 	notifyFocus(focused: boolean): void {
@@ -210,6 +326,55 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 
 		this.browser.postToParent(message);
 	}
+
+	private registerWorkbenchClientOnConnection(
+		ipcClient: MessagePortClient,
+		client: IHucodeOmniWebWorkbenchClient,
+		disposables: DisposableStore
+	): void {
+		ipcClient.registerChannel(
+			HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+			ProxyChannel.fromService(client, disposables)
+		);
+	}
+
+	private clearReadyRetryTimer(): void {
+		if (this.readyRetryTimer !== undefined) {
+			this.browser.clearTimeout(this.readyRetryTimer);
+			this.readyRetryTimer = undefined;
+		}
+	}
+
+	private clearInitialConnectionTimer(): void {
+		if (this.initialConnectionTimer !== undefined) {
+			this.browser.clearTimeout(this.initialConnectionTimer);
+			this.initialConnectionTimer = undefined;
+		}
+	}
+
+	private shutdown(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		this.clearReadyRetryTimer();
+		this.clearInitialConnectionTimer();
+		this.connection = undefined;
+		this.connectionDisposables.clear();
+		void this.initialConnection.complete(undefined);
+	}
+}
+
+function isPortMessageTarget(value: unknown, instanceId: string): boolean {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+	};
+	return message.type === HucodeOmniWebParentMessageType.Port &&
+		message.instanceId === instanceId;
 }
 
 function isPortMessage(
@@ -224,12 +389,15 @@ function isPortMessage(
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
 		readonly windowId?: unknown;
+		readonly connectionBootstrap?: unknown;
+		readonly connectionAttempt?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
 		typeof message.windowId === 'number' &&
+		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		(
 			message.hostedShellProtocolVersion === undefined ||
 			typeof message.hostedShellProtocolVersion === 'number'

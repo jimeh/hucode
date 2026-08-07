@@ -20,8 +20,21 @@ import {
 	runLinuxOmniBoundedProbe,
 	summarizeLinuxOmniRenderers,
 } from '../../hucode/linux-omni-smoke.ts';
+import { hostedWorkbenchSmokeCommands } from
+	'../../hucode/omni-hosted-command-smoke.ts';
 
 suite('Hucode Linux Omni lifecycle smoke', () => {
+	test('shares the hosted command contract with the serve-web smoke', () => {
+		assert.deepStrictEqual(hostedWorkbenchSmokeCommands, {
+			switchWorkbench: 'Switch Workbench...',
+			previousLoaded: 'Switch to Previous Loaded Workbench',
+			nextLoaded: 'Switch to Next Loaded Workbench',
+			lastActive: 'Switch to Last Active Workbench',
+			quickSwitchLoaded: 'Quick Switch Loaded Workbench',
+			unloadCurrent: 'Omni-Window: Unload Current Worktree',
+		});
+	});
+
 	test('parses a caller-supplied packaged application path', () => {
 		assert.deepStrictEqual(
 			parseLinuxOmniSmokeOptions([
@@ -298,6 +311,13 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			'initial restore',
 			'switch to Bravo',
 			'switch to Alpha',
+			'hosted full picker to Bravo',
+			'hosted previous loaded to Alpha',
+			'hosted next loaded to Bravo',
+			'hosted last active to Alpha',
+			'hosted quick switch to Bravo',
+			'hosted unload Bravo',
+			'restore Bravo after hosted unload',
 			'suspend Bravo',
 			'restore Bravo',
 			'crash Bravo',
@@ -309,6 +329,24 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			'/tmp/smoke/Alpha',
 			'/tmp/smoke/Bravo'
 		);
+		assert.deepStrictEqual(expectations['hosted unload Bravo'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 0,
+		});
 		assert.deepStrictEqual(expectations['crash Bravo'], {
 			rows: [
 				{

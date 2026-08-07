@@ -82,6 +82,7 @@ import {
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import {
 	acceptHucodeHostedShellPortRequest,
+	bindHucodeHostedShellPortLifetime,
 	IHucodeHostedShellPortConnection,
 } from './hostedShellPortAcceptor.js';
 import {
@@ -230,6 +231,10 @@ export class HucodeShellMainService extends Disposable
 				port2.close();
 			}
 		}));
+		connection.add(bindHucodeHostedShellPortLifetime(
+			port1,
+			() => controller.releaseHostedShellBinding(binding)
+		));
 		const client = connection.add(new MessagePortClient(
 			port1,
 			`hucodeHostedDesktop:${binding.instanceId}`
@@ -303,9 +308,9 @@ export class HucodeShellMainService extends Disposable
 		return reopenHucodeHostedWorkspaceInNormalWindow({
 			getState: () => controller.getState(),
 			closeWorkspace: async targetInstanceId => {
-				if (targetInstanceId === binding.instanceId) {
+				const committed = targetInstanceId === binding.instanceId &&
 					await controller.closeHostedShellSelf(binding);
-				}
+				return { committed };
 			},
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
@@ -798,7 +803,10 @@ export class HucodeShellMainService extends Disposable
 		return reopenHucodeHostedWorkspaceInNormalWindow({
 			getState: () => controller.getState(),
 			closeWorkspace: async targetInstanceId => {
-				await controller.closeWorkspace(targetInstanceId);
+				const committed = await controller.closeWorkspace(
+					targetInstanceId
+				);
+				return { committed };
 			},
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),

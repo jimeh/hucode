@@ -120,6 +120,11 @@ as the required Hucode instruction set for work in this fork.
   `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
   `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
   variables or Electron unit tests may start in Node mode before loading tests.
+- `build/lib/preLaunch.ts` validates only the Electron version, not the
+  product-branded executable name. CI that runs upstream Electron tests before
+  a Hucode desktop smoke must rebuild Electron under `run-with-mixin.js`,
+  reapply the Linux sandbox ownership, and launch with
+  `VSCODE_SKIP_PRELAUNCH=1`.
 - Local `./scripts/test.sh` runs need `ELECTRON_DISABLE_SANDBOX=1`, because
   `.build/electron/chrome-sandbox` must be root-owned with mode 4755 and only
   CI does that (`sudo chown root` / `sudo chmod 4755`). Without it the runner
@@ -237,6 +242,10 @@ as the required Hucode instruction set for work in this fork.
   binding generation and connection before replacement setup. A setup failure
   stays fail-closed and requires a renderer retry; do not preserve the stale
   connection as though it were still usable.
+- Desktop hosted-shell response timeouts close the renderer MessagePort. Keep
+  the main-side port-close listener bound to that connection generation so the
+  pending operation loses authority before reacquisition; a late close from an
+  old port must not invalidate its replacement.
 - Complete project-catalog reconciliation is shell authority. Hosted
   workbenches may read combined state through `getWindowState`, but must not
   submit a supposedly complete catalog over their connection facade.
@@ -248,6 +257,10 @@ as the required Hucode instruction set for work in this fork.
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
   iframe.
+- The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
+  resolves a separate stable `playwright-core`. Build smoke helpers shared by
+  desktop and serve-web must use `@playwright/test` consistently; mixing their
+  `Page`, `Frame`, or `Locator` types fails build typecheck despite matching APIs.
 - Shell controller ownership ends when its host fires `onDidClose`, even if a
   later global window-destroy event also arrives. Release on both signals
   idempotently so a closed host cannot retain controller state.

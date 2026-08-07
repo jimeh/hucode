@@ -4,11 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { mainWindow } from '../../../base/browser/window.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { Emitter } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
+import {
+	acquirePortOrUndefinedCancellable,
+	IMessagePortAcquisitionHost,
+} from '../../../base/parts/ipc/electron-browser/ipc.mp.js';
 import {
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
@@ -20,13 +25,17 @@ import { HucodeHostedShellAction } from
 	'../../../platform/window/common/hucodeHostedShellActions.js';
 import { INativeWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/electron-browser/environmentService.js';
-import { DesktopHostedShellServiceAdapter } from
+import {
+	DesktopHostedShellServiceAdapter,
+	IDesktopHostedShellConnectionAttempt,
+	IDesktopHostedShellConnectionOptions,
+} from
 	'../../electron-browser/hostedShellServiceAdapter.js';
 
 suite('DesktopHostedShellServiceAdapter', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('waits for and delegates only to the narrow hosted connection',
+	test('returns unavailable while connecting then delegates to the narrow connection',
 		async () => {
 			const connection =
 				new DeferredPromise<IHucodeHostedShellService | undefined>();
@@ -71,21 +80,25 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				captureSelfScreenshot: async () => VSBuffer.fromString('self'),
 			};
 			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
-				() => connection.p,
-				createHostedEnvironment()
+				() => createAttempt(connection.p),
+				createHostedEnvironment(),
+				createImmediateOptions()
 			));
 			const forwardedStates: IHucodeHostedShellState[] = [];
 			disposables.add(adapter.onDidChangeState(value =>
 				forwardedStates.push(value)
 			));
 
-			const statePromise = adapter.getState();
+			assert.deepStrictEqual(
+				await adapter.getState(),
+				HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+			);
 			assert.strictEqual(
 				isHucodeHostedShellServiceAvailable(adapter),
 				false
 			);
 			void connection.complete(shell);
-			assert.deepStrictEqual(await statePromise, state);
+			await settled();
 			assert.strictEqual(
 				isHucodeHostedShellServiceAvailable(adapter),
 				true
@@ -112,16 +125,19 @@ suite('DesktopHostedShellServiceAdapter', () => {
 			assert.deepStrictEqual(calls, ['action:addProject', 'paste']);
 		});
 
-	test('disposal settles a pending connection without fallback', async () => {
+	test('disposal cancels a pending connection and disposes a late client', async () => {
 		const connection =
 			new DeferredPromise<IHucodeHostedShellService | undefined>();
+		let attemptDisposed = false;
 		let connectionDisposed = false;
 		const adapter = new DesktopHostedShellServiceAdapter(
-			() => connection.p,
-			createHostedEnvironment()
+			() => createAttempt(connection.p, () => attemptDisposed = true),
+			createHostedEnvironment(),
+			createImmediateOptions()
 		);
 		const operation = adapter.closeSelf();
 		adapter.dispose();
+		assert.strictEqual(attemptDisposed, true);
 		assert.strictEqual(
 			isHucodeHostedShellServiceAvailable(adapter),
 			false
@@ -141,32 +157,429 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		assert.strictEqual(connectionDisposed, true);
 	});
 
-	test('maps rejected port operations to unavailable outcomes', async () => {
-		const changes = disposables.add(new Emitter<IHucodeHostedShellState>());
-		const shell = Object.assign(createUnavailableShell(), {
-			onDidChangeState: changes.event,
-			getState: async () => {
-				throw new Error('connection disposed');
-			},
-			closeSelf: async () => {
-				throw new Error('connection disposed');
-			},
-		});
+	test('recovers after a denied acquisition', async () => {
+		const timers = new ManualTimers();
+		const second = new DeferredPromise<
+			IHucodeHostedShellService | undefined
+		>();
+		let attempts = 0;
 		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
-			async () => shell,
-			createHostedEnvironment()
+			() => {
+				attempts++;
+				return createAttempt(attempts === 1
+					? Promise.resolve(undefined)
+					: second.p);
+			},
+			createHostedEnvironment(),
+			timers.options
 		));
 
-		assert.deepStrictEqual(
-			await adapter.getState(),
-			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
-		);
+		await settled();
+		assert.strictEqual(attempts, 1);
+		timers.fireNext(10);
+		assert.strictEqual(attempts, 2);
+		void second.complete(createAcceptedShell());
+		await settled();
 		assert.strictEqual(
 			await adapter.closeSelf(),
-			HucodeHostedShellOperationOutcome.Unavailable
+			HucodeHostedShellOperationOutcome.Accepted
 		);
 	});
+
+	test('times out acquisition, retries, and closes a late client', async () => {
+		const timers = new ManualTimers();
+		const first = new DeferredPromise<
+			IHucodeHostedShellService | undefined
+		>();
+		const second = new DeferredPromise<
+			IHucodeHostedShellService | undefined
+		>();
+		let attempts = 0;
+		let firstAttemptDisposed = false;
+		let lateClientDisposed = false;
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			() => {
+				attempts++;
+				return createAttempt(
+					attempts === 1 ? first.p : second.p,
+					attempts === 1
+						? () => firstAttemptDisposed = true
+						: undefined
+				);
+			},
+			createHostedEnvironment(),
+			timers.options
+		));
+
+		timers.fireNext(50);
+		assert.strictEqual(firstAttemptDisposed, true);
+		timers.fireNext(10);
+		assert.strictEqual(attempts, 2);
+		void first.complete(Object.assign(createAcceptedShell(), {
+			dispose: () => lateClientDisposed = true,
+		}));
+		void second.complete(createAcceptedShell());
+		await settled();
+		assert.strictEqual(lateClientDisposed, true);
+		assert.strictEqual(isHucodeHostedShellServiceAvailable(adapter), true);
+	});
+
+	test('response timeout reacquires without replaying the operation', async () => {
+		const timers = new ManualTimers();
+		const never = new DeferredPromise<HucodeHostedShellOperationOutcome>();
+		let operationCalls = 0;
+		let attempts = 0;
+		let firstShellDisposed = false;
+		const firstShell = Object.assign(createAcceptedShell(), {
+			closeSelf: async () => {
+				operationCalls++;
+				return never.p;
+			},
+			dispose: () => firstShellDisposed = true,
+		});
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			() => createAttempt(Promise.resolve(
+				++attempts === 1 ? firstShell : createAcceptedShell()
+			)),
+			createHostedEnvironment(),
+			timers.options
+		));
+		await settled();
+
+		const operation = adapter.closeSelf();
+		await settled();
+		timers.fireNext(70);
+		assert.strictEqual(
+			await operation,
+			HucodeHostedShellOperationOutcome.Unavailable
+		);
+		assert.strictEqual(operationCalls, 1);
+		assert.strictEqual(firstShellDisposed, true);
+		timers.fireNext(10);
+		await settled();
+		assert.strictEqual(attempts, 2);
+		assert.strictEqual(operationCalls, 1);
+		assert.strictEqual(
+			await adapter.closeSelf(),
+			HucodeHostedShellOperationOutcome.Accepted
+		);
+	});
+
+	test('ignores a late state result from a timed-out connection', async () => {
+		const timers = new ManualTimers();
+		const lateState = new DeferredPromise<IHucodeHostedShellState>();
+		const secondChanges = disposables.add(new Emitter<IHucodeHostedShellState>());
+		const firstState: IHucodeHostedShellState = {
+			available: true,
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			lifecycleState: 'active',
+			active: true,
+			visible: true,
+		};
+		const secondState = {
+			...firstState,
+			projectsSidebarVisible: false,
+		};
+		let firstStateCalls = 0;
+		let attempts = 0;
+		const firstShell = Object.assign(createAcceptedShell(), {
+			getState: async () => ++firstStateCalls === 1
+				? firstState
+				: lateState.p,
+		});
+		const secondShell = Object.assign(createAcceptedShell(), {
+			onDidChangeState: secondChanges.event,
+			getState: async () => secondState,
+		});
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			() => createAttempt(Promise.resolve(
+				++attempts === 1 ? firstShell : secondShell
+			)),
+			createHostedEnvironment(),
+			timers.options
+		));
+		const forwardedStates: IHucodeHostedShellState[] = [];
+		disposables.add(adapter.onDidChangeState(state => forwardedStates.push(state)));
+		await settled();
+
+		const timedOutState = adapter.getState();
+		await settled();
+		timers.fireNext(70);
+		assert.deepStrictEqual(
+			await timedOutState,
+			HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+		);
+		timers.fireNext(10);
+		await settled();
+		assert.strictEqual(attempts, 2);
+		assert.deepStrictEqual(await adapter.getState(), secondState);
+
+		const forwardedBeforeLateState = forwardedStates.length;
+		void lateState.complete(firstState);
+		await settled();
+		secondChanges.fire(secondState);
+		assert.strictEqual(forwardedStates.length, forwardedBeforeLateState);
+	});
+
+	test('stale generation outcome reacquires without replaying the operation',
+		async () => {
+			const timers = new ManualTimers();
+			let operationCalls = 0;
+			let attempts = 0;
+			const firstShell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => {
+					operationCalls++;
+					return HucodeHostedShellOperationOutcome.Stale;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => createAttempt(Promise.resolve(
+					++attempts === 1 ? firstShell : createAcceptedShell()
+				)),
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Stale
+			);
+			assert.strictEqual(operationCalls, 1);
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				false
+			);
+			timers.fireNext(10);
+			await settled();
+			assert.strictEqual(attempts, 2);
+			assert.strictEqual(operationCalls, 1);
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+		});
 });
+
+suite('Hucode desktop MessagePort acquisition', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('cleans renderer and preload listeners on success and denial', async () => {
+		for (const port of [createTestPort(), undefined]) {
+			const host = new FakeAcquisitionHost();
+			const acquisition = acquirePortOrUndefinedCancellable(
+				'vscode:request',
+				'vscode:response',
+				'nonce',
+				host
+			);
+			host.emit('nonce', port);
+			assert.strictEqual(await acquisition.promise, port);
+			assert.deepStrictEqual(host.counts, {
+				added: 1,
+				removed: 1,
+				acquired: 1,
+				cancelled: 1,
+				sent: 1,
+			});
+		}
+	});
+
+	test('dispose cleans exactly once and closes an already-dispatched late port',
+		async () => {
+			const host = new FakeAcquisitionHost();
+			const acquisition = acquirePortOrUndefinedCancellable(
+				'vscode:request',
+				'vscode:response',
+				'nonce',
+				host
+			);
+			const dispatchedListener = host.listener;
+			acquisition.dispose();
+			acquisition.dispose();
+			assert.strictEqual(await acquisition.promise, undefined);
+			let closed = 0;
+			dispatchedListener?.(createPortEvent('nonce', createTestPort(
+				() => closed++
+			)));
+			assert.strictEqual(closed, 1);
+			assert.deepStrictEqual(host.counts, {
+				added: 1,
+				removed: 1,
+				acquired: 1,
+				cancelled: 1,
+				sent: 1,
+			});
+		});
+
+	test('synchronous request failure cleans both listener layers', () => {
+		const host = new FakeAcquisitionHost();
+		host.throwOnSend = true;
+		assert.throws(() => acquirePortOrUndefinedCancellable(
+			'vscode:request',
+			'vscode:response',
+			'nonce',
+			host
+		), /request failed/);
+		assert.deepStrictEqual(host.counts, {
+			added: 1,
+			removed: 1,
+			acquired: 1,
+			cancelled: 1,
+			sent: 1,
+		});
+	});
+});
+
+class FakeAcquisitionHost implements IMessagePortAcquisitionHost {
+	listener: ((event: MessageEvent) => void) | undefined;
+	throwOnSend = false;
+	readonly counts = {
+		added: 0,
+		removed: 0,
+		acquired: 0,
+		cancelled: 0,
+		sent: 0,
+	};
+
+	addMessageListener(listener: (event: MessageEvent) => void): void {
+		this.counts.added++;
+		this.listener = listener;
+	}
+
+	removeMessageListener(listener: (event: MessageEvent) => void): void {
+		this.counts.removed++;
+		if (this.listener === listener) {
+			this.listener = undefined;
+		}
+	}
+
+	acquire(): void {
+		this.counts.acquired++;
+	}
+
+	cancel(): void {
+		this.counts.cancelled++;
+	}
+
+	send(): void {
+		this.counts.sent++;
+		if (this.throwOnSend) {
+			throw new Error('request failed');
+		}
+	}
+
+	emit(nonce: string, port: MessagePort | undefined): void {
+		this.listener?.(createPortEvent(nonce, port));
+	}
+}
+
+function createPortEvent(
+	nonce: string,
+	port: MessagePort | undefined
+): MessageEvent {
+	return {
+		data: nonce,
+		ports: port ? [port] : [],
+		source: mainWindow,
+	} as unknown as MessageEvent;
+}
+
+function createTestPort(onClose?: () => void): MessagePort {
+	return {
+		onmessage: null,
+		onmessageerror: null,
+		close: () => onClose?.(),
+		postMessage() { },
+		start() { },
+		addEventListener() { },
+		removeEventListener() { },
+		dispatchEvent: () => true,
+	};
+}
+
+function createAttempt(
+	promise: Promise<IHucodeHostedShellService | undefined>,
+	onDispose?: () => void
+): IDesktopHostedShellConnectionAttempt {
+	let disposed = false;
+	return {
+		promise,
+		dispose() {
+			if (!disposed) {
+				disposed = true;
+				onDispose?.();
+			}
+		},
+	};
+}
+
+function createAcceptedShell(): IHucodeHostedShellService {
+	return {
+		...createUnavailableShell(),
+		getState: async () => ({
+			available: true,
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			lifecycleState: 'active',
+			active: true,
+			visible: true,
+		}),
+		closeSelf: async () => HucodeHostedShellOperationOutcome.Accepted,
+		notifyReady: async () => ({
+			outcome: HucodeHostedShellOperationOutcome.Accepted,
+		}),
+	};
+}
+
+function createImmediateOptions(): IDesktopHostedShellConnectionOptions {
+	return {
+		acquisitionTimeoutMs: 1_000,
+		operationTimeoutMs: 1_000,
+		retryDelaysMs: [0],
+		setTimeout: (callback, delay) => setTimeout(callback, delay),
+		clearTimeout: handle => clearTimeout(handle),
+	};
+}
+
+class ManualTimers {
+	private nextHandle = 1;
+	private readonly callbacks = new Map<number, {
+		readonly callback: () => void;
+		readonly delay: number;
+	}>();
+
+	readonly options: IDesktopHostedShellConnectionOptions = {
+		acquisitionTimeoutMs: 50,
+		operationTimeoutMs: 70,
+		retryDelaysMs: [10],
+		setTimeout: (callback, delay) => {
+			const handle = this.nextHandle++;
+			this.callbacks.set(handle, { callback, delay });
+			return handle as unknown as ReturnType<typeof setTimeout>;
+		},
+		clearTimeout: handle => {
+			this.callbacks.delete(handle as unknown as number);
+		},
+	};
+
+	fireNext(delay: number): void {
+		const entry = [...this.callbacks.entries()].reverse().find(
+			([, value]) => value.delay === delay
+		);
+		assert.ok(entry, `Expected a pending ${delay}ms timer`);
+		this.callbacks.delete(entry[0]);
+		entry[1].callback();
+	}
+}
+
+async function settled(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
 
 function createUnavailableShell(): IHucodeHostedShellService {
 	return {

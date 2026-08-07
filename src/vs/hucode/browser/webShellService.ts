@@ -94,6 +94,7 @@ import {
 	HucodeOmniWebParentMessageType,
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	IHucodeOmniWebWorkbenchClient,
+	isHucodeOmniWebConnectionBootstrapMetadata,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import {
 	getHucodeOmniHostedWorkbenchRoute,
@@ -144,6 +145,9 @@ interface IHostedIframeInstance {
 	hostedShellProtocolVersion?: number;
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
+	bootstrapId?: string;
+	bootstrapAttempt?: number;
+	retiredBootstrapIds?: Set<string>;
 	pendingUnload?: Promise<boolean>;
 	pendingUnloadDisposition?: HostedUnloadDisposition;
 	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
@@ -1308,8 +1312,16 @@ export class WebHucodeShellController extends Disposable
 
 		return reopenHucodeHostedWorkspaceInNormalWindow({
 			getState: () => this.getState(),
-			closeWorkspace: targetInstanceId =>
-				this.closeWorkspace(this.windowId, targetInstanceId),
+			closeWorkspace: async targetInstanceId => {
+				const instance = this.instancesById.get(targetInstanceId);
+				if (!instance || instance.pendingUnload) {
+					return { committed: false };
+				}
+				const committed = await this.deferStateEmission(() =>
+					this.unloadAndRemoveInstance(instance, 'unload')
+				);
+				return { committed };
+			},
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
 			openNormalWindow: worktreePath => {
@@ -1654,6 +1666,41 @@ export class WebHucodeShellController extends Disposable
 
 		switch (message.type) {
 			case HucodeOmniWebChildMessageType.Ready:
+				if (message.connectionBootstrap !== undefined) {
+					if (instance.bootstrapId !==
+						message.connectionBootstrap.id &&
+						instance.retiredBootstrapIds?.has(
+							message.connectionBootstrap.id
+						)) {
+						return;
+					}
+					if (instance.bootstrapId === message.connectionBootstrap.id &&
+						instance.bootstrapAttempt !== undefined &&
+						message.connectionBootstrap.attempt <=
+						instance.bootstrapAttempt) {
+						return;
+					}
+					this.retireBootstrapDocument(
+						instance,
+						message.connectionBootstrap.id
+					);
+					instance.bootstrapId = message.connectionBootstrap.id;
+					instance.bootstrapAttempt =
+						message.connectionBootstrap.attempt;
+				} else if (message.connectionAttempt !== undefined) {
+					if (instance.bootstrapId === undefined &&
+						instance.bootstrapAttempt !== undefined &&
+						message.connectionAttempt <= instance.bootstrapAttempt) {
+						return;
+					}
+					this.retireBootstrapDocument(instance);
+					instance.bootstrapId = undefined;
+					instance.bootstrapAttempt = message.connectionAttempt;
+				} else {
+					this.retireBootstrapDocument(instance);
+					instance.bootstrapId = undefined;
+					instance.bootstrapAttempt = undefined;
+				}
 				// A workbench that announces nothing predates the two-phase
 				// unload handshake.
 				instance.protocolVersion = message.protocolVersion ?? 1;
@@ -1680,6 +1727,17 @@ export class WebHucodeShellController extends Disposable
 				}
 				break;
 		}
+	}
+
+	private retireBootstrapDocument(
+		instance: IHostedIframeInstance,
+		nextBootstrapId?: string
+	): void {
+		if (instance.bootstrapId === undefined ||
+			instance.bootstrapId === nextBootstrapId) {
+			return;
+		}
+		(instance.retiredBootstrapIds ??= new Set()).add(instance.bootstrapId);
 	}
 
 	/**
@@ -1736,6 +1794,16 @@ export class WebHucodeShellController extends Disposable
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
 			windowId: this.windowId,
+			...(instance.bootstrapId === undefined ? {} : {
+				connectionBootstrap: {
+					id: instance.bootstrapId,
+					attempt: instance.bootstrapAttempt!,
+				},
+			}),
+			...(instance.bootstrapId !== undefined ||
+				instance.bootstrapAttempt === undefined ? {} : {
+				connectionAttempt: instance.bootstrapAttempt,
+			}),
 			hostedShellProtocolVersion: negotiatedCapabilities
 				? HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
 				: instance.hostedShellProtocolVersion === undefined
@@ -1792,17 +1860,18 @@ export class WebHucodeShellController extends Disposable
 					getState: () => this.getState(),
 					closeWorkspace: async targetInstanceId => {
 						if (targetInstanceId !== current.instanceId ||
-							!this.isCurrentHostedBinding(instance, current)) {
-							return this.getState();
+							!this.isCurrentHostedBinding(instance, current) ||
+							instance.pendingUnload) {
+							return { committed: false };
 						}
-						await this.deferStateEmission(() =>
+						const committed = await this.deferStateEmission(() =>
 							this.unloadAndRemoveInstance(
 								instance,
 								'unload',
 								current.connectionGeneration
 							)
 						);
-						return this.getState();
+						return { committed };
 					},
 					focusNormalWindowByPath: worktreePath =>
 						this.focusNormalWindowByPath(worktreePath),
@@ -2742,9 +2811,21 @@ function isHucodeOmniWebChildMessage(
 		return false;
 	}
 
-	const type = (value as { readonly type?: unknown }).type;
-	return type === HucodeOmniWebChildMessageType.Ready ||
-		type === HucodeOmniWebChildMessageType.Focus;
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+		readonly connectionBootstrap?: unknown;
+		readonly connectionAttempt?: unknown;
+		readonly focused?: unknown;
+	};
+	if (typeof message.instanceId !== 'string' || !message.instanceId) {
+		return false;
+	}
+	if (message.type === HucodeOmniWebChildMessageType.Ready) {
+		return isHucodeOmniWebConnectionBootstrapMetadata(message);
+	}
+	return message.type === HucodeOmniWebChildMessageType.Focus &&
+		typeof message.focused === 'boolean';
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {

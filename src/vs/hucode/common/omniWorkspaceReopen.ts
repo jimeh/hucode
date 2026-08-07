@@ -13,11 +13,15 @@ import {
 export interface IHucodeHostedWorkspaceReopenDelegate {
 	getState(): IHucodeHostedWorkspaceState;
 	closeWorkspace(instanceId: string):
-		Promise<IHucodeHostedWorkspaceState | void> |
-		IHucodeHostedWorkspaceState |
-		void;
+		Promise<IHucodeHostedWorkspaceCloseResult> |
+		IHucodeHostedWorkspaceCloseResult;
 	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openNormalWindow(worktreePath: string): Promise<void> | void;
+}
+
+/** Result of this reopen operation's own irreversible hosted close. */
+export interface IHucodeHostedWorkspaceCloseResult {
+	readonly committed: boolean;
 }
 
 /**
@@ -39,11 +43,8 @@ export async function reopenHucodeHostedWorkspaceInNormalWindow(
 	}
 
 	const worktreePath = instance.worktreePath;
-	const closedState = await delegate.closeWorkspace(instanceId);
-	const stateAfterClose = closedState ?? delegate.getState();
-	if (stateAfterClose.instances.some(candidate =>
-		candidate.instanceId === instanceId
-	)) {
+	const closeResult = await delegate.closeWorkspace(instanceId);
+	if (!closeResult.committed) {
 		return false;
 	}
 

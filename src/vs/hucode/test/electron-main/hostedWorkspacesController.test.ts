@@ -2817,11 +2817,12 @@ suite('ResidentHostedWorkspacesController', () => {
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 
-		await Promise.all([
+		const committed = await Promise.all([
 			controller.closeWorkspace('instance-1'),
 			controller.closeWorkspace('instance-1'),
 		]);
 
+		assert.deepStrictEqual(committed.sort(), [false, true]);
 		assert.strictEqual(controller.getState().instances.length, 0);
 		assert.strictEqual(
 			viewFactory.views[0].rawWebContents.closeCalls.length,
@@ -4386,6 +4387,50 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 			assert.deepStrictEqual(hostedWebContents.closeCalls, []);
 		});
+
+	test('failed hosted close keeps a retained workbench loaded', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller } = createController();
+
+		await controller.retainAndOpenWorkbench(URI.file(alpha));
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const staleBinding = controller.acquireHostedShellBinding(1)!;
+		controller.acquireHostedShellBinding(1);
+
+		assert.strictEqual(
+			await controller.closeHostedShellSelf(staleBinding),
+			false
+		);
+		assert.deepStrictEqual(
+			controller.getState().retainedWorkbenches?.map(record => ({
+				folderUri: URI.revive(record.folderUri).fsPath,
+				desiredState: record.desiredState,
+			})),
+			[{ folderUri: alpha, desiredState: 'loaded' }]
+		);
+	});
+
+	test('hosted close unloads the retained workbench', async () => {
+		const alpha = createWorktree('alpha');
+		const { controller } = createController();
+
+		await controller.retainAndOpenWorkbench(URI.file(alpha));
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const binding = controller.acquireHostedShellBinding(1)!;
+
+		assert.strictEqual(
+			await controller.closeHostedShellSelf(binding),
+			true
+		);
+		assert.deepStrictEqual(controller.getState().instances, []);
+		assert.deepStrictEqual(
+			controller.getState().retainedWorkbenches?.map(record => ({
+				folderUri: URI.revive(record.folderUri).fsPath,
+				desiredState: record.desiredState,
+			})),
+			[{ folderUri: alpha, desiredState: 'unloaded' }]
+		);
+	});
 
 	test('hosted navigation focuses a workbench in another Omni window',
 		async () => {
