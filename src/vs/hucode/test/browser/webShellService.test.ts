@@ -260,6 +260,14 @@ suite('WebHucodeShellService', () => {
 		});
 	}
 
+	function advanceHostedDocument(
+		browser: FakeBrowserAdapter,
+		surface: HTMLElement,
+		instanceId: string
+	): void {
+		browser.advanceIframeDocument(getIframe(surface, instanceId));
+	}
+
 	interface IConnectedChild {
 		readonly workbench: FakeHostedWorkbench;
 		readonly shell: IHucodeShellService;
@@ -303,13 +311,24 @@ suite('WebHucodeShellService', () => {
 	function connectCurrentChild(
 		browser: FakeBrowserAdapter,
 		surface: HTMLElement,
-		instanceId: string
+		instanceId: string,
+		connectionBootstrap?: number | {
+			readonly id: string;
+			readonly attempt: number;
+		}
 	): {
 		readonly workbench: FakeHostedWorkbench;
 		readonly shell: IHucodeHostedShellService;
 		readonly shellChannel: IChannel;
 	} {
-		markHostedCapabilityReady(browser, surface, instanceId);
+		markHostedCapabilityReady(
+			browser,
+			surface,
+			instanceId,
+			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			HUCODE_HOSTED_SHELL_CAPABILITIES,
+			connectionBootstrap
+		);
 		const posted = browser.portMessages.at(-1);
 		assert.ok(posted, 'expected a transferred shell port');
 		assert.strictEqual(
@@ -3869,6 +3888,7 @@ suite('WebHucodeShellService', () => {
 			browser.expireTimeouts(500);
 			assert.strictEqual(browser.reloadIframeCalls, 0);
 
+			advanceHostedDocument(browser, surface, instanceId);
 			markReady(browser, surface, instanceId);
 			const reloaded = await waitForInstanceState(
 				service,
@@ -3879,6 +3899,156 @@ suite('WebHucodeShellService', () => {
 
 			assert.strictEqual(reloaded.instances[0].state, 'active');
 		});
+
+	test('rejects current-protocol Ready retries from the reloading document',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/current-document-reload',
+				'project'
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const oldChild = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				{ id: 'document-a', attempt: 1 }
+			);
+			oldChild.workbench.runCommandResult = true;
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => oldChild.workbench.commands.length === 1,
+				'expected reload command delivery'
+			);
+			const portCount = browser.portMessages.length;
+
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				instanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-a', attempt: 2 }
+			);
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				instanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION - 1,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'forged-document', attempt: 1 }
+			);
+			browser.clearIframeDocumentIdentity(getIframe(surface, instanceId));
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				instanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'missing-document', attempt: 1 }
+			);
+			assert.strictEqual(browser.portMessages.length, portCount);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances[0].state,
+				'loading'
+			);
+
+			advanceHostedDocument(browser, surface, instanceId);
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				instanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				{ id: 'document-a', attempt: 3 }
+			);
+			assert.strictEqual(browser.portMessages.length, portCount);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances[0].state,
+				'loading'
+			);
+			const replacement = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				{ id: 'document-b', attempt: 1 }
+			);
+			assert.strictEqual((await replacement.shell.getState()).available, true);
+		});
+
+	test('scopes attempt-only Ready deduplication to the iframe document',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/attempt-document-reload',
+				'project'
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const oldChild = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				2
+			);
+			oldChild.workbench.runCommandResult = true;
+			await service.reloadWorkspace(browser.windowId);
+			await waitFor(
+				() => oldChild.workbench.commands.length === 1,
+				'expected reload command delivery'
+			);
+			const portCount = browser.portMessages.length;
+			markHostedCapabilityReady(
+				browser,
+				surface,
+				instanceId,
+				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				HUCODE_HOSTED_SHELL_CAPABILITIES,
+				3
+			);
+			assert.strictEqual(browser.portMessages.length, portCount);
+
+			advanceHostedDocument(browser, surface, instanceId);
+			const replacement = connectCurrentChild(
+				browser,
+				surface,
+				instanceId,
+				1
+			);
+			assert.strictEqual((await replacement.shell.getState()).available, true);
+			assert.strictEqual(
+				browser.portMessages.at(-1)?.connectionAttempt,
+				1
+			);
+		});
+
+	test('rejects unstamped Ready from the reloading document', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/unstamped-document-reload',
+			'project'
+		);
+		const instanceId = opened.activeInstanceId;
+		assert.ok(instanceId);
+		const oldChild = connectCurrentChild(browser, surface, instanceId);
+		oldChild.workbench.runCommandResult = true;
+		await service.reloadWorkspace(browser.windowId);
+		await waitFor(
+			() => oldChild.workbench.commands.length === 1,
+			'expected reload command delivery'
+		);
+		const portCount = browser.portMessages.length;
+		markHostedCapabilityReady(browser, surface, instanceId);
+		assert.strictEqual(browser.portMessages.length, portCount);
+
+		advanceHostedDocument(browser, surface, instanceId);
+		const replacement = connectCurrentChild(browser, surface, instanceId);
+		assert.strictEqual((await replacement.shell.getState()).available, true);
+	});
 
 	test('isolates the reloading connection until replacement Ready',
 		async () => {
@@ -3922,6 +4092,7 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(oldChild.workbench.commands.length, 2);
 			assert.strictEqual(browser.reloadIframeCalls, 1);
 
+			advanceHostedDocument(browser, surface, instanceId);
 			const replacement = connectChild(browser, surface, instanceId);
 			await waitForInstanceState(
 				service,
@@ -4011,6 +4182,7 @@ suite('WebHucodeShellService', () => {
 			assert.deepStrictEqual(browser.iframeFocusCalls, []);
 			assert.strictEqual(browser.openedUrls.length, openedUrlCount);
 
+			advanceHostedDocument(browser, surface, instanceId);
 			const replacement = connectCurrentChild(browser, surface, instanceId);
 			assert.strictEqual((await replacement.shell.getState()).available, true);
 			assert.strictEqual(
@@ -4082,6 +4254,7 @@ suite('WebHucodeShellService', () => {
 			false
 		);
 
+		advanceHostedDocument(browser, surface, instanceId);
 		const replacement = connectChild(browser, surface, instanceId);
 		assert.strictEqual(await replacement.shell.runActionInShell(
 			browser.windowId,
@@ -6094,9 +6267,13 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	reloadIframeCalls = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
+	private readonly documentIdentities =
+		new WeakMap<HTMLIFrameElement, object>();
 
 	createIframe(): HTMLIFrameElement {
-		return document.createElement('iframe');
+		const iframe = document.createElement('iframe');
+		this.advanceIframeDocument(iframe);
+		return iframe;
 	}
 
 	addMessageListener(listener: (event: MessageEvent) => void): IDisposable {
@@ -6129,6 +6306,18 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 
 	reloadIframe(_iframe: HTMLIFrameElement): void {
 		this.reloadIframeCalls++;
+	}
+
+	getIframeDocumentIdentity(iframe: HTMLIFrameElement): object | undefined {
+		return this.documentIdentities.get(iframe);
+	}
+
+	advanceIframeDocument(iframe: HTMLIFrameElement): void {
+		this.documentIdentities.set(iframe, {});
+	}
+
+	clearIframeDocumentIdentity(iframe: HTMLIFrameElement): void {
+		this.documentIdentities.delete(iframe);
 	}
 
 	createMessageChannel(): MessageChannel {

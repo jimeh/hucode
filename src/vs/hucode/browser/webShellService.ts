@@ -147,6 +147,7 @@ interface IHostedIframeInstance {
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
 	pendingReloadConnectionGeneration?: number;
+	acceptedDocumentIdentity?: object;
 	bootstrapId?: string;
 	bootstrapAttempt?: number;
 	retiredBootstrapIds?: Set<string>;
@@ -411,6 +412,7 @@ export interface IWebHucodeShellBrowserAdapter {
 	focusIframe(iframe: HTMLIFrameElement): void;
 	focusIframeContent(iframe: HTMLIFrameElement): void;
 	reloadIframe(iframe: HTMLIFrameElement): void;
+	getIframeDocumentIdentity(iframe: HTMLIFrameElement): object | undefined;
 	createMessageChannel(): MessageChannel;
 	postPortMessage(
 		iframe: HTMLIFrameElement,
@@ -439,6 +441,7 @@ function defaultWebHucodeShellBrowserAdapter():
 		focusIframe: iframe => iframe.focus(),
 		focusIframeContent: iframe => iframe.contentWindow?.focus(),
 		reloadIframe: iframe => iframe.contentWindow?.location.reload(),
+		getIframeDocumentIdentity: iframe => iframe.contentDocument ?? undefined,
 		createMessageChannel: () => new MessageChannel(),
 		postPortMessage: (iframe, message, port) => {
 			iframe.contentWindow?.postMessage(
@@ -1689,7 +1692,25 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		switch (message.type) {
-			case HucodeOmniWebChildMessageType.Ready:
+			case HucodeOmniWebChildMessageType.Ready: {
+				if (!instance.iframe) {
+					return;
+				}
+				const documentIdentity =
+					this.browser.getIframeDocumentIdentity(instance.iframe);
+				if (!documentIdentity) {
+					return;
+				}
+				const documentChanged =
+					instance.acceptedDocumentIdentity !== undefined &&
+					instance.acceptedDocumentIdentity !== documentIdentity;
+				if (instance.pendingReloadConnectionGeneration !== undefined) {
+					if (!documentChanged ||
+						(message.connectionBootstrap !== undefined &&
+							message.connectionBootstrap.id === instance.bootstrapId)) {
+						return;
+					}
+				}
 				if (message.connectionBootstrap !== undefined) {
 					if (instance.bootstrapId !==
 						message.connectionBootstrap.id &&
@@ -1698,7 +1719,8 @@ export class WebHucodeShellController extends Disposable
 						)) {
 						return;
 					}
-					if (instance.bootstrapId === message.connectionBootstrap.id &&
+					if (!documentChanged &&
+						instance.bootstrapId === message.connectionBootstrap.id &&
 						instance.bootstrapAttempt !== undefined &&
 						message.connectionBootstrap.attempt <=
 						instance.bootstrapAttempt) {
@@ -1712,7 +1734,8 @@ export class WebHucodeShellController extends Disposable
 					instance.bootstrapAttempt =
 						message.connectionBootstrap.attempt;
 				} else if (message.connectionAttempt !== undefined) {
-					if (instance.bootstrapId === undefined &&
+					if (!documentChanged &&
+						instance.bootstrapId === undefined &&
 						instance.bootstrapAttempt !== undefined &&
 						message.connectionAttempt <= instance.bootstrapAttempt) {
 						return;
@@ -1732,12 +1755,14 @@ export class WebHucodeShellController extends Disposable
 					message.hostedShellProtocolVersion;
 				instance.hostedShellCapabilities =
 					message.hostedShellCapabilities;
+				instance.acceptedDocumentIdentity = documentIdentity;
 				this.connectInstance(instance);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
 					message.instanceId
 				);
 				break;
+			}
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
