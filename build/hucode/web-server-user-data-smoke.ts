@@ -279,20 +279,18 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			{ label: 'Bravo', state: 'loaded', active: false },
 		]);
 		const beforeReload = await waitForHostedFrame(page, alphaPath, deadline);
-		const reloadNavigation = beforeReload.waitForNavigation({
-			waitUntil: 'domcontentloaded',
-			timeout: commandTimeout(deadline),
-		});
-		await Promise.all([
-			runHostedWorkbenchSmokeCommand(
-				page,
-				beforeReload,
-				hostedWorkbenchSmokeCommands.reloadWeb,
-				commandTimeout(deadline)
-			),
-			reloadNavigation,
-		]);
-		const afterReload = await waitForHostedFrame(page, alphaPath, deadline);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			beforeReload,
+			hostedWorkbenchSmokeCommands.reloadWeb,
+			commandTimeout(deadline)
+		);
+		const afterReload = await waitForHostedFrame(
+			page,
+			alphaPath,
+			deadline,
+			beforeReload
+		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
 			{ label: 'Bravo', state: 'loaded', active: false },
@@ -595,7 +593,8 @@ async function waitForWebWorkbenchState(
 async function waitForHostedFrame(
 	page: Page,
 	worktreePath: string,
-	deadline: number
+	deadline: number,
+	excludedFrame?: Frame
 ): Promise<Frame> {
 	let lastInventory = '<not observed>';
 	const phaseDeadline = Date.now() + commandTimeout(deadline);
@@ -603,6 +602,9 @@ async function waitForHostedFrame(
 		const matches: Frame[] = [];
 		const inventory: unknown[] = [];
 		for (const frame of page.frames()) {
+			if (frame === excludedFrame) {
+				continue;
+			}
 			try {
 				const configuration = await readWebFrameConfiguration(frame);
 				const frameWorktreePath = getWebFrameWorktreePath(frame);

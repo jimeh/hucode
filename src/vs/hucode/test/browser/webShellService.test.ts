@@ -260,14 +260,6 @@ suite('WebHucodeShellService', () => {
 		});
 	}
 
-	function advanceHostedDocument(
-		browser: FakeBrowserAdapter,
-		surface: HTMLElement,
-		instanceId: string
-	): void {
-		browser.advanceIframeDocument(getIframe(surface, instanceId));
-	}
-
 	interface IConnectedChild {
 		readonly workbench: FakeHostedWorkbench;
 		readonly shell: IHucodeShellService;
@@ -3871,8 +3863,20 @@ suite('WebHucodeShellService', () => {
 				'project'
 			);
 			const instanceId = state.instances[0].instanceId;
+			const originalIframe = getIframe(surface, instanceId);
 			const child = connectChild(browser, surface, instanceId);
 			child.workbench.runCommandResult = true;
+			markFocused(browser, surface, instanceId);
+			const followingSibling = document.createElement('span');
+			surface.appendChild(followingSibling);
+			const originalAttributes = {
+				className: originalIframe.className,
+				instanceId: originalIframe.dataset.hucodeHostedInstanceId,
+				src: originalIframe.src,
+				title: originalIframe.title,
+			};
+			browser.focusedIframes.length = 0;
+			browser.contentFocusedIframes.length = 0;
 
 			await service.reloadWorkspace(windowId);
 			await waitFor(
@@ -3885,10 +3889,30 @@ suite('WebHucodeShellService', () => {
 			);
 			const loading = await service.getWindowState(windowId);
 			assert.strictEqual(loading.instances[0].state, 'loading');
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected accepted reload to replace the iframe'
+			);
+			const replacementIframe = getIframe(surface, instanceId);
+			assert.strictEqual(replacementIframe.parentElement, surface);
+			assert.strictEqual(replacementIframe.nextSibling, followingSibling);
+			assert.deepStrictEqual({
+				className: replacementIframe.className,
+				instanceId: replacementIframe.dataset.hucodeHostedInstanceId,
+				src: replacementIframe.src,
+				title: replacementIframe.title,
+			}, originalAttributes);
+			assert.deepStrictEqual(browser.focusedIframes, [replacementIframe]);
+			assert.deepStrictEqual(
+				browser.contentFocusedIframes,
+				[replacementIframe]
+			);
 			browser.expireTimeouts(500);
-			assert.strictEqual(browser.reloadIframeCalls, 0);
+			assert.strictEqual(
+				getIframe(surface, instanceId),
+				replacementIframe
+			);
 
-			advanceHostedDocument(browser, surface, instanceId);
 			markReady(browser, surface, instanceId);
 			const reloaded = await waitForInstanceState(
 				service,
@@ -3900,7 +3924,48 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(reloaded.instances[0].state, 'active');
 		});
 
-	test('rejects current-protocol Ready retries from the reloading document',
+	test('preserves a hidden iframe position while replacing it for reload',
+		async () => {
+			const { service, surface, browser } = createService();
+			const first = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/hidden-reload',
+				'project'
+			);
+			const instanceId = first.activeInstanceId;
+			assert.ok(instanceId);
+			const child = connectCurrentChild(browser, surface, instanceId);
+			child.workbench.runCommandResult = true;
+			await service.openWorkspace(
+				browser.windowId,
+				'/tmp/visible-workbench',
+				'project'
+			);
+			const originalIframe = getIframe(surface, instanceId);
+			const followingSibling = originalIframe.nextSibling;
+			assert.strictEqual(originalIframe.classList.contains('hidden'), true);
+
+			assert.strictEqual(
+				await child.shell.reloadSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected hidden iframe replacement'
+			);
+			const replacement = getIframe(surface, instanceId);
+			assert.strictEqual(replacement.parentElement, surface);
+			assert.strictEqual(replacement.nextSibling, followingSibling);
+			assert.strictEqual(replacement.classList.contains('hidden'), true);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances.find(
+					instance => instance.instanceId === instanceId
+				)?.state,
+				'loading'
+			);
+		});
+
+	test('rejects queued Ready messages from the replaced iframe WindowProxy',
 		async () => {
 			const { service, surface, browser } = createService();
 			const opened = await service.openWorkspace(
@@ -3916,54 +3981,43 @@ suite('WebHucodeShellService', () => {
 				instanceId,
 				{ id: 'document-a', attempt: 1 }
 			);
+			const oldSource = getIframe(surface, instanceId).contentWindow;
+			assert.ok(oldSource);
 			oldChild.workbench.runCommandResult = true;
 			await service.reloadWorkspace(browser.windowId);
 			await waitFor(
 				() => oldChild.workbench.commands.length === 1,
 				'expected reload command delivery'
 			);
+			await waitFor(
+				() => getIframe(surface, instanceId).contentWindow !== oldSource,
+				'expected iframe browsing-context replacement'
+			);
 			const portCount = browser.portMessages.length;
 
-			markHostedCapabilityReady(
-				browser,
-				surface,
-				instanceId,
-				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-				HUCODE_HOSTED_SHELL_CAPABILITIES,
-				{ id: 'document-a', attempt: 2 }
-			);
-			markHostedCapabilityReady(
-				browser,
-				surface,
-				instanceId,
-				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION - 1,
-				HUCODE_HOSTED_SHELL_CAPABILITIES,
-				{ id: 'forged-document', attempt: 1 }
-			);
-			browser.clearIframeDocumentIdentity(getIframe(surface, instanceId));
-			markHostedCapabilityReady(
-				browser,
-				surface,
-				instanceId,
-				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-				HUCODE_HOSTED_SHELL_CAPABILITIES,
-				{ id: 'missing-document', attempt: 1 }
-			);
-			assert.strictEqual(browser.portMessages.length, portCount);
-			assert.strictEqual(
-				(await service.getWindowState(browser.windowId)).instances[0].state,
-				'loading'
-			);
-
-			advanceHostedDocument(browser, surface, instanceId);
-			markHostedCapabilityReady(
-				browser,
-				surface,
-				instanceId,
-				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-				HUCODE_HOSTED_SHELL_CAPABILITIES,
-				{ id: 'document-a', attempt: 3 }
-			);
+			for (const message of [{
+				type: HucodeOmniWebChildMessageType.Ready,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+				connectionBootstrap: { id: 'forged-document', attempt: 1 },
+			}, {
+				type: HucodeOmniWebChildMessageType.Ready,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+				connectionAttempt: 3,
+			}, {
+				type: HucodeOmniWebChildMessageType.Ready,
+			}]) {
+				postMessage(
+					browser,
+					surface,
+					instanceId,
+					message,
+					oldSource
+				);
+			}
 			assert.strictEqual(browser.portMessages.length, portCount);
 			assert.strictEqual(
 				(await service.getWindowState(browser.windowId)).instances[0].state,
@@ -3978,7 +4032,7 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual((await replacement.shell.getState()).available, true);
 		});
 
-	test('scopes attempt-only Ready deduplication to the iframe document',
+	test('allows an attempt-only replacement iframe to reset its attempt',
 		async () => {
 			const { service, surface, browser } = createService();
 			const opened = await service.openWorkspace(
@@ -3988,6 +4042,7 @@ suite('WebHucodeShellService', () => {
 			);
 			const instanceId = opened.activeInstanceId;
 			assert.ok(instanceId);
+			const originalIframe = getIframe(surface, instanceId);
 			const oldChild = connectCurrentChild(
 				browser,
 				surface,
@@ -4000,18 +4055,10 @@ suite('WebHucodeShellService', () => {
 				() => oldChild.workbench.commands.length === 1,
 				'expected reload command delivery'
 			);
-			const portCount = browser.portMessages.length;
-			markHostedCapabilityReady(
-				browser,
-				surface,
-				instanceId,
-				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
-				HUCODE_HOSTED_SHELL_CAPABILITIES,
-				3
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected reload iframe replacement'
 			);
-			assert.strictEqual(browser.portMessages.length, portCount);
-
-			advanceHostedDocument(browser, surface, instanceId);
 			const replacement = connectCurrentChild(
 				browser,
 				surface,
@@ -4025,31 +4072,6 @@ suite('WebHucodeShellService', () => {
 			);
 		});
 
-	test('rejects unstamped Ready from the reloading document', async () => {
-		const { service, surface, browser } = createService();
-		const opened = await service.openWorkspace(
-			browser.windowId,
-			'/tmp/unstamped-document-reload',
-			'project'
-		);
-		const instanceId = opened.activeInstanceId;
-		assert.ok(instanceId);
-		const oldChild = connectCurrentChild(browser, surface, instanceId);
-		oldChild.workbench.runCommandResult = true;
-		await service.reloadWorkspace(browser.windowId);
-		await waitFor(
-			() => oldChild.workbench.commands.length === 1,
-			'expected reload command delivery'
-		);
-		const portCount = browser.portMessages.length;
-		markHostedCapabilityReady(browser, surface, instanceId);
-		assert.strictEqual(browser.portMessages.length, portCount);
-
-		advanceHostedDocument(browser, surface, instanceId);
-		const replacement = connectCurrentChild(browser, surface, instanceId);
-		assert.strictEqual((await replacement.shell.getState()).available, true);
-	});
-
 	test('isolates the reloading connection until replacement Ready',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -4059,6 +4081,7 @@ suite('WebHucodeShellService', () => {
 				'project'
 			);
 			const instanceId = state.instances[0].instanceId;
+			const originalIframe = getIframe(surface, instanceId);
 			const oldChild = connectChild(browser, surface, instanceId);
 			const oldCommandResult = new DeferredPromise<boolean>();
 			oldChild.workbench.runCommandResult = oldCommandResult.p;
@@ -4078,7 +4101,7 @@ suite('WebHucodeShellService', () => {
 				'expected reload command delivery'
 			);
 			await oldCommandResult.complete(true);
-			assert.strictEqual(await oldCommand, true);
+			assert.strictEqual(await oldCommand, false);
 			assert.strictEqual(
 				(await service.getWindowState(browser.windowId)).instances[0].state,
 				'loading'
@@ -4088,11 +4111,17 @@ suite('WebHucodeShellService', () => {
 				browser.windowId,
 				{ id: 'test.command.duringReload', from: 'menu' }
 			), false);
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected accepted reload to replace the iframe'
+			);
+			const firstReplacement = getIframe(surface, instanceId);
 			await service.reloadWorkspace(browser.windowId);
 			assert.strictEqual(oldChild.workbench.commands.length, 2);
-			assert.strictEqual(browser.reloadIframeCalls, 1);
-
-			advanceHostedDocument(browser, surface, instanceId);
+			await waitFor(
+				() => getIframe(surface, instanceId) !== firstReplacement,
+				'expected repeated reload to replace the pending iframe'
+			);
 			const replacement = connectChild(browser, surface, instanceId);
 			await waitForInstanceState(
 				service,
@@ -4113,8 +4142,9 @@ suite('WebHucodeShellService', () => {
 	test('revokes hosted authority until the reload replacement is ready',
 		async () => {
 			const commandCalls: string[] = [];
-			const { service, surface, browser } = createService(
-				new FakeBrowserAdapter(),
+			const browser = new ManualTimeoutBrowserAdapter();
+			const { service, surface } = createService(
+				browser,
 				undefined,
 				'active',
 				undefined,
@@ -4133,6 +4163,7 @@ suite('WebHucodeShellService', () => {
 			);
 			const instanceId = opened.activeInstanceId;
 			assert.ok(instanceId);
+			const originalIframe = getIframe(surface, instanceId);
 			const oldChild = connectCurrentChild(browser, surface, instanceId);
 			oldChild.workbench.runCommandResult = true;
 
@@ -4182,7 +4213,10 @@ suite('WebHucodeShellService', () => {
 			assert.deepStrictEqual(browser.iframeFocusCalls, []);
 			assert.strictEqual(browser.openedUrls.length, openedUrlCount);
 
-			advanceHostedDocument(browser, surface, instanceId);
+			await waitFor(
+				() => getIframe(surface, instanceId) !== originalIframe,
+				'expected reload iframe replacement'
+			);
 			const replacement = connectCurrentChild(browser, surface, instanceId);
 			assert.strictEqual((await replacement.shell.getState()).available, true);
 			assert.strictEqual(
@@ -4198,8 +4232,9 @@ suite('WebHucodeShellService', () => {
 
 	test('revokes the legacy hosted facade during reload', async () => {
 		const commandCalls: string[] = [];
-		const { service, surface, browser } = createService(
-			new FakeBrowserAdapter(),
+		const browser = new ManualTimeoutBrowserAdapter();
+		const { service, surface } = createService(
+			browser,
 			undefined,
 			'active',
 			undefined,
@@ -4218,6 +4253,7 @@ suite('WebHucodeShellService', () => {
 		);
 		const instanceId = opened.activeInstanceId;
 		assert.ok(instanceId);
+		const originalIframe = getIframe(surface, instanceId);
 		const oldChild = connectChild(browser, surface, instanceId);
 		oldChild.workbench.runCommandResult = true;
 
@@ -4254,7 +4290,10 @@ suite('WebHucodeShellService', () => {
 			false
 		);
 
-		advanceHostedDocument(browser, surface, instanceId);
+		await waitFor(
+			() => getIframe(surface, instanceId) !== originalIframe,
+			'expected reload iframe replacement'
+		);
 		const replacement = connectChild(browser, surface, instanceId);
 		assert.strictEqual(await replacement.shell.runActionInShell(
 			browser.windowId,
@@ -4278,6 +4317,7 @@ suite('WebHucodeShellService', () => {
 				'project'
 			);
 			const instanceId = state.instances[0].instanceId;
+			const originalIframe = getIframe(surface, instanceId);
 			const child = connectChild(browser, surface, instanceId);
 			child.workbench.runCommandResult = false;
 
@@ -4292,7 +4332,10 @@ suite('WebHucodeShellService', () => {
 			);
 			browser.expireTimeouts(500);
 
-			assert.strictEqual(browser.reloadIframeCalls, 1);
+			assert.notStrictEqual(
+				getIframe(surface, instanceId),
+				originalIframe
+			);
 			const loading = await service.getWindowState(browser.windowId);
 			assert.strictEqual(loading.instances[0].state, 'loading');
 		});
@@ -4307,6 +4350,7 @@ suite('WebHucodeShellService', () => {
 				'project'
 			);
 			const instanceId = state.instances[0].instanceId;
+			const originalIframe = getIframe(surface, instanceId);
 			const child = connectChild(browser, surface, instanceId);
 			const commandResult = new DeferredPromise<boolean>();
 			child.workbench.runCommandResult = commandResult.p;
@@ -4318,8 +4362,16 @@ suite('WebHucodeShellService', () => {
 			);
 			browser.expireTimeouts(500);
 
-			assert.strictEqual(browser.reloadIframeCalls, 1);
-			await commandResult.complete(false);
+			assert.notStrictEqual(
+				getIframe(surface, instanceId),
+				originalIframe
+			);
+			const replacementIframe = getIframe(surface, instanceId);
+			await commandResult.complete(true);
+			assert.strictEqual(
+				getIframe(surface, instanceId),
+				replacementIframe
+			);
 		});
 
 	test('does not surface or revive crashed iframe instances', async () => {
@@ -6263,17 +6315,14 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly openedUrls: string[] = [];
 	readonly portMessages: IPostedPortMessage[] = [];
 	readonly iframeFocusCalls: string[] = [];
+	readonly focusedIframes: HTMLIFrameElement[] = [];
+	readonly contentFocusedIframes: HTMLIFrameElement[] = [];
 	contentFocusCalls = 0;
-	reloadIframeCalls = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
-	private readonly documentIdentities =
-		new WeakMap<HTMLIFrameElement, object>();
 
 	createIframe(): HTMLIFrameElement {
-		const iframe = document.createElement('iframe');
-		this.advanceIframeDocument(iframe);
-		return iframe;
+		return document.createElement('iframe');
 	}
 
 	addMessageListener(listener: (event: MessageEvent) => void): IDisposable {
@@ -6298,26 +6347,12 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 
 	focusIframe(iframe: HTMLIFrameElement): void {
 		this.iframeFocusCalls.push(iframe.title);
+		this.focusedIframes.push(iframe);
 	}
 
-	focusIframeContent(_iframe: HTMLIFrameElement): void {
+	focusIframeContent(iframe: HTMLIFrameElement): void {
 		this.contentFocusCalls++;
-	}
-
-	reloadIframe(_iframe: HTMLIFrameElement): void {
-		this.reloadIframeCalls++;
-	}
-
-	getIframeDocumentIdentity(iframe: HTMLIFrameElement): object | undefined {
-		return this.documentIdentities.get(iframe);
-	}
-
-	advanceIframeDocument(iframe: HTMLIFrameElement): void {
-		this.documentIdentities.set(iframe, {});
-	}
-
-	clearIframeDocumentIdentity(iframe: HTMLIFrameElement): void {
-		this.documentIdentities.delete(iframe);
+		this.contentFocusedIframes.push(iframe);
 	}
 
 	createMessageChannel(): MessageChannel {

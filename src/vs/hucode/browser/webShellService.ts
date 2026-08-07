@@ -147,7 +147,7 @@ interface IHostedIframeInstance {
 	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
 	connectionGeneration: number;
 	pendingReloadConnectionGeneration?: number;
-	acceptedDocumentIdentity?: object;
+	pendingReloadIframe?: HTMLIFrameElement;
 	bootstrapId?: string;
 	bootstrapAttempt?: number;
 	retiredBootstrapIds?: Set<string>;
@@ -411,8 +411,6 @@ export interface IWebHucodeShellBrowserAdapter {
 	open(url: string): void;
 	focusIframe(iframe: HTMLIFrameElement): void;
 	focusIframeContent(iframe: HTMLIFrameElement): void;
-	reloadIframe(iframe: HTMLIFrameElement): void;
-	getIframeDocumentIdentity(iframe: HTMLIFrameElement): object | undefined;
 	createMessageChannel(): MessageChannel;
 	postPortMessage(
 		iframe: HTMLIFrameElement,
@@ -440,8 +438,6 @@ function defaultWebHucodeShellBrowserAdapter():
 		},
 		focusIframe: iframe => iframe.focus(),
 		focusIframeContent: iframe => iframe.contentWindow?.focus(),
-		reloadIframe: iframe => iframe.contentWindow?.location.reload(),
-		getIframeDocumentIdentity: iframe => iframe.contentDocument ?? undefined,
 		createMessageChannel: () => new MessageChannel(),
 		postPortMessage: (iframe, message, port) => {
 			iframe.contentWindow?.postMessage(
@@ -1484,15 +1480,18 @@ export class WebHucodeShellController extends Disposable
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
 		if (instance.pendingReloadConnectionGeneration !== undefined) {
-			if (this.isCurrentConnectionPendingReload(instance) &&
-				instance.iframe) {
-				this.browser.reloadIframe(instance.iframe);
-			}
+			this.replaceReloadingIframe(
+				instance,
+				instance.pendingReloadConnectionGeneration,
+				instance.pendingReloadIframe
+			);
 			return;
 		}
 		const reloadConnectionGeneration = instance.connectionGeneration;
+		const reloadIframe = instance.iframe;
 		instance.pendingReloadConnectionGeneration =
 			reloadConnectionGeneration;
+		instance.pendingReloadIframe = reloadIframe;
 		instance.state = 'loading';
 		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
@@ -1502,16 +1501,26 @@ export class WebHucodeShellController extends Disposable
 			false
 		).then(result => {
 			reloadCommandAccepted = result === true;
+			if (reloadCommandAccepted) {
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
+			}
 		});
 		this.browser.setTimeout(() => {
 			if (
 				instance.pendingReloadConnectionGeneration ===
 				reloadConnectionGeneration &&
 				instance.state === 'loading' &&
-				!reloadCommandAccepted &&
-				instance.iframe
+				!reloadCommandAccepted
 			) {
-				this.browser.reloadIframe(instance.iframe);
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
 			}
 		}, 500);
 		this.emitState();
@@ -1692,25 +1701,7 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		switch (message.type) {
-			case HucodeOmniWebChildMessageType.Ready: {
-				if (!instance.iframe) {
-					return;
-				}
-				const documentIdentity =
-					this.browser.getIframeDocumentIdentity(instance.iframe);
-				if (!documentIdentity) {
-					return;
-				}
-				const documentChanged =
-					instance.acceptedDocumentIdentity !== undefined &&
-					instance.acceptedDocumentIdentity !== documentIdentity;
-				if (instance.pendingReloadConnectionGeneration !== undefined) {
-					if (!documentChanged ||
-						(message.connectionBootstrap !== undefined &&
-							message.connectionBootstrap.id === instance.bootstrapId)) {
-						return;
-					}
-				}
+			case HucodeOmniWebChildMessageType.Ready:
 				if (message.connectionBootstrap !== undefined) {
 					if (instance.bootstrapId !==
 						message.connectionBootstrap.id &&
@@ -1719,8 +1710,7 @@ export class WebHucodeShellController extends Disposable
 						)) {
 						return;
 					}
-					if (!documentChanged &&
-						instance.bootstrapId === message.connectionBootstrap.id &&
+					if (instance.bootstrapId === message.connectionBootstrap.id &&
 						instance.bootstrapAttempt !== undefined &&
 						message.connectionBootstrap.attempt <=
 						instance.bootstrapAttempt) {
@@ -1734,8 +1724,7 @@ export class WebHucodeShellController extends Disposable
 					instance.bootstrapAttempt =
 						message.connectionBootstrap.attempt;
 				} else if (message.connectionAttempt !== undefined) {
-					if (!documentChanged &&
-						instance.bootstrapId === undefined &&
+					if (instance.bootstrapId === undefined &&
 						instance.bootstrapAttempt !== undefined &&
 						message.connectionAttempt <= instance.bootstrapAttempt) {
 						return;
@@ -1755,14 +1744,12 @@ export class WebHucodeShellController extends Disposable
 					message.hostedShellProtocolVersion;
 				instance.hostedShellCapabilities =
 					message.hostedShellCapabilities;
-				instance.acceptedDocumentIdentity = documentIdentity;
 				this.connectInstance(instance);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
 					message.instanceId
 				);
 				break;
-			}
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
@@ -2027,6 +2014,7 @@ export class WebHucodeShellController extends Disposable
 				return false;
 			}
 			instance.pendingReloadConnectionGeneration = undefined;
+			instance.pendingReloadIframe = undefined;
 		}
 
 		this.hostedWorkspaces.markInstanceReady(instance);
@@ -2261,11 +2249,6 @@ export class WebHucodeShellController extends Disposable
 		retainedWorkbenchId?: string
 	): IHostedIframeInstance {
 		const instanceId = generateUuid();
-		const iframe = this.browser.createIframe();
-		iframe.className = 'hucode-omni-host-iframe hidden';
-		iframe.title = worktreePath;
-		iframe.dataset.hucodeHostedInstanceId = instanceId;
-		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
 
 		return {
 			instanceId,
@@ -2273,12 +2256,56 @@ export class WebHucodeShellController extends Disposable
 			retainedWorkbenchId,
 			worktreePath,
 			state: 'loading',
-			iframe,
+			iframe: this.createHostedIframe(instanceId, worktreePath, false),
 			visible: false,
 			focused: false,
 			lifecycleGeneration: 0,
 			connectionGeneration: 0,
 		};
+	}
+
+	private createHostedIframe(
+		instanceId: string,
+		worktreePath: string,
+		visible: boolean
+	): HTMLIFrameElement {
+		const iframe = this.browser.createIframe();
+		iframe.className = 'hucode-omni-host-iframe';
+		iframe.classList.toggle('hidden', !visible);
+		iframe.title = worktreePath;
+		iframe.dataset.hucodeHostedInstanceId = instanceId;
+		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
+		return iframe;
+	}
+
+	private replaceReloadingIframe(
+		instance: IHostedIframeInstance,
+		connectionGeneration: number,
+		expectedIframe: HTMLIFrameElement | undefined
+	): boolean {
+		if (!expectedIframe ||
+			instance.pendingReloadConnectionGeneration !== connectionGeneration ||
+			instance.iframe !== expectedIframe) {
+			return false;
+		}
+
+		const replacement = this.createHostedIframe(
+			instance.instanceId,
+			instance.worktreePath,
+			instance.visible
+		);
+		const restoreFocus = instance.visible && instance.focused;
+		instance.iframe = replacement;
+		instance.pendingReloadIframe = replacement;
+		this.retireBootstrapDocument(instance);
+		instance.bootstrapId = undefined;
+		instance.bootstrapAttempt = undefined;
+		this.disposeConnection(instance);
+		expectedIframe.replaceWith(replacement);
+		if (restoreFocus) {
+			this.focusIframe(instance);
+		}
+		return true;
 	}
 
 	private activateInstance(instance: IHostedIframeInstance): void {
