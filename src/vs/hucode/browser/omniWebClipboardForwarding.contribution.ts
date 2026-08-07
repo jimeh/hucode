@@ -15,6 +15,7 @@ import {
 	IHucodeOmniCommandForwardingContext,
 	IHucodeOmniCommandForwardingScope,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import '../../platform/window/common/hucodeOmniCommandForwardingContext.js';
 import {
 	IWorkbenchContribution,
 	registerWorkbenchContribution2,

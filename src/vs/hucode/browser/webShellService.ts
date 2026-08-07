@@ -1481,6 +1481,10 @@ export class WebHucodeShellController extends Disposable
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
 		if (instance.pendingReloadConnectionGeneration !== undefined) {
+			if (this.isCurrentConnectionPendingReload(instance) &&
+				instance.iframe) {
+				this.browser.reloadIframe(instance.iframe);
+			}
 			return;
 		}
 		const reloadConnectionGeneration = instance.connectionGeneration;
@@ -1954,7 +1958,8 @@ export class WebHucodeShellController extends Disposable
 		return {
 			connectionGeneration: instance.connectionGeneration,
 			disposed: this.instancesById.get(instance.instanceId) !== instance ||
-				!instance.connection,
+				!instance.connection ||
+				this.isCurrentConnectionPendingReload(instance),
 			projectsSidebarVisible: state.projectsSidebarVisible,
 			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
 			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
@@ -1976,7 +1981,15 @@ export class WebHucodeShellController extends Disposable
 			binding.instanceId === instance.instanceId &&
 			binding.connectionGeneration === instance.connectionGeneration &&
 			this.instancesById.get(instance.instanceId) === instance &&
-			!!instance.connection;
+			!!instance.connection &&
+			!this.isCurrentConnectionPendingReload(instance);
+	}
+
+	private isCurrentConnectionPendingReload(
+		instance: IHostedIframeInstance
+	): boolean {
+		return instance.pendingReloadConnectionGeneration ===
+			instance.connectionGeneration;
 	}
 
 	private markInstanceReadyFromCurrentConnection(

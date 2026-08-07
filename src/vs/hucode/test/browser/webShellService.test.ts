@@ -3920,6 +3920,7 @@ suite('WebHucodeShellService', () => {
 			), false);
 			await service.reloadWorkspace(browser.windowId);
 			assert.strictEqual(oldChild.workbench.commands.length, 2);
+			assert.strictEqual(browser.reloadIframeCalls, 1);
 
 			const replacement = connectChild(browser, surface, instanceId);
 			await waitForInstanceState(
@@ -3937,6 +3938,162 @@ suite('WebHucodeShellService', () => {
 				args: [],
 			}]);
 		});
+
+	test('revokes hosted authority until the reload replacement is ready',
+		async () => {
+			const commandCalls: string[] = [];
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				{
+					async executeCommand<T = unknown>(commandId: string) {
+						commandCalls.push(commandId);
+						return undefined as T;
+					},
+				}
+			);
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/reload-authority',
+				'project'
+			);
+			const instanceId = opened.activeInstanceId;
+			assert.ok(instanceId);
+			const oldChild = connectCurrentChild(browser, surface, instanceId);
+			oldChild.workbench.runCommandResult = true;
+
+			assert.strictEqual(
+				await oldChild.shell.reloadSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			await waitFor(
+				() => oldChild.workbench.commands.length === 1,
+				'expected reload command delivery'
+			);
+			const loadingState = await service.getWindowState(browser.windowId);
+			browser.iframeFocusCalls.length = 0;
+			const openedUrlCount = browser.openedUrls.length;
+
+			assert.strictEqual((await oldChild.shell.getState()).available, false);
+			assert.strictEqual(
+				await oldChild.shell.getNavigationSnapshot!(),
+				undefined
+			);
+			for (const operation of [
+				oldChild.shell.closeSelf(),
+				oldChild.shell.reopenSelfInNormalWindow(),
+				oldChild.shell.focusSelf(),
+				oldChild.shell.focusShell(),
+				oldChild.shell.requestShellAction(
+					HucodeHostedShellAction.ToggleProjectsSidebar
+				),
+				oldChild.shell.navigateToFolder({
+					folderUri: URI.file('/tmp/reload-stale-navigation').toJSON(),
+				}),
+			]) {
+				assert.strictEqual(
+					await operation,
+					HucodeHostedShellOperationOutcome.Stale
+				);
+			}
+			assert.strictEqual(
+				(await oldChild.shell.notifyReady()).outcome,
+				HucodeHostedShellOperationOutcome.Stale
+			);
+			assert.deepStrictEqual(
+				await service.getWindowState(browser.windowId),
+				loadingState
+			);
+			assert.deepStrictEqual(commandCalls, []);
+			assert.deepStrictEqual(browser.iframeFocusCalls, []);
+			assert.strictEqual(browser.openedUrls.length, openedUrlCount);
+
+			const replacement = connectCurrentChild(browser, surface, instanceId);
+			assert.strictEqual((await replacement.shell.getState()).available, true);
+			assert.strictEqual(
+				await replacement.shell.requestShellAction(
+					HucodeHostedShellAction.ToggleProjectsSidebar
+				),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(commandCalls, [
+				TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+			]);
+		});
+
+	test('revokes the legacy hosted facade during reload', async () => {
+		const commandCalls: string[] = [];
+		const { service, surface, browser } = createService(
+			new FakeBrowserAdapter(),
+			undefined,
+			'active',
+			undefined,
+			undefined,
+			{
+				async executeCommand<T = unknown>(commandId: string) {
+					commandCalls.push(commandId);
+					return undefined as T;
+				},
+			}
+		);
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/legacy-reload-authority',
+			'project'
+		);
+		const instanceId = opened.activeInstanceId;
+		assert.ok(instanceId);
+		const oldChild = connectChild(browser, surface, instanceId);
+		oldChild.workbench.runCommandResult = true;
+
+		await oldChild.shell.reloadWorkspace(browser.windowId);
+		await waitFor(
+			() => oldChild.workbench.commands.length === 1,
+			'expected legacy reload command delivery'
+		);
+		assert.deepStrictEqual(
+			(await oldChild.shell.getWindowState(browser.windowId)).instances,
+			[]
+		);
+		assert.strictEqual(await oldChild.shell.runActionInShell(
+			browser.windowId,
+			{
+				id: TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+				from: 'menu',
+			}
+		), false);
+		assert.deepStrictEqual(
+			(await oldChild.shell.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/legacy-reload-stale-navigation',
+				'caller-controlled-project'
+			)).instances,
+			[]
+		);
+		assert.deepStrictEqual(commandCalls, []);
+		assert.strictEqual(
+			(await service.getWindowState(browser.windowId)).instances.some(
+				instance => instance.worktreePath ===
+					'/tmp/legacy-reload-stale-navigation'
+			),
+			false
+		);
+
+		const replacement = connectChild(browser, surface, instanceId);
+		assert.strictEqual(await replacement.shell.runActionInShell(
+			browser.windowId,
+			{
+				id: TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+				from: 'menu',
+			}
+		), true);
+		assert.deepStrictEqual(commandCalls, [
+			TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
+		]);
+	});
 
 	test('falls back to iframe reload when the reload command is declined',
 		async () => {
