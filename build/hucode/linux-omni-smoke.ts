@@ -8,7 +8,7 @@ import {
 	type BrowserContext,
 	chromium,
 	type Page,
-} from 'playwright-core';
+} from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import { createServer } from 'net';

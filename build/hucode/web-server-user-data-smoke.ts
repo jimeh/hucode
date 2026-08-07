@@ -639,7 +639,14 @@ async function readWebFrameRouteConfiguration(
 	frame: Frame
 ): Promise<object | undefined> {
 	return frame.evaluate(() => {
-		const encoded = document.getElementById(
+		const target = globalThis as unknown as {
+			readonly document: {
+				getElementById(id: string): {
+					getAttribute(name: string): string | null;
+				} | null;
+			};
+		};
+		const encoded = target.document.getElementById(
 			'vscode-workbench-web-configuration'
 		)?.getAttribute('data-settings');
 		if (!encoded) {

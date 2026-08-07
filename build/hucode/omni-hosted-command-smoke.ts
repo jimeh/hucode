@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Frame, Locator, Page } from 'playwright-core';
+import type { Frame, Locator, Page } from '@playwright/test';
 
 /** Commands exercised from both desktop and serve-web hosted workbenches. */
 export const hostedWorkbenchSmokeCommands = Object.freeze({

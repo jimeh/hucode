@@ -248,6 +248,10 @@ as the required Hucode instruction set for work in this fork.
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
   iframe.
+- The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
+  resolves a separate stable `playwright-core`. Build smoke helpers shared by
+  desktop and serve-web must use `@playwright/test` consistently; mixing their
+  `Page`, `Frame`, or `Locator` types fails build typecheck despite matching APIs.
 - Shell controller ownership ends when its host fires `onDidClose`, even if a
   later global window-destroy event also arrives. Release on both signals
   idempotently so a closed host cannot retain controller state.
