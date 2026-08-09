@@ -649,9 +649,11 @@ while the parent treats every repeated Ready as a reload and replaces its
 connection. Add an attempt generation or nonce that the parent echoes, discard
 late ports from older attempts, and let the child adopt and re-register on the
 latest accepted port. Never leave the child on a parent-disposed first port.
-Cached peers that did not negotiate this bootstrap behavior retain the existing
-one-shot path. Do not copy the desktop reconnect state machine or reconnect an
-established same-document port unless a real loss path is demonstrated; iframe
+Hosted-shell bootstrap is strictly current-protocol-only: incompatible cached
+pages fail closed and require a full browser-page reload. This does not change
+the separately versioned hosted unload compatibility behavior. Do not copy
+the desktop reconnect state machine or reconnect an established same-document
+port unless a real loss path is demonstrated; iframe
 reload already creates a fresh child service. As on desktop, user operations
 are not replayed after ambiguous delivery.
 

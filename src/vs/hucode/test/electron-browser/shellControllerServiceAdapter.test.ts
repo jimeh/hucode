@@ -441,7 +441,10 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			} as unknown as IHucodeShellControllerService;
 			const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
 				() => connectionAttempt(Promise.resolve(shell)),
-				{ shutdownConnectionTimeoutMs: 5 },
+				{
+					shutdownConnectionTimeoutMs: 5,
+					shutdownOperationTimeoutMs: 100,
+				},
 				shellEnvironment(true)
 			));
 			await adapter.getState();
@@ -456,6 +459,97 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			await shutdown;
 		}
 	);
+
+	test('rejoins shutdown after concurrent operation invalidates the port',
+		async () => {
+			const firstClientShutdown = new DeferredPromise<void>();
+			const mainShutdown = new DeferredPromise<void>();
+			const hungOperation = new DeferredPromise<IHucodeHostedWorkspaceState>();
+			let connectCalls = 0;
+			let firstShutdownCalls = 0;
+			let replacementShutdownCalls = 0;
+			const first = Object.assign({
+				onDidChangeState: Event.None,
+				getState: async () => state('first'),
+				openWorkspace: async () => hungOperation.p,
+				shutdownWindowWorkspaces: async () => {
+					firstShutdownCalls++;
+					return firstClientShutdown.p;
+				},
+			} as unknown as IHucodeShellControllerService, {
+				dispose: () => void firstClientShutdown.error(
+					new Error('controller port closed')
+				),
+			});
+			const replacement = {
+				onDidChangeState: Event.None,
+				getState: async () => state('replacement'),
+				shutdownWindowWorkspaces: async () => {
+					replacementShutdownCalls++;
+					return mainShutdown.p;
+				},
+			} as unknown as IHucodeShellControllerService;
+			const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+				() => connectionAttempt(Promise.resolve(
+					++connectCalls === 1 ? first : replacement
+				)),
+				{
+					operationTimeoutMs: 5,
+					retryDelaysMs: [0],
+					shutdownConnectionTimeoutMs: 50,
+					shutdownOperationTimeoutMs: 200,
+				},
+				shellEnvironment(true)
+			));
+			await adapter.getState();
+
+			const shutdown = adapter.shutdownWindowWorkspaces(4);
+			await waitFor(() => firstShutdownCalls === 1);
+			await assert.rejects(
+				adapter.openWorkspace('/ambiguous'),
+				/timed out after dispatch/
+			);
+			await waitFor(() => replacementShutdownCalls === 1);
+			assert.strictEqual(
+				await raceTimeout(shutdown.then(() => 'settled'), 20),
+				undefined
+			);
+			void mainShutdown.complete();
+			await shutdown;
+			assert.strictEqual(firstShutdownCalls, 1);
+			assert.strictEqual(replacementShutdownCalls, 1);
+			assert.strictEqual(connectCalls, 2);
+		}
+	);
+
+	test('bounds a silently hung dispatched shutdown', async () => {
+		const hungShutdown = new DeferredPromise<void>();
+		let shutdownCalls = 0;
+		const shell = {
+			onDidChangeState: Event.None,
+			getState: async () => state('connected'),
+			shutdownWindowWorkspaces: async () => {
+				shutdownCalls++;
+				return hungShutdown.p;
+			},
+		} as unknown as IHucodeShellControllerService;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connectionAttempt(Promise.resolve(shell)),
+			{
+				shutdownConnectionTimeoutMs: 5,
+				shutdownOperationTimeoutMs: 10,
+			},
+			shellEnvironment(true)
+		));
+		await adapter.getState();
+
+		const shutdown = adapter.shutdownWindowWorkspaces(4);
+		await waitFor(() => shutdownCalls === 1);
+		assert.strictEqual(
+			await raceTimeout(shutdown.then(() => 'settled'), 100),
+			'settled'
+		);
+	});
 
 	test('shutdown acquires a recovered connection after initial readiness expires',
 		async () => {

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../base/common/async.js';
 import { Emitter } from '../../base/common/event.js';
 import {
 	Disposable,
@@ -40,7 +40,7 @@ export interface IDesktopShellControllerConnectionAttempt extends IDisposable {
 export type DesktopShellControllerConnector = () =>
 	IDesktopShellControllerConnectionAttempt;
 
-/** Bounds privileged connection acquisition and ordinary operations. */
+/** Bounds privileged connection acquisition and controller operations. */
 interface IDesktopShellControllerAdapterOptions {
 	/** Overall budget for calls waiting on the initial connection. */
 	readonly connectionTimeoutMs?: number;
@@ -49,6 +49,8 @@ interface IDesktopShellControllerAdapterOptions {
 	/** Budget for one dispatched controller operation. */
 	readonly operationTimeoutMs?: number;
 	readonly shutdownConnectionTimeoutMs?: number;
+	/** Overall budget for terminal shutdown acquisition and joining. */
+	readonly shutdownOperationTimeoutMs?: number;
 	readonly retryDelaysMs?: readonly number[];
 }
 
@@ -76,6 +78,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	private readonly acquisitionTimeoutMs: number;
 	private readonly operationTimeoutMs: number;
 	private readonly shutdownConnectionTimeoutMs: number;
+	private readonly shutdownOperationTimeoutMs: number;
 	private readonly retryDelaysMs: readonly number[];
 	private readonly _onDidChangeState = this._register(new Emitter<
 		Awaited<ReturnType<IHucodeShellControllerService['getState']>>
@@ -96,6 +99,8 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		this.operationTimeoutMs = options.operationTimeoutMs ?? 15_000;
 		this.shutdownConnectionTimeoutMs =
 			options.shutdownConnectionTimeoutMs ?? 1000;
+		this.shutdownOperationTimeoutMs =
+			options.shutdownOperationTimeoutMs ?? 30_000;
 		this.retryDelaysMs = (options.retryDelaysMs ?? defaultRetryDelaysMs)
 			.filter(delay => Number.isFinite(delay) && delay >= 0);
 		this.supportsWorkspaceScreenshotOverlay =
@@ -463,25 +468,53 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	async shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]): Promise<void> {
-		try {
-			const acquisitionDeadline =
-				Date.now() + this.shutdownConnectionTimeoutMs;
-			while (true) {
-				const shell = await this.waitForShutdownConnection(Math.max(
-					0,
-					acquisitionDeadline - Date.now()
-				));
-				if (!shell) {
-					return;
-				}
+		const operationDeadline =
+			Date.now() + this.shutdownOperationTimeoutMs;
+		while (true) {
+			const remainingBudget = operationDeadline - Date.now();
+			if (remainingBudget <= 0) {
+				return;
+			}
+			const shell = await this.waitForShutdownConnection(Math.min(
+				this.shutdownConnectionTimeoutMs,
+				remainingBudget
+			));
+			if (!shell) {
+				return;
+			}
+			if (this.shell !== shell) {
+				continue;
+			}
+
+			let shutdown: Promise<void>;
+			try {
+				shutdown = shell.shutdownWindowWorkspaces(reason);
+			} catch {
 				if (this.shell !== shell) {
 					continue;
 				}
-				await shell.shutdownWindowWorkspaces(reason);
 				return;
 			}
-		} catch {
-			// A renderer teardown can dispose the port before shutdown joins settle.
+
+			let timedOut = false;
+			try {
+				await raceTimeout(
+					shutdown,
+					Math.max(0, operationDeadline - Date.now()),
+					() => timedOut = true
+				);
+			} catch {
+				if (this.shell !== shell) {
+					// Main caches terminal shutdown, so a replacement port can
+					// safely rejoin the same operation without replaying work.
+					continue;
+				}
+				return;
+			}
+			if (timedOut) {
+				return;
+			}
+			return;
 		}
 	}
 }

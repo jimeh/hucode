@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { raceTimeout } from '../../../base/common/async.js';
 import { onUnexpectedError } from
 	'../../../base/common/errors.js';
 import { URI } from '../../../base/common/uri.js';
@@ -47,6 +48,7 @@ const omniShellControllerUnavailable = localize(
 	'omniShellControllerUnavailable',
 	'Omni shell controller is unavailable.'
 );
+const standaloneMruPersistenceTimeoutMs = 250;
 
 /**
  * Opens a project switcher target in the current workbench context.
@@ -126,10 +128,13 @@ export async function openProjectSwitcherTargetInWindow(
 		return;
 	}
 
-	await setLastActiveWorktreeBestEffort(
-		projectManagerService,
-		canonicalTarget.projectId,
-		canonicalTarget.worktreePath
+	await raceTimeout(
+		setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			canonicalTarget.projectId,
+			canonicalTarget.worktreePath
+		),
+		standaloneMruPersistenceTimeoutMs
 	);
 	await hostService.openWindow(
 		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],

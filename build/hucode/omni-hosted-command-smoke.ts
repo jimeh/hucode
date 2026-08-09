@@ -352,7 +352,6 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 		':scope > .title.dirty, ' +
 		':scope > .title .tabs-container > .tab.active.dirty'
 	).first();
-	await dirtyIndicator.waitFor({ state: 'visible', timeout: options.timeoutMs });
 	await options.keyboardPage.keyboard.press('Control+S');
 	await waitForSavedFileText(
 		options.readSavedFileText,

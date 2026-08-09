@@ -4,6 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import {
+	DeferredPromise,
+	raceTimeout,
+} from '../../../../base/common/async.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -222,6 +226,8 @@ suite('OpenProjectSwitcherTarget', () => {
 
 	test('reuses current normal window outside Omni', async () => {
 		const calls: string[] = [];
+		const persistenceStarted = new DeferredPromise<void>();
+		const persistence = new DeferredPromise<void>();
 		let opened: unknown;
 		let openOptions: unknown;
 		const hostService = {
@@ -231,14 +237,30 @@ suite('OpenProjectSwitcherTarget', () => {
 				openOptions = options;
 			}
 		} as unknown as IHostService;
+		const manager = projectManager(calls);
+		manager.setLastActiveWorktree = async (
+			projectId: string,
+			worktreePath: string
+		) => {
+			calls.push(`setLastActive:${projectId}:${worktreePath}`);
+			void persistenceStarted.complete();
+			return persistence.p;
+		};
 
-		await openProjectSwitcherTargetInWindow(
+		const opening = openProjectSwitcherTargetInWindow(
 			target,
-			projectManager(calls),
+			manager,
 			environment({}),
 			shell(calls, false),
 			hostService
 		);
+		await persistenceStarted.p;
+		assert.strictEqual(opened, undefined);
+		assert.deepStrictEqual(calls, [
+			'setLastActive:project:/repo',
+		]);
+		void persistence.complete();
+		await opening;
 
 		assert.deepStrictEqual(calls, [
 			'setLastActive:project:/repo',
@@ -247,6 +269,29 @@ suite('OpenProjectSwitcherTarget', () => {
 		assert.deepStrictEqual(opened, [{ folderUri: URI.file('/repo') }]);
 		assert.deepStrictEqual(openOptions, { forceReuseWindow: true });
 	});
+
+	test('bounds standalone MRU persistence before reusing the window',
+		async () => {
+			const calls: string[] = [];
+			const neverPersisted = new DeferredPromise<void>();
+			const manager = projectManager(calls);
+			manager.setLastActiveWorktree = async () => neverPersisted.p;
+
+			const opening = openProjectSwitcherTargetInWindow(
+				target,
+				manager,
+				environment({}),
+				shell(calls, false),
+				host(calls)
+			);
+			assert.strictEqual(
+				await raceTimeout(opening.then(() => 'settled'), 1_000),
+				'settled'
+			);
+			assert.strictEqual(calls.length, 1);
+			assert.match(calls[0], /^hostOpen:/);
+		}
+	);
 
 	test('handles every hosted navigation outcome without caller MRU writes',
 		async () => {
