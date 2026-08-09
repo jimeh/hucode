@@ -9,12 +9,14 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
-import { createDecorator } from
+import { createDecorator, IInstantiationService } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
 	'../../../../platform/environment/common/hucodeWebConfiguration.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../../../platform/projectManager/common/projectManagerState.js';
+import { IProjectManagerService } from
+	'../../../../platform/projectManager/common/projectManager.js';
 import {
 	IOpenWindowOptions,
 	IWindowOpenable,
@@ -70,6 +72,36 @@ export interface IHucodeOmniBrowserProjectManager {
 /** Browser-local view of the Hucode shell service. */
 export const IHucodeBrowserOmniShellService =
 	createDecorator<IHucodeBrowserOmniShellService>('hucodeShellService');
+
+/** Selects the browser-local Omni routing capability for the current window. */
+export async function dispatchHucodeOmniBrowserOpen(
+	toOpen: IWindowOpenable[],
+	options: IOpenWindowOptions | undefined,
+	environmentService: IHucodeOmniBrowserEnvironment,
+	instantiationService: IInstantiationService
+): Promise<boolean> {
+	return instantiationService.invokeFunction(accessor => {
+		if (environmentService.isHostedOmniWorkspace) {
+			return tryNavigateHucodeHostedBrowserWindow(
+				toOpen,
+				options,
+				environmentService,
+				accessor.get(IHucodeHostedShellService)
+			);
+		}
+		if (environmentService.isOmniWindow) {
+			return tryOpenHucodeOmniBrowserWindow(
+				toOpen,
+				options,
+				environmentService,
+				accessor.get(IHucodeBrowserOmniShellService),
+				accessor.get(IProjectManagerService)
+			);
+		}
+
+		return false;
+	});
+}
 
 /** Routes ordinary folder opens from serve-web Omni into hosted workbenches. */
 export async function tryOpenHucodeOmniBrowserWindow(

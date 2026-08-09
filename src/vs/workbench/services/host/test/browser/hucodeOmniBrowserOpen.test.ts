@@ -10,7 +10,13 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
+import { TestInstantiationService } from
+	'../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IProjectManagerService } from
+	'../../../../../platform/projectManager/common/projectManager.js';
 import {
+	dispatchHucodeOmniBrowserOpen,
+	IHucodeBrowserOmniShellService,
 	IHucodeOmniBrowserEnvironment,
 	IHucodeOmniBrowserProjectManager,
 	tryNavigateHucodeHostedBrowserWindow,
@@ -48,6 +54,59 @@ suite('HucodeOmniBrowserOpen', () => {
 		async openWorkspace() { },
 		async openAndFocusWorkspace() { },
 		async focusWorkspace() { },
+	});
+
+	test('dispatcher gives hosted routing precedence over Omni shell routing',
+		async () => {
+			const instantiationService = new TestInstantiationService();
+			let navigationCalls = 0;
+			instantiationService.stub(IHucodeHostedShellService, {
+				_serviceBrand: undefined,
+				onDidChangeState: Event.None,
+				async navigateToFolder() {
+					navigationCalls++;
+					return HucodeHostedShellOperationOutcome.Accepted;
+				},
+			} as Partial<IHucodeHostedShellService> as IHucodeHostedShellService);
+			try {
+				assert.strictEqual(await dispatchHucodeOmniBrowserOpen(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({
+						isHostedOmniWorkspace: true,
+						isOmniWindow: true,
+					}),
+					instantiationService
+				), true);
+				assert.strictEqual(navigationCalls, 1);
+			} finally {
+				instantiationService.dispose();
+			}
+		}
+	);
+
+	test('dispatcher resolves Omni shell routing services', async () => {
+		const instantiationService = new TestInstantiationService();
+		let openCalls = 0;
+		instantiationService.stub(IHucodeBrowserOmniShellService, {
+			...shellService(),
+			async openWorkspace() { openCalls++; },
+		});
+		instantiationService.stub(
+			IProjectManagerService,
+			projectManager() as unknown as IProjectManagerService
+		);
+		try {
+			assert.strictEqual(await dispatchHucodeOmniBrowserOpen(
+				[{ folderUri: URI.file('/scratch') }],
+				undefined,
+				environment({ isOmniWindow: true }),
+				instantiationService
+			), true);
+			assert.strictEqual(openCalls, 1);
+		} finally {
+			instantiationService.dispose();
+		}
 	});
 
 	test('routes arbitrary folders into a retained hosted workbench', async () => {

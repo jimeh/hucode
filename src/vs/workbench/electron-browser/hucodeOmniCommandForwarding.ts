@@ -57,13 +57,16 @@ export interface IHucodeOmniCommandForwardingWindowHandlers {
 export class HucodeOmniCommandForwarding {
 
 	constructor(
-		private readonly nativeEnvironmentService:
-			INativeWorkbenchEnvironmentService,
-		private readonly shellControllerService:
-			IHucodeShellControllerService,
-		private readonly logService: ILogService,
 		private readonly commandForwardingScope:
 			IHucodeOmniCommandForwardingScope,
+		@INativeWorkbenchEnvironmentService
+		private readonly nativeEnvironmentService:
+			INativeWorkbenchEnvironmentService,
+		@IHucodeShellControllerService
+		private readonly shellControllerService:
+			IHucodeShellControllerService,
+		@ILogService
+		private readonly logService: ILogService,
 	) { }
 
 	/**
