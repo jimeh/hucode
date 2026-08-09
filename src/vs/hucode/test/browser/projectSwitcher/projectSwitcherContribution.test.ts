@@ -563,6 +563,25 @@ suite('ProjectSwitcherContribution', () => {
 		}
 	);
 
+	test('falls back to local projects for an old hosted snapshot without a catalog',
+		async () => {
+			let projectManagerCalls = 0;
+			const expectedProjects = [projectRecord()];
+			const projects = await getProjectSwitcherProjects({
+				async getProjects() {
+					projectManagerCalls++;
+					return expectedProjects;
+				},
+			} as unknown as IProjectManagerService, {
+				isHostedOmniWorkspace: true,
+			} as IWorkbenchEnvironmentService,
+				createHucodeHostedNavigationSnapshot(hostedState()));
+
+			assert.strictEqual(projectManagerCalls, 1);
+			assert.strictEqual(projects, expectedProjects);
+		}
+	);
+
 	test('cancels hosted switchers before show and after deactivation',
 		async () => {
 			const cancellation = disposables.add(new Emitter<void>());
