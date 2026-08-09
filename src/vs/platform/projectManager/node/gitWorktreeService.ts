@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as cp from 'child_process';
+import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import {
 	CancellationToken,
@@ -24,6 +25,8 @@ import {
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
+	WorktreeStatusEntry,
+	WorktreeStatusPreview,
 } from '../common/projectManager.js';
 
 type ExecGitResult = {
@@ -36,6 +39,7 @@ export type GitOperation =
 	'getGitCommonDir' |
 	'listWorktrees' |
 	'listRefs' |
+	'getWorktreeStatus' |
 	'isValidBranchName' |
 	'createWorktree' |
 	'removeWorktree';
@@ -58,6 +62,10 @@ export type ExecGitFn = (
 
 export type PathExistsFn = (path: string) => Promise<boolean>;
 export type EnsureDirFn = (path: string) => Promise<void>;
+/**
+ * Reports whether a path is genuinely absent rather than inaccessible.
+ */
+export type PathMissingFn = (path: string) => Promise<boolean>;
 
 export type GitCommandErrorKind =
 	'exit' |
@@ -137,6 +145,94 @@ const GIT_DIAGNOSTIC_OMISSION_MARKER =
 	'\n… diagnostic output omitted …\n';
 // Tree-kill is best-effort, so bound it before falling back to the root process.
 const GIT_PROCESS_CLEANUP_WATCHDOG_MS = 1_000;
+const WORKTREE_STATUS_PREVIEW_LIMIT = 1_000;
+const MISSING_WORKTREE_STATUS_FINGERPRINT = createHash('sha256')
+	.update('hucode:missing-worktree:v1')
+	.digest('hex');
+
+type WorktreeStatusEntryVisitor = (
+	indexStatus: string,
+	worktreeStatus: string,
+	path: string,
+	originalPath: string | undefined
+) => void;
+
+function visitWorktreeStatus(
+	stdout: string,
+	visitor: WorktreeStatusEntryVisitor
+): number {
+	if (!stdout) {
+		return 0;
+	}
+
+	let offset = 0;
+	let totalCount = 0;
+	const readField = (): string | undefined => {
+		if (offset >= stdout.length) {
+			return undefined;
+		}
+
+		const separatorIndex = stdout.indexOf('\0', offset);
+		if (separatorIndex === -1) {
+			const field = stdout.slice(offset);
+			offset = stdout.length;
+			return field;
+		}
+
+		const field = stdout.slice(offset, separatorIndex);
+		offset = separatorIndex + 1;
+		return field;
+	};
+
+	while (offset < stdout.length) {
+		const field = readField();
+		if (field === undefined || field.length < 4 || field[2] !== ' ') {
+			throw new Error('Git returned an invalid worktree status entry.');
+		}
+
+		const indexStatus = field[0];
+		const worktreeStatus = field[1];
+		const path = field.slice(3);
+		if (!path) {
+			throw new Error('Git returned a worktree status entry without a path.');
+		}
+
+		let originalPath: string | undefined;
+		if (
+			indexStatus === 'R' ||
+			indexStatus === 'C' ||
+			worktreeStatus === 'R' ||
+			worktreeStatus === 'C'
+		) {
+			originalPath = readField();
+			if (!originalPath) {
+				throw new Error(
+					'Git returned a renamed worktree status entry without its source path.'
+				);
+			}
+		}
+
+		visitor(indexStatus, worktreeStatus, path, originalPath);
+		totalCount++;
+	}
+
+	return totalCount;
+}
+
+function createWorktreeStatusEntry(
+	indexStatus: string,
+	worktreeStatus: string,
+	path: string,
+	originalPath: string | undefined
+): WorktreeStatusEntry {
+	return {
+		indexStatus,
+		worktreeStatus,
+		path,
+		...(originalPath ? { originalPath } : {}),
+	};
+}
+
 const GIT_POLICIES: Readonly<Record<GitOperation, GitCommandPolicy>> = {
 	resolveProjectRoot: {
 		operation: 'resolveProjectRoot',
@@ -156,6 +252,11 @@ const GIT_POLICIES: Readonly<Record<GitOperation, GitCommandPolicy>> = {
 	listRefs: {
 		operation: 'listRefs',
 		timeoutMs: 30_000,
+		maxOutputBytes: 32 * MIB,
+	},
+	getWorktreeStatus: {
+		operation: 'getWorktreeStatus',
+		timeoutMs: 15_000,
 		maxOutputBytes: 32 * MIB,
 	},
 	isValidBranchName: {
@@ -202,6 +303,8 @@ export class GitWorktreeService {
 			GitWorktreeService.pathExists(path),
 		private readonly ensureDir: EnsureDirFn = path =>
 			GitWorktreeService.ensureDir(path),
+		private readonly pathMissing: PathMissingFn = path =>
+			GitWorktreeService.pathMissing(path),
 	) {
 	}
 
@@ -397,16 +500,93 @@ export class GitWorktreeService {
 		}
 	}
 
+	/**
+	 * Reads a bounded status preview from the target worktree.
+	 */
+	async getWorktreeStatus(
+		worktreePath: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<WorktreeStatusPreview> {
+		let result: ExecGitResult;
+		try {
+			result = await this.runGit(
+				[
+					'--no-optional-locks',
+					'status',
+					'--porcelain=v1',
+					'-z',
+					'--untracked-files=all',
+					'--',
+				],
+				worktreePath,
+				GIT_POLICIES.getWorktreeStatus,
+				token
+			);
+		} catch (error) {
+			if (
+				error instanceof GitCommandError &&
+				error.kind === 'spawn'
+			) {
+				try {
+					if (await this.pathMissing(worktreePath)) {
+						return {
+							fingerprint: MISSING_WORKTREE_STATUS_FINGERPRINT,
+							totalCount: 0,
+							entries: [],
+							omittedCount: 0,
+							missing: true,
+						};
+					}
+				} catch (probeError) {
+					this.logService.debug(
+						'Failed to verify whether the worktree path is missing.',
+						probeError
+					);
+				}
+			}
+
+			throw error;
+		}
+
+		return GitWorktreeService.createWorktreeStatusPreview(result.stdout);
+	}
+
 	async removeWorktree(
 		projectRoot: string,
 		worktreePath: string,
+		token?: CancellationToken
+	): Promise<void>;
+	async removeWorktree(
+		projectRoot: string,
+		worktreePath: string,
+		options: { readonly force?: boolean },
+		token?: CancellationToken
+	): Promise<void>;
+	async removeWorktree(
+		projectRoot: string,
+		worktreePath: string,
+		optionsOrToken:
+			| { readonly force?: boolean }
+			| CancellationToken = {},
 		token: CancellationToken = CancellationToken.None
 	): Promise<void> {
+		const options = isCancellationToken(optionsOrToken)
+			? {}
+			: optionsOrToken;
+		const operationToken = isCancellationToken(optionsOrToken)
+			? optionsOrToken
+			: token;
 		await this.runGit(
-			['worktree', 'remove', '--', worktreePath],
+			[
+				'worktree',
+				'remove',
+				...(options.force ? ['--force'] : []),
+				'--',
+				worktreePath,
+			],
 			projectRoot,
 			GIT_POLICIES.removeWorktree,
-			token
+			operationToken
 		);
 	}
 
@@ -504,6 +684,58 @@ export class GitWorktreeService {
 			return a.label.localeCompare(b.label) ||
 				a.path.localeCompare(b.path);
 		});
+	}
+
+	/**
+	 * Parses NUL-delimited porcelain v1 status without losing unusual paths.
+	 */
+	static parseWorktreeStatus(stdout: string): readonly WorktreeStatusEntry[] {
+		const entries: WorktreeStatusEntry[] = [];
+		visitWorktreeStatus(
+			stdout,
+			(indexStatus, worktreeStatus, path, originalPath) => {
+				entries.push(
+					createWorktreeStatusEntry(
+						indexStatus,
+						worktreeStatus,
+						path,
+						originalPath
+					)
+				);
+			}
+		);
+
+		return entries;
+	}
+
+	/**
+	 * Creates the transport-safe status preview and full-output fingerprint.
+	 */
+	static createWorktreeStatusPreview(
+		stdout: string
+	): WorktreeStatusPreview {
+		const entries: WorktreeStatusEntry[] = [];
+		const totalCount = visitWorktreeStatus(
+			stdout,
+			(indexStatus, worktreeStatus, path, originalPath) => {
+				if (entries.length < WORKTREE_STATUS_PREVIEW_LIMIT) {
+					entries.push(
+						createWorktreeStatusEntry(
+							indexStatus,
+							worktreeStatus,
+							path,
+							originalPath
+						)
+					);
+				}
+			}
+		);
+		return {
+			fingerprint: createHash('sha256').update(stdout).digest('hex'),
+			totalCount,
+			entries,
+			omittedCount: totalCount - entries.length,
+		};
 	}
 
 	static parseRefList(
@@ -957,6 +1189,20 @@ export class GitWorktreeService {
 		await fs.mkdir(path, { recursive: true });
 	}
 
+	private static async pathMissing(path: string): Promise<boolean> {
+		try {
+			await fs.stat(path);
+			return false;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				return true;
+			}
+
+			throw error;
+		}
+	}
+
 	private static pathsEqual(pathA: string, pathB: string): boolean {
 		return isEqual(pathA, pathB, !isLinux);
 	}
@@ -967,6 +1213,13 @@ function normalizeTrackingStatus(
 ): string | undefined {
 	const value = tracking?.trim().replace(/^\[|\]$/g, '');
 	return value || undefined;
+}
+
+function isCancellationToken(value: unknown): value is CancellationToken {
+	return !!value &&
+		typeof value === 'object' &&
+		'isCancellationRequested' in value &&
+		'onCancellationRequested' in value;
 }
 
 function compareRefsByTypeAndName(

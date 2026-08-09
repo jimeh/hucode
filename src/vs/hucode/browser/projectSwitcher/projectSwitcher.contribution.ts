@@ -92,6 +92,7 @@ import {
 	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ADD_PROJECT_COMMAND_ID,
 	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	getWorktreeDisplayLabel,
 	pathsEqual,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
@@ -160,6 +161,10 @@ import {
 	shouldUnloadHostedWorkbench,
 } from './hostedWorkbenchActions.js';
 import { removeProjectWithHostedWorkbenchCleanup } from './removeProject.js';
+import {
+	deleteWorktreeWithPreview,
+	isCurrentWorktreePath,
+} from './removeWorktree.js';
 
 export const PROJECT_SWITCHER_VIEW_ID = 'workbench.hucode.projectSwitcher.view';
 
@@ -3080,7 +3085,10 @@ registerAction2(class extends Action2 {
 			if (workspaceContextService.getWorkbenchState() === WorkbenchState.FOLDER) {
 				const currentFolder = workspaceContextService.getWorkspace().folders[0]?.uri;
 				if (currentFolder?.scheme === 'file' &&
-					pathsEqual(currentFolder.fsPath, parsed.worktreePath)
+					isCurrentWorktreePath(
+						parsed.worktreePath,
+						currentFolder.fsPath
+					)
 				) {
 					notificationService.error(localize(
 						'removeCurrentWorktreeBlocked',
@@ -3090,25 +3098,19 @@ registerAction2(class extends Action2 {
 				}
 			}
 
-			const result = await dialogService.confirm({
-				type: 'warning',
-				message: localize(
-					'removeWorktreeConfirm',
-					'Remove worktree "{0}"?',
-					basename(parsed.worktreePath)
-				),
-				detail: localize(
-					'removeWorktreeDetail',
-					'Hucode will run `git worktree remove` without `--force`.'
-				),
-			});
-			if (!result.confirmed) {
-				return;
-			}
-
-			await projectManagerService.removeWorktree(
+			const worktree = (await projectManagerService.getProjects())
+				.find(project => project.id === parsed.projectId)
+				?.worktrees.find(candidate =>
+					pathsEqual(candidate.path, parsed.worktreePath)
+				);
+			await deleteWorktreeWithPreview(
 				parsed.projectId,
-				parsed.worktreePath
+				parsed.worktreePath,
+				worktree
+					? getWorktreeDisplayLabel(worktree)
+					: basename(parsed.worktreePath),
+				projectManagerService,
+				dialogService
 			);
 		} catch (error) {
 			notificationService.error(String(error));

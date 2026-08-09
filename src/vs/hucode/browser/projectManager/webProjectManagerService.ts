@@ -16,9 +16,12 @@ import {
 	CreateWorktreeOptions,
 	IProjectManagerService,
 	ProjectRecord,
+	RemoveWorktreeOptions,
+	RemoveWorktreeResult,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
+	WorktreeStatusPreview,
 } from '../../../platform/projectManager/common/projectManager.js';
 import { IBrowserWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/browser/environmentService.js';
@@ -42,6 +45,14 @@ interface WorktreeRefsResponse {
 
 interface BranchNameResponse {
 	readonly valid: boolean;
+}
+
+interface WorktreeStatusResponse {
+	readonly status: WorktreeStatusPreview;
+}
+
+interface RemoveWorktreeResponse extends ProjectsResponse {
+	readonly result: RemoveWorktreeResult;
 }
 
 export interface IWebProjectManagerServiceTransport {
@@ -212,12 +223,25 @@ export class WebProjectManagerClient extends Disposable
 
 	async removeWorktree(
 		projectId: string,
-		worktreePath: string
-	): Promise<void> {
-		await this.writeProjectMutation(
+		worktreePath: string,
+		options: RemoveWorktreeOptions
+	): Promise<RemoveWorktreeResult> {
+		const response = await this.request<RemoveWorktreeResponse>(
 			`${projectId}/worktrees/remove`,
-			{ worktreePath }
+			{ method: 'POST', body: { worktreePath, options } }
 		);
+		this.readProjectsResponse(response);
+		return response.result;
+	}
+
+	async getWorktreeStatus(
+		projectId: string,
+		worktreePath: string
+	): Promise<WorktreeStatusPreview> {
+		return (await this.request<WorktreeStatusResponse>(
+			`${projectId}/worktrees/status`,
+			{ method: 'POST', body: { worktreePath } }
+		)).status;
 	}
 
 	async moveWorktree(
