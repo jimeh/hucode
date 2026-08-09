@@ -2,6 +2,24 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.66 - 2026-08-09
+
+### Features
+
+- **omni:** add a bound hosted shell capability (#167)
+- **omni:** bind desktop hosted shell capabilities (#168)
+- **omni:** bind privileged desktop shell capabilities (#169)
+
+### Bug Fixes
+
+- **omni:** close hosted shell recovery gaps (#178)
+- **omni:** forward Projects commands on serve-web (#175)
+- **omni:** harden shell capability recovery (#177)
+- **omni:** prevent hosted project stream exhaustion (#176)
+- **omni:** recover hosted shell connections (#173)
+- **omni:** restore hosted workbench navigation (#172)
+- **omni:** restrict hosted shell action forwarding (#166)
+
 ## 0.0.65 - 2026-08-05
 
 ### Features
