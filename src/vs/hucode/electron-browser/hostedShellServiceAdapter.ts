@@ -16,7 +16,7 @@ import {
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/common/ipc.mp.js';
 import { acquirePortOrUndefinedCancellable } from
-	'../../base/parts/ipc/electron-browser/ipc.mp.js';
+	'./messagePortAcquisition.js';
 import { registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import { SyncDescriptor } from

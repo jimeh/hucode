@@ -681,10 +681,10 @@ function createFixture(options: {
 		commandForwardingContext,
 		commandForwardingScope,
 		forwarding: new HucodeOmniCommandForwarding(
+			commandForwardingScope,
 			environmentService,
 			shellControllerService,
-			new NullLogService(),
-			commandForwardingScope
+			new NullLogService()
 		),
 		handlers,
 		keybindingCalls,

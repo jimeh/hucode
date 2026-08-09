@@ -4,22 +4,36 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from
+	'../../../base/test/common/utils.js';
+import { IClipboardService } from
+	'../../../platform/clipboard/common/clipboardService.js';
+import { getSingletonServiceDescriptors } from
+	'../../../platform/instantiation/common/extensions.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeHostService } from
-	'../../../../../platform/native/common/native.js';
+	'../../../platform/native/common/native.js';
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellService,
-} from '../../../../../platform/window/common/hucodeHostedShellService.js';
-import { ensureNoDisposablesAreLeakedInTestSuite } from
-	'../../../../../base/test/common/utils.js';
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { INativeWorkbenchEnvironmentService } from
-	'../../../environment/electron-browser/environmentService.js';
-import { NativeClipboardService } from
-	'../../electron-browser/clipboardService.js';
+	'../../../workbench/services/environment/electron-browser/environmentService.js';
+import { HucodeNativeClipboardService } from
+	'../../electron-browser/hucodeClipboardService.js';
 
 suite('Hucode Native Clipboard Service', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('desktop registration selects the Hucode override', () => {
+		const registrations = getSingletonServiceDescriptors().filter(
+			([id]) => id === IClipboardService
+		);
+		assert.strictEqual(
+			registrations.at(-1)?.[1].ctor,
+			HucodeNativeClipboardService
+		);
+	});
 
 	test('hosted paste is consumed without owner-window fallback', async () => {
 		const calls: string[] = [];
@@ -63,8 +77,8 @@ function createService(
 	isHostedOmniWorkspace: boolean,
 	calls: string[],
 	triggerPasteInSelf: IHucodeHostedShellService['triggerPasteInSelf']
-): NativeClipboardService {
-	return new NativeClipboardService(
+): HucodeNativeClipboardService {
+	return new HucodeNativeClipboardService(
 		{
 			async triggerPaste(options: { readonly targetWindowId: number }) {
 				calls.push(`nativePaste:${options.targetWindowId}`);

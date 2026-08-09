@@ -2062,8 +2062,7 @@ export default defineConfig(
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
 						'vs/workbench/workbench.common.main.js',
-						'vs/hucode/electron-browser/hostedShellServiceAdapter.js',
-						'vs/hucode/electron-browser/shellControllerServiceAdapter.js',
+						'vs/hucode/electron-browser/omniWindowService.js',
 						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
 					]
 				},

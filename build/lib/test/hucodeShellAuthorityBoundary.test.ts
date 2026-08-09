@@ -21,7 +21,7 @@ const appPath = 'src/vs/code/electron-main/app.ts';
 const eslintConfigPath = 'eslint.config.js';
 const sharedContractPath = 'src/vs/hucode/common/omniWindow.ts';
 const mainContractPath = 'src/vs/hucode/electron-main/omniWindow.ts';
-const obsoleteClientPath =
+const desktopCompositionRootPath =
 	'src/vs/hucode/electron-browser/omniWindowService.ts';
 const omniDesktopMainPath = 'src/vs/hucode/omni.desktop.main.ts';
 const workbenchDesktopMainPath = 'src/vs/workbench/workbench.desktop.main.ts';
@@ -89,39 +89,48 @@ suite('Hucode desktop shell authority boundary', () => {
 	);
 
 	test('desktop entrypoints register only the narrow shell adapters', async () => {
-		await assert.rejects(
-			fs.access(path.join(repoRoot, obsoleteClientPath)),
-			(error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+		const compositionRoot = await readSource(desktopCompositionRootPath);
+		assert.match(
+			compositionRoot,
+			/\.\/hostedShellServiceAdapter\.js/
 		);
+		assert.match(
+			compositionRoot,
+			/\.\/shellControllerServiceAdapter\.js/
+		);
+		assert.match(compositionRoot, /\.\/hucodeClipboardService\.js/);
+		assert.doesNotMatch(compositionRoot, /registerMainProcessRemoteService/);
+		assert.doesNotMatch(compositionRoot, /HUCODE_SHELL_CHANNEL_NAME/);
 
-		for (const [entrypoint, hostedImport, controllerImport] of [
+		for (const [entrypoint, compositionRootImport] of [
 			[
 				omniDesktopMainPath,
-				'./electron-browser/hostedShellServiceAdapter.js',
-				'./electron-browser/shellControllerServiceAdapter.js',
+				'./electron-browser/omniWindowService.js',
 			],
 			[
 				workbenchDesktopMainPath,
-				'../hucode/electron-browser/hostedShellServiceAdapter.js',
-				'../hucode/electron-browser/shellControllerServiceAdapter.js',
+				'../hucode/electron-browser/omniWindowService.js',
 			],
 		] as const) {
 			const source = await readSource(entrypoint);
-			assert.match(source, new RegExp(escapeRegExp(hostedImport)));
-			assert.match(source, new RegExp(escapeRegExp(controllerImport)));
-			assert.doesNotMatch(source, /omniWindowService\.js/);
+			assert.match(source, new RegExp(escapeRegExp(compositionRootImport)));
+			assert.doesNotMatch(source, /hostedShellServiceAdapter\.js/);
+			assert.doesNotMatch(source, /shellControllerServiceAdapter\.js/);
 		}
 
 		const eslintConfig = await readSource(eslintConfigPath);
 		assert.match(
 			eslintConfig,
+			/vs\/hucode\/electron-browser\/omniWindowService\.js/
+		);
+		assert.doesNotMatch(
+			eslintConfig,
 			/vs\/hucode\/electron-browser\/hostedShellServiceAdapter\.js/
 		);
-		assert.match(
+		assert.doesNotMatch(
 			eslintConfig,
 			/vs\/hucode\/electron-browser\/shellControllerServiceAdapter\.js/
 		);
-		assert.doesNotMatch(eslintConfig, /omniWindowService\.js/);
 
 		const rendererFiles = (await collectTypeScriptFiles(
 			path.join(repoRoot, 'src', 'vs')

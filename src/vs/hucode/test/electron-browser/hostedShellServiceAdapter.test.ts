@@ -14,7 +14,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 import {
 	acquirePortOrUndefinedCancellable,
 	IMessagePortAcquisitionHost,
-} from '../../../base/parts/ipc/electron-browser/ipc.mp.js';
+} from '../../electron-browser/messagePortAcquisition.js';
 import {
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
