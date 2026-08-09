@@ -285,6 +285,12 @@ jobs:
       - name: Compile Hucode
         run: npm run hucode:compile
 
+      - name: Install Chromium for serve-web smoke test
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+
+      - name: Run server user-data Omni smoke test
+        run: npm run hucode:smoke:web-server-user-data
+
       - name: Run Node unit tests
         run: npm run test-node
 

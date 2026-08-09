@@ -16,19 +16,30 @@ const repoRoot = path.resolve(
 	'..'
 );
 const omniWebMain = 'src/vs/hucode/browser/omni.web.main.ts';
+const omniWebUserDataFactory =
+	'src/vs/hucode/browser/omniWebUserData.factory.ts';
+const omniWebContribution =
+	'src/vs/hucode/browser/omniWeb.contribution.ts';
+const omniWebContributionImport =
+	'src/vs/hucode/browser/omniWeb.contribution.js';
 
 suite('Hucode Omni web entrypoint', () => {
 
-	test('registers the create worktree command contribution', async () => {
-		const imports = await readImportPaths(omniWebMain);
+	test('loads shared registrations from both Omni entrypoints', async () => {
+		const [mainImports, userDataImports] = await Promise.all([
+			readImportPaths(omniWebMain),
+			readImportPaths(omniWebUserDataFactory),
+		]);
+		assert.ok(mainImports.has(omniWebContributionImport));
+		assert.ok(userDataImports.has(omniWebContributionImport));
+	});
+
+	test('shared registrations include project worktree commands', async () => {
+		const imports = await readImportPaths(omniWebContribution);
 		assert.ok(imports.has(
 			'src/vs/hucode/browser/projectSwitcher/' +
 			'createProjectWorktree.contribution.js'
 		));
-	});
-
-	test('registers the project rename command contribution', async () => {
-		const imports = await readImportPaths(omniWebMain);
 		assert.ok(imports.has(
 			'src/vs/hucode/browser/projectSwitcher/' +
 			'renameProjectWorktree.contribution.js'

@@ -19,7 +19,7 @@ import { isUndefined } from '../../../../base/common/types.js';
 import { refineServiceDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ITextEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { EXTENSION_IDENTIFIER_WITH_LOG_REGEX } from '../../../../platform/environment/common/environmentService.js';
-import { isHucodeHostedOmniWebConfiguration, isHucodeOmniWebConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
+import { IHucodeWebWorkbenchConfiguration, isHucodeHostedOmniWebConfiguration, isHucodeOmniWebConfiguration, isHucodeServerUserDataConfiguration } from '../../../../platform/environment/common/hucodeWebConfiguration.js';
 import {
 	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
 	type HucodeExtensionEnablementPolicy,
@@ -107,7 +107,13 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get logFile(): URI { return joinPath(this.windowLogsPath, 'window.log'); }
 
 	@memoize
-	get userRoamingDataHome(): URI { return URI.file('/User').with({ scheme: Schemas.vscodeUserData }); }
+	get userRoamingDataHome(): URI {
+		const hucodeOptions = this.options as IWorkbenchConstructionOptions & IHucodeWebWorkbenchConfiguration;
+		if (isHucodeServerUserDataConfiguration(hucodeOptions) && hucodeOptions.hucodeWebUserDataHome) {
+			return URI.revive(hucodeOptions.hucodeWebUserDataHome);
+		}
+		return URI.file('/User').with({ scheme: Schemas.vscodeUserData });
+	}
 
 	@memoize
 	get argvResource(): URI { return joinPath(this.userRoamingDataHome, 'argv.json'); }
@@ -150,7 +156,12 @@ export class BrowserWorkbenchEnvironmentService implements IBrowserWorkbenchEnvi
 	get agentSessionsWorkspace(): URI { return joinPath(this.userRoamingDataHome, 'agent-sessions.code-workspace'); }
 
 	@memoize
-	get serviceMachineIdResource(): URI { return joinPath(this.userRoamingDataHome, 'machineid'); }
+	get serviceMachineIdResource(): URI {
+		const userDataHome = isHucodeServerUserDataConfiguration(this.options)
+			? URI.file('/User').with({ scheme: Schemas.vscodeUserData })
+			: this.userRoamingDataHome;
+		return joinPath(userDataHome, 'machineid');
+	}
 
 	@memoize
 	get extHostLogsPath(): URI { return joinPath(this.logsHome, 'exthost'); }

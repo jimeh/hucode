@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { UriComponents } from '../../../base/common/uri.js';
+
+export type HucodeWebUserDataStorage = 'browser' | 'server';
+
 /**
  * Hucode-specific configuration injected into server-web workbench pages.
  *
@@ -17,7 +21,29 @@ export interface IHucodeWebWorkbenchConfiguration {
 	readonly hucodeOmniHostedWorkbenchRoute?: string;
 	readonly hucodeOmniProjectsApi?: string;
 	readonly hucodeServerPathCaseSensitive?: boolean;
+	readonly hucodeWebUserDataStorage?: HucodeWebUserDataStorage;
+	readonly hucodeWebUserDataApi?: string;
+	readonly hucodeWebUserDataHome?: UriComponents;
 	readonly webviewEndpoint?: string;
+}
+
+/**
+ * Returns the trusted serve-web user-data mode injected by the server.
+ */
+export function getHucodeWebUserDataStorage(
+	config: object | undefined
+): HucodeWebUserDataStorage {
+	return (config as IHucodeWebWorkbenchConfiguration | undefined)
+		?.hucodeWebUserDataStorage === 'server' ? 'server' : 'browser';
+}
+
+/**
+ * Returns whether the server selected server-authoritative web user data.
+ */
+export function isHucodeServerUserDataConfiguration(
+	config: object | undefined
+): config is IHucodeWebWorkbenchConfiguration {
+	return getHucodeWebUserDataStorage(config) === 'server';
 }
 
 /**

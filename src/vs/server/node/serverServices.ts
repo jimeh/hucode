@@ -103,6 +103,7 @@ import { IMcpGalleryManifestService } from '../../platform/mcp/common/mcpGallery
 import { McpGalleryManifestIPCService } from '../../platform/mcp/common/mcpGalleryManifestServiceIpc.js';
 import { SANDBOX_HELPER_CHANNEL_NAME, SandboxHelperChannel } from '../../platform/sandbox/common/sandboxHelperIpc.js';
 import { SandboxHelperService } from '../../platform/sandbox/node/sandboxHelper.js';
+import { HucodeWebUserDataServer, IHucodeWebUserDataServer } from './hucodeWebUserDataServer.js';
 
 const eventPrefix = 'monacoworkbench';
 
@@ -152,10 +153,43 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 	const configurationService = new ConfigurationService(environmentService.machineSettingsResource, fileService, new NullPolicyService(), logService);
 	services.set(IConfigurationService, configurationService);
 
+	const serverLifetimeService = new ServerLifetimeService({
+		enableAutoShutdown: !!args['enable-remote-auto-shutdown'],
+		shutdownWithoutDelay: !!args['remote-auto-shutdown-without-delay'],
+	}, logService);
+	services.set(IServerLifetimeService, serverLifetimeService);
+
 	// User Data Profiles
 	const userDataProfilesService = new ServerUserDataProfilesService(uriIdentityService, environmentService, fileService, logService);
 	services.set(IUserDataProfilesService, userDataProfilesService);
 	socketServer.registerChannel('userDataProfiles', new RemoteUserDataProfilesServiceChannel(userDataProfilesService, (ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority)));
+
+	// Hucode serve-web user data is a separate local/UI namespace from the
+	// remote extension host's user-data service above.
+	const webUserDataMode = environmentService.args['hucode-web-user-data-storage'] ?? 'browser';
+	if (webUserDataMode !== 'browser' && webUserDataMode !== 'server') {
+		throw new Error(`Invalid --hucode-web-user-data-storage value: ${webUserDataMode}`);
+	}
+	const hucodeWebUserDataServer = new HucodeWebUserDataServer(
+		environmentService.userDataPath,
+		webUserDataMode,
+		environmentService,
+		fileService,
+		uriIdentityService,
+		logService,
+		{
+			acquireOperationLease: () => serverLifetimeService.active('hucode-user-data-operation'),
+			acquireResponseLease: () => serverLifetimeService.active('hucode-user-data-response'),
+		},
+	);
+	services.set(IHucodeWebUserDataServer, hucodeWebUserDataServer);
+	disposables.add(hucodeWebUserDataServer);
+	if (hucodeWebUserDataServer.enabled) {
+		socketServer.registerChannel('storage', hucodeWebUserDataServer.storageChannel!);
+		socketServer.registerChannel('hucodeWebUserDataProfiles', hucodeWebUserDataServer.createProfilesChannel(
+			(ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority),
+		));
+	}
 
 	// Dev Only: CSS service (for ESM)
 	services.set(ICSSDevelopmentService, new SyncDescriptor(CSSDevelopmentService, undefined, true));
@@ -234,12 +268,6 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 	);
 	const ptyHostService = instantiationService.createInstance(PtyHostService, ptyHostStarter);
 	services.set(IPtyService, ptyHostService);
-
-	const serverLifetimeService = instantiationService.createInstance(ServerLifetimeService, {
-		enableAutoShutdown: !!args['enable-remote-auto-shutdown'],
-		shutdownWithoutDelay: !!args['remote-auto-shutdown-without-delay'],
-	});
-	services.set(IServerLifetimeService, serverLifetimeService);
 
 	// ---- Agent host wiring -------------------------------------------------
 	//
@@ -335,7 +363,18 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		socketServer.registerChannel(McpGatewayChannelName, instantiationService.createInstance(McpGatewayChannel<RemoteAgentConnectionContext>, socketServer));
 
 		const remoteFileSystemChannel = disposables.add(new RemoteAgentFileSystemProviderChannel(logService, environmentService, configurationService));
-		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, remoteFileSystemChannel);
+		const webUserDataFileSystemChannel = hucodeWebUserDataServer.createFileSystemChannel(
+			remoteFileSystemChannel,
+			(ctx: RemoteAgentConnectionContext) => getUriTransformer(ctx.remoteAuthority),
+		);
+		socketServer.registerChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME, webUserDataFileSystemChannel);
+		if (hucodeWebUserDataServer.enabled) {
+			disposables.add(socketServer.onDidRemoveConnection(connection => {
+				void webUserDataFileSystemChannel.releaseConnection(connection.ctx).catch(error => {
+					logService.error('Unable to release disconnected WebUser file handles.', error);
+				});
+			}));
+		}
 
 		socketServer.registerChannel('request', new RequestChannel(accessor.get(IRequestService)));
 
@@ -354,7 +393,11 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		};
 	});
 
-	return { socketServer, instantiationService };
+	return {
+		socketServer,
+		instantiationService,
+		serverServices: hucodeWebUserDataServer.createServerServicesDisposal(disposables),
+	};
 }
 
 const _uriTransformerCache: { [remoteAuthority: string]: IURITransformer } = Object.create(null);

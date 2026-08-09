@@ -7,9 +7,12 @@ import { mainWindow } from '../../../base/browser/window.js';
 import {
 	isHucodeHostedOmniWebConfiguration,
 	isHucodeOmniWebConfiguration,
+	isHucodeServerUserDataConfiguration,
 } from '../../../platform/environment/common/hucodeWebConfiguration.js';
 import type { IWorkbenchConstructionOptions } from
 	'../../../workbench/browser/web.api.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import { bootstrapHucodeWebUserData } from './hucodeWebUserDataBootstrap.js';
 
 type CreateWorkbench = typeof import(
 	'../../../workbench/workbench.web.main.internal.js'
@@ -27,6 +30,11 @@ export async function resolveHucodeWebWorkbenchCreate(
 	config: IWorkbenchConstructionOptions,
 	defaultCreate: CreateWorkbench
 ): Promise<CreateWorkbench> {
+	if (isHucodeServerUserDataConfiguration(config)) {
+		if (!await bootstrapHucodeWebUserData(config)) {
+			return () => Disposable.None;
+		}
+	}
 	const create = await resolveCreate(config, defaultCreate);
 	return (domElement, options) => create(
 		domElement,
@@ -39,11 +47,21 @@ async function resolveCreate(
 	defaultCreate: CreateWorkbench
 ): Promise<CreateWorkbench> {
 	if (isHucodeOmniWebConfiguration(config)) {
+		if (isHucodeServerUserDataConfiguration(config)) {
+			return (await import('../../../hucode/browser/omniWebUserData.factory.js')).create;
+		}
 		return (await import('../../../hucode/browser/omni.web.main.js')).create;
 	}
 
 	if (isHucodeHostedOmniWebConfiguration(config)) {
+		if (isHucodeServerUserDataConfiguration(config)) {
+			return (await import('../../../hucode/browser/hostedOmniWebUserData.main.js')).create;
+		}
 		return (await import('../../../hucode/browser/hostedOmniWeb.main.js')).create;
+	}
+
+	if (isHucodeServerUserDataConfiguration(config)) {
+		return (await import('./hucodeWebUserData.factory.js')).create;
 	}
 
 	return defaultCreate;
