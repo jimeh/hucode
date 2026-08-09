@@ -70,6 +70,8 @@ import {
 } from
 	'../common/retainedWorkbench.js';
 import { ShellControllerStore } from '../common/shellControllerStore.js';
+import { createHucodeHostedNavigationSnapshotWithCatalog } from
+	'../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
 	createBoundHucodeHostedShellFacade,
 	createHucodeHostedShellServerChannel,
@@ -265,6 +267,15 @@ export class HucodeShellMainService extends Disposable
 			),
 			getState: async () =>
 				controller.getHostedShellAuthorityState(binding),
+			getNavigationSnapshot: async () =>
+				createHucodeHostedNavigationSnapshotWithCatalog(
+					() => controller.getState(),
+					() => this.projectManagerMainService.getProjects(),
+					error => this.logService.warn(
+						'[hucode] Hosted navigation catalog is unavailable; ' +
+						`using lifecycle-only state: ${String(error)}`
+					)
+				),
 			notifyReady: async current => {
 				controller.notifyHostedShellReady(current);
 			},

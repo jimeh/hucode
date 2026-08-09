@@ -186,7 +186,11 @@ suite('OpenProjectSwitcherTarget', () => {
 
 			await openProjectSwitcherTargetInWindow(
 				target,
-				projectManager(calls),
+				{
+					async getProjects() {
+						throw new Error('must not be called');
+					},
+				} as unknown as IProjectManagerService,
 				environment({ isHostedOmniWorkspace: true }),
 				shell(calls, new Error('must not be called')),
 				host(calls),

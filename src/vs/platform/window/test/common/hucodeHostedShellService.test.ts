@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
@@ -347,6 +348,59 @@ suite('HucodeHostedShellService', () => {
 		listener.dispose();
 		emitter.dispose();
 	});
+
+	test('drops a navigation snapshot when its binding changes during the read',
+		async () => {
+			const binding: IHucodeHostedShellBinding = {
+				windowId: 1,
+				instanceId: 'self',
+				connectionGeneration: 1,
+			};
+			let connectionGeneration = 1;
+			const snapshotStarted = new DeferredPromise<void>();
+			const releaseSnapshot = new DeferredPromise<void>();
+			const authority = (): IHucodeHostedShellAuthorityState => ({
+				connectionGeneration,
+				disposed: false,
+				projectsSidebarVisible: true,
+				projectSwitcherCanGoBack: false,
+				projectSwitcherCanGoForward: false,
+				activeInstanceId: 'self',
+				instances: [{
+					instanceId: 'self',
+					state: 'active',
+					visible: true,
+				}],
+			});
+			const facade = createBoundHucodeHostedShellFacade(binding, {
+				onDidChangeState: Event.None,
+				getState: async () => authority(),
+				getNavigationSnapshot: async () => {
+					snapshotStarted.complete();
+					await releaseSnapshot.p;
+					return { targets: [], sectionOrder: ['projects', 'workbenches'] };
+				},
+				notifyReady: async () => undefined,
+				closeSelf: async () => true,
+				reopenSelfInNormalWindow: async () => true,
+				reloadSelf: async () => true,
+				focusSelf: async () => true,
+				focusShell: async () => true,
+				requestShellAction: async () => true,
+				navigateToFolder: async () =>
+					HucodeHostedShellOperationOutcome.Accepted,
+				triggerPasteInSelf: async () => true,
+				captureSelfScreenshot: async () => undefined,
+			});
+
+			const snapshot = facade.getNavigationSnapshot!();
+			await snapshotStarted.p;
+			connectionGeneration = 2;
+			releaseSnapshot.complete();
+
+			assert.strictEqual(await snapshot, undefined);
+		}
+	);
 
 	test('navigation continuation fails after the caller becomes hidden',
 		async () => {

@@ -5,6 +5,7 @@
 
 import { mainWindow } from '../../../base/browser/window.js';
 import { Codicon } from '../../../base/common/codicons.js';
+import { Event } from '../../../base/common/event.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
@@ -64,6 +65,7 @@ import {
 	getRetainedWorkbenchQuickPickPresentation,
 	getVisualProjectWorktreeTargets,
 	IProjectSwitcherSelectionTarget,
+	reviveHucodeHostedNavigationProjects,
 	SwitchWorktreeQuickPick,
 	SwitchWorktreeSearchField,
 	withSwitchWorktreeSeparators,
@@ -520,6 +522,51 @@ async function getHostedNavigationSnapshot(
 	return hostedShellService.getNavigationSnapshot?.();
 }
 
+/** Resolves the switcher catalog without re-reading hosted project authority. */
+export async function getProjectSwitcherProjects(
+	projectManagerService: IProjectManagerService,
+	environmentService: IWorkbenchEnvironmentService,
+	navigationSnapshot: IHucodeHostedNavigationSnapshot | undefined
+): Promise<readonly ProjectRecord[]> {
+	if (environmentService.isHostedOmniWorkspace) {
+		const hostedProjects = reviveHucodeHostedNavigationProjects(
+			navigationSnapshot
+		);
+		if (hostedProjects) {
+			return hostedProjects;
+		}
+	}
+	return projectManagerService.getProjects();
+}
+
+/** Lifetime and presentation options for a Hucode workbench switcher. */
+export interface ISwitchWorktreeQuickPickOptions {
+	readonly cancelOn?: Event<void>;
+	readonly contextKey?: string;
+	readonly hideInput?: boolean;
+	readonly quickNavigate?: IQuickNavigateConfiguration;
+	readonly validateBeforeShow?: () => Promise<boolean>;
+}
+
+function getHostedSwitcherQuickPickOptions(
+	environmentService: IWorkbenchEnvironmentService,
+	hostedShellService: IHucodeHostedShellService | undefined
+): ISwitchWorktreeQuickPickOptions {
+	if (!environmentService.isHostedOmniWorkspace || !hostedShellService) {
+		return {};
+	}
+	return {
+		cancelOn: Event.map(Event.filter(
+			hostedShellService.onDidChangeState,
+			state => !state.available || !state.active || !state.visible
+		), () => undefined),
+		validateBeforeShow: async () => {
+			const state = await hostedShellService.getState();
+			return state.available && state.active && state.visible;
+		},
+	};
+}
+
 export async function openProjectSwitcherTarget(
 	target: IProjectSwitcherSelectionTarget,
 	projectManagerService: IProjectManagerService,
@@ -538,14 +585,11 @@ export async function openProjectSwitcherTarget(
 	);
 }
 
-function pickSwitchWorktree(
+/** Shows a switcher whose lifetime can be bound to hosted-workbench state. */
+export function pickSwitchWorktree(
 	quickInputService: IQuickInputService,
 	picks: readonly SwitchWorktreeQuickPick[],
-	options: {
-		readonly contextKey?: string;
-		readonly hideInput?: boolean;
-		readonly quickNavigate?: IQuickNavigateConfiguration;
-	} = {}
+	options: ISwitchWorktreeQuickPickOptions = {}
 ): Promise<SwitchWorktreeQuickPick | undefined> {
 	const disposables = new DisposableStore();
 	const quickPick =
@@ -573,7 +617,7 @@ function pickSwitchWorktree(
 	};
 	setItems('');
 
-	return new Promise(resolve => {
+	return new Promise((resolve, reject) => {
 		let didResolve = false;
 		let acceptedPick: SwitchWorktreeQuickPick | undefined;
 		const finish = (pick: SwitchWorktreeQuickPick | undefined): void => {
@@ -590,13 +634,37 @@ function pickSwitchWorktree(
 		}));
 		disposables.add(quickPick.onDidHide(() => finish(acceptedPick)));
 		disposables.add(quickPick.onDidChangeValue(value => setItems(value)));
-
-		quickPick.show();
-		if (!options.hideInput) {
-			quickPick.focusOnInput();
-			mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
-			mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+		if (options.cancelOn) {
+			disposables.add(options.cancelOn(() => {
+				acceptedPick = undefined;
+				quickPick.hide();
+				finish(undefined);
+			}));
 		}
+
+		void (async () => {
+			if (options.validateBeforeShow &&
+				!await options.validateBeforeShow()) {
+				finish(undefined);
+				return;
+			}
+			if (didResolve) {
+				return;
+			}
+
+			quickPick.show();
+			if (!options.hideInput) {
+				quickPick.focusOnInput();
+				mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
+				mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+			}
+		})().catch(error => {
+			if (!didResolve) {
+				didResolve = true;
+				disposables.dispose();
+				reject(error);
+			}
+		});
 	});
 }
 
@@ -646,10 +714,14 @@ async function switchAdjacentProjectWorktree(
 			return;
 		}
 
-		const projects = await projectManagerService.getProjects();
 		const navigationSnapshot = await getHostedNavigationSnapshot(
 			environmentService,
 			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
 		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
@@ -744,10 +816,14 @@ async function switchLastActiveProjectWorktree(
 			return;
 		}
 
-		const projects = await projectManagerService.getProjects();
 		const navigationSnapshot = await getHostedNavigationSnapshot(
 			environmentService,
 			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
 		);
 		const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 			environmentService,
@@ -832,10 +908,14 @@ async function quickSwitchLoadedProjectWorktree(
 			await shellService.focusShell();
 		}
 
-		const projects = await projectManagerService.getProjects();
 		const navigationSnapshot = await getHostedNavigationSnapshot(
 			environmentService,
 			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
 		);
 		const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 			environmentService,
@@ -871,6 +951,10 @@ async function quickSwitchLoadedProjectWorktree(
 			quickInputService,
 			picks,
 			{
+				...getHostedSwitcherQuickPickOptions(
+					environmentService,
+					hostedShellService
+				),
 				contextKey: QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY,
 				hideInput: true,
 				quickNavigate: {
@@ -971,10 +1055,14 @@ registerAction2(class extends Action2 {
 				await shellService.focusShell();
 			}
 
-			const projects = await projectManagerService.getProjects();
 			const navigationSnapshot = await getHostedNavigationSnapshot(
 				environmentService,
 				hostedShellService
+			);
+			const projects = await getProjectSwitcherProjects(
+				projectManagerService,
+				environmentService,
+				navigationSnapshot
 			);
 			const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 				environmentService,
@@ -1012,7 +1100,11 @@ registerAction2(class extends Action2 {
 
 			const pick = await pickSwitchWorktree(
 				quickInputService,
-				picks
+				picks,
+				getHostedSwitcherQuickPickOptions(
+					environmentService,
+					hostedShellService
+				)
 			);
 			if (!pick) {
 				return;

@@ -2947,6 +2947,47 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		});
 
+	test('lays out only the visible workspace and restores latest hidden bounds',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { controller, viewFactory } = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			const alphaView = viewFactory.views[0];
+			const bravoView = viewFactory.views[1];
+			const alphaBoundsBefore = alphaView.boundsCalls.length;
+			const bravoBoundsBefore = bravoView.boundsCalls.length;
+			const latestBounds = { x: 320, y: 0, width: 960, height: 720 };
+
+			controller.layout(latestBounds);
+			controller.layout(latestBounds);
+
+			assert.deepStrictEqual({
+				alphaLayoutCalls: alphaView.boundsCalls.length - alphaBoundsBefore,
+				bravoLayoutCalls: bravoView.boundsCalls.length - bravoBoundsBefore,
+				bravoBounds: bravoView.boundsCalls.at(-1),
+			}, {
+				alphaLayoutCalls: 0,
+				bravoLayoutCalls: 1,
+				bravoBounds: latestBounds,
+			});
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+
+			assert.deepStrictEqual({
+				alphaBounds: alphaView.boundsCalls.at(-1),
+				alphaLayoutCalls: alphaView.boundsCalls.length - alphaBoundsBefore,
+			}, {
+				alphaBounds: latestBounds,
+				alphaLayoutCalls: 1,
+			});
+		}
+	);
+
 	test('overlay occlusion restores active workspace with repaint',
 		async () => {
 			const alpha = createWorktree('alpha');
@@ -2986,12 +3027,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			controller.setWorkspaceOverlayOcclusion(false);
 
 			assert.deepStrictEqual(view.visibleCalls.slice(-1), [true]);
-			assert.deepStrictEqual(view.boundsCalls.slice(boundsBefore), [{
-				x: 280,
-				y: 0,
-				width: 1000,
-				height: 800,
-			}]);
+			assert.deepStrictEqual(view.boundsCalls.slice(boundsBefore), []);
 			assert.deepStrictEqual(
 				browserViewMainService.visibleCalls.at(-1),
 				{ id: 1, visible: true }
