@@ -43,6 +43,7 @@ export interface IContextMenuDelegate {
 	closeAnimation?: IContextViewCloseAnimation;
 	actionRunner?: IActionRunner;
 	skipTelemetry?: boolean;
+	forceNative?: boolean;
 	autoSelectFirstItem?: boolean;
 	anchorAlignment?: AnchorAlignment;
 	anchorAxisAlignment?: AnchorAxisAlignment;

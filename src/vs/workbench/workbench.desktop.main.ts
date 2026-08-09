@@ -21,6 +21,7 @@ import './workbench.common.main.js';
 
 import './electron-browser/desktop.main.js';
 import './electron-browser/desktop.contribution.js';
+import './electron-browser/hucodeConfiguration.contribution.js';
 
 //#endregion
 
@@ -95,9 +96,12 @@ import '../platform/webContentExtractor/electron-browser/webContentExtractorServ
 import './services/agentHost/electron-browser/agentHostService.js';
 import '../platform/agentHost/electron-browser/remoteAgentHostService.js';
 import '../platform/agentHost/browser/agentHostEnablementService.js';
+import '../platform/agentHost/electron-browser/sshRemoteAgentHostService.js';
 import './services/browserView/electron-browser/playwrightWorkbenchService.js';
 import './services/process/electron-browser/processService.js';
 import './services/power/electron-browser/powerService.js';
+import '../platform/projectManager/electron-browser/projectManagerService.js';
+import '../hucode/electron-browser/omniWindowService.js';
 
 import { registerSingleton } from '../platform/instantiation/common/extensions.js';
 import { IUserDataInitializationService, UserDataInitializationService } from './services/userData/browser/userDataInit.js';
@@ -208,6 +212,9 @@ import './contrib/keybindingsExport/electron-browser/keybindingsExport.contribut
 
 // System-wide (OS global) Keybindings
 import './contrib/keybindings/electron-browser/systemWideKeybindings.contribution.js';
+
+// Hucode hosted Omni workspace actions
+import '../hucode/browser/hostedOmniWorkspace.contribution.js';
 
 //#endregion
 
