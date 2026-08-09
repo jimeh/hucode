@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IMatch } from '../../../base/common/filters.js';
+import { basename } from '../../../base/common/path.js';
+import { URI } from '../../../base/common/uri.js';
 import {
 	matchesFuzzyIconAware,
 	parseLabelWithIcons,
@@ -14,12 +16,137 @@ import {
 	IQuickPickItemHighlights,
 	IQuickPickSeparator,
 } from '../../../platform/quickinput/common/quickInput.js';
+import {
+	IHucodeHostedNavigationSnapshot,
+	IHucodeHostedNavigationTarget,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { ProjectRecord, WorktreeRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
 import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	ProjectSwitcherOmniSection,
 } from './projectSwitcherViewState.js';
+import { IHucodeHostedWorkspaceState } from '../omniWindow.js';
+
+/** Builds the identity-free hosted navigation projection owned by the shell. */
+export function createHucodeHostedNavigationSnapshot(
+	state: IHucodeHostedWorkspaceState,
+	projects?: readonly ProjectRecord[]
+): IHucodeHostedNavigationSnapshot {
+	const instancesByPath = new Map(state.instances.map(instance => [
+		instance.worktreePath,
+		instance,
+	]));
+	const retainedPaths = new Set<string>();
+	const targets: IHucodeHostedNavigationTarget[] = [];
+
+	for (const record of (state.retainedWorkbenches ?? [])
+		.toSorted((a, b) => a.order - b.order)) {
+		const path = URI.revive(record.folderUri).fsPath;
+		retainedPaths.add(path);
+		const instance = instancesByPath.get(path);
+		const lifecycleState = instance?.state ??
+			(record.folderStatus === 'missing'
+				? 'missing'
+				: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
+		targets.push({
+			folderUri: URI.file(path).toJSON(),
+			lifecycleState: lifecycleState === 'restore-pending'
+				? 'loading'
+				: lifecycleState,
+			lastActiveAt: instance?.lastActiveAt ?? record.lastActiveAt,
+			section: 'workbenches',
+			order: record.order,
+			label: record.label ?? basename(path),
+		});
+	}
+
+	for (const [order, instance] of state.instances.entries()) {
+		if (retainedPaths.has(instance.worktreePath)) {
+			continue;
+		}
+		const lifecycleState = instance.state === 'restore-pending'
+			? 'loading'
+			: instance.state;
+		targets.push({
+			folderUri: URI.file(instance.worktreePath).toJSON(),
+			lifecycleState,
+			lastActiveAt: instance.lastActiveAt,
+			section: instance.projectId ? 'projects' : 'workbenches',
+			order,
+			...(instance.projectId ? {} : {
+				label: basename(instance.worktreePath),
+			}),
+		});
+	}
+
+	return {
+		targets,
+		sectionOrder: state.projectSwitcherSectionOrder ??
+			DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+		...(projects ? {
+			projects: projects.map(project => ({
+				rootUri: project.rootUri.toJSON(),
+				label: project.label,
+				pinned: project.pinned,
+				order: project.order,
+				worktrees: project.worktrees.map(worktree => ({
+					folderUri: URI.file(worktree.path).toJSON(),
+					label: worktree.label,
+					customLabel: worktree.customLabel,
+					branch: worktree.branch,
+					isMain: worktree.isMain,
+					isDetached: worktree.isDetached,
+					pinned: worktree.pinned,
+					lastVisitedAt: worktree.lastVisitedAt,
+				})),
+			})),
+		} : {}),
+	};
+}
+
+/**
+ * Adds the optional project catalog without making lifecycle navigation depend
+ * on the catalog read. The state is sampled after the asynchronous read so the
+ * returned lifecycle projection is as current as possible.
+ */
+export async function createHucodeHostedNavigationSnapshotWithCatalog(
+	getState: () => IHucodeHostedWorkspaceState,
+	getProjects: (() => Promise<readonly ProjectRecord[]>) | undefined,
+	onCatalogError?: (error: unknown) => void
+): Promise<IHucodeHostedNavigationSnapshot> {
+	let projects: readonly ProjectRecord[] | undefined;
+	try {
+		projects = await getProjects?.();
+	} catch (error) {
+		onCatalogError?.(error);
+	}
+	return createHucodeHostedNavigationSnapshot(getState(), projects);
+}
+
+/** Revives the optional shell-owned catalog for hosted switcher rendering. */
+export function reviveHucodeHostedNavigationProjects(
+	snapshot: IHucodeHostedNavigationSnapshot | undefined
+): readonly ProjectRecord[] | undefined {
+	return snapshot?.projects?.map((project, index) => ({
+		id: `hosted-navigation-project-${index}`,
+		label: project.label,
+		rootUri: URI.revive(project.rootUri),
+		pinned: project.pinned,
+		order: project.order,
+		worktreeState: 'current',
+		worktrees: project.worktrees.map(worktree => ({
+			path: URI.revive(worktree.folderUri).fsPath,
+			label: worktree.label,
+			customLabel: worktree.customLabel,
+			branch: worktree.branch,
+			isMain: worktree.isMain,
+			isDetached: worktree.isDetached,
+			pinned: worktree.pinned,
+			lastVisitedAt: worktree.lastVisitedAt,
+		})),
+	}));
+}
 
 export interface IProjectSwitcherSelectionTarget {
 	readonly projectId?: string;

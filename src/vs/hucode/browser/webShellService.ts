@@ -6,7 +6,7 @@
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
-import { Emitter } from '../../base/common/event.js';
+import { Emitter, Event } from '../../base/common/event.js';
 import { Schemas } from '../../base/common/network.js';
 import {
 	Disposable,
@@ -38,8 +38,29 @@ import {
 } from '../../platform/window/common/window.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
-	isHucodeOmniExplicitShellAction,
+	isHucodeOmniClipboardAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import {
+	getHucodeHostedShellActionCommandId,
+} from '../../platform/window/common/hucodeHostedShellActions.js';
+import {
+	createBoundHucodeHostedShellFacade,
+	createHucodeHostedShellServerChannel,
+	HUCODE_HOSTED_SHELL_CHANNEL,
+	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+	HucodeHostedShellCapability,
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedNavigationRequest,
+	IHucodeHostedShellAuthorityState,
+	IHucodeHostedShellBinding,
+	IHucodeHostedShellContinuationAuthorization,
+	IHucodeHostedShellDelegate,
+	negotiateHucodeHostedShellCapabilities,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import {
+	createHucodeHostedNavigationSnapshot,
+	createHucodeHostedNavigationSnapshotWithCatalog,
+} from '../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserWorkbenchEnvironmentService } from
@@ -66,13 +87,14 @@ import {
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'../common/omniWorkspaceReopen.js';
 import {
-	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+	IHucodeOmniWebConnectionBootstrap,
 	IHucodeOmniWebWorkbenchClient,
+	isHucodeOmniWebConnectionBootstrapMetadata,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import {
 	getHucodeOmniHostedWorkbenchRoute,
@@ -94,13 +116,8 @@ import { IStorageService, StorageScope, StorageTarget } from
 	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
-import {
-	ADD_PROJECT_COMMAND_ID,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	GO_BACK_WORKTREE_COMMAND_ID,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
-	REFRESH_PROJECTS_COMMAND_ID,
-} from './projectSwitcher/projectSwitcherCommon.js';
+import { IProjectManagerService, ProjectRecord } from
+	'../../platform/projectManager/common/projectManager.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -125,6 +142,15 @@ interface IHostedIframeInstance {
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
 	protocolVersion?: number;
+	hostedShellProtocolVersion?: number;
+	hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
+	connectionGeneration: number;
+	pendingReloadConnectionGeneration?: number;
+	pendingReloadIframe?: HTMLIFrameElement;
+	pendingReloadIframeReplaced?: boolean;
+	bootstrapId?: string;
+	bootstrapAttempt?: number;
+	retiredBootstrapIds?: Set<string>;
 	pendingUnload?: Promise<boolean>;
 	pendingUnloadDisposition?: HostedUnloadDisposition;
 	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
@@ -334,37 +360,6 @@ type IWebHucodeShellHostSurfaceService = Pick<
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
 const COMMAND_DELIVERY_UNKNOWN =
 	Symbol('hucodeOmniWebCommandDeliveryUnknown');
-const HUCODE_OMNI_CLIPBOARD_COMMANDS = new Set([
-	'editor.action.clipboardCopyAction',
-	'editor.action.clipboardCutAction',
-]);
-const HUCODE_HOSTED_PROJECT_SHELL_ACTIONS = new Set([
-	ADD_PROJECT_COMMAND_ID,
-	REFRESH_PROJECTS_COMMAND_ID,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	GO_BACK_WORKTREE_COMMAND_ID,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
-]);
-
-type IHucodeHostedWebShellConnectionFacade = Pick<
-	IHucodeShellService,
-	| 'onDidChangeWindowState'
-	| 'getWindowState'
-	| 'findHostedWorkspaceByPath'
-	| 'focusHostedWorkspaceByPath'
-	| 'focusNormalWindowByPath'
-	| 'openWorkspace'
-	| 'openAndFocusWorkspace'
-	| 'openFilesInWorkspace'
-	| 'openFilesInActiveWorkspace'
-	| 'closeWorkspace'
-	| 'reopenWorkspaceInNormalWindow'
-	| 'notifyHostedWorkspaceReady'
-	| 'focusWorkspace'
-	| 'focusShell'
-	| 'runActionInShell'
-	| 'reloadWorkspace'
->;
 
 /**
  * Server routing configuration the web shell needs to build workbench URLs.
@@ -373,6 +368,16 @@ export interface IWebHucodeShellOptions {
 	readonly workbenchRoute: string;
 	readonly hostedWorkbenchRoute: string;
 	readonly serverPathCaseSensitive: boolean;
+	readonly remoteAuthority?: string;
+}
+
+/** Project authority used by hosted navigation after URI validation. */
+export interface IWebHucodeHostedNavigationProjectManager {
+	getProjects(): Promise<readonly ProjectRecord[]>;
+	setLastActiveWorktree(
+		projectId: string,
+		worktreePath: string
+	): Promise<void>;
 }
 
 /**
@@ -389,7 +394,6 @@ export interface IWebHucodeShellBrowserAdapter {
 	open(url: string): void;
 	focusIframe(iframe: HTMLIFrameElement): void;
 	focusIframeContent(iframe: HTMLIFrameElement): void;
-	reloadIframe(iframe: HTMLIFrameElement): void;
 	createMessageChannel(): MessageChannel;
 	postPortMessage(
 		iframe: HTMLIFrameElement,
@@ -417,7 +421,6 @@ function defaultWebHucodeShellBrowserAdapter():
 		},
 		focusIframe: iframe => iframe.focus(),
 		focusIframeContent: iframe => iframe.contentWindow?.focus(),
-		reloadIframe: iframe => iframe.contentWindow?.location.reload(),
 		createMessageChannel: () => new MessageChannel(),
 		postPortMessage: (iframe, message, port) => {
 			iframe.contentWindow?.postMessage(
@@ -459,6 +462,7 @@ export class WebHucodeShellController extends Disposable
 	private readonly workbenchRoute: string;
 	private readonly hostedWorkbenchRoute: string;
 	private readonly serverPathCaseSensitive: boolean;
+	private readonly remoteAuthority: string | undefined;
 	private readonly hostedWorkspaces: HostedWorkspaceStateModel<
 		IHostedIframeInstance
 	>;
@@ -493,6 +497,8 @@ export class WebHucodeShellController extends Disposable
 			assumeFoldersExist,
 		private readonly logService: IWebHucodeShellLogService =
 			silentWebShellLog,
+		private readonly navigationProjectManager?:
+			IWebHucodeHostedNavigationProjectManager,
 	) {
 		super();
 
@@ -500,6 +506,7 @@ export class WebHucodeShellController extends Disposable
 		this.workbenchRoute = options.workbenchRoute;
 		this.hostedWorkbenchRoute = options.hostedWorkbenchRoute;
 		this.serverPathCaseSensitive = options.serverPathCaseSensitive;
+		this.remoteAuthority = options.remoteAuthority;
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => this.toPathKey(path)
 		);
@@ -629,6 +636,110 @@ export class WebHucodeShellController extends Disposable
 		);
 	}
 
+	private async navigateToFolderFromHosted(
+		instance: IHostedIframeInstance,
+		binding: IHucodeHostedShellBinding,
+		request: IHucodeHostedNavigationRequest,
+		authorization: IHucodeHostedShellContinuationAuthorization
+	): Promise<HucodeHostedShellOperationOutcome> {
+		await this.initialization;
+		if (!this.isBoundInstanceActiveVisible(instance, binding)) {
+			return HucodeHostedShellOperationOutcome.Rejected;
+		}
+
+		const resource = URI.revive(request.folderUri);
+		if (
+			resource.scheme !== Schemas.file &&
+			(
+				resource.scheme !== Schemas.vscodeRemote ||
+				!this.optionsRemoteAuthorityMatches(resource)
+			)
+		) {
+			return HucodeHostedShellOperationOutcome.Unsupported;
+		}
+
+		const activationIntent = ++this.activationIntentGeneration;
+		let worktreePath = resource.fsPath;
+		let projectId: string | undefined;
+		if (this.navigationProjectManager) {
+			let projects: Awaited<ReturnType<
+				IWebHucodeHostedNavigationProjectManager['getProjects']
+			>> = [];
+			try {
+				projects = await this.navigationProjectManager.getProjects();
+			} catch {
+				// An unavailable project catalog leaves the path eligible as an
+				// arbitrary retained workbench.
+			}
+			if (!await authorization.isCurrentAndActiveVisible() ||
+				activationIntent !== this.activationIntentGeneration) {
+				return HucodeHostedShellOperationOutcome.Superseded;
+			}
+			const pathKey = this.toPathKey(worktreePath);
+			for (const project of projects) {
+				const worktree = project.worktrees.find(candidate =>
+					this.toPathKey(candidate.path) === pathKey);
+				if (worktree) {
+					projectId = project.id;
+					worktreePath = worktree.path;
+					break;
+				}
+			}
+		}
+
+		if (!await authorization.isCurrentAndActiveVisible() ||
+			activationIntent !== this.activationIntentGeneration) {
+			return HucodeHostedShellOperationOutcome.Superseded;
+		}
+		const folderExists = this.getAvailableInstanceByPath(worktreePath)
+			? undefined
+			: await this.folderAccess.exists(worktreePath);
+		if (!await authorization.isCurrentAndActiveVisible() ||
+			activationIntent !== this.activationIntentGeneration) {
+			return HucodeHostedShellOperationOutcome.Superseded;
+		}
+		const canApply = () =>
+			activationIntent === this.activationIntentGeneration &&
+			this.isBoundInstanceActiveVisible(instance, binding);
+		let activationAuthorized = false;
+		const canActivate = () => {
+			activationAuthorized = canApply();
+			return activationAuthorized;
+		};
+		await this.doOpenWorkspace(
+			this.windowId,
+			worktreePath,
+			projectId,
+			true,
+			activationIntent,
+			canActivate,
+			folderExists,
+			canApply
+		);
+		const outcome = activationAuthorized &&
+			activationIntent === this.activationIntentGeneration
+			? HucodeHostedShellOperationOutcome.Accepted
+			: HucodeHostedShellOperationOutcome.Superseded;
+		if (outcome === HucodeHostedShellOperationOutcome.Accepted &&
+			projectId && this.navigationProjectManager) {
+			try {
+				await this.navigationProjectManager.setLastActiveWorktree(
+					projectId,
+					worktreePath
+				);
+			} catch {
+				// MRU persistence is best-effort; ownership remains the
+				// authoritative catalog match above.
+			}
+		}
+		return outcome;
+	}
+
+	private optionsRemoteAuthorityMatches(resource: URI): boolean {
+		return !!this.remoteAuthority &&
+			resource.authority === this.remoteAuthority;
+	}
+
 	/**
 	 * Opens a workspace and optionally transfers browser focus while this
 	 * request remains the latest activation intent.
@@ -637,13 +748,19 @@ export class WebHucodeShellController extends Disposable
 		windowId: number,
 		worktreePath: string,
 		projectId: string | undefined,
-		focus: boolean
+		focus: boolean,
+		activationIntent = ++this.activationIntentGeneration,
+		canActivate: () => boolean = () => true,
+		knownFolderExists: boolean | undefined = undefined,
+		canApply: () => boolean = () => true
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
-		const activationIntent = ++this.activationIntentGeneration;
+		if (!canApply()) {
+			return this.getState();
+		}
 		const existing = this.getInstanceByPath(worktreePath);
 		const projectCatalogGeneration =
 			this.projectCatalogSnapshot?.generation;
@@ -674,14 +791,23 @@ export class WebHucodeShellController extends Disposable
 					folderStatus: undefined,
 				});
 			}
-			this.activateInstance(existing);
-			if (focus) {
-				this.focusIframe(existing);
+			if (
+				activationIntent === this.activationIntentGeneration &&
+				canActivate()
+			) {
+				this.activateInstance(existing);
+				if (focus) {
+					this.focusIframe(existing);
+				}
 			}
 			return this.getState();
 		}
 
-		const folderExists = await this.folderAccess.exists(worktreePath);
+		const folderExists = knownFolderExists ??
+			await this.folderAccess.exists(worktreePath);
+		if (!canApply()) {
+			return this.getState();
+		}
 		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
 		const currentInstance = this.getInstanceByPath(worktreePath);
 		effectiveProjectId = this.resolveProjectIdAgainstCatalog(
@@ -709,7 +835,8 @@ export class WebHucodeShellController extends Disposable
 					folderStatus: undefined,
 				});
 			}
-			if (activationIntent === this.activationIntentGeneration) {
+			if (activationIntent === this.activationIntentGeneration &&
+				canActivate()) {
 				this.activateInstance(currentInstance);
 				if (focus) {
 					this.focusIframe(currentInstance);
@@ -722,7 +849,11 @@ export class WebHucodeShellController extends Disposable
 			retained.id !== retainedWorkbenchId ||
 			retained.desiredState !== 'loaded'
 		) && !invalidatedByNewCatalog) {
-			this.focusActiveInstanceIfCurrent(activationIntent, focus);
+			this.focusActiveInstanceIfCurrent(
+				activationIntent,
+				focus,
+				canActivate
+			);
 			return this.getState();
 		}
 
@@ -738,7 +869,11 @@ export class WebHucodeShellController extends Disposable
 				}
 				this.emitState();
 			});
-			this.focusActiveInstanceIfCurrent(activationIntent, focus);
+			this.focusActiveInstanceIfCurrent(
+				activationIntent,
+				focus,
+				canActivate
+			);
 			return this.getState();
 		}
 		if (retained?.folderStatus === 'missing') {
@@ -762,7 +897,8 @@ export class WebHucodeShellController extends Disposable
 		);
 		this.hostedWorkspaces.addInstance(instance);
 		this.attachIframe(instance);
-		if (activationIntent === this.activationIntentGeneration) {
+		if (activationIntent === this.activationIntentGeneration &&
+			canActivate()) {
 			this.activateInstance(instance);
 			if (focus) {
 				this.focusIframe(instance);
@@ -779,9 +915,11 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private focusActiveInstanceIfCurrent(
 		activationIntent: number,
-		focus: boolean
+		focus: boolean,
+		canActivate: () => boolean = () => true
 	): void {
-		if (!focus || activationIntent !== this.activationIntentGeneration) {
+		if (!focus || activationIntent !== this.activationIntentGeneration ||
+			!canActivate()) {
 			return;
 		}
 		const active = this.getAvailableActiveInstance();
@@ -1154,8 +1292,16 @@ export class WebHucodeShellController extends Disposable
 
 		return reopenHucodeHostedWorkspaceInNormalWindow({
 			getState: () => this.getState(),
-			closeWorkspace: targetInstanceId =>
-				this.closeWorkspace(this.windowId, targetInstanceId),
+			closeWorkspace: async targetInstanceId => {
+				const instance = this.instancesById.get(targetInstanceId);
+				if (!instance || instance.pendingUnload) {
+					return { committed: false };
+				}
+				const committed = await this.deferStateEmission(() =>
+					this.unloadAndRemoveInstance(instance, 'unload')
+				);
+				return { committed };
+			},
 			focusNormalWindowByPath: worktreePath =>
 				this.focusNormalWindowByPath(worktreePath),
 			openNormalWindow: worktreePath => {
@@ -1178,7 +1324,9 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 
-		this.hostedWorkspaces.markInstanceReady(instance);
+		if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+			return;
+		}
 		this.emitState();
 	}
 
@@ -1251,10 +1399,14 @@ export class WebHucodeShellController extends Disposable
 	): Promise<boolean> {
 		await this.initialization;
 		const instance = this.getAvailableActiveInstance();
-		if (!instance) {
+		if (!instance ||
+			instance.pendingReloadConnectionGeneration !== undefined) {
 			return false;
 		}
 
+		if (isHucodeOmniClipboardAction(request.id)) {
+			this.focusIframe(instance);
+		}
 		const result = await this.runCommandInInstance(
 			instance,
 			request.id,
@@ -1264,15 +1416,12 @@ export class WebHucodeShellController extends Disposable
 			return result;
 		}
 
-		if (!HUCODE_OMNI_CLIPBOARD_COMMANDS.has(request.id)) {
-			return false;
-		}
 		// A timed-out request may still execute in the child after this point.
-		// Treat clipboard delivery as consumed: retrying copy/cut locally can
-		// duplicate a destructive cut. The tradeoff is that an actually lost
-		// request leaves the clipboard operation unapplied.
+		// Treat delivery as consumed: retrying it locally can duplicate commands
+		// whose child-side completion includes a user interaction such as a Quick
+		// Input. The tradeoff is that an actually lost request remains unapplied.
 		this.logService.warn(
-			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
+			`[hucode] Hosted command ${request.id} did not confirm completion; ` +
 			'delivery is unconfirmed, so it will not be retried locally.'
 		);
 		return true;
@@ -1310,15 +1459,49 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private reloadInstance(instance: IHostedIframeInstance): void {
+		if (instance.pendingReloadConnectionGeneration !== undefined) {
+			this.replaceReloadingIframe(
+				instance,
+				instance.pendingReloadConnectionGeneration,
+				instance.pendingReloadIframe
+			);
+			return;
+		}
+		const reloadConnectionGeneration = instance.connectionGeneration;
+		const reloadIframe = instance.iframe;
+		instance.pendingReloadConnectionGeneration =
+			reloadConnectionGeneration;
+		instance.pendingReloadIframe = reloadIframe;
+		instance.pendingReloadIframeReplaced = false;
 		instance.state = 'loading';
+		let reloadCommandAccepted = false;
 		void this.runCommandInInstance(
 			instance,
 			'workbench.action.reloadWindow',
-			[]
-		);
+			[],
+			false
+		).then(result => {
+			reloadCommandAccepted = result === true;
+			if (reloadCommandAccepted) {
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
+			}
+		});
 		this.browser.setTimeout(() => {
-			if (instance.state === 'loading' && instance.iframe) {
-				this.browser.reloadIframe(instance.iframe);
+			if (
+				instance.pendingReloadConnectionGeneration ===
+				reloadConnectionGeneration &&
+				instance.state === 'loading' &&
+				!reloadCommandAccepted
+			) {
+				this.replaceReloadingIframe(
+					instance,
+					reloadConnectionGeneration,
+					reloadIframe
+				);
 			}
 		}, 500);
 		this.emitState();
@@ -1499,16 +1682,57 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		switch (message.type) {
-			case HucodeOmniWebChildMessageType.Ready:
+			case HucodeOmniWebChildMessageType.Ready: {
+				if (instance.pendingReloadConnectionGeneration !== undefined &&
+					!instance.pendingReloadIframeReplaced) {
+					return;
+				}
+				const negotiatedCapabilities =
+					negotiateHucodeHostedShellCapabilities(
+						message.hostedShellProtocolVersion,
+						message.hostedShellCapabilities
+					);
+				if (!negotiatedCapabilities) {
+					return;
+				}
+				if (instance.bootstrapId !==
+					message.connectionBootstrap.id &&
+					instance.retiredBootstrapIds?.has(
+						message.connectionBootstrap.id
+					)) {
+					return;
+				}
+				if (instance.bootstrapId === message.connectionBootstrap.id &&
+					instance.bootstrapAttempt !== undefined &&
+					message.connectionBootstrap.attempt <=
+					instance.bootstrapAttempt) {
+					return;
+				}
+				this.retireBootstrapDocument(
+					instance,
+					message.connectionBootstrap.id
+				);
+				instance.bootstrapId = message.connectionBootstrap.id;
+				instance.bootstrapAttempt =
+					message.connectionBootstrap.attempt;
 				// A workbench that announces nothing predates the two-phase
 				// unload handshake.
 				instance.protocolVersion = message.protocolVersion ?? 1;
-				this.connectInstance(instance);
+				instance.hostedShellProtocolVersion =
+					message.hostedShellProtocolVersion;
+				instance.hostedShellCapabilities =
+					message.hostedShellCapabilities;
+				this.connectInstance(
+					instance,
+					message.connectionBootstrap,
+					negotiatedCapabilities
+				);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
 					message.instanceId
 				);
 				break;
+			}
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
@@ -1524,13 +1748,29 @@ export class WebHucodeShellController extends Disposable
 		}
 	}
 
+	private retireBootstrapDocument(
+		instance: IHostedIframeInstance,
+		nextBootstrapId?: string
+	): void {
+		if (instance.bootstrapId === undefined ||
+			instance.bootstrapId === nextBootstrapId) {
+			return;
+		}
+		(instance.retiredBootstrapIds ??= new Set()).add(instance.bootstrapId);
+	}
+
 	/**
 	 * Establishes the per-instance MessagePort IPC connection. A repeated
 	 * ready signal means the iframe document reloaded, so any previous
 	 * connection is replaced.
 	 */
-	private connectInstance(instance: IHostedIframeInstance): void {
+	private connectInstance(
+		instance: IHostedIframeInstance,
+		connectionBootstrap: IHucodeOmniWebConnectionBootstrap,
+		negotiatedCapabilities: readonly HucodeHostedShellCapability[]
+	): void {
 		this.disposeConnection(instance);
+		instance.connectionGeneration++;
 
 		const disposables = new DisposableStore();
 		const channel = this.browser.createMessageChannel();
@@ -1539,10 +1779,11 @@ export class WebHucodeShellController extends Disposable
 			`hucodeOmniWebShell:${instance.instanceId}`
 		));
 		client.registerChannel(
-			HUCODE_OMNI_WEB_SHELL_CHANNEL,
-			ProxyChannel.fromService(
+			HUCODE_HOSTED_SHELL_CHANNEL,
+			createHucodeHostedShellServerChannel(
 				this.createHostedConnectionFacade(instance),
-				disposables
+				disposables,
+				negotiatedCapabilities
 			)
 		);
 		instance.connection = {
@@ -1557,103 +1798,207 @@ export class WebHucodeShellController extends Disposable
 		this.browser.postPortMessage(instance.iframe, {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
-			windowId: this.windowId,
+			connectionBootstrap,
+			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			hostedShellCapabilities: negotiatedCapabilities,
 		}, channel.port2);
 	}
 
-	/**
-	 * Creates the only shell operations callable over one hosted workbench's
-	 * connection. Legacy wire signatures are retained, but caller-supplied
-	 * window and instance identifiers are ignored in favour of the identities
-	 * established by the trusted MessagePort handshake.
-	 */
-	private createHostedConnectionFacade(
-		instance: IHostedIframeInstance
-	): IHucodeHostedWebShellConnectionFacade {
-		return {
-			onDidChangeWindowState: this.onDidChangeWindowState,
-			getWindowState: _windowId =>
-				this.getWindowState(this.windowId),
-			findHostedWorkspaceByPath: worktreePath =>
-				this.findHostedWorkspaceByPath(worktreePath),
-			focusHostedWorkspaceByPath: (worktreePath, projectId) =>
-				this.focusHostedWorkspaceByPath(worktreePath, projectId),
-			focusNormalWindowByPath: worktreePath =>
-				this.focusNormalWindowByPath(worktreePath),
-			openWorkspace: (_windowId, worktreePath, projectId) =>
-				this.openWorkspace(this.windowId, worktreePath, projectId),
-			openAndFocusWorkspace: (_windowId, worktreePath, projectId) =>
-				this.openAndFocusWorkspace(
-					this.windowId,
-					worktreePath,
-					projectId
-				),
-			openFilesInWorkspace: (
-				_windowId,
-				worktreePath,
-				request,
-				projectId
-			) => this.openFilesInWorkspace(
-				this.windowId,
-				worktreePath,
-				request,
-				projectId
+	/** Builds the shared least-authority facade for a current web connection. */
+	private createHostedConnectionFacade(instance: IHostedIframeInstance) {
+		const binding: IHucodeHostedShellBinding = {
+			windowId: this.windowId,
+			instanceId: instance.instanceId,
+			connectionGeneration: instance.connectionGeneration,
+		};
+		const delegate: IHucodeHostedShellDelegate = {
+			onDidChangeState: Event.map(
+				this.onDidChangeWindowState,
+				() => this.getHostedAuthorityState(instance)
 			),
-			openFilesInActiveWorkspace: async (_windowId, request) => {
+			getState: async () => {
 				await this.initialization;
-				return this.instancesById.get(instance.instanceId) === instance &&
-					isHostedWorkspaceAvailable(instance)
-					? this.openFilesInInstance(instance, request)
-					: false;
+				return this.getHostedAuthorityState(instance);
 			},
-			closeWorkspace: _windowId =>
-				this.closeWorkspace(this.windowId, instance.instanceId),
-			reopenWorkspaceInNormalWindow: _windowId =>
-				this.reopenWorkspaceInNormalWindow(
-					this.windowId,
-					instance.instanceId
-				),
-			notifyHostedWorkspaceReady: _windowId =>
-				this.notifyHostedWorkspaceReady(
-					this.windowId,
-					instance.instanceId
-				),
-			focusWorkspace: async _windowId => {
+			getNavigationSnapshot: async () => {
 				await this.initialization;
-				if (
-					this.instancesById.get(instance.instanceId) !== instance ||
-					!isHostedWorkspaceAvailable(instance)
-				) {
+				const projectManager = this.navigationProjectManager;
+				return createHucodeHostedNavigationSnapshotWithCatalog(
+					() => this.getState(),
+					projectManager
+						? () => projectManager.getProjects()
+						: undefined,
+					error => this.logService.warn(
+						'[hucode] Hosted navigation catalog is unavailable; ' +
+						`using lifecycle-only state: ${String(error)}`
+					)
+				);
+			},
+			notifyReady: async current => {
+				await this.initialization;
+				if (!this.isCurrentHostedBinding(instance, current) ||
+					!isHostedWorkspaceAvailable(instance)) {
 					return;
+				}
+				if (!this.markInstanceReadyFromCurrentConnection(instance)) {
+					return;
+				}
+				this.emitState();
+			},
+			closeSelf: async current => {
+				await this.initialization;
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				return this.deferStateEmission(() =>
+					this.unloadAndRemoveInstance(
+						instance,
+						'unload',
+						current.connectionGeneration
+					)
+				);
+			},
+			reopenSelfInNormalWindow: async current => {
+				await this.initialization;
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				return reopenHucodeHostedWorkspaceInNormalWindow({
+					getState: () => this.getState(),
+					closeWorkspace: async targetInstanceId => {
+						if (targetInstanceId !== current.instanceId ||
+							!this.isCurrentHostedBinding(instance, current) ||
+							instance.pendingUnload) {
+							return { committed: false };
+						}
+						const committed = await this.deferStateEmission(() =>
+							this.unloadAndRemoveInstance(
+								instance,
+								'unload',
+								current.connectionGeneration
+							)
+						);
+						return { committed };
+					},
+					focusNormalWindowByPath: worktreePath =>
+						this.focusNormalWindowByPath(worktreePath),
+					openNormalWindow: worktreePath => {
+						this.browser.open(this.toNormalWorkbenchUrl(worktreePath));
+					},
+				}, current.instanceId);
+			},
+			reloadSelf: async current => {
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				this.reloadInstance(instance);
+				return true;
+			},
+			focusSelf: async current => {
+				if (!this.isCurrentHostedBinding(instance, current) ||
+					!isHostedWorkspaceAvailable(instance)) {
+					return false;
 				}
 				this.activateInstance(instance);
 				this.focusIframe(instance);
+				return true;
 			},
-			focusShell: _windowId => this.focusShell(this.windowId),
-			runActionInShell: async (_windowId, request) => {
-				if (
-					!isHucodeOmniExplicitShellAction(request.id) &&
-					!HUCODE_HOSTED_PROJECT_SHELL_ACTIONS.has(request.id)
-				) {
-					this.logService.warn(
-						'[hucode] Rejected hosted workbench request for ' +
-						`non-shell command ${request.id}.`
-					);
+			focusShell: async current => {
+				if (!this.isBoundInstanceActiveVisible(instance, current)) {
 					return false;
 				}
-				return this.runActionInShell(this.windowId, request);
+				await this.focusShell(current.windowId);
+				return true;
 			},
-			reloadWorkspace: async _windowId => {
-				await this.initialization;
-				if (
-					this.instancesById.get(instance.instanceId) !== instance ||
-					!isHostedWorkspaceAvailable(instance)
-				) {
-					return;
+			requestShellAction: async (current, action) => {
+				if (!this.isBoundInstanceActiveVisible(instance, current)) {
+					return false;
 				}
-				this.reloadInstance(instance);
+				await this.commandService.executeCommand(
+					getHucodeHostedShellActionCommandId(action)
+				);
+				return true;
 			},
+			navigateToFolder: (current, request, authorization) =>
+				this.navigateToFolderFromHosted(
+					instance,
+					current,
+					request,
+					authorization
+				),
+			triggerPasteInSelf: async () => false,
+			captureSelfScreenshot: async () => undefined,
 		};
+		return createBoundHucodeHostedShellFacade(binding, delegate);
+	}
+
+	private getHostedAuthorityState(
+		instance: IHostedIframeInstance
+	): IHucodeHostedShellAuthorityState {
+		const state = this.getState();
+		return {
+			connectionGeneration: instance.connectionGeneration,
+			disposed: this.instancesById.get(instance.instanceId) !== instance ||
+				!instance.connection ||
+				this.isCurrentConnectionPendingReload(instance),
+			projectsSidebarVisible: state.projectsSidebarVisible,
+			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
+			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
+			activeInstanceId: state.activeInstanceId,
+			instances: state.instances.map(candidate => ({
+				instanceId: candidate.instanceId,
+				state: candidate.state,
+				visible: candidate.visible,
+			})),
+			navigationSnapshot: createHucodeHostedNavigationSnapshot(state),
+		};
+	}
+
+	private isCurrentHostedBinding(
+		instance: IHostedIframeInstance,
+		binding: IHucodeHostedShellBinding
+	): boolean {
+		return binding.windowId === this.windowId &&
+			binding.instanceId === instance.instanceId &&
+			binding.connectionGeneration === instance.connectionGeneration &&
+			this.instancesById.get(instance.instanceId) === instance &&
+			!!instance.connection &&
+			!this.isCurrentConnectionPendingReload(instance);
+	}
+
+	private isCurrentConnectionPendingReload(
+		instance: IHostedIframeInstance
+	): boolean {
+		return instance.pendingReloadConnectionGeneration ===
+			instance.connectionGeneration;
+	}
+
+	private markInstanceReadyFromCurrentConnection(
+		instance: IHostedIframeInstance
+	): boolean {
+		const pendingReloadGeneration =
+			instance.pendingReloadConnectionGeneration;
+		if (pendingReloadGeneration !== undefined) {
+			if (pendingReloadGeneration === instance.connectionGeneration) {
+				return false;
+			}
+			instance.pendingReloadConnectionGeneration = undefined;
+			instance.pendingReloadIframe = undefined;
+			instance.pendingReloadIframeReplaced = undefined;
+		}
+
+		this.hostedWorkspaces.markInstanceReady(instance);
+		return true;
+	}
+
+	private isBoundInstanceActiveVisible(
+		instance: IHostedIframeInstance,
+		binding: IHucodeHostedShellBinding
+	): boolean {
+		return this.isCurrentHostedBinding(instance, binding) &&
+			this.activeInstanceId === instance.instanceId &&
+			instance.visible &&
+			isHostedWorkspaceAvailable(instance);
 	}
 
 	private disposeConnection(instance: IHostedIframeInstance): void {
@@ -1725,6 +2070,7 @@ export class WebHucodeShellController extends Disposable
 				focused: false,
 				lastActiveAt: candidate.lastActiveAt,
 				lifecycleGeneration: 0,
+				connectionGeneration: 0,
 			});
 		}
 
@@ -1798,11 +2144,6 @@ export class WebHucodeShellController extends Disposable
 		retainedWorkbenchId?: string
 	): IHostedIframeInstance {
 		const instanceId = generateUuid();
-		const iframe = this.browser.createIframe();
-		iframe.className = 'hucode-omni-host-iframe hidden';
-		iframe.title = worktreePath;
-		iframe.dataset.hucodeHostedInstanceId = instanceId;
-		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
 
 		return {
 			instanceId,
@@ -1810,11 +2151,57 @@ export class WebHucodeShellController extends Disposable
 			retainedWorkbenchId,
 			worktreePath,
 			state: 'loading',
-			iframe,
+			iframe: this.createHostedIframe(instanceId, worktreePath, false),
 			visible: false,
 			focused: false,
 			lifecycleGeneration: 0,
+			connectionGeneration: 0,
 		};
+	}
+
+	private createHostedIframe(
+		instanceId: string,
+		worktreePath: string,
+		visible: boolean
+	): HTMLIFrameElement {
+		const iframe = this.browser.createIframe();
+		iframe.className = 'hucode-omni-host-iframe';
+		iframe.classList.toggle('hidden', !visible);
+		iframe.title = worktreePath;
+		iframe.dataset.hucodeHostedInstanceId = instanceId;
+		iframe.src = this.toWorkbenchUrl(instanceId, worktreePath);
+		return iframe;
+	}
+
+	private replaceReloadingIframe(
+		instance: IHostedIframeInstance,
+		connectionGeneration: number,
+		expectedIframe: HTMLIFrameElement | undefined
+	): boolean {
+		if (!expectedIframe ||
+			instance.pendingReloadConnectionGeneration !== connectionGeneration ||
+			instance.iframe !== expectedIframe) {
+			return false;
+		}
+
+		const replacement = this.createHostedIframe(
+			instance.instanceId,
+			instance.worktreePath,
+			instance.visible
+		);
+		const restoreFocus = instance.visible && instance.focused;
+		instance.iframe = replacement;
+		instance.pendingReloadIframe = replacement;
+		instance.pendingReloadIframeReplaced = true;
+		this.retireBootstrapDocument(instance);
+		instance.bootstrapId = undefined;
+		instance.bootstrapAttempt = undefined;
+		this.disposeConnection(instance);
+		expectedIframe.replaceWith(replacement);
+		if (restoreFocus) {
+			this.focusIframe(instance);
+		}
+		return true;
 	}
 
 	private activateInstance(instance: IHostedIframeInstance): void {
@@ -1841,6 +2228,9 @@ export class WebHucodeShellController extends Disposable
 	private removeInstance(instance: IHostedIframeInstance): void {
 		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
+		instance.pendingReloadConnectionGeneration = undefined;
+		instance.pendingReloadIframe = undefined;
+		instance.pendingReloadIframeReplaced = undefined;
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
@@ -1867,8 +2257,14 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private unloadAndRemoveInstance(
 		instance: IHostedIframeInstance,
-		disposition: HostedUnloadDisposition
+		disposition: HostedUnloadDisposition,
+		expectedConnectionGeneration?: number
 	): Promise<boolean> {
+		if (expectedConnectionGeneration !== undefined &&
+			(instance.connectionGeneration !== expectedConnectionGeneration ||
+				this.instancesById.get(instance.instanceId) !== instance)) {
+			return Promise.resolve(false);
+		}
 		const pending = instance.pendingUnload;
 		if (pending) {
 			instance.pendingUnloadDisposition = strongestUnloadDisposition(
@@ -1896,7 +2292,10 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		instance.pendingUnloadDisposition = disposition;
-		const unload = this.runUnloadHandshake(instance).finally(() => {
+		const unload = this.runUnloadHandshake(
+			instance,
+			expectedConnectionGeneration
+		).finally(() => {
 			// A failed handshake still holds the claim, and a later request
 			// may already have replaced it.
 			if (instance.pendingUnload === unload) {
@@ -1908,7 +2307,8 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private async runUnloadHandshake(
-		instance: IHostedIframeInstance
+		instance: IHostedIframeInstance,
+		expectedConnectionGeneration?: number
 	): Promise<boolean> {
 		const lifecycleGeneration = instance.lifecycleGeneration;
 		// Pending-ready workbenches close directly: a never-connected iframe
@@ -1941,6 +2341,11 @@ export class WebHucodeShellController extends Disposable
 		) {
 			return false;
 		}
+		if (expectedConnectionGeneration !== undefined &&
+			(instance.connectionGeneration !== expectedConnectionGeneration ||
+				this.instancesById.get(instance.instanceId) !== instance)) {
+			return false;
+		}
 		if (
 			!singlePhase && (
 				instance.lifecycleGeneration !== lifecycleGeneration ||
@@ -1955,6 +2360,11 @@ export class WebHucodeShellController extends Disposable
 			workbench && !singlePhase &&
 			await this.commitUnload(instance, workbench) === 'refused'
 		) {
+			return false;
+		}
+		if (expectedConnectionGeneration !== undefined &&
+			(instance.connectionGeneration !== expectedConnectionGeneration ||
+				this.instancesById.get(instance.instanceId) !== instance)) {
 			return false;
 		}
 
@@ -2012,6 +2422,7 @@ export class WebHucodeShellController extends Disposable
 				focused: false,
 				lastActiveAt: instance.lastActiveAt,
 				lifecycleGeneration: 0,
+				connectionGeneration: 0,
 			});
 			this.emitState();
 			return;
@@ -2213,30 +2624,43 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	/**
-	 * Runs a workbench command in an instance. Completed results also settle
-	 * a pending `loading` state: success marks the workbench ready, failure
-	 * marks it crashed. Timeouts leave the state untouched so an in-flight
-	 * reload keeps its iframe-level fallback.
+	 * Runs a workbench command in an instance. When requested, completed results
+	 * also settle a pending `loading` state: success marks the workbench ready
+	 * and failure marks it crashed. Reload command delivery deliberately leaves
+	 * that state untouched so Ready or the iframe fallback remains authoritative.
 	 */
 	private async runCommandInInstance(
 		instance: IHostedIframeInstance,
 		commandId: string,
-		args: readonly unknown[]
+		args: readonly unknown[],
+		settleLoadingState = true
 	): Promise<boolean | typeof COMMAND_DELIVERY_UNKNOWN> {
 		const workbench = instance.connection?.workbench;
 		if (!workbench) {
 			return false;
 		}
+		const connectionGeneration = instance.connectionGeneration;
 
-		const result = await this.raceTimeout(
-			workbench.runCommand(commandId, args).catch(() => false),
+		const result = await this.raceTimeout<
+			boolean | typeof COMMAND_DELIVERY_UNKNOWN
+		>(
+			workbench.runCommand(commandId, args).catch(
+				() => COMMAND_DELIVERY_UNKNOWN
+			),
 			WebHucodeShellController.COMMAND_TIMEOUT_MS
 		);
-		if (result === REQUEST_TIMEOUT) {
+		if (result === REQUEST_TIMEOUT ||
+			result === COMMAND_DELIVERY_UNKNOWN) {
 			return COMMAND_DELIVERY_UNKNOWN;
 		}
 
-		if (instance.state === 'loading') {
+		if (
+			instance.state === 'loading' &&
+			settleLoadingState &&
+			instance.connectionGeneration === connectionGeneration &&
+			instance.connection?.workbench === workbench &&
+			instance.pendingReloadConnectionGeneration !== connectionGeneration
+		) {
 			if (result) {
 				this.hostedWorkspaces.markInstanceReady(instance);
 			} else {
@@ -2402,9 +2826,24 @@ function isHucodeOmniWebChildMessage(
 		return false;
 	}
 
-	const type = (value as { readonly type?: unknown }).type;
-	return type === HucodeOmniWebChildMessageType.Ready ||
-		type === HucodeOmniWebChildMessageType.Focus;
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+		readonly connectionBootstrap?: unknown;
+		readonly hostedShellProtocolVersion?: unknown;
+		readonly hostedShellCapabilities?: unknown;
+		readonly focused?: unknown;
+	};
+	if (typeof message.instanceId !== 'string' || !message.instanceId) {
+		return false;
+	}
+	if (message.type === HucodeOmniWebChildMessageType.Ready) {
+		return isHucodeOmniWebConnectionBootstrapMetadata(message) &&
+			typeof message.hostedShellProtocolVersion === 'number' &&
+			Array.isArray(message.hostedShellCapabilities);
+	}
+	return message.type === HucodeOmniWebChildMessageType.Focus &&
+		typeof message.focused === 'boolean';
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {
@@ -2426,6 +2865,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IStorageService storageService: IStorageService,
 		@IFileService fileService: IFileService,
 		@ILogService logService: ILogService,
+		@IProjectManagerService projectManagerService: IProjectManagerService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -2437,6 +2877,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			serverPathCaseSensitive: getHucodeServerPathCaseSensitive(
 				environmentService.options
 			),
+			remoteAuthority: environmentService.remoteAuthority,
 		}, commandService, hostSurfaceService, undefined,
 			new StorageServiceWebHucodeShellPersistence(storageService),
 			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
@@ -2444,7 +2885,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			) ?? 'active', createWebHucodeShellFolderAccess(
 				environmentService.remoteAuthority,
 				resource => fileService.stat(resource)
-			), logService);
+			), logService, projectManagerService);
 	}
 }
 

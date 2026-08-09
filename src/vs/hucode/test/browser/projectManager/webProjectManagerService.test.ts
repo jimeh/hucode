@@ -71,6 +71,27 @@ suite('WebProjectManagerService', () => {
 		assert.strictEqual(projects[0].rootUri.fsPath, '/repo');
 	});
 
+	test('keeps one-shot project reads and mutations stream-free', async () => {
+		const fakeFetch: WebProjectManagerFetch = async (input, init) => {
+			if (input.toString() === '/api/projects' && init?.method === 'POST') {
+				return new Response(JSON.stringify({
+					project: rawProject('/added'),
+					projects: [rawProject('/added')],
+				}), { status: 201 });
+			}
+			return new Response(JSON.stringify({
+				projects: [rawProject('/repo')],
+			}));
+		};
+		const service = disposables.add(createService(fakeFetch));
+
+		await service.getProjects();
+		await service.addProject(URI.file('/added'));
+		await service.setLastActiveWorktree('project', '/repo');
+
+		assert.strictEqual(FakeEventSource.instances.length, 0);
+	});
+
 	test('serializes bounded status preview and conditional force removal',
 		async () => {
 			const calls: {
@@ -247,6 +268,7 @@ suite('WebProjectManagerService', () => {
 		disposables.add(service.onDidChangeProjects(projects =>
 			events.push(projects as readonly { rootUri: URI }[])
 		));
+		disposables.add(service.onDidChangeProjects(() => undefined));
 
 		assert.strictEqual(FakeEventSource.instances.length, 1);
 		FakeEventSource.instances[0].emit('projects', new Event('projects'));
@@ -278,6 +300,17 @@ suite('WebProjectManagerService', () => {
 			(events[1][0] as { worktreeState?: string }).worktreeState,
 			'unavailable'
 		);
+	});
+
+	test('starts exactly one project stream for Git-monitor targets', async () => {
+		const fakeFetch: WebProjectManagerFetch = async () =>
+			new Response(JSON.stringify({ observations: [] }));
+		const service = disposables.add(createService(fakeFetch));
+
+		await service.setGitWorktreeTargets('first', ['/repo']);
+		await service.setGitWorktreeTargets('second', ['/other']);
+
+		assert.strictEqual(FakeEventSource.instances.length, 1);
 	});
 
 	test('transports ephemeral Git-monitor targets and live updates', async () => {
@@ -435,6 +468,41 @@ suite('WebProjectManagerService', () => {
 		}
 	);
 
+	test('does not hang target registration after permanent reconnect failure',
+		async () => {
+			let fetchCalls = 0;
+			const fakeFetch: WebProjectManagerFetch = async () => {
+				fetchCalls++;
+				if (fetchCalls === 2) {
+					return new Response(JSON.stringify({
+						error: 'event session is disconnected',
+					}), { status: 400 });
+				}
+				return new Response(JSON.stringify({ observations: [] }));
+			};
+			const service = disposables.add(createService(fakeFetch));
+			const restored = new DeferredPromise<void>();
+			disposables.add(service.onDidChangeGitWorktreeTargets(() => {
+				void restored.complete();
+			}));
+
+			await service.setGitWorktreeTargets('consumer', ['/repo']);
+			FakeEventSource.instances[0].emit('error', new Event('error'));
+			const disconnectedRegistration = service.setGitWorktreeTargets(
+				'consumer',
+				['/repo/next']
+			).then(
+				() => 'resolved',
+				error => `rejected: ${error}`
+			);
+			const result = await raceTimeout(disconnectedRegistration, 100);
+			assert.match(result ?? '', /event session is disconnected/);
+
+			FakeEventSource.instances[0].emit('open', new Event('open'));
+			await restored.p;
+			assert.strictEqual(fetchCalls, 3);
+		});
+
 	test('settles initial Git targets when project events fail to connect',
 		async () => {
 			FakeEventSource.openOnConstruction = false;
@@ -473,6 +541,7 @@ suite('WebProjectManagerService', () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({ projects: [] }));
 		const service = disposables.add(createService(fakeFetch));
+		disposables.add(service.onDidChangeProjects(() => undefined));
 		const source = FakeEventSource.instances[0];
 
 		service.dispose();

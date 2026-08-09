@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { basename } from '../../../base/common/path.js';
 import { isWeb } from '../../../base/common/platform.js';
@@ -22,7 +21,8 @@ import { TreeViewItemHandleArg } from
 	'../../../workbench/common/views.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
-import { IHucodeShellService } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import {
 	pathsEqual,
 	RENAME_PROJECT_COMMAND_ID,
@@ -30,6 +30,11 @@ import {
 } from './projectSwitcherCommon.js';
 import { tryForwardShellRenameCommand } from
 	'./renameProjectWorktreeRouting.js';
+
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
 
 function parseProjectHandle(handle: string | undefined): string | undefined {
 	if (!handle?.startsWith('project:')) {
@@ -75,11 +80,14 @@ function getHandle(
 async function runShellRenameInput<T>(
 	quickInputService: IQuickInputService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	callback: () => Promise<T>
 ): Promise<T> {
 	if (environmentService.isOmniWindow) {
-		await shellService.focusShell(dom.getWindowId(mainWindow));
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
+		await shellService.focusShell();
 	}
 
 	const result = callback();
@@ -107,19 +115,22 @@ registerAction2(class extends Action2 {
 		const quickInputService = accessor.get(IQuickInputService);
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = environmentService.isOmniWindow
+			? accessor.get(IHucodeShellControllerService)
+			: undefined;
 
 		try {
-			const forwarded = await tryForwardShellRenameCommand(
-				{
-					isOmniWindow: environmentService.isOmniWindow,
-					isWebClient: isWeb,
-				},
-				shellService,
-				dom.getWindowId(mainWindow),
-				RENAME_PROJECT_COMMAND_ID,
-				handle
-			);
+			const forwarded = shellService
+				? await tryForwardShellRenameCommand(
+					{
+						isOmniWindow: environmentService.isOmniWindow,
+						isWebClient: isWeb,
+					},
+					shellService,
+					RENAME_PROJECT_COMMAND_ID,
+					handle
+				)
+				: false;
 			if (forwarded) {
 				return;
 			}
@@ -177,19 +188,22 @@ registerAction2(class extends Action2 {
 		const quickInputService = accessor.get(IQuickInputService);
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = environmentService.isOmniWindow
+			? accessor.get(IHucodeShellControllerService)
+			: undefined;
 
 		try {
-			const forwarded = await tryForwardShellRenameCommand(
-				{
-					isOmniWindow: environmentService.isOmniWindow,
-					isWebClient: isWeb,
-				},
-				shellService,
-				dom.getWindowId(mainWindow),
-				RENAME_WORKTREE_COMMAND_ID,
-				handle
-			);
+			const forwarded = shellService
+				? await tryForwardShellRenameCommand(
+					{
+						isOmniWindow: environmentService.isOmniWindow,
+						isWebClient: isWeb,
+					},
+					shellService,
+					RENAME_WORKTREE_COMMAND_ID,
+					handle
+				)
+				: false;
 			if (forwarded) {
 				return;
 			}

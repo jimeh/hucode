@@ -12,37 +12,38 @@ import {
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import '../../platform/window/common/hucodeOmniCommandForwardingContext.js';
 import { INativeRunActionInWindowRequest } from '../../platform/window/common/window.js';
 import {
 	isHucodeOmniLocalInputFocus,
 	isHucodeOmniProjectsFocus,
-} from '../browser/omniFocus.js';
-import { IHucodeShellService } from '../common/omniWindow.js';
+} from './omniFocus.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
 import { CommandService } from '../../workbench/services/commands/common/commandService.js';
-import { INativeWorkbenchEnvironmentService } from '../../workbench/services/environment/electron-browser/environmentService.js';
+import { IWorkbenchEnvironmentService } from
+	'../../workbench/services/environment/common/environmentService.js';
 import { IExtensionService } from '../../workbench/services/extensions/common/extensions.js';
 
 export class OmniCommandService extends CommandService {
 
 	constructor(
-		@IInstantiationService instantiationService: IInstantiationService,
+		@IInstantiationService
+		private readonly omniInstantiationService: IInstantiationService,
 		@IExtensionService extensionService: IExtensionService,
 		@ILogService private readonly omniLogService: ILogService,
-		@INativeWorkbenchEnvironmentService
-		private readonly nativeEnvironmentService:
-			INativeWorkbenchEnvironmentService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IWorkbenchEnvironmentService
+		private readonly environmentService: IWorkbenchEnvironmentService,
 		@IHucodeOmniCommandForwardingContext
 		private readonly commandForwardingContext:
 			IHucodeOmniCommandForwardingContext
 	) {
-		super(instantiationService, extensionService, omniLogService);
+		super(omniInstantiationService, extensionService, omniLogService);
 	}
 
 	override async executeCommand<T>(id: string, ...args: unknown[]): Promise<T> {
 		if (
-			!this.nativeEnvironmentService.isOmniWindow ||
+			!this.environmentService.isOmniWindow ||
 			!isHucodeOmniProjectsFocus() ||
 			isHucodeOmniLocalInputFocus() ||
 			this.commandForwardingContext.isForwardingDisabledFor(id) ||
@@ -70,9 +71,9 @@ export class OmniCommandService extends CommandService {
 		};
 
 		try {
-			return await this.shellService.runActionInWorkspace(
-				this.nativeEnvironmentService.window.id,
-				request
+			return await this.omniInstantiationService.invokeFunction(
+				accessor => accessor.get(IHucodeShellControllerService)
+					.runActionInWorkspace(request)
 			);
 		} catch (error) {
 			this.omniLogService.warn(

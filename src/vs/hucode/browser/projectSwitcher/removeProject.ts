@@ -7,11 +7,11 @@ import type {
 	IProjectManagerService,
 	ProjectRecord,
 } from '../../../platform/projectManager/common/projectManager.js';
-import type { IHucodeShellService } from '../../common/omniWindow.js';
+import type { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 
 export interface IRemoveProjectRouting {
 	readonly isOmniWindow: boolean;
-	readonly windowId: number;
 }
 
 /**
@@ -27,8 +27,8 @@ export async function removeProjectWithHostedWorkbenchCleanup(
 		'getProjects' | 'removeProject'
 	>,
 	shellService: Pick<
-		IHucodeShellService,
-		'getWindowState' | 'closeWorkspace'
+		IHucodeShellControllerService,
+		'getState' | 'closeWorkspace'
 	>,
 	confirmRemoval: (project: ProjectRecord) => Promise<boolean>
 ): Promise<void> {
@@ -39,7 +39,7 @@ export async function removeProjectWithHostedWorkbenchCleanup(
 	}
 
 	if (routing.isOmniWindow) {
-		const state = await shellService.getWindowState(routing.windowId);
+		const state = await shellService.getState();
 		const matches = state.instances.filter(instance =>
 			instance.projectId === projectId
 		);
@@ -52,16 +52,10 @@ export async function removeProjectWithHostedWorkbenchCleanup(
 		// sibling and can supersede that sibling's in-flight close.
 		await Promise.allSettled(matches
 			.filter(instance => instance !== active)
-			.map(instance => shellService.closeWorkspace(
-				routing.windowId,
-				instance.instanceId
-			)));
+			.map(instance => shellService.closeWorkspace(instance.instanceId)));
 		if (active) {
 			await Promise.allSettled([
-				shellService.closeWorkspace(
-					routing.windowId,
-					active.instanceId
-				),
+				shellService.closeWorkspace(active.instanceId),
 			]);
 		}
 	}

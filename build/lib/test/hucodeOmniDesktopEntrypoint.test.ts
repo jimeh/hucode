@@ -101,7 +101,7 @@ const addedByOmniDesktop = new Map([
 		'Omni pane composite part service.',
 	],
 	[
-		'src/vs/hucode/electron-browser/omniCommandService.js',
+		'src/vs/hucode/browser/omniCommandService.js',
 		'Omni command service.',
 	],
 	[
@@ -208,16 +208,16 @@ const addedByOmniBootstrap = new Map([
 		'Omni resolves its workspace identifier directly.',
 	],
 	[
-		'src/vs/hucode/common/omniWindow.js',
-		'Hucode shell service channel wiring.',
-	],
-	[
 		'src/vs/workbench/services/lifecycle/common/lifecycle.js',
 		'Omni consumes ShutdownReason for its lifecycle handling.',
 	],
 	[
 		'src/vs/workbench/services/extensions/common/hucodeExtensionEnablementPolicy.js',
 		'Omni exposes the Hucode extension enablement policy.',
+	],
+	[
+		'src/vs/platform/window/common/hucodeShellControllerService.js',
+		'Omni consumes its owner-bound privileged shell capability.',
 	],
 ]);
 

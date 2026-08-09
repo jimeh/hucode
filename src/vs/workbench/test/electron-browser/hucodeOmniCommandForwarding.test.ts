@@ -10,7 +10,12 @@ import { URI } from '../../../base/common/uri.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
-import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
+import {
+	HucodeShellControllerTimeoutError,
+	HucodeShellControllerUnavailableError,
+	IHucodeShellControllerService,
+} from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { INativeRunActionInWindowRequest, INativeRunKeybindingInWindowRequest } from '../../../platform/window/common/window.js';
 import {
@@ -90,7 +95,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.actionExecutedCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -113,7 +118,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.actionExecutedCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -195,7 +200,7 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.keybindingCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runKeybindingInWorkspace',
-			arg: [fixture.windowId, request]
+			arg: [request]
 		}]);
 	});
 
@@ -309,7 +314,6 @@ suite('HucodeOmniCommandForwarding', () => {
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
 			arg: [
-				fixture.windowId,
 				{
 					id: 'editor.action.clipboardCopyAction',
 					from: 'menu'
@@ -491,31 +495,56 @@ suite('HucodeOmniCommandForwarding', () => {
 		);
 	});
 
-	test('runs clipboard commands locally when forwarding rejects', async () => {
-		const fixture = createFixture({
-			isOmniWindow: true,
-			channelError: new Error('forwarding unavailable')
-		});
-		const event = new mainWindow.Event('cut', {
-			cancelable: true,
-			bubbles: true
+	test('does not retry clipboard commands after a dispatched request times out',
+		async () => {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelError: new HucodeShellControllerTimeoutError()
+			});
+			const event = new mainWindow.Event('cut', {
+				cancelable: true,
+				bubbles: true
+			});
+
+			await fixture.forwarding.handleClipboardEvent(
+				event,
+				'editor.action.clipboardCutAction',
+				fixture.handlers
+			);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.deepStrictEqual(fixture.commandCalls, []);
+			assert.deepStrictEqual(fixture.commandSuppressionStates, []);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.actionErrorCalls, []);
 		});
 
-		await fixture.forwarding.handleClipboardEvent(
-			event,
-			'editor.action.clipboardCutAction',
-			fixture.handlers
-		);
+	test('runs clipboard commands locally before dispatch is available',
+		async () => {
+			const fixture = createFixture({
+				isOmniWindow: true,
+				channelError: new HucodeShellControllerUnavailableError()
+			});
+			const event = new mainWindow.Event('copy', {
+				cancelable: true,
+				bubbles: true
+			});
 
-		assert.strictEqual(event.defaultPrevented, true);
-		assert.deepStrictEqual(fixture.commandCalls, [{
-			commandId: 'editor.action.clipboardCutAction',
-			args: []
-		}]);
-		assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
-		assert.strictEqual(fixture.channel.calls.length, 1);
-		assert.deepStrictEqual(fixture.actionErrorCalls, []);
-	});
+			await fixture.forwarding.handleClipboardEvent(
+				event,
+				'editor.action.clipboardCopyAction',
+				fixture.handlers
+			);
+
+			assert.strictEqual(event.defaultPrevented, true);
+			assert.deepStrictEqual(fixture.commandCalls, [{
+				commandId: 'editor.action.clipboardCopyAction',
+				args: []
+			}]);
+			assert.deepStrictEqual(fixture.commandSuppressionStates, [true]);
+			assert.strictEqual(fixture.channel.calls.length, 1);
+			assert.deepStrictEqual(fixture.actionErrorCalls, []);
+		});
 
 	test('disposes registered window IPC listeners', () => {
 		const fixture = createFixture({ isOmniWindow: false });
@@ -589,12 +618,17 @@ function createFixture(options: {
 		new HucodeOmniCommandForwardingContext();
 	const commandForwardingScope =
 		commandForwardingContext.createScope();
-	const mainProcessService = {
-		getChannel(channelName: string): IChannel {
-			assert.strictEqual(channelName, 'hucodeShell');
-			return channel;
-		}
-	} as Partial<IMainProcessService> as IMainProcessService;
+	const shellControllerService = {
+		runActionInWorkspace(request: INativeRunActionInWindowRequest) {
+			return channel.call<boolean>('runActionInWorkspace', [request]);
+		},
+		runKeybindingInWorkspace(request: INativeRunKeybindingInWindowRequest) {
+			return channel.call<boolean>('runKeybindingInWorkspace', [request]);
+		},
+		triggerPasteInWorkspace() {
+			return channel.call<boolean>('triggerPasteInWorkspace');
+		},
+	} as unknown as IHucodeShellControllerService;
 	const environmentService = {
 		isOmniWindow: options.isOmniWindow,
 		window: { id: windowId }
@@ -647,10 +681,10 @@ function createFixture(options: {
 		commandForwardingContext,
 		commandForwardingScope,
 		forwarding: new HucodeOmniCommandForwarding(
+			commandForwardingScope,
 			environmentService,
-			mainProcessService,
-			new NullLogService(),
-			commandForwardingScope
+			shellControllerService,
+			new NullLogService()
 		),
 		handlers,
 		keybindingCalls,

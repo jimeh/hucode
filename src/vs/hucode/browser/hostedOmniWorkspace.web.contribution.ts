@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { addDisposableListener, getWindowId } from '../../base/browser/dom.js';
+import { addDisposableListener } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { Disposable } from '../../base/common/lifecycle.js';
 import { isObject } from '../../base/common/types.js';
@@ -12,11 +12,17 @@ import { registerOmniShellAction2 } from './omniShellCommandRegistration.js';
 import { ICommandActionTitle } from '../../platform/action/common/action.js';
 import { ICommandService } from '../../platform/commands/common/commands.js';
 import { IFileService } from '../../platform/files/common/files.js';
+import { ICodeEditorService } from
+	'../../editor/browser/services/codeEditorService.js';
+import { ICodeEditor } from '../../editor/browser/editorBrowser.js';
+import { Handler } from '../../editor/common/editorCommon.js';
 import {
 	IInstantiationService,
 	ServicesAccessor,
 } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../platform/log/common/log.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import {
 	INativeOpenFileRequest,
 } from '../../platform/window/common/window.js';
@@ -25,6 +31,7 @@ import {
 	CLOSE_WORKSPACE_COMMAND_ID,
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	FOCUS_WORKSPACE_COMMAND_ID,
+	isHucodeOmniClipboardAction,
 	RELOAD_WORKSPACE_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IsHostedOmniWorkspaceContext } from '../../workbench/common/contextkeys.js';
@@ -39,12 +46,49 @@ import { IHucodeHostedOmniWebConnectionService } from
 	'./hostedOmniWebConnection.js';
 import { HucodeHostedOmniWebUnloadCoordinator } from
 	'./hostedOmniWebUnload.js';
-import { IHucodeShellService } from '../common/omniWindow.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
+} from '../../platform/window/common/hucodeHostedShellService.js';
+import { notifyHucodeHostedOperationOutcome } from
+	'./omniProjectsSidebarActions.js';
 import { openHucodeFilesRequest } from
 	'../../workbench/browser/hucodeOpenFilesRequest.js';
 import './hostedOmniWebShellService.js';
 import './projectManager/webProjectManagerService.js';
 import './hostedOmniWorkspace.contribution.js';
+
+type IHostedOmniWebCodeEditor = Pick<ICodeEditor, 'focus' | 'trigger'>;
+type IHostedOmniWebCodeEditorService = {
+	getActiveCodeEditor(): IHostedOmniWebCodeEditor | null;
+};
+type IHostedOmniWebCommandService = {
+	executeCommand(commandId: string, ...args: unknown[]): Promise<unknown>;
+};
+
+/** Runs a remote command with the browser-specific editor clipboard behavior. */
+export async function runHostedOmniWebCommand(
+	commandId: string,
+	args: readonly unknown[],
+	commandService: IHostedOmniWebCommandService,
+	codeEditorService: IHostedOmniWebCodeEditorService
+): Promise<void> {
+	const editor = codeEditorService.getActiveCodeEditor();
+	if (isHucodeOmniClipboardAction(commandId)) {
+		editor?.focus();
+	}
+
+	if (commandId === 'editor.action.clipboardCutAction' && editor) {
+		await commandService.executeCommand(
+			'editor.action.clipboardCopyAction'
+		);
+		editor.trigger(undefined, Handler.Cut, undefined);
+		return;
+	}
+
+	await commandService.executeCommand(commandId, ...args);
+}
 
 /**
  * Connects a hosted iframe workbench to its Omni web shell: it exposes the
@@ -63,6 +107,8 @@ class HostedOmniWebBridgeContribution extends Disposable
 		@IHucodeHostedOmniWebConnectionService
 		private readonly connectionService: IHucodeHostedOmniWebConnectionService,
 		@ICommandService private readonly commandService: ICommandService,
+		@ICodeEditorService
+		private readonly codeEditorService: ICodeEditorService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IFileService private readonly fileService: IFileService,
 		@IInstantiationService
@@ -106,7 +152,12 @@ class HostedOmniWebBridgeContribution extends Disposable
 		args: readonly unknown[]
 	): Promise<boolean> {
 		try {
-			await this.commandService.executeCommand(commandId, ...args);
+			await runHostedOmniWebCommand(
+				commandId,
+				args,
+				this.commandService,
+				this.codeEditorService
+			);
 			return true;
 		} catch (error) {
 			this.logService.error(error);
@@ -151,7 +202,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellFocusProjects',
 				'Omni-Window: Focus Projects'
 			),
-			(shellService, windowId) => shellService.focusShell(windowId)
+			shellService => shellService.focusShell()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			FOCUS_WORKSPACE_COMMAND_ID,
@@ -159,7 +210,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellFocusWorkbench',
 				'Omni-Window: Focus Workbench'
 			),
-			(shellService, windowId) => shellService.focusWorkspace(windowId)
+			shellService => shellService.focusSelf()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			RELOAD_WORKSPACE_COMMAND_ID,
@@ -167,7 +218,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellReloadWorkbench',
 				'Omni-Window: Reload Workbench'
 			),
-			(shellService, windowId) => shellService.reloadWorkspace(windowId)
+			shellService => shellService.reloadSelf()
 		));
 		this._register(registerHostedOmniWebShellCommand(
 			CLOSE_WORKSPACE_COMMAND_ID,
@@ -175,9 +226,7 @@ class HostedOmniWebBridgeContribution extends Disposable
 				'hostedOmniWebShellCloseWorkbench',
 				'Omni-Window: Close Workbench'
 			),
-			(shellService, windowId, instanceId) =>
-				shellService.closeWorkspace(windowId, instanceId)
-					.then(() => undefined)
+			shellService => shellService.closeSelf()
 		));
 	}
 }
@@ -198,10 +247,8 @@ function registerHostedOmniWebShellCommand(
 	id: string,
 	title: ICommandActionTitle,
 	run: (
-		shellService: IHucodeShellService,
-		windowId: number,
-		instanceId: string
-	) => Promise<void>
+		shellService: IHucodeHostedShellService
+	) => Promise<HucodeHostedShellOperationOutcome>
 ) {
 	return registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
@@ -215,15 +262,20 @@ function registerHostedOmniWebShellCommand(
 
 		override async run(accessor: ServicesAccessor): Promise<void> {
 			const environmentService = accessor.get(IWorkbenchEnvironmentService);
-			const instanceId = environmentService.hostedInstanceId;
-			if (!environmentService.isHostedOmniWorkspace || !instanceId) {
+			if (!environmentService.isHostedOmniWorkspace ||
+				!environmentService.hostedInstanceId) {
 				return;
 			}
 
-			await run(
-				accessor.get(IHucodeShellService),
-				getWindowId(mainWindow),
-				instanceId
+			const shellService = accessor.get(IHucodeHostedShellService);
+			const notificationService = accessor.get(INotificationService);
+			const outcome = isHucodeHostedShellServiceAvailable(shellService)
+				? await run(shellService)
+				: HucodeHostedShellOperationOutcome.Unavailable;
+			notifyHucodeHostedOperationOutcome(
+				title.value,
+				outcome,
+				notificationService
 			);
 		}
 	});

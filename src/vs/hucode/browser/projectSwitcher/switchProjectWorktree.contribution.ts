@@ -3,9 +3,9 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Codicon } from '../../../base/common/codicons.js';
+import { Event } from '../../../base/common/event.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { basename } from '../../../base/common/path.js';
@@ -35,6 +35,12 @@ import {
 } from '../../../platform/projectManager/common/projectManager.js';
 import { IQuickInputService, IQuickNavigateConfiguration } from
 	'../../../platform/quickinput/common/quickInput.js';
+import {
+	IHucodeHostedNavigationSnapshot,
+	IHucodeHostedNavigationTarget,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkspaceContextService, WorkbenchState } from
 	'../../../platform/workspace/common/workspace.js';
 import { getQuickNavigateHandler, inQuickPickContext } from
@@ -59,6 +65,7 @@ import {
 	getRetainedWorkbenchQuickPickPresentation,
 	getVisualProjectWorktreeTargets,
 	IProjectSwitcherSelectionTarget,
+	reviveHucodeHostedNavigationProjects,
 	SwitchWorktreeQuickPick,
 	SwitchWorktreeSearchField,
 	withSwitchWorktreeSeparators,
@@ -71,8 +78,9 @@ import { getRetainedWorkbenchPresentation } from
 	'../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
 	IHucodeHostedWorkspaceState,
-	IHucodeShellService,
 } from '../../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../../platform/window/common/hucodeShellControllerService.js';
 import { isHostedWorkspaceAvailable } from
 	'../../common/hostedWorkspaceState.js';
 import { Menus } from '../menus.js';
@@ -102,6 +110,11 @@ import {
 export type { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
 export { setLastActiveWorktreeBestEffort } from './openProjectSwitcherTarget.js';
+
+const omniShellControllerUnavailable = localize(
+	'omniShellControllerUnavailable',
+	'Omni shell controller is unavailable.'
+);
 
 interface ILoadedWorkbenchWorktree {
 	readonly path: string;
@@ -281,18 +294,19 @@ function getRetainedWorkbenchPicks(
  */
 export async function getOmniHostedWorkspaceState(
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService | undefined,
 	projects: readonly ProjectRecord[]
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
-	const windowId = dom.getWindowId(mainWindow);
 	if (environmentService.isHostedOmniWorkspace) {
-		return shellService.getWindowState(windowId);
+		return undefined;
 	}
 	if (!environmentService.isOmniShellWindow) {
 		return undefined;
 	}
+	if (!shellService) {
+		throw new Error(omniShellControllerUnavailable);
+	}
 	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-		windowId,
 		projects.map(project => ({
 			projectId: project.id,
 			folderUris: project.worktrees.map(worktree =>
@@ -302,15 +316,20 @@ export async function getOmniHostedWorkspaceState(
 	);
 }
 
-function getCombinedSwitchWorkbenchPicks(
+export function getCombinedSwitchWorkbenchPicks(
 	projects: readonly ProjectRecord[],
 	state: IHucodeHostedWorkspaceState | undefined,
 	activeWorktreePath: string | undefined,
 	loadedWorktrees: readonly ILoadedWorkbenchWorktree[],
 	labelService: ILabelService,
 	sectionOrder: readonly ProjectSwitcherOmniSection[] =
-		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER
+		DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
+	navigationSnapshot?: IHucodeHostedNavigationSnapshot
 ): SwitchWorktreeQuickPick[] {
+	const navigationTarget = (path: string) =>
+		navigationSnapshot?.targets.find(candidate =>
+			pathsEqual(URI.revive(candidate.folderUri).fsPath, path)
+		);
 	const projectPicks = getSwitchWorktreePicks(
 		projects,
 		activeWorktreePath,
@@ -320,36 +339,94 @@ function getCombinedSwitchWorkbenchPicks(
 		const instance = state?.instances.find(candidate =>
 			pathsEqual(candidate.worktreePath, pick.worktreePath)
 		);
-		const icon = !state
+		const lifecycleState = navigationTarget(pick.worktreePath)
+			?.lifecycleState ?? instance?.state;
+		const icon = !state && !navigationSnapshot
 			? undefined
-			: instance?.state === 'restore-pending' ||
-				instance?.state === 'loading'
+			: lifecycleState === 'restore-pending' ||
+				lifecycleState === 'loading'
 				? ThemeIcon.modify(Codicon.loading, 'spin')
-				: instance?.state === 'dormant'
+				: lifecycleState === 'dormant'
 					? Codicon.debugPause
-					: instance?.state === 'crashed' ||
-						instance?.state === 'missing'
+					: lifecycleState === 'crashed' ||
+						lifecycleState === 'missing'
 						? Codicon.warning
-						: instance?.state === 'unloaded' || !instance
+						: lifecycleState === 'unloaded' ||
+							(!instance && !navigationTarget(pick.worktreePath))
 							? Codicon.circleOutline
 							: undefined;
 		return {
 			...pick,
-			...(instance?.state === 'dormant' ? { isDormant: true } : {}),
-			lastVisitedAt: instance?.lastActiveAt ?? pick.lastVisitedAt,
+			...(lifecycleState === 'dormant' ? { isDormant: true } : {}),
+			lastVisitedAt: navigationTarget(pick.worktreePath)?.lastActiveAt ??
+				instance?.lastActiveAt ?? pick.lastVisitedAt,
 			...(icon ? { iconClass: ThemeIcon.asClassName(icon) } : {}),
 		};
 	});
 	return combineProjectSwitcherTargets(
-		getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
+		navigationSnapshot
+			? getRetainedWorkbenchPicksFromNavigationSnapshot(
+				navigationSnapshot,
+				activeWorktreePath,
+				labelService
+			)
+			: getRetainedWorkbenchPicks(state, activeWorktreePath, labelService),
 		projectPicks,
 		pathsEqual,
 		sectionOrder
 	).sort((a, b) => compareSwitchWorktreePicks(
 		a,
 		b,
-		state ? sectionOrder : undefined
+		state || navigationSnapshot ? sectionOrder : undefined
 	));
+}
+
+function getRetainedWorkbenchPicksFromNavigationSnapshot(
+	snapshot: IHucodeHostedNavigationSnapshot,
+	activeWorktreePath: string | undefined,
+	labelService: ILabelService
+): SwitchWorktreeQuickPick[] {
+	return snapshot.targets
+		.filter(target => target.section === 'workbenches')
+		.map(target => getRetainedWorkbenchPickFromNavigationTarget(
+			target,
+			activeWorktreePath,
+			labelService
+		));
+}
+
+function getRetainedWorkbenchPickFromNavigationTarget(
+	target: IHucodeHostedNavigationTarget,
+	activeWorktreePath: string | undefined,
+	labelService: ILabelService
+): SwitchWorktreeQuickPick {
+	const path = URI.revive(target.folderUri).fsPath;
+	const label = target.label ?? basename(path);
+	const pathLabel = target.pathLabel ?? labelService.getUriLabel(URI.file(path));
+	const lifecycleState = target.lifecycleState;
+	return {
+		worktreePath: path,
+		isCurrent: activeWorktreePath !== undefined &&
+			pathsEqual(activeWorktreePath, path),
+		isLoaded: lifecycleState === 'loading' || lifecycleState === 'active' ||
+			lifecycleState === 'loaded',
+		...(lifecycleState === 'dormant' ? { isDormant: true } : {}),
+		lastVisitedAt: target.lastActiveAt,
+		logicalOrder: target.order,
+		projectOrder: -1,
+		worktreeOrder: target.order,
+		...getRetainedWorkbenchQuickPickPresentation(label, pathLabel, path),
+		iconClass: ThemeIcon.asClassName(
+			lifecycleState === 'loading'
+				? ThemeIcon.modify(Codicon.loading, 'spin')
+				: lifecycleState === 'dormant' ? Codicon.debugPause
+					: lifecycleState === 'unloaded' ? Codicon.circleOutline
+						: lifecycleState === 'missing' ||
+							lifecycleState === 'crashed'
+							? Codicon.warning
+							: Codicon.window
+		),
+	};
 }
 
 /**
@@ -358,20 +435,20 @@ function getCombinedSwitchWorkbenchPicks(
 export async function getActiveWorkbenchWorktreePath(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<string | undefined> {
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
-		const state = await shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+	if (environmentService.isHostedOmniWorkspace) {
+		return workspaceContextService.getWorkspace().folders[0]?.uri.fsPath;
+	}
+	if (environmentService.isOmniShellWindow) {
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
+		const state = await shellService.getState();
 		return state.instances.find(instance =>
 			instance.instanceId === state.activeInstanceId
 		)?.worktreePath;
 	}
-
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
 		return undefined;
 	}
@@ -383,27 +460,42 @@ export async function getActiveWorkbenchWorktreePath(
 async function getLoadedWorkbenchWorktreePaths(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined,
+	navigationSnapshot?: IHucodeHostedNavigationSnapshot
 ): Promise<readonly string[]> {
 	return (await getLoadedWorkbenchWorktrees(
 		environmentService,
 		workspaceContextService,
-		shellService
+		shellService,
+		navigationSnapshot
 	)).map(worktree => worktree.path);
 }
 
 async function getLoadedWorkbenchWorktrees(
 	environmentService: IWorkbenchEnvironmentService,
 	workspaceContextService: IWorkspaceContextService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined,
+	navigationSnapshot?: IHucodeHostedNavigationSnapshot
 ): Promise<readonly ILoadedWorkbenchWorktree[]> {
-	if (
-		environmentService.isOmniWindow ||
-		environmentService.isHostedOmniWorkspace
-	) {
-		const state = await shellService.getWindowState(
-			dom.getWindowId(mainWindow)
-		);
+	if (environmentService.isHostedOmniWorkspace) {
+		if (navigationSnapshot) {
+			return navigationSnapshot.targets
+				.filter(target => target.lifecycleState === 'loading' ||
+					target.lifecycleState === 'active' ||
+					target.lifecycleState === 'loaded')
+				.map(target => ({
+					path: URI.revive(target.folderUri).fsPath,
+					lastActiveAt: target.lastActiveAt,
+				}));
+		}
+		const folderUri = workspaceContextService.getWorkspace().folders[0]?.uri;
+		return folderUri ? [{ path: folderUri.fsPath }] : [];
+	}
+	if (environmentService.isOmniShellWindow) {
+		if (!shellService) {
+			throw new Error(omniShellControllerUnavailable);
+		}
+		const state = await shellService.getState();
 		return state.instances
 			.filter(isHostedWorkspaceAvailable)
 			.map(instance => ({
@@ -411,7 +503,6 @@ async function getLoadedWorkbenchWorktrees(
 				lastActiveAt: instance.lastActiveAt,
 			}));
 	}
-
 	if (workspaceContextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
 		return [];
 	}
@@ -420,31 +511,85 @@ async function getLoadedWorkbenchWorktrees(
 	return folderUri?.scheme === 'file' ? [{ path: folderUri.fsPath }] : [];
 }
 
+async function getHostedNavigationSnapshot(
+	environmentService: IWorkbenchEnvironmentService,
+	hostedShellService: IHucodeHostedShellService | undefined
+): Promise<IHucodeHostedNavigationSnapshot | undefined> {
+	if (!environmentService.isHostedOmniWorkspace || !hostedShellService ||
+		!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+		return undefined;
+	}
+	return hostedShellService.getNavigationSnapshot?.();
+}
+
+/** Resolves the switcher catalog without re-reading hosted project authority. */
+export async function getProjectSwitcherProjects(
+	projectManagerService: IProjectManagerService,
+	environmentService: IWorkbenchEnvironmentService,
+	navigationSnapshot: IHucodeHostedNavigationSnapshot | undefined
+): Promise<readonly ProjectRecord[]> {
+	if (environmentService.isHostedOmniWorkspace) {
+		const hostedProjects = reviveHucodeHostedNavigationProjects(
+			navigationSnapshot
+		);
+		if (hostedProjects) {
+			return hostedProjects;
+		}
+	}
+	return projectManagerService.getProjects();
+}
+
+/** Lifetime and presentation options for a Hucode workbench switcher. */
+export interface ISwitchWorktreeQuickPickOptions {
+	readonly cancelOn?: Event<void>;
+	readonly contextKey?: string;
+	readonly hideInput?: boolean;
+	readonly quickNavigate?: IQuickNavigateConfiguration;
+	readonly validateBeforeShow?: () => Promise<boolean>;
+}
+
+function getHostedSwitcherQuickPickOptions(
+	environmentService: IWorkbenchEnvironmentService,
+	hostedShellService: IHucodeHostedShellService | undefined
+): ISwitchWorktreeQuickPickOptions {
+	if (!environmentService.isHostedOmniWorkspace || !hostedShellService) {
+		return {};
+	}
+	return {
+		cancelOn: Event.map(Event.filter(
+			hostedShellService.onDidChangeState,
+			state => !state.available || !state.active || !state.visible
+		), () => undefined),
+		validateBeforeShow: async () => {
+			const state = await hostedShellService.getState();
+			return state.available && state.active && state.visible;
+		},
+	};
+}
+
 export async function openProjectSwitcherTarget(
 	target: IProjectSwitcherSelectionTarget,
 	projectManagerService: IProjectManagerService,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService,
-	hostService: IHostService
+	shellService: IHucodeShellControllerService | undefined,
+	hostService: IHostService,
+	hostedShellService?: IHucodeHostedShellService
 ): Promise<void> {
 	await openProjectSwitcherTargetInWindow(
 		target,
-		dom.getWindowId(mainWindow),
 		projectManagerService,
 		environmentService,
 		shellService,
-		hostService
+		hostService,
+		hostedShellService
 	);
 }
 
-function pickSwitchWorktree(
+/** Shows a switcher whose lifetime can be bound to hosted-workbench state. */
+export function pickSwitchWorktree(
 	quickInputService: IQuickInputService,
 	picks: readonly SwitchWorktreeQuickPick[],
-	options: {
-		readonly contextKey?: string;
-		readonly hideInput?: boolean;
-		readonly quickNavigate?: IQuickNavigateConfiguration;
-	} = {}
+	options: ISwitchWorktreeQuickPickOptions = {}
 ): Promise<SwitchWorktreeQuickPick | undefined> {
 	const disposables = new DisposableStore();
 	const quickPick =
@@ -472,7 +617,7 @@ function pickSwitchWorktree(
 	};
 	setItems('');
 
-	return new Promise(resolve => {
+	return new Promise((resolve, reject) => {
 		let didResolve = false;
 		let acceptedPick: SwitchWorktreeQuickPick | undefined;
 		const finish = (pick: SwitchWorktreeQuickPick | undefined): void => {
@@ -489,29 +634,56 @@ function pickSwitchWorktree(
 		}));
 		disposables.add(quickPick.onDidHide(() => finish(acceptedPick)));
 		disposables.add(quickPick.onDidChangeValue(value => setItems(value)));
-
-		quickPick.show();
-		if (!options.hideInput) {
-			quickPick.focusOnInput();
-			mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
-			mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+		if (options.cancelOn) {
+			disposables.add(options.cancelOn(() => {
+				acceptedPick = undefined;
+				quickPick.hide();
+				finish(undefined);
+			}));
 		}
+
+		void (async () => {
+			if (options.validateBeforeShow &&
+				!await options.validateBeforeShow()) {
+				finish(undefined);
+				return;
+			}
+			if (didResolve) {
+				return;
+			}
+
+			quickPick.show();
+			if (!options.hideInput) {
+				quickPick.focusOnInput();
+				mainWindow.requestAnimationFrame(() => quickPick.focusOnInput());
+				mainWindow.setTimeout(() => quickPick.focusOnInput(), 0);
+			}
+		})().catch(error => {
+			if (!didResolve) {
+				didResolve = true;
+				disposables.dispose();
+				reject(error);
+			}
+		});
 	});
 }
 
 async function tryForwardShellSwitchCommand(
 	commandId: string,
 	environmentService: IWorkbenchEnvironmentService,
-	shellService: IHucodeShellService
+	shellService: IHucodeShellControllerService | undefined
 ): Promise<boolean> {
-	if (!environmentService.isOmniWindow) {
+	if (!environmentService.isOmniShellWindow) {
 		return false;
 	}
+	if (!shellService) {
+		throw new Error(omniShellControllerUnavailable);
+	}
 
-	return shellService.runActionInWorkspace(
-		dom.getWindowId(mainWindow),
-		{ id: commandId, from: 'keybinding' }
-	);
+	return shellService.runActionInWorkspace({
+		id: commandId,
+		from: 'keybinding',
+	});
 }
 
 async function switchAdjacentProjectWorktree(
@@ -524,8 +696,13 @@ async function switchAdjacentProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniShellWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
 		const forwarded = await tryForwardShellSwitchCommand(
@@ -537,20 +714,36 @@ async function switchAdjacentProjectWorktree(
 			return;
 		}
 
-		const projects = await projectManagerService.getProjects();
+		const navigationSnapshot = await getHostedNavigationSnapshot(
+			environmentService,
+			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
+		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
 			shellService,
 			projects
 		);
 		const visualTargets = combineProjectSwitcherTargets(
-			(omniState?.retainedWorkbenches ?? [])
-				.toSorted((a, b) => a.order - b.order)
-				.map(record => ({
-					worktreePath: URI.revive(record.folderUri).fsPath,
-				})),
+			navigationSnapshot
+				? navigationSnapshot.targets
+					.filter(target => target.section === 'workbenches')
+					.toSorted((a, b) => a.order - b.order)
+					.map(target => ({
+						worktreePath: URI.revive(target.folderUri).fsPath,
+					}))
+				: (omniState?.retainedWorkbenches ?? [])
+					.toSorted((a, b) => a.order - b.order)
+					.map(record => ({
+						worktreePath: URI.revive(record.folderUri).fsPath,
+					})),
 			getVisualProjectWorktreeTargets(projects),
 			pathsEqual,
+			navigationSnapshot?.sectionOrder ??
 			omniState?.projectSwitcherSectionOrder
 		);
 		const targets = loadedOnly
@@ -559,7 +752,8 @@ async function switchAdjacentProjectWorktree(
 				await getLoadedWorkbenchWorktreePaths(
 					environmentService,
 					workspaceContextService,
-					shellService
+					shellService,
+					navigationSnapshot
 				),
 				pathsEqual
 			)
@@ -588,7 +782,8 @@ async function switchAdjacentProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -603,8 +798,13 @@ async function switchLastActiveProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniShellWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
 		const forwarded = await tryForwardShellSwitchCommand(
@@ -616,7 +816,15 @@ async function switchLastActiveProjectWorktree(
 			return;
 		}
 
-		const projects = await projectManagerService.getProjects();
+		const navigationSnapshot = await getHostedNavigationSnapshot(
+			environmentService,
+			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
+		);
 		const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 			environmentService,
 			workspaceContextService,
@@ -625,7 +833,8 @@ async function switchLastActiveProjectWorktree(
 		const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 			environmentService,
 			workspaceContextService,
-			shellService
+			shellService,
+			navigationSnapshot
 		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
@@ -638,7 +847,9 @@ async function switchLastActiveProjectWorktree(
 			activeWorktreePath,
 			loadedWorktrees,
 			labelService,
-			omniState?.projectSwitcherSectionOrder
+			navigationSnapshot?.sectionOrder ??
+			omniState?.projectSwitcherSectionOrder,
+			navigationSnapshot
 		);
 		const pick = getLastActiveSwitchWorkbenchPick(picks);
 		if (
@@ -654,7 +865,8 @@ async function switchLastActiveProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -671,12 +883,19 @@ async function quickSwitchLoadedProjectWorktree(
 	const notificationService = accessor.get(INotificationService);
 	const environmentService = accessor.get(IWorkbenchEnvironmentService);
 	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const shellService = accessor.get(IHucodeShellService);
+	const shellService = environmentService.isOmniShellWindow
+		? accessor.get(IHucodeShellControllerService)
+		: undefined;
 	const hostService = accessor.get(IHostService);
+	const hostedShellService = environmentService.isHostedOmniWorkspace
+		? accessor.get(IHucodeHostedShellService)
+		: undefined;
 
 	try {
-		if (environmentService.isOmniWindow) {
-			const windowId = dom.getWindowId(mainWindow);
+		if (environmentService.isOmniShellWindow) {
+			if (!shellService) {
+				throw new Error(omniShellControllerUnavailable);
+			}
 			const forwarded = await tryForwardShellSwitchCommand(
 				QUICK_SWITCH_LOADED_WORKTREE_COMMAND_ID,
 				environmentService,
@@ -686,10 +905,18 @@ async function quickSwitchLoadedProjectWorktree(
 				return;
 			}
 
-			await shellService.focusShell(windowId);
+			await shellService.focusShell();
 		}
 
-		const projects = await projectManagerService.getProjects();
+		const navigationSnapshot = await getHostedNavigationSnapshot(
+			environmentService,
+			hostedShellService
+		);
+		const projects = await getProjectSwitcherProjects(
+			projectManagerService,
+			environmentService,
+			navigationSnapshot
+		);
 		const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 			environmentService,
 			workspaceContextService,
@@ -698,7 +925,8 @@ async function quickSwitchLoadedProjectWorktree(
 		const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 			environmentService,
 			workspaceContextService,
-			shellService
+			shellService,
+			navigationSnapshot
 		);
 		const omniState = await getOmniHostedWorkspaceState(
 			environmentService,
@@ -711,7 +939,9 @@ async function quickSwitchLoadedProjectWorktree(
 			activeWorktreePath,
 			loadedWorktrees,
 			labelService,
-			omniState?.projectSwitcherSectionOrder
+			navigationSnapshot?.sectionOrder ??
+			omniState?.projectSwitcherSectionOrder,
+			navigationSnapshot
 		));
 		if (!picks.some(pick => !pick.isCurrent)) {
 			return;
@@ -721,6 +951,10 @@ async function quickSwitchLoadedProjectWorktree(
 			quickInputService,
 			picks,
 			{
+				...getHostedSwitcherQuickPickOptions(
+					environmentService,
+					hostedShellService
+				),
 				contextKey: QUICK_SWITCH_LOADED_WORKTREE_CONTEXT_KEY,
 				hideInput: true,
 				quickNavigate: {
@@ -743,7 +977,8 @@ async function quickSwitchLoadedProjectWorktree(
 			projectManagerService,
 			environmentService,
 			shellService,
-			hostService
+			hostService,
+			hostedShellService
 		);
 	} catch (error) {
 		notificationService.error(String(error));
@@ -795,12 +1030,19 @@ registerAction2(class extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 		const workspaceContextService = accessor.get(IWorkspaceContextService);
-		const shellService = accessor.get(IHucodeShellService);
+		const shellService = environmentService.isOmniShellWindow
+			? accessor.get(IHucodeShellControllerService)
+			: undefined;
 		const hostService = accessor.get(IHostService);
+		const hostedShellService = environmentService.isHostedOmniWorkspace
+			? accessor.get(IHucodeHostedShellService)
+			: undefined;
 
 		try {
-			if (environmentService.isOmniWindow) {
-				const windowId = dom.getWindowId(mainWindow);
+			if (environmentService.isOmniShellWindow) {
+				if (!shellService) {
+					throw new Error(omniShellControllerUnavailable);
+				}
 				const forwarded = await tryForwardShellSwitchCommand(
 					SWITCH_WORKTREE_COMMAND_ID,
 					environmentService,
@@ -810,10 +1052,18 @@ registerAction2(class extends Action2 {
 					return;
 				}
 
-				await shellService.focusShell(windowId);
+				await shellService.focusShell();
 			}
 
-			const projects = await projectManagerService.getProjects();
+			const navigationSnapshot = await getHostedNavigationSnapshot(
+				environmentService,
+				hostedShellService
+			);
+			const projects = await getProjectSwitcherProjects(
+				projectManagerService,
+				environmentService,
+				navigationSnapshot
+			);
 			const activeWorktreePath = await getActiveWorkbenchWorktreePath(
 				environmentService,
 				workspaceContextService,
@@ -822,7 +1072,8 @@ registerAction2(class extends Action2 {
 			const loadedWorktrees = await getLoadedWorkbenchWorktrees(
 				environmentService,
 				workspaceContextService,
-				shellService
+				shellService,
+				navigationSnapshot
 			);
 			const omniState = await getOmniHostedWorkspaceState(
 				environmentService,
@@ -835,7 +1086,9 @@ registerAction2(class extends Action2 {
 				activeWorktreePath,
 				loadedWorktrees,
 				labelService,
-				omniState?.projectSwitcherSectionOrder
+				navigationSnapshot?.sectionOrder ??
+				omniState?.projectSwitcherSectionOrder,
+				navigationSnapshot
 			);
 			if (!picks.length) {
 				notificationService.info(localize(
@@ -847,7 +1100,11 @@ registerAction2(class extends Action2 {
 
 			const pick = await pickSwitchWorktree(
 				quickInputService,
-				picks
+				picks,
+				getHostedSwitcherQuickPickOptions(
+					environmentService,
+					hostedShellService
+				)
 			);
 			if (!pick) {
 				return;
@@ -858,7 +1115,8 @@ registerAction2(class extends Action2 {
 				projectManagerService,
 				environmentService,
 				shellService,
-				hostService
+				hostService,
+				hostedShellService
 			);
 		} catch (error) {
 			notificationService.error(String(error));

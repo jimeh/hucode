@@ -46,7 +46,6 @@ import {
 	getProjectSwitcherGitConsumerId,
 	PROJECT_MANAGER_CHANNEL_NAME,
 } from '../../platform/projectManager/common/projectManager.js';
-import { HUCODE_SHELL_CHANNEL_NAME } from '../../hucode/common/omniWindow.js';
 import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
 import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
@@ -1423,16 +1422,6 @@ export class CodeApplication extends Disposable {
 				));
 			}
 		));
-
-		// Hucode Omni Shell
-		const hucodeShellChannel = ProxyChannel.fromService(
-			accessor.get(IHucodeShellMainService),
-			disposables
-		);
-		mainProcessElectronServer.registerChannel(
-			HUCODE_SHELL_CHANNEL_NAME,
-			hucodeShellChannel
-		);
 
 		// Signing
 		const signChannel = ProxyChannel.fromService(accessor.get(ISignService), disposables);

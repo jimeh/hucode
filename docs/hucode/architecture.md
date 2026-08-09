@@ -66,13 +66,36 @@ the web `WebHucodeShellController` injects iframe, timer, and browser-message
 behavior. Keep controller orchestration changes in sync across both adapters
 unless the difference is explicitly platform-specific.
 
-The shell service contract is shared as `IHucodeShellService`. Desktop exposes
-it through IPC to the main-process controller. Web implements the same contract
-in the shell renderer and serves it to hosted iframes over per-instance
-`MessagePort` channels (`vs/base/parts/ipc` + `ProxyChannel`), so both call
-directions are statically typed against the shared interfaces. Same-origin
-window `postMessage` is only used for the bootstrap handshake: `Ready` and
-`Focus` from the iframe, and the `Port` transfer from the shell.
+The complete `IHucodeShellService` contract is controller-internal: desktop
+implements it in the main process, while web implements it in the shell
+renderer. Desktop never publishes that complete service as renderer IPC.
+Instead, each renderer role receives a disjoint capability:
+
+- the exact Omni shell renderer gets an owner-bound shell-controller
+  `MessagePort` with its window identity fixed by the main process;
+- each hosted workbench gets a generation-scoped hosted-shell `MessagePort`
+  with its instance identity fixed by the connection; and
+- ordinary workbench renderers receive neither capability.
+
+The desktop shell-controller client bounds both its initial readiness wait and
+each cancellable port-acquisition attempt. It keeps retrying acquisition in the
+background after transient denial, rejection, or timeout, so later calls and
+state events can recover without reloading the renderer. The current
+MessagePort client has no proactive close signal; a connected transport loss
+is therefore detected when the next operation times out, after which subsequent
+calls may use a replacement connection. A round-tripped operation rejection
+proves that the response path remains live and preserves the current connection.
+The timed-out operation is never replayed because delivery may be ambiguous.
+
+Current web-hosted iframes use the same hosted-shell contract and policy over a
+per-instance `MessagePort` (`vs/base/parts/ipc` + `ProxyChannel`). The parent
+and child accept only the current typed protocol and capability set; missing or
+mismatched metadata fails closed. A server deployment therefore requires a
+full browser-page reload instead of adapting cached hosted-shell method
+clients. This is separate from the independently versioned hosted unload
+protocol. Same-origin window `postMessage` is only used for the bootstrap
+handshake: `Ready` and `Focus` from the iframe, and the `Port` transfer from the
+shell.
 
 ### Serve-Web Routing
 
@@ -110,9 +133,10 @@ Key services:
 - `src/vs/platform/browserView/electron-main/browserViewMainService.ts` owns
   integrated browser views and hosted-workspace browser ownership.
 
-The `projectManager` and `hucodeShell` channels are registered from the main
-process so the Omni shell and hosted desktop workbenches can share these
-services.
+The `projectManager` channel remains a main-process shared service. Shell
+administration and hosted-to-shell requests use the two authenticated,
+least-authority `MessagePort` capabilities above; there is no global desktop
+shell-service channel.
 
 Serve-web reuses the project manager service from the shared `node` layer
 through `HucodeWebProjectManagerServer`. The HTTP/SSE adapter stores its data
