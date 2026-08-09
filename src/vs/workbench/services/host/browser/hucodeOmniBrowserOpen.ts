@@ -112,6 +112,7 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	projectManagerService: IHucodeOmniBrowserProjectManager
 ): Promise<boolean> {
 	if (!environmentService.isOmniWindow ||
+		environmentService.isHostedOmniWorkspace ||
 		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow || options?.addMode || options?.removeMode ||
 		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||

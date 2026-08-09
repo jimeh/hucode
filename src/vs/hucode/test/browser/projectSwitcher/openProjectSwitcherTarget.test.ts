@@ -293,6 +293,34 @@ suite('OpenProjectSwitcherTarget', () => {
 		}
 	);
 
+	test('bounds Omni MRU persistence after navigation completes', async () => {
+		for (const focusNormalResult of [true, false]) {
+			const calls: string[] = [];
+			const neverPersisted = new DeferredPromise<void>();
+			const manager = projectManager(calls);
+			manager.setLastActiveWorktree = async () => neverPersisted.p;
+
+			const opening = openProjectSwitcherTargetInWindow(
+				target,
+				manager,
+				environment({ isOmniWindow: true }),
+				shell(calls, focusNormalResult),
+				host(calls)
+			);
+			assert.strictEqual(
+				await raceTimeout(opening.then(() => 'settled'), 1_000),
+				'settled'
+			);
+			assert.deepStrictEqual(calls, focusNormalResult
+				? ['focusNormal:/repo']
+				: [
+					'focusNormal:/repo',
+					'openWorkspace:/repo:project',
+					'focusWorkspace',
+				]);
+		}
+	});
+
 	test('handles every hosted navigation outcome without caller MRU writes',
 		async () => {
 			for (const outcome of [

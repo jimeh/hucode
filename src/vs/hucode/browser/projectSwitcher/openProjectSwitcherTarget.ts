@@ -107,10 +107,13 @@ export async function openProjectSwitcherTargetInWindow(
 			shellService,
 			canonicalTarget.worktreePath
 		)) {
-			await setLastActiveWorktreeBestEffort(
-				projectManagerService,
-				canonicalTarget.projectId,
-				canonicalTarget.worktreePath
+			await raceTimeout(
+				setLastActiveWorktreeBestEffort(
+					projectManagerService,
+					canonicalTarget.projectId,
+					canonicalTarget.worktreePath
+				),
+				standaloneMruPersistenceTimeoutMs
 			);
 			return;
 		}
@@ -120,10 +123,13 @@ export async function openProjectSwitcherTargetInWindow(
 			canonicalTarget.projectId
 		);
 		await focusWorkspaceBestEffort(shellService);
-		await setLastActiveWorktreeBestEffort(
-			projectManagerService,
-			canonicalTarget.projectId,
-			canonicalTarget.worktreePath
+		await raceTimeout(
+			setLastActiveWorktreeBestEffort(
+				projectManagerService,
+				canonicalTarget.projectId,
+				canonicalTarget.worktreePath
+			),
+			standaloneMruPersistenceTimeoutMs
 		);
 		return;
 	}

@@ -85,6 +85,34 @@ suite('HucodeOmniBrowserOpen', () => {
 		}
 	);
 
+	test('local Omni routing rejects a hosted workspace identity', async () => {
+		let projectCalls = 0;
+		let shellCalls = 0;
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[{ folderUri: URI.file('/scratch') }],
+			undefined,
+			environment({
+				isHostedOmniWorkspace: true,
+				isOmniWindow: true,
+			}),
+			{
+				...shellService(),
+				async openWorkspace() { shellCalls++; },
+			},
+			{
+				async getProjects() {
+					projectCalls++;
+					return [];
+				},
+				async setLastActiveWorktree() { projectCalls++; },
+			}
+		);
+
+		assert.strictEqual(handled, false);
+		assert.strictEqual(projectCalls, 0);
+		assert.strictEqual(shellCalls, 0);
+	});
+
 	test('dispatcher resolves Omni shell routing services', async () => {
 		const instantiationService = new TestInstantiationService();
 		let openCalls = 0;

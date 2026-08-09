@@ -12,6 +12,7 @@ import {
 	IServerChannel,
 	ProxyChannel,
 } from '../../../base/parts/ipc/common/ipc.js';
+import { localize } from '../../../nls.js';
 import { createDecorator } from
 	'../../instantiation/common/instantiation.js';
 import {
@@ -86,7 +87,10 @@ export const HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL =
 /** A privileged shell call could not be dispatched to a bound controller. */
 export class HucodeShellControllerUnavailableError extends Error {
 	constructor() {
-		super('Desktop Omni shell capability is unavailable.');
+		super(localize(
+			'hucodeShellControllerUnavailable',
+			'Desktop Omni shell capability is unavailable.'
+		));
 		this.name = 'HucodeShellControllerUnavailableError';
 	}
 }
@@ -94,7 +98,10 @@ export class HucodeShellControllerUnavailableError extends Error {
 /** A dispatched privileged shell call timed out with ambiguous delivery. */
 export class HucodeShellControllerTimeoutError extends Error {
 	constructor() {
-		super('Desktop Omni shell capability timed out after dispatch.');
+		super(localize(
+			'hucodeShellControllerTimeout',
+			'Desktop Omni shell capability timed out after dispatch.'
+		));
 		this.name = 'HucodeShellControllerTimeoutError';
 	}
 }
