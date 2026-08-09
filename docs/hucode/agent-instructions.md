@@ -653,6 +653,25 @@ human-facing guides rather than replacing them.
   `getWindowState()` is called by multiple shell parts during startup, and a
   partial restore snapshot makes Projects miss loaded worktrees and unload
   actions.
+- Shell-state consumers that subscribe before fetching their initial snapshot
+  must not apply that snapshot after an `onDidChangeState` event arrives. The
+  late snapshot can be older and overwrite live host or Projects state.
+- Keep the complete desktop `IHucodeShellMainService` main-process-internal.
+  Desktop entrypoints register only the owner-bound shell-controller and
+  per-instance hosted-shell adapters; do not restore a global `hucodeShell`
+  renderer channel or refine the main decorator from `IHucodeShellService`.
+- Keep desktop shell-controller calls bounded while cancellable acquisition
+  retries in the background. The MessagePort client has no proactive close
+  signal, so invalidate and recover a connected transport loss only after an
+  operation times out, and never replay that ambiguously delivered operation.
+  A round-tripped operation rejection proves the response path remains live;
+  preserve the current connection.
+- Keep serve-web hosted-shell messaging current-protocol-only. Require the
+  typed protocol version, capability set, and correlated nested bootstrap on
+  both parent and child; missing or mismatched metadata fails closed and a
+  server update requires a full browser-page reload. Do not restore the legacy
+  `IHucodeShellService` channel or adapter. The separately versioned hosted
+  unload protocol retains its existing compatibility behavior.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.
@@ -716,6 +735,14 @@ human-facing guides rather than replacing them.
   `NativeHostMainService.triggerPaste()` resolves that id to the shell
   `BrowserWindow.webContents`. Use the Hucode shell service to trigger native
   paste on the active hosted `WebContentsView`.
+- A serve-web hosted cut crosses an asynchronous `MessagePort` boundary before
+  the workbench handles it, so the browser's generic `document.execCommand`
+  path no longer has user activation. Keep the remote cut path narrowly scoped:
+  focus the active editor, run the normal copy command, then invoke the editor's
+  direct Cut handler once.
+- A hosted serve-web reload command returning only confirms that the old page
+  accepted the command. Keep the instance loading until the replacement page's
+  Ready message arrives; otherwise follow-up commands can target a stale port.
 - Do not catch shell `Cmd+V` in Electron `before-input-event`. That runs before
   the renderer can inspect focused DOM and will steal paste from shell
   QuickInput prompts. Let renderer keybinding/clipboard routing decide when

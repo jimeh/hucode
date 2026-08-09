@@ -105,7 +105,7 @@ export async function tryOpenFolderInHucodeHostedWorkspace(
 	}
 }
 
-function findHucodeProjectWorktreeByPath(
+export function findHucodeProjectWorktreeByPath(
 	projects: readonly ProjectRecord[],
 	worktreePath: string
 ): { readonly projectId: string; readonly worktreePath: string } | undefined {

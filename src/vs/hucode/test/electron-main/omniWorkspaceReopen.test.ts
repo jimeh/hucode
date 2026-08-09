@@ -49,6 +49,7 @@ suite('HucodeOmniWorkspaceReopen', () => {
 			getState: () => state([]),
 			closeWorkspace: async () => {
 				calls.push('close');
+				return { committed: false };
 			},
 			focusNormalWindowByPath: async () => {
 				calls.push('focusNormal');
@@ -76,6 +77,7 @@ suite('HucodeOmniWorkspaceReopen', () => {
 				getState: () => state([instance(stateValue)]),
 				closeWorkspace: async () => {
 					calls.push('close');
+					return { committed: false };
 				},
 				focusNormalWindowByPath: async () => {
 					calls.push('focusNormal');
@@ -107,6 +109,7 @@ suite('HucodeOmniWorkspaceReopen', () => {
 					assert.strictEqual(targetInstanceId, 'instance');
 					calls.push('close');
 					currentState = state([]);
+					return { committed: true };
 				},
 				focusNormalWindowByPath: async worktreePath => {
 					assert.strictEqual(worktreePath, '/repo');
@@ -136,6 +139,7 @@ suite('HucodeOmniWorkspaceReopen', () => {
 			getState: () => currentState,
 			closeWorkspace: async () => {
 				calls.push('close');
+				return { committed: false };
 			},
 			focusNormalWindowByPath: async () => {
 				calls.push('focusNormal');
@@ -156,6 +160,63 @@ suite('HucodeOmniWorkspaceReopen', () => {
 		assert.deepStrictEqual(calls, ['close']);
 	});
 
+	test('does not claim another actor\'s concurrent close', async () => {
+		const calls: string[] = [];
+		let currentState = state([instance()]);
+		const delegate: IHucodeHostedWorkspaceReopenDelegate = {
+			getState: () => currentState,
+			closeWorkspace: async () => {
+				calls.push('close');
+				currentState = state([]);
+				return { committed: false };
+			},
+			focusNormalWindowByPath: async () => {
+				calls.push('focusNormal');
+				return true;
+			},
+			openNormalWindow: async () => {
+				calls.push('openNormal');
+			},
+		};
+
+		assert.strictEqual(
+			await reopenHucodeHostedWorkspaceInNormalWindow(
+				delegate,
+				'instance'
+			),
+			false
+		);
+		assert.deepStrictEqual(calls, ['close']);
+	});
+
+	test('finishes reopening after its own close commits', async () => {
+		const calls: string[] = [];
+		const currentState = state([instance()]);
+		const delegate: IHucodeHostedWorkspaceReopenDelegate = {
+			getState: () => currentState,
+			closeWorkspace: async () => {
+				calls.push('close');
+				return { committed: true };
+			},
+			focusNormalWindowByPath: async () => {
+				calls.push('focusNormal');
+				return true;
+			},
+			openNormalWindow: async () => {
+				calls.push('openNormal');
+			},
+		};
+
+		assert.strictEqual(
+			await reopenHucodeHostedWorkspaceInNormalWindow(
+				delegate,
+				'instance'
+			),
+			true
+		);
+		assert.deepStrictEqual(calls, ['close', 'focusNormal']);
+	});
+
 	test('opens normal window when no existing normal window owns path',
 		async () => {
 			const calls: string[] = [];
@@ -165,6 +226,7 @@ suite('HucodeOmniWorkspaceReopen', () => {
 				closeWorkspace: async targetInstanceId => {
 					calls.push(`close:${targetInstanceId}`);
 					currentState = state([]);
+					return { committed: true };
 				},
 				focusNormalWindowByPath: async worktreePath => {
 					calls.push(`focusNormal:${worktreePath}`);

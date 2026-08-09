@@ -4,18 +4,30 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { getWindowId } from '../../../../../base/browser/dom.js';
-import { mainWindow } from '../../../../../base/browser/window.js';
+import { errorHandler } from '../../../../../base/common/errors.js';
+import { Event } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../../base/test/common/utils.js';
+import { TestInstantiationService } from
+	'../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IProjectManagerService } from
+	'../../../../../platform/projectManager/common/projectManager.js';
 import {
+	dispatchHucodeOmniBrowserOpen,
+	IHucodeBrowserOmniShellService,
 	IHucodeOmniBrowserEnvironment,
 	IHucodeOmniBrowserProjectManager,
+	tryNavigateHucodeHostedBrowserWindow,
 	tryOpenHucodeOmniBrowserWindow,
 } from
 	'../../browser/hucodeOmniBrowserOpen.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	withHucodeHostedShellCachedAvailability,
+} from '../../../../../platform/window/common/hucodeHostedShellService.js';
 
 suite('HucodeOmniBrowserOpen', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -42,6 +54,87 @@ suite('HucodeOmniBrowserOpen', () => {
 		async openWorkspace() { },
 		async openAndFocusWorkspace() { },
 		async focusWorkspace() { },
+	});
+
+	test('dispatcher gives hosted routing precedence over Omni shell routing',
+		async () => {
+			const instantiationService = new TestInstantiationService();
+			let navigationCalls = 0;
+			instantiationService.stub(IHucodeHostedShellService, {
+				_serviceBrand: undefined,
+				onDidChangeState: Event.None,
+				async navigateToFolder() {
+					navigationCalls++;
+					return HucodeHostedShellOperationOutcome.Accepted;
+				},
+			} as Partial<IHucodeHostedShellService> as IHucodeHostedShellService);
+			try {
+				assert.strictEqual(await dispatchHucodeOmniBrowserOpen(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({
+						isHostedOmniWorkspace: true,
+						isOmniWindow: true,
+					}),
+					instantiationService
+				), true);
+				assert.strictEqual(navigationCalls, 1);
+			} finally {
+				instantiationService.dispose();
+			}
+		}
+	);
+
+	test('local Omni routing rejects a hosted workspace identity', async () => {
+		let projectCalls = 0;
+		let shellCalls = 0;
+		const handled = await tryOpenHucodeOmniBrowserWindow(
+			[{ folderUri: URI.file('/scratch') }],
+			undefined,
+			environment({
+				isHostedOmniWorkspace: true,
+				isOmniWindow: true,
+			}),
+			{
+				...shellService(),
+				async openWorkspace() { shellCalls++; },
+			},
+			{
+				async getProjects() {
+					projectCalls++;
+					return [];
+				},
+				async setLastActiveWorktree() { projectCalls++; },
+			}
+		);
+
+		assert.strictEqual(handled, false);
+		assert.strictEqual(projectCalls, 0);
+		assert.strictEqual(shellCalls, 0);
+	});
+
+	test('dispatcher resolves Omni shell routing services', async () => {
+		const instantiationService = new TestInstantiationService();
+		let openCalls = 0;
+		instantiationService.stub(IHucodeBrowserOmniShellService, {
+			...shellService(),
+			async openWorkspace() { openCalls++; },
+		});
+		instantiationService.stub(
+			IProjectManagerService,
+			projectManager() as unknown as IProjectManagerService
+		);
+		try {
+			assert.strictEqual(await dispatchHucodeOmniBrowserOpen(
+				[{ folderUri: URI.file('/scratch') }],
+				undefined,
+				environment({ isOmniWindow: true }),
+				instantiationService
+			), true);
+			assert.strictEqual(openCalls, 1);
+		} finally {
+			instantiationService.dispose();
+		}
 	});
 
 	test('routes arbitrary folders into a retained hosted workbench', async () => {
@@ -214,43 +307,122 @@ suite('HucodeOmniBrowserOpen', () => {
 	});
 
 	test('routes folder opens from a hosted Omni workbench', async () => {
-		let opened: {
-			windowId: number;
-			path: string;
-			projectId: string | undefined;
-		} | undefined;
-		const handled = await tryOpenHucodeOmniBrowserWindow(
+		let opened: URI | undefined;
+		const handled = await tryNavigateHucodeHostedBrowserWindow(
 			[{ folderUri: URI.file('/scratch') }],
 			undefined,
 			environment({ isHostedOmniWorkspace: true }),
 			{
 				_serviceBrand: undefined,
-				async focusHostedWorkspaceByPath() {
-					assert.fail('hosted folder open used path focus');
+				onDidChangeState: Event.None,
+				async navigateToFolder(request) {
+					opened = URI.revive(request.folderUri);
+					return HucodeHostedShellOperationOutcome.Accepted;
 				},
-				async focusNormalWindowByPath() {
-					assert.fail('hosted folder open used normal focus');
-				},
-				async openWorkspace() {
-					assert.fail('hosted folder open used non-atomic open');
-				},
-				async openAndFocusWorkspace(windowId, path, projectId) {
-					opened = { windowId, path, projectId };
-				},
-				async focusWorkspace() {
-					assert.fail('hosted folder open used generic focus');
-				},
-			},
-			projectManager()
+			} as Partial<IHucodeHostedShellService> as IHucodeHostedShellService
 		);
 
 		assert.strictEqual(handled, true);
-		assert.deepStrictEqual(opened, {
-			windowId: getWindowId(mainWindow),
-			path: '/scratch',
-			projectId: undefined,
-		});
+		assert.strictEqual(opened?.fsPath, '/scratch');
 	});
+
+	test('fails closed when a hosted folder capability is unavailable',
+		async () => {
+			const originalHandler = errorHandler.getUnexpectedErrorHandler();
+			const errors: unknown[] = [];
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				for (const outcome of [
+					HucodeHostedShellOperationOutcome.Unavailable,
+					HucodeHostedShellOperationOutcome.Rejected,
+					HucodeHostedShellOperationOutcome.Stale,
+				]) {
+					const expectedErrorCount = errors.length + 1;
+					assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+						[{ folderUri: URI.file('/scratch') }],
+						undefined,
+						environment({ isHostedOmniWorkspace: true }),
+						{
+							_serviceBrand: undefined,
+							onDidChangeState: Event.None,
+							async navigateToFolder() { return outcome; },
+						} as Partial<IHucodeHostedShellService> as
+						IHucodeHostedShellService
+					), true);
+					assert.strictEqual(errors.length, expectedErrorCount);
+					assert.ok(String(errors.at(-1)).includes(outcome));
+				}
+
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					{
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() {
+							return HucodeHostedShellOperationOutcome.Superseded;
+						},
+					} as Partial<IHucodeHostedShellService> as
+					IHucodeHostedShellService
+				), true);
+				assert.strictEqual(errors.length, 3);
+
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{
+						folderUri: URI.from({
+							scheme: 'memfs', path: '/scratch',
+						}),
+					}],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					{
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() {
+							return HucodeHostedShellOperationOutcome.Unsupported;
+						},
+					} as Partial<IHucodeHostedShellService> as
+					IHucodeHostedShellService
+				), false);
+				assert.strictEqual(errors.length, 3);
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(originalHandler);
+			}
+		});
+
+	test('fails fast while the hosted shell transport is unavailable',
+		async () => {
+			const originalHandler = errorHandler.getUnexpectedErrorHandler();
+			const errors: unknown[] = [];
+			let navigationCalls = 0;
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				const hostedShellService =
+					withHucodeHostedShellCachedAvailability({
+						_serviceBrand: undefined,
+						onDidChangeState: Event.None,
+						async navigateToFolder() {
+							navigationCalls++;
+							return HucodeHostedShellOperationOutcome.Accepted;
+						},
+					} as Partial<IHucodeHostedShellService> as
+						IHucodeHostedShellService, () => false);
+				assert.strictEqual(await tryNavigateHucodeHostedBrowserWindow(
+					[{ folderUri: URI.file('/scratch') }],
+					undefined,
+					environment({ isHostedOmniWorkspace: true }),
+					hostedShellService
+				), true);
+				assert.strictEqual(navigationCalls, 0);
+				assert.strictEqual(errors.length, 1);
+				assert.ok(String(errors[0]).includes(
+					'Hosted Omni folder navigation is unavailable.'
+				));
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(originalHandler);
+			}
+		});
 
 	test('routes folders for the current remote authority', async () => {
 		let openedPath: string | undefined;

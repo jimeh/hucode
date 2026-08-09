@@ -4,8 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize, localize2 } from '../../nls.js';
-import { getWindowId } from '../../base/browser/dom.js';
-import { mainWindow } from '../../base/browser/window.js';
 import { Codicon } from '../../base/common/codicons.js';
 import { onUnexpectedError } from '../../base/common/errors.js';
 import {
@@ -23,6 +21,8 @@ import { Categories } from
 	'../../platform/action/common/actionCommonCategories.js';
 import { ServicesAccessor } from
 	'../../platform/instantiation/common/instantiation.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import {
 	ConfigurationScope,
 	Extensions as ConfigurationExtensions,
@@ -44,9 +44,11 @@ import {
 } from
 	'../../workbench/common/contextkeys.js';
 import {
-	IHucodeShellService,
-	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-} from '../common/omniWindow.js';
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	IHucodeHostedShellState,
+	isHucodeHostedShellServiceAvailable,
+} from '../../platform/window/common/hucodeHostedShellService.js';
 import { ToggleTitleBarConfigAction } from
 	'../../workbench/browser/parts/titlebar/titlebarActions.js';
 import {
@@ -62,21 +64,21 @@ import { KeybindingWeight } from
 import {
 	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
+import { getHucodeHostedShellActionCommandId, HucodeHostedShellAction } from
+	'../../platform/window/common/hucodeHostedShellActions.js';
 import {
 	HasLoadedWorkbenchContext,
+	notifyHucodeHostedOperationOutcome,
 	PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING,
 	ProjectsSidebarHiddenContext,
 	ProjectsTitleBarControlsEnabledContext,
 } from './omniProjectsSidebarActions.js';
 import {
-	ADD_PROJECT_COMMAND_ID,
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
-	GO_BACK_WORKTREE_COMMAND_ID,
-	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ProjectSwitcherCanGoBackContext,
 	ProjectSwitcherCanGoForwardContext,
-	REFRESH_PROJECTS_COMMAND_ID,
 } from './projectSwitcher/projectSwitcherCommon.js';
+import { observeHucodeHostedShellState } from
+	'./hostedShellStateObserver.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
@@ -92,8 +94,6 @@ import {
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 } from '../common/retainedWorkbench.js';
-import { isHostedWorkspaceAvailable } from
-	'../common/hostedWorkspaceState.js';
 
 Registry.as<IConfigurationRegistry>(
 	ConfigurationExtensions.Configuration
@@ -215,7 +215,7 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 	constructor(
 		@IWorkbenchEnvironmentService
 		environmentService: IWorkbenchEnvironmentService,
-		@IHucodeShellService shellService: IHucodeShellService,
+		@IHucodeHostedShellService shellService: IHucodeHostedShellService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 	) {
 		super();
@@ -227,12 +227,7 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			return;
 		}
 
-		const windowId = getWindowId(mainWindow);
-		this.notifyHostedWorkspaceReadyWithRetry(
-			shellService,
-			windowId,
-			environmentService.hostedInstanceId
-		);
+		this.notifyHostedWorkspaceReadyWithRetry(shellService);
 
 		const projectsSidebarHidden =
 			ProjectsSidebarHiddenContext.bindTo(contextKeyService);
@@ -242,26 +237,21 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 			ProjectSwitcherCanGoBackContext.bindTo(contextKeyService);
 		const projectSwitcherCanGoForward =
 			ProjectSwitcherCanGoForwardContext.bindTo(contextKeyService);
-		const updateShellStateContexts = (
-			state: Awaited<ReturnType<IHucodeShellService['getWindowState']>>
-		) => {
+		const updateShellStateContexts = (state: IHucodeHostedShellState) => {
 			projectsSidebarHidden.set(!state.projectsSidebarVisible);
-			hasLoadedWorkbench.set(state.instances.some(
-				isHostedWorkspaceAvailable
-			));
+			hasLoadedWorkbench.set(state.available &&
+				state.lifecycleState !== 'unloaded' &&
+				state.lifecycleState !== 'dormant' &&
+				state.lifecycleState !== 'missing' &&
+				state.lifecycleState !== 'crashed');
 			projectSwitcherCanGoBack.set(state.projectSwitcherCanGoBack);
 			projectSwitcherCanGoForward.set(state.projectSwitcherCanGoForward);
 		};
 
-		void shellService.getWindowState(windowId).then(state => {
-			updateShellStateContexts(state);
-		});
-
-		this._register(shellService.onDidChangeWindowState(change => {
-			if (change.windowId === windowId) {
-				updateShellStateContexts(change.state);
-			}
-		}));
+		this._register(observeHucodeHostedShellState(
+			shellService,
+			updateShellStateContexts
+		));
 	}
 
 	override dispose(): void {
@@ -270,22 +260,16 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 	}
 
 	private notifyHostedWorkspaceReadyWithRetry(
-		shellService: IHucodeShellService,
-		windowId: number,
-		instanceId: string
+		shellService: IHucodeHostedShellService
 	): void {
 		this.scheduleHostedWorkspaceReadyNotification(
 			shellService,
-			windowId,
-			instanceId,
 			0
 		);
 	}
 
 	private scheduleHostedWorkspaceReadyNotification(
-		shellService: IHucodeShellService,
-		windowId: number,
-		instanceId: string,
+		shellService: IHucodeHostedShellService,
 		attemptIndex: number
 	): void {
 		if (
@@ -301,8 +285,6 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 		const handle = setTimeout(() => {
 			void this.notifyHostedWorkspaceReadyAndVerify(
 				shellService,
-				windowId,
-				instanceId,
 				attemptIndex
 			);
 		}, delay);
@@ -312,22 +294,16 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 	}
 
 	private async notifyHostedWorkspaceReadyAndVerify(
-		shellService: IHucodeShellService,
-		windowId: number,
-		instanceId: string,
+		shellService: IHucodeHostedShellService,
 		attemptIndex: number
 	): Promise<void> {
 		let shouldRetry = false;
 		try {
-			await shellService.notifyHostedWorkspaceReady(
-				windowId,
-				instanceId
-			);
-			shouldRetry = await this.isHostedWorkspaceStillPendingReady(
-				shellService,
-				windowId,
-				instanceId
-			);
+			const result = await shellService.notifyReady();
+			shouldRetry = result.outcome !==
+				HucodeHostedShellOperationOutcome.Accepted ||
+				result.state?.lifecycleState === 'restore-pending' ||
+				result.state?.lifecycleState === 'loading';
 		} catch (error) {
 			shouldRetry = true;
 			if (this.isLastReadyNotificationAttempt(attemptIndex)) {
@@ -344,24 +320,7 @@ class HostedOmniWorkspaceReadyContribution extends Disposable
 
 		this.scheduleHostedWorkspaceReadyNotification(
 			shellService,
-			windowId,
-			instanceId,
 			attemptIndex + 1
-		);
-	}
-
-	private async isHostedWorkspaceStillPendingReady(
-		shellService: IHucodeShellService,
-		windowId: number,
-		instanceId: string
-	): Promise<boolean> {
-		const state = await shellService.getWindowState(windowId);
-		return state.instances.some(instance =>
-			instance.instanceId === instanceId &&
-			(
-				instance.state === 'restore-pending' ||
-				instance.state === 'loading'
-			)
 		);
 	}
 
@@ -377,10 +336,36 @@ registerWorkbenchContribution2(
 	WorkbenchPhase.AfterRestored
 );
 
+/** Uses cached adapter availability to fail fast, then reports the outcome. */
+async function runHostedShellOperation(
+	accessor: ServicesAccessor,
+	operation: string,
+	run: (
+		shellService: IHucodeHostedShellService
+	) => Promise<HucodeHostedShellOperationOutcome>
+): Promise<void> {
+	const shellService = accessor.get(IHucodeHostedShellService);
+	const notificationService = accessor.get(INotificationService);
+	if (!isHucodeHostedShellServiceAvailable(shellService)) {
+		notifyHucodeHostedOperationOutcome(
+			operation,
+			HucodeHostedShellOperationOutcome.Unavailable,
+			notificationService
+		);
+		return;
+	}
+	notifyHucodeHostedOperationOutcome(
+		operation,
+		await run(shellService),
+		notificationService
+	);
+}
+
 function registerHostedProjectSidebarCommand(
-	id: string,
+	action: HucodeHostedShellAction,
 	title: ReturnType<typeof localize2>
 ): void {
+	const id = getHucodeHostedShellActionCommandId(action);
 	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
@@ -397,60 +382,29 @@ function registerHostedProjectSidebarCommand(
 				return;
 			}
 
-			await accessor.get(IHucodeShellService).runActionInShell(
-				getWindowId(mainWindow),
-				{ id, from: 'menu' }
+			await runHostedShellOperation(
+				accessor,
+				title.value,
+				shellService => shellService.requestShellAction(action)
 			);
 		}
 	});
 }
 
 registerHostedProjectSidebarCommand(
-	ADD_PROJECT_COMMAND_ID,
+	HucodeHostedShellAction.AddProject,
 	localize2('addProject', 'Add Project')
 );
 
 registerHostedProjectSidebarCommand(
-	REFRESH_PROJECTS_COMMAND_ID,
+	HucodeHostedShellAction.RefreshProjects,
 	localize2('refreshProjects', 'Refresh Projects')
 );
 
 registerHostedProjectSidebarCommand(
-	COLLAPSE_ALL_PROJECTS_COMMAND_ID,
+	HucodeHostedShellAction.CollapseProjects,
 	localize2('collapseAllProjects', 'Collapse All')
 );
-
-registerOmniShellAction2(UNLOAD_CURRENT_WORKTREE_COMMAND_ID, class extends Action2 {
-	constructor() {
-		super({
-			id: UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
-			title: localize2(
-				'hostedOmniUnloadCurrentWorktree',
-				'Omni-Window: Unload Current Worktree'
-			),
-			f1: true,
-			precondition: ContextKeyExpr.and(
-				IsHostedOmniWorkspaceContext,
-				HasLoadedWorkbenchContext
-			),
-		});
-	}
-
-	override async run(accessor: ServicesAccessor): Promise<void> {
-		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		if (
-			!environmentService.isHostedOmniWorkspace ||
-			!environmentService.hostedInstanceId
-		) {
-			return;
-		}
-
-		await accessor.get(IHucodeShellService).closeWorkspace(
-			getWindowId(mainWindow),
-			environmentService.hostedInstanceId
-		);
-	}
-});
 
 registerAction2(class extends Action2 {
 	constructor() {
@@ -477,20 +431,22 @@ registerAction2(class extends Action2 {
 			return;
 		}
 
-		await accessor.get(IHucodeShellService).reopenWorkspaceInNormalWindow(
-			getWindowId(mainWindow),
-			environmentService.hostedInstanceId
+		await runHostedShellOperation(
+			accessor,
+			localize('reopenCurrentWorkbench', 'Re-open Current Worktree'),
+			shellService => shellService.reopenSelfInNormalWindow()
 		);
 	}
 });
 
 function registerHostedProjectNavigationAction(
-	id: string,
+	action: HucodeHostedShellAction,
 	title: ReturnType<typeof localize2>,
 	icon: ThemeIcon,
 	enabledContext: ContextKeyExpression,
 	order: number
 ): void {
+	const id = getHucodeHostedShellActionCommandId(action);
 	registerOmniShellAction2(id, class extends Action2 {
 		constructor() {
 			super({
@@ -517,16 +473,17 @@ function registerHostedProjectNavigationAction(
 		}
 
 		override async run(accessor: ServicesAccessor): Promise<void> {
-			await accessor.get(IHucodeShellService).runActionInShell(
-				getWindowId(mainWindow),
-				{ id, from: 'mouse' }
+			await runHostedShellOperation(
+				accessor,
+				title.value,
+				shellService => shellService.requestShellAction(action)
 			);
 		}
 	});
 }
 
 registerHostedProjectNavigationAction(
-	GO_BACK_WORKTREE_COMMAND_ID,
+	HucodeHostedShellAction.NavigateBack,
 	localize2('hostedOmniGoBackWorktree', 'Go Back Project Worktree'),
 	Codicon.arrowLeft,
 	ProjectSwitcherCanGoBackContext,
@@ -534,7 +491,7 @@ registerHostedProjectNavigationAction(
 );
 
 registerHostedProjectNavigationAction(
-	GO_FORWARD_WORKTREE_COMMAND_ID,
+	HucodeHostedShellAction.NavigateForward,
 	localize2('hostedOmniGoForwardWorktree', 'Go Forward Project Worktree'),
 	Codicon.arrowRight,
 	ProjectSwitcherCanGoForwardContext,
@@ -564,8 +521,10 @@ registerAction2(class extends Action2 {
 	}
 
 	override run(accessor: ServicesAccessor): Promise<void> {
-		return accessor.get(IHucodeShellService).reloadWorkspace(
-			getWindowId(mainWindow)
+		return runHostedShellOperation(
+			accessor,
+			localize('reloadHostedWorkbench', 'Reload Hosted Workbench'),
+			shellService => shellService.reloadSelf()
 		);
 	}
 });

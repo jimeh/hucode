@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../base/common/async.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -13,6 +14,8 @@ import {
 	canonicalizeProjectSwitcherTarget,
 	combineProjectSwitcherTargets,
 	compareSwitchWorktreePicks,
+	createHucodeHostedNavigationSnapshot,
+	createHucodeHostedNavigationSnapshotWithCatalog,
 	filterSwitchWorktreePicks,
 	getAdjacentProjectWorktreeTarget,
 	getDefaultSwitchWorktreeActivePick,
@@ -21,6 +24,7 @@ import {
 	getLoadedSwitchWorktreePicks,
 	getRetainedWorkbenchQuickPickPresentation,
 	getVisualProjectWorktreeTargets,
+	reviveHucodeHostedNavigationProjects,
 	sortProjectSwitcherNavigationHistory,
 	SwitchWorktreeQuickPick,
 	withSwitchWorktreeSeparators,
@@ -28,6 +32,181 @@ import {
 
 suite('SwitchProjectWorktreeModel', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('projects a sanitized hosted navigation snapshot', () => {
+		const snapshot = createHucodeHostedNavigationSnapshot({
+			activeInstanceId: 'project-instance',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			projectSwitcherSectionOrder: ['projects', 'workbenches'],
+			instances: [{
+				instanceId: 'retained-instance',
+				worktreePath: '/arbitrary',
+				state: 'loaded',
+				visible: false,
+				focused: false,
+				webContentsId: 123,
+				processId: 456,
+				lastActiveAt: 10,
+			}, {
+				instanceId: 'project-instance',
+				projectId: 'secret-project-id',
+				worktreePath: '/project',
+				state: 'active',
+				visible: true,
+				focused: true,
+				lastActiveAt: 20,
+			}],
+			retainedWorkbenches: [{
+				id: 'retained-id',
+				folderUri: URI.file('/arbitrary').toJSON(),
+				desiredState: 'loaded',
+				order: 7,
+				label: 'Arbitrary',
+			}],
+		});
+
+		assert.deepStrictEqual(snapshot, {
+			sectionOrder: ['projects', 'workbenches'],
+			targets: [{
+				folderUri: URI.file('/arbitrary').toJSON(),
+				lifecycleState: 'loaded',
+				lastActiveAt: 10,
+				section: 'workbenches',
+				order: 7,
+				label: 'Arbitrary',
+			}, {
+				folderUri: URI.file('/project').toJSON(),
+				lifecycleState: 'active',
+				lastActiveAt: 20,
+				section: 'projects',
+				order: 1,
+			}],
+		});
+		const serialized = JSON.stringify(snapshot);
+		for (const forbidden of [
+			'instanceId', 'projectId', 'retainedWorkbenchId',
+			'webContentsId', 'processId', 'connectionGeneration',
+		]) {
+			assert.strictEqual(serialized.includes(forbidden), false);
+		}
+	});
+
+	test('round-trips a switcher catalog without authority identities', () => {
+		const snapshot = createHucodeHostedNavigationSnapshot({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [],
+		}, [{
+			id: 'secret-project-id',
+			label: 'Repository',
+			rootUri: URI.file('/repo'),
+			pinned: true,
+			order: 4,
+			lastActiveWorktreePath: '/repo/feature',
+			worktreeState: 'stale',
+			worktrees: [{
+				path: '/repo/feature',
+				label: 'feature',
+				customLabel: 'Feature',
+				branch: 'feature/catalog',
+				isMain: false,
+				isDetached: false,
+				pinned: true,
+				lastVisitedAt: 42,
+			}],
+		}]);
+		const revived = reviveHucodeHostedNavigationProjects(snapshot);
+
+		assert.deepStrictEqual({
+			serializedContainsSecretId: JSON.stringify(snapshot)
+				.includes('secret-project-id'),
+			serializedContainsAuthorityFields: [
+				'projectId', 'lastActiveWorktreePath', 'worktreeState',
+			].some(field => JSON.stringify(snapshot).includes(field)),
+			project: snapshot.projects?.[0],
+			revived: revived?.map(project => ({
+				idIsSynthetic: project.id !== 'secret-project-id',
+				rootPath: project.rootUri.fsPath,
+				worktreeState: project.worktreeState,
+				worktree: project.worktrees[0],
+			})),
+		}, {
+			serializedContainsSecretId: false,
+			serializedContainsAuthorityFields: false,
+			project: {
+				rootUri: URI.file('/repo').toJSON(),
+				label: 'Repository',
+				pinned: true,
+				order: 4,
+				worktrees: [{
+					folderUri: URI.file('/repo/feature').toJSON(),
+					label: 'feature',
+					customLabel: 'Feature',
+					branch: 'feature/catalog',
+					isMain: false,
+					isDetached: false,
+					pinned: true,
+					lastVisitedAt: 42,
+				}],
+			},
+			revived: [{
+				idIsSynthetic: true,
+				rootPath: '/repo',
+				worktreeState: 'current',
+				worktree: {
+					path: '/repo/feature',
+					label: 'feature',
+					customLabel: 'Feature',
+					branch: 'feature/catalog',
+					isMain: false,
+					isDetached: false,
+					pinned: true,
+					lastVisitedAt: 42,
+				},
+			}],
+		});
+	});
+
+	test('falls back to current lifecycle state when catalog loading fails',
+		async () => {
+			const catalog = new DeferredPromise<readonly ProjectRecord[]>();
+			let path = '/initial';
+			let error: unknown;
+			const snapshotPromise =
+				createHucodeHostedNavigationSnapshotWithCatalog(
+					() => ({
+						projectsSidebarVisible: true,
+						projectSwitcherCanGoBack: false,
+						projectSwitcherCanGoForward: false,
+						instances: [{
+							instanceId: 'instance',
+							worktreePath: path,
+							state: 'active',
+							visible: true,
+							focused: true,
+						}],
+					}),
+					() => catalog.p,
+					value => error = value
+				);
+			path = '/current';
+			catalog.error(new Error('catalog unavailable'));
+
+			const snapshot = await snapshotPromise;
+			assert.deepStrictEqual({
+				path: URI.revive(snapshot.targets[0].folderUri).fsPath,
+				projects: snapshot.projects,
+				error: String(error),
+			}, {
+				path: '/current',
+				projects: undefined,
+				error: 'Error: catalog unavailable',
+			});
+		}
+	);
 
 	test('matches query tokens across project and worktree fields', () => {
 		const picks = [

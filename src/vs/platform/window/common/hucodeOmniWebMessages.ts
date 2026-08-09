@@ -3,12 +3,10 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { hasKey } from '../../../base/common/types.js';
 import { INativeOpenFileRequest } from './window.js';
-
-/**
- * Channel exposing the Omni web shell service to hosted iframe workbenches.
- */
-export const HUCODE_OMNI_WEB_SHELL_CHANNEL = 'hucodeOmniWebShell';
+import { HucodeHostedShellCapability } from
+	'./hucodeHostedShellService.js';
 
 /**
  * Channel exposing a hosted iframe workbench to the Omni web shell.
@@ -33,13 +31,44 @@ export const enum HucodeOmniWebChildMessageType {
 	Focus = 'hucode.omni.hostedWorkbenchFocus',
 }
 
+/** Identifies one hosted workbench document and one of its bootstrap retries. */
+export interface IHucodeOmniWebConnectionBootstrap {
+	readonly id: string;
+	readonly attempt: number;
+}
+
+/** Validates the current document-and-attempt connection correlation. */
+export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
+	readonly connectionBootstrap?: unknown;
+	readonly connectionAttempt?: unknown;
+}): boolean {
+	if (hasKey(value, { connectionAttempt: true })) {
+		return false;
+	}
+	if (!value.connectionBootstrap ||
+		typeof value.connectionBootstrap !== 'object') {
+		return false;
+	}
+	const bootstrap = value.connectionBootstrap as {
+		readonly id?: unknown;
+		readonly attempt?: unknown;
+	};
+	return typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
+		Number.isSafeInteger(bootstrap.attempt) &&
+		(bootstrap.attempt as number) > 0;
+}
+
 /**
  * Message transferring the shell IPC port into a hosted iframe workbench.
  */
 export interface IHucodeOmniWebPortMessage {
 	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
-	readonly windowId: number;
+	/** Correlates retryable bootstraps for the current document. */
+	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
+	/** Negotiated independently from the hosted unload protocol. */
+	readonly hostedShellProtocolVersion: number;
+	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
 }
 
 /**
@@ -65,11 +94,19 @@ export interface IHucodeOmniWebReadyMessage {
 	readonly type: HucodeOmniWebChildMessageType.Ready;
 	readonly instanceId: string;
 
+	/** Current document identity and its monotonic bootstrap attempt. */
+	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
+
 	/**
 	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows
 	 * it. Absent from workbenches built before the unload handshake split.
 	 */
 	readonly protocolVersion?: number;
+
+	/** Hosted shell capability version offered by this workbench. */
+	readonly hostedShellProtocolVersion: number;
+	/** Hosted shell operation groups offered by this workbench. */
+	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
 }
 
 /**

@@ -24,12 +24,11 @@ import { IWorkbenchEnvironmentService } from
 import {
 	getSelectedProjectSwitcherTarget,
 } from './projectSwitcher/projectSwitcher.contribution.js';
-import {
-	focusWorkspaceBestEffort,
-} from '../common/omniWindowFocus.js';
-import {
-	IHucodeShellService,
-} from '../common/omniWindow.js';
+import { IHucodeShellControllerService } from
+	'../../platform/window/common/hucodeShellControllerService.js';
+import { ICommandService } from '../../platform/commands/common/commands.js';
+import { FOCUS_WORKSPACE_COMMAND_ID } from
+	'../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IHucodeOmniWindowUIService } from './omniWindowUI.js';
 import {
 	openSelectionInOmniWindow,
@@ -41,14 +40,12 @@ import {
 } from './omniSmokeTestDriver.js';
 
 async function openSelectedInOmniWindow(
-	windowId: number,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): ReturnType<typeof openSelectionInOmniWindow> {
 	return openSelectionInOmniWindow(
 		getSelectedProjectSwitcherTarget(),
-		windowId,
 		shellService,
 		projectManagerService,
 		notificationService,
@@ -61,7 +58,7 @@ async function openSelectedInOmniWindow(
 
 async function openSelectedInStandaloneWindow(
 	hostService: IHostService,
-	shellService: IHucodeShellService,
+	shellService: IHucodeShellControllerService,
 	projectManagerService: IProjectManagerService,
 	notificationService: INotificationService
 ): Promise<void> {
@@ -90,8 +87,8 @@ class OmniWindowShellContribution extends Disposable
 		private readonly omniWindowUIService: IHucodeOmniWindowUIService,
 		@IWorkbenchLayoutService
 		private readonly layoutService: IWorkbenchLayoutService,
-		@IHucodeShellService
-		private readonly shellService: IHucodeShellService,
+		@IHucodeShellControllerService
+		private readonly shellService: IHucodeShellControllerService,
 		@IProjectManagerService
 		private readonly projectManagerService: IProjectManagerService,
 		@IHostService
@@ -105,32 +102,18 @@ class OmniWindowShellContribution extends Disposable
 			return;
 		}
 
-		this._register(registerOmniSmokeTestDriver({
-			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
-			enableSmokeTestDriver:
-				!!this.environmentService.enableSmokeTestDriver,
-			isOmniWindow: this.environmentService.isOmniWindow,
-			windowId: this.windowId,
-			suspendWorkspace: (windowId, instanceId) =>
-				this.shellService.suspendWorkspace(windowId, instanceId),
-		}));
-
 		this._register(this.omniWindowUIService.registerDelegate({
 			focusProjectPane: () => {
 				this.layoutService.focusPart(Parts.SIDEBAR_PART);
 			},
 			openSelectedInOmni: async () => {
 				const nextState = await openSelectedInOmniWindow(
-					this.windowId,
 					this.shellService,
 					this.projectManagerService,
 					this.notificationService
 				);
 				if (nextState) {
-					await focusWorkspaceBestEffort(
-						this.shellService,
-						this.windowId
-					);
+					await this.shellService.focusWorkspace();
 				}
 			},
 			openSelectedInStandalone: () => openSelectedInStandaloneWindow(
@@ -140,17 +123,11 @@ class OmniWindowShellContribution extends Disposable
 				this.notificationService
 			),
 			focusWorkspace: () =>
-				this.shellService.focusWorkspace(
-					this.windowId
-				),
+				this.shellService.focusWorkspace(),
 			reloadWorkspace: () =>
-				this.shellService.reloadWorkspace(
-					this.windowId
-				),
+				this.shellService.reloadWorkspace(),
 			closeWorkspace: async () => {
-				await this.shellService.closeWorkspace(
-					this.windowId
-				);
+				await this.shellService.closeWorkspace();
 			},
 		}));
 
@@ -162,17 +139,50 @@ class OmniWindowShellContribution extends Disposable
 		}));
 	}
 
-	private get windowId(): number {
-		return getWindowId(mainWindow);
-	}
-
 	private updateProjectsSidebarVisibility(): void {
 		void this.shellService.setProjectsSidebarVisible(
-			this.windowId,
 			this.layoutService.isVisible(Parts.SIDEBAR_PART)
 		);
 	}
 }
+
+/** Registers the enabled smoke-test driver only in a trusted Omni shell. */
+class OmniSmokeTestDriverContribution extends Disposable
+	implements IWorkbenchContribution {
+
+	static readonly ID = 'hucode.omniSmokeTestDriver';
+
+	constructor(
+		@IWorkbenchEnvironmentService
+		environmentService: IWorkbenchEnvironmentService,
+		@IHucodeShellControllerService
+		shellService: IHucodeShellControllerService,
+		@ICommandService commandService: ICommandService,
+	) {
+		super();
+		this._register(registerOmniSmokeTestDriver({
+			target: mainWindow as IHucodeOmniSmokeTestDriverTarget,
+			enableSmokeTestDriver:
+				!!environmentService.enableSmokeTestDriver,
+			isOmniShellWindow: environmentService.isOmniShellWindow,
+			windowId: getWindowId(mainWindow),
+			openWorkspace: (_windowId, worktreePath) =>
+				shellService.openWorkspace(worktreePath),
+			suspendWorkspace: (_windowId, instanceId) =>
+				shellService.suspendWorkspace(instanceId),
+			reloadWorkspace: _windowId => shellService.reloadWorkspace(),
+			focusWorkspace: _windowId => commandService.executeCommand(
+				FOCUS_WORKSPACE_COMMAND_ID
+			),
+		}));
+	}
+}
+
+registerWorkbenchContribution2(
+	OmniSmokeTestDriverContribution.ID,
+	OmniSmokeTestDriverContribution,
+	WorkbenchPhase.BlockRestore
+);
 
 registerWorkbenchContribution2(
 	OmniWindowShellContribution.ID,

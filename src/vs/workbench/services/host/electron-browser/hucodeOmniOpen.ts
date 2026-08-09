@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { isEqual } from '../../../../base/common/extpath.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { isLinux } from '../../../../base/common/platform.js';
+import { localize } from '../../../../nls.js';
 import { INativeHostService } from
 	'../../../../platform/native/common/native.js';
 import { IProjectManagerService } from
@@ -17,6 +18,11 @@ import {
 	isFolderToOpen,
 	isWorkspaceToOpen,
 } from '../../../../platform/window/common/window.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
+} from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from
 	'../../environment/common/environmentService.js';
 
@@ -27,11 +33,10 @@ export interface IHucodeOmniOpenShellService {
 	): Promise<boolean>;
 	focusNormalWindowByPath(worktreePath: string): Promise<boolean>;
 	openWorkspace(
-		windowId: number,
 		worktreePath: string,
 		projectId?: string
 	): Promise<unknown>;
-	focusWorkspace(windowId: number): Promise<void>;
+	focusWorkspace(): Promise<void>;
 }
 
 export async function tryOpenHucodeOmniWindow(
@@ -40,6 +45,7 @@ export async function tryOpenHucodeOmniWindow(
 	nativeHostService: INativeHostService,
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeOmniOpenShellService,
+	hostedShellService: IHucodeHostedShellService,
 	projectManagerService: IProjectManagerService
 ): Promise<boolean> {
 	if (
@@ -74,40 +80,55 @@ export async function tryOpenHucodeOmniWindow(
 		if (openable.folderUri.scheme !== Schemas.file) {
 			return false;
 		}
+		if (environmentService.isHostedOmniWorkspace) {
+			if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationUnavailable',
+					'Hosted Omni folder navigation is unavailable.'
+				)));
+				return true;
+			}
+			const outcome = await hostedShellService.navigateToFolder({
+				folderUri: openable.folderUri.toJSON(),
+			});
+			if (outcome !== HucodeHostedShellOperationOutcome.Accepted &&
+				outcome !== HucodeHostedShellOperationOutcome.Unsupported &&
+				outcome !== HucodeHostedShellOperationOutcome.Superseded) {
+				onUnexpectedError(new Error(localize(
+					'hostedOmniFolderNavigationNotAccepted',
+					'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+					openable.folderUri.toString(true),
+					outcome
+				)));
+			}
+			return outcome !== HucodeHostedShellOperationOutcome.Unsupported;
+		}
 		const target = await getProjectWorktreeTarget(
 			projectManagerService,
 			openable.folderUri.fsPath
 		);
 		const worktreePath = target?.worktreePath ?? openable.folderUri.fsPath;
-		if (target) {
-			await setLastActiveWorktreeBestEffort(
-				projectManagerService,
-				target.projectId,
-				target.worktreePath
-			);
-		}
 		if (await focusHostedWorkspaceByPathBestEffort(
 			shellService,
 			worktreePath,
 			target?.projectId
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		if (await focusNormalWindowByPathBestEffort(
 			shellService,
 			worktreePath
 		)) {
+			await recordTargetLastActive(projectManagerService, target);
 			return true;
 		}
 		await shellService.openWorkspace(
-			nativeHostService.windowId,
 			worktreePath,
 			target?.projectId
 		);
-		await focusWorkspaceBestEffort(
-			shellService,
-			nativeHostService.windowId
-		);
+		await focusWorkspaceBestEffort(shellService);
+		await recordTargetLastActive(projectManagerService, target);
 		return true;
 	}
 
@@ -188,12 +209,25 @@ async function setLastActiveWorktreeBestEffort(
 	}
 }
 
+async function recordTargetLastActive(
+	projectManagerService: IProjectManagerService,
+	target: { readonly projectId: string; readonly worktreePath: string } |
+		undefined
+): Promise<void> {
+	if (target) {
+		await setLastActiveWorktreeBestEffort(
+			projectManagerService,
+			target.projectId,
+			target.worktreePath
+		);
+	}
+}
+
 async function focusWorkspaceBestEffort(
-	shellService: IHucodeOmniOpenShellService,
-	windowId: number
+	shellService: IHucodeOmniOpenShellService
 ): Promise<void> {
 	try {
-		await shellService.focusWorkspace(windowId);
+		await shellService.focusWorkspace();
 	} catch (error) {
 		onUnexpectedError(error);
 	}

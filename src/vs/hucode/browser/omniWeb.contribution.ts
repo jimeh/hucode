@@ -5,9 +5,12 @@
 
 import './paneCompositePartService.js';
 import './layoutActions.js';
+import './omniCommandService.js';
+import './omniWebClipboardForwarding.contribution.js';
 import './omniHost.contribution.js';
 import './services/omniAgentHostService.js';
 import './projectManager/webProjectManagerService.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './webShellService.js';
+import './webShellControllerServiceAdapter.js';

@@ -8,17 +8,25 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { URI } from '../../../../base/common/uri.js';
-import { createDecorator } from
+import { localize } from '../../../../nls.js';
+import { createDecorator, IInstantiationService } from
 	'../../../../platform/instantiation/common/instantiation.js';
 import { getHucodeServerPathCaseSensitive } from
 	'../../../../platform/environment/common/hucodeWebConfiguration.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../../../platform/projectManager/common/projectManagerState.js';
+import { IProjectManagerService } from
+	'../../../../platform/projectManager/common/projectManager.js';
 import {
 	IOpenWindowOptions,
 	IWindowOpenable,
 	isFolderToOpen,
 } from '../../../../platform/window/common/window.js';
+import {
+	HucodeHostedShellOperationOutcome,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
+} from '../../../../platform/window/common/hucodeHostedShellService.js';
 
 interface IHucodeBrowserOmniShellService {
 	readonly _serviceBrand: undefined;
@@ -65,6 +73,36 @@ export interface IHucodeOmniBrowserProjectManager {
 export const IHucodeBrowserOmniShellService =
 	createDecorator<IHucodeBrowserOmniShellService>('hucodeShellService');
 
+/** Selects the browser-local Omni routing capability for the current window. */
+export async function dispatchHucodeOmniBrowserOpen(
+	toOpen: IWindowOpenable[],
+	options: IOpenWindowOptions | undefined,
+	environmentService: IHucodeOmniBrowserEnvironment,
+	instantiationService: IInstantiationService
+): Promise<boolean> {
+	return instantiationService.invokeFunction(accessor => {
+		if (environmentService.isHostedOmniWorkspace) {
+			return tryNavigateHucodeHostedBrowserWindow(
+				toOpen,
+				options,
+				environmentService,
+				accessor.get(IHucodeHostedShellService)
+			);
+		}
+		if (environmentService.isOmniWindow) {
+			return tryOpenHucodeOmniBrowserWindow(
+				toOpen,
+				options,
+				environmentService,
+				accessor.get(IHucodeBrowserOmniShellService),
+				accessor.get(IProjectManagerService)
+			);
+		}
+
+		return false;
+	});
+}
+
 /** Routes ordinary folder opens from serve-web Omni into hosted workbenches. */
 export async function tryOpenHucodeOmniBrowserWindow(
 	toOpen: IWindowOpenable[],
@@ -73,8 +111,8 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	shellService: IHucodeBrowserOmniShellService,
 	projectManagerService: IHucodeOmniBrowserProjectManager
 ): Promise<boolean> {
-	if ((!environmentService.isOmniWindow &&
-		!environmentService.isHostedOmniWorkspace) ||
+	if (!environmentService.isOmniWindow ||
+		environmentService.isHostedOmniWorkspace ||
 		environmentService.extensionDevelopmentLocationURI ||
 		options?.forceNewWindow || options?.addMode || options?.removeMode ||
 		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||
@@ -114,14 +152,6 @@ export async function tryOpenHucodeOmniBrowserWindow(
 			if (worktree) {
 				projectId = project.id;
 				worktreePath = worktree.path;
-				try {
-					await projectManagerService.setLastActiveWorktree(
-						project.id,
-						worktree.path
-					);
-				} catch (error) {
-					onUnexpectedError(error);
-				}
 				break;
 			}
 		}
@@ -129,19 +159,13 @@ export async function tryOpenHucodeOmniBrowserWindow(
 		onUnexpectedError(error);
 	}
 	const windowId = getWindowId(mainWindow);
-	if (environmentService.isHostedOmniWorkspace) {
-		await shellService.openAndFocusWorkspace(
-			windowId,
-			worktreePath,
-			projectId
-		);
-		return true;
-	}
 	try {
 		if (await shellService.focusHostedWorkspaceByPath(
 			worktreePath,
 			projectId
 		)) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService, projectId, worktreePath);
 			return true;
 		}
 	} catch (error) {
@@ -149,6 +173,8 @@ export async function tryOpenHucodeOmniBrowserWindow(
 	}
 	try {
 		if (await shellService.focusNormalWindowByPath(worktreePath)) {
+			await setLastActiveWorktreeBestEffort(
+				projectManagerService, projectId, worktreePath);
 			return true;
 		}
 	} catch (error) {
@@ -157,5 +183,72 @@ export async function tryOpenHucodeOmniBrowserWindow(
 
 	await shellService.openWorkspace(windowId, worktreePath, projectId);
 	await shellService.focusWorkspace(windowId);
+	await setLastActiveWorktreeBestEffort(
+		projectManagerService, projectId, worktreePath);
 	return true;
+}
+
+/** Routes a hosted web workbench folder open through its bound capability. */
+export async function tryNavigateHucodeHostedBrowserWindow(
+	toOpen: IWindowOpenable[],
+	options: IOpenWindowOptions | undefined,
+	environmentService: IHucodeOmniBrowserEnvironment,
+	hostedShellService: IHucodeHostedShellService
+): Promise<boolean> {
+	if (!environmentService.isHostedOmniWorkspace ||
+		environmentService.extensionDevelopmentLocationURI ||
+		options?.forceNewWindow || options?.addMode || options?.removeMode ||
+		options?.diffMode || options?.mergeMode || options?.gotoLineMode ||
+		options?.waitMarkerFileURI || options?.forceProfile ||
+		options?.forceTempProfile || options?.chatSessionToOpen ||
+		toOpen.length !== 1 || !isFolderToOpen(toOpen[0])) {
+		return false;
+	}
+	if (!isHucodeHostedShellServiceAvailable(hostedShellService)) {
+		onUnexpectedError(new Error(localize(
+			'hostedOmniFolderNavigationUnavailable',
+			'Hosted Omni folder navigation is unavailable.'
+		)));
+		return true;
+	}
+
+	const result = await hostedShellService.navigateToFolder({
+		folderUri: toOpen[0].folderUri.toJSON(),
+	});
+	switch (result) {
+		case HucodeHostedShellOperationOutcome.Unsupported:
+			return false;
+		case HucodeHostedShellOperationOutcome.Accepted:
+		case HucodeHostedShellOperationOutcome.Superseded:
+			return true;
+		case HucodeHostedShellOperationOutcome.Rejected:
+		case HucodeHostedShellOperationOutcome.Stale:
+		case HucodeHostedShellOperationOutcome.Unavailable:
+		default:
+			onUnexpectedError(new Error(localize(
+				'hostedOmniFolderNavigationNotAccepted',
+				'Hosted Omni folder navigation was not accepted for {0}: {1}.',
+				toOpen[0].folderUri.toString(true),
+				result
+			)));
+			return true;
+	}
+}
+
+async function setLastActiveWorktreeBestEffort(
+	projectManagerService: IHucodeOmniBrowserProjectManager,
+	projectId: string | undefined,
+	worktreePath: string
+): Promise<void> {
+	if (!projectId) {
+		return;
+	}
+	try {
+		await projectManagerService.setLastActiveWorktree(
+			projectId,
+			worktreePath
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 }
