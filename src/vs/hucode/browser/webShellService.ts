@@ -92,6 +92,7 @@ import {
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+	IHucodeOmniWebConnectionBootstrap,
 	IHucodeOmniWebWorkbenchClient,
 	isHucodeOmniWebConnectionBootstrapMetadata,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
@@ -1721,7 +1722,11 @@ export class WebHucodeShellController extends Disposable
 					message.hostedShellProtocolVersion;
 				instance.hostedShellCapabilities =
 					message.hostedShellCapabilities;
-				this.connectInstance(instance, negotiatedCapabilities);
+				this.connectInstance(
+					instance,
+					message.connectionBootstrap,
+					negotiatedCapabilities
+				);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
 					message.instanceId
@@ -1761,6 +1766,7 @@ export class WebHucodeShellController extends Disposable
 	 */
 	private connectInstance(
 		instance: IHostedIframeInstance,
+		connectionBootstrap: IHucodeOmniWebConnectionBootstrap,
 		negotiatedCapabilities: readonly HucodeHostedShellCapability[]
 	): void {
 		this.disposeConnection(instance);
@@ -1792,10 +1798,7 @@ export class WebHucodeShellController extends Disposable
 		this.browser.postPortMessage(instance.iframe, {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
-			connectionBootstrap: {
-				id: instance.bootstrapId!,
-				attempt: instance.bootstrapAttempt!,
-			},
+			connectionBootstrap,
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: negotiatedCapabilities,
 		}, channel.port2);

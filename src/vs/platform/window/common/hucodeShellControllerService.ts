@@ -251,12 +251,12 @@ export function createHucodeShellControllerServerChannel(
 			}
 			return channel.listen(context, event, arg);
 		},
-		call(context, command, args) {
+		call(context, command, args, cancellationToken) {
 			if (command === 'onDidChangeState' ||
 				!hucodeShellControllerRemoteMemberSet.has(command)) {
 				return Promise.reject(new Error(`Method not found: ${command}`));
 			}
-			return channel.call(context, command, args);
+			return channel.call(context, command, args, cancellationToken);
 		},
 	};
 }

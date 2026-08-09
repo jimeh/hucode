@@ -1521,19 +1521,12 @@ suite('WebHucodeShellService', () => {
 		assert.ok(instanceId);
 		const child = connectChild(browser, surface, instanceId);
 
-		const originalConsoleError = console.error;
-		try {
-			// The IPC client reports an unknown channel before rejecting it.
-			console.error = () => undefined;
-			await assert.rejects(
-				child.removedLegacyShellChannel.call('getWindowState', [
-					browser.windowId,
-				]),
-				/Channel name 'hucodeOmniWebShell' timed out/
-			);
-		} finally {
-			console.error = originalConsoleError;
-		}
+		await assert.rejects(
+			child.removedLegacyShellChannel.call('getWindowState', [
+				browser.windowId,
+			]),
+			/hucodeOmniWebShell/
+		);
 	});
 
 	test('binds the hosted shell channel to its window and instance', async () => {

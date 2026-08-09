@@ -662,8 +662,10 @@ human-facing guides rather than replacing them.
   renderer channel or refine the main decorator from `IHucodeShellService`.
 - Keep desktop shell-controller calls bounded while cancellable acquisition
   retries in the background. The MessagePort client has no proactive close
-  signal, so recover a connected transport loss after the next rejected or
-  timed-out operation and never replay that ambiguously delivered operation.
+  signal, so invalidate and recover a connected transport loss only after an
+  operation times out, and never replay that ambiguously delivered operation.
+  A round-tripped operation rejection proves the response path remains live;
+  preserve the current connection.
 - Keep serve-web hosted-shell messaging current-protocol-only. Require the
   typed protocol version, capability set, and correlated nested bootstrap on
   both parent and child; missing or mismatched metadata fails closed and a

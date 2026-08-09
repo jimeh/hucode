@@ -82,9 +82,10 @@ each cancellable port-acquisition attempt. It keeps retrying acquisition in the
 background after transient denial, rejection, or timeout, so later calls and
 state events can recover without reloading the renderer. The current
 MessagePort client has no proactive close signal; a connected transport loss
-is therefore detected by the next rejected or timed-out operation, after which
-subsequent calls may use a replacement connection. The triggering operation is
-never replayed because delivery may be ambiguous.
+is therefore detected when the next operation times out, after which subsequent
+calls may use a replacement connection. A round-tripped operation rejection
+proves that the response path remains live and preserves the current connection.
+The timed-out operation is never replayed because delivery may be ambiguous.
 
 Current web-hosted iframes use the same hosted-shell contract and policy over a
 per-instance `MessagePort` (`vs/base/parts/ipc` + `ProxyChannel`). The parent

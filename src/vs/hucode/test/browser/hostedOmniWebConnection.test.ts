@@ -331,9 +331,15 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 		}, nullBootstrap.port);
+		const mixedBootstrap = trackedPort();
+		browser.emitFromParent({
+			...portMessage(bootstrap),
+			connectionAttempt: bootstrap.attempt,
+		}, mixedBootstrap.port);
 		assert.strictEqual(wrongDocument.wasClosed(), true);
 		assert.strictEqual(partial.wasClosed(), true);
 		assert.strictEqual(nullBootstrap.wasClosed(), true);
+		assert.strictEqual(mixedBootstrap.wasClosed(), true);
 
 		browser.emitFromParent(
 			portMessage(bootstrap),
