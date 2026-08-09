@@ -222,10 +222,32 @@ export interface IHucodeHostedNavigationTarget {
 	readonly pathLabel?: string;
 }
 
+/** Sanitized worktree metadata needed to render hosted switcher choices. */
+export interface IHucodeHostedNavigationWorktree {
+	readonly folderUri: UriComponents;
+	readonly label: string;
+	readonly customLabel?: string;
+	readonly branch?: string;
+	readonly isMain: boolean;
+	readonly isDetached: boolean;
+	readonly pinned?: boolean;
+	readonly lastVisitedAt?: number;
+}
+
+/** Sanitized project metadata without controller or persisted identity. */
+export interface IHucodeHostedNavigationProject {
+	readonly rootUri: UriComponents;
+	readonly label: string;
+	readonly pinned: boolean;
+	readonly order: number;
+	readonly worktrees: readonly IHucodeHostedNavigationWorktree[];
+}
+
 /** On-demand read model used by hosted workbench-switching commands. */
 export interface IHucodeHostedNavigationSnapshot {
 	readonly targets: readonly IHucodeHostedNavigationTarget[];
 	readonly sectionOrder: readonly HucodeHostedNavigationSection[];
+	readonly projects?: readonly IHucodeHostedNavigationProject[];
 }
 
 /** Authoritative identity captured when a hosted connection is created. */
@@ -264,6 +286,9 @@ export interface IHucodeHostedShellDelegate {
 	getState(
 		binding: IHucodeHostedShellBinding
 	): Promise<IHucodeHostedShellAuthorityState>;
+	getNavigationSnapshot?(
+		binding: IHucodeHostedShellBinding
+	): Promise<IHucodeHostedNavigationSnapshot | undefined>;
 	notifyReady(binding: IHucodeHostedShellBinding): Promise<void>;
 	closeSelf(binding: IHucodeHostedShellBinding): Promise<boolean>;
 	reopenSelfInNormalWindow(
@@ -400,8 +425,15 @@ export function createBoundHucodeHostedShellFacade(
 		},
 		async getNavigationSnapshot() {
 			const state = await getAuthorityState();
-			return isCurrentBinding(binding, state) && getBoundSelf(binding, state)
-				? state.navigationSnapshot
+			if (!isCurrentBinding(binding, state) || !getBoundSelf(binding, state)) {
+				return undefined;
+			}
+			const snapshot = delegate.getNavigationSnapshot
+				? await delegate.getNavigationSnapshot(binding)
+				: state.navigationSnapshot;
+			const current = await getAuthorityState();
+			return isCurrentBinding(binding, current) && getBoundSelf(binding, current)
+				? snapshot
 				: undefined;
 		},
 		async notifyReady() {

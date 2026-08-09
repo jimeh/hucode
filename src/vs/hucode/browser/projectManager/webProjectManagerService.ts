@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DeferredPromise } from '../../../base/common/async.js';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, Event as VSCodeEvent } from '../../../base/common/event.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CancellationError } from '../../../base/common/errors.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
@@ -98,14 +98,11 @@ export class WebProjectManagerClient extends Disposable
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly _onDidChangeProjects =
-		this._register(new Emitter<readonly ProjectRecord[]>());
-	readonly onDidChangeProjects = this._onDidChangeProjects.event;
-	private readonly _onDidChangeGitWorktreeTargets = this._register(
-		new Emitter<GitWorktreeTargetChange>()
-	);
-	readonly onDidChangeGitWorktreeTargets =
-		this._onDidChangeGitWorktreeTargets.event;
+	private readonly _onDidChangeProjects: Emitter<readonly ProjectRecord[]>;
+	readonly onDidChangeProjects: VSCodeEvent<readonly ProjectRecord[]>;
+	private readonly _onDidChangeGitWorktreeTargets:
+		Emitter<GitWorktreeTargetChange>;
+	readonly onDidChangeGitWorktreeTargets: VSCodeEvent<GitWorktreeTargetChange>;
 	private eventSessionReady = new DeferredPromise<void>();
 	private readonly gitWorktreeTargetPaths =
 		new Map<string, readonly string[]>();
@@ -128,8 +125,16 @@ export class WebProjectManagerClient extends Disposable
 		private readonly eventSessionId: string = generateUuid(),
 	) {
 		super();
-
-		this.registerProjectEvents(transport);
+		const ensureProjectEvents = () => this.ensureProjectEvents();
+		this._onDidChangeProjects = this._register(new Emitter({
+			onWillAddFirstListener: ensureProjectEvents,
+		}));
+		this.onDidChangeProjects = this._onDidChangeProjects.event;
+		this._onDidChangeGitWorktreeTargets = this._register(new Emitter({
+			onWillAddFirstListener: ensureProjectEvents,
+		}));
+		this.onDidChangeGitWorktreeTargets =
+			this._onDidChangeGitWorktreeTargets.event;
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
@@ -293,6 +298,7 @@ export class WebProjectManagerClient extends Disposable
 		consumerId: string,
 		targetPaths: readonly string[]
 	): Promise<readonly GitWorktreeTargetObservation[]> {
+		this.ensureProjectEvents();
 		const paths = [...targetPaths];
 		this.gitWorktreeTargetPaths.set(consumerId, paths);
 		if (this.hasEventSource) {
@@ -471,14 +477,13 @@ export class WebProjectManagerClient extends Disposable
 		return `${this.projectsApi}${suffix}`;
 	}
 
-	private registerProjectEvents(
-		transport: IWebProjectManagerServiceTransport
-	): void {
-		if (typeof transport.EventSource !== 'function') {
+	private ensureProjectEvents(): void {
+		if (this.hasEventSource ||
+			typeof this.transport.EventSource !== 'function') {
 			return;
 		}
 
-		const events = new transport.EventSource(
+		const events = new this.transport.EventSource(
 			this.toApiUrl(
 				`events/${encodeURIComponent(this.eventSessionId)}`
 			),

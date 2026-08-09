@@ -69,6 +69,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 	let failure: Error | undefined;
 	const pageErrors: string[] = [];
 	const consoleErrors: string[] = [];
+	const projectEventStreamUrls = new Set<string>();
 	let targetInventory = '<not collected>';
 	let screenshotPath: string | undefined;
 
@@ -99,6 +100,13 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		page.on('console', message => {
 			if (message.type() === 'error') {
 				consoleErrors.push(message.text());
+			}
+		});
+		page.on('request', request => {
+			const url = new URL(request.url());
+			if (request.method() === 'GET' &&
+				url.pathname.startsWith('/_hucode/projects/events/')) {
+				projectEventStreamUrls.add(url.href);
 			}
 		});
 		const bootstrapResponse = observeServerUserDataBootstrap(page, deadline);
@@ -310,13 +318,21 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			afterReload,
 			commandTimeout(deadline)
 		);
+		if (projectEventStreamUrls.size !== 1) {
+			throw new Error(
+				'Expected one shell-owned project event stream after hosted ' +
+				`switching, observed ${projectEventStreamUrls.size}: ` +
+				[...projectEventStreamUrls].join(', ')
+			);
+		}
 		targetInventory = await formatWebTargetInventory(page);
 
 		console.log(
 			`Hucode server user-data Omni smoke passed: observed GET ` +
 			`${bootstrap.pathname} (${bootstrap.status}); exercised hosted ` +
-			`navigation, clipboard/focus bridging, a shell action, unload, and ` +
-			`command-driven connection recovery across Alpha and Bravo`
+			`navigation, clipboard/focus bridging, one shell-owned project ` +
+			`event stream, a shell action, unload, and command-driven ` +
+			`connection recovery across Alpha and Bravo`
 		);
 	} catch (error) {
 		if (page) {

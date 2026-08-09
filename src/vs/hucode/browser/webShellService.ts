@@ -60,8 +60,10 @@ import {
 	IHucodeHostedShellState,
 	negotiateHucodeHostedShellCapabilities,
 } from '../../platform/window/common/hucodeHostedShellService.js';
-import { createHucodeHostedNavigationSnapshot } from
-	'../common/projectSwitcher/switchProjectWorktreeModel.js';
+import {
+	createHucodeHostedNavigationSnapshot,
+	createHucodeHostedNavigationSnapshotWithCatalog,
+} from '../common/projectSwitcher/switchProjectWorktreeModel.js';
 import { ShutdownReason } from
 	'../../workbench/services/lifecycle/common/lifecycle.js';
 import { IBrowserWorkbenchEnvironmentService } from
@@ -117,7 +119,7 @@ import { IStorageService, StorageScope, StorageTarget } from
 	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
-import { IProjectManagerService } from
+import { IProjectManagerService, ProjectRecord } from
 	'../../platform/projectManager/common/projectManager.js';
 
 interface IHostedIframeConnection {
@@ -388,10 +390,7 @@ export interface IWebHucodeShellOptions {
 
 /** Project authority used by hosted navigation after URI validation. */
 export interface IWebHucodeHostedNavigationProjectManager {
-	getProjects(): Promise<readonly {
-		readonly id: string;
-		readonly worktrees: readonly { readonly path: string }[];
-	}[]>;
+	getProjects(): Promise<readonly ProjectRecord[]>;
 	setLastActiveWorktree(
 		projectId: string,
 		worktreePath: string
@@ -1434,15 +1433,12 @@ export class WebHucodeShellController extends Disposable
 			return result;
 		}
 
-		if (!isHucodeOmniClipboardAction(request.id)) {
-			return false;
-		}
 		// A timed-out request may still execute in the child after this point.
-		// Treat clipboard delivery as consumed: retrying it locally can duplicate
-		// a paste or destructive cut. The tradeoff is that an actually lost
-		// request leaves the clipboard operation unapplied.
+		// Treat delivery as consumed: retrying it locally can duplicate commands
+		// whose child-side completion includes a user interaction such as a Quick
+		// Input. The tradeoff is that an actually lost request remains unapplied.
 		this.logService.warn(
-			`[hucode] Hosted clipboard command ${request.id} timed out; ` +
+			`[hucode] Hosted command ${request.id} did not confirm completion; ` +
 			'delivery is unconfirmed, so it will not be retried locally.'
 		);
 		return true;
@@ -1870,6 +1866,20 @@ export class WebHucodeShellController extends Disposable
 			getState: async () => {
 				await this.initialization;
 				return this.getHostedAuthorityState(instance);
+			},
+			getNavigationSnapshot: async () => {
+				await this.initialization;
+				const projectManager = this.navigationProjectManager;
+				return createHucodeHostedNavigationSnapshotWithCatalog(
+					() => this.getState(),
+					projectManager
+						? () => projectManager.getProjects()
+						: undefined,
+					error => this.logService.warn(
+						'[hucode] Hosted navigation catalog is unavailable; ' +
+						`using lifecycle-only state: ${String(error)}`
+					)
+				);
 			},
 			notifyReady: async current => {
 				await this.initialization;

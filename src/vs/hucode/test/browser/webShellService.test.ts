@@ -26,6 +26,8 @@ import {
 	FileOperationResult,
 } from '../../../platform/files/common/files.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
+import { ProjectRecord } from
+	'../../../platform/projectManager/common/projectManager.js';
 import { InMemoryStorageService } from
 	'../../../platform/storage/common/storage.js';
 import { BrowserLifecycleService } from
@@ -1589,10 +1591,10 @@ suite('WebHucodeShellService', () => {
 				undefined,
 				{
 					async getProjects() {
-						return [{
-							id: 'authoritative-project',
-							worktrees: [{ path: '/tmp/target' }],
-						}];
+						return [navigationProjectRecord(
+							'authoritative-project',
+							'/tmp/target'
+						)];
 					},
 					async setLastActiveWorktree(projectId, worktreePath) {
 						mruCalls.push({ projectId, worktreePath });
@@ -1673,10 +1675,8 @@ suite('WebHucodeShellService', () => {
 	test('stale legacy hosted children cannot navigate after reconnect',
 		async () => {
 			const catalogStarted = new DeferredPromise<void>();
-			const catalogGate = new DeferredPromise<readonly {
-				readonly id: string;
-				readonly worktrees: readonly { readonly path: string }[];
-			}[]>();
+			const catalogGate =
+				new DeferredPromise<readonly ProjectRecord[]>();
 			let mruCalls = 0;
 			const { service, surface, browser } = createService(
 				new FakeBrowserAdapter(),
@@ -1715,10 +1715,10 @@ suite('WebHucodeShellService', () => {
 				surface,
 				caller.activeInstanceId
 			);
-			await catalogGate.complete([{
-				id: 'authoritative-project',
-				worktrees: [{ path: '/tmp/legacy-stale-target' }],
-			}]);
+			await catalogGate.complete([navigationProjectRecord(
+				'authoritative-project',
+				'/tmp/legacy-stale-target'
+			)]);
 			await new Promise<void>(resolve => setTimeout(resolve, 0));
 
 			const state = await service.getWindowState(browser.windowId);
@@ -1872,6 +1872,15 @@ suite('WebHucodeShellService', () => {
 						commandCalls.push(commandId);
 						return undefined as T;
 					},
+				},
+				{
+					async getProjects() {
+						return [navigationProjectRecord(
+							'secret-project-id',
+							'/tmp/current-child'
+						)];
+					},
+					async setLastActiveWorktree() { },
 				}
 			);
 			const opened = await service.openWorkspace(
@@ -1902,8 +1911,23 @@ suite('WebHucodeShellService', () => {
 			assert.ok(navigationSnapshot);
 			assert.deepStrictEqual(
 				Object.getOwnPropertyNames(navigationSnapshot).sort(),
-				['sectionOrder', 'targets']
+				['projects', 'sectionOrder', 'targets']
 			);
+			assert.strictEqual(
+				JSON.stringify(navigationSnapshot).includes('secret-project-id'),
+				false
+			);
+			assert.deepStrictEqual(navigationSnapshot.projects?.map(project => ({
+				label: project.label,
+				rootPath: URI.revive(project.rootUri).fsPath,
+				worktreePaths: project.worktrees.map(worktree =>
+					URI.revive(worktree.folderUri).fsPath
+				),
+			})), [{
+				label: 'current-child',
+				rootPath: '/tmp/current-child',
+				worktreePaths: ['/tmp/current-child'],
+			}]);
 			for (const target of navigationSnapshot.targets) {
 				assert.deepStrictEqual(
 					Object.getOwnPropertyNames(target).sort(),
@@ -1953,6 +1977,52 @@ suite('WebHucodeShellService', () => {
 				/Method not found: constructor/
 			);
 		});
+
+	test('keeps hosted lifecycle navigation when catalog loading fails',
+		async () => {
+			const logService = new RecordingLogService();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				logService,
+				undefined,
+				{
+					async getProjects() {
+						throw new Error('catalog unavailable');
+					},
+					async setLastActiveWorktree() { },
+				}
+			);
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/lifecycle-only',
+				'project'
+			);
+			assert.ok(opened.activeInstanceId);
+			const child = connectCurrentChild(
+				browser,
+				surface,
+				opened.activeInstanceId
+			);
+
+			const snapshot = await child.shell.getNavigationSnapshot!();
+			assert.deepStrictEqual({
+				paths: snapshot?.targets.map(target =>
+					URI.revive(target.folderUri).fsPath
+				),
+				projects: snapshot?.projects,
+				loggedFallback: logService.warnings.some(message =>
+					message.includes('catalog unavailable')
+				),
+			}, {
+				paths: ['/tmp/lifecycle-only'],
+				projects: undefined,
+				loggedFallback: true,
+			});
+		}
+	);
 
 	test('rejects hidden current children from shell actions and navigation',
 		async () => {
@@ -2150,10 +2220,10 @@ suite('WebHucodeShellService', () => {
 				undefined,
 				{
 					async getProjects() {
-						return [{
-							id: 'canonical-project',
-							worktrees: [{ path: canonicalPath }],
-						}];
+						return [navigationProjectRecord(
+							'canonical-project',
+							canonicalPath
+						)];
 					},
 					async setLastActiveWorktree() { },
 				},
@@ -2196,10 +2266,10 @@ suite('WebHucodeShellService', () => {
 				undefined,
 				{
 					async getProjects() {
-						return [{
-							id: 'authoritative-project',
-							worktrees: [{ path: '/tmp/project-target' }],
-						}];
+						return [navigationProjectRecord(
+							'authoritative-project',
+							'/tmp/project-target'
+						)];
 					},
 					async setLastActiveWorktree() {
 						throw new Error('persistence unavailable');
@@ -3739,7 +3809,7 @@ suite('WebHucodeShellService', () => {
 		});
 	});
 
-	test('does not retry paste after ambiguous delivery timeout',
+	test('does not retry a generic command after ambiguous delivery timeout',
 		async () => {
 			const browser = new ManualTimeoutBrowserAdapter();
 			const logService = new RecordingLogService();
@@ -3762,7 +3832,7 @@ suite('WebHucodeShellService', () => {
 			child.workbench.runCommandResult = commandResult.p;
 
 			const forwarding = service.runActionInWorkspace(browser.windowId, {
-				id: 'editor.action.clipboardPasteAction',
+				id: 'hucode.projectSwitcher.switchWorktree',
 				from: 'menu',
 			});
 			await waitFor(
@@ -3778,7 +3848,7 @@ suite('WebHucodeShellService', () => {
 			await commandResult.complete(false);
 		});
 
-	test('consumes rejected clipboard delivery but declines explicit false',
+	test('consumes rejected command delivery but declines explicit false',
 		async () => {
 			const logService = new RecordingLogService();
 			const { service, surface, browser } = createService(
@@ -3801,7 +3871,7 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(await service.runActionInWorkspace(
 				browser.windowId,
 				{
-					id: 'editor.action.clipboardPasteAction',
+					id: 'hucode.projectSwitcher.switchWorktree',
 					from: 'menu',
 				}
 			), true);
@@ -3814,7 +3884,7 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(await service.runActionInWorkspace(
 				browser.windowId,
 				{
-					id: 'editor.action.clipboardCopyAction',
+					id: 'hucode.projectSwitcher.switchNextWorktree',
 					from: 'menu',
 				}
 			), false);
@@ -4168,7 +4238,7 @@ suite('WebHucodeShellService', () => {
 				'expected reload command delivery'
 			);
 			await oldCommandResult.complete(true);
-			assert.strictEqual(await oldCommand, false);
+			assert.strictEqual(await oldCommand, true);
 			assert.strictEqual(
 				(await service.getWindowState(browser.windowId)).instances[0].state,
 				'loading'
@@ -6150,6 +6220,23 @@ suite('WebHucodeShellService', () => {
 			assert.deepStrictEqual(state.instances, []);
 		});
 });
+
+function navigationProjectRecord(id: string, path: string): ProjectRecord {
+	return {
+		id,
+		label: basename(path),
+		rootUri: URI.file(path),
+		pinned: false,
+		order: 0,
+		worktreeState: 'current',
+		worktrees: [{
+			path,
+			label: basename(path),
+			isMain: true,
+			isDetached: false,
+		}],
+	};
+}
 
 class FakePersistence implements IWebHucodeShellPersistenceAdapter {
 	saveCalls = 0;

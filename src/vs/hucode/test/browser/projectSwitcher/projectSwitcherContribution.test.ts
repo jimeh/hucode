@@ -33,6 +33,8 @@ import { INotificationService } from
 	'../../../../platform/notification/common/notification.js';
 import { ILabelService } from
 	'../../../../platform/label/common/label.js';
+import { IQuickInputService } from
+	'../../../../platform/quickinput/common/quickInput.js';
 import { WorkbenchObjectTree } from
 	'../../../../platform/list/browser/listService.js';
 import {
@@ -65,8 +67,11 @@ import {
 	'../../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { IHucodeRetainedWorkbench } from
 	'../../../common/retainedWorkbench.js';
-import { filterSwitchWorktreePicks } from
-	'../../../common/projectSwitcher/switchProjectWorktreeModel.js';
+import {
+	createHucodeHostedNavigationSnapshot,
+	filterSwitchWorktreePicks,
+	SwitchWorktreeQuickPick,
+} from '../../../common/projectSwitcher/switchProjectWorktreeModel.js';
 import {
 	PROJECTS_SECTION_HANDLE,
 	ProjectSwitcherItem,
@@ -87,6 +92,8 @@ import {
 	getActiveWorkbenchWorktreePath,
 	getCombinedSwitchWorkbenchPicks,
 	getOmniHostedWorkspaceState,
+	getProjectSwitcherProjects,
+	pickSwitchWorktree,
 } from
 	'../../../browser/projectSwitcher/switchProjectWorktree.contribution.js';
 import {
@@ -522,6 +529,102 @@ suite('ProjectSwitcherContribution', () => {
 				['/arbitrary']
 			);
 		});
+
+	test('uses the hosted catalog without consulting Project Manager',
+		async () => {
+			let projectManagerCalls = 0;
+			const snapshot = createHucodeHostedNavigationSnapshot(hostedState(), [
+				projectRecord(),
+			]);
+			const projects = await getProjectSwitcherProjects({
+				async getProjects() {
+					projectManagerCalls++;
+					throw new Error('must not be called');
+				},
+			} as unknown as IProjectManagerService, {
+				isHostedOmniWorkspace: true,
+			} as IWorkbenchEnvironmentService, snapshot);
+
+			assert.deepStrictEqual({
+				projectManagerCalls,
+				projects: projects.map(project => ({
+					label: project.label,
+					rootPath: project.rootUri.fsPath,
+					worktreePaths: project.worktrees.map(worktree => worktree.path),
+				})),
+			}, {
+				projectManagerCalls: 0,
+				projects: [{
+					label: 'repo',
+					rootPath: '/repo',
+					worktreePaths: ['/repo/previous', '/repo/current'],
+				}],
+			});
+		}
+	);
+
+	test('falls back to local projects for an old hosted snapshot without a catalog',
+		async () => {
+			let projectManagerCalls = 0;
+			const expectedProjects = [projectRecord()];
+			const projects = await getProjectSwitcherProjects({
+				async getProjects() {
+					projectManagerCalls++;
+					return expectedProjects;
+				},
+			} as unknown as IProjectManagerService, {
+				isHostedOmniWorkspace: true,
+			} as IWorkbenchEnvironmentService,
+				createHucodeHostedNavigationSnapshot(hostedState()));
+
+			assert.strictEqual(projectManagerCalls, 1);
+			assert.strictEqual(projects, expectedProjects);
+		}
+	);
+
+	test('cancels hosted switchers before show and after deactivation',
+		async () => {
+			const cancellation = disposables.add(new Emitter<void>());
+			const validation = new DeferredPromise<boolean>();
+			const beforeShow = new TestSwitchQuickPick();
+			const beforeShowResult = pickSwitchWorktree({
+				createQuickPick: () => beforeShow,
+			} as unknown as IQuickInputService, [switchQuickPick()], {
+				cancelOn: cancellation.event,
+				hideInput: true,
+				validateBeforeShow: () => validation.p,
+			});
+
+			cancellation.fire();
+			validation.complete(true);
+			assert.strictEqual(await beforeShowResult, undefined);
+			assert.strictEqual(beforeShow.showCalls, 0);
+
+			const immediatelyInactive = new TestSwitchQuickPick();
+			assert.strictEqual(await pickSwitchWorktree({
+				createQuickPick: () => immediatelyInactive,
+			} as unknown as IQuickInputService, [switchQuickPick()], {
+				hideInput: true,
+				validateBeforeShow: async () => false,
+			}), undefined);
+			assert.strictEqual(immediatelyInactive.showCalls, 0);
+
+			const afterShowCancellation = disposables.add(new Emitter<void>());
+			const afterShow = new TestSwitchQuickPick();
+			const afterShowResult = pickSwitchWorktree({
+				createQuickPick: () => afterShow,
+			} as unknown as IQuickInputService, [switchQuickPick()], {
+				cancelOn: afterShowCancellation.event,
+				hideInput: true,
+				validateBeforeShow: async () => true,
+			});
+			await Promise.resolve();
+			assert.strictEqual(afterShow.showCalls, 1);
+			afterShowCancellation.fire();
+			assert.strictEqual(await afterShowResult, undefined);
+			assert.strictEqual(afterShow.disposed, true);
+		}
+	);
 
 	test('renders independent name branch and path fields in source order', () => {
 		let layout: 'compact' | 'twoLine' = 'compact';
@@ -2092,6 +2195,59 @@ function hostedState(activeInstanceId?: string): IHucodeHostedWorkspaceState {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+}
+
+function switchQuickPick(): SwitchWorktreeQuickPick {
+	return {
+		projectId: 'project',
+		worktreePath: '/repo',
+		isCurrent: false,
+		isLoaded: true,
+		logicalOrder: 0,
+		projectOrder: 0,
+		worktreeOrder: 0,
+		label: 'repo',
+		searchFields: [],
+	};
+}
+
+class TestSwitchQuickPick {
+	private readonly acceptEmitter = new Emitter<void>();
+	private readonly hideEmitter = new Emitter<void>();
+	private readonly valueEmitter = new Emitter<string>();
+	readonly onDidAccept = this.acceptEmitter.event;
+	readonly onDidHide = this.hideEmitter.event;
+	readonly onDidChangeValue = this.valueEmitter.event;
+	placeholder: string | undefined;
+	matchOnLabel = true;
+	matchOnDescription = true;
+	matchOnDetail = true;
+	sortByLabel = true;
+	contextKey: string | undefined;
+	hideInput = false;
+	quickNavigate: unknown;
+	items: readonly unknown[] = [];
+	activeItems: readonly SwitchWorktreeQuickPick[] = [];
+	selectedItems: readonly SwitchWorktreeQuickPick[] = [];
+	showCalls = 0;
+	disposed = false;
+
+	show(): void {
+		this.showCalls++;
+	}
+
+	hide(): void {
+		this.hideEmitter.fire();
+	}
+
+	focusOnInput(): void { }
+
+	dispose(): void {
+		this.disposed = true;
+		this.acceptEmitter.dispose();
+		this.hideEmitter.dispose();
+		this.valueEmitter.dispose();
+	}
 }
 
 function prototypeHost<T extends object>(

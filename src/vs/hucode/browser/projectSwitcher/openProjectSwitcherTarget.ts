@@ -59,23 +59,13 @@ export async function openProjectSwitcherTargetInWindow(
 	hostService: IHostService,
 	hostedShellService?: IHucodeHostedShellService
 ): Promise<void> {
-	let canonicalTarget = target;
-	try {
-		canonicalTarget = canonicalizeProjectSwitcherTarget(
-			target,
-			await projectManagerService.getProjects(),
-			pathsEqual
-		);
-	} catch (error) {
-		onUnexpectedError(error);
-	}
 	if (environmentService.isHostedOmniWorkspace) {
 		if (!hostedShellService ||
 			!isHucodeHostedShellServiceAvailable(hostedShellService)) {
 			throw new Error(hostedShellCapabilityUnavailable);
 		}
 		const outcome = await hostedShellService.navigateToFolder({
-			folderUri: URI.file(canonicalTarget.worktreePath).toJSON(),
+			folderUri: URI.file(target.worktreePath).toJSON(),
 		});
 		switch (outcome) {
 			case HucodeHostedShellOperationOutcome.Accepted:
@@ -97,6 +87,16 @@ export async function openProjectSwitcherTargetInWindow(
 		}
 	}
 
+	let canonicalTarget = target;
+	try {
+		canonicalTarget = canonicalizeProjectSwitcherTarget(
+			target,
+			await projectManagerService.getProjects(),
+			pathsEqual
+		);
+	} catch (error) {
+		onUnexpectedError(error);
+	}
 	if (environmentService.isOmniWindow) {
 		if (!shellService) {
 			throw new Error(omniShellControllerUnavailable);

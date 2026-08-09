@@ -139,6 +139,7 @@ interface IHostedWorkbenchInstance {
 	lastActiveAt?: number;
 	lifecycleGeneration: number;
 	connectionGeneration: number;
+	appliedBounds?: IRectangle;
 	interruptedUnloadReloadGeneration?: number;
 	disposed: boolean;
 }
@@ -665,12 +666,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		const zoomFactor = this.window.win.webContents.getZoomFactor();
-		instance.view.setBounds({
+		const appliedBounds = {
 			x: Math.round(bounds.x * zoomFactor),
 			y: Math.round(bounds.y * zoomFactor),
 			width: Math.round(bounds.width * zoomFactor),
 			height: Math.round(bounds.height * zoomFactor),
-		});
+		};
+		if (instance.appliedBounds &&
+			instance.appliedBounds.x === appliedBounds.x &&
+			instance.appliedBounds.y === appliedBounds.y &&
+			instance.appliedBounds.width === appliedBounds.width &&
+			instance.appliedBounds.height === appliedBounds.height) {
+			return;
+		}
+		instance.view.setBounds(appliedBounds);
+		instance.appliedBounds = appliedBounds;
 	}
 
 	private expandActiveInstanceToWindowLeft(): void {
@@ -1726,6 +1736,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		);
 
 		instance.view = view;
+		instance.appliedBounds = undefined;
 		instance.configObjectUrl = configObjectUrl;
 		const webContents = view.webContents;
 		const webContentsId = webContents.id;
@@ -1808,7 +1819,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		});
 
 		this.attachInstanceView(instance);
-		this.layout(this.bounds);
+		this.setInstanceBounds(instance, this.bounds);
 		this.setViewVisible(instance, makeActive);
 		this.trustView(instance);
 
@@ -1955,8 +1966,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		for (const instance of this.instancesById.values()) {
-			this.setInstanceBounds(instance, bounds);
+		const activeInstance = this.getActiveInstance();
+		if (activeInstance && this.isViewActuallyVisible(activeInstance)) {
+			this.setInstanceBounds(activeInstance, bounds);
 		}
 		this.bringActiveInstanceToFront();
 	}
