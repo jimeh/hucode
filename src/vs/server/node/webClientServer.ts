@@ -23,11 +23,24 @@ import { IHeaders } from '../../base/parts/request/common/request.js';
 import { CancellationToken } from '../../base/common/cancellation.js';
 import { URI } from '../../base/common/uri.js';
 import { streamToBuffer } from '../../base/common/buffer.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { IProductConfiguration } from '../../base/common/product.js';
 import { isString, Mutable } from '../../base/common/types.js';
 import { CharCode } from '../../base/common/charCode.js';
 import { IExtensionManifest } from '../../platform/extensions/common/extensions.js';
 import { ICSSDevelopmentService } from '../../platform/cssDev/node/cssDevService.js';
+import {
+	HUCODE_WEB_OMNI_ROOT_ARG,
+	type HucodeWebWorkbenchRoutePath,
+	type IHucodeWebWorkbenchRouteOptions,
+	getHucodeWebClientBasePath,
+	getHucodeWebClientRouteAction,
+	getHucodeWebProductConfiguration,
+	getHucodeWebWorkbenchConfiguration,
+	toHucodeWebRouteLocation,
+} from './hucodeWebClientServerIntegration.js';
+import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
+import { IServerLifetimeService } from './serverLifetimeService.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
 	'.html': 'text/html',
@@ -115,9 +128,10 @@ const STATIC_PATH = `/static`;
 const CALLBACK_PATH = `/callback`;
 const WEB_EXTENSION_PATH = `/web-extension-resource`;
 
-export class WebClientServer {
+export class WebClientServer extends Disposable {
 
 	private readonly _webExtensionResourceUrlTemplate: URI | undefined;
+	private readonly _hucodeProjectManagerServer: HucodeWebProjectManagerServer;
 
 	constructor(
 		private readonly _connectionToken: ServerConnectionToken,
@@ -127,9 +141,35 @@ export class WebClientServer {
 		@ILogService private readonly _logService: ILogService,
 		@IRequestService private readonly _requestService: IRequestService,
 		@IProductService private readonly _productService: IProductService,
-		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService
+		@ICSSDevelopmentService private readonly _cssDevService: ICSSDevelopmentService,
+		@IServerLifetimeService private readonly _serverLifetimeService: IServerLifetimeService
 	) {
+		super();
 		this._webExtensionResourceUrlTemplate = this._productService.extensionsGallery?.resourceUrlTemplate ? URI.parse(this._productService.extensionsGallery.resourceUrlTemplate) : undefined;
+		this._hucodeProjectManagerServer =
+			this._register(new HucodeWebProjectManagerServer(
+				this._environmentService.userDataPath,
+				this._logService,
+				{
+					enabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
+					acquireStateWriteLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-state-write'
+						),
+					acquireMutationLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-mutation'
+						),
+					acquireReadLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-read'
+						),
+					acquireResponseLease: () =>
+						this._serverLifetimeService.active(
+							'hucode-project-response'
+						),
+				}
+			));
 	}
 
 	/**
@@ -144,9 +184,6 @@ export class WebClientServer {
 			if (pathname.startsWith(STATIC_PATH) && pathname.charCodeAt(STATIC_PATH.length) === CharCode.Slash) {
 				return this._handleStatic(req, res, pathname.substring(STATIC_PATH.length));
 			}
-			if (pathname === '/') {
-				return this._handleRoot(req, res, parsedUrl);
-			}
 			if (pathname === CALLBACK_PATH) {
 				// callback support
 				return this._handleCallback(res);
@@ -154,6 +191,34 @@ export class WebClientServer {
 			if (pathname.startsWith(WEB_EXTENSION_PATH) && pathname.charCodeAt(WEB_EXTENSION_PATH.length) === CharCode.Slash) {
 				// extension resource support
 				return this._handleWebExtensionResource(req, res, pathname.substring(WEB_EXTENSION_PATH.length));
+			}
+			if (await this._hucodeProjectManagerServer.handle(
+				req,
+				res,
+				pathname
+			)) {
+				return;
+			}
+
+			const routeAction = getHucodeWebClientRouteAction(pathname, {
+				basePath: getHucodeWebClientBasePath(req.headers, this._basePath),
+				query: parsedUrl.query,
+				omniEnabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
+			});
+			switch (routeAction.type) {
+				case 'workbench':
+					return this._handleRoot(
+						req,
+						res,
+						parsedUrl,
+						routeAction.routePath,
+						routeAction
+					);
+				case 'redirect':
+					res.writeHead(302, { Location: routeAction.location });
+					return void res.end();
+				case 'notFound':
+					break;
 			}
 
 			return serveError(req, res, 404, 'Not found.');
@@ -255,9 +320,15 @@ export class WebClientServer {
 	}
 
 	/**
-	 * Handle HTTP requests for /
+	 * Handle HTTP requests that load the web workbench document.
 	 */
-	private async _handleRoot(req: http.IncomingMessage, res: http.ServerResponse, parsedUrl: url.UrlWithParsedQuery): Promise<void> {
+	private async _handleRoot(
+		req: http.IncomingMessage,
+		res: http.ServerResponse,
+		parsedUrl: url.UrlWithParsedQuery,
+		routePath: HucodeWebWorkbenchRoutePath = '/',
+		options: IHucodeWebWorkbenchRouteOptions = {}
+	): Promise<void> {
 
 		const getFirstHeader = (headerName: string) => {
 			const val = req.headers[headerName];
@@ -287,7 +358,11 @@ export class WebClientServer {
 					newQuery[key] = parsedUrl.query[key];
 				}
 			}
-			const newLocation = url.format({ pathname: basePath, query: newQuery });
+			const newLocation = toHucodeWebRouteLocation(
+				basePath,
+				routePath,
+				newQuery
+			);
 			responseHeaders['Location'] = newLocation;
 
 			res.writeHead(302, responseHeaders);
@@ -354,6 +429,7 @@ export class WebClientServer {
 
 		const productConfiguration: Partial<Mutable<IProductConfiguration>> = {
 			embedderIdentifier: 'server-distro',
+			...getHucodeWebProductConfiguration(this._productService),
 			voiceWsUrl: this._productService.voiceWsUrl,
 			extensionsGallery: this._webExtensionResourceUrlTemplate && this._productService.extensionsGallery ? {
 				...this._productService.extensionsGallery,
@@ -375,6 +451,9 @@ export class WebClientServer {
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
+			...getHucodeWebWorkbenchConfiguration(basePath, options, {
+				serverPathCaseSensitive: isLinux,
+			}),
 			_wrapWebWorkerExtHostInIframe,
 			developmentOptions: { enableSmokeTestDriver: this._environmentService.args['enable-smoke-test-driver'] ? true : undefined, logLevel: this._logService.getLevel() },
 			settingsSyncOptions: !this._environmentService.isBuilt && this._environmentService.args['enable-sync'] ? { enabled: true } : undefined,
