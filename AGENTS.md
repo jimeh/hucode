@@ -251,6 +251,13 @@ as the required Hucode instruction set for work in this fork.
   the main-side port-close listener bound to that connection generation so the
   pending operation loses authority before reacquisition; a late close from an
   old port must not invalidate its replacement.
+- Desktop terminal shell shutdown is retryable because the main service caches
+  one shared shutdown operation. If another call invalidates the renderer port,
+  reacquire and repeat only the shutdown call to rejoin that operation, within
+  one overall terminal budget; ordinary operations remain at-most-once.
+- Racing `Event.toPromise()` against a timeout does not dispose the event
+  subscription when the timeout wins. Bounded connection waiters must dispose
+  both the listener and timer explicitly.
 - Complete project-catalog reconciliation is shell authority. Hosted
   workbenches may read combined state through `getWindowState`, but must not
   submit a supposedly complete catalog over their connection facade.

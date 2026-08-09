@@ -27,6 +27,7 @@ import {
 	HUCODE_SHELL_CONTROLLER_CHANNEL,
 	HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
 	HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL,
+	HucodeShellControllerTimeoutError,
 	HucodeShellControllerUnavailableError,
 	IHucodeShellControllerService,
 } from '../../platform/window/common/hucodeShellControllerService.js';
@@ -39,7 +40,7 @@ export interface IDesktopShellControllerConnectionAttempt extends IDisposable {
 export type DesktopShellControllerConnector = () =>
 	IDesktopShellControllerConnectionAttempt;
 
-/** Bounds privileged connection acquisition and shutdown joining. */
+/** Bounds privileged connection acquisition and controller operations. */
 interface IDesktopShellControllerAdapterOptions {
 	/** Overall budget for calls waiting on the initial connection. */
 	readonly connectionTimeoutMs?: number;
@@ -48,6 +49,8 @@ interface IDesktopShellControllerAdapterOptions {
 	/** Budget for one dispatched controller operation. */
 	readonly operationTimeoutMs?: number;
 	readonly shutdownConnectionTimeoutMs?: number;
+	/** Overall budget for terminal shutdown acquisition and joining. */
+	readonly shutdownOperationTimeoutMs?: number;
 	readonly retryDelaysMs?: readonly number[];
 }
 
@@ -75,11 +78,15 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	private readonly acquisitionTimeoutMs: number;
 	private readonly operationTimeoutMs: number;
 	private readonly shutdownConnectionTimeoutMs: number;
+	private readonly shutdownOperationTimeoutMs: number;
 	private readonly retryDelaysMs: readonly number[];
 	private readonly _onDidChangeState = this._register(new Emitter<
 		Awaited<ReturnType<IHucodeShellControllerService['getState']>>
 	>());
 	readonly onDidChangeState = this._onDidChangeState.event;
+	private readonly _onDidConnect = this._register(
+		new Emitter<IHucodeShellControllerService>()
+	);
 
 	constructor(
 		private readonly connect: DesktopShellControllerConnector,
@@ -92,6 +99,8 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		this.operationTimeoutMs = options.operationTimeoutMs ?? 15_000;
 		this.shutdownConnectionTimeoutMs =
 			options.shutdownConnectionTimeoutMs ?? 1000;
+		this.shutdownOperationTimeoutMs =
+			options.shutdownOperationTimeoutMs ?? 30_000;
 		this.retryDelaysMs = (options.retryDelaysMs ?? defaultRetryDelaysMs)
 			.filter(delay => Number.isFinite(delay) && delay >= 0);
 		this.supportsWorkspaceScreenshotOverlay =
@@ -193,6 +202,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		this.retryIndex = 0;
 		this.clearInitialConnectionTimer();
 		void this.initialConnection.complete(shell);
+		this._onDidConnect.fire(shell);
 		if (publishRecoveredState) {
 			void this.refreshState(shell);
 		}
@@ -237,7 +247,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 				throw result.error;
 			}
 			this.invalidateConnection(shell);
-			throw new HucodeShellControllerUnavailableError();
+			throw new HucodeShellControllerTimeoutError();
 		} finally {
 			if (timer !== undefined) {
 				clearTimeout(timer);
@@ -286,6 +296,29 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 			clearTimeout(this.initialConnectionTimer);
 			this.initialConnectionTimer = undefined;
 		}
+	}
+
+	private waitForShutdownConnection(timeoutMs: number): Promise<
+		IHucodeShellControllerService | undefined
+	> {
+		if (this.shell) {
+			return Promise.resolve(this.shell);
+		}
+		return new Promise(resolve => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const listener = this._onDidConnect.event(shell => {
+				if (timer !== undefined) {
+					clearTimeout(timer);
+				}
+				listener.dispose();
+				resolve(shell);
+			});
+			timer = setTimeout(() => {
+				timer = undefined;
+				listener.dispose();
+				resolve(undefined);
+			}, timeoutMs);
+		});
 	}
 
 	private shutdown(): void {
@@ -435,22 +468,48 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	async shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]): Promise<void> {
-		try {
-			const shell = await raceTimeout(
-				this.shell
-					? Promise.resolve(this.shell)
-					: this.initialConnection.p,
-				this.shutdownConnectionTimeoutMs
-			);
-			if (!shell || this.shell !== shell) {
+		const operationDeadline =
+			Date.now() + this.shutdownOperationTimeoutMs;
+		while (true) {
+			const remainingBudget = operationDeadline - Date.now();
+			if (remainingBudget <= 0) {
 				return;
 			}
-			await raceTimeout(
-				shell.shutdownWindowWorkspaces(reason),
-				this.shutdownConnectionTimeoutMs
-			);
-		} catch {
-			// A renderer teardown can dispose the port before shutdown joins settle.
+			const shell = await this.waitForShutdownConnection(Math.min(
+				this.shutdownConnectionTimeoutMs,
+				remainingBudget
+			));
+			if (!shell) {
+				return;
+			}
+			if (this.shell !== shell) {
+				continue;
+			}
+
+			let shutdown: Promise<void>;
+			try {
+				shutdown = shell.shutdownWindowWorkspaces(reason);
+			} catch {
+				if (this.shell !== shell) {
+					continue;
+				}
+				return;
+			}
+
+			try {
+				await raceTimeout(
+					shutdown,
+					Math.max(0, operationDeadline - Date.now())
+				);
+			} catch {
+				if (this.shell !== shell) {
+					// Main caches terminal shutdown, so a replacement port can
+					// safely rejoin the same operation without replaying work.
+					continue;
+				}
+				return;
+			}
+			return;
 		}
 	}
 }

@@ -191,6 +191,10 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 					};
 				}
 			).navigator.clipboard.writeText(value), text),
+			readSavedFileText: () => fs.readFile(
+				path.join(alphaPath, bridgeFileName),
+				'utf8'
+			),
 		});
 		await runHostedWorkbenchSmokeCommand(
 			page,

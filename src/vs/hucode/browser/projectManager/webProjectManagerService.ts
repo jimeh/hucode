@@ -103,7 +103,7 @@ export class WebProjectManagerClient extends Disposable
 	private readonly _onDidChangeGitWorktreeTargets:
 		Emitter<GitWorktreeTargetChange>;
 	readonly onDidChangeGitWorktreeTargets: VSCodeEvent<GitWorktreeTargetChange>;
-	private eventSessionReady = new DeferredPromise<void>();
+	private readonly eventSessionReady = new DeferredPromise<void>();
 	private readonly gitWorktreeTargetPaths =
 		new Map<string, readonly string[]>();
 	private readonly gitWorktreeTargetRegistrations = new Map<
@@ -502,8 +502,6 @@ export class WebProjectManagerClient extends Disposable
 			this.eventConnected = false;
 			if (this.eventConnectionGeneration === 0) {
 				void this.eventSessionReady.complete();
-			} else if (this.eventSessionReady.isResolved) {
-				this.eventSessionReady = new DeferredPromise<void>();
 			}
 		});
 		events.addEventListener('projects', event => {

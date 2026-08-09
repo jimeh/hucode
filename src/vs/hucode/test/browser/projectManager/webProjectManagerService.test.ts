@@ -468,6 +468,41 @@ suite('WebProjectManagerService', () => {
 		}
 	);
 
+	test('does not hang target registration after permanent reconnect failure',
+		async () => {
+			let fetchCalls = 0;
+			const fakeFetch: WebProjectManagerFetch = async () => {
+				fetchCalls++;
+				if (fetchCalls === 2) {
+					return new Response(JSON.stringify({
+						error: 'event session is disconnected',
+					}), { status: 400 });
+				}
+				return new Response(JSON.stringify({ observations: [] }));
+			};
+			const service = disposables.add(createService(fakeFetch));
+			const restored = new DeferredPromise<void>();
+			disposables.add(service.onDidChangeGitWorktreeTargets(() => {
+				void restored.complete();
+			}));
+
+			await service.setGitWorktreeTargets('consumer', ['/repo']);
+			FakeEventSource.instances[0].emit('error', new Event('error'));
+			const disconnectedRegistration = service.setGitWorktreeTargets(
+				'consumer',
+				['/repo/next']
+			).then(
+				() => 'resolved',
+				error => `rejected: ${error}`
+			);
+			const result = await raceTimeout(disconnectedRegistration, 100);
+			assert.match(result ?? '', /event session is disconnected/);
+
+			FakeEventSource.instances[0].emit('open', new Event('open'));
+			await restored.p;
+			assert.strictEqual(fetchCalls, 3);
+		});
+
 	test('settles initial Git targets when project events fail to connect',
 		async () => {
 			FakeEventSource.openOnConstruction = false;

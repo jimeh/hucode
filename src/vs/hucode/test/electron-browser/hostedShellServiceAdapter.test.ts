@@ -7,6 +7,7 @@ import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
+import { CancellationError } from '../../../base/common/errors.js';
 import { Emitter } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
@@ -360,6 +361,162 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				await adapter.closeSelf(),
 				HucodeHostedShellOperationOutcome.Accepted
 			);
+		});
+
+	test('application rejection preserves concurrent non-idempotent success',
+		async () => {
+			const timers = new ManualTimers();
+			const accepted = new DeferredPromise<
+				HucodeHostedShellOperationOutcome
+			>();
+			let attempts = 0;
+			let reloadCalls = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => {
+					throw new Error('application rejected request');
+				},
+				reloadSelf: async () => {
+					reloadCalls++;
+					return accepted.p;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => {
+					attempts++;
+					return createAttempt(Promise.resolve(shell));
+				},
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			const successful = adapter.reloadSelf();
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Rejected
+			);
+			void accepted.complete(HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(
+				await successful,
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(reloadCalls, 1);
+			assert.strictEqual(attempts, 1);
+			assert.strictEqual(isHucodeHostedShellServiceAvailable(adapter), true);
+		});
+
+	test('application rejection preserves readiness and state availability',
+		async () => {
+			const timers = new ManualTimers();
+			const connectedState: IHucodeHostedShellState = {
+				available: true,
+				projectsSidebarVisible: true,
+				projectSwitcherCanGoBack: false,
+				projectSwitcherCanGoForward: false,
+				lifecycleState: 'active',
+				active: true,
+				visible: true,
+			};
+			let stateCalls = 0;
+			let attempts = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				getState: async () => {
+					if (++stateCalls === 1) {
+						return connectedState;
+					}
+					throw new Error('application rejected state request');
+				},
+				notifyReady: async () => {
+					throw new Error('application rejected readiness');
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => {
+					attempts++;
+					return createAttempt(Promise.resolve(shell));
+				},
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			assert.deepStrictEqual(await adapter.getState(), connectedState);
+			assert.deepStrictEqual(await adapter.notifyReady(), {
+				outcome: HucodeHostedShellOperationOutcome.Rejected,
+			});
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(attempts, 1);
+			assert.strictEqual(isHucodeHostedShellServiceAvailable(adapter), true);
+		});
+
+	test('transport cancellation stays unavailable without invalidation',
+		async () => {
+			let closeCalls = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => {
+					if (++closeCalls === 1) {
+						throw new CancellationError();
+					}
+					return HucodeHostedShellOperationOutcome.Accepted;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => createAttempt(Promise.resolve(shell)),
+				createHostedEnvironment(),
+				createImmediateOptions()
+			));
+			await settled();
+
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Unavailable
+			);
+			assert.strictEqual(isHucodeHostedShellServiceAvailable(adapter), true);
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+		});
+
+	test('returns a success completed after concurrent timeout invalidation',
+		async () => {
+			const timers = new ManualTimers();
+			const accepted = new DeferredPromise<
+				HucodeHostedShellOperationOutcome
+			>();
+			const never = new DeferredPromise<HucodeHostedShellOperationOutcome>();
+			let reloadCalls = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => never.p,
+				reloadSelf: async () => {
+					reloadCalls++;
+					return accepted.p;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => createAttempt(Promise.resolve(shell)),
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			const successful = adapter.reloadSelf();
+			const timedOut = adapter.closeSelf();
+			await settled();
+			timers.fireNext(70);
+			assert.strictEqual(
+				await timedOut,
+				HucodeHostedShellOperationOutcome.Unavailable
+			);
+			void accepted.complete(HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(
+				await successful,
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(reloadCalls, 1);
 		});
 });
 

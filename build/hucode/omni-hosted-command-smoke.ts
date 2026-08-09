@@ -259,6 +259,7 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 	readonly timeoutMs: number;
 	readonly readClipboardText: () => Promise<string>;
 	readonly writeClipboardText: (text: string) => Promise<void>;
+	readonly readSavedFileText: () => Promise<string>;
 }): Promise<Locator> {
 	const editor = await openHostedWorkbenchSmokeFile(
 		options.keyboardPage,
@@ -343,8 +344,95 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 		options.timeoutMs
 	);
 	await focusHostedWorkbenchSmokeEditor(editor, options.timeoutMs);
+	const editorGroup = editor.locator(
+		'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), ' +
+		'" editor-group-container ")][1]'
+	);
+	const dirtyIndicator = editorGroup.locator(
+		':scope > .title.dirty, ' +
+		':scope > .title .tabs-container > .tab.active.dirty'
+	).first();
 	await options.keyboardPage.keyboard.press('Control+S');
+	const saveDeadline = Date.now() + options.timeoutMs;
+	await waitForSavedFileText(
+		options.readSavedFileText,
+		shellPasteMarker,
+		saveDeadline
+	);
+	const remainingCleanWaitMs = saveDeadline - Date.now();
+	if (remainingCleanWaitMs <= 0) {
+		throw new Error('Timed out waiting for the saved editor to become clean');
+	}
+	await dirtyIndicator.waitFor({
+		state: 'hidden',
+		timeout: remainingCleanWaitMs,
+	});
 	return editor;
+}
+
+async function waitForSavedFileText(
+	readSavedFileText: () => Promise<string>,
+	expected: string,
+	deadline: number
+): Promise<void> {
+	let lastObserved = '<not observed>';
+	while (Date.now() < deadline) {
+		const result = await readSavedFileTextBeforeDeadline(
+			readSavedFileText,
+			deadline
+		);
+		if (result.kind === 'timeout') {
+			break;
+		}
+		if (result.kind === 'error') {
+			lastObserved = result.error instanceof Error
+				? result.error.message
+				: String(result.error);
+		} else {
+			lastObserved = result.value;
+			if (lastObserved === expected) {
+				return;
+			}
+		}
+		await delay(Math.min(50, Math.max(0, deadline - Date.now())));
+	}
+	throw new Error(
+		`Timed out waiting for saved file text ${JSON.stringify(expected)}; ` +
+		`last observed ${JSON.stringify(lastObserved)}`
+	);
+}
+
+async function readSavedFileTextBeforeDeadline(
+	readSavedFileText: () => Promise<string>,
+	deadline: number
+): Promise<
+	| { readonly kind: 'value'; readonly value: string }
+	| { readonly kind: 'error'; readonly error: unknown }
+	| { readonly kind: 'timeout' }
+> {
+	const timeoutMs = deadline - Date.now();
+	if (timeoutMs <= 0) {
+		return { kind: 'timeout' };
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			Promise.resolve().then(readSavedFileText).then(
+				value => ({ kind: 'value' as const, value }),
+				error => ({ kind: 'error' as const, error })
+			),
+			new Promise<{ readonly kind: 'timeout' }>(resolve => {
+				timer = setTimeout(
+					() => resolve({ kind: 'timeout' }),
+					timeoutMs
+				);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+		}
+	}
 }
 
 async function waitForClipboardText(

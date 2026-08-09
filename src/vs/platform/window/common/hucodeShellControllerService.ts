@@ -91,6 +91,14 @@ export class HucodeShellControllerUnavailableError extends Error {
 	}
 }
 
+/** A dispatched privileged shell call timed out with ambiguous delivery. */
+export class HucodeShellControllerTimeoutError extends Error {
+	constructor() {
+		super('Desktop Omni shell capability timed out after dispatch.');
+		this.name = 'HucodeShellControllerTimeoutError';
+	}
+}
+
 /** Path-scoped preparation before a shell opens a folder standalone. */
 export interface IHucodeStandaloneWorkspaceRequest {
 	readonly folderUri: UriComponents;
