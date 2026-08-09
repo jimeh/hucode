@@ -8,11 +8,13 @@ import { Emitter } from '../../base/common/event.js';
 import {
 	Disposable,
 	DisposableStore,
+	IDisposable,
 	isDisposable,
+	MutableDisposable,
 } from '../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/common/ipc.mp.js';
-import { acquirePortOrUndefined } from
+import { acquirePortOrUndefinedCancellable } from
 	'../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { SyncDescriptor } from
 	'../../platform/instantiation/common/descriptors.js';
@@ -29,14 +31,27 @@ import {
 	IHucodeShellControllerService,
 } from '../../platform/window/common/hucodeShellControllerService.js';
 
+/** One cancellable attempt to acquire the privileged controller capability. */
+export interface IDesktopShellControllerConnectionAttempt extends IDisposable {
+	readonly promise: Promise<IHucodeShellControllerService | undefined>;
+}
+
 export type DesktopShellControllerConnector = () =>
-	Promise<IHucodeShellControllerService | undefined>;
+	IDesktopShellControllerConnectionAttempt;
 
 /** Bounds privileged connection acquisition and shutdown joining. */
 interface IDesktopShellControllerAdapterOptions {
+	/** Overall budget for calls waiting on the initial connection. */
 	readonly connectionTimeoutMs?: number;
+	/** Budget for each individual port acquisition attempt. */
+	readonly acquisitionTimeoutMs?: number;
+	/** Budget for one dispatched controller operation. */
+	readonly operationTimeoutMs?: number;
 	readonly shutdownConnectionTimeoutMs?: number;
+	readonly retryDelaysMs?: readonly number[];
 }
+
+const defaultRetryDelaysMs = [100, 250, 500, 1_000, 2_000];
 
 /** Desktop client for the privileged capability bound to one Omni shell. */
 export class DesktopShellControllerServiceAdapter extends Disposable
@@ -45,78 +60,253 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	declare readonly _serviceBrand: undefined;
 	readonly supportsWorkspaceScreenshotOverlay: boolean;
 
-	private readonly connection =
+	private readonly initialConnection =
 		new DeferredPromise<IHucodeShellControllerService | undefined>();
+	private shell: IHucodeShellControllerService | undefined;
+	private readonly shellDisposables =
+		this._register(new MutableDisposable<DisposableStore>());
+	private connectionAttempt:
+		IDesktopShellControllerConnectionAttempt | undefined;
+	private acquisitionTimer: ReturnType<typeof setTimeout> | undefined;
+	private retryTimer: ReturnType<typeof setTimeout> | undefined;
+	private initialConnectionTimer: ReturnType<typeof setTimeout> | undefined;
+	private retryIndex = 0;
+	private disposed = false;
+	private readonly acquisitionTimeoutMs: number;
+	private readonly operationTimeoutMs: number;
 	private readonly shutdownConnectionTimeoutMs: number;
+	private readonly retryDelaysMs: readonly number[];
 	private readonly _onDidChangeState = this._register(new Emitter<
 		Awaited<ReturnType<IHucodeShellControllerService['getState']>>
 	>());
 	readonly onDidChangeState = this._onDidChangeState.event;
 
 	constructor(
-		connect: DesktopShellControllerConnector,
+		private readonly connect: DesktopShellControllerConnector,
 		options: IDesktopShellControllerAdapterOptions = {},
 		@INativeWorkbenchEnvironmentService
 		environmentService: INativeWorkbenchEnvironmentService
 	) {
 		super();
+		this.acquisitionTimeoutMs = options.acquisitionTimeoutMs ?? 5_000;
+		this.operationTimeoutMs = options.operationTimeoutMs ?? 15_000;
 		this.shutdownConnectionTimeoutMs =
 			options.shutdownConnectionTimeoutMs ?? 1000;
+		this.retryDelaysMs = (options.retryDelaysMs ?? defaultRetryDelaysMs)
+			.filter(delay => Number.isFinite(delay) && delay >= 0);
 		this.supportsWorkspaceScreenshotOverlay =
 			!!environmentService.isOmniShellWindow;
 		if (!environmentService.isOmniShellWindow) {
-			void this.connection.complete(undefined);
+			void this.initialConnection.complete(undefined);
 			return;
 		}
 
-		let disposed = false;
-		let connectionSettled = false;
-		this._register({
-			dispose: () => {
-				disposed = true;
-				connectionSettled = true;
-				void this.connection.complete(undefined);
-			},
-		});
-		const connectionAttempt = connect();
-		const connectionTimeout = setTimeout(() => {
-			connectionSettled = true;
-			void this.connection.complete(undefined);
-		}, options.connectionTimeoutMs ?? 10000);
-		this._register({ dispose: () => clearTimeout(connectionTimeout) });
-		void connectionAttempt.then(shell => {
-			if (disposed || connectionSettled) {
-				if (isDisposable(shell)) {
-					shell.dispose();
-				}
-				return;
-			}
-			connectionSettled = true;
-			clearTimeout(connectionTimeout);
-			if (shell) {
-				if (isDisposable(shell)) {
-					this._register(shell);
-				}
-				this._register(shell.onDidChangeState(state =>
-					this._onDidChangeState.fire(state)
-				));
-			}
-			void this.connection.complete(shell);
-		}, () => {
-			connectionSettled = true;
-			clearTimeout(connectionTimeout);
-			void this.connection.complete(undefined);
-		});
+		this._register({ dispose: () => this.shutdown() });
+		this.initialConnectionTimer = setTimeout(() => {
+			this.initialConnectionTimer = undefined;
+			void this.initialConnection.complete(undefined);
+		}, options.connectionTimeoutMs ?? 10_000);
+		this.beginConnectionAttempt();
 	}
 
 	private async withShell<T>(
 		run: (shell: IHucodeShellControllerService) => Promise<T>
 	): Promise<T> {
-		const shell = await this.connection.p;
-		if (!shell) {
+		const shell = this.shell ?? await this.initialConnection.p;
+		if (!shell || this.shell !== shell) {
 			throw new HucodeShellControllerUnavailableError();
 		}
-		return run(shell);
+		try {
+			return await this.invokeBounded(shell, () => run(shell));
+		} catch (error) {
+			this.invalidateConnection(shell);
+			throw error;
+		}
+	}
+
+	private beginConnectionAttempt(): void {
+		if (this.disposed || this.shell || this.connectionAttempt) {
+			return;
+		}
+
+		let attempt: IDesktopShellControllerConnectionAttempt;
+		try {
+			attempt = this.connect();
+		} catch {
+			this.scheduleRetry();
+			return;
+		}
+		this.connectionAttempt = attempt;
+		this.acquisitionTimer = setTimeout(() => {
+			if (this.connectionAttempt !== attempt) {
+				return;
+			}
+			this.connectionAttempt = undefined;
+			this.acquisitionTimer = undefined;
+			attempt.dispose();
+			this.scheduleRetry();
+		}, this.acquisitionTimeoutMs);
+
+		void attempt.promise.then(shell => {
+			this.finishConnectionAttempt(attempt, shell);
+		}, () => {
+			this.finishConnectionAttempt(attempt, undefined);
+		});
+	}
+
+	private finishConnectionAttempt(
+		attempt: IDesktopShellControllerConnectionAttempt,
+		shell: IHucodeShellControllerService | undefined
+	): void {
+		if (this.connectionAttempt !== attempt) {
+			if (isDisposable(shell)) {
+				shell.dispose();
+			}
+			return;
+		}
+		this.connectionAttempt = undefined;
+		this.clearAcquisitionTimer();
+		attempt.dispose();
+		if (this.disposed || !shell) {
+			if (isDisposable(shell)) {
+				shell.dispose();
+			}
+			if (!this.disposed) {
+				this.scheduleRetry();
+			}
+			return;
+		}
+
+		this.installConnection(shell);
+	}
+
+	private installConnection(
+		shell: IHucodeShellControllerService
+	): void {
+		const publishRecoveredState = this.initialConnection.isSettled;
+		const disposables = new DisposableStore();
+		if (isDisposable(shell)) {
+			disposables.add(shell);
+		}
+		disposables.add(shell.onDidChangeState(state => {
+			if (this.shell === shell) {
+				this._onDidChangeState.fire(state);
+			}
+		}));
+		this.shellDisposables.value = disposables;
+		this.shell = shell;
+		this.retryIndex = 0;
+		this.clearInitialConnectionTimer();
+		void this.initialConnection.complete(shell);
+		if (publishRecoveredState) {
+			void this.refreshState(shell);
+		}
+	}
+
+	private async refreshState(
+		shell: IHucodeShellControllerService
+	): Promise<void> {
+		try {
+			const state = await this.invokeBounded(shell, () => shell.getState());
+			if (this.shell === shell) {
+				this._onDidChangeState.fire(state);
+			}
+		} catch {
+			this.invalidateConnection(shell);
+		}
+	}
+
+	private async invokeBounded<T>(
+		shell: IHucodeShellControllerService,
+		operation: () => Promise<T>
+	): Promise<T> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const result = await Promise.race([
+				Promise.resolve().then(operation).then(
+					value => ({ kind: 'value' as const, value }),
+					error => ({ kind: 'failure' as const, error })
+				),
+				new Promise<{ readonly kind: 'timeout' }>(resolve => {
+					timer = setTimeout(
+						() => resolve({ kind: 'timeout' }),
+						this.operationTimeoutMs
+					);
+				}),
+			]);
+			if (result.kind === 'value' && this.shell === shell) {
+				return result.value;
+			}
+			if (result.kind === 'failure') {
+				throw result.error;
+			}
+			throw new HucodeShellControllerUnavailableError();
+		} finally {
+			if (timer !== undefined) {
+				clearTimeout(timer);
+			}
+		}
+	}
+
+	private invalidateConnection(
+		shell: IHucodeShellControllerService
+	): void {
+		if (this.shell !== shell) {
+			return;
+		}
+		this.shell = undefined;
+		this.shellDisposables.clear();
+		this.scheduleRetry();
+	}
+
+	private scheduleRetry(): void {
+		if (this.disposed || this.shell || this.connectionAttempt ||
+			this.retryTimer) {
+			return;
+		}
+		const delay = this.retryDelaysMs.length === 0
+			? 0
+			: this.retryDelaysMs[Math.min(
+				this.retryIndex,
+				this.retryDelaysMs.length - 1
+			)];
+		this.retryIndex++;
+		this.retryTimer = setTimeout(() => {
+			this.retryTimer = undefined;
+			this.beginConnectionAttempt();
+		}, delay);
+	}
+
+	private clearAcquisitionTimer(): void {
+		if (this.acquisitionTimer !== undefined) {
+			clearTimeout(this.acquisitionTimer);
+			this.acquisitionTimer = undefined;
+		}
+	}
+
+	private clearInitialConnectionTimer(): void {
+		if (this.initialConnectionTimer !== undefined) {
+			clearTimeout(this.initialConnectionTimer);
+			this.initialConnectionTimer = undefined;
+		}
+	}
+
+	private shutdown(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		this.clearAcquisitionTimer();
+		this.clearInitialConnectionTimer();
+		if (this.retryTimer !== undefined) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = undefined;
+		}
+		this.connectionAttempt?.dispose();
+		this.connectionAttempt = undefined;
+		this.shell = undefined;
+		this.shellDisposables.clear();
+		void this.initialConnection.complete(undefined);
 	}
 
 	getState() { return this.withShell(shell => shell.getState()); }
@@ -250,10 +440,18 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	>[0]): Promise<void> {
 		try {
 			const shell = await raceTimeout(
-				this.connection.p,
+				this.shell
+					? Promise.resolve(this.shell)
+					: this.initialConnection.p,
 				this.shutdownConnectionTimeoutMs
 			);
-			await shell?.shutdownWindowWorkspaces(reason);
+			if (!shell || this.shell !== shell) {
+				return;
+			}
+			await raceTimeout(
+				shell.shutdownWindowWorkspaces(reason),
+				this.shutdownConnectionTimeoutMs
+			);
 		} catch {
 			// A renderer teardown can dispose the port before shutdown joins settle.
 		}
@@ -261,26 +459,31 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 }
 
 /** Acquires the owner-bound privileged controller port for an Omni shell. */
-export async function connectDesktopShellController():
-	Promise<IHucodeShellControllerService> {
-	const port = await acquirePortOrUndefined(
+export function connectDesktopShellController():
+	IDesktopShellControllerConnectionAttempt {
+	const acquisition = acquirePortOrUndefinedCancellable(
 		HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
 		HUCODE_SHELL_CONTROLLER_PORT_RESPONSE_CHANNEL
 	);
-	if (!port) {
-		throw new Error('Desktop Omni shell capability was denied.');
-	}
-	const disposables = new DisposableStore();
-	const client = disposables.add(new MessagePortClient(
-		port,
-		'hucodeDesktopShellController'
-	));
-	const shell = createHucodeShellControllerClient(
-		client.getChannel(HUCODE_SHELL_CONTROLLER_CHANNEL)
-	);
-	return Object.assign(shell, {
-		dispose: () => disposables.dispose(),
-	});
+	return {
+		promise: acquisition.promise.then(port => {
+			if (!port) {
+				return undefined;
+			}
+			const disposables = new DisposableStore();
+			const client = disposables.add(new MessagePortClient(
+				port,
+				'hucodeDesktopShellController'
+			));
+			const shell = createHucodeShellControllerClient(
+				client.getChannel(HUCODE_SHELL_CONTROLLER_CHANNEL)
+			);
+			return Object.assign(shell, {
+				dispose: () => disposables.dispose(),
+			});
+		}),
+		dispose: () => acquisition.dispose(),
+	};
 }
 
 registerSingleton(

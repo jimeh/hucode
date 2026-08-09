@@ -41,8 +41,6 @@ import {
 	isHucodeOmniClipboardAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
 import {
-	formatHucodeHostedShellActionCommandIdForLog,
-	getHucodeHostedShellAction,
 	getHucodeHostedShellActionCommandId,
 } from '../../platform/window/common/hucodeHostedShellActions.js';
 import {
@@ -57,7 +55,6 @@ import {
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellContinuationAuthorization,
 	IHucodeHostedShellDelegate,
-	IHucodeHostedShellState,
 	negotiateHucodeHostedShellCapabilities,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import {
@@ -90,7 +87,6 @@ import {
 import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'../common/omniWorkspaceReopen.js';
 import {
-	HUCODE_OMNI_WEB_SHELL_CHANNEL,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
@@ -363,20 +359,6 @@ type IWebHucodeShellHostSurfaceService = Pick<
 const REQUEST_TIMEOUT = Symbol('hucodeOmniWebRequestTimeout');
 const COMMAND_DELIVERY_UNKNOWN =
 	Symbol('hucodeOmniWebCommandDeliveryUnknown');
-type IHucodeHostedWebShellConnectionFacade = Pick<
-	IHucodeShellService,
-	| 'onDidChangeWindowState'
-	| 'getWindowState'
-	| 'openAndFocusWorkspace'
-	| 'focusNormalWindowByPath'
-	| 'closeWorkspace'
-	| 'reopenWorkspaceInNormalWindow'
-	| 'notifyHostedWorkspaceReady'
-	| 'focusWorkspace'
-	| 'focusShell'
-	| 'runActionInShell'
-	| 'reloadWorkspace'
->;
 
 /**
  * Server routing configuration the web shell needs to build workbench URLs.
@@ -1699,46 +1681,39 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		switch (message.type) {
-			case HucodeOmniWebChildMessageType.Ready:
+			case HucodeOmniWebChildMessageType.Ready: {
 				if (instance.pendingReloadConnectionGeneration !== undefined &&
 					!instance.pendingReloadIframeReplaced) {
 					return;
 				}
-				if (message.connectionBootstrap !== undefined) {
-					if (instance.bootstrapId !==
-						message.connectionBootstrap.id &&
-						instance.retiredBootstrapIds?.has(
-							message.connectionBootstrap.id
-						)) {
-						return;
-					}
-					if (instance.bootstrapId === message.connectionBootstrap.id &&
-						instance.bootstrapAttempt !== undefined &&
-						message.connectionBootstrap.attempt <=
-						instance.bootstrapAttempt) {
-						return;
-					}
-					this.retireBootstrapDocument(
-						instance,
-						message.connectionBootstrap.id
+				const negotiatedCapabilities =
+					negotiateHucodeHostedShellCapabilities(
+						message.hostedShellProtocolVersion,
+						message.hostedShellCapabilities
 					);
-					instance.bootstrapId = message.connectionBootstrap.id;
-					instance.bootstrapAttempt =
-						message.connectionBootstrap.attempt;
-				} else if (message.connectionAttempt !== undefined) {
-					if (instance.bootstrapId === undefined &&
-						instance.bootstrapAttempt !== undefined &&
-						message.connectionAttempt <= instance.bootstrapAttempt) {
-						return;
-					}
-					this.retireBootstrapDocument(instance);
-					instance.bootstrapId = undefined;
-					instance.bootstrapAttempt = message.connectionAttempt;
-				} else {
-					this.retireBootstrapDocument(instance);
-					instance.bootstrapId = undefined;
-					instance.bootstrapAttempt = undefined;
+				if (!negotiatedCapabilities) {
+					return;
 				}
+				if (instance.bootstrapId !==
+					message.connectionBootstrap.id &&
+					instance.retiredBootstrapIds?.has(
+						message.connectionBootstrap.id
+					)) {
+					return;
+				}
+				if (instance.bootstrapId === message.connectionBootstrap.id &&
+					instance.bootstrapAttempt !== undefined &&
+					message.connectionBootstrap.attempt <=
+					instance.bootstrapAttempt) {
+					return;
+				}
+				this.retireBootstrapDocument(
+					instance,
+					message.connectionBootstrap.id
+				);
+				instance.bootstrapId = message.connectionBootstrap.id;
+				instance.bootstrapAttempt =
+					message.connectionBootstrap.attempt;
 				// A workbench that announces nothing predates the two-phase
 				// unload handshake.
 				instance.protocolVersion = message.protocolVersion ?? 1;
@@ -1746,12 +1721,13 @@ export class WebHucodeShellController extends Disposable
 					message.hostedShellProtocolVersion;
 				instance.hostedShellCapabilities =
 					message.hostedShellCapabilities;
-				this.connectInstance(instance);
+				this.connectInstance(instance, negotiatedCapabilities);
 				void this.notifyHostedWorkspaceReady(
 					this.windowId,
 					message.instanceId
 				);
 				break;
+			}
 			case HucodeOmniWebChildMessageType.Focus:
 				instance.focused = message.focused && instance.visible;
 				if (instance.focused) {
@@ -1783,7 +1759,10 @@ export class WebHucodeShellController extends Disposable
 	 * ready signal means the iframe document reloaded, so any previous
 	 * connection is replaced.
 	 */
-	private connectInstance(instance: IHostedIframeInstance): void {
+	private connectInstance(
+		instance: IHostedIframeInstance,
+		negotiatedCapabilities: readonly HucodeHostedShellCapability[]
+	): void {
 		this.disposeConnection(instance);
 		instance.connectionGeneration++;
 
@@ -1793,32 +1772,14 @@ export class WebHucodeShellController extends Disposable
 			channel.port1,
 			`hucodeOmniWebShell:${instance.instanceId}`
 		));
-		const negotiatedCapabilities =
-			negotiateHucodeHostedShellCapabilities(
-				instance.hostedShellProtocolVersion,
-				instance.hostedShellCapabilities
-			);
-		if (negotiatedCapabilities) {
-			client.registerChannel(
-				HUCODE_HOSTED_SHELL_CHANNEL,
-				createHucodeHostedShellServerChannel(
-					this.createHostedConnectionFacade(instance),
-					disposables,
-					negotiatedCapabilities
-				)
-			);
-		} else if (instance.hostedShellProtocolVersion === undefined) {
-			// One-generation compatibility for cached children predating the
-			// typed hosted capability. It retains the old wire shape but remains
-			// bound to this connection's authoritative instance.
-			client.registerChannel(
-				HUCODE_OMNI_WEB_SHELL_CHANNEL,
-				ProxyChannel.fromService(
-					this.createLegacyHostedConnectionFacade(instance),
-					disposables
-				)
-			);
-		}
+		client.registerChannel(
+			HUCODE_HOSTED_SHELL_CHANNEL,
+			createHucodeHostedShellServerChannel(
+				this.createHostedConnectionFacade(instance),
+				disposables,
+				negotiatedCapabilities
+			)
+		);
 		instance.connection = {
 			workbench: ProxyChannel.toService<IHucodeOmniWebWorkbenchClient>(
 				client.getChannel(HUCODE_OMNI_WEB_WORKBENCH_CHANNEL)
@@ -1831,22 +1792,11 @@ export class WebHucodeShellController extends Disposable
 		this.browser.postPortMessage(instance.iframe, {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
-			windowId: this.windowId,
-			...(instance.bootstrapId === undefined ? {} : {
-				connectionBootstrap: {
-					id: instance.bootstrapId,
-					attempt: instance.bootstrapAttempt!,
-				},
-			}),
-			...(instance.bootstrapId !== undefined ||
-				instance.bootstrapAttempt === undefined ? {} : {
-				connectionAttempt: instance.bootstrapAttempt,
-			}),
-			hostedShellProtocolVersion: negotiatedCapabilities
-				? HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
-				: instance.hostedShellProtocolVersion === undefined
-					? undefined
-					: 0,
+			connectionBootstrap: {
+				id: instance.bootstrapId!,
+				attempt: instance.bootstrapAttempt!,
+			},
+			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: negotiatedCapabilities,
 		}, channel.port2);
 	}
@@ -2046,81 +1996,6 @@ export class WebHucodeShellController extends Disposable
 			this.activeInstanceId === instance.instanceId &&
 			instance.visible &&
 			isHostedWorkspaceAvailable(instance);
-	}
-
-	/**
-	 * Creates the only shell operations callable over one hosted workbench's
-	 * connection. Legacy wire signatures are retained, but caller-supplied
-	 * window and instance identifiers are ignored in favour of the identities
-	 * established by the trusted MessagePort handshake.
-	 */
-	private createLegacyHostedConnectionFacade(
-		instance: IHostedIframeInstance
-	): IHucodeHostedWebShellConnectionFacade {
-		const hosted = this.createHostedConnectionFacade(instance);
-		const toLegacyState = (
-			state: IHucodeHostedShellState
-		): IHucodeHostedWorkspaceState => ({
-			activeInstanceId: state.available && state.active
-				? instance.instanceId
-				: undefined,
-			projectsSidebarVisible: state.projectsSidebarVisible,
-			projectSwitcherCanGoBack: state.projectSwitcherCanGoBack,
-			projectSwitcherCanGoForward: state.projectSwitcherCanGoForward,
-			instances: state.available ? [{
-				instanceId: instance.instanceId,
-				worktreePath: instance.worktreePath,
-				state: state.lifecycleState ?? 'loading',
-				visible: state.visible,
-				focused: false,
-			}] : [],
-		});
-		const getLegacyState = async () => toLegacyState(await hosted.getState());
-		const onDidChangeWindowState = Event.map(
-			hosted.onDidChangeState,
-			state => ({
-				windowId: this.windowId,
-				state: toLegacyState(state),
-			})
-		);
-		return {
-			onDidChangeWindowState,
-			getWindowState: async _windowId => getLegacyState(),
-			openAndFocusWorkspace: async (_windowId, worktreePath, _projectId) => {
-				await hosted.navigateToFolder({
-					folderUri: URI.file(worktreePath).toJSON(),
-				});
-				return getLegacyState();
-			},
-			focusNormalWindowByPath: async _worktreePath => false,
-			closeWorkspace: async _windowId => {
-				await hosted.closeSelf();
-				return getLegacyState();
-			},
-			reopenWorkspaceInNormalWindow: async _windowId =>
-				await hosted.reopenSelfInNormalWindow() ===
-				HucodeHostedShellOperationOutcome.Accepted,
-			notifyHostedWorkspaceReady: async _windowId => {
-				await hosted.notifyReady();
-			},
-			focusWorkspace: async _windowId => { await hosted.focusSelf(); },
-			focusShell: async _windowId => { await hosted.focusShell(); },
-			runActionInShell: async (_windowId, request) => {
-				const action = getHucodeHostedShellAction(request.id);
-				if (!action) {
-					this.logService.warn(
-						'[hucode] Rejected hosted shell action for ' +
-						`window ${this.windowId}, instance ${instance.instanceId}: ` +
-						'unsupported command id ' +
-						`${formatHucodeHostedShellActionCommandIdForLog(request.id)}.`
-					);
-					return false;
-				}
-				return await hosted.requestShellAction(action) ===
-					HucodeHostedShellOperationOutcome.Accepted;
-			},
-			reloadWorkspace: async _windowId => { await hosted.reloadSelf(); },
-		};
 	}
 
 	private disposeConnection(instance: IHostedIframeInstance): void {
@@ -2952,14 +2827,17 @@ function isHucodeOmniWebChildMessage(
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
 		readonly connectionBootstrap?: unknown;
-		readonly connectionAttempt?: unknown;
+		readonly hostedShellProtocolVersion?: unknown;
+		readonly hostedShellCapabilities?: unknown;
 		readonly focused?: unknown;
 	};
 	if (typeof message.instanceId !== 'string' || !message.instanceId) {
 		return false;
 	}
 	if (message.type === HucodeOmniWebChildMessageType.Ready) {
-		return isHucodeOmniWebConnectionBootstrapMetadata(message);
+		return isHucodeOmniWebConnectionBootstrapMetadata(message) &&
+			typeof message.hostedShellProtocolVersion === 'number' &&
+			Array.isArray(message.hostedShellCapabilities);
 	}
 	return message.type === HucodeOmniWebChildMessageType.Focus &&
 		typeof message.focused === 'boolean';

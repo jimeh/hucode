@@ -12,7 +12,6 @@ import {
 	DisposableStore,
 	toDisposable,
 } from '../../base/common/lifecycle.js';
-import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/electron-main/ipc.mp.js';
 import { validatedIpcMain } from
@@ -88,6 +87,7 @@ import {
 	IHucodeHostedShellPortConnection,
 } from './hostedShellPortAcceptor.js';
 import {
+	createHucodeShellControllerServerChannel,
 	HUCODE_SHELL_CONTROLLER_CHANNEL,
 	HUCODE_SHELL_CONTROLLER_PORT_REQUEST_CHANNEL,
 	IHucodeShellControllerService,
@@ -403,7 +403,7 @@ export class HucodeShellMainService extends Disposable
 		));
 		client.registerChannel(
 			HUCODE_SHELL_CONTROLLER_CHANNEL,
-			ProxyChannel.fromService(
+			createHucodeShellControllerServerChannel(
 				this.createShellControllerFacade(owner.windowId),
 				connection
 			)

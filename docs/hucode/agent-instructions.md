@@ -660,6 +660,16 @@ human-facing guides rather than replacing them.
   Desktop entrypoints register only the owner-bound shell-controller and
   per-instance hosted-shell adapters; do not restore a global `hucodeShell`
   renderer channel or refine the main decorator from `IHucodeShellService`.
+- Keep desktop shell-controller calls bounded while cancellable acquisition
+  retries in the background. The MessagePort client has no proactive close
+  signal, so recover a connected transport loss after the next rejected or
+  timed-out operation and never replay that ambiguously delivered operation.
+- Keep serve-web hosted-shell messaging current-protocol-only. Require the
+  typed protocol version, capability set, and correlated nested bootstrap on
+  both parent and child; missing or mismatched metadata fails closed and a
+  server update requires a full browser-page reload. Do not restore the legacy
+  `IHucodeShellService` channel or adapter. The separately versioned hosted
+  unload protocol retains its existing compatibility behavior.
 - Hosted Omni workbench unload must explicitly destroy integrated browser
   views owned by that hosted `webContentsId`; those views are top-level
   siblings, so removing the workbench view will not remove them.

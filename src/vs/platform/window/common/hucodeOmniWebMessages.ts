@@ -3,14 +3,10 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { hasKey } from '../../../base/common/types.js';
 import { INativeOpenFileRequest } from './window.js';
 import { HucodeHostedShellCapability } from
 	'./hucodeHostedShellService.js';
-
-/**
- * Channel exposing the Omni web shell service to hosted iframe workbenches.
- */
-export const HUCODE_OMNI_WEB_SHELL_CHANNEL = 'hucodeOmniWebShell';
 
 /**
  * Channel exposing a hosted iframe workbench to the Omni web shell.
@@ -41,33 +37,25 @@ export interface IHucodeOmniWebConnectionBootstrap {
 	readonly attempt: number;
 }
 
-/** Validates current, legacy, or unstamped connection-correlation metadata. */
+/** Validates the current document-and-attempt connection correlation. */
 export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
 	readonly connectionBootstrap?: unknown;
 	readonly connectionAttempt?: unknown;
 }): boolean {
-	const hasCurrentBootstrap = value.connectionBootstrap !== undefined;
-	const hasLegacyAttempt = value.connectionAttempt !== undefined;
-	if (hasCurrentBootstrap && hasLegacyAttempt) {
+	if (hasKey(value, { connectionAttempt: true })) {
 		return false;
 	}
-	if (hasCurrentBootstrap) {
-		if (!value.connectionBootstrap ||
-			typeof value.connectionBootstrap !== 'object') {
-			return false;
-		}
-		const bootstrap = value.connectionBootstrap as {
-			readonly id?: unknown;
-			readonly attempt?: unknown;
-		};
-		return typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
-			Number.isSafeInteger(bootstrap.attempt) &&
-			(bootstrap.attempt as number) > 0;
+	if (!value.connectionBootstrap ||
+		typeof value.connectionBootstrap !== 'object') {
+		return false;
 	}
-	return !hasLegacyAttempt || (
-		Number.isSafeInteger(value.connectionAttempt) &&
-		(value.connectionAttempt as number) > 0
-	);
+	const bootstrap = value.connectionBootstrap as {
+		readonly id?: unknown;
+		readonly attempt?: unknown;
+	};
+	return typeof bootstrap.id === 'string' && bootstrap.id.length > 0 &&
+		Number.isSafeInteger(bootstrap.attempt) &&
+		(bootstrap.attempt as number) > 0;
 }
 
 /**
@@ -76,14 +64,11 @@ export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
 export interface IHucodeOmniWebPortMessage {
 	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
-	readonly windowId: number;
-	/** Correlates retryable bootstraps for current peers. */
-	readonly connectionBootstrap?: IHucodeOmniWebConnectionBootstrap;
-	/** Previous-generation retry metadata. */
-	readonly connectionAttempt?: number;
+	/** Correlates retryable bootstraps for the current document. */
+	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
 	/** Negotiated independently from the hosted unload protocol. */
-	readonly hostedShellProtocolVersion?: number;
-	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
+	readonly hostedShellProtocolVersion: number;
+	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
 }
 
 /**
@@ -110,13 +95,7 @@ export interface IHucodeOmniWebReadyMessage {
 	readonly instanceId: string;
 
 	/** Current document identity and its monotonic bootstrap attempt. */
-	readonly connectionBootstrap?: IHucodeOmniWebConnectionBootstrap;
-
-	/**
-	 * Previous-generation monotonic bootstrap attempt. Current children use
-	 * {@link connectionBootstrap}; this stays for cached children.
-	 */
-	readonly connectionAttempt?: number;
+	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
 
 	/**
 	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows
@@ -125,9 +104,9 @@ export interface IHucodeOmniWebReadyMessage {
 	readonly protocolVersion?: number;
 
 	/** Hosted shell capability version offered by this workbench. */
-	readonly hostedShellProtocolVersion?: number;
+	readonly hostedShellProtocolVersion: number;
 	/** Hosted shell operation groups offered by this workbench. */
-	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
+	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
 }
 
 /**
