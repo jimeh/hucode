@@ -523,15 +523,16 @@ ambiguous and replay could apply navigation twice or after intent has changed.
 
 ### Protocol versioning
 
-Give the hosted capability protocol an explicit version. Parent and child must
-advertise the current version, the complete required core capability set, and
-matching nested-bootstrap metadata. The optional `navigationSnapshot` group is
-negotiated independently. Missing required core groups, older or newer protocol
-versions, or otherwise mismatched bootstrap metadata fails closed on both
-desktop and serve-web.
-After a server deployment, a browser page holding incompatible assets must be
-fully reloaded; there is no legacy `IHucodeShellService` adapter or old/new
-hosted-shell negotiation window.
+Give the hosted capability protocol an explicit version. On serve-web, parent
+and child must advertise the current version, the complete required core
+capability set, and matching nested-bootstrap metadata. The optional
+`navigationSnapshot` group is negotiated independently. Missing required core
+groups, older or newer protocol versions, or otherwise mismatched bootstrap
+metadata fails closed. Desktop uses the same-bundle typed contract over an
+authorized port and relies on binding and connection generations rather than a
+runtime capability negotiation. After a server deployment, a browser page
+holding incompatible assets must be fully reloaded; there is no legacy
+`IHucodeShellService` adapter or old/new hosted-shell negotiation window.
 
 This strict policy applies only to the hosted-shell capability. Keep
 `HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` separate: its single-phase/two-phase
@@ -1106,9 +1107,10 @@ only a returned boolean.
 - Rejected, stale, unavailable, unsupported, and superseded navigation outcomes
   have distinct tested caller behavior.
 - MRU persistence occurs only after accepted canonical navigation.
-- Old/new serve-web peers preserve the v1 core in both directions; the
-  navigation snapshot method is remotely callable only when its optional group
-  was negotiated.
+- Serve-web peers with a missing or mismatched current protocol, required core
+  set, or nested-bootstrap metadata fail closed and require a full page reload;
+  the navigation snapshot method is remotely callable only when its optional
+  group was negotiated.
 - Stale connection generations fail closed.
 - The exposed method list is exact, so adding a method to a broader service
   cannot widen the hosted facade implicitly.
