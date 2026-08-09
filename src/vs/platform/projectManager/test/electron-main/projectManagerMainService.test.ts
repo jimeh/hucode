@@ -16,12 +16,19 @@ import {
 	CancellationTokenSource,
 } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
+import { Emitter as BaseEmitter } from '../../../../base/common/event.js';
 import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/path.js';
 import { isLinux } from '../../../../base/common/platform.js';
+import { dirname as resourceDirname } from '../../../../base/common/resources.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { URI } from '../../../../base/common/uri.js';
+import {
+	FileChangesEvent,
+	FileChangeType,
+	IFileService,
+} from '../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../platform/log/common/log.js';
 import { IStateService } from '../../../../platform/state/node/state.js';
 import {
@@ -45,6 +52,11 @@ import {
 	type ProjectManagerMainServiceOptions,
 } from
 	'../../node/projectManagerMainService.js';
+import {
+	FileServiceGitMetadataWatcher,
+	GitWorktreeMonitor,
+} from
+	'../../node/gitWorktreeMonitor.js';
 
 class TestStateService implements IStateService {
 	declare readonly _serviceBrand: undefined;
@@ -110,12 +122,18 @@ class TestGitWorktreeService {
 	readonly commonDirErrors = new Set<string>();
 	readonly adminDirs = new Map<string, readonly string[]>();
 	readonly resolvedRoots = new Map<string, string>();
+	readonly resolveRootErrors = new Map<string, Error>();
 	readonly worktrees = new Map<string, readonly WorktreeRecord[]>();
 	readonly refs = new Map<string, readonly WorktreeRefRecord[]>();
 	readonly validBranchNames = new Set<string>();
 	readonly listWorktreesCalls: string[] = [];
 	readonly listWorktreesTokens: CancellationToken[] = [];
 	readonly commonDirTokens: CancellationToken[] = [];
+	readonly resolveProjectRootCalls: string[] = [];
+	resolveProjectRootHandler?: (
+		cwd: string,
+		token: CancellationToken
+	) => Promise<string>;
 	listWorktreesHandler?: (
 		projectRoot: string,
 		token: CancellationToken
@@ -136,7 +154,18 @@ class TestGitWorktreeService {
 	readonly statuses = new Map<string, WorktreeStatusPreview>();
 	readonly removalForces: boolean[] = [];
 
-	async resolveProjectRoot(cwd: string): Promise<string> {
+	async resolveProjectRoot(
+		cwd: string,
+		token: CancellationToken = CancellationToken.None
+	): Promise<string> {
+		this.resolveProjectRootCalls.push(cwd);
+		if (this.resolveProjectRootHandler) {
+			return this.resolveProjectRootHandler(cwd, token);
+		}
+		const error = this.resolveRootErrors.get(cwd);
+		if (error) {
+			throw error;
+		}
 		return this.resolvedRoots.get(cwd) ?? cwd;
 	}
 
@@ -253,36 +282,59 @@ class TestProjectMetadataWatcher {
 	readonly disposedPaths: string[] = [];
 	readonly throwPaths = new Set<string>();
 	private readonly listeners = new Map<string, (() => void)[]>();
+	private readonly entryListeners = new Map<string, (() => void)[]>();
 
 	watch(path: string, onDidChange: () => void) {
+		return this.addListener(this.listeners, path, onDidChange);
+	}
+
+	watchEntry(path: string, onDidChange: () => void) {
+		return this.addListener(this.entryListeners, path, onDidChange);
+	}
+
+	private addListener(
+		listenersByPath: Map<string, (() => void)[]>,
+		path: string,
+		onDidChange: () => void
+	) {
 		if (this.throwPaths.has(path)) {
 			throw new Error(`Cannot watch ${path}.`);
 		}
 		this.watchedPaths.push(path);
-		const listeners = this.listeners.get(path) ?? [];
+		const listeners = listenersByPath.get(path) ?? [];
 		listeners.push(onDidChange);
-		this.listeners.set(path, listeners);
+		listenersByPath.set(path, listeners);
 
 		return toDisposable(() => {
 			this.disposedPaths.push(path);
-			const nextListeners = (this.listeners.get(path) ?? [])
+			const nextListeners = (listenersByPath.get(path) ?? [])
 				.filter(listener => listener !== onDidChange);
 			if (nextListeners.length) {
-				this.listeners.set(path, nextListeners);
+				listenersByPath.set(path, nextListeners);
 			} else {
-				this.listeners.delete(path);
+				listenersByPath.delete(path);
 			}
 		});
 	}
 
 	fire(path: string): void {
+		for (const listener of [
+			...(this.listeners.get(path) ?? []),
+			...(this.entryListeners.get(path) ?? []),
+		]) {
+			listener();
+		}
+	}
+
+	fireContents(path: string): void {
 		for (const listener of this.listeners.get(path) ?? []) {
 			listener();
 		}
 	}
 
 	activeListenerCount(path: string): number {
-		return this.listeners.get(path)?.length ?? 0;
+		return (this.listeners.get(path)?.length ?? 0) +
+			(this.entryListeners.get(path)?.length ?? 0);
 	}
 }
 
@@ -318,6 +370,29 @@ class TestRetryDelay {
 		assert.ok(pending, 'Expected a pending retry delay.');
 		pending.resolve();
 	}
+}
+
+async function waitForTestCondition(
+	predicate: () => boolean,
+	timeoutMs = 1000
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			throw new Error('Timed out waiting for test condition.');
+		}
+		await timeout(0);
+	}
+}
+
+function gitMonitorConsumerNeedsRetry(
+	monitor: GitWorktreeMonitor,
+	consumerId: string
+): boolean {
+	const consumers = Reflect.get(monitor, 'consumers') as {
+		get(id: string): { readonly needsRetry: boolean } | undefined;
+	};
+	return consumers.get(consumerId)?.needsRetry === true;
 }
 
 function createMainWorktree(
@@ -2019,6 +2094,623 @@ suite('GitWorktreeService', () => {
 	});
 });
 
+suite('GitWorktreeMonitor', () => {
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('file-service entry watches filter literal paths exactly', () => {
+		const changes = disposables.add(new BaseEmitter<FileChangesEvent>());
+		let watchedParent: URI | undefined;
+		let watchOptions: {
+			readonly recursive: boolean;
+			readonly excludes: readonly string[];
+			readonly includes?: readonly unknown[];
+		} | undefined;
+		const fileService = {
+			createWatcher(resource: URI, options: typeof watchOptions) {
+				watchedParent = resource;
+				watchOptions = options;
+				return {
+					onDidChange: changes.event,
+					dispose() { },
+				};
+			},
+		} as unknown as IFileService;
+		const watcher = new FileServiceGitMetadataWatcher(fileService);
+		const entry = URI.file('/home/u/proj[1]/{draft}/.git');
+		let changeCount = 0;
+		disposables.add(watcher.watchEntry(entry.fsPath, () => changeCount++));
+
+		assert.strictEqual(
+			watchedParent?.toString(),
+			resourceDirname(entry).toString()
+		);
+		assert.deepStrictEqual(watchOptions, {
+			recursive: false,
+			excludes: [],
+		});
+		changes.fire(new FileChangesEvent([{
+			resource: URI.file('/home/u/proj[1]/{draft}/sibling'),
+			type: FileChangeType.ADDED,
+		}], false));
+		changes.fire(new FileChangesEvent([{
+			resource: URI.file('/home/u/proj[1]/{draft}/.git/index'),
+			type: FileChangeType.UPDATED,
+		}], false));
+		assert.strictEqual(changeCount, 0);
+
+		for (const type of [
+			FileChangeType.ADDED,
+			FileChangeType.DELETED,
+			FileChangeType.UPDATED,
+		]) {
+			changes.fire(new FileChangesEvent([{
+				resource: entry,
+				type,
+			}], false));
+		}
+		assert.strictEqual(changeCount, 3);
+	});
+
+	test('deduplicates repository watches and resolves subdirectory targets',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			git.resolvedRoots.set('/repo/subdirectory', '/repo');
+			git.resolvedRoots.set('/repo', '/repo');
+			git.worktrees.set('/repo', [
+				createMainWorktree('/repo', 'main'),
+			]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{ metadataWatcher: watcher }
+			));
+
+			const first = await monitor.setTargets('first', [
+				'/repo/subdirectory',
+				'/repo',
+			]);
+			const callsAfterFirst = git.listWorktreesCalls.length;
+			const second = await monitor.setTargets('second', ['/repo']);
+
+			assert.deepStrictEqual({
+				first,
+				second,
+				headListeners: watcher.activeListenerCount('/repo/.git/HEAD'),
+				worktreeListeners: watcher.activeListenerCount(
+					'/repo/.git/worktrees'
+				),
+				callsAfterFirst,
+			}, {
+				first: [{
+					targetPath: '/repo/subdirectory',
+					state: 'current',
+					repositoryRoot: '/repo',
+					worktree: createMainWorktree('/repo', 'main'),
+				}, {
+					targetPath: '/repo',
+					state: 'current',
+					repositoryRoot: '/repo',
+					worktree: createMainWorktree('/repo', 'main'),
+				}],
+				second: [{
+					targetPath: '/repo',
+					state: 'current',
+					repositoryRoot: '/repo',
+					worktree: createMainWorktree('/repo', 'main'),
+				}],
+				headListeners: 1,
+				worktreeListeners: 1,
+				callsAfterFirst: 1,
+			});
+
+			monitor.clearTargets('first');
+			assert.strictEqual(watcher.activeListenerCount('/repo/.git/HEAD'), 1);
+			monitor.clearTargets('second');
+			assert.strictEqual(watcher.activeListenerCount('/repo/.git/HEAD'), 0);
+		});
+
+	test('distinguishes non-Git folders and retains stale snapshots on failure',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const retry = new TestRetryDelay();
+			git.resolveRootErrors.set('/plain', new GitCommandError(
+				'Git command failed.',
+				{
+					kind: 'exit',
+					operation: 'resolveProjectRoot',
+					command: 'git rev-parse --show-toplevel',
+					stderr: 'fatal: not a git repository',
+					code: 128,
+				}
+			));
+			git.worktrees.set('/repo', [createMainWorktree('/repo', 'main')]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{
+					metadataWatcher: watcher,
+					debounceMs: 0,
+					retryDelay: retry.delay,
+				}
+			));
+
+			const initial = await monitor.setTargets('consumer', ['/plain', '/repo']);
+			assert.deepStrictEqual(initial.map(item => item.state), [
+				'notRepository',
+				'current',
+			]);
+
+			git.listWorktreesHandler = async () => {
+				throw new Error('temporary failure');
+			};
+			const staleChange = new DeferredPromise<readonly string[]>();
+			const staleListener = disposables.add(monitor.onDidChangeTargets(change => {
+				const states = change.observations.map(item => item.state);
+				if (states.includes('stale')) {
+					staleChange.complete(states);
+				}
+			}));
+			watcher.fire('/repo/.git/HEAD');
+			assert.deepStrictEqual(await staleChange.p, ['notRepository', 'stale']);
+			await waitForTestCondition(() => retry.delays.length === 1);
+			assert.deepStrictEqual(retry.delays, [1000]);
+
+			git.listWorktreesHandler = undefined;
+			const currentChange = new DeferredPromise<readonly string[]>();
+			const currentListener = disposables.add(monitor.onDidChangeTargets(change => {
+				const states = change.observations.map(item => item.state);
+				if (states[1] === 'current') {
+					currentChange.complete(states);
+				}
+			}));
+			retry.releaseNext();
+			assert.deepStrictEqual(await currentChange.p, [
+				'notRepository',
+				'current',
+			]);
+			staleListener.dispose();
+			currentListener.dispose();
+		});
+
+	test('keeps one progressive retry owner through failure and recovery',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const retry = new TestRetryDelay();
+			git.worktrees.set('/repo', [createMainWorktree('/repo', 'main')]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{
+					metadataWatcher: watcher,
+					debounceMs: 0,
+					retryDelay: retry.delay,
+				}
+			));
+			await monitor.setTargets('consumer', ['/repo']);
+
+			git.listWorktreesHandler = async () => {
+				throw new Error('persistent failure');
+			};
+			watcher.fire('/repo/.git/HEAD');
+			await waitForTestCondition(() => retry.delays.length === 1);
+			retry.releaseNext();
+			await waitForTestCondition(() => retry.delays.length === 2);
+
+			assert.deepStrictEqual(retry.delays, [1000, 2000]);
+			assert.strictEqual(new Set(retry.tokens).size, 1);
+
+			git.listWorktreesHandler = undefined;
+			const recovered = new DeferredPromise<void>();
+			const listener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.state === 'current') {
+					recovered.complete();
+				}
+			}));
+			retry.releaseNext();
+			await recovered.p;
+
+			git.listWorktreesHandler = async () => {
+				throw new Error('failure after recovery');
+			};
+			watcher.fire('/repo/.git/HEAD');
+			await waitForTestCondition(() => retry.delays.length === 3);
+			assert.deepStrictEqual(retry.delays, [1000, 2000, 1000]);
+			const canceledToken = retry.tokens[2];
+			monitor.clearTargets('consumer');
+			assert.strictEqual(canceledToken.isCancellationRequested, true);
+			listener.dispose();
+		});
+
+	test('re-arms retry after recovery and re-failure while the old delay sleeps',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const retry = new TestRetryDelay();
+			git.worktrees.set('/repo', [createMainWorktree('/repo', 'main')]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{
+					metadataWatcher: watcher,
+					debounceMs: 0,
+					retryDelay: retry.delay,
+				}
+			));
+			await monitor.setTargets('consumer', ['/repo']);
+
+			git.listWorktreesHandler = async () => {
+				throw new Error('first failure');
+			};
+			watcher.fire('/repo/.git/HEAD');
+			await waitForTestCondition(() => retry.delays.length === 1);
+
+			git.listWorktreesHandler = undefined;
+			const recovered = new DeferredPromise<void>();
+			const recoveredListener = disposables.add(
+				monitor.onDidChangeTargets(change => {
+					if (change.observations[0]?.state === 'current') {
+						recovered.complete();
+					}
+				})
+			);
+			watcher.fire('/repo/.git');
+			await recovered.p;
+
+			git.listWorktreesHandler = async () => {
+				throw new Error('second failure');
+			};
+			const failedAgain = new DeferredPromise<void>();
+			const failedListener = disposables.add(
+				monitor.onDidChangeTargets(change => {
+					if (change.observations[0]?.state === 'stale') {
+						failedAgain.complete();
+					}
+				})
+			);
+			watcher.fire('/repo/.git/HEAD');
+			await failedAgain.p;
+			await waitForTestCondition(() =>
+				gitMonitorConsumerNeedsRetry(monitor, 'consumer')
+			);
+			assert.deepStrictEqual(retry.delays, [1000]);
+
+			retry.releaseNext();
+			await waitForTestCondition(() => retry.delays.length === 2);
+			assert.deepStrictEqual(retry.delays, [1000, 1000]);
+
+			git.listWorktreesHandler = undefined;
+			const recoveredAgain = new DeferredPromise<void>();
+			const recoveredAgainListener = disposables.add(
+				monitor.onDidChangeTargets(change => {
+					if (change.observations[0]?.state === 'current') {
+						recoveredAgain.complete();
+					}
+				})
+			);
+			retry.releaseNext();
+			await recoveredAgain.p;
+			recoveredListener.dispose();
+			failedListener.dispose();
+			recoveredAgainListener.dispose();
+		});
+
+	test('keeps the winning repository listener after out-of-order replacement',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const firstList = new DeferredPromise<readonly WorktreeRecord[]>();
+			git.resolvedRoots.set('/repo/first', '/repo');
+			git.resolvedRoots.set('/repo/second', '/repo');
+			git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+			let listCall = 0;
+			git.listWorktreesHandler = async () => ++listCall === 1
+				? firstList.p
+				: git.worktrees.get('/repo')!;
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{ metadataWatcher: watcher, debounceMs: 0 }
+			));
+
+			const superseded = monitor.setTargets('consumer', ['/repo/first']);
+			await waitForTestCondition(() => listCall === 1);
+			const winner = monitor.setTargets('consumer', ['/repo/second']);
+			await winner;
+			firstList.complete(git.worktrees.get('/repo')!);
+			assert.deepStrictEqual(await superseded, []);
+
+			assert.strictEqual(
+				watcher.activeListenerCount('/repo/.git/HEAD'),
+				1
+			);
+			const changed = new DeferredPromise<void>();
+			const listener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.targetPath === '/repo/second') {
+					changed.complete();
+				}
+			}));
+			watcher.fire('/repo/.git/HEAD');
+			await changed.p;
+			listener.dispose();
+		});
+
+	test('detects repository creation and removal for a retained target',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const notRepository = new GitCommandError('Git command failed.', {
+				kind: 'exit',
+				operation: 'resolveProjectRoot',
+				command: 'git rev-parse --show-toplevel',
+				stderr: 'fatal: not a git repository',
+				code: 128,
+			});
+			git.resolveRootErrors.set('/plain', notRepository);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{ metadataWatcher: watcher, debounceMs: 0 }
+			));
+			assert.strictEqual(
+				(await monitor.setTargets('consumer', ['/plain']))[0].state,
+				'notRepository'
+			);
+
+			git.resolveRootErrors.delete('/plain');
+			git.worktrees.set('/plain', [createMainWorktree('/plain', 'topic')]);
+			const created = new DeferredPromise<string>();
+			const createdListener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0].state === 'current') {
+					created.complete(change.observations[0].worktree?.branch ?? '');
+				}
+			}));
+			watcher.fire('/plain/.git');
+			assert.strictEqual(await created.p, 'topic');
+			git.worktrees.set('/plain', [
+				createMainWorktree('/plain', 'topic-updated'),
+			]);
+			const branchChanged = new DeferredPromise<string>();
+			const branchListener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0].worktree?.branch === 'topic-updated') {
+					branchChanged.complete('topic-updated');
+				}
+			}));
+			watcher.fire('/plain/.git/HEAD');
+			assert.strictEqual(await branchChanged.p, 'topic-updated');
+
+			git.resolveRootErrors.set('/plain', notRepository);
+			const removed = new DeferredPromise<string>();
+			const removedListener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0].state === 'notRepository') {
+					removed.complete(change.observations[0].state);
+				}
+			}));
+			watcher.fire('/plain/.git');
+			assert.strictEqual(await removed.p, 'notRepository');
+
+			git.resolveRootErrors.delete('/plain');
+			git.worktrees.set('/plain', [
+				createMainWorktree('/plain', 'recreated'),
+			]);
+			const recreated = new DeferredPromise<string>();
+			const recreatedListener = disposables.add(
+				monitor.onDidChangeTargets(change => {
+					if (change.observations[0].worktree?.branch === 'recreated') {
+						recreated.complete('recreated');
+					}
+				})
+			);
+			watcher.fire('/plain/.git');
+			assert.strictEqual(await recreated.p, 'recreated');
+			createdListener.dispose();
+			branchListener.dispose();
+			removedListener.dispose();
+			recreatedListener.dispose();
+		});
+
+	test('shares current-target membership probes and detects nested repositories',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const target = '/repo/nested';
+			git.resolvedRoots.set(target, '/repo');
+			git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{ metadataWatcher: watcher, debounceMs: 0 }
+			));
+			await monitor.setTargets('first', [target]);
+			await monitor.setTargets('second', [target]);
+
+			assert.deepStrictEqual({
+				target: watcher.activeListenerCount(target),
+				gitMarker: watcher.activeListenerCount(`${target}/.git`),
+			}, { target: 1, gitMarker: 1 });
+
+			git.resolvedRoots.set(target, target);
+			git.worktrees.set(target, [createMainWorktree(target, 'nested')]);
+			const nested = new DeferredPromise<void>();
+			const listener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.repositoryRoot === target) {
+					nested.complete();
+				}
+			}));
+			watcher.fire(`${target}/.git`);
+			await nested.p;
+			monitor.clearTargets('first');
+			assert.strictEqual(watcher.activeListenerCount(`${target}/.git`), 1);
+			monitor.clearTargets('second');
+			assert.strictEqual(watcher.activeListenerCount(`${target}/.git`), 0);
+			listener.dispose();
+		});
+
+	test('ignores contents churn in repository membership probes', async () => {
+		const git = new TestGitWorktreeService();
+		const watcher = new TestProjectMetadataWatcher();
+		const target = '/repo/nested';
+		git.resolvedRoots.set(target, '/repo');
+		git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+		const monitor = disposables.add(new GitWorktreeMonitor(
+			git,
+			new NullLogService(),
+			{ metadataWatcher: watcher, debounceMs: 0 }
+		));
+		await monitor.setTargets('consumer', [target]);
+		const resolveCalls = git.resolveProjectRootCalls.length;
+
+		watcher.fireContents(target);
+		watcher.fireContents(`${target}/.git`);
+		await timeout(20);
+
+		assert.strictEqual(git.resolveProjectRootCalls.length, resolveCalls);
+	});
+
+	test('detects retained target removal and recreation', async () => {
+		const git = new TestGitWorktreeService();
+		const watcher = new TestProjectMetadataWatcher();
+		const target = '/repo/nested';
+		const unrelatedTarget = '/unrelated';
+		const notRepository = new GitCommandError('Git command failed.', {
+			kind: 'exit',
+			operation: 'resolveProjectRoot',
+			command: 'git rev-parse --show-toplevel',
+			stderr: 'fatal: not a git repository',
+			code: 128,
+		});
+		git.resolvedRoots.set(target, '/repo');
+		git.resolvedRoots.set(unrelatedTarget, unrelatedTarget);
+		git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+		git.worktrees.set(unrelatedTarget, [createMainWorktree(unrelatedTarget)]);
+		const monitor = disposables.add(new GitWorktreeMonitor(
+			git,
+			new NullLogService(),
+			{ metadataWatcher: watcher, debounceMs: 0 }
+		));
+		await monitor.setTargets('consumer', [target, unrelatedTarget]);
+		const gitMarker = `${target}/.git`;
+		const unrelatedGitMarker = `${unrelatedTarget}/.git`;
+		const markerWatchesBefore = watcher.watchedPaths
+			.filter(path => path === gitMarker).length;
+		const unrelatedWatchesBefore = watcher.watchedPaths
+			.filter(path => path === unrelatedGitMarker).length;
+
+		git.resolveRootErrors.set(target, notRepository);
+		const removed = new DeferredPromise<void>();
+		const removedListener = disposables.add(
+			monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.state === 'notRepository') {
+					removed.complete();
+				}
+			})
+		);
+		watcher.fire(target);
+		await removed.p;
+		assert.ok(
+			watcher.watchedPaths.filter(path => path === gitMarker).length >
+			markerWatchesBefore
+		);
+		assert.strictEqual(
+			watcher.watchedPaths.filter(path => path === unrelatedGitMarker).length,
+			unrelatedWatchesBefore
+		);
+
+		git.resolveRootErrors.delete(target);
+		const recreated = new DeferredPromise<void>();
+		const recreatedListener = disposables.add(
+			monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.state === 'current') {
+					recreated.complete();
+				}
+			})
+		);
+		watcher.fire(target);
+		await recreated.p;
+		removedListener.dispose();
+		recreatedListener.dispose();
+	});
+
+	test('probes intermediate repository membership through the worktree root',
+		async () => {
+			const git = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			const target = '/repo/a/b';
+			git.resolvedRoots.set(target, '/repo');
+			git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				git,
+				new NullLogService(),
+				{ metadataWatcher: watcher, debounceMs: 0 }
+			));
+			await monitor.setTargets('first', [target]);
+			await monitor.setTargets('second', [target]);
+
+			assert.deepStrictEqual({
+				target: watcher.activeListenerCount(target),
+				targetGit: watcher.activeListenerCount(`${target}/.git`),
+				intermediateGit: watcher.activeListenerCount('/repo/a/.git'),
+				worktreeGit: watcher.activeListenerCount('/repo/.git'),
+				filesystemRootGit: watcher.activeListenerCount('/.git'),
+			}, {
+				target: 1,
+				targetGit: 1,
+				intermediateGit: 1,
+				worktreeGit: 1,
+				filesystemRootGit: 0,
+			});
+
+			git.resolvedRoots.set(target, '/repo/a');
+			git.worktrees.set('/repo/a', [
+				createMainWorktree('/repo/a', 'nested'),
+			]);
+			const nested = new DeferredPromise<void>();
+			const listener = disposables.add(monitor.onDidChangeTargets(change => {
+				if (change.observations[0]?.repositoryRoot === '/repo/a') {
+					nested.complete();
+				}
+			}));
+			watcher.fire('/repo/a/.git');
+			await nested.p;
+			listener.dispose();
+		});
+
+	test('bounds target Git resolution concurrency', async () => {
+		const git = new TestGitWorktreeService();
+		const releases: DeferredPromise<void>[] = [];
+		let active = 0;
+		let maximumActive = 0;
+		git.resolveProjectRootHandler = async cwd => {
+			active++;
+			maximumActive = Math.max(maximumActive, active);
+			const release = new DeferredPromise<void>();
+			releases.push(release);
+			await release.p;
+			active--;
+			return cwd;
+		};
+		const monitor = disposables.add(new GitWorktreeMonitor(
+			git,
+			new NullLogService(),
+			{ targetConcurrency: 2 }
+		));
+		const targets = Array.from({ length: 5 }, (_, index) => `/repo-${index}`);
+		const pending = monitor.setTargets('consumer', targets);
+		await waitForTestCondition(() => releases.length >= 2);
+		assert.strictEqual(maximumActive, 2);
+		for (let index = 0; index < targets.length; index++) {
+			releases[index].complete();
+			if (index < targets.length - 2) {
+				await waitForTestCondition(() => releases.length >= index + 3);
+			}
+		}
+		await pending;
+		assert.strictEqual(maximumActive, 2);
+	});
+});
+
 suite('ProjectManagerMainService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -2042,6 +2734,47 @@ suite('ProjectManagerMainService', () => {
 			}
 		));
 	}
+
+	test('uses the shared repository observer for projects and arbitrary targets',
+		async () => {
+			const stateService = new TestStateService();
+			const gitWorktreeService = new TestGitWorktreeService();
+			const watcher = new TestProjectMetadataWatcher();
+			gitWorktreeService.worktrees.set('/repo', [
+				createMainWorktree('/repo', 'main'),
+			]);
+			gitWorktreeService.resolvedRoots.set('/repo/nested', '/repo');
+			const monitor = disposables.add(new GitWorktreeMonitor(
+				gitWorktreeService,
+				new NullLogService(),
+				{ metadataWatcher: watcher }
+			));
+			const observedRoots: string[] = [];
+			const observeRepository = monitor.observeRepository.bind(monitor);
+			monitor.observeRepository = async (...args) => {
+				observedRoots.push(args[0]);
+				return observeRepository(...args);
+			};
+			const service = createService(
+				stateService,
+				gitWorktreeService,
+				undefined,
+				{ gitWorktreeMonitor: monitor }
+			);
+
+			await service.addProject(URI.file('/repo'));
+			await service.setGitWorktreeTargets('retained', ['/repo/nested']);
+
+			assert.deepStrictEqual({
+				observedRoots,
+				headWatchers: watcher.activeListenerCount('/repo/.git/HEAD'),
+			}, {
+				observedRoots: ['/repo', '/repo'],
+				headWatchers: 1,
+			});
+			await service.clearGitWorktreeTargets('retained');
+		}
+	);
 
 	test('addProject canonicalizes roots and de-duplicates projects', async () => {
 		const stateService = new TestStateService();

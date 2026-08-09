@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise, raceTimeout } from '../../../../base/common/async.js';
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -21,6 +22,7 @@ suite('WebProjectManagerService', () => {
 
 	setup(() => {
 		FakeEventSource.instances.length = 0;
+		FakeEventSource.openOnConstruction = true;
 	});
 
 	test('posts add-project requests and revives project responses', async () => {
@@ -278,6 +280,195 @@ suite('WebProjectManagerService', () => {
 		);
 	});
 
+	test('transports ephemeral Git-monitor targets and live updates', async () => {
+		const calls: { readonly input: string; readonly body: unknown }[] = [];
+		const observation = {
+			targetPath: '/repo/subdirectory',
+			state: 'current' as const,
+			repositoryRoot: '/repo',
+			worktree: {
+				path: '/repo',
+				label: 'main',
+				branch: 'main',
+				isMain: true,
+				isDetached: false,
+			},
+		};
+		const fakeFetch: WebProjectManagerFetch = async (input, init) => {
+			calls.push({
+				input: input.toString(),
+				body: init?.body ? JSON.parse(init.body as string) : undefined,
+			});
+			return new Response(JSON.stringify(
+				input.toString().endsWith('/targets')
+					? { observations: [observation] }
+					: {}
+			));
+		};
+		const service = disposables.add(createService(fakeFetch));
+		const changes: unknown[] = [];
+		disposables.add(service.onDidChangeGitWorktreeTargets(change =>
+			changes.push(change)
+		));
+
+		const observations = await service.setGitWorktreeTargets(
+			'consumer',
+			['/repo/subdirectory']
+		);
+		FakeEventSource.instances[0].emit(
+			'git-worktrees',
+			new MessageEvent('git-worktrees', {
+				data: JSON.stringify({
+					consumerId: 'consumer',
+					observations: [observation],
+				}),
+			})
+		);
+		await service.clearGitWorktreeTargets('consumer');
+
+		assert.deepStrictEqual({ observations, calls, changes }, {
+			observations: [observation],
+			calls: [{
+				input: '/api/projects/git-monitor/targets',
+				body: {
+					sessionId: 'test-session',
+					consumerId: 'consumer',
+					targetPaths: ['/repo/subdirectory'],
+				},
+			}, {
+				input: '/api/projects/git-monitor/clear',
+				body: {
+					sessionId: 'test-session',
+					consumerId: 'consumer',
+				},
+			}],
+			changes: [{
+				consumerId: 'consumer',
+				observations: [observation],
+			}],
+		});
+	});
+
+	test('does not clear a replacement Git-monitor registration', async () => {
+		const calls: string[] = [];
+		const firstResponse = new DeferredPromise<Response>();
+		const firstStarted = new DeferredPromise<void>();
+		const fakeFetch: WebProjectManagerFetch = async input => {
+			const path = input.toString();
+			calls.push(path);
+			if (calls.length === 1) {
+				firstStarted.complete();
+				return firstResponse.p;
+			}
+			return new Response(JSON.stringify({ observations: [] }));
+		};
+		const service = disposables.add(createService(fakeFetch));
+
+		const initial = service.setGitWorktreeTargets('consumer', ['/old']);
+		await firstStarted.p;
+		const clearing = service.clearGitWorktreeTargets('consumer');
+		const replacement = service.setGitWorktreeTargets(
+			'consumer',
+			['/replacement']
+		);
+		await replacement;
+		firstResponse.complete(new Response(JSON.stringify({ observations: [] })));
+		await initial;
+		await clearing;
+
+		assert.deepStrictEqual(calls, [
+			'/api/projects/git-monitor/targets',
+			'/api/projects/git-monitor/targets',
+		]);
+	});
+
+	test('re-registers Git targets and publishes observations on reconnect',
+		async () => {
+			const calls: unknown[] = [];
+			const observation = {
+				targetPath: '/repo/subdirectory',
+				state: 'current' as const,
+				repositoryRoot: '/repo',
+				worktree: {
+					path: '/repo',
+					label: 'main',
+					branch: 'main',
+					isMain: true,
+					isDetached: false,
+				},
+			};
+			const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+				calls.push(init?.body ? JSON.parse(init.body as string) : undefined);
+				return new Response(JSON.stringify({ observations: [observation] }));
+			};
+			const service = disposables.add(createService(fakeFetch));
+			const changes: unknown[] = [];
+			const restored = new DeferredPromise<void>();
+			disposables.add(service.onDidChangeGitWorktreeTargets(change => {
+				changes.push(change);
+				restored.complete();
+			}));
+
+			await service.setGitWorktreeTargets(
+				'consumer',
+				['/repo/subdirectory']
+			);
+			FakeEventSource.instances[0].emit('error', new Event('error'));
+			FakeEventSource.instances[0].emit('open', new Event('open'));
+			await restored.p;
+
+			assert.deepStrictEqual({ calls, changes }, {
+				calls: [{
+					sessionId: 'test-session',
+					consumerId: 'consumer',
+					targetPaths: ['/repo/subdirectory'],
+				}, {
+					sessionId: 'test-session',
+					consumerId: 'consumer',
+					targetPaths: ['/repo/subdirectory'],
+				}],
+				changes: [{
+					consumerId: 'consumer',
+					observations: [observation],
+				}],
+			});
+		}
+	);
+
+	test('settles initial Git targets when project events fail to connect',
+		async () => {
+			FakeEventSource.openOnConstruction = false;
+			let fetchCalls = 0;
+			const restored = new DeferredPromise<void>();
+			const fakeFetch: WebProjectManagerFetch = async () => {
+				fetchCalls++;
+				if (fetchCalls === 1) {
+					return new Response(JSON.stringify({
+						error: 'event session unavailable',
+					}), { status: 400 });
+				}
+				restored.complete();
+				return new Response(JSON.stringify({ observations: [] }));
+			};
+			const service = disposables.add(createService(fakeFetch));
+			const registration = service.setGitWorktreeTargets(
+				'consumer',
+				['/repo']
+			).then(
+				() => 'resolved',
+				error => `rejected: ${error}`
+			);
+
+			FakeEventSource.instances[0].emit('error', new Event('error'));
+			const result = await raceTimeout(registration, 100);
+			assert.match(result ?? '', /event session unavailable/);
+
+			FakeEventSource.instances[0].emit('open', new Event('open'));
+			await restored.p;
+			assert.strictEqual(fetchCalls, 2);
+		}
+	);
+
 	test('closes project events when disposed', () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({ projects: [] }));
@@ -292,7 +483,8 @@ suite('WebProjectManagerService', () => {
 	function createService(fetch: WebProjectManagerFetch): WebProjectManagerClient {
 		return new WebProjectManagerClient(
 			'/api/projects',
-			{ fetch, EventSource: FakeEventSource }
+			{ fetch, EventSource: FakeEventSource },
+			'test-session'
 		);
 	}
 });
@@ -314,6 +506,7 @@ function rawProject(
 
 class FakeEventSource implements IWebProjectManagerEventSource {
 	static readonly instances: FakeEventSource[] = [];
+	static openOnConstruction = true;
 
 	closed = false;
 	private readonly listeners = new Map<string, ((event: Event) => void)[]>();
@@ -323,6 +516,11 @@ class FakeEventSource implements IWebProjectManagerEventSource {
 		readonly eventSourceInitDict?: EventSourceInit
 	) {
 		FakeEventSource.instances.push(this);
+		queueMicrotask(() => {
+			if (!this.closed && FakeEventSource.openOnConstruction) {
+				this.emit('open', new Event('open'));
+			}
+		});
 	}
 
 	addEventListener(type: string, listener: (event: Event) => void): void {
