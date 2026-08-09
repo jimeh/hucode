@@ -336,8 +336,12 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 				);
 			});
 			const result = await Promise.race([operationResult, timeoutResult]);
-			if (result.kind === 'value' && this.shell === shell) {
+			if (result.kind === 'value') {
 				return { ok: true, value: result.value };
+			}
+			if (result.kind === 'failure') {
+				// A round-tripped rejection proves the response path remains live.
+				return { ok: false };
 			}
 			this.invalidateConnection(shell);
 			return { ok: false };

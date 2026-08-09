@@ -11,6 +11,7 @@ import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/global
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import {
+	HucodeShellControllerTimeoutError,
 	HucodeShellControllerUnavailableError,
 	IHucodeShellControllerService,
 } from
@@ -494,11 +495,11 @@ suite('HucodeOmniCommandForwarding', () => {
 		);
 	});
 
-	test('does not retry clipboard commands after ambiguous forwarding failure',
+	test('does not retry clipboard commands after a dispatched request times out',
 		async () => {
 			const fixture = createFixture({
 				isOmniWindow: true,
-				channelError: new Error('connection closed after dispatch')
+				channelError: new HucodeShellControllerTimeoutError()
 			});
 			const event = new mainWindow.Event('cut', {
 				cancelable: true,

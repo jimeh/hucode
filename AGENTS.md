@@ -251,6 +251,9 @@ as the required Hucode instruction set for work in this fork.
   the main-side port-close listener bound to that connection generation so the
   pending operation loses authority before reacquisition; a late close from an
   old port must not invalidate its replacement.
+- Racing `Event.toPromise()` against a timeout does not dispose the event
+  subscription when the timeout wins. Bounded connection waiters must dispose
+  both the listener and timer explicitly.
 - Complete project-catalog reconciliation is shell authority. Hosted
   workbenches may read combined state through `getWindowState`, but must not
   submit a supposedly complete catalog over their connection facade.

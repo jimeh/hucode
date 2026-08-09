@@ -361,6 +361,86 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				HucodeHostedShellOperationOutcome.Accepted
 			);
 		});
+
+	test('application rejection preserves concurrent non-idempotent success',
+		async () => {
+			const timers = new ManualTimers();
+			const accepted = new DeferredPromise<
+				HucodeHostedShellOperationOutcome
+			>();
+			let attempts = 0;
+			let reloadCalls = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => {
+					throw new Error('application rejected request');
+				},
+				reloadSelf: async () => {
+					reloadCalls++;
+					return accepted.p;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => {
+					attempts++;
+					return createAttempt(Promise.resolve(shell));
+				},
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			const successful = adapter.reloadSelf();
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Unavailable
+			);
+			void accepted.complete(HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(
+				await successful,
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(reloadCalls, 1);
+			assert.strictEqual(attempts, 1);
+			assert.strictEqual(isHucodeHostedShellServiceAvailable(adapter), true);
+		});
+
+	test('returns a success completed after concurrent timeout invalidation',
+		async () => {
+			const timers = new ManualTimers();
+			const accepted = new DeferredPromise<
+				HucodeHostedShellOperationOutcome
+			>();
+			const never = new DeferredPromise<HucodeHostedShellOperationOutcome>();
+			let reloadCalls = 0;
+			const shell = Object.assign(createAcceptedShell(), {
+				closeSelf: async () => never.p,
+				reloadSelf: async () => {
+					reloadCalls++;
+					return accepted.p;
+				},
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => createAttempt(Promise.resolve(shell)),
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			const successful = adapter.reloadSelf();
+			const timedOut = adapter.closeSelf();
+			await settled();
+			timers.fireNext(70);
+			assert.strictEqual(
+				await timedOut,
+				HucodeHostedShellOperationOutcome.Unavailable
+			);
+			void accepted.complete(HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(
+				await successful,
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(reloadCalls, 1);
+		});
 });
 
 suite('Hucode desktop MessagePort acquisition', () => {

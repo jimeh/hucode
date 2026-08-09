@@ -241,8 +241,8 @@ suite('OpenProjectSwitcherTarget', () => {
 		);
 
 		assert.deepStrictEqual(calls, [
-			'hostOpen',
 			'setLastActive:project:/repo',
+			'hostOpen',
 		]);
 		assert.deepStrictEqual(opened, [{ folderUri: URI.file('/repo') }]);
 		assert.deepStrictEqual(openOptions, { forceReuseWindow: true });

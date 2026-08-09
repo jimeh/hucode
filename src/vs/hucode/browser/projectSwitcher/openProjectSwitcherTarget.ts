@@ -126,14 +126,14 @@ export async function openProjectSwitcherTargetInWindow(
 		return;
 	}
 
-	await hostService.openWindow(
-		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],
-		{ forceReuseWindow: true }
-	);
 	await setLastActiveWorktreeBestEffort(
 		projectManagerService,
 		canonicalTarget.projectId,
 		canonicalTarget.worktreePath
+	);
+	await hostService.openWindow(
+		[{ folderUri: URI.file(canonicalTarget.worktreePath) }],
+		{ forceReuseWindow: true }
 	);
 }
 

@@ -67,8 +67,9 @@ as settled requirements before implementation begins:
   is demonstrated;
 - ordinary desktop workbench dependency injection must remain constructible
   after the global shell service registration is removed;
-- the first hardening stage must preserve the legacy serve-web wire shape for
-  cached children, with protocol negotiation introduced in the next stage;
+- serve-web must expose only the current typed hosted-shell protocol and
+  capability set; incompatible cached pages fail closed and require a full
+  browser-page reload;
 - desktop port startup needs an explicit deferred-connection state and must not
   fall back to the broad channel while the port is pending;
 - screenshot self-targeting is an intentional semantic change that requires
@@ -520,35 +521,19 @@ ambiguous and replay could apply navigation twice or after intent has changed.
 
 ### Protocol versioning
 
-Give the hosted capability protocol an explicit version and capability set.
+Give the hosted capability protocol an explicit version and exact capability
+set. Parent and child must advertise the current version, the full required
+capability set, and matching nested-bootstrap metadata. Missing, older, newer,
+or otherwise mismatched metadata fails closed on both desktop and serve-web.
+After a server deployment, a browser page holding incompatible assets must be
+fully reloaded; there is no legacy `IHucodeShellService` adapter or old/new
+hosted-shell negotiation window.
 
-- Add `navigationSnapshot` as an optional capability group within protocol
-  version 1,
-  rather than making a strict version bump that would disable the whole hosted
-  service during serve-web asset skew. The eight existing v1 core groups,
-  including the existing `navigation` group for `navigateToFolder`, are
-  immutable and remain required. Negotiation returns the intersection of known
-  optional groups in addition to that core. The server
-  exposes `getNavigationSnapshot` only when that group was offered and accepted,
-  and the client never invokes it otherwise. Test new-parent/old-child and old-
-  parent/new-child handshakes in both directions. Reserve a protocol-version
-  bump for a wire-incompatible change with an explicit two-version fallback.
-
-- Desktop is normally same-build and may fail closed on mismatch, prompting a
-  renderer reload.
-- Serve-web can encounter old page assets during deployment or caching, so it
-  needs a deliberate compatibility window.
-- The first action-hardening stage keeps the existing command-request wire
-  shape. New callers map semantic actions to legacy command IDs, while the
-  authoritative side enforces a closed command-ID set and discards caller
-  arguments. The typed hosted wire protocol begins in the following stage.
-- Keep a legacy web adapter only for an explicitly selected compatibility
-  period; do not widen the new facade to match the old full service.
-- Keep the existing `HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` separate from the
-  hosted capability version. They describe different lifecycle and service
-  contracts and may evolve independently.
-- Connection replacement increments a generation so late replies and old
-  ports cannot affect a reloaded child.
+This strict policy applies only to the hosted-shell capability. Keep
+`HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION` separate: its single-phase/two-phase
+compatibility behavior is independently versioned and remains supported.
+Connection replacement increments a generation so late replies and old ports
+cannot affect a reloaded child.
 
 ## Desktop transport design
 
@@ -789,10 +774,10 @@ migration. PR 5 removed the global channel, but the integration branch is not
 ready for mainline until PRs 6 and 7 close the runtime regressions and their
 automated coverage gaps.
 
-### PR 1 — Legacy-wire action policy and immediate hardening
+### PR 1 — Closed action policy and immediate hardening
 
-**Objective.** Remove arbitrary hosted shell action execution without breaking
-cached serve-web children or changing transport.
+**Objective.** Remove arbitrary hosted shell action execution before replacing
+the transport.
 
 **Work.**
 
@@ -803,26 +788,22 @@ cached serve-web children or changing transport.
   dedicated capability.
 - Introduce `HucodeHostedShellAction`, its runtime validator, and common mapping
   to the existing command IDs.
-- Change current-source callers to request semantic actions through a helper,
-  while retaining the legacy command-request wire shape.
+- Change current-source callers to request semantic actions through a helper.
 - Enforce a closed command-ID set in the existing desktop and web receiving
   paths and discard caller-supplied arguments and `from` metadata.
 - Log rejected action kinds and connection context without logging arbitrary
   arguments.
-- Add characterization tests for every required action and a stale cached-web-
-  child compatibility test using the old wire request.
+- Add characterization tests for every required action.
 
 **Acceptance criteria.**
 
 - Every action demonstrated by the census works on desktop and web.
 - Unknown actions and command namespace lookalikes are rejected.
 - No hosted input reaches a shell command argument array.
-- An old web child using the legacy request shape remains functional for the
-  closed allowed set.
 - Shell-to-workspace arbitrary command routing remains unchanged.
 
 **Risk.** Low to medium. The behavioral surface is small, but desktop action
-delivery and old-asset web compatibility must remain intact.
+delivery must remain intact.
 
 ### PR 2 — Shared hosted capability on serve-web
 
@@ -843,15 +824,15 @@ already mature web `MessagePort` transport.
 - Audit the currently exposed web file-open methods. Add them to the hosted
   contract only if a concrete hosted-origin caller and least-authority shape are
   demonstrated.
-- Retain a narrowly documented compatibility adapter for the selected
-  serve-web old-asset window.
+- Reject missing or mismatched protocol, capability, and nested-bootstrap
+  metadata without registering a legacy adapter.
 
 **Acceptance criteria.**
 
 - Hosted web code cannot name another window or instance.
 - Hidden or superseded web children cannot navigate or drive shell UI.
 - The remote method surface exactly matches the hosted capability interface.
-- Old and new capability versions follow the documented compatibility policy.
+- Incompatible hosted-shell versions fail closed and require a full page reload.
 - Existing web authority, navigation, and lifecycle tests remain green.
 - A static/conformance test prevents accidental facade widening.
 
@@ -1016,8 +997,7 @@ mutation authority in the shell.
   canonical target.
 - Unload Current Worktree appears in the hosted command palette when applicable.
 - Projection tests prove that privileged identity and mutation surfaces remain
-  absent and that old/new serve-web peers retain the core capability when the
-  optional navigation group is unavailable.
+  absent and that incompatible serve-web peers fail closed.
 - Desktop and serve-web consume the same projection and outcome semantics.
 
 **Risk.** Medium to high. The data is read-only, but it feeds several command

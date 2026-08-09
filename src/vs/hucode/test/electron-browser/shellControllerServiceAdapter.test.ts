@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { DeferredPromise } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
@@ -185,7 +185,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		const recoveredState = Event.toPromise(adapter.onDidChangeState);
 		await assert.rejects(
 			adapter.openWorkspace('/ambiguous'),
-			/capability is unavailable/
+			/timed out after dispatch/
 		);
 		assert.deepStrictEqual(await recoveredState, expected);
 		assert.deepStrictEqual(await adapter.getState(), expected);
@@ -275,7 +275,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		const timedOut = adapter.openWorkspace('/hung');
 		await new Promise<void>(resolve => setTimeout(resolve, 20));
 		const completedAfterInvalidation = adapter.openWorkspace('/slow-success');
-		await assert.rejects(timedOut, /capability is unavailable/);
+		await assert.rejects(timedOut, /timed out after dispatch/);
 		void staleSuccess.complete(staleSuccessState);
 		assert.deepStrictEqual(
 			await completedAfterInvalidation,
@@ -400,7 +400,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			} as unknown as IHucodeShellControllerService, {
 				dispose: () => connectionDisposed = true,
 			}));
-			await Promise.resolve();
+			await waitFor(() => connectionDisposed);
 			assert.strictEqual(connectionDisposed, true);
 		}
 	);
@@ -427,6 +427,66 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		assert.strictEqual(attemptDisposed, true);
 	});
 
+	test('joins a dispatched shutdown beyond the connection acquisition budget',
+		async () => {
+			const remoteShutdown = new DeferredPromise<void>();
+			let shutdownCalls = 0;
+			const shell = {
+				onDidChangeState: Event.None,
+				getState: async () => state('connected'),
+				shutdownWindowWorkspaces: async () => {
+					shutdownCalls++;
+					return remoteShutdown.p;
+				},
+			} as unknown as IHucodeShellControllerService;
+			const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+				() => connectionAttempt(Promise.resolve(shell)),
+				{ shutdownConnectionTimeoutMs: 5 },
+				shellEnvironment(true)
+			));
+			await adapter.getState();
+
+			const shutdown = adapter.shutdownWindowWorkspaces(4);
+			await waitFor(() => shutdownCalls === 1);
+			assert.strictEqual(
+				await raceTimeout(shutdown.then(() => 'settled'), 20),
+				undefined
+			);
+			void remoteShutdown.complete();
+			await shutdown;
+		}
+	);
+
+	test('shutdown acquires a recovered connection after initial readiness expires',
+		async () => {
+			let connectCalls = 0;
+			let shutdownCalls = 0;
+			const shell = {
+				onDidChangeState: Event.None,
+				getState: async () => state('recovered'),
+				shutdownWindowWorkspaces: async () => {
+					shutdownCalls++;
+				},
+			} as unknown as IHucodeShellControllerService;
+			const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+				() => connectionAttempt(Promise.resolve(
+					++connectCalls === 1 ? undefined : shell
+				)),
+				{
+					connectionTimeoutMs: 5,
+					retryDelaysMs: [20],
+					shutdownConnectionTimeoutMs: 100,
+				},
+				shellEnvironment(true)
+			));
+
+			await assert.rejects(adapter.getState(), /capability is unavailable/);
+			await adapter.shutdownWindowWorkspaces(4);
+			assert.strictEqual(connectCalls, 2);
+			assert.strictEqual(shutdownCalls, 1);
+		}
+	);
+
 	test('times out acquisition and disposes a late connection', async () => {
 		const connection =
 			new DeferredPromise<IHucodeShellControllerService | undefined>();
@@ -452,7 +512,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		} as unknown as IHucodeShellControllerService, {
 			dispose: () => connectionDisposed = true,
 		}));
-		await Promise.resolve();
+		await waitFor(() => connectionDisposed);
 		assert.strictEqual(connectionDisposed, true);
 	});
 });
@@ -481,4 +541,14 @@ function state(activeInstanceId: string): IHucodeHostedWorkspaceState {
 		projectSwitcherCanGoForward: false,
 		instances: [],
 	};
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 100): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			assert.fail('Timed out waiting for observable test state');
+		}
+		await new Promise<void>(resolve => setTimeout(resolve, 1));
+	}
 }

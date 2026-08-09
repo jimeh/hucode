@@ -259,6 +259,7 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 	readonly timeoutMs: number;
 	readonly readClipboardText: () => Promise<string>;
 	readonly writeClipboardText: (text: string) => Promise<void>;
+	readonly readSavedFileText: () => Promise<string>;
 }): Promise<Locator> {
 	const editor = await openHostedWorkbenchSmokeFile(
 		options.keyboardPage,
@@ -343,8 +344,47 @@ export async function runHostedWorkbenchClipboardBridgeSmoke(options: {
 		options.timeoutMs
 	);
 	await focusHostedWorkbenchSmokeEditor(editor, options.timeoutMs);
+	const editorGroup = editor.locator(
+		'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), ' +
+		'" editor-group-container ")][1]'
+	);
+	const dirtyIndicator = editorGroup.locator(
+		':scope > .title.dirty, ' +
+		':scope > .title .tabs-container > .tab.active.dirty'
+	).first();
+	await dirtyIndicator.waitFor({ state: 'visible', timeout: options.timeoutMs });
 	await options.keyboardPage.keyboard.press('Control+S');
+	await waitForSavedFileText(
+		options.readSavedFileText,
+		shellPasteMarker,
+		options.timeoutMs
+	);
+	await dirtyIndicator.waitFor({ state: 'hidden', timeout: options.timeoutMs });
 	return editor;
+}
+
+async function waitForSavedFileText(
+	readSavedFileText: () => Promise<string>,
+	expected: string,
+	timeoutMs: number
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	let lastObserved = '<not observed>';
+	while (Date.now() < deadline) {
+		try {
+			lastObserved = await readSavedFileText();
+			if (lastObserved === expected) {
+				return;
+			}
+		} catch (error) {
+			lastObserved = error instanceof Error ? error.message : String(error);
+		}
+		await delay(50);
+	}
+	throw new Error(
+		`Timed out waiting for saved file text ${JSON.stringify(expected)}; ` +
+		`last observed ${JSON.stringify(lastObserved)}`
+	);
 }
 
 async function waitForClipboardText(
