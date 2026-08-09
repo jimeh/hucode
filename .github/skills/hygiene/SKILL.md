@@ -31,7 +31,9 @@ The hygiene linter scans staged files for issues including (but not limited to):
 
 - **Unicode characters**: Non-ASCII characters (em-dashes, curly quotes, emoji, etc.) are rejected. Use ASCII equivalents in comments and code. Suppress with `// allow-any-unicode-next-line` or `// allow-any-unicode-comment-file`.
 - **Double-quoted strings**: Only use `"double quotes"` for externalized (localized) strings. Use `'single quotes'` everywhere else.
-- **Copyright headers**: All files must include the Microsoft copyright header.
+- **Copyright headers**: Source files must use the exact Microsoft, Hucode, or
+  dual header required by
+  [Hucode's copyright policy](../../../docs/hucode/copyright.md).
 - **Indentation**: Tabs only, no spaces for indentation.
 - **Formatting**: TypeScript files must match the formatter output (run `Format Document` to fix).
 - **ESLint**: TypeScript files are linted with ESLint.
