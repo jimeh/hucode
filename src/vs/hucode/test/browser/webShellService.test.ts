@@ -1521,12 +1521,20 @@ suite('WebHucodeShellService', () => {
 		assert.ok(instanceId);
 		const child = connectChild(browser, surface, instanceId);
 
-		await assert.rejects(
-			child.removedLegacyShellChannel.call('getWindowState', [
-				browser.windowId,
-			]),
-			/hucodeOmniWebShell/
-		);
+		const originalConsoleError = console.error;
+		try {
+			// ChannelServer must report an unknown channel before rejecting it,
+			// while the Electron runner treats any console output as a test failure.
+			console.error = () => undefined;
+			await assert.rejects(
+				child.removedLegacyShellChannel.call('getWindowState', [
+					browser.windowId,
+				]),
+				/hucodeOmniWebShell/
+			);
+		} finally {
+			console.error = originalConsoleError;
+		}
 	});
 
 	test('binds the hosted shell channel to its window and instance', async () => {
