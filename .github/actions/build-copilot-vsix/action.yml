@@ -1,0 +1,155 @@
+name: Build Copilot VSIX
+description: Build and package the Copilot Chat extension VSIX.
+
+inputs:
+  github-token:
+    description: Token used by npm install scripts.
+    required: true
+  save-cache:
+    description: Whether to save a new node_modules cache on cache misses.
+    required: false
+    default: "true"
+
+outputs:
+  vsix-path:
+    description: Path to the packaged Copilot VSIX.
+    value: ${{ steps.record.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          extensions/copilot/package-lock.json
+
+    - name: Setup npm 11.1
+      shell: bash
+      run: npm install -g npm@11.1.0
+
+    - name: Prepare node_modules cache key
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p .build
+        node build/azure-pipelines/common/computeNodeModulesCacheKey.ts \
+          hucode-copilot-vsix \
+          "$RUNNER_OS" \
+          "$RUNNER_ARCH" \
+          "$(node -p process.arch)" \
+          > .build/copilot-packagelockhash
+
+    - name: Restore node_modules cache
+      id: cache-node-modules
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: .build/node_modules_cache
+        key: "node_modules-hucode-copilot-vsix-${{ hashFiles('.build/copilot-packagelockhash') }}"
+
+    - name: Extract node_modules cache
+      if: steps.cache-node-modules.outputs.cache-hit == 'true'
+      shell: bash
+      run: tar -xzf .build/node_modules_cache/cache.tgz
+
+    - name: Install dependencies
+      if: steps.cache-node-modules.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm ci --ignore-scripts --no-workspaces
+        npm ci --prefix extensions/copilot
+      env:
+        ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Create node_modules archive
+      if: steps.cache-node-modules.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        node build/azure-pipelines/common/listNodeModules.ts \
+          .build/node_modules_list.txt
+        mkdir -p .build/node_modules_cache
+        tar -czf .build/node_modules_cache/cache.tgz \
+          --files-from .build/node_modules_list.txt
+
+    - name: Save node_modules cache
+      if: |
+        steps.cache-node-modules.outputs.cache-hit != 'true' &&
+        inputs.save-cache == 'true'
+      continue-on-error: true
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: .build/node_modules_cache
+        key: "node_modules-hucode-copilot-vsix-${{ hashFiles('.build/copilot-packagelockhash') }}"
+
+    - name: Build Copilot extension
+      shell: bash
+      working-directory: extensions/copilot
+      run: npm run build
+
+    - name: Minify Copilot JSON files
+      shell: bash
+      working-directory: extensions/copilot
+      run: |
+        set -euo pipefail
+        node <<'NODE'
+        const fs = require('fs');
+        const path = require('path');
+        const { parse } = require('jsonc-parser');
+        const files = new Set();
+
+        function add(file) {
+          if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+            files.add(file);
+          }
+        }
+
+        function addMatchingFiles(dir, pattern) {
+          if (!fs.existsSync(dir)) {
+            return;
+          }
+
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const file = path.join(dir, entry.name);
+            if (entry.isFile() && pattern.test(entry.name)) {
+              files.add(file);
+            }
+          }
+        }
+
+        add('package.json');
+        add('package.nls.json');
+        add('telemetry.json');
+        addMatchingFiles('.', /^package\.nls\..+\.json$/);
+        addMatchingFiles('l10n', /^bundle\.l10n\..+\.json$/);
+        addMatchingFiles('dist', /\.json$/);
+
+        for (const file of files) {
+          console.log(`Minifying ${file}`);
+          const contents = fs.readFileSync(file, 'utf8');
+          const errors = [];
+          const parsed = parse(contents, errors);
+          if (errors.length) {
+            throw new Error(
+              `Failed to parse ${file}: ${JSON.stringify(errors)}`
+            );
+          }
+
+          fs.writeFileSync(file, JSON.stringify(parsed, null, 0));
+        }
+        NODE
+
+    - name: Package Copilot VSIX
+      shell: bash
+      working-directory: extensions/copilot
+      run: npx vsce package -o copilot-chat.vsix --allow-package-secrets sendgrid
+
+    - name: Record VSIX path
+      id: record
+      shell: bash
+      run: echo "path=extensions/copilot/copilot-chat.vsix" >> "$GITHUB_OUTPUT"

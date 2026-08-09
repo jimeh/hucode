@@ -11,7 +11,9 @@ import { filter, jsonEditor } from './gulp/facade.ts';
 import * as util from './util.ts';
 import { getVersion } from './getVersion.ts';
 import { downloadFeedPackage } from './azureFeed.ts';
+import { patchDarwinInfoPlistVersion } from './darwinProductVersion.ts';
 import electron from '@vscode/gulp-electron';
+import { ELECTRON_CHECKSUM_FILE } from '../hucode/electron-checksums.ts';
 
 type DarwinDocumentSuffix = 'document' | 'script' | 'file' | 'source code';
 type DarwinDocumentType = {
@@ -113,6 +115,57 @@ const { electronVersion, msBuildId } = util.getElectronVersion();
 // validated against the feed's `SHASUMS256.txt`.
 const electronFeed: string | undefined = product.electronArtifactFeed;
 
+/**
+ * Resolves an Electron release asset to a response body.
+ */
+export type ElectronAssetResolver = (request: {
+	readonly url: string;
+	readonly fileName: string;
+}) => Promise<Response>;
+
+/**
+ * Creates a cache-only resolver for an Electron artifact populated by the
+ * release workflow's prefetch step.
+ */
+export function createPrefetchedElectronAssetResolver(
+	enabled: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	if (!enabled) {
+		return undefined;
+	}
+
+	return async ({ fileName }) => {
+		if (fileName !== 'SHASUMS256.txt') {
+			throw new Error(
+				`${fileName} is not present or valid in the Electron ` +
+					'prefetch cache'
+			);
+		}
+
+		const checksums = await fs.promises.readFile(checksumFile, 'utf8');
+		return new Response(checksums, {
+			status: 200,
+			headers: {
+				'Content-Length': String(Buffer.byteLength(checksums)),
+			},
+		});
+	};
+}
+
+/**
+ * Selects the Azure feed resolver when present, otherwise the release
+ * workflow's cache-only prefetch resolver when enabled.
+ */
+export function selectElectronAssetResolver(
+	electronFeedResolver: ElectronAssetResolver | undefined,
+	prefetched: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	return electronFeedResolver ??
+		createPrefetchedElectronAssetResolver(prefetched, checksumFile);
+}
+
 // Maps the artifact file name `@vscode/gulp-electron` requests to the matching
 // universal package name in the feed, or `undefined` when it is not mirrored.
 function feedPackageName(fileName: string): string | undefined {
@@ -125,7 +178,7 @@ function feedPackageName(fileName: string): string | undefined {
 	return fileName.replace(/\.zip$/, '');
 }
 
-const electronAssetResolver = electronFeed
+const electronFeedAssetResolver = electronFeed
 	? async ({ fileName }: { url: string; fileName: string }): Promise<Response> => {
 		const name = feedPackageName(fileName);
 		if (!name) {
@@ -138,6 +191,11 @@ const electronAssetResolver = electronFeed
 		return new Response(body, { status: 200, headers: { 'Content-Length': String(size) } });
 	}
 	: undefined;
+const electronAssetResolver = selectElectronAssetResolver(
+	electronFeedAssetResolver,
+	process.env['HUCODE_ELECTRON_PREFETCHED'] === '1',
+	ELECTRON_CHECKSUM_FILE
+);
 
 export const config = {
 	version: electronVersion,
@@ -146,6 +204,7 @@ export const config = {
 	copyright: 'Copyright (C) 2026 Microsoft. All rights reserved',
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
+	darwinAssetsCar: product.darwinAssetsCar,
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
 	darwinApplicationCategoryType: 'public.app-category.developer-tools',
 	darwinHelpBookFolder: 'VS Code HelpBook',
@@ -240,7 +299,7 @@ export const config = {
 	token: process.env['GITHUB_TOKEN'],
 	repo: electronAssetResolver,
 	validateChecksum: true,
-	checksumFile: path.join(root, 'build', 'checksums', 'electron.txt'),
+	checksumFile: ELECTRON_CHECKSUM_FILE,
 	createVersionedResources: useVersionedUpdate,
 	productVersionString: versionedResourcesFolder,
 };
@@ -255,9 +314,18 @@ function getElectron(arch: string): () => NodeJS.ReadWriteStream {
 			keepDefaultApp: true
 		};
 
-		return vfs.src('package.json')
+		let result: NodeJS.ReadWriteStream = vfs.src('package.json')
 			.pipe(jsonEditor({ name: product.nameShort }))
-			.pipe(electron(electronOpts))
+			.pipe(electron(electronOpts));
+
+		if (process.platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[`${product.nameLong}.app/Contents/Info.plist`]
+			));
+		}
+
+		return result
 			.pipe(filter(['**', '!**/app/package.json']))
 			.pipe(vfs.dest('.build/electron'));
 	};
