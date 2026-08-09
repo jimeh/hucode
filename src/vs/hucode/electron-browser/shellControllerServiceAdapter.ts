@@ -496,12 +496,10 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 				return;
 			}
 
-			let timedOut = false;
 			try {
 				await raceTimeout(
 					shutdown,
-					Math.max(0, operationDeadline - Date.now()),
-					() => timedOut = true
+					Math.max(0, operationDeadline - Date.now())
 				);
 			} catch {
 				if (this.shell !== shell) {
@@ -509,9 +507,6 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 					// safely rejoin the same operation without replaying work.
 					continue;
 				}
-				return;
-			}
-			if (timedOut) {
 				return;
 			}
 			return;

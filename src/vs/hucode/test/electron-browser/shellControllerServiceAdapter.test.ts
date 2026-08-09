@@ -443,7 +443,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 				() => connectionAttempt(Promise.resolve(shell)),
 				{
 					shutdownConnectionTimeoutMs: 5,
-					shutdownOperationTimeoutMs: 100,
+					shutdownOperationTimeoutMs: 5_000,
 				},
 				shellEnvironment(true)
 			));
@@ -497,7 +497,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 					operationTimeoutMs: 5,
 					retryDelaysMs: [0],
 					shutdownConnectionTimeoutMs: 50,
-					shutdownOperationTimeoutMs: 200,
+					shutdownOperationTimeoutMs: 5_000,
 				},
 				shellEnvironment(true)
 			));

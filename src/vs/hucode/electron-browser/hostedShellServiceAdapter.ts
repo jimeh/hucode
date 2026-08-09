@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../base/common/buffer.js';
+import { isCancellationError } from '../../base/common/errors.js';
 import { Emitter } from '../../base/common/event.js';
 import {
 	Disposable,
@@ -67,6 +68,11 @@ const defaultConnectionOptions: IDesktopHostedShellConnectionOptions = {
 	clearTimeout: handle => clearTimeout(handle),
 };
 
+type DesktopHostedShellInvocationResult<T> =
+	| { readonly kind: 'value'; readonly value: T }
+	| { readonly kind: 'rejected' }
+	| { readonly kind: 'unavailable' };
+
 /**
  * Desktop hosted-workbench client for the narrow, main-process-bound shell
  * capability. Connection establishment and calls are bounded, recover through
@@ -121,7 +127,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			return fallback();
 		}
 		const result = await this.invokeBounded(shell, () => run(shell));
-		return result.ok ? result.value : fallback();
+		return result.kind === 'value' ? result.value : fallback();
 	}
 
 	async getState(): Promise<IHucodeHostedShellState> {
@@ -130,7 +136,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			return this.markUnavailable();
 		}
 		const result = await this.invokeBounded(shell, () => shell.getState());
-		if (result.ok && this.shell === shell) {
+		if (result.kind === 'value' && this.shell === shell) {
 			this.updateState(result.value);
 		}
 		return this.state;
@@ -157,7 +163,12 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			shell,
 			() => shell.notifyReady()
 		);
-		if (!result.ok) {
+		if (result.kind === 'rejected') {
+			return {
+				outcome: HucodeHostedShellOperationOutcome.Rejected,
+			};
+		}
+		if (result.kind === 'unavailable') {
 			return {
 				outcome: HucodeHostedShellOperationOutcome.Unavailable,
 			};
@@ -207,7 +218,10 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			return HucodeHostedShellOperationOutcome.Unavailable;
 		}
 		const result = await this.invokeBounded(shell, () => run(shell));
-		if (!result.ok) {
+		if (result.kind === 'rejected') {
+			return HucodeHostedShellOperationOutcome.Rejected;
+		}
+		if (result.kind === 'unavailable') {
 			return HucodeHostedShellOperationOutcome.Unavailable;
 		}
 		if (result.value === HucodeHostedShellOperationOutcome.Stale) {
@@ -304,7 +318,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 
 	private async refreshState(shell: IHucodeHostedShellService): Promise<void> {
 		const result = await this.invokeBounded(shell, () => shell.getState());
-		if (result.ok && this.shell === shell) {
+		if (result.kind === 'value' && this.shell === shell) {
 			this.updateState(result.value);
 		}
 	}
@@ -313,7 +327,7 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		shell: IHucodeHostedShellService
 	): Promise<void> {
 		const result = await this.invokeBounded(shell, () => shell.notifyReady());
-		if (result.ok && result.value.outcome ===
+		if (result.kind === 'value' && result.value.outcome ===
 			HucodeHostedShellOperationOutcome.Stale) {
 			this.invalidateConnection(shell);
 		}
@@ -322,12 +336,12 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 	private async invokeBounded<T>(
 		shell: IHucodeHostedShellService,
 		operation: () => Promise<T>
-	): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false }> {
+	): Promise<DesktopHostedShellInvocationResult<T>> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const operationResult = Promise.resolve().then(operation).then(
 				value => ({ kind: 'value' as const, value }),
-				() => ({ kind: 'failure' as const })
+				error => ({ kind: 'failure' as const, error })
 			);
 			const timeoutResult = new Promise<{ readonly kind: 'timeout' }>(resolve => {
 				timer = this.options.setTimeout(
@@ -337,14 +351,18 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			});
 			const result = await Promise.race([operationResult, timeoutResult]);
 			if (result.kind === 'value') {
-				return { ok: true, value: result.value };
+				return result;
 			}
 			if (result.kind === 'failure') {
-				// A round-tripped rejection proves the response path remains live.
-				return { ok: false };
+				// A non-cancellation rejection from the current port proves the
+				// response path remains live.
+				return this.shell === shell &&
+					!isCancellationError(result.error)
+					? { kind: 'rejected' }
+					: { kind: 'unavailable' };
 			}
 			this.invalidateConnection(shell);
-			return { ok: false };
+			return { kind: 'unavailable' };
 		} finally {
 			if (timer !== undefined) {
 				this.options.clearTimeout(timer);

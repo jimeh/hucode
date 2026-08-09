@@ -67,9 +67,10 @@ as settled requirements before implementation begins:
   is demonstrated;
 - ordinary desktop workbench dependency injection must remain constructible
   after the global shell service registration is removed;
-- serve-web must expose only the current typed hosted-shell protocol and
-  capability set; incompatible cached pages fail closed and require a full
-  browser-page reload;
+- serve-web must expose only the current typed hosted-shell protocol and its
+  complete required core capability set, while negotiating the optional
+  `navigationSnapshot` group independently; incompatible cached pages fail
+  closed and require a full browser-page reload;
 - desktop port startup needs an explicit deferred-connection state and must not
   fall back to the broad channel while the port is pending;
 - screenshot self-targeting is an intentional semantic change that requires
@@ -112,10 +113,11 @@ integration PR remains user-merge-only.
 
 ## Final protocol compatibility amendment
 
-The final implementation supports only the current typed serve-web
-hosted-shell protocol and capability set. Missing or mismatched protocol,
-capability, or nested bootstrap metadata fails closed. A server deployment may
-therefore require a full browser-page reload; the one-generation legacy
+The final implementation supports only the current typed serve-web hosted-shell
+protocol and its complete required core capability set; the optional
+`navigationSnapshot` group is independently negotiated. Missing or mismatched
+protocol, required core capability, or nested bootstrap metadata fails closed.
+A server deployment may therefore require a full browser-page reload; the legacy
 `IHucodeShellService` adapter and its method-version-skew tests are removed.
 
 This decision supersedes this historical plan's earlier hosted-shell
@@ -521,10 +523,12 @@ ambiguous and replay could apply navigation twice or after intent has changed.
 
 ### Protocol versioning
 
-Give the hosted capability protocol an explicit version and exact capability
-set. Parent and child must advertise the current version, the full required
-capability set, and matching nested-bootstrap metadata. Missing, older, newer,
-or otherwise mismatched metadata fails closed on both desktop and serve-web.
+Give the hosted capability protocol an explicit version. Parent and child must
+advertise the current version, the complete required core capability set, and
+matching nested-bootstrap metadata. The optional `navigationSnapshot` group is
+negotiated independently. Missing required core groups, older or newer protocol
+versions, or otherwise mismatched bootstrap metadata fails closed on both
+desktop and serve-web.
 After a server deployment, a browser page holding incompatible assets must be
 fully reloaded; there is no legacy `IHucodeShellService` adapter or old/new
 hosted-shell negotiation window.
@@ -826,14 +830,16 @@ already mature web `MessagePort` transport.
 - Audit the currently exposed web file-open methods. Add them to the hosted
   contract only if a concrete hosted-origin caller and least-authority shape are
   demonstrated.
-- Reject missing or mismatched protocol, capability, and nested-bootstrap
-  metadata without registering a legacy adapter.
+- Reject missing or mismatched protocol, required core capability, and
+  nested-bootstrap metadata without registering a legacy adapter. Negotiate
+  optional capabilities independently.
 
 **Acceptance criteria.**
 
 - Hosted web code cannot name another window or instance.
 - Hidden or superseded web children cannot navigate or drive shell UI.
-- The remote method surface exactly matches the hosted capability interface.
+- The remote core method surface matches the required capability interface;
+  `navigationSnapshot` is exposed only when independently negotiated.
 - Incompatible hosted-shell versions fail closed and require a full page reload.
 - Existing web authority, navigation, and lifecycle tests remain green.
 - A static/conformance test prevents accidental facade widening.
@@ -1264,7 +1270,7 @@ custom role-aware fork of VS Code's generic IPC system.
 | New action is accidentally authorized | Closed semantic union; never reuse namespace routing as authorization |
 | Desktop and web drift again | Shared facade/client/policy plus cross-platform conformance suite |
 | Serve-web old/new asset mismatch | Fail closed and require a full browser-page reload after deployment; do not retain a legacy hosted-shell adapter |
-| Optional navigation is invoked without negotiation | Require the current capability set before accepting the port and gate optional member exposure on the negotiated capability |
+| Optional navigation is invoked without negotiation | Require the complete current core capability set before accepting the port and gate optional member exposure on its independent negotiation |
 | Web retry disposes the child's latched port | Correlate attempts, adopt only the latest accepted port, and close late or replaced clients |
 | Hidden child steals navigation | Active/visible authorization plus latest-activation-intent checks after asynchronous preflight |
 | Hosted paste reaches the shell | Self-bound paste capability with no shell-window fallback |
@@ -1298,8 +1304,9 @@ The work is complete only when all of the following are true:
 - desktop and web share policy, facade, client, and conformance tests;
 - hosted switchers receive a sanitized read-only sibling navigation projection
   without instance identity or catalog authority;
-- serve-web accepts only the current hosted-shell protocol/capability set and
-  requires a full browser-page reload after an incompatible deployment;
+- serve-web accepts only the current hosted-shell protocol plus the complete
+  required core capability set, negotiates `navigationSnapshot` independently,
+  and requires a full browser-page reload after an incompatible deployment;
 - every navigation outcome has explicit caller semantics and only accepted
   canonical navigation updates MRU;
 - desktop and web connection bootstrap is bounded and can recover from a
@@ -1328,8 +1335,9 @@ The recommended defaults for implementation are:
    authoritatively through high-level path-scoped methods.
 5. Share contract, facade, policy, client, and conformance tests.
 6. Keep only transport bootstrap and host mechanics platform-specific.
-7. Accept only the current serve-web hosted-shell protocol and capability set,
-   while keeping it versioned separately from the unload protocol.
+7. Accept only the current serve-web hosted-shell protocol and complete required
+   core capability set, negotiate `navigationSnapshot` independently, and keep
+   the hosted-shell protocol versioned separately from the unload protocol.
 8. Deliver the original five and both corrective `ship-feature-pr` staging PRs
    into `series-1.131.0-hosted-shell-capability`, followed by one holistic PR
    from that branch to mainline.
