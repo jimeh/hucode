@@ -19,6 +19,8 @@ import {
 } from '../../../platform/window/common/hucodeHostedShellService.js';
 import { INativeWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/electron-browser/environmentService.js';
+import { NativeClipboardService } from
+	'../../../workbench/services/clipboard/electron-browser/clipboardService.js';
 import { HucodeNativeClipboardService } from
 	'../../electron-browser/hucodeClipboardService.js';
 
@@ -29,10 +31,14 @@ suite('Hucode Native Clipboard Service', () => {
 		const registrations = getSingletonServiceDescriptors().filter(
 			([id]) => id === IClipboardService
 		);
-		assert.strictEqual(
-			registrations.at(-1)?.[1].ctor,
-			HucodeNativeClipboardService
+		const upstreamIndex = registrations.findIndex(
+			([, descriptor]) => descriptor.ctor === NativeClipboardService
 		);
+		const hucodeIndex = registrations.findIndex(
+			([, descriptor]) => descriptor.ctor === HucodeNativeClipboardService
+		);
+		assert.notStrictEqual(upstreamIndex, -1);
+		assert.ok(hucodeIndex > upstreamIndex);
 	});
 
 	test('hosted paste is consumed without owner-window fallback', async () => {
