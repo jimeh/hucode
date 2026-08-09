@@ -1,2 +1,1 @@
-copy = [".codegraph"]
 commands = ["mise run setup"]
