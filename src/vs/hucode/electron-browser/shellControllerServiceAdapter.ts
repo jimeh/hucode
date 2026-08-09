@@ -116,12 +116,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		if (!shell || this.shell !== shell) {
 			throw new HucodeShellControllerUnavailableError();
 		}
-		try {
-			return await this.invokeBounded(shell, () => run(shell));
-		} catch (error) {
-			this.invalidateConnection(shell);
-			throw error;
-		}
+		return this.invokeBounded(shell, () => run(shell));
 	}
 
 	private beginConnectionAttempt(): void {
@@ -212,7 +207,7 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 				this._onDidChangeState.fire(state);
 			}
 		} catch {
-			this.invalidateConnection(shell);
+			// invokeBounded has already invalidated a timed-out connection.
 		}
 	}
 
@@ -234,12 +229,14 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 					);
 				}),
 			]);
-			if (result.kind === 'value' && this.shell === shell) {
+			if (result.kind === 'value') {
 				return result.value;
 			}
 			if (result.kind === 'failure') {
+				// A round-tripped rejection proves the response path remains live.
 				throw result.error;
 			}
+			this.invalidateConnection(shell);
 			throw new HucodeShellControllerUnavailableError();
 		} finally {
 			if (timer !== undefined) {

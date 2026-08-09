@@ -152,8 +152,9 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		assert.strictEqual(lateConnectionDisposed, true);
 	});
 
-	test('reacquires after an ambiguous failure without replaying it', async () => {
+	test('reacquires after an ambiguous timeout without replaying it', async () => {
 		const expected = state('replacement');
+		const hungOperation = new DeferredPromise<IHucodeHostedWorkspaceState>();
 		let connectCalls = 0;
 		let firstOperationCalls = 0;
 		const first = {
@@ -161,7 +162,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			getState: async () => state('first'),
 			openWorkspace: async () => {
 				firstOperationCalls++;
-				throw new Error('connection lost after dispatch');
+				return hungOperation.p;
 			},
 		} as unknown as IHucodeShellControllerService;
 		const replacement = {
@@ -174,6 +175,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			)),
 			{
 				connectionTimeoutMs: 500,
+				operationTimeoutMs: 5,
 				retryDelaysMs: [0],
 			},
 			shellEnvironment(true)
@@ -183,11 +185,105 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		const recoveredState = Event.toPromise(adapter.onDidChangeState);
 		await assert.rejects(
 			adapter.openWorkspace('/ambiguous'),
-			/connection lost after dispatch/
+			/capability is unavailable/
 		);
 		assert.deepStrictEqual(await recoveredState, expected);
 		assert.deepStrictEqual(await adapter.getState(), expected);
 		assert.strictEqual(firstOperationCalls, 1);
+		assert.strictEqual(connectCalls, 2);
+	});
+
+	test('application rejection preserves concurrent successful work',
+		async () => {
+			const initial = state('initial');
+			const accepted = state('accepted');
+			const acceptedOperation =
+				new DeferredPromise<IHucodeHostedWorkspaceState>();
+			let connectCalls = 0;
+			let acceptedCalls = 0;
+			const shell = {
+				onDidChangeState: Event.None,
+				getState: async () => initial,
+				openWorkspace: async (path: string) => {
+					if (path === '/rejected') {
+						throw new Error('application rejected request');
+					}
+					acceptedCalls++;
+					return acceptedOperation.p;
+				},
+			} as unknown as IHucodeShellControllerService;
+			const adapter = disposables.add(
+				new DesktopShellControllerServiceAdapter(
+					() => {
+						connectCalls++;
+						return connectionAttempt(Promise.resolve(shell));
+					},
+					{ operationTimeoutMs: 500, retryDelaysMs: [0] },
+					shellEnvironment(true)
+				)
+			);
+
+			await adapter.getState();
+			const successful = adapter.openWorkspace('/accepted');
+			await assert.rejects(
+				adapter.openWorkspace('/rejected'),
+				/application rejected request/
+			);
+			void acceptedOperation.complete(accepted);
+			assert.deepStrictEqual(await successful, accepted);
+			assert.deepStrictEqual(await adapter.getState(), initial);
+			assert.strictEqual(acceptedCalls, 1);
+			assert.strictEqual(connectCalls, 1);
+		}
+	);
+
+	test('returns a success completed after concurrent invalidation', async () => {
+		const replacementState = state('replacement');
+		const staleSuccessState = state('stale-success');
+		const hungOperation = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const staleSuccess = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		let connectCalls = 0;
+		let staleSuccessCalls = 0;
+		const first = {
+			onDidChangeState: Event.None,
+			getState: async () => state('first'),
+			openWorkspace: async (path: string) => {
+				if (path === '/hung') {
+					return hungOperation.p;
+				}
+				staleSuccessCalls++;
+				return staleSuccess.p;
+			},
+		} as unknown as IHucodeShellControllerService;
+		const replacement = {
+			onDidChangeState: Event.None,
+			getState: async () => replacementState,
+		} as unknown as IHucodeShellControllerService;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connectionAttempt(Promise.resolve(
+				++connectCalls === 1 ? first : replacement
+			)),
+			{
+				operationTimeoutMs: 100,
+				retryDelaysMs: [0],
+			},
+			shellEnvironment(true)
+		));
+
+		await adapter.getState();
+		const recoveredState = Event.toPromise(adapter.onDidChangeState);
+		const timedOut = adapter.openWorkspace('/hung');
+		await new Promise<void>(resolve => setTimeout(resolve, 20));
+		const completedAfterInvalidation = adapter.openWorkspace('/slow-success');
+		await assert.rejects(timedOut, /capability is unavailable/);
+		void staleSuccess.complete(staleSuccessState);
+		assert.deepStrictEqual(
+			await completedAfterInvalidation,
+			staleSuccessState
+		);
+		assert.deepStrictEqual(await recoveredState, replacementState);
+		assert.deepStrictEqual(await adapter.getState(), replacementState);
+		assert.strictEqual(staleSuccessCalls, 1);
 		assert.strictEqual(connectCalls, 2);
 	});
 
