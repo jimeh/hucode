@@ -5,7 +5,8 @@
 
 import assert from 'assert';
 import { DeferredPromise } from '../../../base/common/async.js';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
@@ -13,7 +14,9 @@ import { INativeWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/electron-browser/environmentService.js';
 import { IHucodeHostedWorkspaceState } from '../../common/omniWindow.js';
 import {
+	createHucodeShellControllerServerChannel,
 	createHucodeShellControllerClient,
+	HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS,
 	IHucodeShellControllerService,
 } from
 	'../../../platform/window/common/hucodeShellControllerService.js';
@@ -42,7 +45,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 			},
 		} as unknown as IHucodeShellControllerService;
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
-			() => connection.p,
+			() => connectionAttempt(connection.p),
 			{},
 			shellEnvironment(true)
 		));
@@ -55,6 +58,233 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		changes.fire(second);
 		assert.deepStrictEqual(observed, [second]);
 		assert.deepStrictEqual(calls, ['open:/repo:project']);
+	});
+
+	test('recovers an initial denied acquisition without a renderer reload',
+		async () => {
+			const expected = state('recovered');
+			let connectCalls = 0;
+			const adapter = disposables.add(
+				new DesktopShellControllerServiceAdapter(
+					() => connectionAttempt(Promise.resolve(
+						++connectCalls === 1
+							? undefined
+							: {
+								onDidChangeState: Event.None,
+								getState: async () => expected,
+							} as unknown as IHucodeShellControllerService
+					)),
+					{ connectionTimeoutMs: 500, retryDelaysMs: [0] },
+					shellEnvironment(true)
+				)
+			);
+
+			assert.deepStrictEqual(await adapter.getState(), expected);
+			assert.strictEqual(connectCalls, 2);
+		}
+	);
+
+	test('recovers after the initial readiness budget expires', async () => {
+		const expected = state('background-recovery');
+		let connectCalls = 0;
+		const adapter = disposables.add(
+			new DesktopShellControllerServiceAdapter(
+				() => connectionAttempt(Promise.resolve(
+					++connectCalls === 1
+						? undefined
+						: {
+							onDidChangeState: Event.None,
+							getState: async () => expected,
+						} as unknown as IHucodeShellControllerService
+				)),
+				{ connectionTimeoutMs: 5, retryDelaysMs: [20] },
+				shellEnvironment(true)
+			)
+		);
+		const recoveredState = Event.toPromise(adapter.onDidChangeState);
+
+		await assert.rejects(adapter.getState(), /capability is unavailable/);
+		assert.deepStrictEqual(await recoveredState, expected);
+		assert.deepStrictEqual(await adapter.getState(), expected);
+		assert.strictEqual(connectCalls, 2);
+	});
+
+	test('recovers initial acquisition rejection and timeout', async () => {
+		const expected = state('recovered');
+		const timedOut = new DeferredPromise<
+			IHucodeShellControllerService | undefined
+		>();
+		let connectCalls = 0;
+		let lateConnectionDisposed = false;
+		const shell = {
+			onDidChangeState: Event.None,
+			getState: async () => expected,
+		} as unknown as IHucodeShellControllerService;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => {
+				connectCalls++;
+				if (connectCalls === 1) {
+					return connectionAttempt(
+						Promise.reject(new Error('denied'))
+					);
+				}
+				if (connectCalls === 2) {
+					return connectionAttempt(timedOut.p);
+				}
+				return connectionAttempt(Promise.resolve(shell));
+			},
+			{
+				acquisitionTimeoutMs: 5,
+				connectionTimeoutMs: 500,
+				retryDelaysMs: [0],
+			},
+			shellEnvironment(true)
+		));
+
+		assert.deepStrictEqual(await adapter.getState(), expected);
+		assert.strictEqual(connectCalls, 3);
+		void timedOut.complete(Object.assign({
+			onDidChangeState: Event.None,
+		} as unknown as IHucodeShellControllerService, {
+			dispose: () => lateConnectionDisposed = true,
+		}));
+		await Promise.resolve();
+		assert.strictEqual(lateConnectionDisposed, true);
+	});
+
+	test('reacquires after an ambiguous timeout without replaying it', async () => {
+		const expected = state('replacement');
+		const hungOperation = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		let connectCalls = 0;
+		let firstOperationCalls = 0;
+		const first = {
+			onDidChangeState: Event.None,
+			getState: async () => state('first'),
+			openWorkspace: async () => {
+				firstOperationCalls++;
+				return hungOperation.p;
+			},
+		} as unknown as IHucodeShellControllerService;
+		const replacement = {
+			onDidChangeState: Event.None,
+			getState: async () => expected,
+		} as unknown as IHucodeShellControllerService;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connectionAttempt(Promise.resolve(
+				++connectCalls === 1 ? first : replacement
+			)),
+			{
+				connectionTimeoutMs: 500,
+				operationTimeoutMs: 5,
+				retryDelaysMs: [0],
+			},
+			shellEnvironment(true)
+		));
+
+		await adapter.getState();
+		const recoveredState = Event.toPromise(adapter.onDidChangeState);
+		await assert.rejects(
+			adapter.openWorkspace('/ambiguous'),
+			/capability is unavailable/
+		);
+		assert.deepStrictEqual(await recoveredState, expected);
+		assert.deepStrictEqual(await adapter.getState(), expected);
+		assert.strictEqual(firstOperationCalls, 1);
+		assert.strictEqual(connectCalls, 2);
+	});
+
+	test('application rejection preserves concurrent successful work',
+		async () => {
+			const initial = state('initial');
+			const accepted = state('accepted');
+			const acceptedOperation =
+				new DeferredPromise<IHucodeHostedWorkspaceState>();
+			let connectCalls = 0;
+			let acceptedCalls = 0;
+			const shell = {
+				onDidChangeState: Event.None,
+				getState: async () => initial,
+				openWorkspace: async (path: string) => {
+					if (path === '/rejected') {
+						throw new Error('application rejected request');
+					}
+					acceptedCalls++;
+					return acceptedOperation.p;
+				},
+			} as unknown as IHucodeShellControllerService;
+			const adapter = disposables.add(
+				new DesktopShellControllerServiceAdapter(
+					() => {
+						connectCalls++;
+						return connectionAttempt(Promise.resolve(shell));
+					},
+					{ operationTimeoutMs: 500, retryDelaysMs: [0] },
+					shellEnvironment(true)
+				)
+			);
+
+			await adapter.getState();
+			const successful = adapter.openWorkspace('/accepted');
+			await assert.rejects(
+				adapter.openWorkspace('/rejected'),
+				/application rejected request/
+			);
+			void acceptedOperation.complete(accepted);
+			assert.deepStrictEqual(await successful, accepted);
+			assert.deepStrictEqual(await adapter.getState(), initial);
+			assert.strictEqual(acceptedCalls, 1);
+			assert.strictEqual(connectCalls, 1);
+		}
+	);
+
+	test('returns a success completed after concurrent invalidation', async () => {
+		const replacementState = state('replacement');
+		const staleSuccessState = state('stale-success');
+		const hungOperation = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const staleSuccess = new DeferredPromise<IHucodeHostedWorkspaceState>();
+		let connectCalls = 0;
+		let staleSuccessCalls = 0;
+		const first = {
+			onDidChangeState: Event.None,
+			getState: async () => state('first'),
+			openWorkspace: async (path: string) => {
+				if (path === '/hung') {
+					return hungOperation.p;
+				}
+				staleSuccessCalls++;
+				return staleSuccess.p;
+			},
+		} as unknown as IHucodeShellControllerService;
+		const replacement = {
+			onDidChangeState: Event.None,
+			getState: async () => replacementState,
+		} as unknown as IHucodeShellControllerService;
+		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
+			() => connectionAttempt(Promise.resolve(
+				++connectCalls === 1 ? first : replacement
+			)),
+			{
+				operationTimeoutMs: 100,
+				retryDelaysMs: [0],
+			},
+			shellEnvironment(true)
+		));
+
+		await adapter.getState();
+		const recoveredState = Event.toPromise(adapter.onDidChangeState);
+		const timedOut = adapter.openWorkspace('/hung');
+		await new Promise<void>(resolve => setTimeout(resolve, 20));
+		const completedAfterInvalidation = adapter.openWorkspace('/slow-success');
+		await assert.rejects(timedOut, /capability is unavailable/);
+		void staleSuccess.complete(staleSuccessState);
+		assert.deepStrictEqual(
+			await completedAfterInvalidation,
+			staleSuccessState
+		);
+		assert.deepStrictEqual(await recoveredState, replacementState);
+		assert.deepStrictEqual(await adapter.getState(), replacementState);
+		assert.strictEqual(staleSuccessCalls, 1);
+		assert.strictEqual(connectCalls, 2);
 	});
 
 	test('typed client is concrete and cannot be assimilated as a promise',
@@ -82,15 +312,66 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		}
 	);
 
+	test('server channel exposes only the declared controller surface',
+		async () => {
+			const calls: string[] = [];
+			const service = new Proxy({
+				_serviceBrand: undefined,
+				supportsWorkspaceScreenshotOverlay: true,
+				onDidChangeState: Event.None,
+			}, {
+				get(target, property) {
+					if (Object.hasOwn(target, property)) {
+						return target[property as keyof typeof target];
+					}
+					return () => {
+						calls.push(String(property));
+						return Promise.resolve(undefined);
+					};
+				},
+			}) as unknown as IHucodeShellControllerService;
+			const channelDisposables = disposables.add(new DisposableStore());
+			const channel = createHucodeShellControllerServerChannel(
+				service,
+				channelDisposables
+			);
+
+			const listener = channel.listen('test', 'onDidChangeState');
+			const listenerDisposable = listener(() => undefined);
+			listenerDisposable.dispose();
+			const methods = HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS.filter(
+				member => member !== 'onDidChangeState'
+			);
+			for (const method of methods) {
+				await channel.call('test', method, []);
+			}
+			assert.deepStrictEqual(calls, methods);
+			await assert.rejects(
+				channel.call('test', 'onDidChangeState'),
+				/Method not found: onDidChangeState/
+			);
+			for (const method of ['constructor', 'toString', 'undeclared']) {
+				await assert.rejects(
+					channel.call('test', method),
+					new RegExp(`Method not found: ${method}`)
+				);
+			}
+			assert.throws(
+				() => channel.listen('test', 'getState'),
+				/Event not found: getState/
+			);
+		}
+	);
+
 	test('ordinary and hosted workbenches never request the privileged port',
 		async () => {
 			let connectCalls = 0;
 			const adapter = disposables.add(
 				new DesktopShellControllerServiceAdapter(
-					async () => {
+					() => connectionAttempt(Promise.resolve().then(() => {
 						connectCalls++;
 						return undefined;
-					},
+					})),
 					{},
 					shellEnvironment(false)
 				)
@@ -107,7 +388,7 @@ suite('DesktopShellControllerServiceAdapter', () => {
 				new DeferredPromise<IHucodeShellControllerService | undefined>();
 			let connectionDisposed = false;
 			const adapter = new DesktopShellControllerServiceAdapter(
-				() => connection.p,
+				() => connectionAttempt(connection.p),
 				{},
 				shellEnvironment(true)
 			);
@@ -127,8 +408,12 @@ suite('DesktopShellControllerServiceAdapter', () => {
 	test('shutdown does not wait for a pending connection', async () => {
 		const connection =
 			new DeferredPromise<IHucodeShellControllerService | undefined>();
+		let attemptDisposed = false;
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
-			() => connection.p,
+			() => connectionAttempt(
+				connection.p,
+				() => attemptDisposed = true
+			),
 			{
 				connectionTimeoutMs: 1000,
 				shutdownConnectionTimeoutMs: 5,
@@ -138,19 +423,30 @@ suite('DesktopShellControllerServiceAdapter', () => {
 
 		await adapter.shutdownWindowWorkspaces(4);
 		assert.strictEqual(connection.isSettled, false);
+		adapter.dispose();
+		assert.strictEqual(attemptDisposed, true);
 	});
 
 	test('times out acquisition and disposes a late connection', async () => {
 		const connection =
 			new DeferredPromise<IHucodeShellControllerService | undefined>();
 		let connectionDisposed = false;
+		let attemptDisposed = false;
 		const adapter = disposables.add(new DesktopShellControllerServiceAdapter(
-			() => connection.p,
-			{ connectionTimeoutMs: 5 },
+			() => connectionAttempt(
+				connection.p,
+				() => attemptDisposed = true
+			),
+			{
+				acquisitionTimeoutMs: 2,
+				connectionTimeoutMs: 5,
+				retryDelaysMs: [100],
+			},
 			shellEnvironment(true)
 		));
 
 		await assert.rejects(adapter.getState(), /capability is unavailable/);
+		assert.strictEqual(attemptDisposed, true);
 		void connection.complete(Object.assign({
 			onDidChangeState: () => ({ dispose() { } }),
 		} as unknown as IHucodeShellControllerService, {
@@ -160,6 +456,13 @@ suite('DesktopShellControllerServiceAdapter', () => {
 		assert.strictEqual(connectionDisposed, true);
 	});
 });
+
+function connectionAttempt(
+	promise: Promise<IHucodeShellControllerService | undefined>,
+	onDispose: () => void = () => undefined
+) {
+	return { promise, dispose: onDispose };
+}
 
 function shellEnvironment(
 	isOmniShellWindow: boolean

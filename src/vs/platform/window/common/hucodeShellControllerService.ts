@@ -5,8 +5,13 @@
 
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { Event } from '../../../base/common/event.js';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { UriComponents } from '../../../base/common/uri.js';
-import { IChannel, ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
+import {
+	IChannel,
+	IServerChannel,
+	ProxyChannel,
+} from '../../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from
 	'../../instantiation/common/instantiation.js';
 import {
@@ -228,6 +233,33 @@ type MissingShellControllerRemoteMember = Exclude<
 const shellControllerRemoteMembersAreExhaustive:
 	MissingShellControllerRemoteMember extends never ? true : never = true;
 void shellControllerRemoteMembersAreExhaustive;
+
+const hucodeShellControllerRemoteMemberSet = new Set<string>(
+	HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS
+);
+
+/** Creates a server channel that rejects inherited or undeclared members. */
+export function createHucodeShellControllerServerChannel(
+	service: IHucodeShellControllerService,
+	disposables: DisposableStore
+): IServerChannel {
+	const channel = ProxyChannel.fromService(service, disposables);
+	return {
+		listen(context, event, arg) {
+			if (event !== 'onDidChangeState') {
+				throw new Error(`Event not found: ${event}`);
+			}
+			return channel.listen(context, event, arg);
+		},
+		call(context, command, args, cancellationToken) {
+			if (command === 'onDidChangeState' ||
+				!hucodeShellControllerRemoteMemberSet.has(command)) {
+				return Promise.reject(new Error(`Method not found: ${command}`));
+			}
+			return channel.call(context, command, args, cancellationToken);
+		},
+	};
+}
 
 /** Creates the typed client for an owner-authenticated shell port. */
 export function createHucodeShellControllerClient(

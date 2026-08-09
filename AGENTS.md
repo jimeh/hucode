@@ -236,12 +236,17 @@ as the required Hucode instruction set for work in this fork.
   caller-supplied method arguments. Expose an explicit least-authority channel
   facade, bind window and instance identity to the port server-side, and use a
   closed hosted-action allowlist rather than the broad
-  `isHucodeOmniShellAction` namespace classifier; keep legacy wire parameters
-  only for version-skew compatibility.
+  `isHucodeOmniShellAction` namespace classifier. Serve-web supports only the
+  current typed hosted-shell protocol and capability set; after a server
+  update, require a full browser-page reload instead of retaining a legacy
+  hosted-shell method adapter. This does not change the independently
+  versioned hosted unload protocol.
 - Desktop hosted-shell port acquisition deliberately invalidates the previous
-  binding generation and connection before replacement setup. A setup failure
-  stays fail-closed and requires a renderer retry; do not preserve the stale
-  connection as though it were still usable.
+  binding generation and connection before replacement setup. Keep public
+  calls bounded while acquisition retries in the background; a setup failure
+  stays fail-closed, and only subsequent calls may use a replacement
+  connection. Do not replay an operation whose delivery may be ambiguous or
+  preserve the stale connection as though it were still usable.
 - Desktop hosted-shell response timeouts close the renderer MessagePort. Keep
   the main-side port-close listener bound to that connection generation so the
   pending operation loses authority before reacquisition; a late close from an
@@ -251,8 +256,8 @@ as the required Hucode instruction set for work in this fork.
   submit a supposedly complete catalog over their connection facade.
 - Hosted navigation authorities also own last-active-worktree persistence.
   Resolve the canonical project worktree server-side, record it only after an
-  accepted navigation, and keep the bounded legacy web facade's self state
-  populated with its real `worktreePath` for cached clients.
+  accepted navigation, and keep the current hosted capability's self state
+  populated with its real `worktreePath`.
 - Web shell restoration can block on remote folder checks. Page shutdown must
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an

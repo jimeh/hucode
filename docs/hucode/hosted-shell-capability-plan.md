@@ -1,7 +1,7 @@
 ---
 title: Hosted Shell Capability Plan
 status: corrective implementation
-last_updated: 2026-08-06
+last_updated: 2026-08-09
 ---
 
 # Hosted Shell Capability Plan
@@ -108,6 +108,21 @@ Two corrective staging PRs are added after the original five. Both target
 and require focused Codex, Claude, and CodeRabbit review because they change
 shared navigation semantics and connection lifecycle respectively. The final
 integration PR remains user-merge-only.
+
+## Final protocol compatibility amendment
+
+The final implementation supports only the current typed serve-web
+hosted-shell protocol and capability set. Missing or mismatched protocol,
+capability, or nested bootstrap metadata fails closed. A server deployment may
+therefore require a full browser-page reload; the one-generation legacy
+`IHucodeShellService` adapter and its method-version-skew tests are removed.
+
+This decision supersedes this historical plan's earlier hosted-shell
+version-skew requirements, including the proposed bounded legacy adapter and
+old/new hosted-shell client combinations. It does **not** supersede
+`HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION`: the independently versioned
+single-phase/two-phase unload compatibility behavior remains supported and
+tested.
 
 ## Executive decision
 
@@ -1139,10 +1154,10 @@ only a returned boolean.
 
 - Existing origin, source-window, and port-handshake checks remain effective.
 - A child cannot select another instance through arguments.
-- A cached old child can use the bounded legacy action wire during the selected
-  compatibility window.
+- Missing or mismatched hosted-shell protocol/capability metadata fails closed;
+  no legacy hosted-shell channel is registered.
 - Replaced and stale iframe connections are rejected.
-- Protocol version mismatch follows the documented compatibility policy.
+- The current nested bootstrap connects and reloads correctly.
 - Initial port wait is bounded and a valid parent re-signal can recover the
   same bound child without broadening the handshake.
 - A first-port/re-signal race adopts only the latest correlated port and closes
@@ -1179,7 +1194,7 @@ only a returned boolean.
 | Unload Current Worktree command palette presence | Single-registration/role dispatch test plus runtime command-palette assertion, including cached unavailable guard | None |
 | Selection currently does nothing | Outcome tests for every protocol result plus runtime accepted selection | Final macOS confirmation of error presentation |
 | Permanent loading icon and dead commands in one workbench | Adapter denial/timeout/reconnect tests plus runtime connection replacement/recovery and shell lifecycle assertions | Final macOS reproduction attempt after integration update |
-| Mainline serve-web behavior retained | Shared projection tests plus real hosted-iframe smoke | Browser/version skew outside the tested compatibility window remains normal deployment risk |
+| Mainline serve-web behavior retained | Shared projection tests plus real hosted-iframe smoke | A server update may require a full browser-page reload; old hosted-shell clients fail closed |
 | Least-authority boundary retained | Exact method-surface and serialized-projection negative tests on both delegates | CodeRabbit and whole-integration review |
 
 ### Repository validation
@@ -1223,7 +1238,7 @@ complexity comes from:
 - teasing apart current service consumers by renderer role;
 - projecting enough state without retaining accidental dependencies on the
   complete window state; and
-- preserving serve-web compatibility during asset version skew.
+- keeping current-protocol bootstrap correlation and reload recovery strict.
 
 ### Ongoing maintenance
 
@@ -1266,8 +1281,8 @@ custom role-aware fork of VS Code's generic IPC system.
 | Acquisition timeout leaks preload listeners | Add and directly test the nonce-specific preload cancel seam; renderer-only timeout is not accepted |
 | New action is accidentally authorized | Closed semantic union; never reuse namespace routing as authorization |
 | Desktop and web drift again | Shared facade/client/policy plus cross-platform conformance suite |
-| Serve-web old/new asset mismatch | Preserve the legacy action wire in PR 1, then use an explicit capability version and bounded adapter |
-| Optional navigation leaks across version skew | Keep the v1 core compatible in both directions and gate remote member exposure on negotiated optional capability |
+| Serve-web old/new asset mismatch | Fail closed and require a full browser-page reload after deployment; do not retain a legacy hosted-shell adapter |
+| Optional navigation is invoked without negotiation | Require the current capability set before accepting the port and gate optional member exposure on the negotiated capability |
 | Web retry disposes the child's latched port | Correlate attempts, adopt only the latest accepted port, and close late or replaced clients |
 | Hidden child steals navigation | Active/visible authorization plus latest-activation-intent checks after asynchronous preflight |
 | Hosted paste reaches the shell | Self-bound paste capability with no shell-window fallback |
@@ -1301,8 +1316,8 @@ The work is complete only when all of the following are true:
 - desktop and web share policy, facade, client, and conformance tests;
 - hosted switchers receive a sanitized read-only sibling navigation projection
   without instance identity or catalog authority;
-- serve-web version skew preserves the v1 core and exposes navigation only
-  after optional capability negotiation;
+- serve-web accepts only the current hosted-shell protocol/capability set and
+  requires a full browser-page reload after an incompatible deployment;
 - every navigation outcome has explicit caller semantics and only accepted
   canonical navigation updates MRU;
 - desktop and web connection bootstrap is bounded and can recover from a
@@ -1331,8 +1346,8 @@ The recommended defaults for implementation are:
    authoritatively through high-level path-scoped methods.
 5. Share contract, facade, policy, client, and conformance tests.
 6. Keep only transport bootstrap and host mechanics platform-specific.
-7. Preserve the legacy serve-web action wire for PR 1, then version the new
-   hosted capability separately from the unload protocol.
+7. Accept only the current serve-web hosted-shell protocol and capability set,
+   while keeping it versioned separately from the unload protocol.
 8. Deliver the original five and both corrective `ship-feature-pr` staging PRs
    into `series-1.131.0-hosted-shell-capability`, followed by one holistic PR
    from that branch to mainline.

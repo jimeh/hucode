@@ -28,6 +28,7 @@ import {
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellCapability,
+	negotiateHucodeHostedShellCapabilities,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import {
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
@@ -51,9 +52,8 @@ export const IHucodeHostedOmniWebConnectionService =
  */
 export interface IHucodeHostedOmniWebConnection {
 	readonly ipcClient: MessagePortClient;
-	readonly shellWindowId: number;
-	readonly hostedShellProtocolVersion?: number;
-	readonly hostedShellCapabilities?: readonly HucodeHostedShellCapability[];
+	readonly hostedShellProtocolVersion: number;
+	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
 }
 
 /**
@@ -210,11 +210,18 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				}
 				return;
 			}
+			const hostedShellCapabilities =
+				negotiateHucodeHostedShellCapabilities(
+					event.data.hostedShellProtocolVersion,
+					event.data.hostedShellCapabilities
+				);
+			if (!hostedShellCapabilities) {
+				port.close();
+				return;
+			}
 			const bootstrap = event.data.connectionBootstrap;
-			if (bootstrap ? (
-				bootstrap.id !== this.bootstrapId ||
-				bootstrap.attempt !== this.connectionAttempt
-			) : event.data.connectionAttempt !== undefined) {
+			if (bootstrap.id !== this.bootstrapId ||
+				bootstrap.attempt !== this.connectionAttempt) {
 				port.close();
 				return;
 			}
@@ -238,11 +245,9 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			}
 			const connection = this.connection = {
 				ipcClient,
-				shellWindowId: event.data.windowId,
 				hostedShellProtocolVersion:
 					event.data.hostedShellProtocolVersion,
-				hostedShellCapabilities:
-					event.data.hostedShellCapabilities,
+				hostedShellCapabilities,
 			};
 			this.connectionDisposables.value = disposables;
 			this.clearInitialConnectionTimer();
@@ -388,24 +393,15 @@ function isPortMessage(
 	const message = value as {
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
-		readonly windowId?: unknown;
 		readonly connectionBootstrap?: unknown;
-		readonly connectionAttempt?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
-		typeof message.windowId === 'number' &&
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
-		(
-			message.hostedShellProtocolVersion === undefined ||
-			typeof message.hostedShellProtocolVersion === 'number'
-		) &&
-		(
-			message.hostedShellCapabilities === undefined ||
-			Array.isArray(message.hostedShellCapabilities)
-		);
+		typeof message.hostedShellProtocolVersion === 'number' &&
+		Array.isArray(message.hostedShellCapabilities);
 }
 
 registerSingleton(

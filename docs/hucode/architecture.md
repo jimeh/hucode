@@ -77,13 +77,25 @@ Instead, each renderer role receives a disjoint capability:
   with its instance identity fixed by the connection; and
 - ordinary workbench renderers receive neither capability.
 
+The desktop shell-controller client bounds both its initial readiness wait and
+each cancellable port-acquisition attempt. It keeps retrying acquisition in the
+background after transient denial, rejection, or timeout, so later calls and
+state events can recover without reloading the renderer. The current
+MessagePort client has no proactive close signal; a connected transport loss
+is therefore detected when the next operation times out, after which subsequent
+calls may use a replacement connection. A round-tripped operation rejection
+proves that the response path remains live and preserves the current connection.
+The timed-out operation is never replayed because delivery may be ambiguous.
+
 Current web-hosted iframes use the same hosted-shell contract and policy over a
-per-instance `MessagePort` (`vs/base/parts/ipc` + `ProxyChannel`). A bounded
-one-generation adapter retains the legacy web wire for cached older children,
-but binds it to the connection's authoritative instance rather than exposing
-the complete shell service. Same-origin window `postMessage` is only used for
-the bootstrap handshake: `Ready` and `Focus` from the iframe, and the `Port`
-transfer from the shell.
+per-instance `MessagePort` (`vs/base/parts/ipc` + `ProxyChannel`). The parent
+and child accept only the current typed protocol and capability set; missing or
+mismatched metadata fails closed. A server deployment therefore requires a
+full browser-page reload instead of adapting cached hosted-shell method
+clients. This is separate from the independently versioned hosted unload
+protocol. Same-origin window `postMessage` is only used for the bootstrap
+handshake: `Ready` and `Focus` from the iframe, and the `Port` transfer from the
+shell.
 
 ### Serve-Web Routing
 
