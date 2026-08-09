@@ -52,6 +52,9 @@ as the required Hucode instruction set for work in this fork.
   Running pnpm rewrites that tracked file and leaves an untracked
   `pnpm-workspace.yaml` beside it; restore the lockfile and delete the
   workspace file rather than committing either.
+- Do not copy or sync `.codegraph` between worktrees. A running CodeGraph MCP
+  server writes process, socket, SQLite WAL, and lock state into that directory,
+  so Treeboot must rebuild the index locally through `mise run setup`.
 - For code changes, inspect nearby existing tests before considering the work
   complete. Add or extend focused tests for new behavior and regressions when
   an applicable test suite exists. If automated coverage is not practical, say

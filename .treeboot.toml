@@ -1,4 +1,1 @@
-commands = [
-	{ name = "Seed node_modules", run = "npm run hucode:seed-worktree-node-modules" },
-	{ name = "Install dependencies", run = "npm install" },
-]
+commands = ["mise run setup"]
