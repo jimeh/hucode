@@ -66,6 +66,8 @@ import { Menus } from '../menus.js';
 import { IHostService } from '../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
+import { LayoutSettings } from
+	'../../../workbench/services/layout/browser/layoutService.js';
 import { IsOmniWindowContext } from
 	'../../../workbench/common/contextkeys.js';
 import { IWorkspaceContextService, WorkbenchState } from
@@ -202,11 +204,27 @@ const DISMISS_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.dismissWorkbench';
 const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
+const MODERN_PROJECT_SWITCHER_SECTION_HEIGHT = 28;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
 
 let currentProjectSwitcherWidget: ProjectSwitcherWidget | undefined;
+
+/** Returns the row height for the current Omni item layout and workbench style. */
+export function getProjectSwitcherItemHeight(
+	item: ProjectSwitcherItem,
+	layout: HucodeOmniItemLayout,
+	modernUI: boolean
+): number {
+	if (modernUI && isOmniSectionItem(item)) {
+		return MODERN_PROJECT_SWITCHER_SECTION_HEIGHT;
+	}
+
+	return layout === 'twoLine'
+		? PROJECT_SWITCHER_ITEM_HEIGHT * 2
+		: PROJECT_SWITCHER_ITEM_HEIGHT;
+}
 
 function parseWorkbenchHandle(handle: string | undefined): string | undefined {
 	return handle?.startsWith('workbench:')
@@ -364,13 +382,16 @@ class ProjectSwitcherDelegate
 	constructor(
 		private readonly getItemLayout: (
 			item: ProjectSwitcherItem
-		) => HucodeOmniItemLayout
+		) => HucodeOmniItemLayout,
+		private readonly isModernUIEnabled: () => boolean,
 	) { }
 
 	getHeight(item: ProjectSwitcherItem): number {
-		return this.getItemLayout(item) === 'twoLine'
-			? PROJECT_SWITCHER_ITEM_HEIGHT * 2
-			: PROJECT_SWITCHER_ITEM_HEIGHT;
+		return getProjectSwitcherItemHeight(
+			item,
+			this.getItemLayout(item),
+			this.isModernUIEnabled()
+		);
 	}
 
 	getTemplateId(): string {
@@ -1272,6 +1293,8 @@ export class ProjectSwitcherWidget extends Disposable {
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
 					if (event.affectsConfiguration(
+						LayoutSettings.MODERN_UI
+					) || event.affectsConfiguration(
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
 						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
@@ -1367,7 +1390,12 @@ export class ProjectSwitcherWidget extends Disposable {
 			WorkbenchObjectTree<ProjectSwitcherItem, void>,
 			PROJECT_SWITCHER_VIEW_ID,
 			this.treeContainer,
-			new ProjectSwitcherDelegate(item => this.getItemLayout(item)),
+			new ProjectSwitcherDelegate(
+				item => this.getItemLayout(item),
+				() => this.configurationService.getValue<boolean>(
+					LayoutSettings.MODERN_UI
+				) === true
+			),
 			[this.instantiationService.createInstance(
 				ProjectSwitcherRenderer,
 				(item: ProjectSwitcherItem) => this.getItemLayout(item),
@@ -1436,7 +1464,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				return;
 			}
 
-			this.setProjectCollapsed(item, event.node.collapsed);
+			this.handleProjectCollapseChange(item, event.node.collapsed);
 		}));
 		this._register(this.tree.onContextMenu(event => this.onContextMenu(event)));
 		this._register(this.tree.onDidOpen(event => {
@@ -1810,7 +1838,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		toggleProjectTreeItemCollapsed(
 			this.tree,
 			item,
-			collapsed => this.setProjectCollapsed(item, collapsed)
+			collapsed => this.handleProjectCollapseChange(item, collapsed)
 		);
 	}
 
@@ -2227,9 +2255,8 @@ export class ProjectSwitcherWidget extends Disposable {
 				this.collapsedOmniSections
 			);
 
-		if (isWorktreeItem(currentWorktree) &&
-			!isHiddenByCollapsedOmniSection
-		) {
+		let isHiddenByCollapsedProject = false;
+		if (isWorktreeItem(currentWorktree)) {
 			const projectItem = this.itemsById.get(
 				encodeProjectHandle(
 					currentWorktree.projectId,
@@ -2237,8 +2264,12 @@ export class ProjectSwitcherWidget extends Disposable {
 				)
 			);
 			if (isProjectItem(projectItem) && tree.hasElement(projectItem)) {
-				tree.expand(projectItem);
-				this.setProjectCollapsed(projectItem, false);
+				if (this.environmentService.isOmniWindow) {
+					isHiddenByCollapsedProject = tree.isCollapsed(projectItem);
+				} else {
+					tree.expand(projectItem);
+					this.setProjectCollapsed(projectItem, false);
+				}
 			}
 		}
 
@@ -2246,7 +2277,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		if (!isHiddenByCollapsedOmniSection) {
+		if (!isHiddenByCollapsedOmniSection && !isHiddenByCollapsedProject) {
 			await tree.reveal(currentWorktree);
 		}
 		if (
@@ -2477,18 +2508,36 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
-	private setProjectCollapsed(
+	/** Persists user-authored collapse changes while ignoring tree synchronization. */
+	private handleProjectCollapseChange(
 		item: ProjectSwitcherProjectItem,
 		collapsed: boolean
 	): void {
+		if (this.isSynchronizingTree) {
+			return;
+		}
+
+		if (this.setProjectCollapsed(item, collapsed)) {
+			this.saveState();
+		}
+	}
+
+	/** Updates the persisted project collapse set and reports whether it changed. */
+	private setProjectCollapsed(
+		item: ProjectSwitcherProjectItem,
+		collapsed: boolean
+	): boolean {
+		const wasCollapsed = this.collapsedProjectIds.has(item.id) ||
+			this.collapsedProjectIds.has(item.projectId);
 		if (collapsed) {
 			this.collapsedProjectIds.delete(item.projectId);
 			this.collapsedProjectIds.add(item.id);
-			return;
+			return !wasCollapsed;
 		}
 
 		this.collapsedProjectIds.delete(item.id);
 		this.collapsedProjectIds.delete(item.projectId);
+		return wasCollapsed;
 	}
 }
 

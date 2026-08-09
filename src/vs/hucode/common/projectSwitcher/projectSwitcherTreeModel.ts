@@ -696,7 +696,11 @@ function toProjectElement(
 	const rootPath = rootUri.fsPath;
 	const rootBasename = basename(rootPath);
 	const rootParentPath = dirname(rootPath);
-	const rootParentLabel = options.getPathLabel(rootParentPath);
+	const rootPathLabel = options.getPathLabel(rootPath);
+	const rootParentLabel = rootPathLabel.startsWith('~/') &&
+		dirname(rootPathLabel) === '~'
+		? '~/'
+		: options.getPathLabel(rootParentPath);
 	const handle = encodeProjectHandle(project.id, section);
 	const unavailable = project.worktreeState === 'unavailable';
 	const stale = project.worktreeState === 'stale';
@@ -724,7 +728,7 @@ function toProjectElement(
 		hasCustomLabel: project.label !== rootBasename,
 		label: project.label,
 		description: stateDescription ?? rootParentLabel,
-		tooltip: stateDescription ?? options.getPathLabel(rootPath),
+		tooltip: stateDescription ?? rootPathLabel,
 		contextValue: project.pinned
 			? PINNED_PROJECT_CONTEXT_VALUE
 			: PROJECT_CONTEXT_VALUE,

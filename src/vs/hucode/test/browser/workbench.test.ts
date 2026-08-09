@@ -5,15 +5,19 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
+import { Emitter, Event } from '../../../base/common/event.js';
+import { IDisposable } from '../../../base/common/lifecycle.js';
 import { Part } from '../../../workbench/browser/part.js';
-import { Parts } from
+import { IConfigurationChangeEvent } from
+	'../../../platform/configuration/common/configuration.js';
+import { LayoutSettings, Parts } from
 	'../../../workbench/services/layout/browser/layoutService.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import { Workbench } from '../../browser/workbench.js';
 
 suite('Omni Workbench', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const setSideBarHidden = Reflect.get(
 		Workbench.prototype,
@@ -30,6 +34,129 @@ suite('Omni Workbench', () => {
 	) => HTMLElement | undefined;
 	const layout = Workbench.prototype.layout as
 		(this: IWorkbenchHost) => void;
+	const updateFloatingPanels = Reflect.get(
+		Workbench.prototype,
+		'updateFloatingPanels'
+	) as (this: IWorkbenchHost) => void;
+	const registerListeners = Reflect.get(
+		Workbench.prototype,
+		'registerListeners'
+	) as (
+		this: IWorkbenchHost,
+		lifecycleService: unknown,
+		storageService: unknown,
+		configurationService: unknown,
+		hostService: unknown,
+		dialogService: unknown
+	) => void;
+
+	test('mirrors the Modern UI setting into Omni layout classes', () => {
+		const enabled = createHost({ modernUI: true });
+		const disabled = createHost({ modernUI: false });
+
+		updateFloatingPanels.call(enabled);
+		updateFloatingPanels.call(disabled);
+
+		assert.deepStrictEqual({
+			enabled: {
+				floating: Workbench.prototype.isFloatingPanelsEnabled.call(enabled),
+				classes: Workbench.prototype.getLayoutClasses.call(enabled),
+				toggles: enabled.classToggles,
+			},
+			disabled: {
+				floating: Workbench.prototype.isFloatingPanelsEnabled.call(disabled),
+				classes: Workbench.prototype.getLayoutClasses.call(disabled),
+				toggles: disabled.classToggles,
+			},
+		}, {
+			enabled: {
+				floating: true,
+				classes: [
+					'nomaineditorarea',
+					'nopanel',
+					'noauxiliarybar',
+					'nostatusbar',
+					'floating-panels',
+					'style-override',
+				],
+				toggles: [
+					{ name: 'floating-panels', force: true },
+					{ name: 'style-override', force: true },
+				],
+			},
+			disabled: {
+				floating: false,
+				classes: [
+					'nomaineditorarea',
+					'nopanel',
+					'noauxiliarybar',
+					'nostatusbar',
+				],
+				toggles: [
+					{ name: 'floating-panels', force: false },
+					{ name: 'style-override', force: false },
+				],
+			},
+		});
+	});
+
+	test('relayouts the Omni shell when the Modern UI setting changes', () => {
+		const configurationChanges = disposables.add(
+			new Emitter<IConfigurationChangeEvent>()
+		);
+		let modernUI = false;
+		let projectsRelayouts = 0;
+		let workbenchRelayouts = 0;
+		const configurationService = {
+			getValue: <T>(key: string) => key === LayoutSettings.MODERN_UI
+				? modernUI as T
+				: undefined,
+			onDidChangeConfiguration: configurationChanges.event,
+		};
+		const host = createHost({
+			registerDisposable: disposable => disposables.add(disposable),
+		});
+		host.configurationService = configurationService;
+		host.projectsPart.relayoutForModernUI = () => projectsRelayouts++;
+		host.layout = () => workbenchRelayouts++;
+
+		registerListeners.call(
+			host,
+			{
+				onWillShutdown: Event.None,
+				onDidShutdown: Event.None,
+			},
+			{
+				onWillSaveState: Event.None,
+				flush: () => undefined,
+			},
+			configurationService,
+			{ onDidChangeFocus: Event.None },
+			{
+				onWillShowDialog: Event.None,
+				onDidShowDialog: Event.None,
+			}
+		);
+
+		modernUI = true;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === LayoutSettings.MODERN_UI,
+		} as unknown as IConfigurationChangeEvent);
+
+		assert.deepStrictEqual({
+			classes: host.classToggles,
+			projectsRelayouts,
+			workbenchRelayouts,
+		}, {
+			classes: [
+				{ name: 'floating-panels', force: true },
+				{ name: 'style-override', force: true },
+			],
+			projectsRelayouts: 1,
+			workbenchRelayouts: 1,
+		});
+	});
 
 	test('sidebar visibility is idempotent and transfers focus to the host', () => {
 		const host = createHost();
@@ -302,7 +429,10 @@ interface IWorkbenchHost {
 		getActivePaneComposite(): object | undefined;
 		hideActivePaneComposite(): void;
 	};
-	projectsPart: { focus(): void };
+	projectsPart: {
+		focus(): void;
+		relayoutForModernUI(): void;
+	};
 	omniHostPart: { focus(): void };
 	editorGroupService: {
 		getPart(container: HTMLElement): Part | undefined;
@@ -318,6 +448,10 @@ interface IWorkbenchHost {
 		size: { width: number; height: number };
 	}>;
 	readonly layoutEvents: Array<{ width: number; height: number }>;
+	configurationService: {
+		getValue<T>(key: string): T | undefined;
+	};
+	layout(): void;
 	hideCompositeCount: number;
 	hasFocus(part: Parts): boolean;
 	focusPart(part: Parts): void;
@@ -329,6 +463,8 @@ function createHost(options: {
 	readonly mainContainerDimension?: { width: number; height: number };
 	readonly sidebarSize?: { width: number; height: number };
 	readonly activePanel?: boolean;
+	readonly modernUI?: boolean;
+	readonly registerDisposable?: <T extends IDisposable>(disposable: T) => T;
 } = {}): IWorkbenchHost {
 	const parent = options.parent ?? mainWindow.document.createElement('div');
 	const mainContainer = mainWindow.document.createElement('div');
@@ -346,6 +482,8 @@ function createHost(options: {
 	}> = [];
 	const layoutEvents: Array<{ width: number; height: number }> = [];
 	const host = prototypeHost(Workbench.prototype, {
+		_register: <T extends IDisposable>(disposable: T) =>
+			options.registerDisposable?.(disposable) ?? disposable,
 		parent,
 		mainContainer,
 		_mainContainerDimension:
@@ -392,6 +530,7 @@ function createHost(options: {
 		},
 		projectsPart: {
 			focus: () => delegatedFocus.push('projects'),
+			relayoutForModernUI: () => undefined,
 		},
 		omniHostPart: {
 			focus: () => delegatedFocus.push('host'),
@@ -401,6 +540,11 @@ function createHost(options: {
 			activeGroup: { focus: () => delegatedFocus.push('editor') },
 		},
 		logService: { trace: () => undefined },
+		configurationService: {
+			getValue: <T>(key: string) => key === LayoutSettings.MODERN_UI
+				? options.modernUI as T
+				: undefined,
+		},
 		_onDidLayoutContainer: { fire: () => undefined },
 		_onDidLayoutMainContainer: {
 			fire: (dimension: { width: number; height: number }) =>
