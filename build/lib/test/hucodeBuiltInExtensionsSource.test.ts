@@ -5,7 +5,10 @@
 
 import assert from 'assert';
 import { suite, test } from 'node:test';
-import { resolveBuiltInExtensionDownloadSource } from '../hucodeBuiltInExtensionsSource.ts';
+import {
+	createBuiltInExtensionSourceResolver,
+	resolveBuiltInExtensionDownloadSource
+} from '../hucodeBuiltInExtensionsSource.ts';
 
 suite('Hucode built-in extension source', () => {
 	const galleryProduct = {
@@ -72,6 +75,16 @@ suite('Hucode built-in extension source', () => {
 				builtInExtensionsSource: 'open-vsx'
 			}),
 			/Invalid builtInExtensionsSource 'open-vsx'. Expected 'github' or 'marketplace'\./
+		);
+	});
+
+	test('rejects non-string policy before resolving any extension', () => {
+		assert.throws(
+			() => createBuiltInExtensionSourceResolver({
+				...galleryProduct,
+				builtInExtensionsSource: null
+			}),
+			/Invalid builtInExtensionsSource null\. Expected 'github' or 'marketplace'\./
 		);
 	});
 });

@@ -15,7 +15,7 @@ import { getCurrentExtensionTarget, getPlatformSpecificAssetName } from './exten
 import fancyLog from 'fancy-log';
 import ansiColors from 'ansi-colors';
 import { Stream } from 'stream';
-import { resolveBuiltInExtensionDownloadSource } from './hucodeBuiltInExtensionsSource.ts';
+import { createBuiltInExtensionSourceResolver } from './hucodeBuiltInExtensionsSource.ts';
 
 export interface IExtensionDefinition {
 	name: string;
@@ -44,6 +44,7 @@ export interface IExtensionDefinition {
 
 const root = path.dirname(path.dirname(import.meta.dirname));
 const productjson = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../../product.json'), 'utf8'));
+const resolveBuiltInExtensionDownloadSource = createBuiltInExtensionSourceResolver(productjson);
 const builtInExtensions = productjson.builtInExtensions as IExtensionDefinition[] || [];
 const webBuiltInExtensions = productjson.webBuiltInExtensions as IExtensionDefinition[] || [];
 const controlFilePath = path.join(os.homedir(), '.vscode-oss-dev', 'extensions', 'control.json');
@@ -82,7 +83,7 @@ function isInsiders(): boolean {
 
 function getExtensionDownloadStream(extension: IExtensionDefinition) {
 	let input: Stream;
-	const source = resolveBuiltInExtensionDownloadSource(extension, productjson);
+	const source = resolveBuiltInExtensionDownloadSource(extension);
 
 	if (source === 'vsix') {
 		input = ext.fromVsix(path.join(root, extension.vsix!), extension);
@@ -135,7 +136,7 @@ export function getExtensionStream(extension: IExtensionDefinition) {
 }
 
 function syncMarketplaceExtension(extension: IExtensionDefinition): Stream {
-	const downloadSource = resolveBuiltInExtensionDownloadSource(extension, productjson);
+	const downloadSource = resolveBuiltInExtensionDownloadSource(extension);
 	const source = ansiColors.blue(`[${downloadSource}]`);
 	if (isUpToDate(extension)) {
 		log(source, `${extension.name}@${extension.version}`, ansiColors.green('✔︎'));
