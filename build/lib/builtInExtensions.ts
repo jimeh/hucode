@@ -15,6 +15,7 @@ import { getCurrentExtensionTarget, getPlatformSpecificAssetName } from './exten
 import fancyLog from 'fancy-log';
 import ansiColors from 'ansi-colors';
 import { Stream } from 'stream';
+import { resolveBuiltInExtensionDownloadSource } from './hucodeBuiltInExtensionsSource.ts';
 
 export interface IExtensionDefinition {
 	name: string;
@@ -81,9 +82,10 @@ function isInsiders(): boolean {
 
 function getExtensionDownloadStream(extension: IExtensionDefinition) {
 	let input: Stream;
+	const source = resolveBuiltInExtensionDownloadSource(extension, productjson);
 
-	if (extension.vsix) {
-		input = ext.fromVsix(path.join(root, extension.vsix), extension);
+	if (source === 'vsix') {
+		input = ext.fromVsix(path.join(root, extension.vsix!), extension);
 	} else if (extension.platformSpecific) {
 		// A platform-specific extension publishes its VSIX assets on a GitHub release using a
 		// specific asset naming convention, so it is always downloaded from GitHub and never falls
@@ -93,7 +95,7 @@ function getExtensionDownloadStream(extension: IExtensionDefinition) {
 			return es.readArray([]);
 		}
 		input = ext.fromGithub(extension, { asset, latest: isInsiders() });
-	} else if (productjson.extensionsGallery?.serviceUrl) {
+	} else if (source === 'marketplace') {
 		input = ext.fromMarketplace(productjson.extensionsGallery.serviceUrl, extension);
 	} else {
 		input = ext.fromGithub(extension, { latest: isInsiders() });
@@ -133,8 +135,8 @@ export function getExtensionStream(extension: IExtensionDefinition) {
 }
 
 function syncMarketplaceExtension(extension: IExtensionDefinition): Stream {
-	const galleryServiceUrl = productjson.extensionsGallery?.serviceUrl;
-	const source = ansiColors.blue(galleryServiceUrl ? '[marketplace]' : '[github]');
+	const downloadSource = resolveBuiltInExtensionDownloadSource(extension, productjson);
+	const source = ansiColors.blue(`[${downloadSource}]`);
 	if (isUpToDate(extension)) {
 		log(source, `${extension.name}@${extension.version}`, ansiColors.green('✔︎'));
 		return es.readArray([]);

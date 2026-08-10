@@ -35,6 +35,7 @@ const requiredOverlayKeys = [
 	'urlProtocol',
 	'darwinBundleIdentifier',
 	'linuxIconName',
+	'builtInExtensionsSource',
 	'extensionsGallery'
 ];
 
@@ -202,6 +203,10 @@ export async function prepareMixin(quality = 'stable') {
 		assert.strictEqual(
 			mixedOverlayProduct.extensionsGallery.serviceUrl,
 			sourceProduct.extensionsGallery.serviceUrl
+		);
+		assert.strictEqual(
+			mixedOverlayProduct.builtInExtensionsSource,
+			sourceProduct.builtInExtensionsSource
 		);
 		assert.ok(
 			Array.isArray(mixedOverlayProduct.builtInExtensions),

@@ -260,6 +260,11 @@ export async function validateMixin(quality = 'stable') {
 		generated.extensionsGallery.serviceUrl,
 		'https://open-vsx.org/vscode/gallery'
 	);
+	assert.strictEqual(sourceProduct.builtInExtensionsSource, 'github');
+	assert.strictEqual(
+		generated.builtInExtensionsSource,
+		sourceProduct.builtInExtensionsSource
+	);
 	assert.deepStrictEqual(
 		generated.extensionsGallery.openVsxSignatureVerificationHosts,
 		['open-vsx.org']
