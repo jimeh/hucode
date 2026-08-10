@@ -2,7 +2,7 @@
 
 All notable changes to Hucode are documented in this file.
 
-## 0.0.67 - 2026-08-10
+## 0.0.68 - 2026-08-10
 
 ### Features
 
@@ -10,6 +10,7 @@ All notable changes to Hucode are documented in this file.
 
 ### Bug Fixes
 
+- **build:** exclude musl binaries from Linux packages (#182)
 - **build:** source built-in extensions from GitHub (#181)
 
 ## 0.0.66 - 2026-08-09
