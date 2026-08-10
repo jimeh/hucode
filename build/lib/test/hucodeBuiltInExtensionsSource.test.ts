@@ -32,6 +32,16 @@ suite('Hucode built-in extension source', () => {
 		);
 	});
 
+	test('explicit Marketplace policy selects Marketplace', () => {
+		assert.strictEqual(
+			resolveBuiltInExtensionDownloadSource({}, {
+				...galleryProduct,
+				builtInExtensionsSource: 'marketplace'
+			}),
+			'marketplace'
+		);
+	});
+
 	test('omitted policy selects GitHub without a gallery', () => {
 		assert.strictEqual(
 			resolveBuiltInExtensionDownloadSource({}, {}),

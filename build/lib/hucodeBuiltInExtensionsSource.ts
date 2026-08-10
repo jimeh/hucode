@@ -15,6 +15,9 @@ type ProductConfiguration = {
 	readonly extensionsGallery?: { readonly serviceUrl?: string };
 };
 
+/**
+ * Resolves and validates the configured source, defaulting to the gallery when available.
+ */
 function resolveConfiguredSource(product: ProductConfiguration): BuiltInExtensionsSource {
 	const configuredSource = product.builtInExtensionsSource;
 	if (configuredSource === undefined) {
