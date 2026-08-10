@@ -34,12 +34,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
           persist-credentials: false
 
       - name: Setup Hucode Linux CI
         uses: ./.github/actions/setup-hucode-linux
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate package-lock.json changes
+        if: github.event_name == 'pull_request'
+        run: >-
+          node build/azure-pipelines/common/validatePackageLocks.ts
+          "${{ github.event.pull_request.base.sha }}"
 
       - name: Prepare Hucode mixin
         run: npm run hucode:prepare
