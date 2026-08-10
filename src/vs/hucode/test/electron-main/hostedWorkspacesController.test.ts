@@ -510,7 +510,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
 				viewFactory,
-				ipcMain,
+				ipc: ipcMain,
 			}
 		));
 

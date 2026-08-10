@@ -11,6 +11,7 @@ import {
 	classifyLinuxOmniTargets,
 	crashLinuxOmniPage,
 	createLinuxOmniLifecycleExpectations,
+	createLinuxOmniLaunchEnvironment,
 	createLinuxOmniSmokeFixture,
 	formatLinuxOmniUnexpectedExit,
 	getLinuxOmniLaunchAttemptDeadline,
@@ -107,6 +108,18 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				'--enable-smoke-test-driver',
 			]
 		);
+	});
+
+	test('sanitizes inherited launch state without rerunning prelaunch', () => {
+		assert.deepStrictEqual(createLinuxOmniLaunchEnvironment({
+			ELECTRON_RUN_AS_NODE: '1',
+			PATH: '/usr/bin',
+			VSCODE_ESM_ENTRYPOINT: 'out/main.js',
+			VSCODE_SKIP_PRELAUNCH: '0',
+		}), {
+			PATH: '/usr/bin',
+			VSCODE_SKIP_PRELAUNCH: '1',
+		});
 	});
 
 	test('formats the deterministic two-workbench lifecycle fixture', () => {

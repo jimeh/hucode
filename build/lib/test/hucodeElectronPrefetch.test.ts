@@ -17,13 +17,13 @@ import {
 } from '../../hucode/electron-prefetch.ts';
 
 const options: IElectronPrefetchOptions = {
-	version: '42.7.0',
+	version: '42.7.1',
 	platform: 'darwin',
 	arch: 'x64',
 };
 const checksums = {
-	'electron-v42.7.0-darwin-x64.zip': 'darwin-checksum',
-	'electron-v42.7.0-linux-armv7l.zip': 'linux-arm-checksum',
+	'electron-v42.7.1-darwin-x64.zip': 'darwin-checksum',
+	'electron-v42.7.1-linux-armv7l.zip': 'linux-arm-checksum',
 };
 const details = buildElectronArtifactDetails(options, checksums);
 
@@ -50,9 +50,9 @@ suite('Hucode Electron prefetch', () => {
 
 		assert.strictEqual(
 			pinnedDetails.checksums?.[
-				'electron-v42.7.0-darwin-x64.zip'
+				'electron-v42.7.1-darwin-x64.zip'
 			],
-			'0db6f623fccabafe797bc3c9c8776707c4c87b40ffad6a46134536aa84b32c94'
+			'a2f361b66b24b694715b057a9d4ba8c30457ce994e19acd9185c131539bc8900'
 		);
 	});
 
@@ -70,9 +70,9 @@ suite('Hucode Electron prefetch', () => {
 	test('rejects checksums missing the requested Electron artifact', () => {
 		assert.throws(
 			() => buildElectronArtifactDetails(options, {
-				'electron-v42.7.0-linux-x64.zip': 'linux-checksum',
+				'electron-v42.7.1-linux-x64.zip': 'linux-checksum',
 			}),
-			/Missing Electron checksum for electron-v42\.7\.0-darwin-x64\.zip/
+			/Missing Electron checksum for electron-v42\.7\.1-darwin-x64\.zip/
 		);
 	});
 

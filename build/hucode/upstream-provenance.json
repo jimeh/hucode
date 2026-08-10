@@ -18,8 +18,8 @@
 			"reason": "Hucode forwards the public storage mode through a Hucode-owned internal server argument",
 			"upstream": {
 				"path": "cli/src/commands/serve_web.rs",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "12178ef21cf9fa91a3ee890327af433fc42ff829"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "8f2c147fa49a600aa2a105f04e461552a8df2be2"
 			},
 			"testSuites": []
 		},
@@ -117,8 +117,8 @@
 			"reason": "Hucode serves the migration API and injects trusted storage configuration into every web route",
 			"upstream": {
 				"path": "src/vs/server/node/webClientServer.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "763e54dda23fcc958604a351c0e5e73851f2d109"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "7bda5a01a1d15b70f2e4ff9502c8d332badd839f"
 			},
 			"testSuites": []
 		},
@@ -172,8 +172,8 @@
 			"reason": "Hucode selects the trusted remote user-data home only in server mode",
 			"upstream": {
 				"path": "src/vs/workbench/services/environment/browser/environmentService.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "6b2968242cf60e32abfc1c2c7495c0a16c2e0cb3"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "98215099c768f29c9f56ec2ec2700d4a172ac5a1"
 			},
 			"testSuites": []
 		},
@@ -205,8 +205,8 @@
 			"reason": "Omni owns a separate panel Part derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/parts/panelPart.ts",
-				"lastSyncedBaseline": "1.130.0",
-				"blob": "776e9341e265840a50790b90501cb7601407b35c"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "67aefd4dcd1556bb6f4a85219e7eec5d4b19efe0"
 			},
 			"testSuites": []
 		},
@@ -227,8 +227,8 @@
 			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/workbench.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "69438ed9c74e1965aa73183c65149921883e7e2f"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "1ee6deedd6a5ed792c9dabca070284ae41f78355"
 			},
 			"testSuites": []
 		},
@@ -348,8 +348,8 @@
 			"reason": "E1 patches upstream extension enablement for the Omni shell filtering policy",
 			"upstream": {
 				"path": "src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts",
-				"lastSyncedBaseline": "1.130.0",
-				"blob": "06b68e071fd9d48611936c72d9ca914cba06bc03"
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "141241fdb70cdc87e8ea49420a85b9a5b24dcef4"
 			},
 			"testSuites": [
 				{

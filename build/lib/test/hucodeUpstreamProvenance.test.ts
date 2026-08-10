@@ -283,19 +283,30 @@ suite('Hucode upstream provenance', () => {
 				+ 'extensionEnablementService.ts',
 			'src/vs/workbench/services/storage/browser/storageService.ts',
 		].sort();
-		const legacyBaselines = new Set([
-			'src/vs/hucode/browser/parts/auxiliaryBarPart.ts',
-			'src/vs/hucode/browser/parts/panelPart.ts',
-			'src/vs/hucode/browser/parts/titlebarPart.ts',
-			'src/vs/workbench/services/extensionManagement/browser/'
-				+ 'extensionEnablementService.ts',
+		const expectedBaselineByPath = new Map<string, string>([
+			['src/vs/hucode/browser/parts/auxiliaryBarPart.ts', '1.130.0'],
+			['src/vs/hucode/browser/parts/titlebarPart.ts', '1.130.0'],
+			['cli/src/commands/serve_web.rs', '1.132.0'],
+			['src/vs/hucode/browser/parts/panelPart.ts', '1.132.0'],
+			['src/vs/hucode/browser/workbench.ts', '1.132.0'],
+			['src/vs/server/node/webClientServer.ts', '1.132.0'],
+			[
+				'src/vs/workbench/services/environment/browser/'
+					+ 'environmentService.ts',
+				'1.132.0',
+			],
+			[
+				'src/vs/workbench/services/extensionManagement/browser/'
+					+ 'extensionEnablementService.ts',
+				'1.132.0',
+			],
 		]);
 
 		assert.deepStrictEqual(tracked.map(surface => surface.path).sort(), expectedPaths);
 		for (const surface of tracked) {
 			assert.strictEqual(
 				surface.upstream?.lastSyncedBaseline,
-				legacyBaselines.has(surface.path) ? '1.130.0' : '1.131.0',
+				expectedBaselineByPath.get(surface.path) ?? '1.131.0',
 				`unexpected baseline for ${surface.path}`,
 			);
 			assert.match(surface.upstream?.blob ?? '', /^[0-9a-f]{40}$/);

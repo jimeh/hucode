@@ -110,7 +110,7 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly createInstanceId?: () => string;
 	readonly now?: () => number;
 	readonly viewFactory?: IHostedWorkbenchViewFactory;
-	readonly ipcMain?: IHostedWorkspaceIpcMain;
+	readonly ipc?: IHostedWorkspaceIpcMain;
 }
 
 /** Returns whether a file-system error makes a hosted folder unavailable. */
@@ -224,7 +224,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private readonly createInstanceId: () => string;
 	private readonly now: () => number;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
-	private readonly ipcMain: IHostedWorkspaceIpcMain;
+	private readonly ipc: IHostedWorkspaceIpcMain;
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -282,7 +282,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.traceRestoreStartedAt = this.now();
 		this.viewFactory = options.viewFactory ??
 			defaultHostedWorkbenchViewFactory;
-		this.ipcMain = options.ipcMain ?? validatedIpcMain;
+		this.ipc = options.ipc ?? validatedIpcMain;
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
@@ -2404,7 +2404,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 				settled = true;
 				clearTimeout(timeoutHandle);
-				this.ipcMain.removeListener(replyChannel, handleReply);
+				this.ipc.removeListener(replyChannel, handleReply);
 				webContents.removeListener('destroyed', handleDestroyed);
 				resolve(disposition);
 			};
@@ -2429,7 +2429,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			};
 			const handleDestroyed = () => complete(undefined);
 
-			this.ipcMain.once(replyChannel, handleReply);
+			this.ipc.once(replyChannel, handleReply);
 			webContents.once('destroyed', handleDestroyed);
 			const timeoutHandle = setTimeout(() => {
 				this.logService.warn(
@@ -2488,15 +2488,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					clearTimeout(timeoutHandle);
 				}
 
-				this.ipcMain.removeListener(okChannel, handleOk);
-				this.ipcMain.removeListener(cancelChannel, handleCancel);
+				this.ipc.removeListener(okChannel, handleOk);
+				this.ipc.removeListener(cancelChannel, handleCancel);
 				webContents.removeListener('destroyed', handleDestroyed);
 
 				resolve({ preparationId, outcome });
 			};
 
-			this.ipcMain.once(okChannel, handleOk);
-			this.ipcMain.once(cancelChannel, handleCancel);
+			this.ipc.once(okChannel, handleOk);
+			this.ipc.once(cancelChannel, handleCancel);
 			webContents.once('destroyed', handleDestroyed);
 			const timeoutHandle = setTimeout(() => {
 				this.logService.warn(
@@ -2548,13 +2548,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					clearTimeout(timeoutHandle);
 				}
 
-				this.ipcMain.removeListener(replyChannel, handleReply);
+				this.ipc.removeListener(replyChannel, handleReply);
 				webContents.removeListener('destroyed', handleDestroyed);
 
 				resolve();
 			};
 
-			this.ipcMain.once(replyChannel, handleReply);
+			this.ipc.once(replyChannel, handleReply);
 			webContents.once('destroyed', handleDestroyed);
 			const timeoutHandle = setTimeout(() => {
 				this.logService.warn(

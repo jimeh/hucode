@@ -1382,7 +1382,7 @@ async function launchLinuxOmni(
 			buildLinuxOmniSmokeArguments(userDataDir, extensionsDir, port),
 			{
 				detached: true,
-				env: withoutInheritedElectronEnvironment(process.env),
+				env: createLinuxOmniLaunchEnvironment(process.env),
 				stdio: ['ignore', 'pipe', 'pipe'],
 			}
 		);
@@ -1900,7 +1900,7 @@ function getLifecycleExpectation(
 	return expectation;
 }
 
-function withoutInheritedElectronEnvironment(
+export function createLinuxOmniLaunchEnvironment(
 	environment: NodeJS.ProcessEnv
 ): NodeJS.ProcessEnv {
 	const result = { ...environment };
@@ -1910,6 +1910,7 @@ function withoutInheritedElectronEnvironment(
 			delete result[key];
 		}
 	}
+	result.VSCODE_SKIP_PRELAUNCH = '1';
 	return result;
 }
 
