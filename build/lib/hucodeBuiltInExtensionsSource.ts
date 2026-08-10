@@ -35,7 +35,7 @@ function resolveConfiguredSource(product: ProductConfiguration): BuiltInExtensio
 		!product.extensionsGallery?.serviceUrl
 	) {
 		throw new Error(
-			"builtInExtensionsSource is 'marketplace', but extensionsGallery.serviceUrl is not configured."
+			'builtInExtensionsSource is \'marketplace\', but extensionsGallery.serviceUrl is not configured.'
 		);
 	}
 
