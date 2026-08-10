@@ -68,6 +68,7 @@
 			"open-vsx.org"
 		]
 	},
+	"builtInExtensionsSource": "github",
 	"linkProtectionTrustedDomains": [
 		"https://open-vsx.org"
 	]

@@ -43,6 +43,9 @@ human-facing guides rather than replacing them.
 - Hucode uses OpenVSX for its extension gallery. OpenVSX `VsixSignature`
   archives are not valid Microsoft `vsce-sign` signatures; release builds need
   `node-ovsx-sign` available in production dependencies to verify them.
+- Keep `builtInExtensionsSource` set to `github` in the Hucode product mixin.
+  Upstream pins built-in extension checksums to its GitHub release artifacts;
+  OpenVSX remains the gallery for user-installed extensions.
 
 ## Local Workflow
 

@@ -53,6 +53,7 @@ suite('Hucode mixin', () => {
 			generated.extensionsGallery.serviceUrl,
 			'https://open-vsx.org/vscode/gallery'
 		);
+		assert.strictEqual(generated.builtInExtensionsSource, 'github');
 		assert.deepStrictEqual(
 			generated.extensionsGallery.openVsxSignatureVerificationHosts,
 			['open-vsx.org']
