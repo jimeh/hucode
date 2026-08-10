@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.67 - 2026-08-10
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.132.0
+
+### Bug Fixes
+
+- **build:** source built-in extensions from GitHub (#181)
+
 ## 0.0.66 - 2026-08-09
 
 ### Features
