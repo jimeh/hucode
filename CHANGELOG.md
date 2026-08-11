@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.69 - 2026-08-11
+
+### Bug Fixes
+
+- prevent Projects sidebar scroll races (#183)
+
 ## 0.0.68 - 2026-08-10
 
 ### Features
