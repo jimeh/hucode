@@ -8,7 +8,8 @@ import {
 	ListDragOverEffectPosition,
 	ListDragOverEffectType,
 } from '../../../../base/browser/ui/list/list.js';
-import { getWindowId } from '../../../../base/browser/dom.js';
+import { addDisposableListener, getWindowId } from
+	'../../../../base/browser/dom.js';
 import { ElementsDragAndDropData, ListViewTargetSector } from
 	'../../../../base/browser/ui/list/listView.js';
 import { ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
@@ -962,7 +963,7 @@ suite('ProjectSwitcherContribution', () => {
 			]);
 		});
 
-	test('render wires the live tree services and initial empty state', async () => {
+	test('render defers passive tree updates through click', async () => {
 		const projectChanges = disposables.add(
 			new Emitter<readonly ProjectRecord[]>()
 		);
@@ -1006,6 +1007,7 @@ suite('ProjectSwitcherContribution', () => {
 		} | undefined;
 		let showInlineIcons: (() => boolean) | undefined;
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
+		let treeSetChildrenCalls = 0;
 		const tree = {
 			contextKeyService: {
 				createKey: () => ({ set: () => undefined }),
@@ -1015,8 +1017,9 @@ suite('ProjectSwitcherContribution', () => {
 			onDidChangeCollapseState: Event.None,
 			onContextMenu: Event.None,
 			onDidOpen: Event.None,
-			setChildren: () => undefined,
+			setChildren: () => { treeSetChildrenCalls++; },
 			rerender: () => undefined,
+			isCollapsed: () => false,
 			layout: (height: number, width: number) =>
 				treeLayouts.push({ height, width }),
 			getFocus: () => [],
@@ -1200,6 +1203,122 @@ suite('ProjectSwitcherContribution', () => {
 			gitConsumerId,
 			`project-switcher:window:${getWindowId(mainWindow)}`
 		);
+
+		const scheduledTimers = new Map<number, TimerHandler>();
+		const scheduledTimerIds: number[] = [];
+		const clearedTimerIds: number[] = [];
+		let nextTimerId = 1;
+		Reflect.set(widget, 'pointerInteractionWindow', {
+			setTimeout: (handler: TimerHandler) => {
+				const id = nextTimerId++;
+				scheduledTimerIds.push(id);
+				scheduledTimers.set(id, handler);
+				return id;
+			},
+			clearTimeout: (id: number) => {
+				clearedTimerIds.push(id);
+				scheduledTimers.delete(id);
+			},
+		} as unknown as Window);
+		const firstProjects = [projectRecord({ label: 'first' })];
+		const latestProjects = [projectRecord({ label: 'latest' })];
+		const flushedProjectLabels: Array<string | undefined> = [];
+		const renderProjectsNow = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'renderProjectsNow'
+		) as (this: object, projects: readonly ProjectRecord[]) => void;
+		Reflect.set(widget, 'renderProjectsNow', (
+			projects: readonly ProjectRecord[]
+		) => {
+			flushedProjectLabels.push(projects[0]?.label);
+			renderProjectsNow.call(widget, projects);
+		});
+		const treeContainer = container.querySelector(
+			'.hucode-project-switcher-tree'
+		) as HTMLElement;
+		const row = mainWindow.document.createElement('button');
+		treeContainer.appendChild(row);
+		disposables.add(addDisposableListener(row, 'pointerdown', () => {
+			Reflect.set(widget, 'projects', firstProjects);
+			gitChanges.fire({ consumerId: gitConsumerId, observations: [] });
+			Reflect.set(widget, 'projects', latestProjects);
+			gitChanges.fire({ consumerId: gitConsumerId, observations: [] });
+		}));
+		const runScheduledTimer = () => {
+			assert.strictEqual(scheduledTimers.size, 1);
+			const [id, handler] = [...scheduledTimers][0];
+			scheduledTimers.delete(id);
+			assert.strictEqual(typeof handler, 'function');
+			(handler as () => void)();
+		};
+
+		row.dispatchEvent(new PointerEvent('pointerdown', {
+			bubbles: true,
+			button: 0,
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 0,
+			flushedProjectLabels: [],
+		});
+		mainWindow.dispatchEvent(new PointerEvent('pointerup', {
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			scheduledTimerIds,
+			clearedTimerIds,
+		}, {
+			treeSetChildrenCalls: 0,
+			scheduledTimerIds: [1],
+			clearedTimerIds: [],
+		});
+		row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			scheduledTimerIds,
+			clearedTimerIds,
+			pendingTimerIds: [...scheduledTimers.keys()],
+		}, {
+			treeSetChildrenCalls: 0,
+			scheduledTimerIds: [1, 2],
+			clearedTimerIds: [1],
+			pendingTimerIds: [2],
+		});
+		runScheduledTimer();
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 1,
+			flushedProjectLabels: ['latest'],
+		});
+
+		row.dispatchEvent(new PointerEvent('pointerdown', {
+			bubbles: true,
+			button: 0,
+			isPrimary: true,
+			pointerId: 8,
+		}));
+		mainWindow.dispatchEvent(new PointerEvent('pointercancel', {
+			isPrimary: true,
+			pointerId: 8,
+		}));
+		assert.strictEqual(treeSetChildrenCalls, 1);
+		runScheduledTimer();
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 2,
+			flushedProjectLabels: ['latest', 'latest'],
+		});
+
 		widget.dispose();
 		await timeout(0);
 		assert.deepStrictEqual(clearedGitConsumers, [gitConsumerId]);
@@ -1588,10 +1707,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			viewItemContext: { set: () => undefined },
 		}) as unknown as {
-			updateCurrentWorktreeSelection(): Promise<void>;
+			updateCurrentWorktreeSelection(
+				options: { reveal: boolean }
+			): Promise<void>;
 		};
 
-		await host.updateCurrentWorktreeSelection();
+		await host.updateCurrentWorktreeSelection({ reveal: true });
 
 		assert.deepStrictEqual({ reveals, selected, focused }, {
 			reveals: 0,
@@ -1626,10 +1747,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			viewItemContext: { set: () => undefined },
 		}) as unknown as {
-			updateCurrentWorktreeSelection(): Promise<void>;
+			updateCurrentWorktreeSelection(
+				options: { reveal: boolean }
+			): Promise<void>;
 		};
 
-		await host.updateCurrentWorktreeSelection();
+		await host.updateCurrentWorktreeSelection({ reveal: true });
 
 		assert.deepStrictEqual({
 			expanded,
@@ -1683,9 +1806,12 @@ suite('ProjectSwitcherContribution', () => {
 		const updateSelection = Reflect.get(
 			ProjectSwitcherWidget.prototype,
 			'updateCurrentWorktreeSelection'
-		) as (this: object) => Promise<void>;
+		) as (
+			this: object,
+			options: { reveal: boolean }
+		) => Promise<void>;
 
-		await updateSelection.call(host);
+		await updateSelection.call(host, { reveal: true });
 
 		assert.deepStrictEqual({ selected, focused }, {
 			selected: [],
@@ -1924,6 +2050,275 @@ suite('ProjectSwitcherContribution', () => {
 			last: { worktreePath: '/new' },
 			index: 99,
 			newCount: 1,
+		});
+	});
+
+	test('caches focus-only hosted state without refreshing the tree', async () => {
+		const currentState = hostedStateWithInstance({ focused: false });
+		const nextState = hostedStateWithInstance({ focused: true });
+		const calls: string[] = [];
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			omniHostedWorkspaceState: currentState,
+			environmentService: { isOmniWindow: true },
+			tree: {},
+			projects: [],
+			itemsById: new Map(),
+			updateGitWorktreeTargets: () => calls.push('git'),
+			renderProjects: () => calls.push('render'),
+			updateItemContext: () => calls.push('context'),
+			updateCurrentWorktreeSelection: async () => {
+				calls.push('selection');
+			},
+			syncOmniActiveWorktree: async () => calls.push('sync'),
+			recordActiveWorktree: () => calls.push('history'),
+		});
+		const updateState = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'updateOmniHostedWorkspaceState'
+		) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+		updateState.call(host, nextState);
+		await Promise.resolve();
+
+		assert.strictEqual(host.omniHostedWorkspaceState, nextState);
+		assert.deepStrictEqual(calls, []);
+	});
+
+	test('does not reveal the same active worktree after a lifecycle update',
+		async () => {
+			const currentState = hostedStateWithInstance({
+				state: 'active',
+				visible: true,
+			});
+			const nextState = hostedStateWithInstance({
+				state: 'loaded',
+				visible: false,
+			});
+			let renders = 0;
+			let reveals = 0;
+			let selections = 0;
+			const current = worktreeItem({ isActive: true });
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: currentState,
+				environmentService: { isOmniWindow: true },
+				collapsedOmniSections: new Set<string>(),
+				tree: {
+					hasElement: () => true,
+					reveal: async () => { reveals++; },
+					setSelection: () => { selections++; },
+					setFocus: () => undefined,
+				},
+				projects: [],
+				itemsById: new Map([[current.id, current]]),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => { renders++; },
+				updateItemContext: () => undefined,
+				viewItemContext: { set: () => undefined },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, nextState);
+			await Promise.resolve();
+
+			assert.deepStrictEqual({ renders, reveals, selections }, {
+				renders: 1,
+				reveals: 0,
+				selections: 1,
+			});
+		});
+
+	test('reveals a genuinely changed active worktree', async () => {
+		const currentState = hostedStateWithInstance({
+			instanceId: 'instance-1',
+			worktreePath: '/repo/feature',
+		});
+		const nextState = hostedStateWithInstance({
+			instanceId: 'instance-2',
+			worktreePath: '/repo/other',
+		});
+		const selectionOptions: Array<{ reveal: boolean } | undefined> = [];
+		const next = worktreeItem({
+			id: 'worktree:project-1:%2Frepo%2Fother',
+			handle: 'worktree:project-1:%2Frepo%2Fother',
+			worktreePath: '/repo/other',
+		});
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			omniHostedWorkspaceState: currentState,
+			environmentService: { isOmniWindow: true },
+			tree: {},
+			projects: [],
+			itemsById: new Map(),
+			updateGitWorktreeTargets: () => undefined,
+			renderProjects: () => {
+				host.itemsById = new Map([[next.id, next]]);
+			},
+			updateItemContext: () => undefined,
+			updateCurrentWorktreeSelection: async (
+				options?: { reveal: boolean }
+			) => { selectionOptions.push(options); },
+			syncOmniActiveWorktree: async () => undefined,
+			recordActiveWorktree: () => undefined,
+		});
+		const updateState = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'updateOmniHostedWorkspaceState'
+		) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+		updateState.call(host, nextState);
+		await Promise.resolve();
+
+		assert.deepStrictEqual(selectionOptions, [{ reveal: true }]);
+	});
+
+	test('reveals an active worktree when its item first becomes available',
+		async () => {
+			const state = hostedStateWithInstance();
+			const selectionOptions: Array<{ reveal: boolean } | undefined> = [];
+			const current = worktreeItem({ isActive: true });
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: state,
+				environmentService: { isOmniWindow: true },
+				tree: {},
+				projects: [],
+				itemsById: new Map(),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => {
+					host.itemsById = new Map([[current.id, current]]);
+				},
+				updateItemContext: () => undefined,
+				updateCurrentWorktreeSelection: async (
+					options?: { reveal: boolean }
+				) => { selectionOptions.push(options); },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, {
+				...state,
+				instances: state.instances.map(instance => ({
+					...instance,
+					lastActiveAt: 1,
+				})),
+			});
+			await Promise.resolve();
+
+			assert.deepStrictEqual(selectionOptions, [{ reveal: true }]);
+		});
+
+	test('defers and coalesces tree updates during a primary pointer click',
+		async () => {
+			const renders: Array<readonly ProjectRecord[]> = [];
+			const selections: boolean[] = [];
+			const firstProjects = [projectRecord({ label: 'first' })];
+			const latestProjects = [projectRecord({ label: 'latest' })];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				isPrimaryPointerInteraction: true,
+				primaryPointerStartCurrentWorktreeItemId: 'old',
+				pendingProjectsRender: undefined,
+				pendingCurrentWorktreeSelection: false,
+				renderProjectsNow: (projects: readonly ProjectRecord[]) => {
+					renders.push(projects);
+				},
+				captureTreeExpansionState: () => undefined,
+				buildRoots: (projects: readonly ProjectRecord[]) => {
+					renders.push(projects);
+					return { roots: [], itemsById: new Map() };
+				},
+				updateEmptyState: () => undefined,
+				layout: () => undefined,
+				getCurrentWorktreeItem: () => ({ id: 'new' }),
+				updateCurrentWorktreeSelectionNow: async (
+					options: { reveal: boolean }
+				) => { selections.push(options.reveal); },
+				notificationService: {
+					error: (error: unknown) => assert.fail(String(error)),
+				},
+			});
+			const renderProjects = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'renderProjects'
+			) as (this: object, projects: readonly ProjectRecord[]) => void;
+			const updateSelection = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateCurrentWorktreeSelection'
+			) as (
+				this: object,
+				options: { reveal: boolean }
+			) => Promise<void>;
+			const endPointerInteraction = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'endPrimaryPointerInteraction'
+			) as (this: object) => void;
+
+			renderProjects.call(host, firstProjects);
+			renderProjects.call(host, latestProjects);
+			await updateSelection.call(host, { reveal: false });
+			await updateSelection.call(host, { reveal: true });
+
+			assert.deepStrictEqual({ renders, selections }, {
+				renders: [],
+				selections: [],
+			});
+
+			endPointerInteraction.call(host);
+			await Promise.resolve();
+
+			assert.deepStrictEqual({ renders, selections }, {
+				renders: [latestProjects],
+				selections: [true],
+			});
+		});
+
+	test('starts tree-update deferral only for the primary pointer button', () => {
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			isPrimaryPointerInteraction: false,
+			primaryPointerId: undefined,
+			clearPrimaryPointerInteractionRelease: () => undefined,
+			getCurrentWorktreeItem: () => undefined,
+		});
+		const beginPointerInteraction = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'beginPrimaryPointerInteraction'
+		) as (this: object, event: PointerEvent) => void;
+
+		beginPointerInteraction.call(host, {
+			button: 0,
+			isPrimary: false,
+			pointerId: 1,
+		} as PointerEvent);
+		beginPointerInteraction.call(host, {
+			button: 2,
+			isPrimary: true,
+			pointerId: 2,
+		} as PointerEvent);
+		assert.deepStrictEqual({
+			active: host.isPrimaryPointerInteraction,
+			pointerId: host.primaryPointerId,
+		}, {
+			active: false,
+			pointerId: undefined,
+		});
+
+		beginPointerInteraction.call(host, {
+			button: 0,
+			isPrimary: true,
+			pointerId: 3,
+		} as PointerEvent);
+		assert.deepStrictEqual({
+			active: host.isPrimaryPointerInteraction,
+			pointerId: host.primaryPointerId,
+		}, {
+			active: true,
+			pointerId: 3,
 		});
 	});
 
@@ -2194,6 +2589,24 @@ function hostedState(activeInstanceId?: string): IHucodeHostedWorkspaceState {
 		projectSwitcherCanGoBack: false,
 		projectSwitcherCanGoForward: false,
 		instances: [],
+	};
+}
+
+function hostedStateWithInstance(overrides: Partial<
+	IHucodeHostedWorkspaceState['instances'][number]
+> = {}): IHucodeHostedWorkspaceState {
+	const instance = {
+		instanceId: 'instance-1',
+		projectId: 'project-1',
+		worktreePath: '/repo/feature',
+		state: 'active' as const,
+		visible: true,
+		focused: false,
+		...overrides,
+	};
+	return {
+		...hostedState(instance.instanceId),
+		instances: [instance],
 	};
 }
 

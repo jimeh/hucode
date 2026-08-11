@@ -28,6 +28,7 @@ import {
 } from '../../../base/browser/ui/tree/tree.js';
 import { Codicon } from '../../../base/common/codicons.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { equals } from '../../../base/common/objects.js';
 import { basename } from '../../../base/common/path.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { hasKey } from '../../../base/common/types.js';
@@ -1154,6 +1155,30 @@ export class ProjectSwitcherDragAndDrop
 	}
 }
 
+function hasSameProjectSwitcherHostedWorkspaceState(
+	previous: IHucodeHostedWorkspaceState,
+	next: IHucodeHostedWorkspaceState
+): boolean {
+	// ProjectSwitcher does not render hosted focus. If it starts doing so,
+	// stop ignoring `focused` here or update this comparison accordingly.
+	return equals(
+		{
+			...previous,
+			instances: previous.instances.map(instance => ({
+				...instance,
+				focused: undefined,
+			})),
+		},
+		{
+			...next,
+			instances: next.instances.map(instance => ({
+				...instance,
+				focused: undefined,
+			})),
+		}
+	);
+}
+
 export class ProjectSwitcherWidget extends Disposable {
 	private tree: WorkbenchObjectTree<ProjectSwitcherItem, void> | undefined;
 	private viewItemContext:
@@ -1190,6 +1215,15 @@ export class ProjectSwitcherWidget extends Disposable {
 		instances: [],
 	};
 	private didReceiveOmniHostedWorkspaceStateChange = false;
+	private didSynchronizeCurrentWorktreeItem = false;
+	private lastSynchronizedCurrentWorktreeItemId: string | undefined;
+	private isPrimaryPointerInteraction = false;
+	private primaryPointerId: number | undefined;
+	private primaryPointerStartCurrentWorktreeItemId: string | undefined;
+	private pendingProjectsRender: readonly ProjectRecord[] | undefined;
+	private pendingCurrentWorktreeSelection = false;
+	private pointerInteractionReleaseHandle: number | undefined;
+	private pointerInteractionWindow: Window | undefined;
 
 	constructor(
 		@IInstantiationService
@@ -1229,6 +1263,12 @@ export class ProjectSwitcherWidget extends Disposable {
 			ProjectSwitcherCanGoForwardContext.bindTo(this.contextKeyService);
 		this.loadViewState();
 		this._register(toDisposable(() => {
+			this.clearPrimaryPointerInteractionRelease();
+			this.isPrimaryPointerInteraction = false;
+			this.primaryPointerId = undefined;
+			this.primaryPointerStartCurrentWorktreeItemId = undefined;
+			this.pendingProjectsRender = undefined;
+			this.pendingCurrentWorktreeSelection = false;
 			this.saveState();
 			this.canGoBackContext.set(false);
 			this.canGoForwardContext.set(false);
@@ -1357,6 +1397,41 @@ export class ProjectSwitcherWidget extends Disposable {
 			container,
 			dom.$('.hucode-project-switcher-tree.file-icon-themable-tree')
 		);
+		this.pointerInteractionWindow = dom.getWindow(this.treeContainer);
+		this._register(dom.addDisposableListener(
+			this.treeContainer,
+			dom.EventType.POINTER_DOWN,
+			(event: PointerEvent) => this.beginPrimaryPointerInteraction(event),
+			true
+		));
+		this._register(dom.addDisposableListener(
+			this.treeContainer,
+			dom.EventType.CLICK,
+			() => this.schedulePrimaryPointerInteractionRelease()
+		));
+		this._register(dom.addDisposableListener(
+			this.treeContainer,
+			'lostpointercapture',
+			(event: PointerEvent) =>
+				this.schedulePrimaryPointerInteractionRelease(event)
+		));
+		this._register(dom.addDisposableListener(
+			this.pointerInteractionWindow,
+			dom.EventType.POINTER_UP,
+			(event: PointerEvent) =>
+				this.schedulePrimaryPointerInteractionRelease(event)
+		));
+		this._register(dom.addDisposableListener(
+			this.pointerInteractionWindow,
+			'pointercancel',
+			(event: PointerEvent) =>
+				this.schedulePrimaryPointerInteractionRelease(event)
+		));
+		this._register(dom.addDisposableListener(
+			this.pointerInteractionWindow,
+			'blur',
+			() => this.schedulePrimaryPointerInteractionRelease()
+		));
 		this.emptyContainer = dom.append(
 			container,
 			dom.$('.hucode-project-switcher-empty')
@@ -1566,6 +1641,8 @@ export class ProjectSwitcherWidget extends Disposable {
 	private async handleProjectsChanged(
 		projects: readonly ProjectRecord[]
 	): Promise<void> {
+		const previousCurrentWorktreeItemId =
+			this.getCurrentWorktreeItem()?.id;
 		this.lastProjectsRefreshAt = Date.now();
 		this.projects = projects;
 		const reconciledHostedWorkspaceState =
@@ -1582,7 +1659,11 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 		this.renderProjects(projects);
 		await this.syncCurrentWorkspace(projects);
-		await this.updateCurrentWorktreeSelection();
+		await this.updateCurrentWorktreeSelection({
+			reveal: this.shouldRevealCurrentWorktree(
+				previousCurrentWorktreeItemId
+			),
+		});
 		this.recordActiveWorktree(projects);
 	}
 
@@ -1602,11 +1683,22 @@ export class ProjectSwitcherWidget extends Disposable {
 	private async handleWorkspaceContextChange(): Promise<void> {
 		this.renderProjects(this.projects);
 		await this.syncCurrentWorkspace(this.projects);
-		await this.updateCurrentWorktreeSelection();
+		await this.updateCurrentWorktreeSelection({
+			reveal: this.shouldRevealCurrentWorktree(),
+		});
 		this.recordActiveWorktree(this.projects);
 	}
 
 	private renderProjects(projects: readonly ProjectRecord[]): void {
+		if (this.isPrimaryPointerInteraction) {
+			this.pendingProjectsRender = projects;
+			return;
+		}
+
+		this.renderProjectsNow(projects);
+	}
+
+	private renderProjectsNow(projects: readonly ProjectRecord[]): void {
 		this.captureTreeExpansionState();
 		const { roots, itemsById } = this.buildRoots(projects);
 		this.hasProjects = roots.length > 0;
@@ -1620,6 +1712,78 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 		this.updateEmptyState();
 		this.layout(this.width, this.height);
+	}
+
+	private beginPrimaryPointerInteraction(event: PointerEvent): void {
+		if (event.button !== 0 || !event.isPrimary) {
+			return;
+		}
+
+		this.clearPrimaryPointerInteractionRelease();
+		this.isPrimaryPointerInteraction = true;
+		this.primaryPointerId = event.pointerId;
+		this.primaryPointerStartCurrentWorktreeItemId =
+			this.getCurrentWorktreeItem()?.id;
+	}
+
+	private schedulePrimaryPointerInteractionRelease(
+		event?: PointerEvent
+	): void {
+		if (
+			!this.isPrimaryPointerInteraction ||
+			(event !== undefined && event.pointerId !== this.primaryPointerId)
+		) {
+			return;
+		}
+
+		this.clearPrimaryPointerInteractionRelease();
+		const targetWindow = this.pointerInteractionWindow ?? mainWindow;
+		this.pointerInteractionReleaseHandle = targetWindow.setTimeout(() => {
+			this.pointerInteractionReleaseHandle = undefined;
+			this.endPrimaryPointerInteraction();
+		}, 0);
+	}
+
+	private clearPrimaryPointerInteractionRelease(): void {
+		if (this.pointerInteractionReleaseHandle === undefined) {
+			return;
+		}
+
+		(this.pointerInteractionWindow ?? mainWindow).clearTimeout(
+			this.pointerInteractionReleaseHandle
+		);
+		this.pointerInteractionReleaseHandle = undefined;
+	}
+
+	private endPrimaryPointerInteraction(): void {
+		this.clearPrimaryPointerInteractionRelease();
+		if (!this.isPrimaryPointerInteraction) {
+			return;
+		}
+
+		this.isPrimaryPointerInteraction = false;
+		this.primaryPointerId = undefined;
+		const initialCurrentWorktreeItemId =
+			this.primaryPointerStartCurrentWorktreeItemId;
+		this.primaryPointerStartCurrentWorktreeItemId = undefined;
+		const projects = this.pendingProjectsRender;
+		const updateSelection = this.pendingCurrentWorktreeSelection;
+		this.pendingProjectsRender = undefined;
+		this.pendingCurrentWorktreeSelection = false;
+
+		if (projects) {
+			this.renderProjectsNow(projects);
+		}
+		if (updateSelection) {
+			const currentWorktreeItemId = this.getCurrentWorktreeItem()?.id;
+			this.didSynchronizeCurrentWorktreeItem = true;
+			this.lastSynchronizedCurrentWorktreeItemId =
+				currentWorktreeItemId;
+			void this.updateCurrentWorktreeSelectionNow({
+				reveal: currentWorktreeItemId !== undefined &&
+					currentWorktreeItemId !== initialCurrentWorktreeItemId,
+			}).catch(error => this.notificationService.error(String(error)));
+		}
 	}
 
 	private updateEmptyState(): void {
@@ -1735,7 +1899,13 @@ export class ProjectSwitcherWidget extends Disposable {
 	private updateOmniHostedWorkspaceState(
 		state: IHucodeHostedWorkspaceState
 	): void {
+		const previousState = this.omniHostedWorkspaceState;
+		const previousCurrentWorktreeItemId =
+			this.getCurrentWorktreeItem()?.id;
 		this.omniHostedWorkspaceState = state;
+		if (hasSameProjectSwitcherHostedWorkspaceState(previousState, state)) {
+			return;
+		}
 		void this.updateGitWorktreeTargets(state);
 		if (!this.tree) {
 			return;
@@ -1743,7 +1913,11 @@ export class ProjectSwitcherWidget extends Disposable {
 
 		this.renderProjects(this.projects);
 		this.updateItemContext();
-		void this.updateCurrentWorktreeSelection().catch(error => {
+		void this.updateCurrentWorktreeSelection({
+			reveal: this.shouldRevealCurrentWorktree(
+				previousCurrentWorktreeItemId
+			),
+		}).catch(error => {
 			this.notificationService.error(String(error));
 		});
 		void this.syncOmniActiveWorktree(this.projects).catch(error => {
@@ -2219,7 +2393,20 @@ export class ProjectSwitcherWidget extends Disposable {
 		}
 	}
 
-	private async updateCurrentWorktreeSelection(): Promise<void> {
+	private async updateCurrentWorktreeSelection(
+		options: { readonly reveal: boolean }
+	): Promise<void> {
+		if (this.isPrimaryPointerInteraction) {
+			this.pendingCurrentWorktreeSelection = true;
+			return;
+		}
+
+		await this.updateCurrentWorktreeSelectionNow(options);
+	}
+
+	private async updateCurrentWorktreeSelectionNow(
+		options: { readonly reveal: boolean }
+	): Promise<void> {
 		const tree = this.tree;
 		if (!tree) {
 			return;
@@ -2266,7 +2453,11 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		if (!isHiddenByCollapsedOmniSection && !isHiddenByCollapsedProject) {
+		if (
+			options.reveal &&
+			!isHiddenByCollapsedOmniSection &&
+			!isHiddenByCollapsedProject
+		) {
 			await tree.reveal(currentWorktree);
 		}
 		if (
@@ -2279,6 +2470,19 @@ export class ProjectSwitcherWidget extends Disposable {
 		tree.setSelection([currentWorktree]);
 		tree.setFocus([currentWorktree]);
 		this.viewItemContext?.set(currentWorktree.contextValue);
+	}
+
+	private shouldRevealCurrentWorktree(
+		previousCurrentWorktreeItemId?: string
+	): boolean {
+		const currentWorktreeItemId = this.getCurrentWorktreeItem()?.id;
+		const comparisonItemId = this.didSynchronizeCurrentWorktreeItem
+			? this.lastSynchronizedCurrentWorktreeItemId
+			: previousCurrentWorktreeItemId;
+		this.didSynchronizeCurrentWorktreeItem = true;
+		this.lastSynchronizedCurrentWorktreeItemId = currentWorktreeItemId;
+		return currentWorktreeItemId !== undefined &&
+			currentWorktreeItemId !== comparisonItemId;
 	}
 
 	private getCurrentWorktreeItem():
