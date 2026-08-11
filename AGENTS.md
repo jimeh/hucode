@@ -179,6 +179,10 @@ as the required Hucode instruction set for work in this fork.
 - Web Omni hosted-command forwarding has a bounded response timeout. Keep
   interactive commands such as project and worktree renames in the web shell;
   otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- Hosted-workbench focus changes can arrive while a Projects-sidebar click is
+  between pointerdown and click. Keep focus-only state updates from rebuilding
+  or revealing the tree, and defer passive tree reconciliation until the
+  primary-pointer interaction finishes so the clicked row cannot move.
 - Serve-web project SSE snapshots must wait for the corresponding project-state
   write generation, including hydration and background refresh. A disconnected
   request may cancel queued work and active read-only Git commands, but once a
