@@ -8,7 +8,8 @@ import {
 	ListDragOverEffectPosition,
 	ListDragOverEffectType,
 } from '../../../../base/browser/ui/list/list.js';
-import { getWindowId } from '../../../../base/browser/dom.js';
+import { addDisposableListener, getWindowId } from
+	'../../../../base/browser/dom.js';
 import { ElementsDragAndDropData, ListViewTargetSector } from
 	'../../../../base/browser/ui/list/listView.js';
 import { ITreeNode } from '../../../../base/browser/ui/tree/tree.js';
@@ -962,7 +963,7 @@ suite('ProjectSwitcherContribution', () => {
 			]);
 		});
 
-	test('render wires the live tree services and initial empty state', async () => {
+	test('render defers passive tree updates through click', async () => {
 		const projectChanges = disposables.add(
 			new Emitter<readonly ProjectRecord[]>()
 		);
@@ -1006,6 +1007,7 @@ suite('ProjectSwitcherContribution', () => {
 		} | undefined;
 		let showInlineIcons: (() => boolean) | undefined;
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
+		let treeSetChildrenCalls = 0;
 		const tree = {
 			contextKeyService: {
 				createKey: () => ({ set: () => undefined }),
@@ -1015,8 +1017,9 @@ suite('ProjectSwitcherContribution', () => {
 			onDidChangeCollapseState: Event.None,
 			onContextMenu: Event.None,
 			onDidOpen: Event.None,
-			setChildren: () => undefined,
+			setChildren: () => { treeSetChildrenCalls++; },
 			rerender: () => undefined,
+			isCollapsed: () => false,
 			layout: (height: number, width: number) =>
 				treeLayouts.push({ height, width }),
 			getFocus: () => [],
@@ -1200,6 +1203,122 @@ suite('ProjectSwitcherContribution', () => {
 			gitConsumerId,
 			`project-switcher:window:${getWindowId(mainWindow)}`
 		);
+
+		const scheduledTimers = new Map<number, TimerHandler>();
+		const scheduledTimerIds: number[] = [];
+		const clearedTimerIds: number[] = [];
+		let nextTimerId = 1;
+		Reflect.set(widget, 'pointerInteractionWindow', {
+			setTimeout: (handler: TimerHandler) => {
+				const id = nextTimerId++;
+				scheduledTimerIds.push(id);
+				scheduledTimers.set(id, handler);
+				return id;
+			},
+			clearTimeout: (id: number) => {
+				clearedTimerIds.push(id);
+				scheduledTimers.delete(id);
+			},
+		} as unknown as Window);
+		const firstProjects = [projectRecord({ label: 'first' })];
+		const latestProjects = [projectRecord({ label: 'latest' })];
+		const flushedProjectLabels: Array<string | undefined> = [];
+		const renderProjectsNow = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'renderProjectsNow'
+		) as (this: object, projects: readonly ProjectRecord[]) => void;
+		Reflect.set(widget, 'renderProjectsNow', (
+			projects: readonly ProjectRecord[]
+		) => {
+			flushedProjectLabels.push(projects[0]?.label);
+			renderProjectsNow.call(widget, projects);
+		});
+		const treeContainer = container.querySelector(
+			'.hucode-project-switcher-tree'
+		) as HTMLElement;
+		const row = mainWindow.document.createElement('button');
+		treeContainer.appendChild(row);
+		disposables.add(addDisposableListener(row, 'pointerdown', () => {
+			Reflect.set(widget, 'projects', firstProjects);
+			gitChanges.fire({ consumerId: gitConsumerId, observations: [] });
+			Reflect.set(widget, 'projects', latestProjects);
+			gitChanges.fire({ consumerId: gitConsumerId, observations: [] });
+		}));
+		const runScheduledTimer = () => {
+			assert.strictEqual(scheduledTimers.size, 1);
+			const [id, handler] = [...scheduledTimers][0];
+			scheduledTimers.delete(id);
+			assert.strictEqual(typeof handler, 'function');
+			(handler as () => void)();
+		};
+
+		row.dispatchEvent(new PointerEvent('pointerdown', {
+			bubbles: true,
+			button: 0,
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 0,
+			flushedProjectLabels: [],
+		});
+		mainWindow.dispatchEvent(new PointerEvent('pointerup', {
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			scheduledTimerIds,
+			clearedTimerIds,
+		}, {
+			treeSetChildrenCalls: 0,
+			scheduledTimerIds: [1],
+			clearedTimerIds: [],
+		});
+		row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			scheduledTimerIds,
+			clearedTimerIds,
+			pendingTimerIds: [...scheduledTimers.keys()],
+		}, {
+			treeSetChildrenCalls: 0,
+			scheduledTimerIds: [1, 2],
+			clearedTimerIds: [1],
+			pendingTimerIds: [2],
+		});
+		runScheduledTimer();
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 1,
+			flushedProjectLabels: ['latest'],
+		});
+
+		row.dispatchEvent(new PointerEvent('pointerdown', {
+			bubbles: true,
+			button: 0,
+			isPrimary: true,
+			pointerId: 8,
+		}));
+		mainWindow.dispatchEvent(new PointerEvent('pointercancel', {
+			isPrimary: true,
+			pointerId: 8,
+		}));
+		assert.strictEqual(treeSetChildrenCalls, 1);
+		runScheduledTimer();
+		assert.deepStrictEqual({
+			treeSetChildrenCalls,
+			flushedProjectLabels,
+		}, {
+			treeSetChildrenCalls: 2,
+			flushedProjectLabels: ['latest', 'latest'],
+		});
+
 		widget.dispose();
 		await timeout(0);
 		assert.deepStrictEqual(clearedGitConsumers, [gitConsumerId]);
@@ -1588,10 +1707,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			viewItemContext: { set: () => undefined },
 		}) as unknown as {
-			updateCurrentWorktreeSelection(): Promise<void>;
+			updateCurrentWorktreeSelection(
+				options: { reveal: boolean }
+			): Promise<void>;
 		};
 
-		await host.updateCurrentWorktreeSelection();
+		await host.updateCurrentWorktreeSelection({ reveal: true });
 
 		assert.deepStrictEqual({ reveals, selected, focused }, {
 			reveals: 0,
@@ -1626,10 +1747,12 @@ suite('ProjectSwitcherContribution', () => {
 			},
 			viewItemContext: { set: () => undefined },
 		}) as unknown as {
-			updateCurrentWorktreeSelection(): Promise<void>;
+			updateCurrentWorktreeSelection(
+				options: { reveal: boolean }
+			): Promise<void>;
 		};
 
-		await host.updateCurrentWorktreeSelection();
+		await host.updateCurrentWorktreeSelection({ reveal: true });
 
 		assert.deepStrictEqual({
 			expanded,
@@ -1683,9 +1806,12 @@ suite('ProjectSwitcherContribution', () => {
 		const updateSelection = Reflect.get(
 			ProjectSwitcherWidget.prototype,
 			'updateCurrentWorktreeSelection'
-		) as (this: object) => Promise<void>;
+		) as (
+			this: object,
+			options: { reveal: boolean }
+		) => Promise<void>;
 
-		await updateSelection.call(host);
+		await updateSelection.call(host, { reveal: true });
 
 		assert.deepStrictEqual({ selected, focused }, {
 			selected: [],

@@ -1159,6 +1159,8 @@ function hasSameProjectSwitcherHostedWorkspaceState(
 	previous: IHucodeHostedWorkspaceState,
 	next: IHucodeHostedWorkspaceState
 ): boolean {
+	// ProjectSwitcher does not render hosted focus. If it starts doing so,
+	// stop ignoring `focused` here or update this comparison accordingly.
 	return equals(
 		{
 			...previous,
@@ -2392,7 +2394,7 @@ export class ProjectSwitcherWidget extends Disposable {
 	}
 
 	private async updateCurrentWorktreeSelection(
-		options: { readonly reveal: boolean } = { reveal: true }
+		options: { readonly reveal: boolean }
 	): Promise<void> {
 		if (this.isPrimaryPointerInteraction) {
 			this.pendingCurrentWorktreeSelection = true;
