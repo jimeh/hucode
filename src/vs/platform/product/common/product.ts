@@ -42,7 +42,6 @@ else if (globalThis._VSCODE_PRODUCT_JSON && globalThis._VSCODE_PACKAGE_JSON) {
 	// Running out of sources
 	if (env['VSCODE_DEV']) {
 		Object.assign(product, {
-			nameShort: `${product.nameShort} Dev`,
 			nameLong: `${product.nameLong} Dev`,
 			dataFolderName: `${product.dataFolderName}-dev`,
 			serverDataFolderName: product.serverDataFolderName ? `${product.serverDataFolderName}-dev` : undefined
@@ -98,6 +97,17 @@ else {
 					enterprise: {
 						id: 'github-enterprise',
 						name: 'GitHub Enterprise',
+					},
+					// Chat setup renders a button per provider and reads
+					// these entries unconditionally; omitting them breaks
+					// the setup dialog when running web out of sources.
+					google: {
+						id: 'google',
+						name: 'Google',
+					},
+					apple: {
+						id: 'apple',
+						name: 'Apple',
 					}
 				},
 				providerScopes: []
