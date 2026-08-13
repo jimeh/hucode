@@ -106,14 +106,18 @@ export interface IBrowserMainWorkbench {
 	readonly onDidShutdown: Event<void>;
 }
 
+export interface IBrowserUserDataProfilesService extends IUserDataProfilesService {
+	getProfileForWorkspace(workspace: IAnyWorkspaceIdentifier): IUserDataProfile | undefined;
+}
+
 export class BrowserMain extends Disposable {
 
-	private readonly onWillShutdownDisposables = this._register(new DisposableStore());
+	protected readonly onWillShutdownDisposables = this._register(new DisposableStore());
 	private readonly indexedDBFileSystemProviders: IndexedDBFileSystemProvider[] = [];
 
 	constructor(
 		private readonly domElement: HTMLElement,
-		private readonly configuration: IWorkbenchConstructionOptions
+		protected readonly configuration: IWorkbenchConstructionOptions
 	) {
 		super();
 
@@ -347,12 +351,11 @@ export class BrowserMain extends Disposable {
 		serviceCollection.set(IUriIdentityService, uriIdentityService);
 
 		// User Data Profiles
-		const userDataProfilesService = new BrowserUserDataProfilesService(environmentService, fileService, uriIdentityService, logService);
+		const userDataProfilesService = await this.createUserDataProfilesService(environmentService, fileService, uriIdentityService, logService);
 		serviceCollection.set(IUserDataProfilesService, userDataProfilesService);
 
-		const currentProfile = await this.getCurrentProfile(workspace, userDataProfilesService, environmentService);
-		await userDataProfilesService.setProfileForWorkspace(workspace, currentProfile);
-		const userDataProfileService = new UserDataProfileService(currentProfile);
+		const initialProfile = this.getInitialProfile(workspace, userDataProfilesService, environmentService);
+		const userDataProfileService = new UserDataProfileService(initialProfile);
 		serviceCollection.set(IUserDataProfileService, userDataProfileService);
 
 		// Remote Agent
@@ -362,6 +365,11 @@ export class BrowserMain extends Disposable {
 		const remoteAgentService = this._register(new RemoteAgentService(remoteSocketFactoryService, userDataProfileService, environmentService, productService, remoteAuthorityResolverService, signService, logService));
 		serviceCollection.set(IRemoteAgentService, remoteAgentService);
 		this._register(RemoteFileSystemProviderClient.register(remoteAgentService, fileService, logService));
+		await this.connectUserDataProfilesService(remoteAgentService);
+
+		const currentProfile = await this.getCurrentProfile(workspace, userDataProfilesService, environmentService);
+		await userDataProfileService.updateCurrentProfile(currentProfile);
+		await userDataProfilesService.setProfileForWorkspace(workspace, currentProfile);
 
 		// Default Account
 		const defaultAccountService = this._register(new DefaultAccountService(productService));
@@ -383,7 +391,7 @@ export class BrowserMain extends Disposable {
 		workspace: IAnyWorkspaceIdentifier,
 		environmentService: IBrowserWorkbenchEnvironmentService,
 		userDataProfileService: IUserDataProfileService,
-		userDataProfilesService: BrowserUserDataProfilesService,
+		userDataProfilesService: IBrowserUserDataProfilesService,
 		fileService: FileService,
 		remoteAgentService: IRemoteAgentService,
 		uriIdentityService: IUriIdentityService,
@@ -460,7 +468,7 @@ export class BrowserMain extends Disposable {
 		workspace: IAnyWorkspaceIdentifier,
 		environmentService: IBrowserWorkbenchEnvironmentService,
 		userDataProfileService: IUserDataProfileService,
-		userDataProfilesService: BrowserUserDataProfilesService,
+		userDataProfilesService: IBrowserUserDataProfilesService,
 		fileService: FileService,
 		remoteAgentService: IRemoteAgentService,
 		uriIdentityService: IUriIdentityService,
@@ -474,7 +482,7 @@ export class BrowserMain extends Disposable {
 				serviceCollection.set(IWorkbenchConfigurationService, service);
 				return service;
 			}),
-			this.createStorageService(workspace, logService, userDataProfileService).then(service => {
+			this.createStorageService(workspace, logService, userDataProfileService, userDataProfilesService, remoteAgentService, environmentService).then(service => {
 				serviceCollection.set(IStorageService, service);
 				return service;
 			})
@@ -558,6 +566,7 @@ export class BrowserMain extends Disposable {
 	}
 
 	private registerDeveloperActions(provider: IndexedDBFileSystemProvider): void {
+		const browserMain = this;
 		this._register(registerAction2(class ResetUserDataAction extends Action2 {
 			constructor() {
 				super({
@@ -576,15 +585,12 @@ export class BrowserMain extends Disposable {
 				const storageService = accessor.get(IStorageService);
 				const logService = accessor.get(ILogService);
 				const result = await dialogService.confirm({
-					message: localize('reset user data message', "Would you like to reset your data (settings, keybindings, extensions, snippets and UI State) and reload?")
+					message: browserMain.getResetUserDataMessage()
 				});
 
 				if (result.confirmed) {
 					try {
-						await provider?.reset();
-						if (storageService instanceof BrowserStorageService) {
-							await storageService.clear();
-						}
+						await browserMain.resetUserData(provider, storageService);
 					} catch (error) {
 						logService.error(error);
 						throw error;
@@ -596,7 +602,25 @@ export class BrowserMain extends Disposable {
 		}));
 	}
 
-	protected async createStorageService(workspace: IAnyWorkspaceIdentifier, logService: ILogService, userDataProfileService: IUserDataProfileService): Promise<IStorageService> {
+	protected getResetUserDataMessage(): string {
+		return localize('reset user data message', "Would you like to reset your data (settings, keybindings, extensions, snippets and UI State) and reload?");
+	}
+
+	protected async resetUserData(provider: IndexedDBFileSystemProvider, storageService: IStorageService): Promise<void> {
+		await provider.reset();
+		if (storageService instanceof BrowserStorageService) {
+			await storageService.clear();
+		}
+	}
+
+	protected async createStorageService(
+		workspace: IAnyWorkspaceIdentifier,
+		logService: ILogService,
+		userDataProfileService: IUserDataProfileService,
+		_userDataProfilesService: IBrowserUserDataProfilesService,
+		_remoteAgentService: IRemoteAgentService,
+		_environmentService: IBrowserWorkbenchEnvironmentService,
+	): Promise<IStorageService> {
 		const storageService = new BrowserStorageService(workspace, userDataProfileService, logService);
 
 		try {
@@ -644,7 +668,25 @@ export class BrowserMain extends Disposable {
 		}
 	}
 
-	private async getCurrentProfile(workspace: IAnyWorkspaceIdentifier, userDataProfilesService: BrowserUserDataProfilesService, environmentService: BrowserWorkbenchEnvironmentService): Promise<IUserDataProfile> {
+	protected async createUserDataProfilesService(
+		environmentService: IBrowserWorkbenchEnvironmentService,
+		fileService: IFileService,
+		uriIdentityService: IUriIdentityService,
+		logService: ILogService,
+	): Promise<IBrowserUserDataProfilesService> {
+		return new BrowserUserDataProfilesService(environmentService, fileService, uriIdentityService, logService);
+	}
+
+	protected async connectUserDataProfilesService(_remoteAgentService: IRemoteAgentService): Promise<void> { }
+
+	private getInitialProfile(workspace: IAnyWorkspaceIdentifier, userDataProfilesService: IBrowserUserDataProfilesService, environmentService: BrowserWorkbenchEnvironmentService): IUserDataProfile {
+		const profileName = environmentService.options?.profile?.name ?? environmentService.profile;
+		return (profileName ? userDataProfilesService.profiles.find(profile => profile.name === profileName) : undefined)
+			?? userDataProfilesService.getProfileForWorkspace(workspace)
+			?? userDataProfilesService.defaultProfile;
+	}
+
+	private async getCurrentProfile(workspace: IAnyWorkspaceIdentifier, userDataProfilesService: IBrowserUserDataProfilesService, environmentService: BrowserWorkbenchEnvironmentService): Promise<IUserDataProfile> {
 		const profileName = environmentService.options?.profile?.name ?? environmentService.profile;
 		if (profileName) {
 			const profile = userDataProfilesService.profiles.find(p => p.name === profileName);

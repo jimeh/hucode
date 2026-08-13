@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
-import { BrowserStorageService } from '../../../../workbench/services/storage/browser/storageService.js';
+import { IAtomicApplicationStorageService, isAtomicApplicationStorageService } from '../../../../platform/storage/common/storageService.js';
 import { AUTOMATION_STORAGE_KEY, IAutomationStorageCompareAndSwapResult, IAutomationStorageService } from '../common/automationStorageService.js';
 
 /**
@@ -14,13 +14,13 @@ export class BrowserAutomationStorageService implements IAutomationStorageServic
 
 	declare readonly _serviceBrand: undefined;
 
-	private readonly storageService: BrowserStorageService;
+	private readonly storageService: IAtomicApplicationStorageService;
 
 	constructor(
 		@IStorageService storageService: IStorageService,
 	) {
-		if (!(storageService instanceof BrowserStorageService)) {
-			throw new Error('Browser automation storage requires BrowserStorageService.');
+		if (!isAtomicApplicationStorageService(storageService)) {
+			throw new Error('Browser automation storage requires atomic application storage.');
 		}
 		this.storageService = storageService;
 	}

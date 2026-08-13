@@ -89,6 +89,16 @@ abstract class BaseStorageDatabaseClient extends Disposable implements IStorageD
 		return new Map(items);
 	}
 
+	getValue(key: string): Promise<string | undefined> {
+		const request: ISerializableGetValueRequest = { profile: this.profile, workspace: this.workspace, applicationShared: this.applicationShared, key };
+		return this.channel.call('getValue', request);
+	}
+
+	compareAndSwap(key: string, expectedValue: string | undefined, newValue: string): Promise<ISerializableCompareAndSwapResult> {
+		const request: ISerializableCompareAndSwapRequest = { profile: this.profile, workspace: this.workspace, applicationShared: this.applicationShared, key, expectedValue, newValue };
+		return this.channel.call('compareAndSwap', request);
+	}
+
 	updateItems(request: IUpdateRequest): Promise<void> {
 		const serializableRequest: ISerializableUpdateRequest = { profile: this.profile, workspace: this.workspace, applicationShared: this.applicationShared };
 
@@ -188,10 +198,19 @@ export class ProfileStorageDatabaseClient extends BaseProfileAwareStorageDatabas
 
 export class WorkspaceStorageDatabaseClient extends BaseStorageDatabaseClient implements IStorageDatabase {
 
-	readonly onDidChangeItemsExternal = Event.None; // unsupported for workspace storage because we only ever write from one window
+	private readonly _onDidChangeItemsExternal = this._register(new Emitter<IStorageItemsChangeEvent>());
+	readonly onDidChangeItemsExternal = this._onDidChangeItemsExternal.event;
 
 	constructor(channel: IChannel, workspace: IAnyWorkspaceIdentifier) {
 		super(channel, undefined, workspace);
+		this._register(this.channel.listen<ISerializableItemsChangeEvent>('onDidChangeStorage', { workspace: this.workspace, profile: undefined })((event: ISerializableItemsChangeEvent) => {
+			if (Array.isArray(event.changed) || Array.isArray(event.deleted)) {
+				this._onDidChangeItemsExternal.fire({
+					changed: event.changed ? new Map(event.changed) : undefined,
+					deleted: event.deleted ? new Set(event.deleted) : undefined,
+				});
+			}
+		}));
 	}
 
 	async close(): Promise<void> {
