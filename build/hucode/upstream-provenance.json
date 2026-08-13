@@ -7,8 +7,8 @@
 			"reason": "Hucode adds the typed serve-web user-data storage mode and defaults Hucode launches to server-backed storage",
 			"upstream": {
 				"path": "cli/src/commands/args.rs",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "ef6daa0742beade47c33f286600b31bbf04e1cb2"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "6579a598586b277e4b87971d55e3fa62b41776ef"
 			},
 			"testSuites": []
 		},
@@ -106,8 +106,8 @@
 			"reason": "Hucode registers separate web-profile and storage channels, scopes remote file admission to WebUser, and releases per-connection WebUser handles on final disconnect",
 			"upstream": {
 				"path": "src/vs/server/node/serverServices.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "6094d429f9a286ac25590365d1c726eb0047e963"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "49c932485e3df007f38e41f86cd2ad523e566fd7"
 			},
 			"testSuites": []
 		},
@@ -161,8 +161,8 @@
 			"reason": "Hucode narrows BrowserMain construction seams for profile and storage backends while preserving the browser default path",
 			"upstream": {
 				"path": "src/vs/workbench/browser/web.main.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "ee42b29aad34c7efd7b7c28efdf477a7e0e3cb5f"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "5e4099094acd9b3e04496caeb8aba518b012b8a1"
 			},
 			"testSuites": []
 		},
@@ -172,8 +172,8 @@
 			"reason": "Hucode selects the trusted remote user-data home only in server mode",
 			"upstream": {
 				"path": "src/vs/workbench/services/environment/browser/environmentService.ts",
-				"lastSyncedBaseline": "1.132.0",
-				"blob": "98215099c768f29c9f56ec2ec2700d4a172ac5a1"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "a0efae00fc1ce5844d6149200fd6198c9dccd2ae"
 			},
 			"testSuites": []
 		},
@@ -216,8 +216,8 @@
 			"reason": "Omni owns a separate title bar Part derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/parts/titlebarPart.ts",
-				"lastSyncedBaseline": "1.130.0",
-				"blob": "8f92e542f8f1dd21d66b076d7684f448ab904d60"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "7e2674a60a43ebe754156f625eec34c1b2dd1eb2"
 			},
 			"testSuites": []
 		},
@@ -227,8 +227,8 @@
 			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/workbench.ts",
-				"lastSyncedBaseline": "1.132.0",
-				"blob": "1ee6deedd6a5ed792c9dabca070284ae41f78355"
+				"lastSyncedBaseline": "1.133.0",
+				"blob": "37a08832c1ff5835b6325c51639d5f9489952846"
 			},
 			"testSuites": []
 		},

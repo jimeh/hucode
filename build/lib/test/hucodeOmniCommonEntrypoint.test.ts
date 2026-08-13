@@ -41,8 +41,16 @@ const omittedFromOmni = new Map([
 		'Registers the local Agent Sessions provider Omni deliberately avoids.',
 	],
 	[
+		'src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHost.contribution.js',
+		'Registers the standard Agent Host integration replaced by Omni services.',
+	],
+	[
 		'src/vs/workbench/contrib/chat/browser/chat.view.contribution.js',
 		'Chat view UI is not part of Omni.',
+	],
+	[
+		'src/vs/workbench/contrib/chat/browser/chatInputWindow/chatInputWindow.contribution.js',
+		'Floating chat input UI is not part of Omni.',
 	],
 	[
 		'src/vs/workbench/contrib/mcp/browser/mcp.view.contribution.js',

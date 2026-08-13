@@ -285,20 +285,23 @@ suite('Hucode upstream provenance', () => {
 		].sort();
 		const expectedBaselineByPath = new Map<string, string>([
 			['src/vs/hucode/browser/parts/auxiliaryBarPart.ts', '1.130.0'],
-			['src/vs/hucode/browser/parts/titlebarPart.ts', '1.130.0'],
 			['cli/src/commands/serve_web.rs', '1.132.0'],
 			['src/vs/hucode/browser/parts/panelPart.ts', '1.132.0'],
-			['src/vs/hucode/browser/workbench.ts', '1.132.0'],
 			['src/vs/server/node/webClientServer.ts', '1.132.0'],
-			[
-				'src/vs/workbench/services/environment/browser/'
-					+ 'environmentService.ts',
-				'1.132.0',
-			],
 			[
 				'src/vs/workbench/services/extensionManagement/browser/'
 					+ 'extensionEnablementService.ts',
 				'1.132.0',
+			],
+			['cli/src/commands/args.rs', '1.133.0'],
+			['src/vs/hucode/browser/parts/titlebarPart.ts', '1.133.0'],
+			['src/vs/hucode/browser/workbench.ts', '1.133.0'],
+			['src/vs/server/node/serverServices.ts', '1.133.0'],
+			['src/vs/workbench/browser/web.main.ts', '1.133.0'],
+			[
+				'src/vs/workbench/services/environment/browser/'
+					+ 'environmentService.ts',
+				'1.133.0',
 			],
 		]);
 
