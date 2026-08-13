@@ -100,6 +100,28 @@
 	// ###                                                                 ###
 	// #######################################################################
 
+	const messagePortResponseListeners = new Map<
+		string,
+		Map<string, (event: Electron.IpcRendererEvent, nonce: string) => void>
+	>();
+
+	function removeMessagePortResponseListener(
+		responseChannel: string,
+		nonce: string
+	): void {
+		const channelListeners = messagePortResponseListeners.get(responseChannel);
+		const listener = channelListeners?.get(nonce);
+		if (!listener) {
+			return;
+		}
+
+		ipcRenderer.off(responseChannel, listener);
+		channelListeners!.delete(nonce);
+		if (channelListeners!.size === 0) {
+			messagePortResponseListeners.delete(responseChannel);
+		}
+	}
+
 	const globals = {
 
 		/**
@@ -150,19 +172,32 @@
 
 			acquire(responseChannel: string, nonce: string) {
 				if (validateIPC(responseChannel)) {
+					removeMessagePortResponseListener(responseChannel, nonce);
 					const responseListener = (e: Electron.IpcRendererEvent, responseNonce: string) => {
 						// validate that the nonce from the response is the same
 						// as when requested. and if so, use `postMessage` to
 						// send the `MessagePort` safely over, even when context
 						// isolation is enabled
 						if (nonce === responseNonce) {
-							ipcRenderer.off(responseChannel, responseListener);
+							removeMessagePortResponseListener(responseChannel, nonce);
 							window.postMessage(nonce, '*', e.ports);
 						}
 					};
 
 					// handle reply from main
+					let channelListeners = messagePortResponseListeners.get(responseChannel);
+					if (!channelListeners) {
+						channelListeners = new Map();
+						messagePortResponseListeners.set(responseChannel, channelListeners);
+					}
+					channelListeners.set(nonce, responseListener);
 					ipcRenderer.on(responseChannel, responseListener);
+				}
+			},
+
+			cancel(responseChannel: string, nonce: string) {
+				if (validateIPC(responseChannel)) {
+					removeMessagePortResponseListener(responseChannel, nonce);
 				}
 			}
 		},

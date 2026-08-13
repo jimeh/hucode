@@ -42,6 +42,7 @@ export interface IWindowsMainService {
 	openExistingWindow(window: ICodeWindow, openConfig: IOpenConfiguration): void;
 
 	openAgentsWindow(openConfig: IOpenConfiguration, folderUri?: URI, sessionResource?: URI, source?: AgentsWindowOpenSource): Promise<ICodeWindow[]>;
+	openOmniWindow(openConfig: IOpenConfiguration): Promise<ICodeWindow[]>;
 
 	sendToFocused(channel: string, ...args: unknown[]): void;
 	sendToOpeningWindow(channel: string, ...args: unknown[]): void;
@@ -101,6 +102,7 @@ export interface IOpenConfiguration extends IBaseOpenConfiguration {
 	readonly forceNewTabbedWindow?: boolean;
 	readonly forceReuseWindow?: boolean;
 	readonly forceEmpty?: boolean;
+	readonly forceOmniWindow?: boolean;
 	readonly diffMode?: boolean;
 	readonly mergeMode?: boolean;
 	addMode?: boolean;
