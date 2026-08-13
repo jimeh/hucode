@@ -342,6 +342,11 @@
 	padding: 32px;
 }
 
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.hucode-omni-host-empty {
+	background: var(--modern-ui-shell-background, var(--vscode-titleBar-activeBackground));
+}
+
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-empty.hidden {
 	display: none;
