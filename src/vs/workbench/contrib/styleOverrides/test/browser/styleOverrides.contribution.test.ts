@@ -149,12 +149,28 @@ suite('StyleOverridesContribution', () => {
 	});
 
 	test('pane composite actions fill regular and Agents headers', () => {
+		// Serve-web can load the base pane-composite stylesheet after the Modern UI
+		// stylesheet. Mirror that order so the Modern UI geometry must win by
+		// specificity rather than relying on module load order.
+		const lateBaseStyle = document.createElement('style');
+		lateBaseStyle.textContent = `
+			.monaco-workbench .pane-composite-part > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item .active-item-indicator,
+			.monaco-workbench .pane-composite-part > .header-or-footer > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item .active-item-indicator {
+				top: -4px;
+				left: 10px;
+				width: calc(100% - 20px);
+			}
+		`;
+		document.head.appendChild(lateBaseStyle);
+		store.add(toDisposable(() => lateBaseStyle.remove()));
+
 		const regularRoot = document.createElement('div');
 		regularRoot.className = 'monaco-workbench style-override modern-ui-tabs';
 		document.body.appendChild(regularRoot);
 		store.add(toDisposable(() => regularRoot.remove()));
 		// Taller container than the fixed 32px override, so the override is verified rather than a 100% fallback.
 		const regular = createCompositeAction(regularRoot, 40, true);
+		regular.actionItem.style.width = '100px';
 		const regularIcon = createCompositeAction(regularRoot, 40, true, true);
 		const regularIconBadge = appendElement(regularIcon.actionItem, 'badge compact');
 		const regularIconBadgeContent = appendElement(regularIconBadge, 'badge-content');
@@ -176,6 +192,10 @@ suite('StyleOverridesContribution', () => {
 		assert.deepStrictEqual({
 			regularTargetHeight: targetWindow.getComputedStyle(regular.actionItem).height,
 			regularIndicatorHeight: targetWindow.getComputedStyle(regular.indicator).height,
+			regularIndicatorTop: targetWindow.getComputedStyle(regular.indicator).top,
+			regularIndicatorLeft: targetWindow.getComputedStyle(regular.indicator).left,
+			regularIndicatorRight: targetWindow.getComputedStyle(regular.indicator).right,
+			regularIndicatorWidth: targetWindow.getComputedStyle(regular.indicator).width,
 			regularIconBadgeTop: targetWindow.getComputedStyle(regularIconBadgeContent).top,
 			regularIconBadgeRight: targetWindow.getComputedStyle(regularIconBadgeContent).right,
 			agentsTargetHeight: targetWindow.getComputedStyle(agents.actionItem).height,
@@ -189,6 +209,10 @@ suite('StyleOverridesContribution', () => {
 		}, {
 			regularTargetHeight: '32px',
 			regularIndicatorHeight: '24px',
+			regularIndicatorTop: '12px',
+			regularIndicatorLeft: '2px',
+			regularIndicatorRight: '2px',
+			regularIndicatorWidth: '96px',
 			regularIconBadgeTop: '13px',
 			regularIconBadgeRight: '2px',
 			agentsTargetHeight: '35px',
