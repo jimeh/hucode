@@ -46,7 +46,7 @@ const COMMIT_IN_VERSION: &str = match constants::VSCODE_CLI_COMMIT {
 	Some(c) => c,
 	None => "unknown",
 };
-const NUMBER_IN_VERSION: &str = match constants::VSCODE_CLI_VERSION {
+const NUMBER_IN_VERSION: &str = match constants::DISPLAY_VERSION {
 	Some(c) => c,
 	None => "dev",
 };
@@ -220,6 +220,16 @@ pub struct ServeWebArgs {
 	/// Specifies the directory that server data is kept in.
 	#[clap(long)]
 	pub server_data_dir: Option<String>,
+	/// Selects where serve-web settings, profiles, and workbench state are stored.
+	#[clap(long, value_enum, default_value_t = ServeWebUserDataStorage::Server)]
+	pub user_data_storage: ServeWebUserDataStorage,
+	/// Serve the regular workbench at the root URL instead of the Hucode Omni
+	/// Projects shell.
+	#[clap(long, conflicts_with = "omni")]
+	pub no_omni: bool,
+	/// Legacy compatibility option. Omni is enabled by default.
+	#[clap(long, hide = true)]
+	pub omni: bool,
 	/// The workspace folder to open when no input is specified in the browser URL.
 	#[clap(long)]
 	pub default_folder: Option<String>,
@@ -232,6 +242,29 @@ pub struct ServeWebArgs {
 	/// Use a specific commit SHA for the client.
 	#[clap(long)]
 	pub commit_id: Option<String>,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServeWebUserDataStorage {
+	Browser,
+	#[default]
+	Server,
+}
+
+impl fmt::Display for ServeWebUserDataStorage {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Browser => write!(f, "browser"),
+			Self::Server => write!(f, "server"),
+		}
+	}
+}
+
+impl ServeWebArgs {
+	/// Returns whether serve-web should expose the Hucode Omni Projects shell.
+	pub fn omni_enabled(&self) -> bool {
+		!self.no_omni
+	}
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -1061,4 +1094,79 @@ pub struct LoginArgs {
 pub enum AuthProvider {
 	Microsoft,
 	Github,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn parse_serve_web(args: &[&str]) -> ServeWebArgs {
+		let cli = IntegratedCli::try_parse_from(args).unwrap();
+		match cli.core.subcommand {
+			Some(Commands::ServeWeb(args)) => args,
+			_ => panic!("expected serve-web command"),
+		}
+	}
+
+	#[test]
+	fn serve_web_enables_omni_by_default() {
+		let args = parse_serve_web(&["hucode", "serve-web"]);
+
+		assert!(args.omni_enabled());
+	}
+
+	#[test]
+	fn serve_web_can_disable_omni() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--no-omni"]);
+
+		assert!(!args.omni_enabled());
+	}
+
+	#[test]
+	fn serve_web_accepts_legacy_omni_option() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--omni"]);
+
+		assert!(args.omni_enabled());
+	}
+
+	#[test]
+	fn serve_web_rejects_conflicting_omni_options() {
+		let error = IntegratedCli::try_parse_from(["hucode", "serve-web", "--omni", "--no-omni"])
+			.unwrap_err();
+
+		assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+	}
+
+	#[test]
+	fn serve_web_stores_user_data_on_server_by_default() {
+		let args = parse_serve_web(&["hucode", "serve-web"]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
+	}
+
+	#[test]
+	fn serve_web_accepts_browser_user_data_storage() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--user-data-storage=browser"]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Browser);
+	}
+
+	#[test]
+	fn serve_web_accepts_server_user_data_storage() {
+		let args = parse_serve_web(&["hucode", "serve-web", "--user-data-storage=server"]);
+
+		assert_eq!(args.user_data_storage, ServeWebUserDataStorage::Server);
+	}
+
+	#[test]
+	fn serve_web_rejects_unknown_user_data_storage() {
+		let error = IntegratedCli::try_parse_from([
+			"hucode",
+			"serve-web",
+			"--user-data-storage=elsewhere",
+		])
+		.unwrap_err();
+
+		assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+	}
 }

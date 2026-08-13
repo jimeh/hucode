@@ -46,6 +46,18 @@ import { mainWindow } from '../../../../base/browser/window.js';
  */
 const EDITOR_FRAME_BORDER_WIDTH = 1;
 
+/** Returns whether an editor part participates in the main floating-card layout. */
+export function shouldApplyFloatingEditorLayout(
+	editorWindowId: number,
+	mainWindowId: number,
+	floatingPanelsEnabled: boolean,
+	modalEditor: boolean
+): boolean {
+	return editorWindowId === mainWindowId &&
+		floatingPanelsEnabled &&
+		!modalEditor;
+}
+
 export interface IEditorPartUIState {
 	readonly serializedGrid: ISerializedGrid;
 	readonly activeGroup: GroupIdentifier;
@@ -1424,9 +1436,16 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 		this.left = left;
 
 		// When the floating panels experiment is enabled, reserve a margin around the
-		// main editor so it floats like the side bar and panel cards. Scope to the main
-		// window (auxiliary editor windows do not apply the matching CSS).
-		if (this.windowId === mainWindow.vscodeWindowId && this.layoutService.isFloatingPanelsEnabled()) {
+		// main editor so it floats like the side bar and panel cards. The editor has
+		// no top margin (it stays flush with the title bar). Scope to the main window
+		// (auxiliary editor windows do not apply the matching CSS). The matching
+		// `margin` is applied in CSS (`.floating-panels .part.editor`).
+		if (shouldApplyFloatingEditorLayout(
+			this.windowId,
+			mainWindow.vscodeWindowId,
+			this.layoutService.isFloatingPanelsEnabled(),
+			this.element.classList.contains('modal-editor-part')
+		)) {
 
 			// When the editor becomes the outermost card on a side (no floating part
 			// sits between it and the window edge) it adopts the same doubled gutter the
@@ -1444,10 +1463,8 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 			height = Math.max(0, height - top - bottom);
 
 			// Reserve space for the Modern UI editor border (styleOverrides/media/editorBorder.css) so content doesn't get clipped.
-			if (!this.element.classList.contains('modal-editor-part')) {
-				width = Math.max(0, width - EDITOR_FRAME_BORDER_WIDTH * 2);
-				height = Math.max(0, height - EDITOR_FRAME_BORDER_WIDTH * 2);
-			}
+			width = Math.max(0, width - EDITOR_FRAME_BORDER_WIDTH * 2);
+			height = Math.max(0, height - EDITOR_FRAME_BORDER_WIDTH * 2);
 
 			this.element.classList.toggle('floating-editor-outer-left', outerLeft);
 			this.element.classList.toggle('floating-editor-outer-right', outerRight);

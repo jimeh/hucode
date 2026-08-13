@@ -55,6 +55,7 @@ import { getTemplates as getTaskTemplates } from '../common/taskTemplates.js';
 
 import * as TaskConfig from '../common/taskConfiguration.js';
 import { TerminalTaskSystem } from './terminalTaskSystem.js';
+import { PersistentTaskAction, TaskShutdownState } from './hucodeTaskShutdown.js';
 
 import { IQuickInputService, IQuickPickItem, IQuickPickSeparator, QuickPickInput } from '../../../../platform/quickinput/common/quickInput.js';
 
@@ -72,14 +73,13 @@ import { IResolvedTextEditorModel, ITextModelService } from '../../../../editor/
 import { TextEditorSelectionRevealType } from '../../../../platform/editor/common/editor.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { VirtualWorkspaceContext } from '../../../common/contextkeys.js';
 import { EditorResourceAccessor, SaveReason } from '../../../common/editor.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
-import { ILifecycleService, ShutdownReason, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
@@ -243,7 +243,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 	private _onDidRegisterSupportedExecutions = this._register(new Emitter<void>());
 	private _onDidRegisterAllSupportedExecutions = this._register(new Emitter<void>());
 	private _onDidChangeTaskSystemInfo = this._register(new Emitter<void>());
-	private _willRestart: boolean = false;
+	private readonly _shutdownState: TaskShutdownState;
 	public onDidChangeTaskSystemInfo = this._onDidChangeTaskSystemInfo.event;
 	private _onDidReconnectToTasks = this._register(new Emitter<void>());
 	public onDidReconnectToTasks = this._onDidReconnectToTasks.event;
@@ -306,6 +306,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		this._taskSystem = undefined;
 		this._taskSystemListeners = undefined;
 		this._outputChannel = this._outputService.getChannel(AbstractTaskService.OutputChannelId)!;
+		this._shutdownState = this._register(new TaskShutdownState(this._lifecycleService));
 		this._providers = new Map<number, ITaskProvider>();
 		this._providerTypes = new Map<number, string>();
 		this._taskSystemInfos = new Map<string, ITaskSystemInfo[]>();
@@ -394,9 +395,6 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 			}
 			return task._label;
 		});
-		this._register(this._lifecycleService.onBeforeShutdown(e => {
-			this._willRestart = e.reason !== ShutdownReason.RELOAD;
-		}));
 		this._register(this.onDidStateChange(async e => {
 			this._log(nls.localize('taskEvent', 'Task Event kind: {0}', e.kind), true);
 			switch (e.kind) {
@@ -437,14 +435,26 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 					break;
 			}
 			if (e.kind === TaskEventKind.Changed) {
-				// no-op
-			} else if ((this._willRestart || (e.kind === TaskEventKind.Terminated && e.exitReason === TerminalExitReason.User)) && e.taskId) {
-				const key = e.__task.getKey();
-				if (key) {
-					this.removePersistentTask(key);
+				return;
+			}
+
+			switch (this._shutdownState.getPersistentTaskAction(
+				e.kind,
+				e.kind === TaskEventKind.Terminated ? e.exitReason : undefined,
+				!!e.taskId
+			)) {
+				case PersistentTaskAction.Remove: {
+					const key = e.__task.getKey();
+					if (key) {
+						this.removePersistentTask(key);
+					}
+					break;
 				}
-			} else if (e.kind === TaskEventKind.Start && e.__task && e.__task.getWorkspaceFolder()) {
-				this._setPersistentTask(e.__task);
+				case PersistentTaskAction.Save:
+					if (e.__task && e.__task.getWorkspaceFolder()) {
+						this._setPersistentTask(e.__task);
+					}
+					break;
 			}
 		}));
 		this._waitForAllSupportedExecutions = new Promise(resolve => {

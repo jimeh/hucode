@@ -11,7 +11,7 @@ import { Event } from '../../../base/common/event.js';
 import { hash } from '../../../base/common/hash.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
-import { IClipboardService } from '../common/clipboardService.js';
+import { IClipboardService, isDefaultClipboardType } from '../common/clipboardService.js';
 import { ILayoutService } from '../../layout/browser/layoutService.js';
 import { ILogService } from '../../log/common/log.js';
 
@@ -124,8 +124,8 @@ export class BrowserClipboardService extends Disposable implements IClipboardSer
 		// Clear resources given we are writing text
 		this.clearResourcesState();
 
-		// With type: only in-memory is supported
-		if (type) {
+		// Non-default clipboard types are only supported in memory.
+		if (!isDefaultClipboardType(type)) {
 			this.mapTextToType.set(type, text);
 			this.logService.trace('BrowserClipboardService#writeText');
 			return;
@@ -143,13 +143,17 @@ export class BrowserClipboardService extends Disposable implements IClipboardSer
 		// due to security policies.
 		try {
 			this.logService.trace('before navigator.clipboard.writeText');
-			return await getActiveWindow().navigator.clipboard.writeText(text);
+			return await this.writeTextToSystemClipboard(text);
 		} catch (error) {
 			console.error(error);
 		}
 
 		// Fallback to textarea and execCommand solution
 		this.fallbackWriteText(text);
+	}
+
+	protected writeTextToSystemClipboard(text: string): Promise<void> {
+		return getActiveWindow().navigator.clipboard.writeText(text);
 	}
 
 	private fallbackWriteText(text: string): void {
@@ -177,8 +181,8 @@ export class BrowserClipboardService extends Disposable implements IClipboardSer
 
 	async readText(type?: string): Promise<string> {
 		this.logService.trace('BrowserClipboardService#readText called with type:', type);
-		// With type: only in-memory is supported
-		if (type) {
+		// Non-default clipboard types are only supported in memory.
+		if (!isDefaultClipboardType(type)) {
 			const readText = this.mapTextToType.get(type) || '';
 			this.logService.trace('BrowserClipboardService#readText text.length:', readText.length);
 			return readText;
@@ -188,7 +192,7 @@ export class BrowserClipboardService extends Disposable implements IClipboardSer
 		// as we have seen DOMExceptions in certain browsers
 		// due to security policies.
 		try {
-			const readText = await getActiveWindow().navigator.clipboard.readText();
+			const readText = await this.readTextFromSystemClipboard();
 			this.logService.trace('BrowserClipboardService#readText text.length:', readText.length);
 			return readText;
 		} catch (error) {
@@ -196,6 +200,10 @@ export class BrowserClipboardService extends Disposable implements IClipboardSer
 		}
 
 		return '';
+	}
+
+	protected readTextFromSystemClipboard(): Promise<string> {
+		return getActiveWindow().navigator.clipboard.readText();
 	}
 
 	private findText = ''; // unsupported in web (only in-memory)

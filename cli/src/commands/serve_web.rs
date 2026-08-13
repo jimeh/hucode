@@ -847,6 +847,11 @@ impl ConnectionManager {
 			cmd.arg("--server-data-dir");
 			cmd.arg(a);
 		}
+		cmd.arg("--hucode-web-user-data-storage");
+		cmd.arg(args.args.user_data_storage.to_string());
+		if args.args.omni_enabled() {
+			cmd.arg("--hucode-web-omni-root");
+		}
 		if args.args.without_connection_token {
 			cmd.arg("--without-connection-token");
 		}

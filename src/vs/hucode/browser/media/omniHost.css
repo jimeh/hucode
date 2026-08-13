@@ -1,0 +1,348 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host > .content {
+	padding: 0;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-web-window
+	.part.titlebar {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-web-window
+	.part.hucode-omni-host {
+	margin: 0;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar {
+	box-shadow: none;
+	pointer-events: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.hucode-omni-host-empty
+	.part.titlebar {
+	pointer-events: auto;
+	-webkit-app-region: drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .titlebar-container {
+	background: transparent !important;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.hucode-omni-host-empty
+	.part.titlebar > .hucode-omni-titlebar-container,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.hucode-omni-host-empty
+	.part.titlebar > .titlebar-container {
+	pointer-events: auto;
+	-webkit-app-region: drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-left {
+	display: flex !important;
+	position: relative;
+	z-index: 2501;
+	align-items: center;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-drag-region {
+	display: block !important;
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 100%;
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.hucode-omni-host-empty
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-drag-region {
+	-webkit-app-region: drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-left
+	.action-item,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-left
+	.left-toolbar-container,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-left
+	.action-label {
+	pointer-events: auto;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-center,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.titlebar > .hucode-omni-titlebar-container > .titlebar-right {
+	display: none !important;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.sidebar {
+	position: relative;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.sidebar > .hucode-omni-projects-title {
+	box-sizing: border-box;
+	display: flex;
+	position: relative;
+	align-items: center;
+	gap: 8px;
+	height: 35px;
+	line-height: 22px;
+	min-width: 0;
+	padding: 0 8px;
+	border-bottom: 1px solid var(--vscode-titleBar-border);
+	-webkit-app-region: drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.sidebar > .hucode-omni-projects-title > .titlebar-drag-region {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	-webkit-app-region: drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.nosidebar
+	.part.sidebar,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.nosidebar
+	.part.sidebar * {
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-navigation-actions,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-actions {
+	display: flex;
+	position: relative;
+	align-items: center;
+	z-index: 1;
+	flex: 0 0 auto;
+	height: 100%;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-actions {
+	margin-left: auto;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-navigation-actions
+	.monaco-toolbar
+	.actions-container,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-title-actions
+	.monaco-toolbar
+	.actions-container {
+	gap: 4px;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-projects-view {
+	height: 100%;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.sidebar::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: 1px;
+	height: 100%;
+	background: var(--vscode-panel-border, transparent);
+	pointer-events: none;
+	z-index: 36;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar > .hucode-omni-projects-title {
+	height: 32px;
+	border-bottom-color: transparent;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.hucode-omni-projects-title-navigation-actions,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.hucode-omni-projects-title-actions {
+	transform: translateY(2.5px);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.monaco-sash.vertical:not(.part .monaco-sash)::before {
+	top: calc(32px + var(--vscode-spacing-size20) + 1px);
+	bottom: calc(var(--vscode-spacing-size40) * 2);
+	height: auto;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	border: 0 !important;
+	border-radius: 0;
+	background: transparent !important;
+	overflow: visible;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar > .content {
+	/* The shell title is 32px; the extra pixel aligns this card with the
+	 * standard workbench cards at y=35. Keep the inset arithmetic in sync
+	 * with ProjectsPart.layout. */
+	box-sizing: border-box;
+	width: calc(100% - (var(--vscode-spacing-size40) * 2)) !important;
+	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - (var(--vscode-spacing-size40) * 2)) !important;
+	margin: calc(var(--vscode-spacing-size20) + 1px) 0
+		calc(var(--vscode-spacing-size40) * 2)
+		calc(var(--vscode-spacing-size40) * 2);
+	border: 1px solid var(--vscode-surface-border, var(--vscode-widget-border, transparent)) !important;
+	border-radius: var(--vscode-cornerRadius-large);
+	background: var(--vscode-surface-background);
+	overflow: hidden;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
+	.part.sidebar::after {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host > .content .monaco-editor,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host > .content .monaco-editor .margin,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host > .content .monaco-editor .monaco-editor-background,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host {
+	background: var(--vscode-editor-background);
+	border: 0;
+	border-radius: 0;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .split-view-view,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .pane,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .pane > .pane-body,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .monaco-scrollable-element,
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .split-view-container {
+	height: 100%;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .pane > .pane-header {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.part.hucode-omni-host .pane > .pane-body {
+	top: 0 !important;
+	border: 0;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-view {
+	height: 100%;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-root {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-screenshot {
+	position: fixed;
+	pointer-events: none;
+	visibility: hidden;
+	opacity: 0;
+	z-index: 1;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-screenshot-image {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	object-position: top left;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-screenshot.visible {
+	visibility: visible;
+	opacity: 1;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-surface {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	background: var(--vscode-editor-background);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-iframe {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: var(--vscode-editor-background);
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-iframe.hidden {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-surface.hidden {
+	display: none;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 1;
+	min-height: 0;
+	background: var(--vscode-editor-background);
+	color: var(--vscode-descriptionForeground);
+	text-align: center;
+	padding: 32px;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-empty.hidden {
+	display: none;
+}
