@@ -190,7 +190,7 @@
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
 	.monaco-sash.vertical:not(.part .monaco-sash)::before {
-	top: calc(32px + var(--vscode-spacing-size20) + 1px);
+	top: calc(32px + var(--vscode-spacing-size20) + var(--vscode-spacing-size40) + 1px);
 	bottom: calc(var(--vscode-spacing-size40) * 2);
 	height: auto;
 }
@@ -208,13 +208,13 @@
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
 	.part.sidebar > .content {
-	/* The shell title is 32px; the extra pixel aligns this card with the
-	 * standard workbench cards at y=35. Keep the inset arithmetic in sync
-	 * with ProjectsPart.layout. */
+	/* VS Code 1.133 adds the 4px floating-panel gutter below the 32px shell
+	 * title; the extra pixel preserves the Projects card's baseline alignment.
+	 * Keep the inset arithmetic in sync with ProjectsPart.layout. */
 	box-sizing: border-box;
 	width: calc(100% - (var(--vscode-spacing-size40) * 2)) !important;
-	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - (var(--vscode-spacing-size40) * 2)) !important;
-	margin: calc(var(--vscode-spacing-size20) + 1px) 0
+	height: calc(100% - 32px - var(--vscode-spacing-size20) - var(--vscode-spacing-size40) - 1px - (var(--vscode-spacing-size40) * 2)) !important;
+	margin: calc(var(--vscode-spacing-size20) + var(--vscode-spacing-size40) + 1px) 0
 		calc(var(--vscode-spacing-size40) * 2)
 		calc(var(--vscode-spacing-size40) * 2);
 	border: 1px solid var(--vscode-surface-border, var(--vscode-widget-border, transparent)) !important;

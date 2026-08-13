@@ -10,6 +10,10 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { Parts } from
 	'../../../../workbench/services/layout/browser/layoutService.js';
+import {
+	TITLE_BAR_ACTIVE_BACKGROUND,
+	TITLE_BAR_INACTIVE_BACKGROUND,
+} from '../../../../workbench/common/theme.js';
 import { shouldApplyFloatingEditorLayout } from
 	'../../../../workbench/browser/parts/editor/editorPart.js';
 import { AuxiliaryBarPart } from
@@ -18,6 +22,13 @@ import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
 import { PanelPart } from '../../../browser/parts/panelPart.js';
 import { ProjectsPart } from '../../../browser/parts/projectsPart.js';
 import { TitlebarPart } from '../../../browser/parts/titlebarPart.js';
+import {
+	hucodeOmniTitleBackground,
+	hucodeOmniTitleForeground,
+	sessionsSidebarBackground,
+	sessionsSidebarHeaderBackground,
+	sessionsSidebarHeaderForeground,
+} from '../../../common/theme.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
 	IHucodeHostedWorkbenchInstance,
@@ -83,9 +94,121 @@ suite('Omni Parts', () => {
 				{ width: 300, height: 900 },
 			],
 			widgetLayouts: [
-				{ width: 290, height: 887 },
+				{ width: 290, height: 883 },
 				{ width: 300, height: 900 },
 			],
+		});
+	});
+
+	test('ProjectsPart consumes the Modern UI shell background without changing classic colors', () => {
+		const container = mainWindow.document.createElement('div');
+		const titleAreaElement = mainWindow.document.createElement('div');
+		let floating = true;
+		const colors = new Map<string, string>([
+			[sessionsSidebarBackground, '#101112'],
+			[sessionsSidebarHeaderBackground, '#121314'],
+			[sessionsSidebarHeaderForeground, '#f0f1f2'],
+		]);
+		const host = prototypeHost(ProjectsPart.prototype, {
+			titleAreaElement,
+			layoutService: { isFloatingPanelsEnabled: () => floating },
+			getContainer: () => container,
+			getColor: (id: string) => colors.get(id) ?? null,
+		});
+
+		ProjectsPart.prototype.updateStyles.call(host);
+		const modern = {
+			containerBackground: container.style.backgroundColor,
+			titleBackground: titleAreaElement.style.backgroundColor,
+			titleForeground: titleAreaElement.style.color,
+		};
+
+		floating = false;
+		ProjectsPart.prototype.updateStyles.call(host);
+
+		assert.deepStrictEqual({
+			modern,
+			classic: {
+				containerBackground: container.style.backgroundColor,
+				titleBackground: titleAreaElement.style.backgroundColor,
+				titleForeground: titleAreaElement.style.color,
+			},
+		}, {
+			modern: {
+				containerBackground: 'rgb(16, 17, 18)',
+				titleBackground: 'var(--modern-ui-shell-background)',
+				titleForeground: 'rgb(240, 241, 242)',
+			},
+			classic: {
+				containerBackground: 'rgb(16, 17, 18)',
+				titleBackground: 'rgb(18, 19, 20)',
+				titleForeground: 'rgb(240, 241, 242)',
+			},
+		});
+	});
+
+	test('TitlebarPart publishes active and inactive Modern UI shell backgrounds', () => {
+		const element = mainWindow.document.createElement('div');
+		const container = mainWindow.document.createElement('div');
+		let floating = true;
+		const colors = new Map<string, string>([
+			[TITLE_BAR_ACTIVE_BACKGROUND, '#191A1B'],
+			[TITLE_BAR_INACTIVE_BACKGROUND, '#202122'],
+			[hucodeOmniTitleBackground, '#121314'],
+			[hucodeOmniTitleForeground, '#f0f1f2'],
+		]);
+		const host = prototypeHost(TitlebarPart.prototype, {
+			element,
+			isInactive: false,
+			layoutService: {
+				isFloatingPanelsEnabled: () => floating,
+				getContainer: () => container,
+			},
+			getColor: (id: string) => colors.get(id) ?? null,
+		});
+
+		TitlebarPart.prototype.updateStyles.call(host);
+		const active = {
+			background: element.style.backgroundColor,
+			shellBackground: container.style.getPropertyValue(
+				'--modern-ui-shell-background'
+			),
+		};
+
+		Reflect.set(host, 'isInactive', true);
+		TitlebarPart.prototype.updateStyles.call(host);
+		const inactive = {
+			background: element.style.backgroundColor,
+			shellBackground: container.style.getPropertyValue(
+				'--modern-ui-shell-background'
+			),
+		};
+
+		floating = false;
+		TitlebarPart.prototype.updateStyles.call(host);
+
+		assert.deepStrictEqual({
+			active,
+			inactive,
+			classic: {
+				background: element.style.backgroundColor,
+				shellBackground: container.style.getPropertyValue(
+					'--modern-ui-shell-background'
+				),
+			},
+		}, {
+			active: {
+				background: 'rgb(25, 26, 27)',
+				shellBackground: '#191A1B',
+			},
+			inactive: {
+				background: 'rgb(32, 33, 34)',
+				shellBackground: '#202122',
+			},
+			classic: {
+				background: 'rgb(18, 19, 20)',
+				shellBackground: '',
+			},
 		});
 	});
 

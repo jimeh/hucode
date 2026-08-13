@@ -7,7 +7,7 @@
 /* ===== Modern action label styling for sessions auxiliary bar ===== */
 
 /* Base label: lowercase text + heavier weight + pill padding */
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:not(.icon) .action-label {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:not(.icon) .action-label {
 	text-transform: capitalize;
 	font-weight: 500;
 	border-radius: 4px;
@@ -16,12 +16,12 @@
 	line-height: 22px;
 }
 
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item {
 	padding-left: 0;
 	padding-right: 0;
 }
 
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .badge {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .badge {
 	margin-left: -4px;
 	padding-right: 6px;
 }
@@ -33,15 +33,15 @@
 }
 
 /* Hide the underline indicator for non-focused items, but keep it for keyboard focus */
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:not(:focus-visible) .active-item-indicator:before {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:not(:focus-visible) .active-item-indicator:before {
 	display: none !important;
 }
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:focus-visible .active-item-indicator:before {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item:focus-visible .active-item-indicator:before {
 	display: block !important;
 }
 
 /* Active/checked state: background container instead of underline */
-.hucode-omni-workbench .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item.checked {
+.hucode-omni-workbench:not(.modern-ui-tabs) .part.auxiliarybar > .title > .composite-bar-container > .composite-bar > .monaco-action-bar .action-item.checked {
 	background-color: var(--vscode-activityBarTop-activeBackground, color-mix(in srgb, var(--vscode-sideBarTitle-foreground) 5%, transparent)) !important;
 	border-radius: 4px;
 }

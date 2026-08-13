@@ -32,7 +32,11 @@ import { IConfigurationService } from
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { IThemeService } from
 	'../../../platform/theme/common/themeService.js';
-import { WORKBENCH_BACKGROUND } from '../../../workbench/common/theme.js';
+import {
+	TITLE_BAR_ACTIVE_BACKGROUND,
+	TITLE_BAR_INACTIVE_BACKGROUND,
+	WORKBENCH_BACKGROUND,
+} from '../../../workbench/common/theme.js';
 import {
 	hucodeOmniTitleBackground,
 	hucodeOmniTitleForeground,
@@ -308,13 +312,32 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 
 		this.element.classList.toggle('inactive', this.isInactive);
 
+		const modernUI = this.layoutService.isFloatingPanelsEnabled();
 		const titleBackground = this.getColor(
-			hucodeOmniTitleBackground,
+			modernUI
+				? this.isInactive
+					? TITLE_BAR_INACTIVE_BACKGROUND
+					: TITLE_BAR_ACTIVE_BACKGROUND
+				: hucodeOmniTitleBackground,
 			(color, theme) => color.isOpaque()
 				? color
 				: color.makeOpaque(WORKBENCH_BACKGROUND(theme))
 		) || '';
 		this.element.style.backgroundColor = titleBackground;
+
+		const workbenchContainer = this.layoutService.getContainer(
+			getWindow(this.element)
+		);
+		if (modernUI && titleBackground) {
+			workbenchContainer.style.setProperty(
+				'--modern-ui-shell-background',
+				titleBackground
+			);
+		} else {
+			workbenchContainer.style.removeProperty(
+				'--modern-ui-shell-background'
+			);
+		}
 
 		if (titleBackground && Color.fromHex(titleBackground).isLighter()) {
 			this.element.classList.add('light');
