@@ -1,0 +1,362 @@
+{
+	"schemaVersion": 1,
+	"surfaces": [
+		{
+			"path": "cli/src/commands/args.rs",
+			"kind": "upstream-patch",
+			"reason": "Hucode adds the typed serve-web user-data storage mode and defaults Hucode launches to server-backed storage",
+			"upstream": {
+				"path": "cli/src/commands/args.rs",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "ef6daa0742beade47c33f286600b31bbf04e1cb2"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "cli/src/commands/serve_web.rs",
+			"kind": "upstream-patch",
+			"reason": "Hucode forwards the public storage mode through a Hucode-owned internal server argument",
+			"upstream": {
+				"path": "cli/src/commands/serve_web.rs",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "8f2c147fa49a600aa2a105f04e461552a8df2be2"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/base/parts/storage/node/storage.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode structurally detects SQLite fallback to memory so server-authoritative user data fails closed instead of losing writes",
+			"upstream": {
+				"path": "src/vs/base/parts/storage/node/storage.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "df02aaf08aa81e7e7d84a761d6ec35999be8e179"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/code/browser/workbench/workbench.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode explicitly keeps secret storage browser-local when non-secret user data is server-authoritative",
+			"upstream": {
+				"path": "src/vs/code/browser/workbench/workbench.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "e52f0625b233409b1e7c5cd65b2501a13dccc194"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/common/storageIpc.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode extends the common storage protocol with atomic reads and workspace external-change events needed by multi-browser serve-web",
+			"upstream": {
+				"path": "src/vs/platform/storage/common/storageIpc.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "fb6f844d29ed8e7a2c665a74f6542a62e500eeec"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/common/storageService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode exposes a narrow atomic application-storage capability on the reusable remote storage service",
+			"upstream": {
+				"path": "src/vs/platform/storage/common/storageService.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "9bb5d71cdf8d476ee89a71e5ddbe0a49e69255da"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/electron-main/storageIpc.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode keeps desktop storage protocol parity while rebinding workspace events after a storage instance closes",
+			"upstream": {
+				"path": "src/vs/platform/storage/electron-main/storageIpc.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "a3d059618992a1df510b414d20055de21f94da92"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode admits authenticated user-data requests and owns the setup-service lifecycle needed to drain them",
+			"upstream": {
+				"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "e7ae07d1dca76e3c62f1c12336ab86eaf34f61b9"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/server/node/serverEnvironmentService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode parses the internal serve-web user-data storage mode",
+			"upstream": {
+				"path": "src/vs/server/node/serverEnvironmentService.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "4407fcb60667173b2020cfc8ed2cd073b7395761"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/server/node/serverServices.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode registers separate web-profile and storage channels, scopes remote file admission to WebUser, and releases per-connection WebUser handles on final disconnect",
+			"upstream": {
+				"path": "src/vs/server/node/serverServices.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "6094d429f9a286ac25590365d1c726eb0047e963"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/server/node/webClientServer.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode serves the migration API and injects trusted storage configuration into every web route",
+			"upstream": {
+				"path": "src/vs/server/node/webClientServer.ts",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "7bda5a01a1d15b70f2e4ff9502c8d332badd839f"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/sessions/browser/web.main.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode keeps the Sessions BrowserMain override compatible with the narrowed generic storage construction seam",
+			"upstream": {
+				"path": "src/vs/sessions/browser/web.main.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "c6e97e797586e0e3bc22213e106fcc41e24307e6"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/sessions/contrib/automations/browser/automationStorageService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode makes browser automation depend on a narrow atomic-storage capability instead of a concrete IndexedDB class",
+			"upstream": {
+				"path": "src/vs/sessions/contrib/automations/browser/automationStorageService.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "28a9aa98c80f873d69f844cb98c6d08c77ae79c5"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/browser/web.factory.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode adds one generic BrowserMain factory seam so regular, Omni, and hosted routes can share the selected backend",
+			"upstream": {
+				"path": "src/vs/workbench/browser/web.factory.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "e342f838f40c12977e84cd21e03f3300c61cc1f4"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/browser/web.main.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode narrows BrowserMain construction seams for profile and storage backends while preserving the browser default path",
+			"upstream": {
+				"path": "src/vs/workbench/browser/web.main.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "ee42b29aad34c7efd7b7c28efdf477a7e0e3cb5f"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/services/environment/browser/environmentService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode selects the trusted remote user-data home only in server mode",
+			"upstream": {
+				"path": "src/vs/workbench/services/environment/browser/environmentService.ts",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "98215099c768f29c9f56ec2ec2700d4a172ac5a1"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/services/storage/browser/storageService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode declares the existing browser atomic operations through the shared capability used by both storage modes",
+			"upstream": {
+				"path": "src/vs/workbench/services/storage/browser/storageService.ts",
+				"lastSyncedBaseline": "1.131.0",
+				"blob": "0f3e0623dee4e5a75f0411a3edcfa2f62dc74f31"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/parts/auxiliaryBarPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate auxiliary bar Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/auxiliaryBarPart.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "4f7a0dc262e6636977c7b2496838e7e96c1885cd"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/parts/panelPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate panel Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/panelPart.ts",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "67aefd4dcd1556bb6f4a85219e7eec5d4b19efe0"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/parts/titlebarPart.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate title bar Part derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/parts/titlebarPart.ts",
+				"lastSyncedBaseline": "1.130.0",
+				"blob": "8f92e542f8f1dd21d66b076d7684f448ab904d60"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/hucode/browser/workbench.ts",
+			"kind": "fork",
+			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
+			"upstream": {
+				"path": "src/vs/sessions/browser/workbench.ts",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "1ee6deedd6a5ed792c9dabca070284ae41f78355"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/browserView/test/common/browserViewLayout.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view layout arithmetic under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/common/browserViewLayout.test.ts",
+					"reason": "Hucode-authored suite for browser-view layout arithmetic"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns hosted-workbench browser-view coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/electron-main/browserViewHostedWebContents.test.ts",
+					"reason": "Hucode-authored suite for the integrated browser views that hosted Omni workbenches own"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view native-host coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/browserView/test/electron-main/browserViewNativeHost.test.ts",
+					"reason": "Hucode-authored suite for browser-view native host routing"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns OpenVSX signature coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/extensionManagement/test/node/extensionSignatureVerificationService.test.ts",
+					"reason": "Hucode patches the subject to verify OpenVSX signatures"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns project-manager state coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/projectManager/test/common/projectManagerState.test.ts",
+					"reason": "the project manager service is Hucode-owned throughout"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns project-manager main-process coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts",
+					"reason": "the project manager service is Hucode-owned throughout"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns hosted utility-process routing coverage under the platform namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/utilityProcess/test/electron-main/utilityProcess.test.ts",
+					"reason": "Hucode-authored suite; hosted workbenches depend on utility process startup routing back to the right renderer"
+				}
+			]
+		},
+		{
+			"path": "src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode extends the upstream window-resolution suite for Omni routing",
+			"testSuites": [
+				{
+					"file": "src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
+					"reason": "upstream suite over window resolution, which Hucode changes in windowsMainService — rationale predates this list and is unrecorded elsewhere"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns browser-view ownership coverage under the workbench namespace",
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/contrib/browserView/test/common/browserViewOwnership.test.ts",
+					"reason": "Hucode-authored suite for browser-view ownership rules"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode extends the upstream browser-overlay suite for integrated browser views",
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+					"reason": "upstream suite in the browser-view contribution Hucode extends — rationale predates this list and is unrecorded elsewhere"
+				}
+			]
+		},
+		{
+			"path": "src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts",
+			"kind": "upstream-patch",
+			"reason": "E1 patches upstream extension enablement for the Omni shell filtering policy",
+			"upstream": {
+				"path": "src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts",
+				"lastSyncedBaseline": "1.132.0",
+				"blob": "141241fdb70cdc87e8ea49420a85b9a5b24dcef4"
+			},
+			"testSuites": [
+				{
+					"file": "src/vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test.ts",
+					"reason": "Hucode patches the subject for Omni shell extension filtering"
+				}
+			]
+		}
+	]
+}

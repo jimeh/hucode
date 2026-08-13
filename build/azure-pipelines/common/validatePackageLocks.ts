@@ -29,87 +29,19 @@ function lockEntryEquals(first: JsonValue | undefined, second: JsonValue | undef
 
 export function createLockfileRegenerationSeed(base: IPackageLock | undefined, submitted: IPackageLock): IPackageLock {
 	const seed = structuredClone(base ?? submitted);
+	const basePackages = base?.packages ?? {};
+	const submittedPackages = submitted.packages ?? {};
 	const seedPackages = seed.packages ?? {};
+	const packageKeys = new Set([...Object.keys(basePackages), ...Object.keys(submittedPackages)]);
 
-	for (const packageKey of findChangedPackageKeys(base, submitted)) {
-		delete seedPackages[packageKey];
+	for (const packageKey of packageKeys) {
+		if (packageKey !== '' && !lockEntryEquals(basePackages[packageKey], submittedPackages[packageKey])) {
+			delete seedPackages[packageKey];
+		}
 	}
 
 	seed.packages = seedPackages;
 	return seed;
-}
-
-/**
- * Package records the pull request touched. Deleting these from the seed is what forces npm to
- * refetch their manifests; npm reports "up to date" and reuses whatever the lockfile already says
- * for records it leaves in place, which is how stripped `libc`/`os`/`cpu` metadata survives.
- */
-export function findChangedPackageKeys(base: IPackageLock | undefined, submitted: IPackageLock): string[] {
-	const basePackages = base?.packages ?? {};
-	const submittedPackages = submitted.packages ?? {};
-	const packageKeys = new Set([...Object.keys(basePackages), ...Object.keys(submittedPackages)]);
-
-	return [...packageKeys].filter(packageKey => packageKey !== '' && !lockEntryEquals(basePackages[packageKey], submittedPackages[packageKey]));
-}
-
-function isRecord(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
-	return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'] as const;
-
-/**
- * Rewrites the declared range of every changed direct dependency to the exact version the lockfile
- * commits, so regeneration resolves what the pull request submitted instead of whatever the registry
- * has published since. npm rejects `overrides` for direct dependencies (EOVERRIDE), so the range
- * itself has to carry the pin.
- */
-export function pinChangedPackages(packageJson: JsonValue, changedKeys: readonly string[], submitted: IPackageLock): JsonValue {
-	if (!isRecord(packageJson)) {
-		return packageJson;
-	}
-
-	const submittedPackages = submitted.packages ?? {};
-	const pinnedVersions = new Map<string, string>();
-	for (const packageKey of changedKeys) {
-		const record = submittedPackages[packageKey];
-		const name = packageKey.slice(packageKey.lastIndexOf('node_modules/') + 'node_modules/'.length);
-		if (packageKey === `node_modules/${name}` && isRecord(record) && typeof record.version === 'string' && record.link !== true && name) {
-			pinnedVersions.set(name, record.version);
-		}
-	}
-
-	const pinned = structuredClone(packageJson);
-	for (const field of DEPENDENCY_FIELDS) {
-		const declared = pinned[field];
-		if (!isRecord(declared)) {
-			continue;
-		}
-		for (const [name, version] of pinnedVersions) {
-			if (typeof declared[name] === 'string') {
-				declared[name] = version;
-			}
-		}
-	}
-	return pinned;
-}
-
-export function restoreDeclaredDependencies(lockfile: IPackageLock, packageJson: JsonValue): IPackageLock {
-	const restored = structuredClone(lockfile);
-	const rootPackage = restored.packages?.[''];
-	if (!isRecord(rootPackage) || !isRecord(packageJson)) {
-		return restored;
-	}
-
-	for (const field of DEPENDENCY_FIELDS) {
-		const declared = packageJson[field];
-		if (isRecord(declared)) {
-			rootPackage[field] = structuredClone(declared);
-		} else {
-			delete rootPackage[field];
-		}
-	}
-	return restored;
 }
 
 function normalizeForComparison(value: JsonValue, key?: string): JsonValue {
@@ -177,31 +109,25 @@ function getBaseLockfile(baseRef: string, relativeLockPath: string): IPackageLoc
 	}
 }
 
-function regenerateLockfile(lockPath: string, seed: IPackageLock, pinnedPackageJson: JsonValue): IPackageLock {
-	const packageJsonPath = path.join(path.dirname(lockPath), 'package.json');
-	const submittedLock = fs.readFileSync(lockPath, 'utf8');
-	const submittedPackageJson = fs.readFileSync(packageJsonPath, 'utf8');
+function regenerateLockfile(lockPath: string, seed: IPackageLock): IPackageLock {
+	const submittedContents = fs.readFileSync(lockPath, 'utf8');
 	try {
 		fs.writeFileSync(lockPath, `${JSON.stringify(seed, null, 2)}\n`);
-		fs.writeFileSync(packageJsonPath, `${JSON.stringify(pinnedPackageJson, null, 2)}\n`);
-		execFileSync(NPM, ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--min-release-age=0'], {
+		execFileSync(NPM, ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], {
 			cwd: path.dirname(lockPath),
 			stdio: 'inherit',
 			shell: process.platform === 'win32'
 		});
-		const regenerated = readLockfile(fs.readFileSync(lockPath, 'utf8'), lockPath);
-		return restoreDeclaredDependencies(regenerated, JSON.parse(submittedPackageJson) as JsonValue);
+		return readLockfile(fs.readFileSync(lockPath, 'utf8'), lockPath);
 	} finally {
-		fs.writeFileSync(lockPath, submittedLock);
-		fs.writeFileSync(packageJsonPath, submittedPackageJson);
+		fs.writeFileSync(lockPath, submittedContents);
 	}
 }
 
 function main(): void {
 	const args = process.argv.slice(2);
 	const baseRef = args.find(arg => !arg.startsWith('--')) ?? 'origin/main';
-	const baseCommit = git('merge-base', baseRef, 'HEAD');
-	const changedFiles = new Set(git('diff', '--name-only', baseCommit, 'HEAD').split('\n'));
+	const changedFiles = new Set(git('diff', '--name-only', `${baseRef}...HEAD`).split('\n'));
 	if (args.includes('--include-working-tree')) {
 		for (const file of git('diff', '--name-only').split('\n')) {
 			changedFiles.add(file);
@@ -223,12 +149,8 @@ function main(): void {
 
 		console.log(`Regenerating ${relativeLockPath} with npm ${process.env.npm_config_user_agent ?? ''}...`);
 		const submitted = readLockfile(fs.readFileSync(lockPath, 'utf8'), lockPath);
-		const base = getBaseLockfile(baseCommit, relativeLockPath);
-		const changedKeys = findChangedPackageKeys(base, submitted);
-		const seed = createLockfileRegenerationSeed(base, submitted);
-		const packageJsonPath = path.join(path.dirname(lockPath), 'package.json');
-		const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as JsonValue;
-		const expected = regenerateLockfile(lockPath, seed, pinChangedPackages(packageJson, changedKeys, submitted));
+		const seed = createLockfileRegenerationSeed(getBaseLockfile(baseRef, relativeLockPath), submitted);
+		const expected = regenerateLockfile(lockPath, seed);
 		const differences = findLockfileDifferences(expected, submitted);
 
 		if (differences.length === 0) {
