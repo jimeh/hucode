@@ -1,0 +1,359 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.hucode-project-switcher-view .hucode-project-switcher-tree {
+	height: 100%;
+}
+
+.dialog-message-body.hucode-worktree-delete-dialog {
+	min-width: min(640px, 70vw);
+}
+
+.dialog-message-container:has(.hucode-worktree-delete-dialog)
+	.dialog-message-detail {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.hucode-worktree-delete-preview [data-code] {
+	max-height: min(40vh, 360px);
+	margin: 8px 0 0;
+	overflow: auto;
+	white-space: pre;
+	user-select: text;
+}
+
+.hucode-project-switcher-view .hucode-project-switcher-tree.hidden {
+	display: none;
+}
+
+.hucode-project-switcher-empty {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	padding: 18px;
+	color: var(--vscode-descriptionForeground);
+	text-align: center;
+}
+
+.hucode-project-switcher-empty.hidden {
+	display: none;
+}
+
+.hucode-project-switcher-empty-button {
+	padding: 4px 10px;
+	border: 0;
+	border-radius: 4px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	cursor: pointer;
+}
+
+.hucode-project-switcher-empty-button:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.hucode-project-switcher-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	height: 100%;
+}
+
+.hucode-project-switcher-icon {
+	flex: 0 0 auto;
+}
+
+.hucode-project-switcher-text {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.hucode-project-switcher-label,
+.hucode-project-switcher-description,
+.hucode-project-switcher-path {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hucode-project-switcher-label {
+	flex: 0 1 auto;
+	flex-shrink: 1;
+	max-width: 100%;
+}
+
+.hucode-project-switcher-description {
+	flex: 1 1 0;
+	opacity: 0.7;
+}
+
+.hucode-project-switcher-path {
+	flex: 1 1 0;
+	opacity: 0.7;
+}
+
+.monaco-workbench
+	.hucode-project-switcher-inline-icon.codicon[class*='codicon-'] {
+	font-size: 10px;
+	line-height: 10px;
+	width: 10px;
+	height: 10px;
+	margin-right: 3px;
+	vertical-align: -1px;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row {
+	background: var(--vscode-list-inactiveSelectionBackground) !important;
+	color: var(--vscode-list-inactiveSelectionForeground) !important;
+	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+
+/* Omni sections are tree nodes rather than ViewPane headers, so mirror the
+ * Modern UI pane-header and row insets explicitly when the setting is active. */
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view .monaco-list-row {
+	left: var(--vscode-spacing-size40, 4px);
+	right: var(--vscode-spacing-size40, 4px);
+	width: auto;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:has(.hucode-project-switcher-section) {
+	background-color: var(--vscode-sideBar-background) !important;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not([data-index='0']):has(.hucode-project-switcher-section)::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: var(--vscode-spacing-size40, 4px);
+	right: var(--vscode-spacing-size40, 4px);
+	height: 1px;
+	background-color: var(--vscode-sideBarSectionHeader-border);
+	pointer-events: none;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row.hucode-project-switcher-active-row {
+	box-shadow: none;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-label {
+	font-weight: 600;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-description {
+	opacity: 0.9;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-path {
+	opacity: 0.9;
+}
+
+.hucode-project-switcher-worktree-unloaded {
+	opacity: 0.55;
+}
+
+.hucode-project-switcher-worktree-dormant,
+.hucode-project-switcher-workbench-dormant {
+	opacity: 0.72;
+}
+
+.hucode-project-switcher-workbench-unloaded {
+	opacity: 0.5;
+}
+
+.hucode-project-switcher-workbench-crashed
+	.hucode-project-switcher-icon {
+	color: var(--vscode-list-warningForeground);
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-text {
+	display: grid;
+	grid-template-columns: minmax(0, auto) minmax(4em, 1fr);
+	grid-template-rows: 17px 17px;
+	align-items: baseline;
+	justify-content: center;
+	column-gap: 6px;
+	row-gap: 1px;
+	line-height: 17px;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-label,
+.hucode-project-switcher-two-line .hucode-project-switcher-description,
+.hucode-project-switcher-two-line .hucode-project-switcher-path {
+	display: block;
+	width: auto;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-label {
+	grid-row: 1;
+	grid-column: 1;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-path {
+	grid-row: 1;
+	grid-column: 2;
+}
+
+.hucode-project-switcher-two-line .hucode-project-switcher-description {
+	grid-row: 2;
+	grid-column: 1 / -1;
+}
+
+.hucode-project-switcher-two-line.hucode-project-switcher-workbench
+	.hucode-project-switcher-description {
+	grid-row: 1;
+	grid-column: 2;
+}
+
+.hucode-project-switcher-two-line.hucode-project-switcher-workbench
+	.hucode-project-switcher-path {
+	grid-row: 2;
+	grid-column: 1 / -1;
+}
+
+.hucode-project-switcher-two-line.hucode-project-switcher-has-path:not(
+	.hucode-project-switcher-has-branch)
+	.hucode-project-switcher-path {
+	grid-row: 2;
+	grid-column: 1 / -1;
+}
+
+.hucode-project-switcher-worktree-loading {
+	opacity: 0.82;
+}
+
+.hucode-project-switcher-worktree-missing
+	.hucode-project-switcher-icon {
+	color: var(--vscode-list-warningForeground);
+}
+
+.hucode-project-switcher-workbench-missing
+	.hucode-project-switcher-icon {
+	color: var(--vscode-list-warningForeground);
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-worktree-unloaded {
+	opacity: 1;
+}
+
+.hucode-project-switcher-view .monaco-list-row.hucode-project-switcher-active-row
+	.hucode-project-switcher-worktree-loading {
+	opacity: 1;
+}
+
+.hucode-project-switcher-actions {
+	display: flex;
+	align-items: center;
+	flex: 0 0 0;
+	gap: 0;
+	overflow: hidden;
+	margin-left: auto;
+	margin-right: 0;
+}
+
+.hucode-project-switcher-view .monaco-list-row:hover
+	.hucode-project-switcher-actions,
+.hucode-project-switcher-actions:focus-within {
+	flex-basis: auto;
+	gap: 2px;
+	overflow: visible;
+	margin-right: 6px;
+}
+
+.hucode-project-switcher-action-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.hucode-project-switcher-action-button:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.hucode-project-switcher-action-button:focus-visible {
+	opacity: 1;
+	pointer-events: auto;
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.hucode-project-switcher-view .monaco-list-row:hover
+	.hucode-project-switcher-action-button,
+.hucode-project-switcher-actions:focus-within
+	.hucode-project-switcher-action-button {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.hucode-project-switcher-separator {
+	gap: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	font-size: 11px;
+	opacity: 0.85;
+}
+
+.hucode-project-switcher-separator::after {
+	content: '';
+	flex: 1;
+	border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+}
+
+.hucode-project-switcher-section {
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 11px;
+}
+
+.hucode-project-switcher-section-actions,
+.hucode-project-switcher-section-actions
+	.hucode-project-switcher-action-button {
+	display: flex !important;
+	flex-basis: auto;
+	overflow: visible;
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.hucode-project-switcher-section-actions {
+	gap: 2px;
+	margin-right: 6px;
+}
+
+.hucode-project-switcher-action-button[hidden] {
+	display: none !important;
+}

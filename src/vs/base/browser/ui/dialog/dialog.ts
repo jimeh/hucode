@@ -19,6 +19,7 @@ import { mnemonicButtonLabel } from '../../../common/labels.js';
 import { Disposable, toDisposable } from '../../../common/lifecycle.js';
 import { isLinux, isMacintosh, isWindows } from '../../../common/platform.js';
 import { isActionProvider } from '../dropdown/dropdown.js';
+import { applyExplicitDialogButtonOrder } from './dialogButtonOrder.js';
 
 export interface IDialogInputOptions {
 	readonly placeholder?: string;
@@ -63,6 +64,14 @@ export interface IDialogOptions {
 	readonly renderFooter?: (container: HTMLElement) => void;
 	readonly icon?: ThemeIcon;
 	readonly buttonOptions?: Array<undefined | { sublabel?: string; styleButton?: (button: IButton) => void }>;
+	/**
+	 * The original dialog button index to focus.
+	 */
+	readonly buttonFocus?: number;
+	/**
+	 * A complete visual ordering of the original dialog button indices.
+	 */
+	readonly buttonOrder?: readonly number[];
 	readonly primaryButtonDropdown?: IButtonWithDropdownOptions;
 	readonly disableCloseAction?: boolean;
 	readonly disableCloseButton?: boolean;
@@ -582,8 +591,9 @@ export class Dialog extends Disposable {
 				this.inputs[0].select();
 			} else {
 				let focusedButton = false;
+				const buttonFocus = this.options.buttonFocus ?? 0;
 				buttonMap.forEach((value, index) => {
-					if (value.index === 0) {
+					if (value.index === buttonFocus) {
 						buttonBar.buttons[index].focus();
 						focusedButton = true;
 					}
@@ -660,6 +670,13 @@ export class Dialog extends Disposable {
 		// Maps each button to its current label and old index
 		// so that when we move them around it's not a problem
 		const buttonMap: ButtonMapEntry[] = buttons.map((label, index) => ({ label, index }));
+		const explicitlyOrderedButtons = applyExplicitDialogButtonOrder(
+			buttonMap,
+			this.options.buttonOrder
+		);
+		if (explicitlyOrderedButtons) {
+			return explicitlyOrderedButtons;
+		}
 
 		if (buttons.length < 2 || this.options.alignment === DialogContentsAlignment.Vertical) {
 			return buttonMap; // only need to rearrange if there are 2+ buttons and the alignment is left-to-right
