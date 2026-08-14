@@ -2,6 +2,17 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.70 - 2026-08-14
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.133.0
+
+### Bug Fixes
+
+- **dev:** default hucode web to server user data (#185)
+- **omni:** align Modern UI styling with VS Code 1.133 (#184)
+
 ## 0.0.69 - 2026-08-11
 
 ### Bug Fixes
