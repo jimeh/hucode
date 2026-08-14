@@ -62,11 +62,13 @@ suite('Omni Workbench', () => {
 				floating: Workbench.prototype.isFloatingPanelsEnabled.call(enabled),
 				classes: Workbench.prototype.getLayoutClasses.call(enabled),
 				toggles: enabled.classToggles,
+				styleUpdates: enabled.partStyleUpdates,
 			},
 			disabled: {
 				floating: Workbench.prototype.isFloatingPanelsEnabled.call(disabled),
 				classes: Workbench.prototype.getLayoutClasses.call(disabled),
 				toggles: disabled.classToggles,
+				styleUpdates: disabled.partStyleUpdates,
 			},
 		}, {
 			enabled: {
@@ -78,11 +80,14 @@ suite('Omni Workbench', () => {
 					'nostatusbar',
 					'floating-panels',
 					'style-override',
+					'modern-ui-tabs',
 				],
 				toggles: [
 					{ name: 'floating-panels', force: true },
 					{ name: 'style-override', force: true },
+					{ name: 'modern-ui-tabs', force: true },
 				],
+				styleUpdates: ['titlebar', 'sidebar'],
 			},
 			disabled: {
 				floating: false,
@@ -95,7 +100,9 @@ suite('Omni Workbench', () => {
 				toggles: [
 					{ name: 'floating-panels', force: false },
 					{ name: 'style-override', force: false },
+					{ name: 'modern-ui-tabs', force: false },
 				],
+				styleUpdates: ['titlebar', 'sidebar'],
 			},
 		});
 	});
@@ -146,13 +153,16 @@ suite('Omni Workbench', () => {
 
 		assert.deepStrictEqual({
 			classes: host.classToggles,
+			styleUpdates: host.partStyleUpdates,
 			projectsRelayouts,
 			workbenchRelayouts,
 		}, {
 			classes: [
 				{ name: 'floating-panels', force: true },
 				{ name: 'style-override', force: true },
+				{ name: 'modern-ui-tabs', force: true },
 			],
+			styleUpdates: ['titlebar', 'sidebar'],
 			projectsRelayouts: 1,
 			workbenchRelayouts: 1,
 		});
@@ -424,7 +434,10 @@ interface IWorkbenchHost {
 	sideBarPartView: object;
 	panelPartView: object;
 	sidebarContainer: HTMLElement;
-	parts: Map<string, { getContainer(): HTMLElement }>;
+	parts: Map<string, {
+		getContainer(): HTMLElement;
+		updateStyles(): void;
+	}>;
 	paneCompositeService: {
 		getActivePaneComposite(): object | undefined;
 		hideActivePaneComposite(): void;
@@ -442,6 +455,7 @@ interface IWorkbenchHost {
 	readonly focusedParts: Parts[];
 	readonly delegatedFocus: string[];
 	readonly classToggles: Array<{ name: string; force: boolean }>;
+	readonly partStyleUpdates: string[];
 	readonly gridLayouts: Array<{ width: number; height: number }>;
 	readonly resizes: Array<{
 		view: string;
@@ -475,6 +489,7 @@ function createHost(options: {
 	const focusedParts: Parts[] = [];
 	const delegatedFocus: string[] = [];
 	const classToggles: Array<{ name: string; force: boolean }> = [];
+	const partStyleUpdates: string[] = [];
 	const gridLayouts: Array<{ width: number; height: number }> = [];
 	const resizes: Array<{
 		view: string;
@@ -504,7 +519,14 @@ function createHost(options: {
 		titleBarPartView: {},
 		sidebarContainer,
 		parts: new Map([
-			[Parts.SIDEBAR_PART, { getContainer: () => sidebarContainer }],
+			[Parts.TITLEBAR_PART, {
+				getContainer: () => mainContainer,
+				updateStyles: () => partStyleUpdates.push('titlebar'),
+			}],
+			[Parts.SIDEBAR_PART, {
+				getContainer: () => sidebarContainer,
+				updateStyles: () => partStyleUpdates.push('sidebar'),
+			}],
 		]),
 		workbenchGrid: {
 			layout: (width: number, height: number) =>
@@ -555,6 +577,7 @@ function createHost(options: {
 		focusedParts,
 		delegatedFocus,
 		classToggles,
+		partStyleUpdates,
 		gridLayouts,
 		resizes,
 		layoutEvents,

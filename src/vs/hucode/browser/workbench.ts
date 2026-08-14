@@ -95,7 +95,8 @@ enum LayoutClasses {
 	FULLSCREEN = 'fullscreen',
 	MAXIMIZED = 'maximized',
 	FLOATING_PANELS = 'floating-panels',
-	STYLE_OVERRIDE = 'style-override'
+	STYLE_OVERRIDE = 'style-override',
+	MODERN_UI_TABS = 'modern-ui-tabs'
 }
 
 //#endregion
@@ -893,6 +894,12 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			LayoutClasses.STYLE_OVERRIDE,
 			enabled
 		);
+		this.mainContainer.classList.toggle(
+			LayoutClasses.MODERN_UI_TABS,
+			enabled
+		);
+		this.parts.get(Parts.TITLEBAR_PART)?.updateStyles();
+		this.parts.get(Parts.SIDEBAR_PART)?.updateStyles();
 	}
 
 	getLayoutClasses(): string[] {
@@ -905,7 +912,8 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 			LayoutClasses.STATUSBAR_HIDDEN, // agents window never has a status bar
 			this.mainWindowFullscreen ? LayoutClasses.FULLSCREEN : undefined,
 			this.isFloatingPanelsEnabled() ? LayoutClasses.FLOATING_PANELS : undefined,
-			this.isFloatingPanelsEnabled() ? LayoutClasses.STYLE_OVERRIDE : undefined
+			this.isFloatingPanelsEnabled() ? LayoutClasses.STYLE_OVERRIDE : undefined,
+			this.isFloatingPanelsEnabled() ? LayoutClasses.MODERN_UI_TABS : undefined
 		]);
 	}
 
