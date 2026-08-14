@@ -12,6 +12,7 @@ cd "$ROOT"
 args=()
 has_connection_token_arg=0
 has_omni_root_arg=0
+has_user_data_storage_arg=0
 
 for arg in "$@"; do
 	case "$arg" in
@@ -20,6 +21,9 @@ for arg in "$@"; do
 			;;
 		--hucode-web-omni-root)
 			has_omni_root_arg=1
+			;;
+		--hucode-web-user-data-storage|--hucode-web-user-data-storage=*)
+			has_user_data_storage_arg=1
 			;;
 	esac
 done
@@ -30,6 +34,10 @@ fi
 
 if [[ "$has_omni_root_arg" == "0" ]]; then
 	args+=(--hucode-web-omni-root)
+fi
+
+if [[ "$has_user_data_storage_arg" == "0" ]]; then
+	args+=(--hucode-web-user-data-storage=server)
 fi
 
 args+=("$@")
