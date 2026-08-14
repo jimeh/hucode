@@ -30,7 +30,7 @@ import { IContextMenuService } from
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
-import { IThemeService } from
+import { IColorTheme, IThemeService } from
 	'../../../platform/theme/common/themeService.js';
 import {
 	TITLE_BAR_ACTIVE_BACKGROUND,
@@ -313,16 +313,19 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		this.element.classList.toggle('inactive', this.isInactive);
 
 		const modernUI = this.layoutService.isFloatingPanelsEnabled();
-		const titleBackground = this.getColor(
+		const makeOpaque = (color: Color, theme: IColorTheme) => color.isOpaque()
+			? color
+			: color.makeOpaque(WORKBENCH_BACKGROUND(theme));
+		const titleBackground = (this.getColor(
 			modernUI
 				? this.isInactive
 					? TITLE_BAR_INACTIVE_BACKGROUND
 					: TITLE_BAR_ACTIVE_BACKGROUND
 				: hucodeOmniTitleBackground,
-			(color, theme) => color.isOpaque()
-				? color
-				: color.makeOpaque(WORKBENCH_BACKGROUND(theme))
-		) || '';
+			makeOpaque
+		) || (modernUI && this.isInactive
+			? this.getColor(TITLE_BAR_ACTIVE_BACKGROUND, makeOpaque)
+			: undefined)) || '';
 		this.element.style.backgroundColor = titleBackground;
 
 		const workbenchContainer = this.layoutService.getContainer(

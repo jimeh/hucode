@@ -212,6 +212,36 @@ suite('Omni Parts', () => {
 		});
 	});
 
+	test('TitlebarPart falls back to the active Modern UI shell background when the inactive color is absent', () => {
+		const element = mainWindow.document.createElement('div');
+		const container = mainWindow.document.createElement('div');
+		const colors = new Map<string, string>([
+			[TITLE_BAR_ACTIVE_BACKGROUND, '#191A1B'],
+			[hucodeOmniTitleForeground, '#f0f1f2'],
+		]);
+		const host = prototypeHost(TitlebarPart.prototype, {
+			element,
+			isInactive: true,
+			layoutService: {
+				isFloatingPanelsEnabled: () => true,
+				getContainer: () => container,
+			},
+			getColor: (id: string) => colors.get(id) ?? null,
+		});
+
+		TitlebarPart.prototype.updateStyles.call(host);
+
+		assert.deepStrictEqual({
+			background: element.style.backgroundColor,
+			shellBackground: container.style.getPropertyValue(
+				'--modern-ui-shell-background'
+			),
+		}, {
+			background: 'rgb(25, 26, 27)',
+			shellBackground: '#191A1B',
+		});
+	});
+
 	test('OmniHostPart exposes a loaded active workbench', () => {
 		const harness = createOmniHostRenderHarness({
 			activeInstanceId: 'active',
