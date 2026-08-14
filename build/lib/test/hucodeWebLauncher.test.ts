@@ -10,7 +10,7 @@ import os from 'os';
 import path from 'path';
 import { test } from 'node:test';
 
-test('hucode web launcher defaults to server user data and preserves an override', {
+test('hucode web launcher defaults to server user data and preserves overrides', {
 	skip: process.platform === 'win32'
 }, async t => {
 	const tempDirectory = await fs.mkdtemp(
@@ -48,6 +48,11 @@ printf '%s\\n' "$@" > "$HUCODE_STUB_NODE_LOG"
 			browserOverrideArguments: await launch([
 				'--hucode-web-user-data-storage=browser',
 				'--port=8123'
+			]),
+			standaloneBrowserOverrideArguments: await launch([
+				'--hucode-web-user-data-storage',
+				'browser',
+				'--port=8123'
 			])
 		},
 		{
@@ -71,6 +76,18 @@ printf '%s\\n' "$@" > "$HUCODE_STUB_NODE_LOG"
 				'--without-connection-token',
 				'--hucode-web-omni-root',
 				'--hucode-web-user-data-storage=browser',
+				'--port=8123'
+			],
+			standaloneBrowserOverrideArguments: [
+				'build/hucode/run-with-mixin.js',
+				'--quality',
+				'stable',
+				'--',
+				'./scripts/code-server.sh',
+				'--without-connection-token',
+				'--hucode-web-omni-root',
+				'--hucode-web-user-data-storage',
+				'browser',
 				'--port=8123'
 			]
 		}
