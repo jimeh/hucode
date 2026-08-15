@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.71 - 2026-08-15
+
+### Bug Fixes
+
+- **build:** avoid GitHub API rate limits for built-in extensions (#187)
+- **web:** prevent mixed Hucode versions in Omni (#186)
+
 ## 0.0.70 - 2026-08-14
 
 ### Features
