@@ -46,6 +46,10 @@ as the required Hucode instruction set for work in this fork.
   carries Electron native-build settings — `runtime`, `target`, `disturl`,
   `build_from_source` — that native modules such as `@vscode/sqlite3` and
   `node-pty` depend on.
+- `npm install` downloads `@vscode/ripgrep` through the GitHub Releases API.
+  If that request is rate limited, rerun the install with a raw GitHub token in
+  `GITHUB_TOKEN`; `GITHUB_TOKEN="$(gh auth token)" mise run deps:install` keeps
+  the repository task graph while authenticating the package installer.
 - The tracked `pnpm-lock.yaml` at the repository root is upstream debris, not
   a supported alternative. Upstream committed it by accident inside an
   unrelated CSS commit, nothing reads it, and it has not been updated since.
