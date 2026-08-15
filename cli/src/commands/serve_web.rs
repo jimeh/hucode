@@ -213,7 +213,9 @@ async fn handle(
 }
 
 async fn handle_proxied(ctx: &HandleContext, req: Request<Incoming>) -> Response<HyperBody> {
-	let release = if let Some((r, _)) = get_release_from_path(req.uri().path(), ctx.cm.platform) {
+	let release = if let Some((r, _)) =
+		get_release_from_request_path(req.uri().path(), &ctx.cm.base_path, ctx.cm.platform)
+	{
 		r
 	} else {
 		match ctx.cm.get_release_from_cache().await {
@@ -306,6 +308,25 @@ fn get_release_from_path(path: &str, platform: Platform) -> Option<(Release, Str
 		},
 		remaining.to_string(),
 	))
+}
+
+fn get_release_from_request_path(
+	path: &str,
+	base_path: &str,
+	platform: Platform,
+) -> Option<(Release, String)> {
+	let release_path = if base_path == "/" {
+		path
+	} else {
+		let base_path = base_path.strip_suffix('/')?;
+		let release_path = path.strip_prefix(base_path)?;
+		if !release_path.starts_with('/') {
+			return None;
+		}
+		release_path
+	};
+
+	get_release_from_path(release_path, platform)
 }
 
 /// Proxies the standard HTTP request to the async pipe, returning the piped response
@@ -989,6 +1010,66 @@ fn mint_connection_token(path: &Path, prefer_token: Option<String>) -> std::io::
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	const TEST_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+	#[test]
+	fn release_selection_uses_the_first_segment_at_the_root_base_path() {
+		let path = format!("/stable-{TEST_COMMIT}/out/vs/code/browser/workbench");
+
+		let selected =
+			get_release_from_request_path(&path, &normalize_base_path("/"), Platform::LinuxX64);
+
+		assert_eq!(
+			selected.map(|(release, _)| release.commit),
+			Some(TEST_COMMIT.to_string())
+		);
+	}
+
+	#[test]
+	fn release_selection_strips_a_single_level_configured_base_path() {
+		let path = format!("/proxy/stable-{TEST_COMMIT}/out/vs/code/browser/workbench");
+
+		let selected = get_release_from_request_path(
+			&path,
+			&normalize_base_path("/proxy/"),
+			Platform::LinuxX64,
+		);
+
+		assert_eq!(
+			selected.map(|(release, _)| release.commit),
+			Some(TEST_COMMIT.to_string())
+		);
+	}
+
+	#[test]
+	fn release_selection_strips_a_nested_configured_base_path() {
+		let path = format!("/proxy/nested/stable-{TEST_COMMIT}/out/vs/code/browser/workbench");
+
+		let selected = get_release_from_request_path(
+			&path,
+			&normalize_base_path("/proxy/nested/"),
+			Platform::LinuxX64,
+		);
+
+		assert_eq!(
+			selected.map(|(release, _)| release.commit),
+			Some(TEST_COMMIT.to_string())
+		);
+	}
+
+	#[test]
+	fn release_selection_rejects_a_path_outside_the_configured_base_path() {
+		let path = format!("/stable-{TEST_COMMIT}/out/vs/code/browser/workbench");
+
+		let selected = get_release_from_request_path(
+			&path,
+			&normalize_base_path("/proxy/"),
+			Platform::LinuxX64,
+		);
+
+		assert!(selected.is_none());
+	}
 
 	#[tokio::test]
 	async fn wait_for_download_is_a_centered_refreshing_html_page() {
