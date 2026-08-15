@@ -10,12 +10,24 @@ import type { IProductService } from
 import {
 	getHucodeWebClientBasePath,
 	getHucodeWebClientRouteAction,
+	getHucodeWebDocumentBasePath,
 	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
 } from '../../node/hucodeWebClientServerIntegration.js';
 
 suite('HucodeWebClientServerIntegration', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('pins document-owned routes to the exact product path', () => {
+		assert.strictEqual(
+			getHucodeWebDocumentBasePath('/x', '/stable-abc123'),
+			'/x/stable-abc123'
+		);
+		assert.strictEqual(
+			getHucodeWebDocumentBasePath('/proxy/nested/', '/stable-abc123'),
+			'/proxy/nested/stable-abc123'
+		);
+	});
 
 	test('resolves server route actions', () => {
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/', {
@@ -52,65 +64,74 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeHostedOmniWorkbench: true,
 		});
 		assert.deepStrictEqual(getHucodeWebClientRouteAction('/omni/', {
-			basePath: '/x',
+			basePath: '/x/stable-abc123',
 			query: { folder: '/tmp/project' },
 			omniEnabled: true,
 		}), {
 			type: 'redirect',
-			location: '/x/omni?folder=%2Ftmp%2Fproject',
+			location: '/x/stable-abc123/omni?folder=%2Ftmp%2Fproject',
 		});
 	});
 
 	test('builds Hucode workbench configuration', () => {
-		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/x', {
+		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration(
+			'/x/stable-abc123', {
 			hucodeOmniShell: true,
 		}, {
 			serverPathCaseSensitive: true,
 		}), {
 			hucodeOmniShell: true,
 			hucodeHostedOmniWorkbench: undefined,
-			hucodeOmniWorkbenchRoute: '/x/workbench',
-			hucodeOmniHostedWorkbenchRoute: '/x/omni/workbench',
-			hucodeOmniProjectsApi: '/x/_hucode/projects',
+			hucodeOmniWorkbenchRoute: '/x/stable-abc123/workbench',
+			hucodeOmniHostedWorkbenchRoute:
+				'/x/stable-abc123/omni/workbench',
+			hucodeOmniProjectsApi: '/x/stable-abc123/_hucode/projects',
 			hucodeServerPathCaseSensitive: true,
 			hucodeWebUserDataStorage: 'browser',
 			hucodeWebUserDataApi: undefined,
 			hucodeWebUserDataHome: undefined,
 			webviewEndpoint:
-				'/x/static/out/vs/workbench/contrib/webview/browser/pre',
+				'/x/stable-abc123/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
-		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/', {
+		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration(
+			'/stable-abc123', {
 			hucodeHostedOmniWorkbench: true,
 		}, {
 			serverPathCaseSensitive: false,
 		}), {
 			hucodeOmniShell: undefined,
 			hucodeHostedOmniWorkbench: true,
-			hucodeOmniWorkbenchRoute: '/workbench',
-			hucodeOmniHostedWorkbenchRoute: '/omni/workbench',
-			hucodeOmniProjectsApi: '/_hucode/projects',
+			hucodeOmniWorkbenchRoute: '/stable-abc123/workbench',
+			hucodeOmniHostedWorkbenchRoute:
+				'/stable-abc123/omni/workbench',
+			hucodeOmniProjectsApi: '/stable-abc123/_hucode/projects',
 			hucodeServerPathCaseSensitive: false,
 			hucodeWebUserDataStorage: 'browser',
 			hucodeWebUserDataApi: undefined,
 			hucodeWebUserDataHome: undefined,
 			webviewEndpoint:
-				'/static/out/vs/workbench/contrib/webview/browser/pre',
+				'/stable-abc123/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
-		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration('/x', {}, {
+		assert.deepStrictEqual(getHucodeWebWorkbenchConfiguration(
+			'/proxy/stable-abc123', {}, {
 			serverPathCaseSensitive: true,
 			userDataStorage: 'server',
 			userDataHome: { scheme: 'vscode-remote', authority: 'host', path: '/WebUser/User' },
 		}), {
 			hucodeOmniShell: undefined,
 			hucodeHostedOmniWorkbench: undefined,
-			hucodeOmniWorkbenchRoute: '/x/workbench',
-			hucodeOmniHostedWorkbenchRoute: '/x/omni/workbench',
-			hucodeOmniProjectsApi: '/x/_hucode/projects',
+			hucodeOmniWorkbenchRoute: '/proxy/stable-abc123/workbench',
+			hucodeOmniHostedWorkbenchRoute:
+				'/proxy/stable-abc123/omni/workbench',
+			hucodeOmniProjectsApi:
+				'/proxy/stable-abc123/_hucode/projects',
 			hucodeServerPathCaseSensitive: true,
 			hucodeWebUserDataStorage: 'server',
-			hucodeWebUserDataApi: '/x/_hucode/user-data',
+			hucodeWebUserDataApi:
+				'/proxy/stable-abc123/_hucode/user-data',
 			hucodeWebUserDataHome: { scheme: 'vscode-remote', authority: 'host', path: '/WebUser/User' },
-			webviewEndpoint: '/x/static/out/vs/workbench/contrib/webview/browser/pre',
+			webviewEndpoint:
+				'/proxy/stable-abc123/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
 	});
 

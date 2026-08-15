@@ -505,8 +505,19 @@ mod response {
 	pub fn wait_for_download() -> Response<HyperBody> {
 		Response::builder()
 			.status(202)
-			.header("Content-Type", "text/html") // todo: get latest
-			.body(full_body(concatcp!("The latest version of the ", QUALITYLESS_SERVER_NAME, " is downloading, please wait a moment...<script>setTimeout(()=>location.reload(),1500)</script>", )))
+			.header("Content-Type", "text/html; charset=utf-8")
+			.body(full_body(concatcp!(
+				"<!doctype html><html><head><meta charset=\"utf-8\">",
+				"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
+				"<style>html,body{height:100%;margin:0}body{display:flex;align-items:center;",
+				"justify-content:center;padding:24px;box-sizing:border-box;font-family:",
+				"system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;",
+				"text-align:center}</style>",
+				"</head><body><main aria-live=\"polite\">The latest version of the ",
+				QUALITYLESS_SERVER_NAME,
+				" is downloading, please wait a moment...</main>",
+				"<script>setTimeout(()=>location.reload(),1500)</script></body></html>",
+			)))
 			.unwrap()
 	}
 
@@ -973,4 +984,30 @@ fn mint_connection_token(path: &Path, prefer_token: Option<String>) -> std::io::
 	let prefer_token = prefer_token.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 	f.write_all(prefer_token.as_bytes())?;
 	Ok(prefer_token)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn wait_for_download_is_a_centered_refreshing_html_page() {
+		let response = response::wait_for_download();
+		assert_eq!(response.status(), 202);
+		assert_eq!(
+			response.headers().get("Content-Type").unwrap(),
+			"text/html; charset=utf-8"
+		);
+
+		let body = response.into_body().collect().await.unwrap().to_bytes();
+		let html = std::str::from_utf8(&body).unwrap();
+		assert!(html.starts_with("<!doctype html>"));
+		assert!(html.contains("align-items:center"));
+		assert!(html.contains("justify-content:center"));
+		assert!(html.contains(
+			"font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif"
+		));
+		assert!(html.contains("aria-live=\"polite\""));
+		assert!(html.contains("setTimeout(()=>location.reload(),1500)"));
+	}
 }

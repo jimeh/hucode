@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as url from 'url';
+import { posix } from '../../base/common/path.js';
 import type { IncomingHttpHeaders } from 'http';
 import type { IProductConfiguration } from
 	'../../base/common/product.js';
@@ -29,6 +30,16 @@ import {
 import { HUCODE_WEB_USER_DATA_API_PATH } from './hucodeWebUserDataServer.js';
 
 export { HUCODE_WEB_OMNI_ROOT_ARG, toHucodeWebRouteLocation };
+
+/**
+ * Resolves the exact product-version base path owned by a workbench document.
+ */
+export function getHucodeWebDocumentBasePath(
+	basePath: string,
+	productPath: string
+): string {
+	return posix.join(basePath, productPath);
+}
 
 export type HucodeWebWorkbenchRoutePath =
 	| '/'

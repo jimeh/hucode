@@ -35,6 +35,7 @@ import {
 	type IHucodeWebWorkbenchRouteOptions,
 	getHucodeWebClientBasePath,
 	getHucodeWebClientRouteAction,
+	getHucodeWebDocumentBasePath,
 	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
 	toHucodeWebRouteLocation,
@@ -205,8 +206,16 @@ export class WebClientServer extends Disposable {
 				return;
 			}
 
+			const clientBasePath = getHucodeWebClientBasePath(
+				req.headers,
+				this._basePath
+			);
+			const documentBasePath = getHucodeWebDocumentBasePath(
+				clientBasePath,
+				this._productPath
+			);
 			const routeAction = getHucodeWebClientRouteAction(pathname, {
-				basePath: getHucodeWebClientBasePath(req.headers, this._basePath),
+				basePath: documentBasePath,
 				query: parsedUrl.query,
 				omniEnabled: !!this._environmentService.args[HUCODE_WEB_OMNI_ROOT_ARG],
 			});
@@ -342,6 +351,10 @@ export class WebClientServer extends Disposable {
 
 		// Prefix routes with basePath for clients
 		const basePath = getFirstHeader('x-forwarded-prefix') || this._basePath;
+		const documentBasePath = getHucodeWebDocumentBasePath(
+			basePath,
+			this._productPath
+		);
 
 		const queryConnectionToken = parsedUrl.query[connectionTokenQueryName];
 		if (typeof queryConnectionToken === 'string') {
@@ -364,7 +377,7 @@ export class WebClientServer extends Disposable {
 				}
 			}
 			const newLocation = toHucodeWebRouteLocation(
-				basePath,
+				documentBasePath,
 				routePath,
 				newQuery
 			);
@@ -418,9 +431,9 @@ export class WebClientServer extends Disposable {
 			this._logService.trace(`[WebClientServer] Request URL: ${req.url}, basePath: ${basePath}, remoteAuthority: ${remoteAuthority}`);
 		}
 
-		const staticRoute = posix.join(basePath, this._productPath, STATIC_PATH);
-		const callbackRoute = posix.join(basePath, this._productPath, CALLBACK_PATH);
-		const webExtensionRoute = posix.join(basePath, this._productPath, WEB_EXTENSION_PATH);
+		const staticRoute = posix.join(documentBasePath, STATIC_PATH);
+		const callbackRoute = posix.join(documentBasePath, CALLBACK_PATH);
+		const webExtensionRoute = posix.join(documentBasePath, WEB_EXTENSION_PATH);
 
 		const resolveWorkspaceURI = (defaultLocation?: string) => defaultLocation && URI.file(resolve(defaultLocation)).with({ scheme: Schemas.vscodeRemote, authority: remoteAuthority });
 
@@ -456,7 +469,7 @@ export class WebClientServer extends Disposable {
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
-			...getHucodeWebWorkbenchConfiguration(basePath, options, {
+			...getHucodeWebWorkbenchConfiguration(documentBasePath, options, {
 				serverPathCaseSensitive: isLinux,
 				userDataStorage: this._hucodeWebUserDataServer.enabled ? 'server' : 'browser',
 				userDataHome: this._hucodeWebUserDataServer.enabled

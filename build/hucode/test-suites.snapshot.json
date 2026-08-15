@@ -5,6 +5,7 @@
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
 		"src/vs/hucode/test/browser/hostedShellStateObserver.test.ts",
+		"src/vs/hucode/test/browser/hucodeWebVersionMismatch.test.ts",
 		"src/vs/hucode/test/browser/omniConfigurationService.test.ts",
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",

@@ -7,7 +7,7 @@ import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter, Event } from '../../base/common/event.js';
-import { Schemas } from '../../base/common/network.js';
+import { getServerProductSegment, Schemas } from '../../base/common/network.js';
 import {
 	Disposable,
 	DisposableStore,
@@ -93,6 +93,7 @@ import {
 	HucodeOmniWebParentMessageType,
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	IHucodeOmniWebConnectionBootstrap,
+	IHucodeOmniWebReadyMessage,
 	IHucodeOmniWebWorkbenchClient,
 	isHucodeOmniWebConnectionBootstrapMetadata,
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
@@ -118,6 +119,9 @@ import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { IProjectManagerService, ProjectRecord } from
 	'../../platform/projectManager/common/projectManager.js';
+import product from '../../platform/product/common/product.js';
+import { showHucodeWebVersionMismatchBlocker } from
+	'./hucodeWebVersionMismatch.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -400,6 +404,7 @@ export interface IWebHucodeShellBrowserAdapter {
 		message: object,
 		port: MessagePort
 	): void;
+	showVersionMismatch(): void;
 }
 
 function defaultWebHucodeShellBrowserAdapter():
@@ -429,6 +434,7 @@ function defaultWebHucodeShellBrowserAdapter():
 				[port]
 			);
 		},
+		showVersionMismatch: () => showHucodeWebVersionMismatchBlocker(),
 	};
 }
 
@@ -477,6 +483,8 @@ export class WebHucodeShellController extends Disposable
 	private activationIntentGeneration = 0;
 	private lifecycleGeneration = 0;
 	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
+	private versionMismatchBlocked = false;
+	private readonly buildIdentity = getServerProductSegment(product);
 
 	private readonly pendingConnectionDisposals = new Set<DisposableStore>();
 
@@ -1656,22 +1664,52 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private readonly onMessage = (event: MessageEvent): void => {
-		if (
-			event.origin !== this.browser.origin ||
-			!isHucodeOmniWebChildMessage(event.data)
-		) {
+		if (this.versionMismatchBlocked ||
+			event.origin !== this.browser.origin) {
+			return;
+		}
+		const target = getHucodeOmniWebChildMessageTarget(event.data);
+		if (!target) {
 			return;
 		}
 
-		const instance = this.instancesById.get(event.data.instanceId);
+		const instance = this.instancesById.get(target.instanceId);
 		if (!instance?.iframe ||
 			event.source !== instance.iframe.contentWindow
 		) {
 			return;
 		}
+		if (target.type === HucodeOmniWebChildMessageType.Ready) {
+			if (!isHucodeOmniWebReadyMessageWireShape(event.data)) {
+				return;
+			}
+			const compatibility = getReadyMessageBuildCompatibility(
+				event.data,
+				this.buildIdentity
+			);
+			if (compatibility === 'mismatch') {
+				this.blockForVersionMismatch(instance);
+				return;
+			}
+			if (compatibility !== 'match') {
+				return;
+			}
+		}
+		if (!isHucodeOmniWebChildMessage(event.data)) {
+			return;
+		}
 
 		this.handleChildMessage(instance, event.data);
 	};
+
+	private blockForVersionMismatch(instance: IHostedIframeInstance): void {
+		if (this.versionMismatchBlocked) {
+			return;
+		}
+		this.versionMismatchBlocked = true;
+		this.disposeConnection(instance);
+		this.browser.showVersionMismatch();
+	}
 
 	private handleChildMessage(
 		instance: IHostedIframeInstance,
@@ -1799,6 +1837,7 @@ export class WebHucodeShellController extends Disposable
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
 			connectionBootstrap,
+			buildIdentity: this.buildIdentity,
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: negotiatedCapabilities,
 		}, channel.port2);
@@ -2830,6 +2869,7 @@ function isHucodeOmniWebChildMessage(
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
 		readonly connectionBootstrap?: unknown;
+		readonly buildIdentity?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 		readonly focused?: unknown;
@@ -2838,12 +2878,65 @@ function isHucodeOmniWebChildMessage(
 		return false;
 	}
 	if (message.type === HucodeOmniWebChildMessageType.Ready) {
-		return isHucodeOmniWebConnectionBootstrapMetadata(message) &&
-			typeof message.hostedShellProtocolVersion === 'number' &&
-			Array.isArray(message.hostedShellCapabilities);
+		return isHucodeOmniWebReadyMessageWireShape(message) &&
+			typeof message.buildIdentity === 'string';
 	}
 	return message.type === HucodeOmniWebChildMessageType.Focus &&
 		typeof message.focused === 'boolean';
+}
+
+function getHucodeOmniWebChildMessageTarget(value: unknown): {
+	readonly type: HucodeOmniWebChildMessageType;
+	readonly instanceId: string;
+} | undefined {
+	if (!value || typeof value !== 'object') {
+		return undefined;
+	}
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+	};
+	if ((message.type !== HucodeOmniWebChildMessageType.Ready &&
+		message.type !== HucodeOmniWebChildMessageType.Focus) ||
+		typeof message.instanceId !== 'string' || !message.instanceId) {
+		return undefined;
+	}
+	return { type: message.type, instanceId: message.instanceId };
+}
+
+function isHucodeOmniWebReadyMessageWireShape(
+	value: unknown
+): value is Omit<IHucodeOmniWebReadyMessage, 'buildIdentity'> & {
+	readonly buildIdentity?: unknown;
+} {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const message = value as {
+		readonly type?: unknown;
+		readonly instanceId?: unknown;
+		readonly connectionBootstrap?: unknown;
+		readonly hostedShellProtocolVersion?: unknown;
+		readonly hostedShellCapabilities?: unknown;
+	};
+	return message.type === HucodeOmniWebChildMessageType.Ready &&
+		typeof message.instanceId === 'string' && !!message.instanceId &&
+		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
+		typeof message.hostedShellProtocolVersion === 'number' &&
+		Array.isArray(message.hostedShellCapabilities);
+}
+
+function getReadyMessageBuildCompatibility(
+	message: { readonly buildIdentity?: unknown },
+	buildIdentity: string
+): 'match' | 'mismatch' | undefined {
+	if (message.buildIdentity === undefined) {
+		return 'mismatch';
+	}
+	if (typeof message.buildIdentity !== 'string') {
+		return undefined;
+	}
+	return message.buildIdentity === buildIdentity ? 'match' : 'mismatch';
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {
