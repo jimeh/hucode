@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mainWindow } from '../../base/browser/window.js';
+import { localize } from '../../nls.js';
 
 export const HUCODE_WEB_VERSION_MISMATCH_BLOCKER_ID =
 	'hucode-web-version-mismatch-blocker';
@@ -63,19 +64,26 @@ export function showHucodeWebVersionMismatchBlocker(
 
 	const title = targetDocument.createElement('h1');
 	title.id = `${overlay.id}-title`;
-	title.textContent = 'Reload Hucode to continue';
+	title.textContent = localize(
+		'hucodeWebVersionMismatchTitle',
+		'Reload Hucode to continue'
+	);
 	title.style.cssText = 'margin:0 0 12px;font-size:20px;font-weight:600';
 
 	const description = targetDocument.createElement('p');
 	description.id = `${overlay.id}-description`;
-	description.textContent =
-		'The Omni shell and hosted workbench are running different versions ' +
-		'of Hucode. Reload the browser tab to continue.';
+	description.textContent = localize(
+		'hucodeWebVersionMismatchDescription',
+		'The Omni shell and hosted workbench are running different versions of Hucode. Reload the browser tab to continue.'
+	);
 	description.style.cssText = 'margin:0 0 20px;line-height:1.5';
 
 	const button = targetDocument.createElement('button');
 	button.type = 'button';
-	button.textContent = 'Reload Hucode';
+	button.textContent = localize(
+		'hucodeWebVersionMismatchReload',
+		'Reload Hucode'
+	);
 	button.style.cssText = [
 		'border:1px solid transparent',
 		'border-radius:2px',
@@ -109,6 +117,7 @@ export function showHucodeWebVersionMismatchBlocker(
 	return overlay;
 }
 
+/** Disables interaction with every element outside the mismatch blocker. */
 function setSiblingElementsInert(
 	container: Element,
 	overlay: HTMLElement

@@ -2886,6 +2886,7 @@ function isHucodeOmniWebChildMessage(
 		typeof message.focused === 'boolean';
 }
 
+/** Extracts a child-message target before validating its complete wire shape. */
 function getHucodeOmniWebChildMessageTarget(value: unknown): {
 	readonly type: HucodeOmniWebChildMessageType;
 	readonly instanceId: string;
@@ -2905,6 +2906,10 @@ function getHucodeOmniWebChildMessageTarget(value: unknown): {
 	return { type: message.type, instanceId: message.instanceId };
 }
 
+/**
+ * Validates required Ready-message fields while leaving the optional build
+ * identity untyped for compatibility classification.
+ */
 function isHucodeOmniWebReadyMessageWireShape(
 	value: unknown
 ): value is Omit<IHucodeOmniWebReadyMessage, 'buildIdentity'> & {

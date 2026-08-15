@@ -520,6 +520,10 @@ async function observeServerUserDataBootstrap(
 	};
 }
 
+/**
+ * Returns the document-relative endpoint for a versioned Hucode path, or
+ * undefined when the path lacks one product segment or a Hucode endpoint.
+ */
 function getVersionedHucodeEndpointPath(
 	pathname: string
 ): string | undefined {

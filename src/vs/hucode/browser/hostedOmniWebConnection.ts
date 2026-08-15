@@ -422,6 +422,10 @@ function isPortMessageTarget(value: unknown, instanceId: string): boolean {
 		message.instanceId === instanceId;
 }
 
+/**
+ * Validates required port-message fields while leaving the optional build
+ * identity untyped for compatibility classification.
+ */
 function isPortMessageWireShape(
 	value: unknown,
 	instanceId: string
