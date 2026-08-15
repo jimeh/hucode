@@ -88,6 +88,7 @@ import { reopenHucodeHostedWorkspaceInNormalWindow } from
 	'../common/omniWorkspaceReopen.js';
 import {
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+	getHucodeOmniWebBuildCompatibility,
 	HucodeOmniWebChildMessage,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
@@ -1683,7 +1684,7 @@ export class WebHucodeShellController extends Disposable
 			if (!isHucodeOmniWebReadyMessageWireShape(event.data)) {
 				return;
 			}
-			const compatibility = getReadyMessageBuildCompatibility(
+			const compatibility = getHucodeOmniWebBuildCompatibility(
 				event.data,
 				this.buildIdentity
 			);
@@ -2924,19 +2925,6 @@ function isHucodeOmniWebReadyMessageWireShape(
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);
-}
-
-function getReadyMessageBuildCompatibility(
-	message: { readonly buildIdentity?: unknown },
-	buildIdentity: string
-): 'match' | 'mismatch' | undefined {
-	if (message.buildIdentity === undefined) {
-		return 'mismatch';
-	}
-	if (typeof message.buildIdentity !== 'string') {
-		return undefined;
-	}
-	return message.buildIdentity === buildIdentity ? 'match' : 'mismatch';
 }
 
 function emptyState(): IHucodeHostedWorkspaceState {

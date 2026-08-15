@@ -95,10 +95,27 @@ export function showHucodeWebVersionMismatchBlocker(
 
 	content.append(title, description, button);
 	overlay.append(content);
-	for (const child of container.children) {
-		(child as HTMLElement).inert = true;
-	}
+	setSiblingElementsInert(container, overlay);
 	container.append(overlay);
+	const observer = new MutationObserver(() => {
+		if (!overlay.isConnected) {
+			observer.disconnect();
+			return;
+		}
+		setSiblingElementsInert(container, overlay);
+	});
+	observer.observe(container, { childList: true });
 	button.focus();
 	return overlay;
+}
+
+function setSiblingElementsInert(
+	container: Element,
+	overlay: HTMLElement
+): void {
+	for (const child of container.children) {
+		if (child !== overlay) {
+			(child as HTMLElement).inert = true;
+		}
+	}
 }

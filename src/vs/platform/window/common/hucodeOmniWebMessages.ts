@@ -58,6 +58,20 @@ export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
 		(bootstrap.attempt as number) > 0;
 }
 
+/** Compares the build identity of an authenticated Omni web peer. */
+export function getHucodeOmniWebBuildCompatibility(
+	message: { readonly buildIdentity?: unknown },
+	buildIdentity: string
+): 'match' | 'mismatch' | undefined {
+	if (message.buildIdentity === undefined) {
+		return 'mismatch';
+	}
+	if (typeof message.buildIdentity !== 'string') {
+		return undefined;
+	}
+	return message.buildIdentity === buildIdentity ? 'match' : 'mismatch';
+}
+
 /**
  * Message transferring the shell IPC port into a hosted iframe workbench.
  */

@@ -34,6 +34,7 @@ import {
 import {
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+	getHucodeOmniWebBuildCompatibility,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 	isHucodeOmniWebConnectionBootstrapMetadata,
@@ -229,7 +230,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				port.close();
 				return;
 			}
-			const compatibility = getPortMessageBuildCompatibility(
+			const compatibility = getHucodeOmniWebBuildCompatibility(
 				event.data,
 				this.buildIdentity
 			);
@@ -444,19 +445,6 @@ function isPortMessageWireShape(
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);
-}
-
-function getPortMessageBuildCompatibility(
-	message: { readonly buildIdentity?: unknown },
-	buildIdentity: string
-): 'match' | 'mismatch' | undefined {
-	if (message.buildIdentity === undefined) {
-		return 'mismatch';
-	}
-	if (typeof message.buildIdentity !== 'string') {
-		return undefined;
-	}
-	return message.buildIdentity === buildIdentity ? 'match' : 'mismatch';
 }
 
 registerSingleton(
