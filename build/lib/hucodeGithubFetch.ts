@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/** Configures GitHub release asset selection. */
 interface IGithubReleaseAssetOptions {
 	readonly version: string;
 	readonly name: string | ((name: string) => boolean);

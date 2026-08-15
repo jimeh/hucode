@@ -103,6 +103,6 @@ suite('Hucode GitHub build fetches', () => {
 	test('leaves public API requests unauthenticated without a token', () => {
 		const headers = getGithubApiHeaders({});
 
-		assert.ok(!('Authorization' in headers));
+		assert.ok(!Object.hasOwn(headers, 'Authorization'));
 	});
 });
