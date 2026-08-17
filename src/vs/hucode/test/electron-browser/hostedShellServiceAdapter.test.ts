@@ -8,7 +8,7 @@ import { mainWindow } from '../../../base/browser/window.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { CancellationError } from '../../../base/common/errors.js';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -28,6 +28,7 @@ import { INativeWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/electron-browser/environmentService.js';
 import {
 	DesktopHostedShellServiceAdapter,
+	IDesktopHostedShellConnection,
 	IDesktopHostedShellConnectionAttempt,
 	IDesktopHostedShellConnectionOptions,
 } from
@@ -154,7 +155,7 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		void connection.complete(Object.assign(createUnavailableShell(), {
 			dispose: () => connectionDisposed = true,
 		}));
-		await Promise.resolve();
+		await settled();
 		assert.strictEqual(connectionDisposed, true);
 	});
 
@@ -265,6 +266,72 @@ suite('DesktopHostedShellServiceAdapter', () => {
 			HucodeHostedShellOperationOutcome.Accepted
 		);
 	});
+
+	test('port close promptly reacquires without replay and ignores stale close',
+		async () => {
+			const timers = new ManualTimers();
+			const firstLifetime = disposables.add(new TestConnectionLifetime());
+			const secondLifetime = disposables.add(new TestConnectionLifetime());
+			const pending = new DeferredPromise<
+				HucodeHostedShellOperationOutcome
+			>();
+			let operationCalls = 0;
+			let attempts = 0;
+			const firstShell = Object.assign(createAcceptedShell(), {
+				closeSelf: () => {
+					operationCalls++;
+					return pending.p;
+				},
+				dispose: () => pending.error(new CancellationError()),
+			});
+			const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+				() => {
+					attempts++;
+					return createAttempt(
+						Promise.resolve(
+							attempts === 1 ? firstShell : createAcceptedShell()
+						),
+						undefined,
+						attempts === 1 ? firstLifetime : secondLifetime
+					);
+				},
+				createHostedEnvironment(),
+				timers.options
+			));
+			await settled();
+
+			const operation = adapter.closeSelf();
+			await settled();
+			firstLifetime.close();
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				false
+			);
+			assert.strictEqual(
+				await operation,
+				HucodeHostedShellOperationOutcome.Unavailable
+			);
+			assert.strictEqual(operationCalls, 1);
+
+			timers.fireNext(10);
+			await settled();
+			assert.strictEqual(attempts, 2);
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				true
+			);
+
+			firstLifetime.fireClose();
+			assert.strictEqual(
+				isHucodeHostedShellServiceAvailable(adapter),
+				true
+			);
+			assert.strictEqual(operationCalls, 1);
+			assert.strictEqual(
+				await adapter.closeSelf(),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+		});
 
 	test('ignores a late state result from a timed-out connection', async () => {
 		const timers = new ManualTimers();
@@ -659,11 +726,31 @@ function createTestPort(onClose?: () => void): MessagePort {
 
 function createAttempt(
 	promise: Promise<IHucodeHostedShellService | undefined>,
-	onDispose?: () => void
+	onDispose?: () => void,
+	lifetime?: TestConnectionLifetime
 ): IDesktopHostedShellConnectionAttempt {
 	let disposed = false;
 	return {
-		promise,
+		promise: promise.then(shell => {
+			if (!shell) {
+				return undefined;
+			}
+			let connectionDisposed = false;
+			return {
+				shell,
+				onDidClose: lifetime?.event ?? Event.None,
+				get closed() { return lifetime?.closed ?? false; },
+				dispose() {
+					if (connectionDisposed) {
+						return;
+					}
+					connectionDisposed = true;
+					(shell as IHucodeHostedShellService & {
+						dispose?: () => void;
+					}).dispose?.();
+				},
+			} satisfies IDesktopHostedShellConnection;
+		}),
 		dispose() {
 			if (!disposed) {
 				disposed = true;
@@ -671,6 +758,25 @@ function createAttempt(
 			}
 		},
 	};
+}
+
+class TestConnectionLifetime {
+	private readonly closeEmitter = new Emitter<void>();
+	readonly event = this.closeEmitter.event;
+	closed = false;
+
+	close(): void {
+		this.closed = true;
+		this.fireClose();
+	}
+
+	fireClose(): void {
+		this.closeEmitter.fire();
+	}
+
+	dispose(): void {
+		this.closeEmitter.dispose();
+	}
 }
 
 function createAcceptedShell(): IHucodeHostedShellService {
