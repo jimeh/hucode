@@ -1780,12 +1780,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		view.webContents.on('did-start-loading', () => {
 			this.trustView(instance);
 		});
-		view.webContents.on('did-start-navigation', (
-			_event,
-			_url,
+		view.webContents.on('did-start-navigation', ({
 			isSameDocument,
-			isMainFrame
-		) => {
+			isMainFrame,
+		}) => {
 			if (isMainFrame && !isSameDocument) {
 				this.invalidateHostedShellBinding(instance);
 			}

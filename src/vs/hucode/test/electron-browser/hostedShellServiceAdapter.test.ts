@@ -188,6 +188,51 @@ suite('DesktopHostedShellServiceAdapter', () => {
 		);
 	});
 
+	test('closed connection at install promptly reacquires', async () => {
+		const timers = new ManualTimers();
+		const firstLifetime = disposables.add(new TestConnectionLifetime());
+		firstLifetime.close();
+		let attempts = 0;
+		let firstShellDisposed = false;
+		const firstShell = Object.assign(createAcceptedShell(), {
+			dispose: () => firstShellDisposed = true,
+		});
+		const adapter = disposables.add(new DesktopHostedShellServiceAdapter(
+			() => {
+				attempts++;
+				return createAttempt(
+					Promise.resolve(
+						attempts === 1 ? firstShell : createAcceptedShell()
+					),
+					undefined,
+					attempts === 1 ? firstLifetime : undefined
+				);
+			},
+			createHostedEnvironment(),
+			timers.options
+		));
+
+		await settled();
+		assert.strictEqual(attempts, 1);
+		assert.strictEqual(firstShellDisposed, true);
+		assert.strictEqual(
+			isHucodeHostedShellServiceAvailable(adapter),
+			false
+		);
+
+		timers.fireNext(10);
+		await settled();
+		assert.strictEqual(attempts, 2);
+		assert.strictEqual(
+			isHucodeHostedShellServiceAvailable(adapter),
+			true
+		);
+		assert.strictEqual(
+			await adapter.closeSelf(),
+			HucodeHostedShellOperationOutcome.Accepted
+		);
+	});
+
 	test('times out acquisition, retries, and closes a late client', async () => {
 		const timers = new ManualTimers();
 		const first = new DeferredPromise<

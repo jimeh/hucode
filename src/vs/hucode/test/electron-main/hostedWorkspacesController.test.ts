@@ -91,15 +91,12 @@ class TestWebContents extends EventEmitter {
 	}
 
 	startNavigation(isSameDocument: boolean, isMainFrame: boolean): void {
-		this.emit(
-			'did-start-navigation',
-			{} as Electron.Event,
-			'vscode-file://test/workbench',
+		this.emit('did-start-navigation', {
+			url: 'vscode-file://test/workbench',
 			isSameDocument,
 			isMainFrame,
-			this.processId,
-			1
-		);
+			frame: null,
+		} as Electron.Event<Electron.WebContentsDidStartNavigationEventParams>);
 	}
 
 	isDestroyed(): boolean {
