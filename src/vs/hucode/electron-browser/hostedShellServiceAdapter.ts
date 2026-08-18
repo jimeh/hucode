@@ -5,12 +5,11 @@
 
 import { VSBuffer } from '../../base/common/buffer.js';
 import { isCancellationError } from '../../base/common/errors.js';
-import { Emitter } from '../../base/common/event.js';
+import { Emitter, Event } from '../../base/common/event.js';
 import {
 	Disposable,
 	DisposableStore,
 	IDisposable,
-	isDisposable,
 	MutableDisposable,
 } from '../../base/common/lifecycle.js';
 import { Client as MessagePortClient } from
@@ -42,11 +41,18 @@ import { INativeWorkbenchEnvironmentService } from
 
 /** One cancellable attempt to acquire the desktop hosted capability. */
 export interface IDesktopHostedShellConnectionAttempt extends IDisposable {
-	readonly promise: Promise<IHucodeHostedShellService | undefined>;
+	readonly promise: Promise<IDesktopHostedShellConnection | undefined>;
 }
 
 export type DesktopHostedShellConnector = () =>
 	IDesktopHostedShellConnectionAttempt;
+
+/** One acquired desktop hosted-shell capability and its transport lifetime. */
+export interface IDesktopHostedShellConnection extends IDisposable {
+	readonly shell: IHucodeHostedShellService;
+	readonly onDidClose: Event<void>;
+	readonly closed: boolean;
+}
 
 /** Timing seams for deterministic connection-lifecycle tests. */
 export interface IDesktopHostedShellConnectionOptions {
@@ -273,35 +279,35 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 
 	private finishConnectionAttempt(
 		attempt: IDesktopHostedShellConnectionAttempt,
-		shell: IHucodeHostedShellService | undefined
+		connection: IDesktopHostedShellConnection | undefined
 	): void {
 		if (this.connectionAttempt !== attempt) {
-			if (isDisposable(shell)) {
-				shell.dispose();
-			}
+			connection?.dispose();
 			return;
 		}
 		this.connectionAttempt = undefined;
 		this.clearAcquisitionTimer();
 		attempt.dispose();
-		if (this.disposed || !shell) {
-			if (isDisposable(shell)) {
-				shell.dispose();
-			}
+		if (this.disposed || !connection) {
+			connection?.dispose();
 			if (!this.disposed) {
 				this.scheduleRetry();
 			}
 			return;
 		}
 
-		this.installConnection(shell);
+		this.installConnection(connection);
 	}
 
-	private installConnection(shell: IHucodeHostedShellService): void {
+	private installConnection(
+		connection: IDesktopHostedShellConnection
+	): void {
+		const shell = connection.shell;
 		const disposables = new DisposableStore();
-		if (isDisposable(shell)) {
-			disposables.add(shell);
-		}
+		disposables.add(connection);
+		disposables.add(connection.onDidClose(() => {
+			this.invalidateConnection(shell);
+		}));
 		disposables.add(shell.onDidChangeState(state => {
 			if (this.shell === shell) {
 				this.updateState(state);
@@ -309,6 +315,10 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		}));
 		this.shellDisposables.value = disposables;
 		this.shell = shell;
+		if (connection.closed) {
+			this.invalidateConnection(shell);
+			return;
+		}
 		this.retryIndex = 0;
 		void this.refreshState(shell);
 		if (this.readyRequested) {
@@ -440,6 +450,13 @@ function connectDesktopHostedShell(): IDesktopHostedShellConnectionAttempt {
 				return undefined;
 			}
 			const disposables = new DisposableStore();
+			const closeEmitter = new Emitter<void>();
+			let closed = false;
+			const onClose = (): void => {
+				closed = true;
+				closeEmitter.fire();
+			};
+			port.addEventListener('close', onClose);
 			const client = disposables.add(new MessagePortClient(
 				port,
 				'hucodeHostedDesktopWorkbench'
@@ -450,9 +467,16 @@ function connectDesktopHostedShell(): IDesktopHostedShellConnectionAttempt {
 				),
 				() => true
 			);
-			return Object.assign(shell, {
-				dispose: () => disposables.dispose(),
-			});
+			return {
+				shell,
+				onDidClose: closeEmitter.event,
+				get closed() { return closed; },
+				dispose: () => {
+					port.removeEventListener('close', onClose);
+					closeEmitter.dispose();
+					disposables.dispose();
+				},
+			};
 		}),
 		dispose: () => acquisition.dispose(),
 	};

@@ -90,6 +90,15 @@ class TestWebContents extends EventEmitter {
 		this.processId = processId;
 	}
 
+	startNavigation(isSameDocument: boolean, isMainFrame: boolean): void {
+		this.emit('did-start-navigation', {
+			url: 'vscode-file://test/workbench',
+			isSameDocument,
+			isMainFrame,
+			frame: null,
+		} as Electron.Event<Electron.WebContentsDidStartNavigationEventParams>);
+	}
+
 	isDestroyed(): boolean {
 		return this.destroyed;
 	}
@@ -3952,7 +3961,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		await controller.openWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.setProcessId(2001);
-		viewFactory.views[0].rawWebContents.emit('did-start-navigation');
+		viewFactory.views[0].rawWebContents.startNavigation(false, true);
 		viewFactory.views[0].rawWebContents.emit('did-start-loading');
 
 		await controller.closeWorkspace();
@@ -4204,7 +4213,6 @@ suite('ResidentHostedWorkspacesController', () => {
 			const {
 				controller,
 				invalidatedHostedShellWebContentsIds,
-				viewFactory,
 			} = createController();
 
 			await controller.openWorkspace(alpha, 'project-alpha');
@@ -4229,14 +4237,45 @@ suite('ResidentHostedWorkspacesController', () => {
 				false
 			);
 
+			assert.deepStrictEqual(
+				invalidatedHostedShellWebContentsIds,
+				[1, 1]
+			);
+		});
+
+	test('only main-frame cross-document navigation invalidates hosted shell',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const {
+				controller,
+				invalidatedHostedShellWebContentsIds,
+				viewFactory,
+			} = createController();
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+
 			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+			viewFactory.views[0].rawWebContents.startNavigation(false, false);
+			viewFactory.views[0].rawWebContents.startNavigation(true, true);
 			assert.strictEqual(
-				controller.getHostedShellAuthorityState(replacement).disposed,
+				controller.getHostedShellAuthorityState(binding).disposed,
+				false
+			);
+			assert.deepStrictEqual(
+				invalidatedHostedShellWebContentsIds,
+				[1]
+			);
+
+			viewFactory.views[0].rawWebContents.startNavigation(false, true);
+			assert.strictEqual(
+				controller.getHostedShellAuthorityState(binding).disposed,
 				true
 			);
 			assert.deepStrictEqual(
 				invalidatedHostedShellWebContentsIds,
-				[1, 1, 1]
+				[1, 1]
 			);
 		});
 
@@ -4374,7 +4413,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await controller.openWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const stale = controller.acquireHostedShellBinding(1)!;
-			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+			viewFactory.views[0].rawWebContents.startNavigation(false, true);
 
 			assert.strictEqual(controller.reloadHostedShellSelf(stale), false);
 			assert.strictEqual(controller.focusHostedShellSelf(stale), false);
@@ -4406,7 +4445,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const beforeUnload = hostedWebContents.sent[0].request as {
 				okChannel: string;
 			};
-			hostedWebContents.emit('did-start-loading');
+			hostedWebContents.startNavigation(false, true);
 			ipcMain.emitReply(beforeUnload.okChannel);
 
 			assert.strictEqual(await closing, false);
@@ -4706,7 +4745,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				}
 			);
 			await Promise.resolve();
-			viewFactory.views[0].rawWebContents.emit('did-start-loading');
+			viewFactory.views[0].rawWebContents.startNavigation(false, true);
 			void heldLoad.complete();
 
 			assert.strictEqual(
@@ -4845,7 +4884,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				}
 			);
 			await Promise.resolve();
-			viewFactory.views[1].rawWebContents.emit('did-start-loading');
+			viewFactory.views[1].rawWebContents.startNavigation(false, true);
 			void heldLoad.complete();
 
 			assert.strictEqual(

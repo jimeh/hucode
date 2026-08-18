@@ -1778,10 +1778,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.triggerPasteInWorkspace();
 		});
 		view.webContents.on('did-start-loading', () => {
-			this.invalidateHostedShellBinding(instance);
 			this.trustView(instance);
 		});
-		view.webContents.on('did-start-navigation', () => {
+		view.webContents.on('did-start-navigation', ({
+			isSameDocument,
+			isMainFrame,
+		}) => {
+			if (isMainFrame && !isSameDocument) {
+				this.invalidateHostedShellBinding(instance);
+			}
 			this.trustView(instance);
 		});
 		view.webContents.on('render-process-gone', () => {
