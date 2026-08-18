@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.72 - 2026-08-18
+
+### Bug Fixes
+
+- **omni:** restore stalled desktop hosted-shell commands (#189)
+
 ## 0.0.71 - 2026-08-15
 
 ### Bug Fixes
