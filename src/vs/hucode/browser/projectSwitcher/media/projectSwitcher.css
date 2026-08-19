@@ -131,8 +131,29 @@
 
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
-	.monaco-list-row:has(.hucode-project-switcher-section) {
+	.monaco-list-row:not(.selected):not(.focused):has(.hucode-project-switcher-section) {
 	background-color: var(--vscode-sideBar-background) !important;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:hover:not(.selected):not(.focused):has(.hucode-project-switcher-section) {
+	background-color: var(--vscode-list-hoverBackground) !important;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:has(.hucode-project-switcher-section)
+	.monaco-tl-twistie {
+	margin-left: calc(var(--vscode-spacing-size60, 6px) * -1);
+}
+
+/* Section nodes emulate pane headers, so their ancestry guide has no native
+ * pane-header counterpart. Keep its width so deeper project guides stay put. */
+.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-tl-indent > .indent-guide:first-child {
+	visibility: hidden;
 }
 
 .style-override.hucode-omni-workbench
@@ -143,9 +164,21 @@
 	top: 0;
 	left: var(--vscode-spacing-size40, 4px);
 	right: var(--vscode-spacing-size40, 4px);
-	height: 1px;
-	background-color: var(--vscode-sideBarSectionHeader-border);
+	height: var(--vscode-strokeThickness);
+	background-color: var(
+		--vscode-sideBarSectionHeader-border,
+		var(
+			--vscode-panelSectionHeader-border,
+			var(--vscode-panel-border)
+		)
+	);
 	pointer-events: none;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view .monaco-list
+	.monaco-list-row.focused:has(.hucode-project-switcher-section) {
+	outline-offset: calc(var(--vscode-spacing-size20, 2px) * -1);
 }
 
 .style-override.hucode-omni-workbench
@@ -337,6 +370,14 @@
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	font-size: 11px;
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-section {
+	font-size: var(--vscode-fontSize-label1);
+	font-weight: var(--vscode-fontWeight-semiBold);
+	text-transform: capitalize;
+	letter-spacing: normal;
 }
 
 .hucode-project-switcher-section-actions,

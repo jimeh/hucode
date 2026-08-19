@@ -67,7 +67,7 @@ import { Menus } from '../menus.js';
 import { IHostService } from '../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/common/environmentService.js';
-import { LayoutSettings } from
+import { FLOATING_PANEL_MARGIN, LayoutSettings } from
 	'../../../workbench/services/layout/browser/layoutService.js';
 import { IsOmniWindowContext } from
 	'../../../workbench/common/contextkeys.js';
@@ -207,6 +207,7 @@ const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
 const MODERN_PROJECT_SWITCHER_SECTION_HEIGHT = 28;
+const PROJECT_SWITCHER_DEFAULT_INDENT = 8;
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
@@ -226,6 +227,14 @@ export function getProjectSwitcherItemHeight(
 	return layout === 'twoLine'
 		? PROJECT_SWITCHER_ITEM_HEIGHT * 2
 		: PROJECT_SWITCHER_ITEM_HEIGHT;
+}
+
+/** Returns the outer top inset for the synthetic Omni sections. */
+export function getProjectSwitcherTreePaddingTop(
+	isOmniWindow: boolean,
+	modernUI: boolean
+): number {
+	return isOmniWindow && modernUI ? FLOATING_PANEL_MARGIN : 0;
 }
 
 function parseWorkbenchHandle(handle: string | undefined): string | undefined {
@@ -1326,9 +1335,20 @@ export class ProjectSwitcherWidget extends Disposable {
 			}));
 			this._register(this.configurationService.onDidChangeConfiguration(
 				event => {
-					if (event.affectsConfiguration(
+					const modernUIChanged = event.affectsConfiguration(
 						LayoutSettings.MODERN_UI
-					) || event.affectsConfiguration(
+					);
+					if (modernUIChanged) {
+						this.tree?.updateOptions({
+							paddingTop: getProjectSwitcherTreePaddingTop(
+								this.environmentService.isOmniWindow,
+								this.configurationService.getValue<boolean>(
+									LayoutSettings.MODERN_UI
+								) === true
+							),
+						});
+					}
+					if (modernUIChanged || event.affectsConfiguration(
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
 					) || event.affectsConfiguration(
 						HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
@@ -1473,6 +1493,13 @@ export class ProjectSwitcherWidget extends Disposable {
 			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
+				defaultIndent: PROJECT_SWITCHER_DEFAULT_INDENT,
+				paddingTop: getProjectSwitcherTreePaddingTop(
+					this.environmentService.isOmniWindow,
+					this.configurationService.getValue<boolean>(
+						LayoutSettings.MODERN_UI
+					) === true
+				),
 				identityProvider: { getId: item => item.id },
 				indent: getProjectSwitcherTreeIndent(
 					this.environmentService.isOmniWindow,

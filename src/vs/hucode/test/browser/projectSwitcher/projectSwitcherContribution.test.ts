@@ -85,6 +85,7 @@ import {
 	ProjectSwitcherAccessibilityProvider,
 	ProjectSwitcherDragAndDrop,
 	getProjectSwitcherItemHeight,
+	getProjectSwitcherTreePaddingTop,
 	ProjectSwitcherRenderer,
 	ProjectSwitcherWidget,
 } from
@@ -142,6 +143,18 @@ suite('ProjectSwitcherContribution', () => {
 			modernSection: 28,
 			modernCompactItem: 22,
 			modernTwoLineItem: 44,
+		});
+	});
+
+	test('uses a top inset only for the Modern UI Omni tree', () => {
+		assert.deepStrictEqual({
+			classicOmni: getProjectSwitcherTreePaddingTop(true, false),
+			modernOmni: getProjectSwitcherTreePaddingTop(true, true),
+			modernStandalone: getProjectSwitcherTreePaddingTop(false, true),
+		}, {
+			classicOmni: 0,
+			modernOmni: 4,
+			modernStandalone: 0,
 		});
 	});
 
@@ -1001,6 +1014,7 @@ suite('ProjectSwitcherContribution', () => {
 				getWidgetAriaLabel(): string;
 			};
 			readonly dnd: ProjectSwitcherDragAndDrop;
+			readonly defaultIndent: number;
 		} | undefined;
 		let treeDelegate: {
 			getHeight(item: ProjectSwitcherItem): number;
@@ -1170,6 +1184,7 @@ suite('ProjectSwitcherContribution', () => {
 			defaultWorktreeHeight: treeDelegate?.getHeight(worktreeItem()),
 			showInlineIcons: showInlineIcons?.(),
 			treeDnd: treeOptions?.dnd instanceof ProjectSwitcherDragAndDrop,
+			defaultIndent: treeOptions?.defaultIndent,
 			ariaLabel: treeOptions?.accessibilityProvider
 				.getWidgetAriaLabel(),
 			treeLayouts,
@@ -1184,6 +1199,7 @@ suite('ProjectSwitcherContribution', () => {
 			defaultWorktreeHeight: 44,
 			showInlineIcons: true,
 			treeDnd: true,
+			defaultIndent: 8,
 			ariaLabel: 'Workbenches and Projects',
 			treeLayouts: [{ height: 260, width: 420 }],
 			commands: ['hucode.projectSwitcher.addProject'],
