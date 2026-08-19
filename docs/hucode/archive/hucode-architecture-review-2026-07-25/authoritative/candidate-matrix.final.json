@@ -1,0 +1,1515 @@
+{
+  "headSha": "9988ea33b8b22cadc9332eae44c01df7589a22ad",
+  "baselineSha": "1b6a188127eeaf9194f945eb6eb89a657e93c54c",
+  "rawFindingCount": 40,
+  "candidateCount": 36,
+  "candidates": [
+    {
+      "id": "C001",
+      "title": "Serve-web hosted unload bypasses dirty-workbench vetoes",
+      "sourceFindings": [
+        "SOL-001"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "high",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C001",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "high",
+      "rationale": "The veto bypass is real and I could not find any guard that rescues it. hostedOmniWorkspace.web.contribution.ts prepareUnload awaits BrowserLifecycleService.shutdown() and returns true unless shutdown throws. Upstream shutdown() calls doShutdown() with no vetoShutdown argument, and handleVeto returns immediately when vetoShutdown is not a function, so every onBeforeShutdown veto (including BrowserWorkingCopyBackupTracker.onFinalBeforeShutdown) is computed and discarded. The parent then removes the iframe because requestUnload only needs 'ready'. Two corrections to the claim's scope. (1) The data-loss window is narrower than 'unsaved edits are discarded on routine actions': in web, auto-save defaults to afterDelay and files.hotExit defaults to onExit, so the backup tracker only vetoes when hot exit is off or a backup is still pending; when it does veto, the unload proceeds anyway and exactly the unbacked-up modified copies are lost. (2) The finding understates a second, unconditional defect: shutdown() is terminal and irreversible \u2014 it disposes the child's beforeunload and pagehide listeners and fires onWillShutdown/onDidShutdown \u2014 yet unloadAndRemoveInstance can still abort removal afterwards (generation changed, or instance replaced), leaving a live, interactive hosted workbench whose lifecycle has already shut down and which can no longer participate in any later unload. Severity stays high on the combination of ignored veto plus irreversible child lifecycle teardown.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/hostedOmniWorkspace.web.contribution.ts",
+          "line": 126,
+          "observation": "prepareUnload is `await this.lifecycleService.shutdown(); return true;` \u2014 it returns false only when shutdown throws, never for a lifecycle veto."
+        },
+        {
+          "path": "src/vs/workbench/services/lifecycle/browser/lifecycleService.ts",
+          "line": 93,
+          "observation": "shutdown() disposes beforeUnloadListener and unloadListener, flushes storage, then calls doShutdown() with no argument."
+        },
+        {
+          "path": "src/vs/workbench/services/lifecycle/browser/lifecycleService.ts",
+          "line": 122,
+          "observation": "handleVeto returns early with the comment 'veto handling disabled' when vetoShutdown is not a function, so onBeforeShutdown veto results are collected and dropped."
+        },
+        {
+          "path": "src/vs/workbench/services/lifecycle/browser/lifecycleService.ts",
+          "line": 158,
+          "observation": "onUnload sets didUnload/_willShutdown and fires onWillShutdown then onDidShutdown \u2014 a one-way transition with no re-arm path, so an aborted parent-side removal leaves the child permanently shut down."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1310,
+          "observation": "requestUnload maps prepareUnload true to 'ready'; unloadAndRemoveInstance removes the iframe on 'ready' but returns false (leaving the instance in place) when the generation check afterwards fails."
+        },
+        {
+          "path": "src/vs/workbench/services/workingCopy/browser/workingCopyBackupTracker.ts",
+          "line": 41,
+          "observation": "onFinalBeforeShutdown returns true only for modified copies without backups or when hot exit is disabled \u2014 this is the veto that is silently discarded."
+        }
+      ],
+      "remainingUncertainty": "Not runtime-verified. The precise loss surface depends on which working copies are backed up at the moment Suspend/Unload/Dismiss/Close is invoked; non-file custom working copies with hot exit off are the most exposed. The aborted-removal-after-shutdown path also needs a runtime repro to confirm the child stays interactive rather than blanking.",
+      "correctedClaim": "prepareUnload uses terminal BrowserLifecycleService.shutdown() as an unload preflight, so hosted-workbench vetoes are ignored and the iframe is removed regardless. Loss is limited to modified working copies without backups (hot exit off or backup pending) rather than all unsaved edits; additionally, shutdown() is irreversible, so any unload that is later aborted by the parent's generation check leaves a live workbench with a shut-down lifecycle."
+    },
+    {
+      "id": "C002",
+      "title": "Serve-web project persistence lacks durable atomic commits",
+      "sourceFindings": [
+        "SOL-002"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C002",
+      "verdict": "confirmed",
+      "recommendedSeverity": "medium",
+      "rationale": "Traced the write path and found no atomic-replace, no fsync, no error surfacing, and no production join. persistState mkdir's then calls fs.promises.writeFile directly on the live storagePath and swallows every failure into logService.error, so an acknowledged HTTP mutation can be silently unpersisted. writeState only queues the write (`void this.writeQueue.queue(...)`), so ordering is preserved but completion is never awaited by any caller. flushState exists and calls stateService.close(), but a repo-wide search finds only test call sites \u2014 production dispose() closes SSE clients and does not join the queue. On a truncated write, the next load falls into preserveUnreadableStateFile, which renames the file to .corrupt and continues with empty state, so the catalog presents as empty. The one mitigation the finding does not credit is that the corrupt file is preserved for manual recovery rather than deleted, and the payload is a small single JSON document, which narrows the torn-write window; neither changes the durability gap. Medium is correct: no repository data is at risk, only Hucode catalog metadata.",
+      "evidence": [
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 189,
+          "observation": "await fs.promises.writeFile(this.storagePath, ...) writes the live file in place \u2014 no temp file plus rename, unlike upstream FileStorage.doSave."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 192,
+          "observation": "catch (error) { this.logService.error(error); } \u2014 every persistence failure is swallowed; the HTTP caller already received success."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 172,
+          "observation": "writeState uses `void this.writeQueue.queue(...)`; the promise is intentionally not awaited by the request path."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 409,
+          "observation": "flushState() awaits stateService.close(); repo-wide search shows callers only in src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts (lines 72 and 98). Production dispose() at line 413 only ends SSE clients."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 148,
+          "observation": "preserveUnreadableStateFile renames the file to <path>.corrupt and continues with empty state \u2014 recoverable by hand, but the running server shows an empty project catalog."
+        }
+      ],
+      "remainingUncertainty": "Whether serve-web's shutdown path has any other joiner that indirectly awaits the queue (none found in the server module). The real-world torn-write probability for a small JSON document on the target filesystems was not measured."
+    },
+    {
+      "id": "C003",
+      "title": "Transient Git refresh erases worktrees and disables recovery",
+      "sourceFindings": [
+        "SOL-003",
+        "OPUS-005"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "orchestrator",
+      "status": "verified",
+      "verificationReviewer": "orchestrator",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C003",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "medium",
+      "rationale": "The refresh failure path replaces the last-known-good worktree list with an empty list and disposes the metadata watcher, so automatic recovery is lost. The original reports overstate permanence: the public refresh API can retry discovery and recreate watchers, so recovery does not require removing and re-adding the project.",
+      "evidence": [
+        {
+          "path": "src/vs/platform/projectManager/node/projectManagerMainService.ts",
+          "line": 603,
+          "observation": "The catch path logs, stores an empty worktree list, deletes and disposes the watcher, and returns an empty result."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/projectManagerMainService.ts",
+          "line": 674,
+          "observation": "Automatic refresh depends on metadata watcher callbacks scheduling a refresh."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/projectManagerMainService.ts",
+          "line": 381,
+          "observation": "The public refresh method can explicitly rerun refreshProject and recover after the transient condition clears."
+        }
+      ],
+      "remainingUncertainty": "No runtime test was run to measure how the Projects UI communicates the empty/error state or how discoverable manual refresh is.",
+      "correctedClaim": "A transient Git refresh failure discards the last-known-good worktree list and disables automatic watcher-driven recovery until an explicit refresh succeeds."
+    },
+    {
+      "id": "C004",
+      "title": "Project Git commands lack timeout and output-size policy",
+      "sourceFindings": [
+        "SOL-004"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C004",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "medium",
+      "rationale": "The missing process policy is confirmed: execGit passes only { cwd, encoding } to cp.execFile, so it inherits Node's ~1 MiB maxBuffer, has no timeout, no kill, no cancellation token, and no environment control (so a Git operation that triggers a credential or editor prompt can block forever). runGit is a thin trace-and-delegate wrapper adding nothing. The in-tree AgentHostGitService documents exactly this hazard and uses 32 MiB plus an explicit timeout with its own timer, which makes this an internal inconsistency rather than a theoretical concern. Two corrections. (1) The maxBuffer half of the claim needs a large repository: the listRefs format emits roughly 100-200 bytes per ref, so the 1 MiB ceiling is reached at roughly 5k-10k refs across heads, remotes, and tags \u2014 real for monorepos with many remote branches and tags, but not a routine condition, and it fails loudly as a rejected promise rather than corrupting anything. (2) The hang half is the more serious and more reachable part and applies to every command, not just listRefs \u2014 createWorktree can run checkout filters and hooks with no upper bound. Net severity stays medium, but the weight should move from output size to the unbounded, uncancellable child process.",
+      "evidence": [
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 399,
+          "observation": "execGit calls cp.execFile('git', args, { cwd, encoding: 'utf8' }, ...) \u2014 no timeout, no maxBuffer, no env, no kill or cancellation."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 259,
+          "observation": "runGit only traces and delegates to execGit, so all ten call sites (lines 63, 67, 83, 116, 144, 195, 205, 223 included) share the unbounded policy."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 127,
+          "observation": "listRefs requests refs/heads, refs/remotes and refs/tags with a seven-field format, so output scales with total ref count."
+        },
+        {
+          "path": "src/vs/platform/agentHost/node/agentHostGitService.ts",
+          "line": 678,
+          "observation": "_runGit uses an explicit 5s default timeout with its own timer plus a 32 MiB maxBuffer, with a comment stating Node's ~1 MiB default 'is easy to exceed' \u2014 the in-tree precedent this wrapper diverges from."
+        }
+      ],
+      "remainingUncertainty": "No child process was launched. The exact ref count needed to breach 1 MiB depends on branch-name and subject lengths; the hang scenario depends on repository hooks/filters and credential configuration that were not exercised.",
+      "correctedClaim": "GitWorktreeService.execGit delegates all subprocess resource policy to Node execFile defaults, so no Git command has a timeout, kill, cancellation, or environment policy, and none can exceed the ~1 MiB default output buffer. The unbounded/uncancellable child process is the primary reachable risk; the buffer ceiling additionally breaks reference selection only on repositories with roughly 5k+ refs, and does so with a visible error rather than silent truncation."
+    },
+    {
+      "id": "C005",
+      "title": "Committed Hucode tests are omitted from CI execution",
+      "sourceFindings": [
+        "SOL-005",
+        "OPUS-002"
+      ],
+      "category": "testing",
+      "reportedSeverity": "high",
+      "assignedVerifier": "orchestrator",
+      "status": "verified",
+      "notes": "Reviewers disagree whether four or five suites are omitted.",
+      "verificationReviewer": "orchestrator",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C005",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "high",
+      "rationale": "Five changed Hucode-related test files are absent from every active workflow invocation. The Node default runner excludes their browser/electron layers, while Hucode CI invokes the Electron runner with an explicit --run list that omits them. Sol counted only four because it scoped its inventory to src/vs/hucode; the fifth is the Hucode-added browser-view overlay manager suite.",
+      "evidence": [
+        {
+          "path": ".github/workflows/hucode-ci.yml",
+          "line": 343,
+          "observation": "The Hucode Electron test job uses an explicit sequence of --run paths and omits all five disputed suites."
+        },
+        {
+          "path": "test/unit/node/index.js",
+          "line": 57,
+          "observation": "The default Node glob excludes browser, electron-browser, electron-main, and electron-utility test layers."
+        },
+        {
+          "path": "test/unit/electron/renderer.js",
+          "line": 163,
+          "observation": "When --run is provided, the Electron runner loads only the explicitly listed modules instead of its default glob."
+        },
+        {
+          "path": "src/vs/hucode/test/browser/omniConfigurationService.test.ts",
+          "line": 1,
+          "observation": "Committed browser-layer suite omitted from the active CI list."
+        },
+        {
+          "path": "src/vs/hucode/test/browser/projectSwitcher/openProjectSwitcherTarget.test.ts",
+          "line": 1,
+          "observation": "Committed browser-layer suite omitted from the active CI list."
+        },
+        {
+          "path": "src/vs/hucode/test/electron-main/omniWorkspaceOpen.test.ts",
+          "line": 1,
+          "observation": "Committed Electron-main suite omitted from the active CI list."
+        },
+        {
+          "path": "src/vs/hucode/test/electron-main/omniWorkspaceReopen.test.ts",
+          "line": 1,
+          "observation": "Committed Electron-main suite omitted from the active CI list."
+        },
+        {
+          "path": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
+          "line": 1,
+          "observation": "Hucode-added electron-browser suite omitted from the active CI list."
+        }
+      ],
+      "remainingUncertainty": "The suites were not executed during this review; the finding concerns CI assignment rather than whether they currently pass.",
+      "correctedClaim": "Five committed Hucode-related suites are not assigned to any active CI runner, and CI has no completeness guard to detect future omissions."
+    },
+    {
+      "id": "C006",
+      "title": "Release publication can precede update-service refresh",
+      "sourceFindings": [
+        "SOL-006"
+      ],
+      "category": "build-release",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C006",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The ordering claim is factually correct: the 'Publish verified release' step runs `gh release edit \"$TAG_NAME\" --draft=false` as the last step of publish-release, and refresh-update-service is a separate job gated on `needs.publish-release.result == 'success'` that only then mints a GitHub App token and posts a repository_dispatch. There is no polling or verification of the update endpoint afterwards, so the two repositories are not committed atomically. I am downgrading severity for three reasons the finding does not weigh. (1) The failure is loud, not silent: a token-creation or dispatch failure fails the refresh-update-service job and turns the workflow run red, so it is discoverable without diagnosis of user reports. (2) The consequence is bounded and self-healing: the GitHub Release remains valid and downloadable, only automatic update discovery lags, and a re-run of the dispatch (or the next release) converges. (3) Inverting the order does not remove the transaction \u2014 refreshing update metadata before publication would advertise a version whose release is still a draft, which is a worse failure mode. The residual real gap is the absence of a retry/alert on the dispatch step, which is a low-severity hardening item.",
+      "evidence": [
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1383,
+          "observation": "The final step of publish-release is `gh release edit \"$TAG_NAME\" --draft=false`, making the release public."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1385,
+          "observation": "refresh-update-service is a distinct job with `needs: publish-release` and `needs.publish-release.result == 'success'`, so it can only start after publication."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1397,
+          "observation": "The job mints a separate GitHub App token via actions/create-github-app-token before dispatching \u2014 an additional post-publication failure point with no retry or fallback."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1409,
+          "observation": "The dispatch is a single `gh api --method POST .../dispatches` with no retry, no endpoint verification, and no degraded-release signal."
+        }
+      ],
+      "remainingUncertainty": "The hucode-updates repository's own workflow was not inspected, so I cannot confirm whether it independently reconciles from GitHub Releases (which would close the gap entirely) or acts only on the dispatch event.",
+      "correctedClaim": "Publication and update-metadata refresh are two non-atomic steps with the release published first and no verification of convergence. The window is real but the failure is visible as a failed workflow job and is self-healing on retry; the actionable gap is the missing retry/alerting on the dispatch step, not the ordering itself."
+    },
+    {
+      "id": "C007",
+      "title": "Forked Omni workbench and parts create recurring drift risk",
+      "sourceFindings": [
+        "FABLE-001",
+        "OPUS-008"
+      ],
+      "category": "upgradeability",
+      "reportedSeverity": "high",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C007",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "medium",
+      "rationale": "The drift surface is real: Hucode owns a 1,371-line replacement that implements IWorkbenchLayoutService plus several forked workbench parts, so upstream contract changes require deliberate comparison and replay. The reported high severity is not supported, however. The product explicitly requires a separate Omni renderer rather than a normal contribution overlay, documents the fork as intentional, and uses curated series replays to control upgrades. No present runtime failure or demonstrated upgrade regression was found. This is a material stable-readiness maintenance and regression-testing burden, not a high-severity architectural defect by itself.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/workbench.ts",
+          "line": 113,
+          "observation": "The Hucode-owned Workbench directly implements IWorkbenchLayoutService and continues through line 1371, creating a substantial parallel implementation of upstream workbench/layout contracts."
+        },
+        {
+          "path": "src/vs/hucode/browser/parts/titlebarPart.ts",
+          "line": 95,
+          "observation": "Hucode owns a separate TitlebarPart implementation; parallel PanelPart, AuxiliaryBarPart, ProjectsPart, and OmniHostPart classes are also present."
+        },
+        {
+          "path": "docs/hucode/agent-instructions.md",
+          "line": 401,
+          "observation": "The stated product constraint says an Omni window cannot be implemented as a normal workbench contribution overlay because the standard workbench would still render underneath."
+        },
+        {
+          "path": "docs/hucode/agent-instructions.md",
+          "line": 411,
+          "observation": "Repository guidance explicitly assigns the forked workbench and pane parts to the Omni shell and directs changes to the Hucode-local files."
+        },
+        {
+          "path": "docs/hucode/repo-strategy.md",
+          "line": 68,
+          "observation": "The upgrade process deliberately cherry-picks a curated replay series, providing a mitigation for recurring upstream reconciliation cost."
+        }
+      ],
+      "remainingUncertainty": "This pass did not replay the patch stack onto a different VS Code baseline, so it establishes structural drift exposure but not the actual conflict rate or effort of a future upgrade.",
+      "correctedClaim": "The intentionally forked Omni workbench and parts create a medium stable-readiness upgrade and regression-testing burden; current evidence does not establish a high-severity defect or show that the separate shell architecture is avoidable."
+    },
+    {
+      "id": "C008",
+      "title": "Omni layout service silently ignores unsupported show requests",
+      "sourceFindings": [
+        "OPUS-008"
+      ],
+      "category": "architecture",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C008",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The Omni layout service does silently ignore attempts to show its panel and auxiliary bar. That is a real mismatch with the broad IWorkbenchLayoutService surface, but both parts are deliberately unsupported in the shell and the source does not establish a medium-impact runtime failure. The practical defect is that generic or accidentally exposed layout actions receive no indication that the operation is unsupported.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/workbench.ts",
+          "line": 1011,
+          "observation": "setPartHidden routes panel and auxiliary-bar requests into the Omni-specific setters."
+        },
+        {
+          "path": "src/vs/hucode/browser/workbench.ts",
+          "line": 1052,
+          "observation": "The auxiliary-bar setter returns immediately for a show request because the Omni shell does not expose that part."
+        },
+        {
+          "path": "src/vs/hucode/browser/workbench.ts",
+          "line": 1086,
+          "observation": "The panel setter likewise returns immediately for a show request because the hosted workbench owns panel visibility."
+        },
+        {
+          "path": "src/vs/workbench/services/layout/browser/layoutService.ts",
+          "line": 416,
+          "observation": "The shared service contract describes setPartHidden as setting a part hidden or visible and exposes no unsupported-result channel."
+        }
+      ],
+      "remainingUncertainty": "No focused Omni layout test or runtime trace demonstrates a currently reachable generic caller that depends on the ignored show operation.",
+      "correctedClaim": "Omni deliberately implements show requests for unsupported shell parts as silent no-ops; this is a low-severity API/diagnostic mismatch, not an established medium-severity layout failure."
+    },
+    {
+      "id": "C009",
+      "title": "Desktop and web controllers duplicate lifecycle orchestration",
+      "sourceFindings": [
+        "FABLE-002"
+      ],
+      "category": "architecture",
+      "reportedSeverity": "high",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C009",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "medium",
+      "rationale": "The structural claim holds. The two orchestrators are independent implementations of the same lifecycle policy: hostedWorkspacesController.ts is 2089 lines with 28 references to the generation/deferral machinery, webShellService.ts is 1597 lines with 23, and only the passive state model and pure helpers are shared under src/vs/hucode/common (hostedWorkspaceState.ts, retainedWorkbench.ts). The synchronization invariant is encoded as prose in docs/hucode/architecture.md rather than as a code or test contract. I am lowering severity from high to medium on two grounds. First, this is a maintainability/drift risk with no independent runtime consequence \u2014 the finding's own cited proof of realized divergence is FABLE-004, which I verified separately as refuted (the shuttingDown guard exists and a test pins it), so the 'divergence has already begun' evidence does not stand as cited. Second, the two adapters are not merely duplicated: the desktop path is genuinely richer (WebContents-based two-phase before-unload/will-unload with 5s and 15s budgets versus a single 1.5s iframe handshake), so a meaningful share of the apparent duplication is irreducible platform mechanics rather than copy-paste policy. The extractable shared skeleton is real but smaller than the line counts suggest.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 153,
+          "observation": "2089-line ResidentHostedWorkspacesController; 28 matches for stateEmissionDeferrals|lifecycleGeneration|activationIntentGeneration|deferStateEmission."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 327,
+          "observation": "1597-line WebHucodeShellController with 23 matches for the same orchestration-state identifiers, implemented independently."
+        },
+        {
+          "path": "docs/hucode/architecture.md",
+          "line": 66,
+          "observation": "'Keep controller orchestration changes in sync across both adapters' \u2014 the invariant is a human instruction with no enforcing test."
+        },
+        {
+          "path": "src/vs/hucode/common/hostedWorkspaceState.ts",
+          "line": 96,
+          "observation": "HostedWorkspaceStateModel.activateInstance is genuinely shared, showing the passive model was extracted while the orchestration policy around it was not."
+        }
+      ],
+      "remainingUncertainty": "I did not enumerate the full behavioral difference set between the two close/shutdown/restore paths, so the true size of the extractable shared skeleton is unquantified.",
+      "correctedClaim": "Desktop and web hosted-workbench orchestration policy is implemented twice with the shared invariant recorded only in prose. This is a maintainability and drift risk (medium), not a high-severity finding: no realized divergence survives verification, and part of the apparent duplication is irreducible platform mechanics."
+    },
+    {
+      "id": "C010",
+      "title": "Serial hosted-workspace shutdown multiplies quit latency",
+      "sourceFindings": [
+        "FABLE-003",
+        "OPUS-010"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C010",
+      "verdict": "confirmed",
+      "recommendedSeverity": "medium",
+      "rationale": "Both desktop and web shutdown await each hosted workspace teardown sequentially, and the shell joins that work into workbench shutdown. Desktop has independent per-instance before-unload and will-unload waits of up to 5 and 15 seconds, while web has a 1.5-second unload wait. With multiple unresponsive residents, latency therefore scales with their count. The per-instance IPC tokens are unique, so no inspected guard requires serial handshakes.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 153,
+          "observation": "Desktop defines 5-second before-unload and 15-second will-unload timeouts."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1591,
+          "observation": "shutdownAllWorkspaces awaits destroyInstance inside a for loop."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1007,
+          "observation": "The web shutdown path also awaits unloadAndRemoveInstance one instance at a time."
+        },
+        {
+          "path": "src/vs/hucode/electron-browser/omni.main.ts",
+          "line": 290,
+          "observation": "The shell joins shutdownWindowWorkspaces into onWillShutdown."
+        }
+      ],
+      "remainingUncertainty": "Runtime timing with several deliberately stalled renderers is still needed to quantify typical user-visible latency."
+    },
+    {
+      "id": "C011",
+      "title": "Web shutdown may reactivate workspaces and rewrite recency",
+      "sourceFindings": [
+        "FABLE-004"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C011",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The guard the finding predicted might exist in the unread portion of the file does exist, in exactly the place that matters. removeInstance and activateInstance do indeed lack a shuttingDown check and do mutate in-memory lastActiveAt and the retained catalog during teardown \u2014 that part of the reading is accurate. But the retained catalog and resident set are persisted through exactly one call site, persistence.save inside emitState, and that call is wrapped in `if (!this.shuttingDown)`. shutdownWindowWorkspaces sets shuttingDown = true before the teardown loop and it is never reset, so no emitState during or after teardown can write. The material consequence \u2014 'next session restores with C treated as most recently active' \u2014 therefore cannot occur: the persisted snapshot is the one written before shutdown began. This is not inference: an existing test asserts it directly by deep-comparing the persistence state before and after shutdownWindowWorkspaces. The residual is purely in-memory churn during teardown (redundant activations and iframe visibility toggles on instances about to be destroyed), which has no observable effect.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1504,
+          "observation": "emitState guards the persistence write: `if (!this.shuttingDown) { this.persistence.save({ retainedWorkbenches..., residentWorkspaces..., activeWorktreePath... }) }`."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1017,
+          "observation": "shutdownWindowWorkspaces sets this.shuttingDown = true before the teardown loop; grep shows shuttingDown is assigned only here (declared at line 342, read only at 1504) and never reset to false."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1505,
+          "observation": "This is the sole persistence.save call site in the module (only other persistence references are the constructor injection at 360 and load() at 377), so there is no alternate write path that bypasses the guard."
+        },
+        {
+          "path": "src/vs/hucode/test/browser/webShellService.test.ts",
+          "line": 1727,
+          "observation": "Test 'page shutdown preserves the desired restore snapshot' snapshots persistence.state, calls shutdownWindowWorkspaces, and deepStrictEqual-compares \u2014 the exact regression the finding predicts is already pinned."
+        }
+      ],
+      "remainingUncertainty": "If a future change adds a second persistence write path or resets shuttingDown, the unguarded re-activation in removeInstance would become live. Guarding removeInstance/activateInstance is still reasonable defensive hygiene, but it is not a current defect."
+    },
+    {
+      "id": "C012",
+      "title": "Windows main integration inverts documented Hucode layering",
+      "sourceFindings": [
+        "FABLE-005"
+      ],
+      "category": "architecture",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C012",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The import direction is exactly as reported: windowsMainService.ts imports three modules from src/vs/hucode/electron-main, and a repo-wide search confirms windowsMainService.ts and app.ts are the only src/vs files outside src/vs/hucode that import Hucode modules (windowImpl.ts only references a hucode path as a FileAccess URL string, not an import). The architecture doc does state shared window and IPC code should not depend on src/vs/hucode and cites the platform-placed reply-target helper as the pattern. Three corrections lower this from a medium architecture defect to a low-severity consistency item. (1) The deviation is sanctioned, not accidental: eslint.config.js explicitly allow-lists 'vs/hucode/common/**' and 'vs/hucode/electron-main/**' in the layering rules, so the fork has deliberately opened this seam rather than drifting into it. (2) There is no layer cycle: the three omni* modules import only from base, platform (environment, instantiation, projectManager, window), and each other \u2014 nothing above the platform layer \u2014 so this is a convention violation, not a dependency inversion with structural consequences. (3) The recommended remedy does not deliver the claimed benefit: relocating the helpers into src/vs/platform changes three import paths but leaves the same number of Hucode call sites interleaved in getPathsToOpen/doOpen, so the upgrade conflict surface in windowsMainService.ts is essentially unchanged. The genuine concern \u2014 a lot of Hucode logic woven into the most churn-prone upstream main-process file \u2014 is real but is properly the subject of C007-style seam-thinning, not of moving files across directories.",
+      "evidence": [
+        {
+          "path": "src/vs/platform/windows/electron-main/windowsMainService.ts",
+          "line": 43,
+          "observation": "Imports tryOpenFilesInHucodeOmniWindow from '../../../hucode/electron-main/omniFileOpen.js'; lines 44 and 56 import omniWorkspaceOpen.js and omniOpenPlan.js."
+        },
+        {
+          "path": "eslint.config.js",
+          "line": 1601,
+          "observation": "The layer allow-list explicitly permits 'vs/hucode/common/**' and 'vs/hucode/electron-main/**', so lint sanctions this import rather than flagging it."
+        },
+        {
+          "path": "docs/hucode/architecture.md",
+          "line": 201,
+          "observation": "'Generic workbench files may import same-layer hucode* helpers or lower platform helpers, but should not import from src/vs/hucode/*' \u2014 the rule the import contradicts."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/omniOpenPlan.ts",
+          "line": 1,
+          "observation": "Combined imports of the three omni* modules resolve only to base/common, platform/{environment,instantiation,projectManager,window}, and sibling hucode modules \u2014 no workbench or code-layer dependency, so no layer cycle is created."
+        }
+      ],
+      "remainingUncertainty": "I did not measure the actual changed-line count in windowsMainService.ts against the baseline, so the finding's '~255 changed lines' figure is unverified. Whether the eslint allow-list entry was a deliberate policy decision or added to unblock the import is not recorded in the config.",
+      "correctedClaim": "windowsMainService.ts imports three modules from src/vs/hucode/electron-main, contradicting the architecture doc's stated rule. The deviation is explicitly allow-listed in eslint.config.js and creates no layer cycle, and relocating the helpers would not materially reduce the upgrade conflict surface in windowsMainService.ts \u2014 so this is a low-severity doctrine/config inconsistency, not a structural architecture defect."
+    },
+    {
+      "id": "C013",
+      "title": "Web reload and connection teardown rely on fixed timers",
+      "sourceFindings": [
+        "FABLE-006"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C013",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "All three timer sites exist as described: reloadWorkspace fires the reload command with `void` and arms a 500 ms hard-reload fallback, disposeConnection defers port disposal with setTimeout(0) and says so in its own comment, and UNLOAD_TIMEOUT_MS is 1500 against the desktop's 5000 + 15000 budget. So the structural claim \u2014 coordination by wall clock where an ack could be used \u2014 is confirmed. The impact claims do not survive scrutiny. The reload fallback is conditioned on `instance.state === 'loading'`, so it is a no-op once the instance transitions out of loading; the worst case is a redundant iframe reload of a workbench that is already reloading itself, which restarts a navigation rather than corrupting state. More importantly, the unload timeout fails in the safe direction: requestUnload maps a timeout to 'timeout', and unloadAndRemoveInstance only proceeds when the result is exactly 'ready', so a slow child causes a refused close, not a silent removal \u2014 which directly contradicts the finding's 'timeout-classified but actually-successful unloads' harm. The lost-hot-exit-backup scenario is speculative and was not demonstrated. Downgrading to low: real design smell, degraded UX on slow links, no established correctness or data-loss consequence.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 966,
+          "observation": "reloadWorkspace sets state='loading', calls `void this.runCommandInInstance(...'workbench.action.reloadWindow')`, then arms browser.setTimeout(..., 500) \u2014 no acknowledgement is awaited."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 973,
+          "observation": "The fallback body is guarded by `if (instance.state === 'loading' && instance.iframe)`, so it self-cancels once the instance leaves the loading state."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 330,
+          "observation": "UNLOAD_TIMEOUT_MS = 1500 versus the desktop controller's BEFORE_UNLOAD_TIMEOUT_MS = 5000 and WILL_UNLOAD_TIMEOUT_MS = 15000 (hostedWorkspacesController.ts:153-154)."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1318,
+          "observation": "requestUnload returns 'timeout' on expiry and unloadAndRemoveInstance requires exactly 'ready' to continue, so a timeout refuses the close instead of discarding the workbench \u2014 the safe direction."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1110,
+          "observation": "disposeConnection defers disposal via browser.setTimeout(..., 0) with a comment acknowledging it is waiting for a pending response to flush \u2014 a scheduling assumption in place of a settlement signal."
+        }
+      ],
+      "remainingUncertainty": "Not exercised over a throttled connection. Whether a redundant hard reload can interrupt hot-exit backup writing from the first reload is unverified, and the reconnect/handshake path that clears the 'loading' state after a graceful reload was not read.",
+      "correctedClaim": "The web shell coordinates reload and connection teardown with fixed timers instead of protocol acknowledgements. The fallback is self-cancelling and the unload timeout fails closed (refuses the close rather than removing the workbench), so the consequence is redundant reloads and refused closes on slow links, not lost hot-exit state."
+    },
+    {
+      "id": "C014",
+      "title": "Reload fallback timer is not cancelled on removal",
+      "sourceFindings": [
+        "OPUS-021"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C014",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The 500-millisecond handle is not retained, but the claimed stale reload does not follow. The callback reloads only while the same instance remains in loading state and still has an iframe. Removal first changes the instance state to unloaded, and successful or failed command completion also leaves loading. The discarded timer retains a small object for at most 500 milliseconds but is guarded against the reported effect.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 972,
+          "observation": "The fallback callback checks both instance.state === 'loading' and instance.iframe before reloading."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1270,
+          "observation": "removeInstance changes the instance state to unloaded before removing its iframe and indexes."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1382,
+          "observation": "Command completion transitions a loading instance to ready or crashed, making the fallback guard false."
+        }
+      ],
+      "remainingUncertainty": "There is no focused fake-timer test for removal during the 500-millisecond interval, though the synchronous state guard is explicit.",
+      "correctedClaim": "The timer is not cancelled, but current state transitions prevent it from reloading a removed or settled instance; cancellation would be cleanup hardening only."
+    },
+    {
+      "id": "C015",
+      "title": "Project switcher contribution is an oversized responsibility hub",
+      "sourceFindings": [
+        "FABLE-007"
+      ],
+      "category": "maintainability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C015",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The structural facts check out with one correction: projectSwitcher.contribution.ts is exactly 3193 lines and switchProjectWorktree.contribution.ts is 1074, but there are 24 `registerAction2(class extends Action2` registrations, not 25. The module does concentrate anonymous action classes, view/tree plumbing, and constants, while the logic layer (projectSwitcherTreeModel.ts, projectSwitcherViewState.ts) is separately extracted and tested \u2014 so the split point argument is sound and the upstream contrib convention does differ. I am lowering severity to low because the finding itself states there is no runtime risk, the claimed harm is internal replay-commit conflicts in a Hucode-owned file (a cost to the maintainer, not a defect), and the proposed remedy is explicitly mechanical with no behavior change. This is a legitimate cleanup item, but it does not belong at the same severity as reliability or correctness findings.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/projectSwitcher/projectSwitcher.contribution.ts",
+          "line": 1,
+          "observation": "wc -l reports 3193 lines; rg counts 24 occurrences of 'registerAction2(class extends Action2', not the 25 claimed."
+        },
+        {
+          "path": "src/vs/hucode/browser/projectSwitcher/switchProjectWorktree.contribution.ts",
+          "line": 1,
+          "observation": "1074 lines, confirming the second-largest-contribution claim."
+        }
+      ],
+      "remainingUncertainty": "I verified line counts and action-registration density but did not audit whether every action class is genuinely relocatable without circular imports, which would determine how mechanical the split really is.",
+      "correctedClaim": "projectSwitcher.contribution.ts is 3193 lines with 24 anonymous Action2 registrations plus view, tree, and constant definitions in one module. Real maintainability cost with no runtime risk; severity low."
+    },
+    {
+      "id": "C016",
+      "title": "Command-forwarding suppression uses module-global mutable state",
+      "sourceFindings": [
+        "FABLE-008"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "low",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C016",
+      "verdict": "confirmed",
+      "recommendedSeverity": "low",
+      "rationale": "Verified as written. The counter is a module-scope `let` in a common-layer file with only exported increment/decrement and predicate access, so no instance owns it and it is shared by every consumer in a renderer realm \u2014 including auxiliary windows, which share the renderer's module instances. Both production consumers (the electron-browser omniCommandService predicate check and the workbench forwarding contribution's wrapper) live in the shell renderer, so today there is exactly one forwarding surface and the counter behaves correctly; the nesting discipline via try/finally is sound. The finding correctly characterizes this as latent rather than active and correctly recommends leaving it in place, which is the right call \u2014 the re-entrancy-counter idiom matches upstream guard patterns and only the ownership of the state is off-convention. Low severity is accurate; I found nothing to narrow or extend.",
+      "evidence": [
+        {
+          "path": "src/vs/platform/window/common/hucodeOmniCommandRouting.ts",
+          "line": 68,
+          "observation": "`let hucodeOmniShellCommandForwardingDisabled = 0;` at module scope in a common-layer file \u2014 no owning instance."
+        },
+        {
+          "path": "src/vs/platform/window/common/hucodeOmniCommandRouting.ts",
+          "line": 101,
+          "observation": "withHucodeOmniShellCommandForwardingDisabled increments, awaits the callback, and decrements in finally; the paired predicate at line 115 is the only reader."
+        },
+        {
+          "path": "src/vs/workbench/electron-browser/hucodeOmniCommandForwarding.ts",
+          "line": 215,
+          "observation": "The only production wrapper call site; the only production predicate call site is src/vs/hucode/electron-browser/omniCommandService.ts:45 \u2014 a single forwarding surface today, confirming the issue is latent."
+        }
+      ],
+      "remainingUncertainty": "Whether Hucode's auxiliary shell windows share the main window's JS realm in every deployment (desktop renderer versus serve-web) was not runtime-confirmed; that determines whether an added second forwarding surface would actually contend on this counter."
+    },
+    {
+      "id": "C017",
+      "title": "Lazy IPC events depend on undocumented ProxyChannel discovery",
+      "sourceFindings": [
+        "FABLE-009"
+      ],
+      "category": "upgradeability",
+      "reportedSeverity": "low",
+      "assignedVerifier": "opus",
+      "status": "verified",
+      "verificationReviewer": "opus-verifier",
+      "verificationModel": "Opus 5",
+      "candidateId": "C017",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The dependency on undocumented ProxyChannel behavior is real: hucodeCreateLazyEventService works purely by filtering string keys out of Reflect.ownKeys and marking matching descriptors non-enumerable, so its effect depends entirely on ProxyChannel.fromService discovering events by enumeration. If upstream switches to a prototype walk or an explicit registration list, the laziness silently evaporates. That much is confirmed and the upgrade-checklist recommendation stands. The failure scenario's key premise is refuted, though: the finding assumes the existing test 'pins the Proxy traps rather than ProxyChannel's consumption of them' and therefore that a regression would produce no failing test. The test actually round-trips through the real ProxyChannel.fromService and asserts the source emitter has zero listeners before any channel.listen call, then asserts the count becomes 1 after listening. That is exactly the integration tripwire the finding recommends adding \u2014 an upstream change to event discovery would fail this test. With the drift detector already in place, the residual risk is a merge-time test failure to interpret rather than a silent production regression.",
+      "evidence": [
+        {
+          "path": "src/vs/base/parts/ipc/common/hucodeLazyEventService.ts",
+          "line": 16,
+          "observation": "The Proxy implements only ownKeys (filtering lazy event names) and getOwnPropertyDescriptor (forcing enumerable:false) \u2014 the mechanism relies wholly on enumeration-based discovery."
+        },
+        {
+          "path": "src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts",
+          "line": 39,
+          "observation": "The test calls the real `ProxyChannel.fromService(service, disposables)` rather than inspecting the Proxy traps directly."
+        },
+        {
+          "path": "src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts",
+          "line": 40,
+          "observation": "`assert.strictEqual(sourceListeners, 0)` immediately after fromService, with the emitter's onWillAddFirstListener counting subscriptions \u2014 this fails if ProxyChannel ever eagerly subscribes, which is precisely the drift tripwire the finding asks for."
+        }
+      ],
+      "remainingUncertainty": "The test covers the eager-subscription regression. It would not catch a change where ProxyChannel stops finding the event at all (making channel.listen fail rather than over-subscribe), though the same test's later assertion that listening yields 1 listener and delivers the event partially covers that too.",
+      "correctedClaim": "hucodeCreateLazyEventService depends on ProxyChannel's undocumented enumeration-based event discovery, so upstream changes there can disable the laziness. However, the recommended integration tripwire already exists: the unit test round-trips through the real ProxyChannel.fromService and asserts zero eager subscriptions, so such a regression would fail a test rather than pass silently. Only the upgrade-checklist entry remains outstanding."
+    },
+    {
+      "id": "C018",
+      "title": "No automated real-app hosted-workbench lifecycle coverage",
+      "sourceFindings": [
+        "FABLE-010",
+        "OPUS-016"
+      ],
+      "category": "testing",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C018",
+      "verdict": "confirmed",
+      "recommendedSeverity": "medium",
+      "rationale": "The repository has extensive controller-level lifecycle tests, but they use injected fake BrowserWindow, WebContents, IPC, and view implementations. The only packaged desktop Omni automation starts a clean profile and checks renderer counts; it does not create, switch, suspend, unload, crash, or restore a real hosted workbench, and no workflow invokes it. This leaves Electron WebContentsView behavior and full renderer unload/restore integration untested in automation. The gap matches the roadmap and is a medium stable-readiness risk rather than evidence that lifecycle behavior is currently broken.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
+          "line": 298,
+          "observation": "ResidentHostedWorkspacesController has broad lifecycle coverage, but the suite constructs injected fake views, webContents, BrowserWindow, and IPC collaborators rather than launching the application."
+        },
+        {
+          "path": "build/hucode/linux-omni-smoke.ts",
+          "line": 222,
+          "observation": "The packaged-app smoke waits for the Omni renderer and then checks renderer counts; it performs no hosted-workbench lifecycle action."
+        },
+        {
+          "path": "package.json",
+          "line": 17,
+          "observation": "hucode:smoke:linux-omni is declared as a package script, but a repository-wide workflow search found no invocation of this script."
+        },
+        {
+          "path": ".github/workflows/hucode-ci.yml",
+          "line": 391,
+          "observation": "CI runs the mocked ResidentHostedWorkspacesController unit suite, not a packaged or launched real-app hosted-workbench scenario."
+        },
+        {
+          "path": "docs/hucode/roadmap.md",
+          "line": 109,
+          "observation": "The roadmap explicitly places improved packaged-app and browser end-to-end coverage in later or exploratory work."
+        }
+      ],
+      "remainingUncertainty": "Manual acceptance testing may cover some real-app scenarios outside repository automation. This pass did not launch a packaged app because the assigned verification was bounded and the current checkout lacks installed root test dependencies."
+    },
+    {
+      "id": "C019",
+      "title": "Serve-web worktree creation bypasses service-level validation",
+      "sourceFindings": [
+        "OPUS-001"
+      ],
+      "category": "security",
+      "reportedSeverity": "high",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C019",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The HTTP adapter casts an arbitrary options object and the Git service does not validate it or terminate option parsing. A safe scratch reproduction confirmed that startPoint='--detach' is interpreted by Git as an option even after the worktree path. The original high-severity security impact is overstated: execFile uses an argv array rather than a shell, branchName follows -b and Git validates it, requests pass the connection-token gate, and an absolute custom path is already part of the public options shape. This is primarily service-boundary validation and correctness hardening for a privileged API client.",
+      "evidence": [
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 481,
+          "observation": "The worktrees route casts an arbitrary body options object to CreateWorktreeOptions and forwards it."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 156,
+          "observation": "createWorktree trims values but does not invoke branch/ref validation."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 188,
+          "observation": "The Git argv appends worktreePath and startPoint without a '--' option terminator."
+        },
+        {
+          "path": "src/vs/platform/projectManager/node/gitWorktreeService.ts",
+          "line": 399,
+          "observation": "Git execution uses execFile with an argv array, excluding shell-command injection."
+        },
+        {
+          "path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
+          "line": 153,
+          "observation": "The Projects route is reached only after the configured connection token is validated."
+        }
+      ],
+      "remainingUncertainty": "The exact set of no-argument Git flags accepted through startPoint was not exhaustively enumerated; the demonstrated flag changes behavior but does not establish privilege escalation.",
+      "correctedClaim": "Serve-web bypasses UI validation and permits Git option reinterpretation through startPoint, but this is a low-severity privileged-API correctness issue rather than shell injection or unauthenticated arbitrary command execution."
+    },
+    {
+      "id": "C020",
+      "title": "Test coverage avoids the largest imperative modules",
+      "sourceFindings": [
+        "OPUS-003"
+      ],
+      "category": "testing",
+      "reportedSeverity": "high",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C020",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "medium",
+      "rationale": "The direct-coverage gap is confirmed for the largest renderer orchestration modules: ProjectSwitcherWidget, the Hucode Workbench, HucodeShellMainService, and the shell Part classes are not imported by focused tests. The high severity and suggestion that coverage broadly avoids the risky logic are overstated. Significant decision-making has already been extracted into well-tested pure models and the heavily tested ResidentHostedWorkspacesController; Workbench delegates grid construction to a tested layout model. The uncovered DOM, drag/drop, service-wiring, visibility, and multi-window orchestration remains a meaningful medium stable-readiness gap, overlapping the real-app gap in C018.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/projectSwitcher/projectSwitcher.contribution.ts",
+          "line": 1044,
+          "observation": "ProjectSwitcherWidget begins here inside a 3,193-line contribution module; no focused test imports the widget or the contribution module directly."
+        },
+        {
+          "path": "src/vs/hucode/browser/workbench.ts",
+          "line": 806,
+          "observation": "The large Workbench delegates grid descriptor decisions to createOmniGridDescriptor, narrowing some of its direct untested logic."
+        },
+        {
+          "path": "src/vs/hucode/test/browser/omniLayoutModel.test.ts",
+          "line": 17,
+          "observation": "The extracted Omni layout model has focused tests for initial layout, sidebar visibility, web titlebar behavior, and small-window bounds."
+        },
+        {
+          "path": "src/vs/hucode/test/common/projectSwitcher/projectSwitcherTreeModel.test.ts",
+          "line": 34,
+          "observation": "Project-switcher tree construction and lifecycle projection are covered through a dedicated pure-model suite, so the full 3,193-line module is not wholly untested."
+        },
+        {
+          "path": "src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
+          "line": 298,
+          "observation": "The main hosted-workspace lifecycle controller has extensive focused coverage, including restore, overlap, failure, unload, crash, and persistence cases."
+        }
+      ],
+      "remainingUncertainty": "No coverage instrumentation was run, and root dependencies are absent in this checkout. Static import enumeration establishes the lack of direct tests but cannot quantify which imperative branches are incidentally exercised by broader upstream suites.",
+      "correctedClaim": "Direct tests are missing for the largest Omni renderer and shell orchestration classes, but core lifecycle and pure decision logic have substantial extracted coverage; the remaining gap is medium, not high."
+    },
+    {
+      "id": "C021",
+      "title": "Transient state-file read errors trigger destructive corruption handling",
+      "sourceFindings": [
+        "OPUS-004"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C021",
+      "verdict": "confirmed",
+      "recommendedSeverity": "medium",
+      "rationale": "One catch handles JSON parse errors and every non-ENOENT read error, and all of them enter the same rename-to-corrupt path. A transient read failure can therefore relocate valid state and make the running service load an empty project list. The backup remains available for manual recovery, so this is not literal data deletion, but subsequent mutations can create a new primary file and leave users unaware of the preserved state.",
+      "evidence": [
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 129,
+          "observation": "File reading and JSON parsing share one catch that distinguishes only ENOENT."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 149,
+          "observation": "Every other error calls renameSync to move the primary file to projects.json.corrupt."
+        },
+        {
+          "path": "src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts",
+          "line": 216,
+          "observation": "Coverage verifies malformed JSON recovery but does not exercise a transient read error containing valid JSON."
+        },
+        {
+          "path": "src/vs/platform/state/node/stateService.ts",
+          "line": 52,
+          "observation": "The upstream state service logs non-not-found load errors without relocating the source file."
+        }
+      ],
+      "remainingUncertainty": "Filesystem-specific rename behavior for EACCES, EBUSY, and sharing violations varies by platform, so not every transient read error will successfully relocate the file."
+    },
+    {
+      "id": "C022",
+      "title": "Clipboard forwarding cancels native behavior before success",
+      "sourceFindings": [
+        "OPUS-006"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C022",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "When forwarding is selected, the shell synchronously prevents the clipboard event and then discards the asynchronous forwarding result. A false result or channel failure cannot restore the native event. The original medium impact is not established because this path deliberately runs only outside Projects and local inputs, and the shell document may have no meaningful native copy/cut target in the common hosted-workspace case. It is nevertheless a real silent-failure path.",
+      "evidence": [
+        {
+          "path": "src/vs/workbench/electron-browser/hucodeOmniCommandForwarding.ts",
+          "line": 263,
+          "observation": "handleClipboardEvent prevents the event before starting a voided forwarding promise."
+        },
+        {
+          "path": "src/vs/workbench/electron-browser/hucodeOmniCommandForwarding.ts",
+          "line": 221,
+          "observation": "The forwarding helper catches channel failures and returns false."
+        },
+        {
+          "path": "src/vs/workbench/test/electron-browser/hucodeOmniCommandForwarding.test.ts",
+          "line": 224,
+          "observation": "Coverage asserts successful forwarding and default prevention but has no false-result behavior assertion."
+        }
+      ],
+      "remainingUncertainty": "A runtime reproduction is needed to determine whether a failed forward replaces a native clipboard operation that would otherwise have succeeded.",
+      "correctedClaim": "Failed forwarding is silently unrecoverable after preventDefault, but current source supports a low-severity failure-handling gap rather than a demonstrated high-frequency clipboard outage."
+    },
+    {
+      "id": "C023",
+      "title": "Projects SSE lacks lifecycle and flow-control safeguards",
+      "sourceFindings": [
+        "OPUS-007"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C023",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "The endpoint has no subscriber cap, keep-alive interval, or write-backpressure handling. Ignoring a false ServerResponse.write result can buffer data for a slow authenticated client. However, the alleged production cleanup leak through optional req.on is not reachable in the inspected server path because WebClientServer passes Node's IncomingMessage, which is an EventEmitter. EventSource also reconnects after a transport close, so the absence of periodic comments does not by itself establish silent permanent update loss. The concrete issue is low-rate flow-control hardening, not the combined medium-severity failure claimed.",
+      "evidence": [
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 45,
+          "observation": "The narrow adapter interface makes on optional, although the production caller supplies an IncomingMessage."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 582,
+          "observation": "The SSE handler stores every client, registers close cleanup, and sends no periodic keep-alive."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 612,
+          "observation": "Event writes ignore the response write return value and do not wait for drain."
+        },
+        {
+          "path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
+          "line": 153,
+          "observation": "The production route validates the connection token before passing the IncomingMessage to WebClientServer."
+        }
+      ],
+      "remainingUncertainty": "A slow-consumer measurement is required to quantify buffering under realistic project-change frequency.",
+      "correctedClaim": "The production endpoint lacks caps and backpressure handling, but its close cleanup is reachable and missing keep-alives do not prove permanent update loss; severity is low pending load evidence."
+    },
+    {
+      "id": "C024",
+      "title": "Disposed hosted controllers remain retained by the service",
+      "sourceFindings": [
+        "OPUS-009"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C024",
+      "verdict": "confirmed",
+      "recommendedSeverity": "medium",
+      "rationale": "Each controller is registered in the long-lived service DisposableStore, while window destruction only disposes it and removes it from the separate controllers map. DisposableStore retains registered objects until its own clear/dispose unless delete is called, so closed-window controllers remain strongly reachable for the main-process lifetime. Explicit creation of multiple Omni windows is supported, making repeated accumulation reachable.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 92,
+          "observation": "Window destruction disposes the controller and deletes only the controllers-map entry."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 471,
+          "observation": "Controller creation registers every controller in the service DisposableStore."
+        },
+        {
+          "path": "src/vs/base/common/lifecycle.ts",
+          "line": 420,
+          "observation": "DisposableStore holds registered disposables in a Set."
+        },
+        {
+          "path": "src/vs/base/common/lifecycle.ts",
+          "line": 481,
+          "observation": "A registered disposable remains in that Set until clear, delete, or deleteAndLeak removes it."
+        }
+      ],
+      "remainingUncertainty": "Heap profiling is still needed to quantify how much of a destroyed BrowserWindow graph remains reachable per retained controller."
+    },
+    {
+      "id": "C025",
+      "title": "OpenVSX verifier selection and error mapping are brittle",
+      "sourceFindings": [
+        "OPUS-011"
+      ],
+      "category": "security",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C025",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "Verifier selection is an exact open-vsx.org hostname comparison, and one error reclassification depends on an output substring, so the implementation is coupled to the current gallery and node-ovsx-sign diagnostics. The security impact in the source finding is not supported. Hucode's shipped product configuration uses the canonical hostname, selection and mappings have focused tests, and a nonmatching gallery selects vsce-sign; unsuccessful or unexecuted verification blocks installation in built products rather than silently accepting the extension. The realistic consequence is availability or less-specific diagnostics for an unsupported OpenVSX mirror, making this a low robustness issue.",
+      "evidence": [
+        {
+          "path": "build/hucode/mixin/stable/product.json",
+          "line": 59,
+          "observation": "The shipped product's gallery service URL is the canonical https://open-vsx.org/vscode/gallery value expected by the selector."
+        },
+        {
+          "path": "src/vs/platform/extensionManagement/node/hucodeOpenVsxExtensionSignatureVerifier.ts",
+          "line": 178,
+          "observation": "OpenVSX verifier selection is based on an exact hostname comparison with open-vsx.org."
+        },
+        {
+          "path": "src/vs/platform/extensionManagement/node/hucodeOpenVsxExtensionSignatureVerifier.ts",
+          "line": 129,
+          "observation": "SignatureManifestIsInvalid is reclassified as SignatureIsInvalid only when output includes the text 'signature is not valid'; unrecognized cases become UnknownError."
+        },
+        {
+          "path": "src/vs/platform/extensionManagement/node/extensionManagementService.ts",
+          "line": 349,
+          "observation": "In built products, any required verification status other than Success enters a rejection path; missing execution and unknown mappings produce internal verification failures rather than an accepted install."
+        },
+        {
+          "path": "src/vs/platform/extensionManagement/test/node/hucodeOpenVsxExtensionSignatureVerifier.test.ts",
+          "line": 68,
+          "observation": "Focused tests cover invalid-signature error mapping, manifest failures, code passthrough, and canonical gallery URL detection."
+        }
+      ],
+      "remainingUncertainty": "A self-hosted OpenVSX instance was not exercised, and the focused source test could not run locally because root dependencies are absent and mocha was not found. Static code and CI wiring establish fail-closed behavior, but the exact node-ovsx-sign error vocabulary may change across dependency upgrades.",
+      "correctedClaim": "Exact-host verifier selection and text-based error classification are brittle for alternate OpenVSX deployments and dependency diagnostic changes, but current Hucode configuration is covered and failures block installation rather than weakening signature enforcement."
+    },
+    {
+      "id": "C026",
+      "title": "Projects API permits state changes without an Origin header",
+      "sourceFindings": [
+        "OPUS-012"
+      ],
+      "category": "security",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C026",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "Origin-less requests are accepted, but Origin is a browser CSRF signal rather than authentication for arbitrary non-browser clients. In normal deployments the outer server validates the connection token first. In explicitly token-disabled deployments, accepting unauthenticated non-browser requests is the selected server mode, not a bypass caused by the missing Origin header. Browser cross-origin JSON mutations require a preflight, while simple POST content types are rejected. Requiring Origin would also reject legitimate non-browser callers without creating an authentication boundary.",
+      "evidence": [
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 659,
+          "observation": "The origin helper intentionally accepts requests without Origin and validates requests that provide it."
+        },
+        {
+          "path": "src/vs/server/node/hucodeWebProjectManagerServer.ts",
+          "line": 344,
+          "observation": "POST mutations require application/json rather than a CORS-simple form content type."
+        },
+        {
+          "path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
+          "line": 153,
+          "observation": "The outer HTTP server applies the configured connection-token policy before Projects dispatch."
+        },
+        {
+          "path": "src/vs/server/node/serverConnectionToken.ts",
+          "line": 24,
+          "observation": "Only the explicit no-token policy validates every request."
+        }
+      ],
+      "remainingUncertainty": "Deployment-level exposure still depends on operators binding a token-disabled server to an untrusted network, but that broader configuration risk is not specific to this endpoint.",
+      "correctedClaim": "The endpoint accepts Origin-less non-browser requests under the server's configured authentication policy; this is not an Origin-check bypass or standalone security defect."
+    },
+    {
+      "id": "C027",
+      "title": "Synchronous controller disposal launches unobserved async teardown",
+      "sourceFindings": [
+        "OPUS-013"
+      ],
+      "category": "reliability",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C027",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "dispose does discard a Promise, but it calls destroyInstance with graceful=false. That path skips the only awaited renderer handshake and executes all teardown synchronously before the async function returns its already-settled Promise. Browser-view destruction, trust removal, view closing, URL disposal, and map removal are synchronous APIs here. The claimed in-flight teardown race therefore does not occur. A synchronous exception would become an unobserved rejected Promise, which is a narrower defensive concern not demonstrated by current code.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 2082,
+          "observation": "dispose invokes destroyInstance with graceful=false."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1494,
+          "observation": "The only await in destroyInstance is inside the graceful branch that dispose disables."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1531,
+          "observation": "The non-graceful teardown body performs state, view, trust, URL, and map cleanup synchronously."
+        },
+        {
+          "path": "src/vs/platform/browserView/electron-main/browserViewMainService.ts",
+          "line": 272,
+          "observation": "Owned browser-view destruction is a synchronous void method."
+        }
+      ],
+      "remainingUncertainty": "The discarded Promise could hide an exception from a synchronous teardown API, but no inspected path establishes such a throw during normal disposal.",
+      "correctedClaim": "dispose discards an already-synchronous non-graceful teardown Promise; there is no current asynchronous lifecycle race, only a possible unobserved-exception hardening opportunity."
+    },
+    {
+      "id": "C028",
+      "title": "Hosted trust routing relies on an undocumented Electron field",
+      "sourceFindings": [
+        "OPUS-014"
+      ],
+      "category": "security",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C028",
+      "verdict": "confirmed-with-changes",
+      "recommendedSeverity": "low",
+      "rationale": "Both request filters read webContentsId through an optional intersection cast, so this Electron integration seam lacks compile-time protection. But the trust decision does not rely exclusively on that field: the service accepts either a tracked renderer process id or a tracked webContents id, and each hosted view registers both when available. If Electron omits the field, the code falls back to the deliberate process allowlist rather than automatically widening trust. The supported impact is upgrade brittleness or fail-closed resource breakage, not a demonstrated medium-severity security failure.",
+      "evidence": [
+        {
+          "path": "src/vs/code/electron-main/app.ts",
+          "line": 393,
+          "observation": "The vscode-file filter reads optional webContentsId through an explicit intersection cast."
+        },
+        {
+          "path": "src/vs/code/electron-main/app.ts",
+          "line": 427,
+          "observation": "The webview filter repeats the same untyped optional-field access."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 98,
+          "observation": "Trust succeeds for a tracked process id OR a tracked webContents id."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 600,
+          "observation": "trustView records both the view's webContents id and every positive renderer process id."
+        }
+      ],
+      "remainingUncertainty": "Dependencies are not installed in this checkout, so the absence of webContentsId from Electron 42.6.0's published declaration could not be independently re-checked; the source cast strongly indicates it.",
+      "correctedClaim": "An undocumented optional Electron field supplements a typed process-id allowlist, creating a low-severity upgrade seam rather than an established trust bypass."
+    },
+    {
+      "id": "C029",
+      "title": "Browser-view layout repeats recursive tree walks",
+      "sourceFindings": [
+        "OPUS-015"
+      ],
+      "category": "performance",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C029",
+      "verdict": "plausible",
+      "recommendedSeverity": "low",
+      "rationale": "Hosted layouts do resolve a host view with one recursive walk and then compute its offset with another, followed by a z-order add. The worktree architecture intentionally keeps hosted workbenches and owned browser views as top-level siblings, so the common tree is shallow and each walk can stop at a direct child. Re-adding visible views is also an intentional z-order invariant. Without profiling, the source establishes repeated work but not a medium-severity performance defect.",
+      "evidence": [
+        {
+          "path": "src/vs/platform/browserView/electron-main/browserViewNativeHost.ts",
+          "line": 122,
+          "observation": "Each hosted doLayout resolves the host, calculates its offset, applies bounds, and raises the browser view."
+        },
+        {
+          "path": "src/vs/platform/browserView/electron-main/browserViewNativeHost.ts",
+          "line": 199,
+          "observation": "Host resolution recursively traverses the Electron View tree."
+        },
+        {
+          "path": "src/vs/platform/browserView/electron-main/browserViewNativeHost.ts",
+          "line": 232,
+          "observation": "Offset calculation performs a separate recursive traversal."
+        },
+        {
+          "path": "src/vs/platform/browserView/electron-main/browserViewNativeHost.ts",
+          "line": 274,
+          "observation": "Visible browser views are re-added to their parent to maintain frontmost z-order."
+        }
+      ],
+      "remainingUncertainty": "Main-process profiling during resize with realistic resident and integrated-browser counts is required to show whether these shallow walks consume material frame time.",
+      "correctedClaim": "The layout path repeats two traversals, but realistic cost is unproven and likely shallow; retain as a low-severity profiling candidate."
+    },
+    {
+      "id": "C030",
+      "title": "Hosted restore policy does not react to configuration changes",
+      "sourceFindings": [
+        "OPUS-017"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "medium",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C030",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The setting controls which persisted workbenches are restored immediately during startup; it is not a live policy for unloading or loading the current resident set. The desktop controller accepts policy changes only before restoration begins, and later pushes are intentionally ignored. A configuration subscription after startup would therefore have no effect without redefining the setting. New windows/controllers read the current configuration, so the next restore uses the changed value as described.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/browser/hostedOmniWorkspace.contribution.ts",
+          "line": 114,
+          "observation": "The setting description says it controls which previously loaded workbenches are restored immediately."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 348,
+          "observation": "setRestorePolicy updates policy only before restoration or its shared restore promise starts."
+        },
+        {
+          "path": "src/vs/hucode/browser/parts/omniHostPart.ts",
+          "line": 189,
+          "observation": "The current configuration is pushed during shell initialization before getWindowState triggers restore."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 501,
+          "observation": "A newly created desktop controller also reads the current configuration value."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 1584,
+          "observation": "A newly constructed web controller receives the current configuration value for persisted restore."
+        }
+      ],
+      "remainingUncertainty": "The Settings UI could describe next-start semantics even more explicitly, but that is a copy question rather than the reported runtime defect.",
+      "correctedClaim": "Configuration changes intentionally affect the next hosted-workbench restoration; the policy is not specified or implemented as a live resident-set mutation."
+    },
+    {
+      "id": "C031",
+      "title": "Workspace message dispatch activates its target implicitly",
+      "sourceFindings": [
+        "OPUS-018"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C031",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "sendToWorkspace does activate and focus its target, but every current caller requires that behavior. Targeted openFiles first opens/activates the requested workspace; active-workspace openFiles passes the already active instance; action and keybinding forwarding resolve the active instance before dispatch. The helper is private, and there is no current passive-message caller whose target unexpectedly changes. Renaming or parameterizing it could clarify intent but would be speculative hardening.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1033,
+          "observation": "Targeted file opening activates the requested workspace before dispatching vscode:openFiles."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1056,
+          "observation": "The second direct caller explicitly dispatches to the active workspace."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1941,
+          "observation": "Command forwarding obtains the active instance before calling sendToWorkspace."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1950,
+          "observation": "The private helper activates, focuses, and sends as one visible-workspace operation."
+        }
+      ],
+      "remainingUncertainty": "A future caller could misuse the broadly named private helper, but that is not a defect at current HEAD.",
+      "correctedClaim": "Activation is bundled into a private visible-workspace dispatch helper, and all current callers either target or already use the active workspace."
+    },
+    {
+      "id": "C032",
+      "title": "Hosted paste detection uses the macOS modifier on every platform",
+      "sourceFindings": [
+        "OPUS-019"
+      ],
+      "category": "correctness",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C032",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The special interception is indeed limited to unmodified Meta+V, but the reported Linux/Windows paste failure does not follow. The before-input-event listener prevents default only when isPasteKeyDown returns true. Ctrl+V returns false and therefore continues into the hosted renderer's normal input path. The source and focused test describe a macOS-style native-paste reroute, not a cross-platform replacement for all paste handling.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 1231,
+          "observation": "before-input-event returns without preventDefault when isPasteKeyDown is false."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 2030,
+          "observation": "The special reroute recognizes Meta+V and explicitly excludes Control."
+        },
+        {
+          "path": "src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
+          "line": 2135,
+          "observation": "Focused coverage specifies the Meta+V native-paste reroute."
+        }
+      ],
+      "remainingUncertainty": "A runtime platform test would still be useful to confirm Chromium's ordinary Ctrl+V behavior inside the hosted WebContentsView, but current code does not cancel it.",
+      "correctedClaim": "Only Meta+V is specially rerouted; Ctrl+V is deliberately left to the hosted renderer rather than being blocked."
+    },
+    {
+      "id": "C033",
+      "title": "Shell IPC methods disagree on stale-window behavior",
+      "sourceFindings": [
+        "OPUS-020"
+      ],
+      "category": "maintainability",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C033",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The different stale-window behaviors correspond to different lifecycle contracts. Normal state-mutating/query IPC uses getOrCreateController and rejects a non-Omni or destroyed window id. Late readiness notifications and shutdown cleanup use controllers.get and no-op because they can legitimately race teardown and must not recreate a controller. Treating these as one uniform contract would make lifecycle cleanup less safe, not more consistent.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 335,
+          "observation": "A late hosted-workspace-ready notification is intentionally ignored when its controller is already gone."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 430,
+          "observation": "Shutdown operates only on an existing controller and safely returns if teardown already removed it."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/shellMainService.ts",
+          "line": 458,
+          "observation": "Normal operations create a controller for a live Omni window and reject invalid window ids."
+        }
+      ],
+      "remainingUncertainty": "No caller-level failure caused by these intentionally different lifecycle semantics was identified.",
+      "correctedClaim": "Late lifecycle callbacks no-op while ordinary commands reject invalid targets; the distinction is intentional and appropriate to teardown races."
+    },
+    {
+      "id": "C034",
+      "title": "Release checksums are published without independent authenticity",
+      "sourceFindings": [
+        "OPUS-022"
+      ],
+      "category": "build-release",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C034",
+      "verdict": "confirmed",
+      "recommendedSeverity": "low",
+      "rationale": "SHA256SUMS is generated from the release payloads and uploaded beside them without a detached signature, provenance attestation, or other independently verifiable identity. It therefore detects corruption but cannot distinguish wholesale substitution by an actor able to replace both assets and checksums. GitHub's authenticated release channel and macOS code signing reduce practical exposure, so the reported low severity is appropriate and this is not a beta blocker. The focused release-assets test passed in this verification.",
+      "evidence": [
+        {
+          "path": "build/hucode/release-assets.ts",
+          "line": 120,
+          "observation": "The publication helper computes SHA-256 lines for required assets and writes the plain SHA256SUMS file."
+        },
+        {
+          "path": "build/hucode/release-assets.ts",
+          "line": 125,
+          "observation": "SHA256SUMS is appended to the same release asset manifest as the payloads; no signature artifact is added."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1216,
+          "observation": "The publication job requests only contents: write; it does not request id-token or attestations permissions for build provenance."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 1347,
+          "observation": "The workflow uploads the prepared payloads and SHA256SUMS together to the draft GitHub Release."
+        }
+      ],
+      "remainingUncertainty": "Repository configuration outside this workflow, such as tag protection or organization-level artifact attestations, was not inspected. Such controls would not create a detached signature for the published SHA256SUMS file itself."
+    },
+    {
+      "id": "C035",
+      "title": "macOS signing does not restore the previous keychain list",
+      "sourceFindings": [
+        "OPUS-023"
+      ],
+      "category": "build-release",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-quality",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C035",
+      "verdict": "out-of-scope",
+      "recommendedSeverity": "none",
+      "rationale": "The implementation does replace the default keychain and user search list in CI mode and deletes the temporary keychain without restoring prior values. The claimed hazard, however, requires a persistent or self-hosted runner. The release matrix uses standard GitHub-hosted macOS runners, repository policy says Hucode workflows should use GitHub-hosted runners by default, and local signing mode is explicitly required not to change the caller's keychain configuration. Restoration would be prudent hardening if reusable runners or CI mode on developer hosts become supported, but it is not a defect in the stated current release scope.",
+      "evidence": [
+        {
+          "path": "build/hucode/release-build.ts",
+          "line": 1271,
+          "observation": "CI signing makes the temporary keychain the default and then sets the user keychain search list to that keychain alone."
+        },
+        {
+          "path": "build/hucode/release-build.ts",
+          "line": 1353,
+          "observation": "Cleanup deletes the temporary keychain and temp directory without restoring a captured default keychain or prior search list."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 90,
+          "observation": "The macOS packaging matrix uses the standard GitHub-hosted macos-15 runner."
+        },
+        {
+          "path": ".github/workflows/hucode-release-build.yml",
+          "line": 866,
+          "observation": "Packaging runs on the matrix's package_runner or runner values; no self-hosted label is present."
+        },
+        {
+          "path": "docs/hucode/agent-instructions.md",
+          "line": 288,
+          "observation": "The repository contract requires CI mode to make the temporary keychain default and active, while lines 292-294 reserve unchanged keychain state for local signing mode."
+        }
+      ],
+      "remainingUncertainty": "If the project later authorizes persistent self-hosted macOS runners, or users deliberately invoke --signing-mode ci on a reusable host, this behavior becomes a real low-severity cleanup defect.",
+      "correctedClaim": "CI mode intentionally replaces keychain state on ephemeral GitHub-hosted runners; the supported local mode preserves caller state. Missing restoration matters only for currently unsupported persistent-runner or local-CI-mode use."
+    },
+    {
+      "id": "C036",
+      "title": "Hosted state model silently evicts an impossible duplicate",
+      "sourceFindings": [
+        "OPUS-024"
+      ],
+      "category": "maintainability",
+      "reportedSeverity": "low",
+      "assignedVerifier": "sol",
+      "status": "verified",
+      "verificationReviewer": "sol-verifier-runtime",
+      "verificationModel": "GPT-5.6 Sol",
+      "candidateId": "C036",
+      "verdict": "refuted",
+      "recommendedSeverity": "none",
+      "rationale": "The replacement branch is not an accidental unreachable leak path; the state-model test explicitly defines normalized path collisions as last-instance-wins and verifies index consistency. Current production callers also guard, reuse, or remove an existing same-path instance before insertion. Replacing the behavior with an assertion would change a tested defensive model contract. There is no current undisposed duplicate and no concrete defect.",
+      "evidence": [
+        {
+          "path": "src/vs/hucode/common/hostedWorkspaceState.ts",
+          "line": 54,
+          "observation": "addInstance atomically replaces a different instance id indexed under the same normalized path."
+        },
+        {
+          "path": "src/vs/hucode/test/common/hostedWorkspaceState.test.ts",
+          "line": 187,
+          "observation": "A focused test intentionally verifies last-instance-wins behavior for normalized path collisions."
+        },
+        {
+          "path": "src/vs/hucode/electron-main/hostedWorkspacesController.ts",
+          "line": 758,
+          "observation": "Restore insertion skips a path already represented in the model."
+        },
+        {
+          "path": "src/vs/hucode/browser/webShellService.ts",
+          "line": 541,
+          "observation": "Web creation removes or unloads the current same-path instance before adding its replacement."
+        }
+      ],
+      "remainingUncertainty": "A future direct caller could add a live duplicate without disposal, but the complete current caller set does not.",
+      "correctedClaim": "The model intentionally and testably resolves normalized path collisions; current controllers uphold the lifecycle invariant before insertion."
+    }
+  ],
+  "verifiedCount": 36,
+  "survivingCount": 26,
+  "rejectedCount": 10
+}

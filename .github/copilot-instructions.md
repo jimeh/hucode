@@ -128,7 +128,9 @@ function f(x: number, y: string): void { }
 
 ### Code Quality
 
-- All files must include Microsoft copyright header
+- Source files must use the Microsoft, Hucode, or dual copyright header that
+  matches their provenance; follow
+  [Hucode's copyright policy](../docs/hucode/copyright.md)
 - Prefer `async` and `await` over `Promise` and `then` calls
 - All user facing messages must be localized using the applicable localization framework (for example `nls.localize()` method)
 - Don't add tests to the wrong test suite (e.g., adding to end of file instead of inside relevant suite)
