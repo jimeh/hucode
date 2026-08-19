@@ -46,6 +46,18 @@ import { mainWindow } from '../../../../base/browser/window.js';
  */
 const EDITOR_FRAME_BORDER_WIDTH = 1;
 
+/** Returns whether an editor part participates in the main floating-card layout. */
+export function shouldApplyFloatingEditorLayout(
+	editorWindowId: number,
+	mainWindowId: number,
+	floatingPanelsEnabled: boolean,
+	modalEditor: boolean
+): boolean {
+	return editorWindowId === mainWindowId &&
+		floatingPanelsEnabled &&
+		!modalEditor;
+}
+
 export interface IEditorPartUIState {
 	readonly serializedGrid: ISerializedGrid;
 	readonly activeGroup: GroupIdentifier;
@@ -1424,9 +1436,16 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 		this.left = left;
 
 		// When the floating panels experiment is enabled, reserve a margin around the
-		// main editor so it floats like the side bar and panel cards. Scope to the main
-		// window (auxiliary editor windows do not apply the matching CSS).
-		if (this.windowId === mainWindow.vscodeWindowId && this.layoutService.isFloatingPanelsEnabled()) {
+		// main editor so it floats like the side bar and panel cards. The editor has
+		// no top margin (it stays flush with the title bar). Scope to the main window
+		// (auxiliary editor windows do not apply the matching CSS). The matching
+		// `margin` is applied in CSS (`.floating-panels .part.editor`).
+		if (shouldApplyFloatingEditorLayout(
+			this.windowId,
+			mainWindow.vscodeWindowId,
+			this.layoutService.isFloatingPanelsEnabled(),
+			this.element.classList.contains('modal-editor-part')
+		)) {
 
 			// When the editor becomes the outermost card on a side (no floating part
 			// sits between it and the window edge) it adopts the same doubled gutter the

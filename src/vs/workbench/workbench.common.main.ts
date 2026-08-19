@@ -227,6 +227,7 @@ import './contrib/speech/browser/speech.contribution.js';
 
 // Chat
 import './contrib/chat/browser/chat.shared.contribution.js';
+import './contrib/chat/browser/agentSessions/agentSessions.contribution.js';
 import './contrib/chat/browser/chat.contribution.js';
 import './contrib/chat/browser/agentSessions/agentHost/agentHost.contribution.js';
 import './contrib/chat/browser/chat.view.contribution.js';
