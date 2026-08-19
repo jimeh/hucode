@@ -46,6 +46,9 @@ import { ChatEntitlementContext, IChatEntitlementService } from '../../../chat/c
 import { Lazy } from '../../../../../base/common/lazy.js';
 import { IDefaultAccountService } from '../../../../../platform/defaultAccount/common/defaultAccount.js';
 import { IDefaultAccountAuthenticationProvider } from '../../../../../base/common/defaultAccount.js';
+import {
+	HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY,
+} from '../../../extensions/common/hucodeExtensionEnablementPolicy.js';
 
 function createStorageService(instantiationService: TestInstantiationService, disposableStore: DisposableStore): IStorageService {
 	let service = instantiationService.get(IStorageService);
@@ -587,6 +590,20 @@ suite('ExtensionEnablementService Test', () => {
 		installed.push(extension);
 
 		instantiationService.stub(IWorkbenchEnvironmentService, { disableExtensions: ['pub.a'] });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.ok(!testObject.isEnabled(extension));
+		assert.deepStrictEqual(testObject.getEnablementState(extension), EnablementState.DisabledByEnvironment);
+	});
+
+	test('test hucode omni policy disables user extension without themes', async () => {
+		const extension = aLocalExtension('pub.a');
+		installed.push(extension);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, {
+			hucodeExtensionEnablementPolicy:
+				HUCODE_OMNI_EXTENSION_ENABLEMENT_POLICY
+		});
 		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
 
 		assert.ok(!testObject.isEnabled(extension));
@@ -1304,6 +1321,180 @@ suite('ExtensionEnablementService Test', () => {
 			EnablementState.EnabledGlobally,
 			EnablementState.EnabledGlobally,
 		]);
+	});
+
+	// The route distinction is the whole safety property of this filter: the
+	// shell must lose these built-ins and every workbench must keep them.
+	function omniShellStates(environment: Partial<IWorkbenchEnvironmentService>) {
+		instantiationService.stub(IWorkbenchEnvironmentService, environment);
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		const copilotChat = aLocalExtension('GitHub.copilot-chat', undefined, ExtensionType.System);
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		const unlistedBuiltin = aLocalExtension('vscode.theme-defaults', undefined, ExtensionType.System);
+
+		return [copilotChat, git, unlistedBuiltin].map(ext => testObject.getEnablementState(ext));
+	}
+
+	test('test omni shell disables the built-ins it does not expose', () => {
+		assert.deepStrictEqual(omniShellStates({ isOmniShellWindow: true }), [
+			EnablementState.DisabledByEnvironment,
+			EnablementState.DisabledByEnvironment,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test hosted omni workbenches keep normal extension behavior', () => {
+		assert.deepStrictEqual(omniShellStates({ isOmniShellWindow: false, isHostedOmniWorkspace: true }), [
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test the untrusted omni flag cannot strip a workbench', () => {
+		// `isOmniWindow` is settable from the web client's `payload` URL
+		// parameter, so only the trusted flag may drive extension policy.
+		assert.deepStrictEqual(
+			omniShellStates({ isOmniWindow: true, isOmniShellWindow: false }),
+			[
+				EnablementState.EnabledGlobally,
+				EnablementState.EnabledGlobally,
+				EnablementState.EnabledGlobally,
+			]
+		);
+	});
+
+	test('test the untrusted hosted flag cannot unfilter the shell', () => {
+		assert.deepStrictEqual(
+			omniShellStates({ isOmniShellWindow: true, isHostedOmniWorkspace: true }),
+			[
+				EnablementState.DisabledByEnvironment,
+				EnablementState.DisabledByEnvironment,
+				EnablementState.EnabledGlobally,
+			]
+		);
+	});
+
+	test('test a plain workbench keeps the shell built-ins', () => {
+		assert.deepStrictEqual(omniShellStates({}), [
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+			EnablementState.EnabledGlobally,
+		]);
+	});
+
+	test('test omni shell does not run the chat enablement migration', async () => {
+		// The migration writes profile-scoped state that every other window
+		// inherits, so running it in the shell would reach through to the
+		// hosted workbenches. Desktop never gets here because
+		// `skipBuiltinExtensions` carries the chat id; on web that filter is
+		// unset, which is exactly the divergence this guards.
+		// The instance from setup() is not omni-scoped and still reacts to
+		// storage changes, so it would run the migration this test is watching.
+		testObject.dispose();
+
+		const chatExtensionId = productService.defaultChatAgent!.chatExtensionId;
+		const chatExtension = aLocalExtension(chatExtensionId, undefined, ExtensionType.System);
+		installed.push(chatExtension);
+
+		const storageService = instantiationService.get(IStorageService);
+		storageService.store('builtinChatExtensionEnablementMigration', false, StorageScope.PROFILE, StorageTarget.MACHINE);
+
+		const chatEntitlementService = new TestChatEntitlementService();
+		chatEntitlementService.context = new Lazy(() => ({ state: { completed: false }, onDidChange: Event.None })) as unknown as Lazy<ChatEntitlementContext>;
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
+		await testObject.waitUntilInitialized();
+		const inOmniShell = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
+
+		// Same fixture in an ordinary window, to show the migration was
+		// reachable and the shell check is what stopped it.
+		storageService.store('builtinChatExtensionEnablementMigration', false, StorageScope.PROFILE, StorageTarget.MACHINE);
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: false });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService, chatEntitlementService));
+		await testObject.waitUntilInitialized();
+		const inWorkbench = storageService.getBoolean('builtinChatExtensionEnablementMigration', StorageScope.PROFILE);
+
+		assert.deepStrictEqual({ inOmniShell, inWorkbench }, {
+			inOmniShell: false,
+			inWorkbench: true,
+		});
+	});
+
+	test('test an explicitly enabled built-in stays disabled in the shell', async () => {
+		// The branch is deliberately not gated on `isEnabled`, matching
+		// `_isDisabledBySessionsWindow`: enabling vscode.git in an ordinary
+		// window must not pull it into the shell, and the shell must not offer
+		// to change that.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.EnabledGlobally);
+		assert.strictEqual(testObject.getEnablementState(git), EnablementState.EnabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.deepStrictEqual({
+			state: testObject.getEnablementState(git),
+			canChange: testObject.canChangeEnablement(git),
+		}, {
+			state: EnablementState.DisabledByEnvironment,
+			canChange: false,
+		});
+	});
+
+	test('test the shell wins over an extension enabled on the command line', async () => {
+		// `_isEnabledInEnv` is consulted after the shell branch and only when
+		// the extension is otherwise disabled, so both halves are needed to
+		// exercise the ordering: disabled by the user, then re-enabled with
+		// --enable-extension. Moving the shell branch below that one turns
+		// this into EnabledByEnvironment, and vscode.git loads in the shell.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.DisabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, {
+			isOmniShellWindow: true,
+			enableExtensions: <readonly string[]>['vscode.git'],
+		});
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.strictEqual(
+			testObject.getEnablementState(git),
+			EnablementState.DisabledByEnvironment
+		);
+	});
+
+	test('test the shell branch runs whatever the user enablement is', async () => {
+		// Pins that the branch is reached without an `isEnabled` guard. Adding
+		// one would leave this reporting DisabledGlobally: still disabled, so
+		// not a loading regression, but the shell would then offer to re-enable
+		// an extension it has no surface for.
+		const git = aLocalExtension('vscode.git', undefined, ExtensionType.System);
+		installed.push(git);
+
+		await testObject.setEnablement([git], EnablementState.DisabledGlobally);
+
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		assert.strictEqual(
+			testObject.getEnablementState(git),
+			EnablementState.DisabledByEnvironment
+		);
+	});
+
+	test('test omni shell leaves user extensions to the theme-only policy', () => {
+		instantiationService.stub(IWorkbenchEnvironmentService, { isOmniShellWindow: true });
+		testObject = disposableStore.add(new TestExtensionEnablementService(instantiationService));
+
+		const userCopilotChat = aLocalExtension('GitHub.copilot-chat');
+
+		assert.strictEqual(testObject.getEnablementState(userCopilotChat), EnablementState.EnabledGlobally);
 	});
 
 });
