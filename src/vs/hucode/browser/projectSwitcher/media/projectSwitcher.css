@@ -131,13 +131,13 @@
 
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
-	.monaco-list-row:not(.selected):not(.focused):has(.hucode-project-switcher-section) {
+	.monaco-list-row:not(.drop-target):not(.selected):not(.focused):has(.hucode-project-switcher-section) {
 	background-color: var(--vscode-sideBar-background) !important;
 }
 
 .style-override.hucode-omni-workbench
-	.hucode-project-switcher-view
-	.monaco-list-row:hover:not(.selected):not(.focused):has(.hucode-project-switcher-section) {
+	.hucode-project-switcher-view .monaco-list:not(.drop-target):not(.dragging)
+	.monaco-list-row:hover:not(.drop-target):not(.selected):not(.focused):has(.hucode-project-switcher-section) {
 	background-color: var(--vscode-list-hoverBackground) !important;
 }
 
@@ -158,7 +158,7 @@
 
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
-	.monaco-list-row:not([data-index='0']):has(.hucode-project-switcher-section)::before {
+	.monaco-list-row:not(.drop-target-before):not([data-index='0']):has(.hucode-project-switcher-section)::before {
 	content: '';
 	position: absolute;
 	top: 0;

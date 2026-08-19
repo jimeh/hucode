@@ -52,6 +52,8 @@ import { IHostService } from
 	'../../../../workbench/services/host/browser/host.js';
 import { IWorkbenchEnvironmentService } from
 	'../../../../workbench/services/environment/common/environmentService.js';
+import { LayoutSettings } from
+	'../../../../workbench/services/layout/browser/layoutService.js';
 import {
 	IHucodeHostedWorkspaceState,
 } from '../../../common/omniWindow.js';
@@ -1009,12 +1011,14 @@ suite('ProjectSwitcherContribution', () => {
 		)));
 		const subscriptions: string[] = [];
 		const treeLayouts: Array<{ height: number; width: number }> = [];
+		const treeOptionUpdates: Array<{ readonly paddingTop?: number }> = [];
 		let treeOptions: {
 			readonly accessibilityProvider: {
 				getWidgetAriaLabel(): string;
 			};
 			readonly dnd: ProjectSwitcherDragAndDrop;
 			readonly defaultIndent: number;
+			readonly paddingTop: number;
 		} | undefined;
 		let treeDelegate: {
 			getHeight(item: ProjectSwitcherItem): number;
@@ -1022,6 +1026,7 @@ suite('ProjectSwitcherContribution', () => {
 		let showInlineIcons: (() => boolean) | undefined;
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
 		let treeSetChildrenCalls = 0;
+		let modernUI = false;
 		const tree = {
 			contextKeyService: {
 				createKey: () => ({ set: () => undefined }),
@@ -1036,6 +1041,8 @@ suite('ProjectSwitcherContribution', () => {
 			isCollapsed: () => false,
 			layout: (height: number, width: number) =>
 				treeLayouts.push({ height, width }),
+			updateOptions: (options: { readonly paddingTop?: number }) =>
+				treeOptionUpdates.push(options),
 			getFocus: () => [],
 			getSelection: () => [],
 			dispose: () => undefined,
@@ -1155,7 +1162,9 @@ suite('ProjectSwitcherContribution', () => {
 					subscriptions.push('configuration');
 					return configurationChanges.event(listener);
 				},
-				getValue: () => undefined,
+				getValue: (key: string) => key === LayoutSettings.MODERN_UI
+					? modernUI
+					: undefined,
 			} as unknown as IConfigurationService,
 			{ warn: (value: unknown) => warnings.push(value) } as never,
 		));
@@ -1185,6 +1194,7 @@ suite('ProjectSwitcherContribution', () => {
 			showInlineIcons: showInlineIcons?.(),
 			treeDnd: treeOptions?.dnd instanceof ProjectSwitcherDragAndDrop,
 			defaultIndent: treeOptions?.defaultIndent,
+			paddingTop: treeOptions?.paddingTop,
 			ariaLabel: treeOptions?.accessibilityProvider
 				.getWidgetAriaLabel(),
 			treeLayouts,
@@ -1200,6 +1210,7 @@ suite('ProjectSwitcherContribution', () => {
 			showInlineIcons: true,
 			treeDnd: true,
 			defaultIndent: 8,
+			paddingTop: 0,
 			ariaLabel: 'Workbenches and Projects',
 			treeLayouts: [{ height: 260, width: 420 }],
 			commands: ['hucode.projectSwitcher.addProject'],
@@ -1334,6 +1345,13 @@ suite('ProjectSwitcherContribution', () => {
 			treeSetChildrenCalls: 2,
 			flushedProjectLabels: ['latest', 'latest'],
 		});
+
+		modernUI = true;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === LayoutSettings.MODERN_UI,
+		} as unknown as IConfigurationChangeEvent);
+		assert.deepStrictEqual(treeOptionUpdates, [{ paddingTop: 4 }]);
 
 		widget.dispose();
 		await timeout(0);
