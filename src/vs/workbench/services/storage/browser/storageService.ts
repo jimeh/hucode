@@ -18,8 +18,9 @@ import { AbstractStorageService, isProfileUsingDefaultStorage, IS_NEW_KEY, Stora
 import { isUserDataProfile, IUserDataProfile } from '../../../../platform/userDataProfile/common/userDataProfile.js';
 import { IAnyWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
 import { IUserDataProfileService } from '../../userDataProfile/common/userDataProfile.js';
+import { IAtomicApplicationStorageService } from '../../../../platform/storage/common/storageService.js';
 
-export class BrowserStorageService extends AbstractStorageService {
+export class BrowserStorageService extends AbstractStorageService implements IAtomicApplicationStorageService {
 
 	private static BROWSER_DEFAULT_FLUSH_INTERVAL = 5 * 1000; // every 5s because async operations are not permitted on shutdown
 

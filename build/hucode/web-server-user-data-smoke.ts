@@ -105,7 +105,9 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		page.on('request', request => {
 			const url = new URL(request.url());
 			if (request.method() === 'GET' &&
-				url.pathname.startsWith('/_hucode/projects/events/')) {
+				getVersionedHucodeEndpointPath(url.pathname)?.startsWith(
+					'/_hucode/projects/events/'
+				)) {
 				projectEventStreamUrls.add(url.href);
 			}
 		});
@@ -506,7 +508,8 @@ async function observeServerUserDataBootstrap(
 			const request = response.request();
 			const url = new URL(response.url());
 			return request.method() === 'GET' &&
-				url.pathname === '/_hucode/user-data/bootstrap' &&
+				getVersionedHucodeEndpointPath(url.pathname) ===
+				'/_hucode/user-data/bootstrap' &&
 				response.ok();
 		},
 		{ timeout: remainingTime(deadline) }
@@ -515,6 +518,26 @@ async function observeServerUserDataBootstrap(
 		pathname: new URL(response.url()).pathname,
 		status: response.status(),
 	};
+}
+
+/**
+ * Returns the document-relative endpoint for a versioned Hucode path, or
+ * undefined when the path lacks one product segment or a Hucode endpoint.
+ */
+function getVersionedHucodeEndpointPath(
+	pathname: string
+): string | undefined {
+	const productSegmentEnd = pathname.indexOf('/', 1);
+	if (productSegmentEnd <= 1) {
+		return undefined;
+	}
+	const productSegment = pathname.slice(1, productSegmentEnd);
+	const separator = productSegment.indexOf('-');
+	if (separator <= 0 || separator === productSegment.length - 1) {
+		return undefined;
+	}
+	const endpointPath = pathname.slice(productSegmentEnd);
+	return endpointPath.startsWith('/_hucode/') ? endpointPath : undefined;
 }
 
 interface IWebWorkbenchExpectation {
