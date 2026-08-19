@@ -94,7 +94,7 @@ suite('Omni Parts', () => {
 				{ width: 300, height: 900 },
 			],
 			widgetLayouts: [
-				{ width: 290, height: 885 },
+				{ width: 290, height: 889 },
 				{ width: 300, height: 900 },
 			],
 		});

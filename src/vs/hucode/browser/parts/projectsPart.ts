@@ -41,7 +41,7 @@ import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
 
 // Keep in sync with the floating Projects card geometry in media/omniHost.css.
-const MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET = FLOATING_PANEL_MARGIN + 1;
+const MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET = 1;
 
 /**
  * Shell-owned Projects surface for Omni windows.
