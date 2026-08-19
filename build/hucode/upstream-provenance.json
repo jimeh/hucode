@@ -7,8 +7,8 @@
 			"reason": "Hucode adds the typed serve-web user-data storage mode and defaults Hucode launches to server-backed storage",
 			"upstream": {
 				"path": "cli/src/commands/args.rs",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "6579a598586b277e4b87971d55e3fa62b41776ef"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "c3c1a264643c4dfd02215b669eb4ae4071c7f48c"
 			},
 			"testSuites": []
 		},
@@ -84,8 +84,8 @@
 			"reason": "Hucode admits authenticated user-data requests and owns the setup-service lifecycle needed to drain them",
 			"upstream": {
 				"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "e7ae07d1dca76e3c62f1c12336ab86eaf34f61b9"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "119a8bc6d6a4b59ffb6f372a150218d2d6836aec"
 			},
 			"testSuites": []
 		},
@@ -106,8 +106,8 @@
 			"reason": "Hucode registers separate web-profile and storage channels, scopes remote file admission to WebUser, and releases per-connection WebUser handles on final disconnect",
 			"upstream": {
 				"path": "src/vs/server/node/serverServices.ts",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "49c932485e3df007f38e41f86cd2ad523e566fd7"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "cb9e8cdfaa9be0ba2070a29009d043c4e350874a"
 			},
 			"testSuites": []
 		},
@@ -117,8 +117,8 @@
 			"reason": "Hucode serves the migration API and injects trusted storage configuration into every web route",
 			"upstream": {
 				"path": "src/vs/server/node/webClientServer.ts",
-				"lastSyncedBaseline": "1.132.0",
-				"blob": "7bda5a01a1d15b70f2e4ff9502c8d332badd839f"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "24b6c3dba9f188f0f2be0ae53f0f608c81710ad1"
 			},
 			"testSuites": []
 		},
@@ -139,8 +139,8 @@
 			"reason": "Hucode makes browser automation depend on a narrow atomic-storage capability instead of a concrete IndexedDB class",
 			"upstream": {
 				"path": "src/vs/sessions/contrib/automations/browser/automationStorageService.ts",
-				"lastSyncedBaseline": "1.131.0",
-				"blob": "28a9aa98c80f873d69f844cb98c6d08c77ae79c5"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "180d934d2c8d0bd482986c6b7a1dd4285ac3e215"
 			},
 			"testSuites": []
 		},
@@ -161,8 +161,8 @@
 			"reason": "Hucode narrows BrowserMain construction seams for profile and storage backends while preserving the browser default path",
 			"upstream": {
 				"path": "src/vs/workbench/browser/web.main.ts",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "5e4099094acd9b3e04496caeb8aba518b012b8a1"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "c7f154e0459b4115e1e6bf5d3193857b342c26bc"
 			},
 			"testSuites": []
 		},
@@ -205,8 +205,8 @@
 			"reason": "Omni owns a separate panel Part derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/parts/panelPart.ts",
-				"lastSyncedBaseline": "1.132.0",
-				"blob": "67aefd4dcd1556bb6f4a85219e7eec5d4b19efe0"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "bfbb741d6c3ff2011e5f5df7fb0168c70bac20f4"
 			},
 			"testSuites": []
 		},
@@ -216,8 +216,8 @@
 			"reason": "Omni owns a separate title bar Part derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/parts/titlebarPart.ts",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "7e2674a60a43ebe754156f625eec34c1b2dd1eb2"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "8b4855c85c9a33f893ca75d9fbcb77254a246c86"
 			},
 			"testSuites": []
 		},
@@ -227,8 +227,8 @@
 			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/workbench.ts",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "37a08832c1ff5835b6325c51639d5f9489952846"
+				"lastSyncedBaseline": "1.134.0",
+				"blob": "b7cefca90e5fe65f885bd2fd1437e2f97d805180"
 			},
 			"testSuites": []
 		},

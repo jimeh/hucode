@@ -166,10 +166,6 @@ const omittedFromOmniBootstrap = new Map([
 		'Only needed by WorkspaceService, which Omni does not use.',
 	],
 	[
-		'src/vs/platform/policy/common/copilotManagedSettings.js',
-		'Omni builds its account policy service without the managed-settings channels.',
-	],
-	[
 		'src/vs/platform/policy/common/nativeManagedSettingsIpc.js',
 		'Omni builds its account policy service without the managed-settings channels.',
 	],
@@ -238,6 +234,18 @@ suite('Hucode Omni desktop entrypoints', () => {
 			omniDesktopBootstrap,
 			omittedFromOmniBootstrap,
 			addedByOmniBootstrap
+		);
+	});
+
+	test('omni.main exposes its account policy as managed settings', async () => {
+		const source = await fs.readFile(
+			path.join(repoRoot, omniDesktopBootstrap),
+			'utf8'
+		);
+
+		assert.match(
+			source,
+			/serviceCollection\.set\(IManagedSettingsService, accountPolicy\);/
 		);
 	});
 });

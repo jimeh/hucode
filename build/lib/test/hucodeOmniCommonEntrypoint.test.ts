@@ -49,10 +49,6 @@ const omittedFromOmni = new Map([
 		'Chat view UI is not part of Omni.',
 	],
 	[
-		'src/vs/workbench/contrib/chat/browser/chatInputWindow/chatInputWindow.contribution.js',
-		'Floating chat input UI is not part of Omni.',
-	],
-	[
 		'src/vs/workbench/contrib/mcp/browser/mcp.view.contribution.js',
 		'MCP view UI is not part of Omni.',
 	],
