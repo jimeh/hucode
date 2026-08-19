@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>dev.hucode.app</id>
+	<metadata_license>@@LICENSE@@</metadata_license>
+	<project_license>@@LICENSE@@</project_license>
+	<name>@@NAME_LONG@@</name>
+	<url type="homepage">https://github.com/jimeh/hucode</url>
+	<summary>A code editor built for working with coding agents</summary>
+	<description>
+		<p>Hucode provides a focused desktop environment for collaborating with coding agents while retaining the editing and development tools expected from a modern code editor.</p>
+	</description>
+	<launchable type="desktop-id">hucode.desktop</launchable>
+	<developer id="dev.hucode">
+		<name>Hucode Project</name>
+	</developer>
+	<content_rating type="oars-1.1"/>
+</component>

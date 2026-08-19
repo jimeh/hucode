@@ -211,6 +211,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/projectSwitcher",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/search",
 			"project": "vscode-workbench"
 		},
