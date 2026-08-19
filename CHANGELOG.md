@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.73 - 2026-08-19
+
+### Bug Fixes
+
+- **omni:** align Projects sidebar with Modern UI (#190)
+
 ## 0.0.72 - 2026-08-18
 
 ### Bug Fixes
