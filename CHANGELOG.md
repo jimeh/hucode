@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.74 - 2026-08-19
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.134.0
+
+### Bug Fixes
+
+- **omni:** align Projects card with VS Code 1.134
+
 ## 0.0.73 - 2026-08-19
 
 ### Bug Fixes
