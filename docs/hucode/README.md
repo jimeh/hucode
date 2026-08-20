@@ -24,6 +24,8 @@ separate application window for each one.
 - [Hardening Plan](hardening-plan.md) is the active work breakdown for the
   verified findings from the 2026-07-25 architecture and quality review, plus
   the runtime issues raised alongside it.
+- [Omni Profile Spaces Plan](omni-profile-spaces-plan.md) turns the model of one
+  profile per Omni window into a staged desktop and serve-web implementation.
 
 ## Developing Hucode
 
