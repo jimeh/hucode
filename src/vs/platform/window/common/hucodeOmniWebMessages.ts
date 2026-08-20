@@ -78,6 +78,7 @@ export function getHucodeOmniWebBuildCompatibility(
 export interface IHucodeOmniWebPortMessage {
 	readonly type: HucodeOmniWebParentMessageType.Port;
 	readonly instanceId: string;
+	readonly profileId: string;
 	/** Correlates retryable bootstraps for the current document. */
 	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
 	/** Exact shell build that owns the transferred port. */
@@ -109,6 +110,7 @@ export const HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION = 2;
 export interface IHucodeOmniWebReadyMessage {
 	readonly type: HucodeOmniWebChildMessageType.Ready;
 	readonly instanceId: string;
+	readonly profileId: string;
 
 	/** Current document identity and its monotonic bootstrap attempt. */
 	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;

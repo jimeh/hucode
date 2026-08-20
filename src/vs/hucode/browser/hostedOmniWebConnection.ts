@@ -46,6 +46,9 @@ import { IWorkbenchEnvironmentService } from
 import product from '../../platform/product/common/product.js';
 import { showHucodeWebVersionMismatchBlocker } from
 	'./hucodeWebVersionMismatch.js';
+import { showHucodeWebProfileMismatchBlocker } from '../../platform/environment/browser/hucodeWebProfileMismatch.js';
+import { IUserDataProfileService } from
+	'../../workbench/services/userDataProfile/common/userDataProfile.js';
 
 export const IHucodeHostedOmniWebConnectionService =
 	createDecorator<IHucodeHostedOmniWebConnectionService>(
@@ -114,6 +117,7 @@ export interface IHostedOmniWebConnectionBrowserAdapter {
 	): ReturnType<typeof setTimeout>;
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 	showVersionMismatch(): void;
+	showProfileMismatch(): void;
 }
 
 /** Retry and deadline values for the hosted iframe bootstrap. */
@@ -145,6 +149,7 @@ function createMainWindowConnectionAdapter():
 		setTimeout: (callback, delay) => setTimeout(callback, delay),
 		clearTimeout: handle => clearTimeout(handle),
 		showVersionMismatch: () => showHucodeWebVersionMismatchBlocker(),
+		showProfileMismatch: () => showHucodeWebProfileMismatchBlocker(),
 	};
 }
 
@@ -173,8 +178,9 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	private readyRetryTimer: ReturnType<typeof setTimeout> | undefined;
 	private initialConnectionTimer: ReturnType<typeof setTimeout> | undefined;
 	private disposed = false;
-	private versionMismatchBlocked = false;
+	private connectionBlocked = false;
 	private readonly buildIdentity = getServerProductSegment(product);
+	private readonly profileId: string;
 	private readonly _onDidConnect =
 		this._register(new Emitter<IHucodeHostedOmniWebConnection>());
 	readonly onDidConnect = this._onDidConnect.event;
@@ -183,12 +189,15 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		private readonly browser: IHostedOmniWebConnectionBrowserAdapter,
 		@IWorkbenchEnvironmentService
 		environmentService: IHostedOmniWebConnectionEnvironment,
+		@IUserDataProfileService
+		userDataProfileService: IUserDataProfileService,
 		private readonly options = defaultConnectionOptions,
 	) {
 		super();
 		this.readyRetryDelaysMs = options.readyRetryDelaysMs.filter(delay =>
 			Number.isFinite(delay) && delay > 0
 		);
+		this.profileId = userDataProfileService.currentProfile.id;
 
 		this.instanceId = environmentService.isHostedOmniWorkspace &&
 			this.browser.hasParent()
@@ -216,12 +225,17 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			if (!isPortMessageTarget(event.data, this.instanceId!)) {
 				return;
 			}
-			if (this.versionMismatchBlocked) {
+			if (this.connectionBlocked) {
 				port.close();
 				return;
 			}
 			if (!isPortMessageWireShape(event.data, this.instanceId!)) {
 				port.close();
+				return;
+			}
+			if (event.data.profileId !== this.profileId) {
+				port.close();
+				this.blockForProfileMismatch();
 				return;
 			}
 			const bootstrap = event.data.connectionBootstrap;
@@ -304,7 +318,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 
 	signalReady(): void {
 		if (!this.instanceId || this.connection || this.readyStarted ||
-			this.versionMismatchBlocked) {
+			this.connectionBlocked) {
 			return;
 		}
 		this.readyStarted = true;
@@ -319,6 +333,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		this.postToShell({
 			type: HucodeOmniWebChildMessageType.Ready,
 			instanceId: this.instanceId,
+			profileId: this.profileId,
 			connectionBootstrap: {
 				id: this.bootstrapId,
 				attempt: this.connectionAttempt,
@@ -387,14 +402,25 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	}
 
 	private blockForVersionMismatch(): void {
-		if (this.versionMismatchBlocked) {
+		if (this.connectionBlocked) {
 			return;
 		}
-		this.versionMismatchBlocked = true;
+		this.connectionBlocked = true;
 		this.clearReadyRetryTimer();
 		this.clearInitialConnectionTimer();
 		void this.initialConnection.complete(undefined);
 		this.browser.showVersionMismatch();
+	}
+
+	private blockForProfileMismatch(): void {
+		if (this.connectionBlocked) {
+			return;
+		}
+		this.connectionBlocked = true;
+		this.clearReadyRetryTimer();
+		this.clearInitialConnectionTimer();
+		void this.initialConnection.complete(undefined);
+		this.browser.showProfileMismatch();
 	}
 
 	private shutdown(): void {
@@ -417,6 +443,7 @@ function isPortMessageTarget(value: unknown, instanceId: string): boolean {
 	const message = value as {
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
+		readonly profileId?: unknown;
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId;
@@ -439,6 +466,7 @@ function isPortMessageWireShape(
 	const message = value as {
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
+		readonly profileId?: unknown;
 		readonly connectionBootstrap?: unknown;
 		readonly buildIdentity?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
@@ -446,6 +474,7 @@ function isPortMessageWireShape(
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
+		typeof message.profileId === 'string' && !!message.profileId &&
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);

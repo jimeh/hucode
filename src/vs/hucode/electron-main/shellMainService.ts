@@ -23,6 +23,8 @@ import { IEnvironmentMainService } from
 	'../../platform/environment/electron-main/environmentMainService.js';
 import { IConfigurationService } from
 	'../../platform/configuration/common/configuration.js';
+import { IUserDataProfilesMainService } from
+	'../../platform/userDataProfile/electron-main/userDataProfile.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
@@ -147,6 +149,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly configurationService: IConfigurationService,
 		@IProjectManagerMainService
 		private readonly projectManagerMainService: IProjectManagerMainService,
+		@IUserDataProfilesMainService
+		private readonly userDataProfilesMainService: IUserDataProfilesMainService,
 	) {
 		super();
 
@@ -1033,6 +1037,8 @@ export class HucodeShellMainService extends Disposable
 				(state: IHucodeHostedWorkspaceState) =>
 					this._onDidChangeWindowState.fire({ windowId, state }),
 				{
+					ownerProfileId: window.config?.omniProfileId,
+					getProfiles: () => this.userDataProfilesMainService.profiles,
 					restorePolicy: this.configurationService.getValue<
 						HucodeHostedWorkbenchRestorePolicy
 					>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ??

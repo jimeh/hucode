@@ -29,6 +29,7 @@ export interface IWindowState {
 	backupPath?: string;
 	remoteAuthority?: string;
 	windowKind?: 'workbench' | 'omni';
+	omniProfileId?: string;
 	omniActiveWorktreePath?: string;
 	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
 	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
@@ -57,6 +58,7 @@ interface ISerializedWindowState {
 	readonly backupPath?: string;
 	readonly remoteAuthority?: string;
 	readonly windowKind?: 'workbench' | 'omni';
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
 	readonly omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
@@ -277,6 +279,7 @@ export class WindowsStateHandler extends Disposable {
 			backupPath: window.backupPath,
 			remoteAuthority: window.remoteAuthority,
 			windowKind: window.isOmniWindow ? 'omni' : 'workbench',
+			omniProfileId: window.config?.omniProfileId,
 			omniActiveWorktreePath: window.config?.omniActiveWorktreePath,
 			omniResidentWorkspaces: window.config?.omniResidentWorkspaces,
 			omniRetainedWorkbenches: window.config?.omniRetainedWorkbenches,
@@ -478,6 +481,10 @@ function restoreWindowState(windowState: ISerializedWindowState): IWindowState {
 		result.windowKind = windowState.windowKind;
 	}
 
+	if (windowState.omniProfileId) {
+		result.omniProfileId = windowState.omniProfileId;
+	}
+
 	if (windowState.omniActiveWorktreePath) {
 		result.omniActiveWorktreePath = windowState.omniActiveWorktreePath;
 	}
@@ -518,6 +525,7 @@ function serializeWindowState(windowState: IWindowState): ISerializedWindowState
 		backupPath: windowState.backupPath,
 		remoteAuthority: windowState.remoteAuthority,
 		windowKind: windowState.windowKind,
+		omniProfileId: windowState.omniProfileId,
 		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
 		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
 		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,

@@ -34,6 +34,7 @@ import {
 
 const INSTANCE_ID = 'hosted-instance';
 const BUILD_IDENTITY = getServerProductSegment(product);
+const PROFILE_ID = 'work-profile-id';
 
 suite('HucodeHostedOmniWebConnectionService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -54,6 +55,9 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 				isHostedOmniWorkspace: true,
 				hostedInstanceId: INSTANCE_ID,
 			},
+			{
+				currentProfile: { id: PROFILE_ID },
+			} as never,
 			options
 		));
 		return { service, browser };
@@ -63,6 +67,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		connectionBootstrap: { readonly id: string; readonly attempt: number },
 		overrides?: {
 			readonly instanceId?: string;
+			readonly profileId?: string;
 			readonly buildIdentity?: string | 'none';
 			readonly hostedShellProtocolVersion?: number;
 			readonly hostedShellCapabilities?: readonly string[];
@@ -70,6 +75,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		return {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: overrides?.instanceId ?? INSTANCE_ID,
+			profileId: overrides?.profileId ?? PROFILE_ID,
 			connectionBootstrap,
 			...(overrides?.buildIdentity === 'none' ? {} : {
 				buildIdentity: overrides?.buildIdentity ?? BUILD_IDENTITY,
@@ -132,6 +138,20 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			connection.hostedShellCapabilities,
 			HUCODE_HOSTED_SHELL_CAPABILITIES
 		);
+	});
+
+	test('fails closed when the parent owner profile does not match', async () => {
+		const { service, browser } = createService();
+		service.signalReady();
+		const transferred = trackedPort();
+
+		browser.emitFromParent(portMessage(postedBootstrap(browser), {
+			profileId: 'personal-profile-id',
+		}), transferred.port);
+
+		assert.strictEqual(await service.whenConnected(), undefined);
+		assert.strictEqual(transferred.wasClosed(), true);
+		assert.strictEqual(browser.profileMismatchCount, 1);
 	});
 
 	test('ignores port transfers from non-parent same-origin sources', async () => {
@@ -202,6 +222,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			{
 				type: HucodeOmniWebChildMessageType.Ready,
 				instanceId: INSTANCE_ID,
+				profileId: PROFILE_ID,
 				connectionBootstrap: bootstrap,
 				buildIdentity: BUILD_IDENTITY,
 				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
@@ -488,6 +509,7 @@ class FakeConnectionBrowserAdapter
 	readonly origin = location.origin;
 	readonly postedMessages: object[] = [];
 	versionMismatchCount = 0;
+	profileMismatchCount = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
 
@@ -523,6 +545,10 @@ class FakeConnectionBrowserAdapter
 
 	showVersionMismatch(): void {
 		this.versionMismatchCount++;
+	}
+
+	showProfileMismatch(): void {
+		this.profileMismatchCount++;
 	}
 
 	emitFromParent(data: object, port?: MessagePort): void {

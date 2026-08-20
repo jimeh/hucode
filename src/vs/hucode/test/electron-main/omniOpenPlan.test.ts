@@ -18,6 +18,11 @@ import {
 	isHucodeOmniPathToOpen,
 	openNewHucodeOmniWindow
 } from '../../electron-main/omniOpenPlan.js';
+import {
+	resolveHucodeOmniDesktopProfileOwner,
+	resolveHucodeOmniProfileOwner,
+	resolveHucodeOmniWebProfileOwner,
+} from '../../../platform/userDataProfile/common/hucodeOmniProfileOwner.js';
 
 suite('HucodeOmniOpenPlan', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -42,6 +47,100 @@ suite('HucodeOmniOpenPlan', () => {
 		assert.deepStrictEqual(results, [undefined, undefined, undefined]);
 	});
 
+	test('resolves an existing Omni owner by stable ID across rename', () => {
+		const profile = {
+			id: 'stable-id',
+			name: 'Renamed Work',
+			isTransient: false,
+			isAgentsWindowProfile: false,
+		};
+		assert.strictEqual(
+			resolveHucodeOmniProfileOwner([profile] as never, 'stable-id'),
+			profile
+		);
+		assert.throws(
+			() => resolveHucodeOmniProfileOwner(
+				[profile] as never,
+				'missing-id'
+			),
+			/unavailable/
+		);
+	});
+
+	test('desktop owner selection uses explicit ID and legacy fallbacks', () => {
+		const defaultProfile = {
+			id: 'default',
+			name: 'Default',
+		};
+		const work = {
+			id: 'work-id',
+			name: 'Work renamed',
+		};
+		const legacy = {
+			id: 'legacy-id',
+			name: 'Legacy name',
+		};
+		const transient = {
+			id: 'transient-id',
+			name: 'Temporary',
+			isTransient: true,
+		};
+		const profiles = [defaultProfile, work, legacy, transient] as never;
+
+		assert.strictEqual(resolveHucodeOmniDesktopProfileOwner(profiles, {
+			profileId: 'work-id',
+			forceProfile: 'Legacy name',
+			fallbackProfile: defaultProfile as never,
+			defaultProfile: defaultProfile as never,
+		}), work);
+		assert.strictEqual(resolveHucodeOmniDesktopProfileOwner(profiles, {
+			forceProfile: 'Legacy name',
+			fallbackProfile: defaultProfile as never,
+			defaultProfile: defaultProfile as never,
+		}), legacy);
+		assert.strictEqual(resolveHucodeOmniDesktopProfileOwner(profiles, {
+			fallbackProfile: work as never,
+			defaultProfile: defaultProfile as never,
+		}), work);
+		assert.strictEqual(resolveHucodeOmniDesktopProfileOwner(profiles, {
+			fallbackProfile: transient as never,
+			defaultProfile: defaultProfile as never,
+		}), defaultProfile);
+		assert.throws(() => resolveHucodeOmniDesktopProfileOwner(profiles, {
+			forceProfile: 'Missing',
+			fallbackProfile: defaultProfile as never,
+			defaultProfile: defaultProfile as never,
+		}), /unavailable/);
+	});
+
+	test('web hosted startup requires and overrides with its owner ID', () => {
+		const work = {
+			id: 'work',
+			name: 'Work',
+			isTransient: false,
+			isAgentsWindowProfile: false,
+		};
+		const personal = {
+			id: 'personal',
+			name: 'Personal',
+			isTransient: false,
+			isAgentsWindowProfile: false,
+		};
+		const profiles = [work, personal] as never;
+
+		assert.strictEqual(resolveHucodeOmniWebProfileOwner(profiles, {
+			hucodeHostedOmniWorkbench: true,
+			hucodeOmniProfileId: 'work',
+		}), work);
+		assert.throws(() => resolveHucodeOmniWebProfileOwner(profiles, {
+			hucodeHostedOmniWorkbench: true,
+		}), /requires an owner profile/);
+		assert.throws(() => resolveHucodeOmniWebProfileOwner(profiles, {
+			hucodeHostedOmniWorkbench: true,
+			hucodeOmniProfileId: 'missing',
+		}), /unavailable/);
+	});
+
 	test('identifies and restores Omni window paths', () => {
 		const retainedWorkbenches = [{
 			id: 'scratch',
@@ -50,6 +149,7 @@ suite('HucodeOmniOpenPlan', () => {
 			order: 0,
 		}];
 		const omniPath = createHucodeOmniWindowPath({
+			omniProfileId: 'profile-id',
 			omniActiveWorktreePath: '/repo',
 			omniResidentWorkspaces: [{
 				projectId: 'project',
@@ -65,6 +165,7 @@ suite('HucodeOmniOpenPlan', () => {
 		assert.deepStrictEqual(
 			getHucodeOmniPathFromWindowState({
 				windowKind: 'omni',
+				omniProfileId: 'profile-id',
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: omniPath.omniResidentWorkspaces,
 				omniRetainedWorkbenches: retainedWorkbenches,
@@ -116,6 +217,22 @@ suite('HucodeOmniOpenPlan', () => {
 		);
 	});
 
+	test('keeps otherwise identical restore paths for different profiles', () => {
+		const work = createHucodeOmniWindowPath({
+			omniProfileId: 'work',
+			omniActiveWorktreePath: '/repo'
+		});
+		const personal = createHucodeOmniWindowPath({
+			omniProfileId: 'personal',
+			omniActiveWorktreePath: '/repo'
+		});
+
+		assert.deepStrictEqual(
+			distinctHucodeOmniWindowPaths([work, personal]),
+			[work, personal]
+		);
+	});
+
 	test('builds Omni browser window options from open config', () => {
 		assert.deepStrictEqual(
 			getHucodeOmniBrowserWindowOptions(
@@ -126,6 +243,7 @@ suite('HucodeOmniOpenPlan', () => {
 					forceTempProfile: true
 				},
 				createHucodeOmniWindowPath({
+					omniProfileId: 'profile-id',
 					omniActiveWorktreePath: '/repo'
 				}),
 				true
@@ -139,11 +257,23 @@ suite('HucodeOmniOpenPlan', () => {
 				forceProfile: 'Profile',
 				forceTempProfile: true,
 				isOmniWindow: true,
+				omniProfileId: 'profile-id',
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined,
 				omniRetainedWorkbenches: undefined,
 			}
 		);
+
+		assert.strictEqual(getHucodeOmniBrowserWindowOptions(
+			{ omniProfileId: 'source-profile-id' },
+			createHucodeOmniWindowPath(),
+			true
+		).omniProfileId, 'source-profile-id');
+		assert.strictEqual(getHucodeOmniBrowserWindowOptions(
+			{},
+			createHucodeOmniWindowPath(),
+			true
+		).omniProfileId, undefined);
 	});
 
 	test('opens and focuses a distinct Omni window for every request', async () => {

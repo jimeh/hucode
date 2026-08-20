@@ -85,6 +85,7 @@ suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let bootstrapDocumentSequence = 0;
 	const buildIdentity = getServerProductSegment(product);
+	const profileId = 'work-profile-id';
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -148,6 +149,32 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('fails closed when a hosted child announces another profile',
+		async () => {
+			const { service, surface, browser } = createService();
+			const worktree = '/tmp/profile-mismatch';
+			const state = await service.openWorkspace(
+				browser.windowId,
+				worktree,
+				'project'
+			);
+			const instanceId = state.instances[0].instanceId;
+
+			postMessage(browser, surface, instanceId, {
+				type: HucodeOmniWebChildMessageType.Ready,
+				profileId: 'personal-profile-id',
+				connectionBootstrap: { id: 'mismatch', attempt: 1 },
+				buildIdentity,
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion:
+					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+			});
+
+			assert.strictEqual(browser.profileMismatchCount, 1);
+			assert.strictEqual(browser.portMessages.length, 0);
+		});
+
 	function createService(
 		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
 		persistence?: IWebHucodeShellPersistenceAdapter,
@@ -174,6 +201,7 @@ suite('WebHucodeShellService', () => {
 
 		const service = disposables.add(new WebHucodeShellController(
 			{
+				ownerProfileId: profileId,
 				workbenchRoute: '/workbench',
 				hostedWorkbenchRoute: '/omni/workbench',
 				serverPathCaseSensitive,
@@ -204,7 +232,14 @@ suite('WebHucodeShellService', () => {
 	): void {
 		const iframe = getIframe(surface, instanceId);
 		browser.emitMessage(
-			{ instanceId, ...data },
+			{
+				instanceId,
+				...((data as { readonly type?: unknown }).type ===
+					HucodeOmniWebChildMessageType.Ready
+					? { profileId }
+					: {}),
+				...data,
+			},
 			source === undefined ? iframe.contentWindow : source
 		);
 	}
@@ -317,6 +352,7 @@ suite('WebHucodeShellService', () => {
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
 		);
 		assert.strictEqual(posted.buildIdentity, buildIdentity);
+		assert.strictEqual(posted.profileId, profileId);
 		const client = disposables.add(new MessagePortClient(
 			posted.port,
 			`test-current-child-${instanceId}`
@@ -1481,11 +1517,13 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual({
 			pathname: src.pathname,
 			folder: src.searchParams.get('folder'),
+			profileId: src.searchParams.get('hucode-omni-profile'),
 			isHostedOmniWorkspace: payload.get('isHostedOmniWorkspace'),
 			hostedInstanceId: payload.get('hostedInstanceId'),
 		}, {
 			pathname: '/omni/workbench',
 			folder: '/tmp/hucode-worktree',
+			profileId,
 			isHostedOmniWorkspace: 'true',
 			hostedInstanceId: state.instances[0].instanceId,
 		});
@@ -6449,6 +6487,7 @@ class LifecycleBackedHostedWorkbench implements IHucodeOmniWebWorkbenchClient {
 
 interface IPostedPortMessage {
 	readonly instanceId: string;
+	readonly profileId: string;
 	readonly connectionBootstrap: {
 		readonly id: string;
 		readonly attempt: number;
@@ -6469,6 +6508,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly contentFocusedIframes: HTMLIFrameElement[] = [];
 	contentFocusCalls = 0;
 	versionMismatchCount = 0;
+	profileMismatchCount = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
 
@@ -6496,6 +6536,10 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		this.versionMismatchCount++;
 	}
 
+	showProfileMismatch(): void {
+		this.profileMismatchCount++;
+	}
+
 	open(url: string): void {
 		this.openedUrls.push(url);
 	}
@@ -6521,6 +6565,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	): void {
 		const portMessage = message as {
 			readonly instanceId: string;
+			readonly profileId: string;
 			readonly connectionBootstrap: {
 				readonly id: string;
 				readonly attempt: number;
@@ -6531,6 +6576,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 		};
 		this.portMessages.push({
 			instanceId: portMessage.instanceId,
+			profileId: portMessage.profileId,
 			connectionBootstrap: portMessage.connectionBootstrap,
 			buildIdentity: portMessage.buildIdentity,
 			hostedShellProtocolVersion:

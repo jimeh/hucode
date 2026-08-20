@@ -102,6 +102,7 @@ import {
 	getHucodeOmniHostedWorkbenchRoute,
 	getHucodeOmniWorkbenchRoute,
 	getHucodeServerPathCaseSensitive,
+	HUCODE_OMNI_PROFILE_ID_QUERY,
 } from '../../platform/environment/common/hucodeWebConfiguration.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../platform/projectManager/common/projectManagerState.js';
@@ -123,6 +124,9 @@ import { IProjectManagerService, ProjectRecord } from
 import product from '../../platform/product/common/product.js';
 import { showHucodeWebVersionMismatchBlocker } from
 	'./hucodeWebVersionMismatch.js';
+import { showHucodeWebProfileMismatchBlocker } from '../../platform/environment/browser/hucodeWebProfileMismatch.js';
+import { IUserDataProfileService } from
+	'../../workbench/services/userDataProfile/common/userDataProfile.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -370,6 +374,7 @@ const COMMAND_DELIVERY_UNKNOWN =
  * Server routing configuration the web shell needs to build workbench URLs.
  */
 export interface IWebHucodeShellOptions {
+	readonly ownerProfileId: string;
 	readonly workbenchRoute: string;
 	readonly hostedWorkbenchRoute: string;
 	readonly serverPathCaseSensitive: boolean;
@@ -406,6 +411,7 @@ export interface IWebHucodeShellBrowserAdapter {
 		port: MessagePort
 	): void;
 	showVersionMismatch(): void;
+	showProfileMismatch(): void;
 }
 
 function defaultWebHucodeShellBrowserAdapter():
@@ -436,6 +442,7 @@ function defaultWebHucodeShellBrowserAdapter():
 			);
 		},
 		showVersionMismatch: () => showHucodeWebVersionMismatchBlocker(),
+		showProfileMismatch: () => showHucodeWebProfileMismatchBlocker(),
 	};
 }
 
@@ -466,6 +473,7 @@ export class WebHucodeShellController extends Disposable
 	private static readonly COMMIT_UNLOAD_TIMEOUT_MS = 5000;
 
 	private readonly windowId: number;
+	private readonly ownerProfileId: string;
 	private readonly workbenchRoute: string;
 	private readonly hostedWorkbenchRoute: string;
 	private readonly serverPathCaseSensitive: boolean;
@@ -484,7 +492,7 @@ export class WebHucodeShellController extends Disposable
 	private activationIntentGeneration = 0;
 	private lifecycleGeneration = 0;
 	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
-	private versionMismatchBlocked = false;
+	private connectionBlocked = false;
 	private readonly buildIdentity = getServerProductSegment(product);
 
 	private readonly pendingConnectionDisposals = new Set<DisposableStore>();
@@ -512,6 +520,7 @@ export class WebHucodeShellController extends Disposable
 		super();
 
 		this.windowId = browser.windowId;
+		this.ownerProfileId = options.ownerProfileId;
 		this.workbenchRoute = options.workbenchRoute;
 		this.hostedWorkbenchRoute = options.hostedWorkbenchRoute;
 		this.serverPathCaseSensitive = options.serverPathCaseSensitive;
@@ -1665,7 +1674,7 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private readonly onMessage = (event: MessageEvent): void => {
-		if (this.versionMismatchBlocked ||
+		if (this.connectionBlocked ||
 			event.origin !== this.browser.origin) {
 			return;
 		}
@@ -1682,6 +1691,10 @@ export class WebHucodeShellController extends Disposable
 		}
 		if (target.type === HucodeOmniWebChildMessageType.Ready) {
 			if (!isHucodeOmniWebReadyMessageWireShape(event.data)) {
+				return;
+			}
+			if (event.data.profileId !== this.ownerProfileId) {
+				this.blockForProfileMismatch(instance);
 				return;
 			}
 			const compatibility = getHucodeOmniWebBuildCompatibility(
@@ -1704,12 +1717,21 @@ export class WebHucodeShellController extends Disposable
 	};
 
 	private blockForVersionMismatch(instance: IHostedIframeInstance): void {
-		if (this.versionMismatchBlocked) {
+		if (this.connectionBlocked) {
 			return;
 		}
-		this.versionMismatchBlocked = true;
+		this.connectionBlocked = true;
 		this.disposeConnection(instance);
 		this.browser.showVersionMismatch();
+	}
+
+	private blockForProfileMismatch(instance: IHostedIframeInstance): void {
+		if (this.connectionBlocked) {
+			return;
+		}
+		this.connectionBlocked = true;
+		this.disposeConnection(instance);
+		this.browser.showProfileMismatch();
 	}
 
 	private handleChildMessage(
@@ -1837,6 +1859,7 @@ export class WebHucodeShellController extends Disposable
 		this.browser.postPortMessage(instance.iframe, {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: instance.instanceId,
+			profileId: this.ownerProfileId,
 			connectionBootstrap,
 			buildIdentity: this.buildIdentity,
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
@@ -2765,6 +2788,10 @@ export class WebHucodeShellController extends Disposable
 			this.browser.origin
 		);
 		workbenchUrl.searchParams.set('folder', worktreePath);
+		workbenchUrl.searchParams.set(
+			HUCODE_OMNI_PROFILE_ID_QUERY,
+			this.ownerProfileId
+		);
 		workbenchUrl.searchParams.set('payload', JSON.stringify([
 			['isHostedOmniWorkspace', 'true'],
 			['hostedInstanceId', instanceId],
@@ -2869,6 +2896,7 @@ function isHucodeOmniWebChildMessage(
 	const message = value as {
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
+		readonly profileId?: unknown;
 		readonly connectionBootstrap?: unknown;
 		readonly buildIdentity?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
@@ -2921,12 +2949,14 @@ function isHucodeOmniWebReadyMessageWireShape(
 	const message = value as {
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
+		readonly profileId?: unknown;
 		readonly connectionBootstrap?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 	};
 	return message.type === HucodeOmniWebChildMessageType.Ready &&
 		typeof message.instanceId === 'string' && !!message.instanceId &&
+		typeof message.profileId === 'string' && !!message.profileId &&
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);
@@ -2952,8 +2982,11 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IFileService fileService: IFileService,
 		@ILogService logService: ILogService,
 		@IProjectManagerService projectManagerService: IProjectManagerService,
+		@IUserDataProfileService
+		userDataProfileService: IUserDataProfileService,
 	) {
 		super({
+			ownerProfileId: userDataProfileService.currentProfile.id,
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
 				environmentService.options
 			),

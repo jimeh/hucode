@@ -339,7 +339,10 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 		await this.windowsMainService.openOmniWindow({
 			context: OpenContext.API,
 			contextWindowId: windowId,
-			cli: this.environmentMainService.args
+			cli: this.environmentMainService.args,
+			omniProfileId: typeof windowId === 'number'
+				? this.windowsMainService.getWindowById(windowId)?.profile?.id
+				: undefined
 		});
 	}
 

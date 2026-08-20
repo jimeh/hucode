@@ -43,6 +43,9 @@ import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent,
 import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
 import { tryOpenFolderInHucodeHostedWorkspace } from '../../../hucode/electron-main/omniWorkspaceOpen.js';
 import {
+	resolveHucodeOmniDesktopProfileOwner,
+} from '../../userDataProfile/common/hucodeOmniProfileOwner.js';
+import {
 	createHucodeOmniWindowPath,
 	distinctHucodeOmniWindowPaths,
 	filterHucodePreserveRestorePaths,
@@ -98,6 +101,7 @@ interface IOpenBrowserWindowOptions {
 	readonly forceProfile?: string;
 	readonly forceTempProfile?: boolean;
 	readonly isOmniWindow?: boolean;
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
@@ -181,6 +185,7 @@ interface IPathToOpen<T = IEditorOptions> extends IPath<T> {
 	label?: string;
 
 	readonly isOmniWindow?: boolean;
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
@@ -909,11 +914,17 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		omniWindow: IHucodeOmniWindowPath
 	): Promise<ICodeWindow> {
 		this.logService.trace('windowsManager#doOpenOmni', omniWindow);
+		const sourceProfileId = openConfig.contextWindowId !== undefined
+			? this.getWindowById(openConfig.contextWindowId)?.profile?.id
+			: undefined;
+		const resolvedOmniWindow = omniWindow.omniProfileId || !sourceProfileId
+			? omniWindow
+			: { ...omniWindow, omniProfileId: sourceProfileId };
 
 		return this.openInBrowserWindow(
 			getHucodeOmniBrowserWindowOptions(
 				openConfig,
-				omniWindow,
+				resolvedOmniWindow,
 				forceNewWindow
 			)
 		);
@@ -956,7 +967,9 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		// Check for force empty
 		else if (openConfig.forceOmniWindow) {
-			pathsToOpen = [createHucodeOmniWindowPath()];
+			pathsToOpen = [createHucodeOmniWindowPath({
+				omniProfileId: openConfig.omniProfileId
+			})];
 		}
 
 		// Check for force empty
@@ -1742,6 +1755,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 			isSessionsWindow: isWorkspaceIdentifier(options.workspace) && isEqual(options.workspace.configPath, this.environmentMainService.agentSessionsWorkspace),
 			isOmniWindow: options.isOmniWindow,
+			omniProfileId: options.omniProfileId,
 			omniActiveWorktreePath: options.omniActiveWorktreePath,
 			omniResidentWorkspaces: options.omniResidentWorkspaces,
 			omniRetainedWorkbenches: options.omniRetainedWorkbenches,
@@ -1874,6 +1888,42 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		if (configuration.isSessionsWindow) {
 			configuration.profiles.profile = this.userDataProfilesMainService.profiles.find(p => p.isAgentsWindowProfile) ?? await this.userDataProfilesMainService.createAgentsWindowProfile();
+		} else if (configuration.isOmniWindow) {
+			if (options.forceTempProfile) {
+				throw new Error('Temporary profiles cannot own a Hucode Omni window.');
+			}
+
+			let fallbackProfile = defaultProfile;
+			if (!options.omniProfileId && !options.forceProfile) {
+				const resolved = this.resolveProfileForBrowserWindow(
+					options,
+					workspace,
+					defaultProfile
+				);
+				fallbackProfile = resolved instanceof Promise
+					? await resolved
+					: resolved;
+			}
+			const profile = resolveHucodeOmniDesktopProfileOwner(
+				this.userDataProfilesMainService.profiles,
+				{
+					profileId: options.omniProfileId,
+					forceProfile: options.forceProfile,
+					fallbackProfile,
+					defaultProfile: this.userDataProfilesMainService.defaultProfile,
+				}
+			);
+
+			configuration.profiles.all = this.userDataProfilesMainService.profiles;
+			configuration.profiles.profile = profile;
+			configuration.omniProfileId = profile.id;
+
+			if (!configuration.extensionDevelopmentPath) {
+				await this.userDataProfilesMainService.setProfileForWorkspace(
+					workspace,
+					profile
+				);
+			}
 		} else {
 			const profilePromise = this.resolveProfileForBrowserWindow(options, workspace, defaultProfile);
 			const profile = profilePromise instanceof Promise ? await profilePromise : profilePromise;

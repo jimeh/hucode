@@ -35,6 +35,7 @@ suite('HucodeWindowsStateHandler', () => {
 					mode: 0
 				},
 				windowKind: 'omni',
+				omniProfileId: 'work-profile-id',
 				omniActiveWorktreePath: worktreePath,
 				omniResidentWorkspaces: [{
 					projectId: 'project-1',
@@ -52,11 +53,13 @@ suite('HucodeWindowsStateHandler', () => {
 
 		assert.deepStrictEqual({
 			windowKind: restoredWindow.windowKind,
+			omniProfileId: restoredWindow.omniProfileId,
 			omniActiveWorktreePath: restoredWindow.omniActiveWorktreePath,
 			omniResidentWorkspaces: restoredWindow.omniResidentWorkspaces,
 			omniRetainedWorkbenches: restoredWindow.omniRetainedWorkbenches,
 		}, {
 			windowKind: 'omni',
+			omniProfileId: 'work-profile-id',
 			omniActiveWorktreePath: worktreePath,
 			omniResidentWorkspaces: [{
 				projectId: 'project-1',

@@ -73,6 +73,7 @@ import { ElectronIPCMainProcessService } from
 import { LoggerChannelClient } from
 	'../../platform/log/common/logIpc.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
+import { assertHucodeOmniProfileOwner } from '../../platform/userDataProfile/common/hucodeOmniProfileOwner.js';
 import { NativeLogService } from
 	'../../workbench/services/log/electron-browser/logService.js';
 import {
@@ -444,6 +445,13 @@ export class OmniMain extends Disposable {
 		serviceCollection.set(
 			IUserDataProfilesService,
 			userDataProfilesService
+		);
+		if (!this.configuration.omniProfileId) {
+			throw new Error('Omni-window owner profile is unavailable.');
+		}
+		assertHucodeOmniProfileOwner(
+			this.configuration.omniProfileId,
+			this.configuration.profiles.profile
 		);
 		const userDataProfileService = new UserDataProfileService(
 			reviveProfile(

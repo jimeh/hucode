@@ -429,6 +429,13 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly hostedWindowPaths?: readonly string[];
 		readonly hostedWindowFocusOutcome?: HucodeHostedShellOperationOutcome;
 		readonly normalWindowPaths?: readonly string[];
+		readonly ownerProfileId?: string;
+		readonly shellProfileId?: string;
+		readonly liveProfiles?: readonly {
+			readonly id: string;
+			readonly name: string;
+			readonly isDefault: boolean;
+		}[];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -457,10 +464,26 @@ suite('ResidentHostedWorkspacesController', () => {
 			'instance-3',
 			'instance-4',
 		])];
+		const ownerProfileId = options.ownerProfileId ?? 'profile-1';
+		const shellProfileId = options.shellProfileId ?? ownerProfileId;
+		const liveProfiles = options.liveProfiles ?? [{
+			id: ownerProfileId,
+			name: 'Work',
+			isDefault: false,
+		}];
 		const window = {
 			id: options.windowId ?? 1,
 			win: new TestBrowserWindow() as unknown as Electron.BrowserWindow,
 			config: {
+				profiles: {
+					home: URI.file('/profiles').toJSON(),
+					all: liveProfiles,
+					profile: {
+						id: shellProfileId,
+						name: 'Work',
+						isDefault: false,
+					},
+				},
 				windowId: options.windowId ?? 1,
 				partsSplash: {},
 				perfMarks: [],
@@ -474,6 +497,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				filesToMerge: undefined,
 				backupPath: undefined,
 				isOmniWindow: true,
+				omniProfileId: ownerProfileId,
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
 				omniRetainedWorkbenches: options.retainedWorkbenches,
@@ -510,6 +534,8 @@ suite('ResidentHostedWorkspacesController', () => {
 			},
 			state => stateChanges.push(state),
 			{
+				ownerProfileId,
+				getProfiles: () => liveProfiles as never,
 				restorePolicy: options.restorePolicy,
 				beforeUnloadTimeoutMs:
 					options.beforeUnloadTimeoutMs ?? 100,
@@ -1856,6 +1882,63 @@ suite('ResidentHostedWorkspacesController', () => {
 			},
 		]);
 	});
+
+	test('hosted configuration refreshes and keeps the controller owner profile',
+		async () => {
+			const alpha = createWorktree('owner-profile');
+			const liveProfiles = [{
+				id: 'profile-1',
+				name: 'Work renamed',
+				isDefault: false,
+			}, {
+				id: 'profile-2',
+				name: 'Personal',
+				isDefault: false,
+			}];
+			const { controller, protocolMainService } = createController({
+				ownerProfileId: 'profile-1',
+				liveProfiles,
+			});
+
+			await controller.openWorkspace(alpha, 'project-alpha');
+			const configuration = protocolMainService.objectUrls[0]
+				.value as INativeWindowConfiguration;
+
+			assert.deepStrictEqual({
+				ownerProfileId: configuration.omniProfileId,
+				profileId: configuration.profiles.profile.id,
+				profileName: configuration.profiles.profile.name,
+				allProfileIds: configuration.profiles.all.map(profile => profile.id),
+			}, {
+				ownerProfileId: 'profile-1',
+				profileId: 'profile-1',
+				profileName: 'Work renamed',
+				allProfileIds: ['profile-1', 'profile-2'],
+			});
+		});
+
+	test('hosted configuration fails closed when the shell profile mismatches',
+		async () => {
+			const alpha = createWorktree('mismatched-profile');
+			const { controller } = createController({
+				ownerProfileId: 'profile-1',
+				shellProfileId: 'profile-2',
+				liveProfiles: [{
+					id: 'profile-1',
+					name: 'Work',
+					isDefault: false,
+				}, {
+					id: 'profile-2',
+					name: 'Personal',
+					isDefault: false,
+				}],
+			});
+
+			await assert.rejects(
+				controller.openWorkspace(alpha, 'project-alpha'),
+				/does not match its Omni owner profile/
+			);
+		});
 
 	test('failed workspace attach rolls back lookup state', async () => {
 		const alpha = createWorktree('alpha');

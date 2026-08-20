@@ -79,9 +79,11 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeOmniShell: true,
 		}, {
 			serverPathCaseSensitive: true,
+			omniProfileId: 'work-profile-id',
 		}), {
 			hucodeOmniShell: true,
 			hucodeHostedOmniWorkbench: undefined,
+			hucodeOmniProfileId: 'work-profile-id',
 			hucodeOmniWorkbenchRoute: '/x/stable-abc123/workbench',
 			hucodeOmniHostedWorkbenchRoute:
 				'/x/stable-abc123/omni/workbench',
@@ -98,9 +100,11 @@ suite('HucodeWebClientServerIntegration', () => {
 			hucodeHostedOmniWorkbench: true,
 		}, {
 			serverPathCaseSensitive: false,
+			omniProfileId: 'work-profile-id',
 		}), {
 			hucodeOmniShell: undefined,
 			hucodeHostedOmniWorkbench: true,
+			hucodeOmniProfileId: 'work-profile-id',
 			hucodeOmniWorkbenchRoute: '/stable-abc123/workbench',
 			hucodeOmniHostedWorkbenchRoute:
 				'/stable-abc123/omni/workbench',
@@ -120,6 +124,7 @@ suite('HucodeWebClientServerIntegration', () => {
 		}), {
 			hucodeOmniShell: undefined,
 			hucodeHostedOmniWorkbench: undefined,
+			hucodeOmniProfileId: undefined,
 			hucodeOmniWorkbenchRoute: '/proxy/stable-abc123/workbench',
 			hucodeOmniHostedWorkbenchRoute:
 				'/proxy/stable-abc123/omni/workbench',

@@ -8,6 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import {
 	getHucodeOmniHostedWorkbenchRoute,
+	getHucodeOmniWebProfileId,
 	getHucodeOmniProjectsApi,
 	getHucodeOmniWorkbenchRoute,
 	getHucodeServerPathCaseSensitive,
@@ -40,6 +41,16 @@ suite('HucodeWebConfiguration', () => {
 			plain: false,
 			absent: false,
 		});
+	});
+
+	test('reads only non-empty Omni profile owner IDs', () => {
+		assert.deepStrictEqual([
+			getHucodeOmniWebProfileId({
+				hucodeOmniProfileId: 'work-profile-id',
+			}),
+			getHucodeOmniWebProfileId({ hucodeOmniProfileId: '' }),
+			getHucodeOmniWebProfileId(undefined),
+		], ['work-profile-id', undefined, undefined]);
 	});
 
 	test('resolves configured routes with defaults', () => {

@@ -125,6 +125,7 @@ export function getHucodeWebWorkbenchConfiguration(
 	routeOptions: IHucodeWebWorkbenchRouteOptions,
 	env: {
 		readonly serverPathCaseSensitive: boolean;
+		readonly omniProfileId?: string;
 		readonly userDataStorage?: 'browser' | 'server';
 		readonly userDataHome?: IHucodeWebWorkbenchConfiguration['hucodeWebUserDataHome'];
 	}
@@ -132,6 +133,10 @@ export function getHucodeWebWorkbenchConfiguration(
 	return {
 		hucodeOmniShell: routeOptions.hucodeOmniShell,
 		hucodeHostedOmniWorkbench: routeOptions.hucodeHostedOmniWorkbench,
+		hucodeOmniProfileId: routeOptions.hucodeOmniShell ||
+			routeOptions.hucodeHostedOmniWorkbench
+			? env.omniProfileId
+			: undefined,
 		hucodeOmniWorkbenchRoute: getHucodeWebOmniWorkbenchBase(basePath),
 		hucodeOmniHostedWorkbenchRoute:
 			getHucodeWebOmniHostedWorkbenchBase(basePath),

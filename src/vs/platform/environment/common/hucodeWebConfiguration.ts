@@ -7,6 +7,9 @@ import type { UriComponents } from '../../../base/common/uri.js';
 
 export type HucodeWebUserDataStorage = 'browser' | 'server';
 
+/** Query parameter carrying an Omni session's stable owner-profile ID. */
+export const HUCODE_OMNI_PROFILE_ID_QUERY = 'hucode-omni-profile';
+
 /**
  * Hucode-specific configuration injected into server-web workbench pages.
  *
@@ -17,6 +20,7 @@ export type HucodeWebUserDataStorage = 'browser' | 'server';
 export interface IHucodeWebWorkbenchConfiguration {
 	readonly hucodeOmniShell?: boolean;
 	readonly hucodeHostedOmniWorkbench?: boolean;
+	readonly hucodeOmniProfileId?: string;
 	readonly hucodeOmniWorkbenchRoute?: string;
 	readonly hucodeOmniHostedWorkbenchRoute?: string;
 	readonly hucodeOmniProjectsApi?: string;
@@ -64,6 +68,17 @@ export function isHucodeHostedOmniWebConfiguration(
 ): config is IHucodeWebWorkbenchConfiguration {
 	return (config as IHucodeWebWorkbenchConfiguration | undefined)
 		?.hucodeHostedOmniWorkbench === true;
+}
+
+/** Returns the stable profile owner selected for an Omni web page. */
+export function getHucodeOmniWebProfileId(
+	config: object | undefined
+): string | undefined {
+	const profileId = (config as IHucodeWebWorkbenchConfiguration | undefined)
+		?.hucodeOmniProfileId;
+	return typeof profileId === 'string' && profileId.length > 0
+		? profileId
+		: undefined;
 }
 
 /**

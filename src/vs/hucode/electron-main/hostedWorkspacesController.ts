@@ -22,6 +22,8 @@ import {
 } from '../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
+import { IUserDataProfile } from
+	'../../platform/userDataProfile/common/userDataProfile.js';
 import {
 	ICodeWindow,
 	UnloadReason,
@@ -76,6 +78,10 @@ import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
 import type { IBrowserViewMainService } from
 	'../../platform/browserView/electron-main/browserViewMainService.js';
+import {
+	assertHucodeOmniProfileOwner,
+	resolveHucodeOmniProfileOwner,
+} from '../../platform/userDataProfile/common/hucodeOmniProfileOwner.js';
 
 export interface IHostedWorkbenchView extends Electron.View {
 	readonly webContents: Electron.WebContents;
@@ -103,6 +109,8 @@ export interface IHostedWorkspaceIpcMain {
 }
 
 export interface IResidentHostedWorkspacesControllerOptions {
+	readonly ownerProfileId?: string;
+	readonly getProfiles?: () => readonly IUserDataProfile[];
 	readonly restorePolicy?: HucodeHostedWorkbenchRestorePolicy;
 	readonly beforeUnloadTimeoutMs?: number;
 	readonly willUnloadTimeoutMs?: number;
@@ -225,6 +233,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private readonly now: () => number;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
 	private readonly ipc: IHostedWorkspaceIpcMain;
+	private readonly ownerProfileId: string;
+	private readonly getProfiles: () => readonly IUserDataProfile[];
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -283,6 +293,14 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.viewFactory = options.viewFactory ??
 			defaultHostedWorkbenchViewFactory;
 		this.ipc = options.ipc ?? validatedIpcMain;
+		this.ownerProfileId = options.ownerProfileId ??
+			this.window.config?.omniProfileId ?? '';
+		if (!this.ownerProfileId) {
+			throw new Error('Omni-window owner profile is unavailable.');
+		}
+		this.getProfiles = options.getProfiles ?? (() =>
+			(this.window.config?.profiles.all ?? []) as readonly IUserDataProfile[]
+		);
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
@@ -1891,6 +1909,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (!baseConfig) {
 			throw new Error('Omni-window configuration is unavailable.');
 		}
+		if (baseConfig.omniProfileId !== this.ownerProfileId) {
+			throw new Error('Omni-window owner profile changed unexpectedly.');
+		}
+		const profiles = this.getProfiles();
+		const ownerProfile = resolveHucodeOmniProfileOwner(
+			profiles,
+			this.ownerProfileId
+		);
+		assertHucodeOmniProfileOwner(
+			this.ownerProfileId,
+			baseConfig.profiles.profile
+		);
 
 		const workspace = getSingleFolderWorkspaceIdentifier(
 			URI.file(instance.worktreePath),
@@ -1905,6 +1935,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		return {
 			...baseConfig,
+			profiles: {
+				...baseConfig.profiles,
+				all: profiles,
+				profile: ownerProfile,
+			},
 			workspace,
 			backupPath: undefined,
 			filesToOpenOrCreate: undefined,
@@ -1916,6 +1951,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			isHostedOmniWorkspace: true,
 			hostedWebContentsId,
 			hostedInstanceId: instance.instanceId,
+			omniProfileId: this.ownerProfileId,
 			omniActiveWorktreePath: undefined,
 			omniResidentWorkspaces: undefined,
 			omniRetainedWorkbenches: undefined,

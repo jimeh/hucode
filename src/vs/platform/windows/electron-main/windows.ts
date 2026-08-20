@@ -118,6 +118,7 @@ export interface IOpenConfiguration extends IBaseOpenConfiguration {
 	readonly remoteAuthority?: string;
 	readonly forceProfile?: string;
 	readonly forceTempProfile?: boolean;
+	readonly omniProfileId?: string;
 }
 
 export interface IOpenEmptyConfiguration extends IBaseOpenConfiguration { }

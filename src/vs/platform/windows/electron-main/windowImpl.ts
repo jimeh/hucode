@@ -628,6 +628,12 @@ export class CodeWindow extends BaseWindow implements ICodeWindow {
 		}
 
 		const profile = this.userDataProfilesService.profiles.find(profile => profile.id === this.config?.profiles.profile.id);
+		if (this.config.omniProfileId &&
+			(this.config.isOmniWindow || this.config.isHostedOmniWorkspace)) {
+			return this.userDataProfilesService.profiles.find(candidate =>
+				candidate.id === this.config?.omniProfileId
+			);
+		}
 		if (this.isExtensionDevelopmentHost && profile) {
 			return profile;
 		}

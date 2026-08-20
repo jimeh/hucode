@@ -99,6 +99,11 @@ import { INotificationService, Severity } from '../../platform/notification/comm
 import { IDefaultAccountService } from '../../platform/defaultAccount/common/defaultAccount.js';
 import { DefaultAccountService } from '../services/accounts/browser/defaultAccount.js';
 import { AccountPolicyService, IAccountPolicyGateService } from '../services/policies/common/accountPolicyService.js';
+import {
+	isHucodeHostedOmniWebConfiguration,
+} from '../../platform/environment/common/hucodeWebConfiguration.js';
+import { resolveHucodeOmniWebProfileOwner } from '../../platform/userDataProfile/common/hucodeOmniProfileOwner.js';
+import { showHucodeWebProfileMismatchBlocker } from '../../platform/environment/browser/hucodeWebProfileMismatch.js';
 
 export interface IBrowserMainWorkbench {
 	startup(): IInstantiationService;
@@ -369,7 +374,9 @@ export class BrowserMain extends Disposable {
 
 		const currentProfile = await this.getCurrentProfile(workspace, userDataProfilesService, environmentService);
 		await userDataProfileService.updateCurrentProfile(currentProfile);
-		await userDataProfilesService.setProfileForWorkspace(workspace, currentProfile);
+		if (!isHucodeHostedOmniWebConfiguration(environmentService.options)) {
+			await userDataProfilesService.setProfileForWorkspace(workspace, currentProfile);
+		}
 
 		// Default Account
 		const defaultAccountService = this._register(new DefaultAccountService(productService));
@@ -681,6 +688,13 @@ export class BrowserMain extends Disposable {
 	protected async connectUserDataProfilesService(_remoteAgentService: IRemoteAgentService): Promise<void> { }
 
 	private getInitialProfile(workspace: IAnyWorkspaceIdentifier, userDataProfilesService: IBrowserUserDataProfilesService, environmentService: BrowserWorkbenchEnvironmentService): IUserDataProfile {
+		const omniProfile = this.getHucodeOmniProfile(
+			userDataProfilesService,
+			environmentService
+		);
+		if (omniProfile) {
+			return omniProfile;
+		}
 		const profileName = environmentService.options?.profile?.name ?? environmentService.profile;
 		return (profileName ? userDataProfilesService.profiles.find(profile => profile.name === profileName) : undefined)
 			?? userDataProfilesService.getProfileForWorkspace(workspace)
@@ -688,6 +702,13 @@ export class BrowserMain extends Disposable {
 	}
 
 	private async getCurrentProfile(workspace: IAnyWorkspaceIdentifier, userDataProfilesService: IBrowserUserDataProfilesService, environmentService: BrowserWorkbenchEnvironmentService): Promise<IUserDataProfile> {
+		const omniProfile = this.getHucodeOmniProfile(
+			userDataProfilesService,
+			environmentService
+		);
+		if (omniProfile) {
+			return omniProfile;
+		}
 		const profileName = environmentService.options?.profile?.name ?? environmentService.profile;
 		if (profileName) {
 			const profile = userDataProfilesService.profiles.find(p => p.name === profileName);
@@ -697,6 +718,21 @@ export class BrowserMain extends Disposable {
 			return userDataProfilesService.createNamedProfile(profileName, undefined, workspace);
 		}
 		return userDataProfilesService.getProfileForWorkspace(workspace) ?? userDataProfilesService.defaultProfile;
+	}
+
+	private getHucodeOmniProfile(
+		userDataProfilesService: IBrowserUserDataProfilesService,
+		environmentService: BrowserWorkbenchEnvironmentService
+	): IUserDataProfile | undefined {
+		try {
+			return resolveHucodeOmniWebProfileOwner(
+				userDataProfilesService.profiles,
+				environmentService.options
+			);
+		} catch (error) {
+			showHucodeWebProfileMismatchBlocker();
+			throw error;
+		}
 	}
 
 	private resolveWorkspace(): IAnyWorkspaceIdentifier {

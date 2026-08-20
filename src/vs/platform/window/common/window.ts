@@ -540,6 +540,7 @@ export interface INativeWindowConfiguration extends IWindowConfiguration, Native
 	isHostedOmniWorkspace?: boolean;
 	hostedWebContentsId?: number;
 	hostedInstanceId?: string;
+	omniProfileId?: string;
 	omniActiveWorktreePath?: string;
 	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
 	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];

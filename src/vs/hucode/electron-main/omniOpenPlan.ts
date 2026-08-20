@@ -12,6 +12,7 @@ import { INativeWindowConfiguration } from '../../platform/window/common/window.
  */
 export interface IHucodeOmniWindowPath {
 	readonly isOmniWindow: true;
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
@@ -29,6 +30,7 @@ export interface IHucodeOmniOpenConfiguration {
 	readonly forceNewTabbedWindow?: boolean;
 	readonly forceProfile?: string;
 	readonly forceTempProfile?: boolean;
+	readonly omniProfileId?: string;
 }
 
 /**
@@ -55,6 +57,7 @@ export interface IHucodeOmniBrowserWindowOptions
 	extends IHucodeOmniOpenConfiguration {
 	readonly forceNewWindow: boolean;
 	readonly isOmniWindow: true;
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
@@ -67,6 +70,7 @@ export interface IHucodeOmniBrowserWindowOptions
  */
 export interface IHucodeOmniWindowState {
 	readonly windowKind?: string;
+	readonly omniProfileId?: string;
 	readonly omniActiveWorktreePath?: string;
 	readonly omniResidentWorkspaces?:
 	INativeWindowConfiguration['omniResidentWorkspaces'];
@@ -157,6 +161,7 @@ export function getHucodeOmniPathFromWindowState(
 	}
 
 	return createHucodeOmniWindowPath({
+		omniProfileId: windowState.omniProfileId,
 		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
 		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
 		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
@@ -218,6 +223,7 @@ export function getHucodeOmniBrowserWindowOptions(
 		forceProfile: openConfig.forceProfile,
 		forceTempProfile: openConfig.forceTempProfile,
 		isOmniWindow: true,
+		omniProfileId: omniWindow.omniProfileId ?? openConfig.omniProfileId,
 		omniActiveWorktreePath: omniWindow.omniActiveWorktreePath,
 		omniResidentWorkspaces: omniWindow.omniResidentWorkspaces,
 		omniRetainedWorkbenches: omniWindow.omniRetainedWorkbenches,
@@ -265,6 +271,7 @@ function getHucodeOmniWindowRestoreKey(
 	omniWindow: IHucodeOmniWindowPath
 ): string {
 	return JSON.stringify({
+		profileId: omniWindow.omniProfileId,
 		active: omniWindow.omniActiveWorktreePath,
 		resident: omniWindow.omniResidentWorkspaces ?? [],
 		retained: omniWindow.omniRetainedWorkbenches ?? [],
