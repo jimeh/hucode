@@ -215,6 +215,10 @@ const addedByOmniBootstrap = new Map([
 		'src/vs/platform/window/common/hucodeShellControllerService.js',
 		'Omni consumes its owner-bound privileged shell capability.',
 	],
+	[
+		'src/vs/platform/userDataProfile/common/hucodeOmniProfileOwner.js',
+		'Omni verifies its fixed stable profile owner before shell startup.',
+	],
 ]);
 
 suite('Hucode Omni desktop entrypoints', () => {

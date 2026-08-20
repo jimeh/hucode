@@ -10,8 +10,10 @@ import type { IProductConfiguration } from
 	'../../base/common/product.js';
 import type { Mutable } from
 	'../../base/common/types.js';
-import type { IHucodeWebWorkbenchConfiguration } from
-	'../../platform/environment/common/hucodeWebConfiguration.js';
+import {
+	HUCODE_OMNI_PROFILE_ID_QUERY,
+	type IHucodeWebWorkbenchConfiguration,
+} from '../../platform/environment/common/hucodeWebConfiguration.js';
 import type { IProductService } from
 	'../../platform/product/common/productService.js';
 import {
@@ -53,6 +55,25 @@ export type HucodeWebWorkbenchRoutePath =
 export interface IHucodeWebWorkbenchRouteOptions {
 	readonly hucodeOmniShell?: boolean;
 	readonly hucodeHostedOmniWorkbench?: boolean;
+}
+
+export type HucodeOmniProfileQueryResult =
+	| { readonly valid: true; readonly profileId?: string }
+	| { readonly valid: false };
+
+/** Parses the stable owner ID accepted only by Omni document routes. */
+export function parseHucodeOmniProfileQuery(
+	query: URLSearchParams,
+	options: IHucodeWebWorkbenchRouteOptions
+): HucodeOmniProfileQueryResult {
+	if (!options.hucodeOmniShell && !options.hucodeHostedOmniWorkbench) {
+		return { valid: true };
+	}
+	const values = query.getAll(HUCODE_OMNI_PROFILE_ID_QUERY);
+	if (values.length > 1 || (values.length === 1 && !values[0])) {
+		return { valid: false };
+	}
+	return { valid: true, profileId: values[0] };
 }
 
 export type HucodeWebClientRouteAction =

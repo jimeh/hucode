@@ -16,9 +16,12 @@ import {
 	getHucodeOmniPathFromWindowState,
 	getHucodeRegularFileOpenWindows,
 	isHucodeOmniPathToOpen,
-	openNewHucodeOmniWindow
+	openHucodeOmniWithProfilePreflight,
+	openNewHucodeOmniWindow,
+	restoreHucodeOmniWindowPaths,
 } from '../../electron-main/omniOpenPlan.js';
 import {
+	HucodeOmniProfileOwnerError,
 	resolveHucodeOmniDesktopProfileOwner,
 	resolveHucodeOmniProfileOwner,
 	resolveHucodeOmniWebProfileOwner,
@@ -112,6 +115,145 @@ suite('HucodeOmniOpenPlan', () => {
 			defaultProfile: defaultProfile as never,
 		}), /unavailable/);
 	});
+
+	test('preflights explicit owners before allocating an Omni window', () => {
+		const profiles = [{ id: 'work-id', name: 'Work' }] as never;
+		let allocationCount = 0;
+		const allocate = () => ++allocationCount;
+
+		assert.strictEqual(openHucodeOmniWithProfilePreflight(
+			profiles,
+			{ omniProfileId: 'work-id' },
+			allocate
+		), 1);
+		for (const options of [{
+			omniProfileId: 'missing-id',
+		}, {
+			forceProfile: 'Missing name',
+		}, {
+			forceTempProfile: true,
+		}]) {
+			assert.throws(() => openHucodeOmniWithProfilePreflight(
+				profiles,
+				options,
+				allocate
+			), HucodeOmniProfileOwnerError);
+		}
+		assert.strictEqual(allocationCount, 1);
+	});
+
+	test('initial restore skips only stale Omni owners and continues',
+		async () => {
+			const stale = createHucodeOmniWindowPath({
+				omniProfileId: 'deleted-profile',
+			});
+			const valid = createHucodeOmniWindowPath({
+				omniProfileId: 'work-profile',
+			});
+			const attempts: string[] = [];
+			const errors: string[] = [];
+			const windows = await restoreHucodeOmniWindowPaths(
+				[stale, valid],
+				{
+					initialStartup: true,
+					hasOtherWindows: false,
+					async open(path) {
+						attempts.push(path.omniProfileId!);
+						if (path === stale) {
+							throw new HucodeOmniProfileOwnerError('stale owner');
+						}
+						return path.omniProfileId!;
+					},
+					async openFallback() {
+						throw new Error('fallback should not open');
+					},
+					onOwnerError(path, error) {
+						errors.push(`${path.omniProfileId}:${error.message}`);
+					},
+				}
+			);
+
+			assert.deepStrictEqual(attempts, [
+				'deleted-profile',
+				'work-profile',
+			]);
+			assert.deepStrictEqual(errors, [
+				'deleted-profile:stale owner',
+			]);
+			assert.deepStrictEqual(windows, ['work-profile']);
+		});
+
+	test('fully stale initial restore opens one fresh Default Omni window',
+		async () => {
+			const stale = createHucodeOmniWindowPath({
+				omniProfileId: 'deleted-profile',
+				omniActiveWorktreePath: '/stale-session',
+			});
+			let fallbackCount = 0;
+			const windows = await restoreHucodeOmniWindowPaths([stale], {
+				initialStartup: true,
+				hasOtherWindows: false,
+				async open() {
+					throw new HucodeOmniProfileOwnerError('stale owner');
+				},
+				async openFallback() {
+					fallbackCount++;
+					return createHucodeOmniWindowPath({
+						omniProfileId: 'default-profile',
+					});
+				},
+				onOwnerError() { },
+			});
+
+			assert.strictEqual(fallbackCount, 1);
+			assert.deepStrictEqual(windows, [createHucodeOmniWindowPath({
+				omniProfileId: 'default-profile',
+			})]);
+		});
+
+	test('fully stale restore does not add fallback beside another window',
+		async () => {
+			let fallbackCount = 0;
+			const windows = await restoreHucodeOmniWindowPaths([
+				createHucodeOmniWindowPath({ omniProfileId: 'deleted-profile' }),
+			], {
+				initialStartup: true,
+				hasOtherWindows: true,
+				async open() {
+					throw new HucodeOmniProfileOwnerError('stale owner');
+				},
+				async openFallback() {
+					fallbackCount++;
+					return 'unexpected';
+				},
+				onOwnerError() { },
+			});
+
+			assert.strictEqual(fallbackCount, 0);
+			assert.deepStrictEqual(windows, []);
+		});
+
+	test('explicit non-startup Omni opens still reject stale owners',
+		async () => {
+			const stale = createHucodeOmniWindowPath({
+				omniProfileId: 'deleted-profile',
+			});
+			let handled = false;
+			await assert.rejects(restoreHucodeOmniWindowPaths([stale], {
+				initialStartup: false,
+				hasOtherWindows: false,
+				async open() {
+					throw new HucodeOmniProfileOwnerError('stale owner');
+				},
+				async openFallback() {
+					throw new Error('fallback should not open');
+				},
+				onOwnerError() {
+					handled = true;
+				},
+			}), /stale owner/);
+			assert.strictEqual(handled, false);
+		});
 
 	test('web hosted startup requires and overrides with its owner ID', () => {
 		const work = {

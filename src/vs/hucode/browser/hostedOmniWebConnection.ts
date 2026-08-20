@@ -233,11 +233,6 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				port.close();
 				return;
 			}
-			if (event.data.profileId !== this.profileId) {
-				port.close();
-				this.blockForProfileMismatch();
-				return;
-			}
 			const bootstrap = event.data.connectionBootstrap;
 			if (bootstrap.id !== this.bootstrapId ||
 				bootstrap.attempt !== this.connectionAttempt) {
@@ -255,6 +250,13 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 			}
 			if (compatibility !== 'match') {
 				port.close();
+				return;
+			}
+			if (typeof event.data.profileId !== 'string' ||
+				!event.data.profileId ||
+				event.data.profileId !== this.profileId) {
+				port.close();
+				this.blockForProfileMismatch();
 				return;
 			}
 			const hostedShellCapabilities =
@@ -456,8 +458,12 @@ function isPortMessageTarget(value: unknown, instanceId: string): boolean {
 function isPortMessageWireShape(
 	value: unknown,
 	instanceId: string
-): value is Omit<IHucodeOmniWebPortMessage, 'buildIdentity'> & {
+): value is Omit<
+	IHucodeOmniWebPortMessage,
+	'buildIdentity' | 'profileId'
+> & {
 	readonly buildIdentity?: unknown;
+	readonly profileId?: unknown;
 } {
 	if (!value || typeof value !== 'object') {
 		return false;
@@ -474,7 +480,6 @@ function isPortMessageWireShape(
 	};
 	return message.type === HucodeOmniWebParentMessageType.Port &&
 		message.instanceId === instanceId &&
-		typeof message.profileId === 'string' && !!message.profileId &&
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);

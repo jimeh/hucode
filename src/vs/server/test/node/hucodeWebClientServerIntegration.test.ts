@@ -13,6 +13,7 @@ import {
 	getHucodeWebDocumentBasePath,
 	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
+	parseHucodeOmniProfileQuery,
 } from '../../node/hucodeWebClientServerIntegration.js';
 
 suite('HucodeWebClientServerIntegration', () => {
@@ -138,6 +139,27 @@ suite('HucodeWebClientServerIntegration', () => {
 			webviewEndpoint:
 				'/proxy/stable-abc123/static/out/vs/workbench/contrib/webview/browser/pre',
 		});
+	});
+
+	test('rejects malformed owner-profile queries on Omni routes', () => {
+		assert.deepStrictEqual(parseHucodeOmniProfileQuery(
+			new URLSearchParams('hucode-omni-profile=work'),
+			{ hucodeOmniShell: true }
+		), { valid: true, profileId: 'work' });
+		assert.deepStrictEqual(parseHucodeOmniProfileQuery(
+			new URLSearchParams('hucode-omni-profile='),
+			{ hucodeOmniShell: true }
+		), { valid: false });
+		assert.deepStrictEqual(parseHucodeOmniProfileQuery(
+			new URLSearchParams(
+				'hucode-omni-profile=work&hucode-omni-profile=personal'
+			),
+			{ hucodeHostedOmniWorkbench: true }
+		), { valid: false });
+		assert.deepStrictEqual(parseHucodeOmniProfileQuery(
+			new URLSearchParams('hucode-omni-profile='),
+			{}
+		), { valid: true });
 	});
 
 	test('resolves the client base path', () => {

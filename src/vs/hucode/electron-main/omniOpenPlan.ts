@@ -5,6 +5,11 @@
 
 import { IProcessEnvironment } from '../../base/common/platform.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
+import {
+	HucodeOmniProfileOwnerError,
+	preflightHucodeOmniExplicitProfileOwner,
+} from '../../platform/userDataProfile/common/hucodeOmniProfileOwner.js';
+import { IUserDataProfile } from '../../platform/userDataProfile/common/userDataProfile.js';
 import { INativeWindowConfiguration } from '../../platform/window/common/window.js';
 
 /**
@@ -130,6 +135,60 @@ export async function openNewHucodeOmniWindow<
 		getHucodeNewOmniWindowOpenConfiguration(openConfig)
 	);
 	windows.at(-1)?.focus();
+	return windows;
+}
+
+/** Runs explicit owner validation before invoking any window allocation. */
+export function openHucodeOmniWithProfilePreflight<T>(
+	profiles: readonly IUserDataProfile[],
+	options: {
+		readonly omniProfileId?: string;
+		readonly forceProfile?: string;
+		readonly forceTempProfile?: boolean;
+	},
+	open: () => T
+): T {
+	preflightHucodeOmniExplicitProfileOwner(profiles, {
+		profileId: options.omniProfileId,
+		forceProfile: options.forceProfile,
+		forceTempProfile: options.forceTempProfile,
+	});
+	return open();
+}
+
+/** Restores valid Omni paths while isolating stale owners at initial startup. */
+export async function restoreHucodeOmniWindowPaths<
+	TPath extends IHucodeOmniWindowPath,
+	TWindow
+>(
+	paths: readonly TPath[],
+	options: {
+		readonly initialStartup: boolean;
+		readonly hasOtherWindows: boolean;
+		readonly open: (path: TPath) => Promise<TWindow>;
+		readonly openFallback: () => Promise<TWindow>;
+		readonly onOwnerError: (
+			path: TPath,
+			error: HucodeOmniProfileOwnerError
+		) => Promise<void> | void;
+	}
+): Promise<TWindow[]> {
+	const windows: TWindow[] = [];
+	for (const path of paths) {
+		try {
+			windows.push(await options.open(path));
+		} catch (error) {
+			if (!options.initialStartup ||
+				!(error instanceof HucodeOmniProfileOwnerError)) {
+				throw error;
+			}
+			await options.onOwnerError(path, error);
+		}
+	}
+	if (options.initialStartup && paths.length > 0 && windows.length === 0 &&
+		!options.hasOtherWindows) {
+		windows.push(await options.openFallback());
+	}
 	return windows;
 }
 

@@ -175,6 +175,53 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(browser.portMessages.length, 0);
 		});
 
+	test('classifies a legacy child without profile identity by build first',
+		async () => {
+			const { service, surface, browser } = createService();
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/legacy-profile-and-build'
+			);
+			assert.ok(opened.activeInstanceId);
+			const iframe = getIframe(surface, opened.activeInstanceId);
+			browser.emitMessage({
+				type: HucodeOmniWebChildMessageType.Ready,
+				instanceId: opened.activeInstanceId,
+				connectionBootstrap: { id: 'legacy-document', attempt: 1 },
+				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+				hostedShellProtocolVersion:
+					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+			}, iframe.contentWindow);
+
+			assert.strictEqual(browser.versionMismatchCount, 1);
+			assert.strictEqual(browser.profileMismatchCount, 0);
+			assert.deepStrictEqual(browser.portMessages, []);
+		});
+
+	test('blocks a current child without profile identity', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/current-build-without-profile'
+		);
+		assert.ok(opened.activeInstanceId);
+		const iframe = getIframe(surface, opened.activeInstanceId);
+		browser.emitMessage({
+			type: HucodeOmniWebChildMessageType.Ready,
+			instanceId: opened.activeInstanceId,
+			connectionBootstrap: { id: 'current-document', attempt: 1 },
+			buildIdentity,
+			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
+			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+		}, iframe.contentWindow);
+
+		assert.strictEqual(browser.versionMismatchCount, 0);
+		assert.strictEqual(browser.profileMismatchCount, 1);
+		assert.deepStrictEqual(browser.portMessages, []);
+	});
+
 	function createService(
 		browser: FakeBrowserAdapter = new FakeBrowserAdapter(),
 		persistence?: IWebHucodeShellPersistenceAdapter,

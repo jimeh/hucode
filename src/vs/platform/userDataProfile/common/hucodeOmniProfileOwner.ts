@@ -46,6 +46,38 @@ export function resolveHucodeOmniProfileOwner(
 	return profile;
 }
 
+/** Resolves explicit desktop owner input without allocating fallback state. */
+export function preflightHucodeOmniExplicitProfileOwner(
+	profiles: readonly IUserDataProfile[],
+	options: {
+		readonly profileId?: string;
+		readonly forceProfile?: string;
+		readonly forceTempProfile?: boolean;
+	}
+): IUserDataProfile | undefined {
+	if (options.forceTempProfile) {
+		throw new HucodeOmniProfileOwnerError(
+			'Temporary profiles cannot own a Hucode Omni window.'
+		);
+	}
+	if (options.profileId) {
+		return resolveHucodeOmniProfileOwner(profiles, options.profileId);
+	}
+	if (!options.forceProfile) {
+		return undefined;
+	}
+	const profile = profiles.find(candidate =>
+		candidate.name === options.forceProfile &&
+		isHucodeOmniOwnerProfile(candidate)
+	);
+	if (!profile) {
+		throw new HucodeOmniProfileOwnerError(
+			`The Hucode Omni profile "${options.forceProfile}" is unavailable.`
+		);
+	}
+	return profile;
+}
+
 /** Resolves the desktop owner without creating a profile from legacy input. */
 export function resolveHucodeOmniDesktopProfileOwner(
 	profiles: readonly IUserDataProfile[],
@@ -56,20 +88,12 @@ export function resolveHucodeOmniDesktopProfileOwner(
 		readonly defaultProfile: IUserDataProfile;
 	}
 ): IUserDataProfile {
-	if (options.profileId) {
-		return resolveHucodeOmniProfileOwner(profiles, options.profileId);
-	}
-	if (options.forceProfile) {
-		const profile = profiles.find(candidate =>
-			candidate.name === options.forceProfile &&
-			isHucodeOmniOwnerProfile(candidate)
-		);
-		if (!profile) {
-			throw new HucodeOmniProfileOwnerError(
-				`The Hucode Omni profile "${options.forceProfile}" is unavailable.`
-			);
-		}
-		return profile;
+	const explicitProfile = preflightHucodeOmniExplicitProfileOwner(
+		profiles,
+		options
+	);
+	if (explicitProfile) {
+		return explicitProfile;
 	}
 	return isHucodeOmniOwnerProfile(options.fallbackProfile)
 		? options.fallbackProfile

@@ -1693,10 +1693,6 @@ export class WebHucodeShellController extends Disposable
 			if (!isHucodeOmniWebReadyMessageWireShape(event.data)) {
 				return;
 			}
-			if (event.data.profileId !== this.ownerProfileId) {
-				this.blockForProfileMismatch(instance);
-				return;
-			}
 			const compatibility = getHucodeOmniWebBuildCompatibility(
 				event.data,
 				this.buildIdentity
@@ -1706,6 +1702,12 @@ export class WebHucodeShellController extends Disposable
 				return;
 			}
 			if (compatibility !== 'match') {
+				return;
+			}
+			if (typeof event.data.profileId !== 'string' ||
+				!event.data.profileId ||
+				event.data.profileId !== this.ownerProfileId) {
+				this.blockForProfileMismatch(instance);
 				return;
 			}
 		}
@@ -2940,8 +2942,12 @@ function getHucodeOmniWebChildMessageTarget(value: unknown): {
  */
 function isHucodeOmniWebReadyMessageWireShape(
 	value: unknown
-): value is Omit<IHucodeOmniWebReadyMessage, 'buildIdentity'> & {
+): value is Omit<
+	IHucodeOmniWebReadyMessage,
+	'buildIdentity' | 'profileId'
+> & {
 	readonly buildIdentity?: unknown;
+	readonly profileId?: unknown;
 } {
 	if (!value || typeof value !== 'object') {
 		return false;
@@ -2956,7 +2962,6 @@ function isHucodeOmniWebReadyMessageWireShape(
 	};
 	return message.type === HucodeOmniWebChildMessageType.Ready &&
 		typeof message.instanceId === 'string' && !!message.instanceId &&
-		typeof message.profileId === 'string' && !!message.profileId &&
 		isHucodeOmniWebConnectionBootstrapMetadata(message) &&
 		typeof message.hostedShellProtocolVersion === 'number' &&
 		Array.isArray(message.hostedShellCapabilities);

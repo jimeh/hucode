@@ -37,12 +37,12 @@ import {
 	getHucodeWebDocumentBasePath,
 	getHucodeWebProductConfiguration,
 	getHucodeWebWorkbenchConfiguration,
+	parseHucodeOmniProfileQuery,
 	toHucodeWebRouteLocation,
 } from './hucodeWebClientServerIntegration.js';
 import { IHucodeWebUserDataServer } from './hucodeWebUserDataServer.js';
 import { HucodeWebProjectManagerServer } from './hucodeWebProjectManagerServer.js';
 import { IServerLifetimeService } from './serverLifetimeService.js';
-import { HUCODE_OMNI_PROFILE_ID_QUERY } from '../../platform/environment/common/hucodeWebConfiguration.js';
 
 const textMimeType: { [ext: string]: string | undefined } = {
 	'.html': 'text/html',
@@ -463,15 +463,25 @@ export class WebClientServer extends Disposable {
 			} catch (err) {/* Ignore Error */ }
 		}
 
+		const omniProfileQuery = parseHucodeOmniProfileQuery(
+			parsedUrl.searchParams,
+			options
+		);
+		if (!omniProfileQuery.valid) {
+			return serveError(
+				req,
+				res,
+				400,
+				'Invalid Hucode Omni owner profile selection.'
+			);
+		}
+
 		const workbenchWebConfiguration = {
 			remoteAuthority,
 			serverBasePath: basePath,
 			...getHucodeWebWorkbenchConfiguration(documentBasePath, options, {
 				serverPathCaseSensitive: isLinux,
-				omniProfileId: getRequestedHucodeOmniProfileId(
-					parsedUrl,
-					options
-				),
+				omniProfileId: omniProfileQuery.profileId,
 				userDataStorage: this._hucodeWebUserDataServer.enabled ? 'server' : 'browser',
 				userDataHome: this._hucodeWebUserDataServer.enabled
 					? URI.file(this._hucodeWebUserDataServer.userHome).with({ scheme: Schemas.vscodeRemote, authority: remoteAuthority })
@@ -613,18 +623,4 @@ export class WebClientServer extends Disposable {
 		});
 		return void res.end(data);
 	}
-}
-
-function getRequestedHucodeOmniProfileId(
-	url: URL,
-	options: IHucodeWebWorkbenchRouteOptions
-): string | undefined {
-	if (!options.hucodeOmniShell && !options.hucodeHostedOmniWorkbench) {
-		return undefined;
-	}
-	const values = url.searchParams.getAll(HUCODE_OMNI_PROFILE_ID_QUERY);
-	if (values.length > 1 || (values.length === 1 && !values[0])) {
-		throw new Error('Invalid Hucode Omni owner profile selection.');
-	}
-	return values[0];
 }

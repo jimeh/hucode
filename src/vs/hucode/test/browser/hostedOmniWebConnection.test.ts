@@ -67,7 +67,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		connectionBootstrap: { readonly id: string; readonly attempt: number },
 		overrides?: {
 			readonly instanceId?: string;
-			readonly profileId?: string;
+			readonly profileId?: string | 'none';
 			readonly buildIdentity?: string | 'none';
 			readonly hostedShellProtocolVersion?: number;
 			readonly hostedShellCapabilities?: readonly string[];
@@ -75,7 +75,9 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		return {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: overrides?.instanceId ?? INSTANCE_ID,
-			profileId: overrides?.profileId ?? PROFILE_ID,
+			...(overrides?.profileId === 'none' ? {} : {
+				profileId: overrides?.profileId ?? PROFILE_ID,
+			}),
 			connectionBootstrap,
 			...(overrides?.buildIdentity === 'none' ? {} : {
 				buildIdentity: overrides?.buildIdentity ?? BUILD_IDENTITY,
@@ -436,6 +438,36 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 
 		assert.strictEqual(port.wasClosed(), true);
 		assert.strictEqual(browser.versionMismatchCount, 1);
+		assert.strictEqual(await service.whenConnected(), undefined);
+	});
+
+	test('classifies a legacy shell without profile identity by build first',
+		async () => {
+			const { service, browser } = createService();
+			service.signalReady();
+			const port = trackedPort();
+			browser.emitFromParent(portMessage(postedBootstrap(browser), {
+				profileId: 'none',
+				buildIdentity: 'none',
+			}), port.port);
+
+			assert.strictEqual(port.wasClosed(), true);
+			assert.strictEqual(browser.versionMismatchCount, 1);
+			assert.strictEqual(browser.profileMismatchCount, 0);
+			assert.strictEqual(await service.whenConnected(), undefined);
+		});
+
+	test('blocks a current shell port without profile identity', async () => {
+		const { service, browser } = createService();
+		service.signalReady();
+		const port = trackedPort();
+		browser.emitFromParent(portMessage(postedBootstrap(browser), {
+			profileId: 'none',
+		}), port.port);
+
+		assert.strictEqual(port.wasClosed(), true);
+		assert.strictEqual(browser.versionMismatchCount, 0);
+		assert.strictEqual(browser.profileMismatchCount, 1);
 		assert.strictEqual(await service.whenConnected(), undefined);
 	});
 

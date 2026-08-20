@@ -55,7 +55,9 @@ import {
 	getHucodeOmniPathFromWindowState,
 	IHucodeOmniWindowPath,
 	isHucodeOmniPathToOpen,
-	openNewHucodeOmniWindow
+	openHucodeOmniWithProfilePreflight,
+	openNewHucodeOmniWindow,
+	restoreHucodeOmniWindowPaths,
 } from '../../../hucode/electron-main/omniOpenPlan.js';
 import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWorkspaceOrFolder } from './windowsFinder.js';
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
@@ -816,8 +818,47 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const allOmniWindowsToRestore =
 			distinctHucodeOmniWindowPaths(omniWindowsToRestore);
 		if (allOmniWindowsToRestore.length > 0) {
-			for (const omniWindowToRestore of allOmniWindowsToRestore) {
-				addUsedWindow(await this.doOpenOmni(openConfig, true, omniWindowToRestore));
+			const restoredOmniWindows = await restoreHucodeOmniWindowPaths(
+				allOmniWindowsToRestore,
+				{
+					initialStartup: !!openConfig.initialStartup,
+					hasOtherWindows: usedWindows.length > 0,
+					open: omniWindow =>
+						this.doOpenOmni(openConfig, true, omniWindow),
+					openFallback: () => this.doOpenOmni(
+						openConfig,
+						true,
+						createHucodeOmniWindowPath({
+							omniProfileId: this.userDataProfilesMainService
+								.defaultProfile.id,
+						})
+					),
+					onOwnerError: async (_omniWindow, error) => {
+						this.logService.error(
+							'[Hucode Omni] Skipping stale restored window.',
+							error
+						);
+						await this.dialogMainService.showMessageBox({
+							type: 'error',
+							buttons: [localize(
+								{ key: 'ok', comment: ['&& denotes a mnemonic'] },
+								"&&OK"
+							)],
+							message: localize(
+								'hucodeOmniRestoreProfileUnavailable',
+								"Unable to restore Omni window"
+							),
+							detail: localize(
+								'hucodeOmniRestoreProfileUnavailableDetail',
+								"The Omni owner profile is no longer available. Hucode skipped this window. {0}",
+								error.message
+							),
+						}, BrowserWindow.getFocusedWindow() ?? undefined);
+					},
+				}
+			);
+			for (const restoredOmniWindow of restoredOmniWindows) {
+				addUsedWindow(restoredOmniWindow);
 				openFolderInNewWindow = true;
 			}
 		}
@@ -921,12 +962,15 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			? omniWindow
 			: { ...omniWindow, omniProfileId: sourceProfileId };
 
-		return this.openInBrowserWindow(
-			getHucodeOmniBrowserWindowOptions(
-				openConfig,
-				resolvedOmniWindow,
-				forceNewWindow
-			)
+		const browserOptions = getHucodeOmniBrowserWindowOptions(
+			openConfig,
+			resolvedOmniWindow,
+			forceNewWindow
+		);
+		return openHucodeOmniWithProfilePreflight(
+			this.userDataProfilesMainService.profiles,
+			browserOptions,
+			() => this.openInBrowserWindow(browserOptions)
 		);
 	}
 
