@@ -11,6 +11,7 @@ import {
 	FOCUS_WORKSPACE_COMMAND_ID,
 	HucodeOmniCommandForwardingContext,
 	isHucodeForwardedFromOmniShell,
+	isHucodeHostedWorkbenchProfileAction,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 	OPEN_SELECTED_IN_NEW_WINDOW_COMMAND_ID,
@@ -59,6 +60,22 @@ suite('HucodeOmniCommandRouting', () => {
 			isHucodeOmniShellLayoutAction('workbench.action.files.save'),
 			false
 		);
+	});
+
+	test('identifies hosted and regular-window profile actions', () => {
+		assert.deepStrictEqual([
+			'workbench.profiles.actions.switchProfile',
+			'workbench.profiles.actions.profileEntry.work',
+			'workbench.profiles.actions.newWindowWithProfile',
+			'workbench.profiles.actions.createTemporaryProfile',
+		].map(commandId =>
+			isHucodeHostedWorkbenchProfileAction(commandId)
+		), [
+			true,
+			true,
+			false,
+			false,
+		]);
 	});
 
 	test('detects requests already forwarded from the shell', () => {

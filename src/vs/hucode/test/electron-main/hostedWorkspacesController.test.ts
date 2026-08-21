@@ -16,6 +16,12 @@ import { IBrowserViewMainService } from '../../../platform/browserView/electron-
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { IIPCObjectUrl, IProtocolMainService } from '../../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from '../../../platform/theme/electron-main/themeMainService.js';
+import {
+	IUserDataProfile,
+	toUserDataProfile,
+} from '../../../platform/userDataProfile/common/userDataProfile.js';
+import { IUserDataProfilesMainService } from
+	'../../../platform/userDataProfile/electron-main/userDataProfile.js';
 import { UnloadReason, ICodeWindow } from '../../../platform/window/electron-main/window.js';
 import { INativeWindowConfiguration, IRectangle } from '../../../platform/window/common/window.js';
 import {
@@ -412,6 +418,24 @@ suite('ResidentHostedWorkspacesController', () => {
 		return worktreePath;
 	}
 
+	function createProfile(
+		id: string,
+		workspaces: readonly URI[] = [],
+		isDefault = false
+	): IUserDataProfile {
+		const profilesHome = URI.file('/profiles');
+		return {
+			...toUserDataProfile(
+				id,
+				id,
+				URI.joinPath(profilesHome, id),
+				URI.file('/profile-cache'),
+				{ workspaces }
+			),
+			isDefault,
+		};
+	}
+
 	function createController(options: {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
 		readonly retainedWorkbenches?: INativeWindowConfiguration['omniRetainedWorkbenches'];
@@ -429,6 +453,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly hostedWindowPaths?: readonly string[];
 		readonly hostedWindowFocusOutcome?: HucodeHostedShellOperationOutcome;
 		readonly normalWindowPaths?: readonly string[];
+		readonly profiles?: readonly IUserDataProfile[];
+		readonly shellProfile?: IUserDataProfile;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -457,6 +483,30 @@ suite('ResidentHostedWorkspacesController', () => {
 			'instance-3',
 			'instance-4',
 		])];
+		const shellProfile = options.shellProfile ?? createProfile(
+			'default',
+			[],
+			true
+		);
+		const profiles = options.profiles ?? [shellProfile];
+		const defaultProfile = profiles.find(profile => profile.isDefault) ??
+			shellProfile;
+		const userDataProfilesMainService = {
+			profilesHome: URI.file('/profiles'),
+			profiles,
+			defaultProfile,
+			getProfileForWorkspace(workspace: {
+				readonly uri?: URI;
+				readonly configPath?: URI;
+			}) {
+				const resource = workspace.uri ?? workspace.configPath;
+				return resource && profiles.find(profile =>
+					profile.workspaces?.some(candidate =>
+						candidate.toString() === resource.toString()
+					)
+				);
+			},
+		} as unknown as IUserDataProfilesMainService;
 		const window = {
 			id: options.windowId ?? 1,
 			win: new TestBrowserWindow() as unknown as Electron.BrowserWindow,
@@ -474,6 +524,11 @@ suite('ResidentHostedWorkspacesController', () => {
 				filesToMerge: undefined,
 				backupPath: undefined,
 				isOmniWindow: true,
+				profiles: {
+					home: URI.file('/profiles'),
+					all: profiles,
+					profile: shellProfile,
+				},
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
 				omniRetainedWorkbenches: options.retainedWorkbenches,
@@ -482,6 +537,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const controller = disposables.add(new ResidentHostedWorkspacesController(
 			protocolMainService as unknown as IProtocolMainService,
 			{ useCodeCache: false } as unknown as IEnvironmentMainService,
+			userDataProfilesMainService,
 			{ getBackgroundColor: () => '#111111' } as IThemeMainService,
 			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
@@ -542,6 +598,40 @@ suite('ResidentHostedWorkspacesController', () => {
 			window,
 		};
 	}
+
+	test('uses workspace profiles without changing the shell profile', async () => {
+		const firstPath = createWorktree('first');
+		const secondPath = createWorktree('second');
+		const unassociatedPath = createWorktree('unassociated');
+		const defaultProfile = createProfile('default', [], true);
+		const shellProfile = createProfile('shell');
+		const firstProfile = createProfile('first-profile', [URI.file(firstPath)]);
+		const secondProfile = createProfile(
+			'second-profile',
+			[URI.file(secondPath)]
+		);
+		const fixture = createController({
+			profiles: [defaultProfile, shellProfile, firstProfile, secondProfile],
+			shellProfile,
+		});
+
+		await fixture.controller.openWorkspace(firstPath);
+		await fixture.controller.openWorkspace(secondPath);
+		await fixture.controller.openWorkspace(unassociatedPath);
+
+		const configurations = fixture.protocolMainService.objectUrls.map(
+			objectUrl => objectUrl.value as INativeWindowConfiguration
+		);
+		assert.deepStrictEqual(
+			configurations.map(configuration =>
+				configuration.profiles.profile.id),
+			['first-profile', 'second-profile', 'default']
+		);
+		assert.strictEqual(
+			fixture.window.config?.profiles.profile.id,
+			'shell'
+		);
+	});
 
 	function createLifecycleContractAdapter():
 		IHostedWorkspaceLifecycleContractAdapter {

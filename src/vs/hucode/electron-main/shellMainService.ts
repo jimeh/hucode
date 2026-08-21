@@ -30,6 +30,8 @@ import { IProjectManagerMainService } from
 	'../../platform/projectManager/electron-main/projectManager.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
+import { IUserDataProfilesMainService } from
+	'../../platform/userDataProfile/electron-main/userDataProfile.js';
 import {
 	ICodeWindow,
 	UnloadReason,
@@ -137,6 +139,9 @@ export class HucodeShellMainService extends Disposable
 		private readonly protocolMainService: IProtocolMainService,
 		@IEnvironmentMainService
 		private readonly environmentMainService: IEnvironmentMainService,
+		@IUserDataProfilesMainService
+		private readonly userDataProfilesMainService:
+			IUserDataProfilesMainService,
 		@IThemeMainService
 		private readonly themeMainService: IThemeMainService,
 		@ILogService
@@ -972,6 +977,7 @@ export class HucodeShellMainService extends Disposable
 			new ResidentHostedWorkspacesController(
 				this.protocolMainService,
 				this.environmentMainService,
+				this.userDataProfilesMainService,
 				this.themeMainService,
 				this.logService,
 				this.browserViewMainService,

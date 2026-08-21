@@ -14,6 +14,7 @@ import {
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
+	getHucodeOmniShellProfile,
 	getHucodeRegularFileOpenWindows,
 	isHucodeOmniPathToOpen,
 	openNewHucodeOmniWindow
@@ -116,7 +117,7 @@ suite('HucodeOmniOpenPlan', () => {
 		);
 	});
 
-	test('builds Omni browser window options from open config', () => {
+	test('builds profile-neutral Omni browser window options', () => {
 		assert.deepStrictEqual(
 			getHucodeOmniBrowserWindowOptions(
 				{
@@ -136,13 +137,32 @@ suite('HucodeOmniOpenPlan', () => {
 				initialStartup: true,
 				forceNewWindow: true,
 				forceNewTabbedWindow: true,
-				forceProfile: 'Profile',
-				forceTempProfile: true,
+				forceProfile: undefined,
+				forceTempProfile: undefined,
 				isOmniWindow: true,
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined,
 				omniRetainedWorkbenches: undefined,
 			}
+		);
+	});
+
+	test('uses the application default profile only for Omni shells', () => {
+		const applicationDefault = { id: 'default' };
+
+		assert.strictEqual(
+			getHucodeOmniShellProfile(
+				true,
+				applicationDefault
+			),
+			applicationDefault
+		);
+		assert.strictEqual(
+			getHucodeOmniShellProfile(
+				false,
+				applicationDefault
+			),
+			undefined
 		);
 	});
 

@@ -1481,11 +1481,13 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual({
 			pathname: src.pathname,
 			folder: src.searchParams.get('folder'),
+			profile: src.searchParams.get('profile'),
 			isHostedOmniWorkspace: payload.get('isHostedOmniWorkspace'),
 			hostedInstanceId: payload.get('hostedInstanceId'),
 		}, {
 			pathname: '/omni/workbench',
 			folder: '/tmp/hucode-worktree',
+			profile: null,
 			isHostedOmniWorkspace: 'true',
 			hostedInstanceId: state.instances[0].instanceId,
 		});

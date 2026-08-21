@@ -50,6 +50,7 @@ import {
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
+	getHucodeOmniShellProfile,
 	IHucodeOmniWindowPath,
 	isHucodeOmniPathToOpen,
 	openNewHucodeOmniWindow
@@ -1892,6 +1893,14 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	}
 
 	private resolveProfileForBrowserWindow(options: IOpenBrowserWindowOptions, workspace: IAnyWorkspaceIdentifier, defaultProfile: IUserDataProfile): Promise<IUserDataProfile> | IUserDataProfile {
+		const omniShellProfile = getHucodeOmniShellProfile(
+			options.isOmniWindow,
+			this.userDataProfilesMainService.defaultProfile
+		);
+		if (omniShellProfile) {
+			return omniShellProfile;
+		}
+
 		if (options.forceProfile) {
 			return this.userDataProfilesMainService.profiles.find(p => p.name === options.forceProfile) ?? this.userDataProfilesMainService.createNamedProfile(options.forceProfile);
 		}

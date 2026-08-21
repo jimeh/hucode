@@ -22,6 +22,8 @@ import {
 } from '../../platform/protocol/electron-main/protocol.js';
 import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
+import { IUserDataProfilesMainService } from
+	'../../platform/userDataProfile/electron-main/userDataProfile.js';
 import {
 	ICodeWindow,
 	UnloadReason,
@@ -229,6 +231,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
 		private readonly environmentMainService: IEnvironmentMainService,
+		private readonly userDataProfilesMainService:
+			IUserDataProfilesMainService,
 		private readonly themeMainService: IThemeMainService,
 		private readonly logService: ILogService,
 		private readonly browserViewMainService: IBrowserViewMainService,
@@ -1905,6 +1909,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		return {
 			...baseConfig,
+			profiles: {
+				home: this.userDataProfilesMainService.profilesHome,
+				all: this.userDataProfilesMainService.profiles,
+				profile: this.userDataProfilesMainService
+					.getProfileForWorkspace(workspace) ??
+					this.userDataProfilesMainService.defaultProfile,
+			},
 			workspace,
 			backupPath: undefined,
 			filesToOpenOrCreate: undefined,
