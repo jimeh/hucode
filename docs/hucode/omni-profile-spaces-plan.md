@@ -1,6 +1,6 @@
 ---
 title: Omni Sessions, Workbench Ownership, and Appearance Projection Plan
-status: proposed implementation
+status: implementation complete; pending review
 last_updated: 2026-08-21
 tracking_issue: https://github.com/jimeh/hucode/issues/191
 supersedes: Omni Profile Spaces Implementation Plan

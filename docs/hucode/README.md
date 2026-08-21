@@ -25,7 +25,7 @@ separate application window for each one.
   verified findings from the 2026-07-25 architecture and quality review, plus
   the runtime issues raised alongside it.
 - [Omni Sessions, Workbench Ownership, and Appearance Projection
-  Plan](omni-profile-spaces-plan.md) stages global live-path ownership,
+  Plan](omni-profile-spaces-plan.md) records global live-path ownership,
   independent hosted profiles, and a shell that follows the active workbench's
   appearance on desktop and serve-web.
 
