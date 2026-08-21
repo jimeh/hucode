@@ -1522,6 +1522,52 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(change?.projectSwitcherCanGoBack, true);
 	});
 
+	test('caches appearance per instance across web connection replacement',
+		async () => {
+			const { service, surface, browser } = createService();
+			const alphaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-alpha'
+			);
+			const alphaId = alphaState.activeInstanceId!;
+			const alpha = connectChild(browser, surface, alphaId);
+			const betaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-beta'
+			);
+			const betaId = betaState.activeInstanceId!;
+			connectChild(browser, surface, betaId);
+			const alphaAppearance = {
+				colorScheme: 'light' as const,
+				colors: { 'sideBar.background': '#eeeeee' },
+				modernUI: false,
+				modernUIUppercaseViewHeaders: false,
+			};
+			assert.strictEqual(
+				await alpha.shell.publishAppearance!(alphaAppearance),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(
+				(await service.getWindowState(browser.windowId)).instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
+			);
+
+			const currentBeta = connectChild(browser, surface, betaId);
+			assert.strictEqual(await currentBeta.shell.publishAppearance!({
+				...alphaAppearance,
+				colorScheme: 'hc-light',
+				modernUI: true,
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances.find(
+					instance => instance.instanceId === betaId
+				)?.appearance?.colorScheme,
+				'hc-light'
+			);
+		});
+
 	test('does not register the removed legacy hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
 		const state = await service.openWorkspace(

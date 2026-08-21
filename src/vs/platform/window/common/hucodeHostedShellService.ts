@@ -36,6 +36,7 @@ export const HUCODE_HOSTED_SHELL_PROTOCOL_VERSION = 1;
 export const HUCODE_HOSTED_SHELL_CORE_CAPABILITIES = Object.freeze([
 	'state',
 	'ready',
+	'appearance',
 	'selfLifecycle',
 	'focus',
 	'shellActions',
@@ -93,6 +94,7 @@ export const HUCODE_HOSTED_SHELL_REMOTE_MEMBERS = Object.freeze([
 	'getState',
 	'getNavigationSnapshot',
 	'notifyReady',
+	'publishAppearance',
 	'closeSelf',
 	'reopenSelfInNormalWindow',
 	'reloadSelf',
@@ -171,6 +173,75 @@ export type HucodeHostedSelfLifecycleState =
 	| 'unloaded'
 	| 'missing'
 	| 'crashed';
+
+/** Base color scheme projected without exposing a hosted theme identity. */
+export type HucodeHostedAppearanceColorScheme =
+	| 'light'
+	| 'dark'
+	| 'hc-light'
+	| 'hc-dark';
+
+/**
+ * Registered workbench colors used by shell-owned Omni surfaces. Values are
+ * already resolved against the hosted theme and its color customizations.
+ */
+export const HUCODE_HOSTED_APPEARANCE_COLOR_IDS = Object.freeze([
+	'foreground',
+	'descriptionForeground',
+	'disabledForeground',
+	'focusBorder',
+	'icon.foreground',
+	'button.background',
+	'button.foreground',
+	'button.hoverBackground',
+	'list.hoverBackground',
+	'list.inactiveSelectionBackground',
+	'list.inactiveSelectionForeground',
+	'list.warningForeground',
+	'panel.background',
+	'panel.border',
+	'panelSectionHeader.border',
+	'sideBar.background',
+	'sideBar.foreground',
+	'sideBar.border',
+	'sideBarSectionHeader.background',
+	'sideBarSectionHeader.border',
+	'sideBarSectionHeader.foreground',
+	'sideBarTitle.foreground',
+	'titleBar.activeBackground',
+	'titleBar.activeForeground',
+	'titleBar.inactiveBackground',
+	'titleBar.inactiveForeground',
+	'titleBar.border',
+	'toolbar.activeBackground',
+	'toolbar.hoverBackground',
+	'widget.border',
+	'editor.background',
+	'editorWidget.border',
+	'surface.background',
+	'surface.border',
+	'sessionsSidebar.background',
+	'sessionsSidebarHeader.background',
+	'sessionsSidebarHeader.foreground',
+	'sessionsPanel.background',
+	'sessionsAuxiliaryBar.background',
+	'hucodeOmniTitle.background',
+	'hucodeOmniTitle.foreground',
+] as const);
+
+export type HucodeHostedAppearanceColorId =
+	typeof HUCODE_HOSTED_APPEARANCE_COLOR_IDS[number];
+
+/** Minimal resolved appearance published by one hosted workbench. */
+export interface IHucodeHostedAppearanceSnapshot {
+	readonly colorScheme: HucodeHostedAppearanceColorScheme;
+	readonly colors: Readonly<Partial<Record<
+		HucodeHostedAppearanceColorId,
+		string
+	>>>;
+	readonly modernUI: boolean;
+	readonly modernUIUppercaseViewHeaders: boolean;
+}
 
 /** Minimal shell state projected to one hosted workbench. */
 export interface IHucodeHostedShellState {
@@ -290,6 +361,10 @@ export interface IHucodeHostedShellDelegate {
 		binding: IHucodeHostedShellBinding
 	): Promise<IHucodeHostedNavigationSnapshot | undefined>;
 	notifyReady(binding: IHucodeHostedShellBinding): Promise<void>;
+	publishAppearance?(
+		binding: IHucodeHostedShellBinding,
+		appearance: IHucodeHostedAppearanceSnapshot
+	): Promise<boolean>;
 	closeSelf(binding: IHucodeHostedShellBinding): Promise<boolean>;
 	reopenSelfInNormalWindow(
 		binding: IHucodeHostedShellBinding
@@ -331,6 +406,9 @@ export interface IHucodeHostedShellService {
 		IHucodeHostedNavigationSnapshot | undefined
 	>;
 	notifyReady(): Promise<IHucodeHostedReadyResult>;
+	publishAppearance?(
+		appearance: IHucodeHostedAppearanceSnapshot
+	): Promise<HucodeHostedShellOperationOutcome>;
 	closeSelf(): Promise<HucodeHostedShellOperationOutcome>;
 	reopenSelfInNormalWindow(): Promise<HucodeHostedShellOperationOutcome>;
 	reloadSelf(): Promise<HucodeHostedShellOperationOutcome>;
@@ -457,6 +535,19 @@ export function createBoundHucodeHostedShellFacade(
 				state: project(current),
 			};
 		},
+		publishAppearance: appearance => {
+			if (!isHucodeHostedAppearanceSnapshot(appearance)) {
+				return Promise.resolve(
+					HucodeHostedShellOperationOutcome.Unsupported
+				);
+			}
+			return delegate.publishAppearance
+				? runCurrent(() => delegate.publishAppearance!(
+					binding,
+					appearance
+				))
+				: Promise.resolve(HucodeHostedShellOperationOutcome.Unsupported);
+		},
 		closeSelf: () => runCurrent(() => delegate.closeSelf(binding)),
 		reopenSelfInNormalWindow: () => runCurrent(
 			() => delegate.reopenSelfInNormalWindow(binding)
@@ -527,6 +618,7 @@ export function createHucodeHostedShellClient(
 			? () => remote.getNavigationSnapshot!()
 			: async () => undefined,
 		notifyReady: () => remote.notifyReady(),
+		publishAppearance: appearance => remote.publishAppearance!(appearance),
 		closeSelf: () => remote.closeSelf(),
 		reopenSelfInNormalWindow: () => remote.reopenSelfInNormalWindow(),
 		reloadSelf: () => remote.reloadSelf(),
@@ -538,6 +630,34 @@ export function createHucodeHostedShellClient(
 		captureSelfScreenshot: (rect, quality) =>
 			remote.captureSelfScreenshot(rect, quality),
 	};
+}
+
+/** Validates the complete bounded appearance wire shape. */
+export function isHucodeHostedAppearanceSnapshot(
+	value: unknown
+): value is IHucodeHostedAppearanceSnapshot {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const candidate = value as Partial<IHucodeHostedAppearanceSnapshot>;
+	if (candidate.colorScheme !== 'light' &&
+		candidate.colorScheme !== 'dark' &&
+		candidate.colorScheme !== 'hc-light' &&
+		candidate.colorScheme !== 'hc-dark') {
+		return false;
+	}
+	if (typeof candidate.modernUI !== 'boolean' ||
+		typeof candidate.modernUIUppercaseViewHeaders !== 'boolean' ||
+		!candidate.colors || typeof candidate.colors !== 'object' ||
+		Array.isArray(candidate.colors)) {
+		return false;
+	}
+	const allowedColors = new Set<string>(HUCODE_HOSTED_APPEARANCE_COLOR_IDS);
+	return Object.entries(candidate.colors).every(([id, color]) =>
+		allowedColors.has(id) &&
+		typeof color === 'string' &&
+		color.length > 0 && color.length <= 64
+	);
 }
 
 function projectHostedShellState(

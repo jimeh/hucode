@@ -60,6 +60,10 @@ suite('DesktopHostedShellServiceAdapter', () => {
 					outcome: HucodeHostedShellOperationOutcome.Accepted,
 					state,
 				}),
+				publishAppearance: async () => {
+					calls.push('appearance');
+					return HucodeHostedShellOperationOutcome.Accepted;
+				},
 				closeSelf: async () => {
 					calls.push('close');
 					return HucodeHostedShellOperationOutcome.Accepted;
@@ -113,6 +117,15 @@ suite('DesktopHostedShellServiceAdapter', () => {
 			assert.deepStrictEqual(forwardedStates.at(-1), state);
 			assert.deepStrictEqual(await adapter.getState(), state);
 			assert.strictEqual(
+				await adapter.publishAppearance({
+					colorScheme: 'dark',
+					colors: {},
+					modernUI: false,
+					modernUIUppercaseViewHeaders: false,
+				}),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.strictEqual(
 				await adapter.requestShellAction(HucodeHostedShellAction.AddProject),
 				HucodeHostedShellOperationOutcome.Accepted
 			);
@@ -124,7 +137,11 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				(await adapter.captureSelfScreenshot())?.toString(),
 				'self'
 			);
-			assert.deepStrictEqual(calls, ['action:addProject', 'paste']);
+			assert.deepStrictEqual(calls, [
+				'appearance',
+				'action:addProject',
+				'paste',
+			]);
 		});
 
 	test('disposal cancels a pending connection and disposes a late client', async () => {

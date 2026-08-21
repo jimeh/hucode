@@ -30,6 +30,7 @@ import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedNavigationSnapshot,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedReadyResult,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
@@ -184,6 +185,11 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 			this.invalidateConnection(shell);
 		}
 		return result.value;
+	}
+
+	publishAppearance(appearance: IHucodeHostedAppearanceSnapshot) {
+		return this.runOperation(shell => shell.publishAppearance?.(appearance) ??
+			Promise.resolve(HucodeHostedShellOperationOutcome.Unsupported));
 	}
 
 	closeSelf() { return this.runOperation(shell => shell.closeSelf()); }

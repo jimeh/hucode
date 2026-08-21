@@ -20,6 +20,8 @@ import {
 } from './retainedWorkbench.js';
 import { ProjectSwitcherOmniSection } from
 	'./projectSwitcher/projectSwitcherViewState.js';
+import { IHucodeHostedAppearanceSnapshot } from
+	'../../platform/window/common/hucodeHostedShellService.js';
 
 export { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
@@ -50,6 +52,7 @@ export interface IHucodeHostedWorkbenchInstance {
 	readonly visible: boolean;
 	readonly focused: boolean;
 	readonly lastActiveAt?: number;
+	readonly appearance?: IHucodeHostedAppearanceSnapshot;
 }
 
 /**

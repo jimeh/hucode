@@ -16,6 +16,7 @@ import { mark } from '../../base/common/performance.js';
 import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/common/platform.js';
 import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString, LayoutSettings } from '../../workbench/services/layout/browser/layoutService.js';
+import { getHucodeOmniProjectedModernUI } from './omniAppearanceProjection.contribution.js';
 import { ILayoutOffsetInfo } from '../../platform/layout/browser/layoutService.js';
 import { Part } from '../../workbench/browser/part.js';
 import { Direction, ISerializableView, ISerializedGrid, IViewSize, SerializableGrid } from '../../base/browser/ui/grid/grid.js';
@@ -879,7 +880,10 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	isFloatingPanelsEnabled(): boolean {
-		return this.configurationService.getValue<boolean>(LayoutSettings.MODERN_UI) === true;
+		return getHucodeOmniProjectedModernUI() ??
+			this.configurationService.getValue<boolean>(
+				LayoutSettings.MODERN_UI
+			) === true;
 	}
 
 	private updateFloatingPanels(): void {

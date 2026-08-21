@@ -4897,6 +4897,34 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		});
 
+	test('appearance cache is bound to the current hosted connection', async () => {
+		const alpha = createWorktree('appearance-alpha');
+		const { controller } = createController();
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const stale = controller.acquireHostedShellBinding(1)!;
+		const current = controller.acquireHostedShellBinding(1)!;
+		const appearance = {
+			colorScheme: 'hc-dark' as const,
+			colors: { 'sideBar.background': '#010203' },
+			modernUI: true,
+			modernUIUppercaseViewHeaders: true,
+		};
+
+		assert.strictEqual(
+			controller.publishHostedShellAppearance(stale, appearance),
+			false
+		);
+		assert.strictEqual(
+			controller.publishHostedShellAppearance(current, appearance),
+			true
+		);
+		assert.deepStrictEqual(
+			controller.getState().instances[0].appearance,
+			appearance
+		);
+	});
+
 	test('bound paste, screenshot, focus, and action never retarget',
 		async () => {
 			const alpha = createWorktree('alpha');

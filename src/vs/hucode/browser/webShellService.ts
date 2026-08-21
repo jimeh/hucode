@@ -50,6 +50,7 @@ import {
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellCapability,
 	HucodeHostedShellOperationOutcome,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedShellAuthorityState,
 	IHucodeHostedShellBinding,
@@ -144,6 +145,7 @@ interface IHostedIframeInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
 	protocolVersion?: number;
@@ -1884,6 +1886,14 @@ export class WebHucodeShellController extends Disposable
 					return;
 				}
 				this.emitState();
+			},
+			publishAppearance: async (current, appearance) => {
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				instance.appearance = appearance;
+				this.emitState();
+				return true;
 			},
 			closeSelf: async current => {
 				await this.initialization;

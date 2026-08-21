@@ -38,6 +38,7 @@ suite('HucodeHostedShellService', () => {
 		assert.deepStrictEqual(HUCODE_HOSTED_SHELL_CAPABILITIES, [
 			'state',
 			'ready',
+			'appearance',
 			'selfLifecycle',
 			'focus',
 			'shellActions',
@@ -51,6 +52,7 @@ suite('HucodeHostedShellService', () => {
 			'getState',
 			'getNavigationSnapshot',
 			'notifyReady',
+			'publishAppearance',
 			'closeSelf',
 			'reopenSelfInNormalWindow',
 			'reloadSelf',
@@ -157,6 +159,7 @@ suite('HucodeHostedShellService', () => {
 			onDidChangeState: Event.None,
 			getState: async () => state,
 			notifyReady: async () => undefined,
+			publishAppearance: current => accept('appearance', current),
 			closeSelf: current => accept('close', current),
 			reopenSelfInNormalWindow: current => accept('reopen', current),
 			reloadSelf: current => accept('reload', current),
@@ -205,6 +208,18 @@ suite('HucodeHostedShellService', () => {
 		});
 		assert.deepStrictEqual(await facade.getNavigationSnapshot!(),
 			state.navigationSnapshot);
+		assert.strictEqual(await facade.publishAppearance!({
+			colorScheme: 'dark',
+			colors: { 'sideBar.background': '#112233' },
+			modernUI: true,
+			modernUIUppercaseViewHeaders: false,
+		}), HucodeHostedShellOperationOutcome.Accepted);
+		assert.strictEqual(await facade.publishAppearance!({
+			colorScheme: 'dark',
+			colors: { unregistered: '#112233' } as never,
+			modernUI: true,
+			modernUIUppercaseViewHeaders: false,
+		}), HucodeHostedShellOperationOutcome.Unsupported);
 		assert.strictEqual(JSON.stringify(
 			await facade.getNavigationSnapshot!()
 		).includes('instanceId'), false);
@@ -241,6 +256,7 @@ suite('HucodeHostedShellService', () => {
 		);
 		assert.strictEqual(await facade.captureSelfScreenshot(), undefined);
 		assert.deepStrictEqual(operations, [
+			{ operation: 'appearance', binding },
 			{ operation: 'close', binding },
 			{ operation: 'reopen', binding },
 			{ operation: 'reload', binding },
@@ -475,6 +491,7 @@ suite('HucodeHostedShellService', () => {
 				}],
 			}),
 			notifyReady: async () => { delegateCalls++; },
+			publishAppearance: accept,
 			closeSelf: accept,
 			reopenSelfInNormalWindow: accept,
 			reloadSelf: accept,
@@ -502,6 +519,12 @@ suite('HucodeHostedShellService', () => {
 				HucodeHostedShellOperationOutcome.Stale
 			);
 			for (const run of [
+				() => staleFacade.publishAppearance!({
+					colorScheme: 'light',
+					colors: {},
+					modernUI: false,
+					modernUIUppercaseViewHeaders: false,
+				}),
 				() => staleFacade.closeSelf(),
 				() => staleFacade.reopenSelfInNormalWindow(),
 				() => staleFacade.reloadSelf(),

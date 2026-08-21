@@ -413,6 +413,8 @@ export class HucodeShellMainService extends Disposable
 			notifyReady: async current => {
 				controller.notifyHostedShellReady(current);
 			},
+			publishAppearance: async (current, appearance) =>
+				controller.publishHostedShellAppearance(current, appearance),
 			closeSelf: current => controller.closeHostedShellSelf(current),
 			reopenSelfInNormalWindow: current =>
 				this.reopenHostedShellSelf(controller, current),

@@ -45,6 +45,7 @@ import {
 import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedShellAuthorityState,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellContinuationAuthorization,
@@ -156,6 +157,7 @@ interface IHostedWorkbenchInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connectionGeneration: number;
 	appliedBounds?: IRectangle;
@@ -425,6 +427,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			visible: instance.visible,
 			focused: instance.focused,
 			lastActiveAt: instance.lastActiveAt,
+			...(instance.appearance ? { appearance: instance.appearance } : {}),
 		};
 	}
 
@@ -553,6 +556,19 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return false;
 		}
 		this.notifyHostedWorkspaceReady(instance.instanceId);
+		return true;
+	}
+
+	publishHostedShellAppearance(
+		binding: IHucodeHostedShellBinding,
+		appearance: IHucodeHostedAppearanceSnapshot
+	): boolean {
+		const instance = this.getBoundHostedShellInstance(binding);
+		if (!instance) {
+			return false;
+		}
+		instance.appearance = appearance;
+		this.emitState();
 		return true;
 	}
 
