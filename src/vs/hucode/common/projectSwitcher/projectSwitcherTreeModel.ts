@@ -122,6 +122,8 @@ export interface ProjectSwitcherWorktreeItem
 	readonly hostedWorkbenchInstanceId?: string;
 	readonly hostedWorkbenchState?: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
+	readonly desktopOwnershipLocation?:
+	'this-omni' | 'another-omni' | 'regular';
 	readonly hasCustomLabel: boolean;
 	readonly missingGitWorktree: boolean;
 	readonly name: string;
@@ -151,6 +153,8 @@ export interface ProjectSwitcherWorkbenchItem extends ProjectSwitcherBaseItem {
 	readonly hostedWorkbenchInstanceId?: string;
 	readonly hostedWorkbenchState: HucodeHostedWorkbenchLifecycleState;
 	readonly isActive: boolean;
+	readonly desktopOwnershipLocation?:
+	'this-omni' | 'another-omni' | 'regular';
 	readonly order: number;
 	readonly hasCustomLabel: boolean;
 	readonly name: string;
@@ -639,6 +643,7 @@ function toRetainedWorkbenchElement(
 	const instance = options.hostedWorkspaceState.instances.find(candidate =>
 		pathsEqual(candidate.worktreePath, worktreePath)
 	);
+	const desktopOwnership = getDesktopOwnership(worktreePath, options);
 	const state = instance?.state ?? (record.folderStatus === 'missing'
 		? 'missing'
 		: record.desiredState === 'loaded' ? 'dormant' : 'unloaded');
@@ -663,6 +668,7 @@ function toRetainedWorkbenchElement(
 		hostedWorkbenchState: state,
 		isActive: !!instance && instance.instanceId ===
 			options.hostedWorkspaceState.activeInstanceId,
+		desktopOwnershipLocation: desktopOwnership?.location,
 		order: record.order,
 		hasCustomLabel: !!record.label,
 		name: presentation.label,
@@ -670,15 +676,21 @@ function toRetainedWorkbenchElement(
 		path: presentation.pathLabel,
 		label: presentation.label,
 		description: branch ?? presentation.pathLabel,
-		tooltip: presentation.pathLabel,
+		tooltip: getOwnershipTooltip(
+			presentation.pathLabel,
+			desktopOwnership?.location
+		),
 		contextValue: WORKBENCH_CONTEXT_VALUE,
-		themeIcon: state === 'restore-pending' || state === 'loading'
-			? ThemeIcon.modify(Codicon.loading, 'spin')
-			: state === 'dormant' ? Codicon.debugPause
-				: state === 'unloaded' ? Codicon.circleOutline
-					: state === 'missing' ? Codicon.warning
-						: state === 'crashed' ? Codicon.warning
-							: Codicon.window,
+		themeIcon: desktopOwnership?.location === 'another-omni' ||
+			desktopOwnership?.location === 'regular'
+			? Codicon.window
+			: state === 'restore-pending' || state === 'loading'
+				? ThemeIcon.modify(Codicon.loading, 'spin')
+				: state === 'dormant' ? Codicon.debugPause
+					: state === 'unloaded' ? Codicon.circleOutline
+						: state === 'missing' ? Codicon.warning
+							: state === 'crashed' ? Codicon.warning
+								: Codicon.window,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };
@@ -769,6 +781,7 @@ function toWorktreeElement(
 		worktree.path,
 		options
 	);
+	const desktopOwnership = getDesktopOwnership(worktree.path, options);
 	const isActive = typeof options.activeWorktreePath === 'string' &&
 		pathsEqual(options.activeWorktreePath, worktree.path);
 	const worktreeLabel = getWorktreeDisplayLabel(worktree);
@@ -788,6 +801,7 @@ function toWorktreeElement(
 		hostedWorkbenchInstanceId: hostedWorkbenchInstance?.instanceId,
 		hostedWorkbenchState: hostedWorkbenchInstance?.state,
 		isActive,
+		desktopOwnershipLocation: desktopOwnership?.location,
 		hasCustomLabel: !!worktree.customLabel,
 		missingGitWorktree: false,
 		name: worktreeLabel,
@@ -797,18 +811,24 @@ function toWorktreeElement(
 			: undefined,
 		label: worktreeLabel,
 		description: worktreeDescription,
-		tooltip: options.getPathLabel(worktree.path),
+		tooltip: getOwnershipTooltip(
+			options.getPathLabel(worktree.path),
+			desktopOwnership?.location
+		),
 		contextValue: worktree.isMain
 			? MAIN_WORKTREE_CONTEXT_VALUE
 			: WORKTREE_CONTEXT_VALUE,
-		themeIcon: isHostedWorkbenchInProgress(hostedWorkbenchInstance?.state)
-			? ThemeIcon.modify(Codicon.loading, 'spin')
-			: hostedWorkbenchInstance?.state === 'dormant'
-				? Codicon.debugPause
-				: hostedWorkbenchInstance?.state === 'unloaded' ||
-					options.isOmniWindow && !hostedWorkbenchInstance
-					? Codicon.circleOutline
-					: worktree.isMain ? Codicon.repo : Codicon.worktree,
+		themeIcon: desktopOwnership?.location === 'another-omni' ||
+			desktopOwnership?.location === 'regular'
+			? Codicon.window
+			: isHostedWorkbenchInProgress(hostedWorkbenchInstance?.state)
+				? ThemeIcon.modify(Codicon.loading, 'spin')
+				: hostedWorkbenchInstance?.state === 'dormant'
+					? Codicon.debugPause
+					: hostedWorkbenchInstance?.state === 'unloaded' ||
+						options.isOmniWindow && !hostedWorkbenchInstance
+						? Codicon.circleOutline
+						: worktree.isMain ? Codicon.repo : Codicon.worktree,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };
@@ -866,6 +886,36 @@ function getHostedWorkbenchInstance(
 	return options.hostedWorkspaceState.instances.find(instance =>
 		pathsEqual(instance.worktreePath, worktreePath)
 	);
+}
+
+function getDesktopOwnership(
+	worktreePath: string,
+	options: IProjectSwitcherTreeModelOptions
+) {
+	return options.hostedWorkspaceState.desktopOwnerships?.find(ownership =>
+		pathsEqual(ownership.worktreePath, worktreePath)
+	);
+}
+
+function getOwnershipTooltip(
+	pathLabel: string,
+	location: 'this-omni' | 'another-omni' | 'regular' | undefined
+): string {
+	if (location === 'another-omni') {
+		return localize(
+			'workbenchOpenInAnotherOmni',
+			'{0}\nOpen in another Omni window',
+			pathLabel
+		);
+	}
+	if (location === 'regular') {
+		return localize(
+			'workbenchOpenInRegularWindow',
+			'{0}\nOpen in a regular window',
+			pathLabel
+		);
+	}
+	return pathLabel;
 }
 
 function getMissingHostedWorkbenchInstances(

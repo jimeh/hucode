@@ -42,6 +42,7 @@ import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
 import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
 import { tryOpenFolderInHucodeHostedWorkspace } from '../../../hucode/electron-main/omniWorkspaceOpen.js';
+import { IHucodeShellMainService } from '../../../hucode/electron-main/omniWindow.js';
 import {
 	createHucodeOmniWindowPath,
 	distinctHucodeOmniWindowPaths,
@@ -731,7 +732,28 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, remoteAuthority) ? filesToOpen : undefined;
 
 				// Do open folder
-				addUsedWindow(await this.doOpenFolderOrWorkspace(openConfig, workspaceToOpen, openFolderInNewWindow, filesToOpenInWindow), !!filesToOpenInWindow);
+				const openedWindow = !openConfig
+					.hucodeDesktopOwnershipAlreadyReserved &&
+					workspaceToOpen.workspace.configPath.scheme === Schemas.file
+					? await this.instantiationService.invokeFunction(
+						accessor => accessor.get(IHucodeShellMainService)
+							.openRegularWorkbenchWithAdmission(
+								workspaceToOpen.workspace.configPath.fsPath,
+								() => this.doOpenFolderOrWorkspace(
+									openConfig,
+									workspaceToOpen,
+									openFolderInNewWindow,
+									filesToOpenInWindow
+								)
+							)
+					)
+					: await this.doOpenFolderOrWorkspace(
+						openConfig,
+						workspaceToOpen,
+						openFolderInNewWindow,
+						filesToOpenInWindow
+					);
+				addUsedWindow(openedWindow, !!filesToOpenInWindow);
 
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}
@@ -790,7 +812,28 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, remoteAuthority) ? filesToOpen : undefined;
 
 				// Do open folder
-				addUsedWindow(await this.doOpenFolderOrWorkspace(openConfig, folderToOpen, openFolderInNewWindow, filesToOpenInWindow), !!filesToOpenInWindow);
+				const openedWindow = !openConfig
+					.hucodeDesktopOwnershipAlreadyReserved &&
+					folderToOpen.workspace.uri.scheme === Schemas.file
+					? await this.instantiationService.invokeFunction(
+						accessor => accessor.get(IHucodeShellMainService)
+							.openRegularWorkbenchWithAdmission(
+								folderToOpen.workspace.uri.fsPath,
+								() => this.doOpenFolderOrWorkspace(
+									openConfig,
+									folderToOpen,
+									openFolderInNewWindow,
+									filesToOpenInWindow
+								)
+							)
+					)
+					: await this.doOpenFolderOrWorkspace(
+						openConfig,
+						folderToOpen,
+						openFolderInNewWindow,
+						filesToOpenInWindow
+					);
+				addUsedWindow(openedWindow, !!filesToOpenInWindow);
 
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}

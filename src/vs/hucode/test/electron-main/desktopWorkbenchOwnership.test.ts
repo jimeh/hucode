@@ -8,7 +8,12 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
 	HucodeDesktopWorkbenchOwnershipCoordinator,
+	createHucodeDesktopRestoreCandidates,
+	createHucodeDesktopOwnershipState,
 	type HucodeDesktopWorkbenchOwner,
+	type IHucodeDesktopRestoreCandidate,
+	selectHucodeDesktopRestoreWinners,
+	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 } from '../../electron-main/desktopWorkbenchOwnership.js';
 
@@ -143,13 +148,21 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			isCaseSensitive: true,
 		});
 
+		const owner = coordinator.seed({
+			path: '/real/repo',
+			owner: regular(1),
+		});
+		assert.notStrictEqual(owner.kind, 'conflict');
+		const aliasLookup = coordinator.lookup('/alias/repo');
+		assert.strictEqual(aliasLookup.kind, 'current-owner');
 		assert.strictEqual(
-			coordinator.reserve('/alias/repo', regular(1)).kind,
-			'reserved'
+			aliasLookup.kind === 'current-owner' &&
+			aliasLookup.ownership.displayPath,
+			'/real/repo'
 		);
 		assert.strictEqual(
-			coordinator.reserve('/real/repo', hosted(2, 'alpha')).kind,
-			'reserved-conflict'
+			coordinator.reserve('/alias/repo', hosted(2, 'alpha')).kind,
+			'current-owner'
 		);
 	});
 
@@ -235,5 +248,272 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			[]
 		), undefined);
 		assert.deepStrictEqual(coordinator.lookup('/repo'), { kind: 'absent' });
+	});
+
+	test('arbitrates persisted restore claims by the documented priority', () => {
+		const candidate = (
+			path: string,
+			windowId: number,
+			overrides: Partial<IHucodeDesktopRestoreCandidate> = {}
+		) => ({
+			path,
+			windowId,
+			windowLastFocusTime: 10,
+			stableInstanceId: `instance-${windowId}`,
+			persistedActive: false,
+			lastActiveAt: 10,
+			...overrides,
+		});
+		const winners = selectHucodeDesktopRestoreWinners([
+			candidate('/active', 1, { lastActiveAt: 100 }),
+			candidate('/active', 2, { persistedActive: true, lastActiveAt: 1 }),
+			candidate('/activity', 1, { lastActiveAt: 10 }),
+			candidate('/activity', 2, { lastActiveAt: 20 }),
+			candidate('/focus', 1, { windowLastFocusTime: 10 }),
+			candidate('/focus', 2, { windowLastFocusTime: 20 }),
+			candidate('/window', 2),
+			candidate('/window', 1),
+			candidate('/instance', 1, { stableInstanceId: 'bravo' }),
+			candidate('/instance', 1, { stableInstanceId: 'alpha' }),
+		], { canonicalizePath: path => path, isCaseSensitive: true });
+
+		assert.deepStrictEqual(
+			Array.from(winners.values(), winner => [
+				winner.path,
+				winner.windowId,
+				winner.stableInstanceId,
+			]),
+			[
+				['/active', 2, 'instance-2'],
+				['/activity', 2, 'instance-2'],
+				['/focus', 2, 'instance-2'],
+				['/window', 1, 'instance-1'],
+				['/instance', 1, 'alpha'],
+			]
+		);
+	});
+
+	test('builds project, retained, and legacy restore candidate identities',
+		() => {
+			const candidates = createHucodeDesktopRestoreCandidates({
+				windowId: 3,
+				windowLastFocusTime: 50,
+				activeWorktreePath: '/legacy',
+				residentWorkspaces: [
+					{ path: '/project', projectId: 'project-alpha' },
+					{ path: '/legacy', lastActiveAt: 40 },
+					{ path: '/migrated', lastActiveAt: 30 },
+				],
+				retainedWorkbenches: [
+					{
+						path: '/retained',
+						id: 'retained-alpha',
+						desiredState: 'loaded',
+					},
+					{
+						path: '/migrated',
+						id: 'retained-migrated',
+						desiredState: 'unloaded',
+					},
+					{
+						path: '/ignored',
+						id: 'retained-ignored',
+						desiredState: 'unloaded',
+					},
+				],
+			});
+
+			assert.deepStrictEqual(candidates.map(candidate => ({
+				path: candidate.path,
+				stableInstanceId: candidate.stableInstanceId,
+				persistedActive: candidate.persistedActive,
+				lastActiveAt: candidate.lastActiveAt,
+			})), [
+				{
+					path: '/project',
+					stableInstanceId: 'project:project-alpha:/project',
+					persistedActive: false,
+					lastActiveAt: undefined,
+				},
+				{
+					path: '/retained',
+					stableInstanceId: 'retained:retained-alpha',
+					persistedActive: false,
+					lastActiveAt: undefined,
+				},
+				{
+					path: '/legacy',
+					stableInstanceId: 'legacy-retained:/legacy',
+					persistedActive: true,
+					lastActiveAt: 40,
+				},
+				{
+					path: '/migrated',
+					stableInstanceId: 'retained:retained-migrated',
+					persistedActive: false,
+					lastActiveAt: 30,
+				},
+			]);
+		}
+	);
+
+	test('transfers hosted ownership to the opened regular window', async () => {
+		const coordinator = createCoordinator();
+		const seeded = coordinator.seed({
+			path: '/repo',
+			owner: hosted(1, 'alpha'),
+		});
+		assert.notStrictEqual(seeded.kind, 'conflict');
+		if (seeded.kind === 'conflict') {
+			return;
+		}
+		const calls: string[] = [];
+		const result = await transferHucodeDesktopWorkbenchToRegularWindow({
+			coordinator,
+			ownership: seeded.ownership,
+			closeHostedOwner: async () => {
+				calls.push('close');
+				coordinator.release(seeded.token);
+				return true;
+			},
+			openRegularWindow: async () => {
+				calls.push('open');
+				return 7;
+			},
+		});
+
+		assert.strictEqual(result.kind, 'transferred');
+		assert.deepStrictEqual(calls, ['close', 'open']);
+		const current = coordinator.lookup('/repo');
+		assert.deepStrictEqual(
+			current.kind === 'current-owner' && current.ownership.owner,
+			regular(7)
+		);
+	});
+
+	test('restores hosted ownership when transfer is vetoed', async () => {
+		const coordinator = createCoordinator();
+		const seeded = coordinator.seed({
+			path: '/repo',
+			owner: hosted(1, 'alpha'),
+		});
+		if (seeded.kind === 'conflict') {
+			assert.fail('expected hosted ownership');
+		}
+
+		const result = await transferHucodeDesktopWorkbenchToRegularWindow({
+			coordinator,
+			ownership: seeded.ownership,
+			closeHostedOwner: async () => false,
+			openRegularWindow: async () => {
+				assert.fail('must not open after veto');
+			},
+		});
+
+		assert.deepStrictEqual(result, { kind: 'vetoed' });
+		const current = coordinator.lookup('/repo');
+		assert.strictEqual(
+			current.kind === 'current-owner' && current.ownership.phase,
+			'live'
+		);
+	});
+
+	test('releases the regular reservation when transfer open fails',
+		async () => {
+			const coordinator = createCoordinator();
+			const seeded = coordinator.seed({
+				path: '/repo',
+				owner: hosted(1, 'alpha'),
+			});
+			if (seeded.kind === 'conflict') {
+				assert.fail('expected hosted ownership');
+			}
+			const failure = new Error('regular open failed');
+
+			const result =
+				await transferHucodeDesktopWorkbenchToRegularWindow({
+					coordinator,
+					ownership: seeded.ownership,
+					closeHostedOwner: async () => {
+						coordinator.release(seeded.token);
+						return true;
+					},
+					openRegularWindow: async () => { throw failure; },
+				});
+
+			assert.deepStrictEqual(result, { kind: 'failed', error: failure });
+			assert.deepStrictEqual(coordinator.lookup('/repo'), {
+				kind: 'absent',
+			});
+		}
+	);
+
+	test('stale transfer completion cannot disturb replacement ownership',
+		async () => {
+			const coordinator = createCoordinator();
+			const seeded = coordinator.seed({
+				path: '/repo',
+				owner: hosted(1, 'alpha'),
+			});
+			if (seeded.kind === 'conflict') {
+				assert.fail('expected hosted ownership');
+			}
+
+			const result = await transferHucodeDesktopWorkbenchToRegularWindow({
+				coordinator,
+				ownership: seeded.ownership,
+				closeHostedOwner: async () => {
+					coordinator.release(seeded.token);
+					const replacement = coordinator.reserve(
+						'/repo',
+						hosted(2, 'bravo')
+					);
+					assert.strictEqual(replacement.kind, 'reserved');
+					if (replacement.kind === 'reserved') {
+						coordinator.publish(replacement.reservation);
+					}
+					return true;
+				},
+				openRegularWindow: async () => 7,
+			});
+
+			assert.deepStrictEqual(result, { kind: 'superseded' });
+			const current = coordinator.lookup('/repo');
+			assert.deepStrictEqual(
+				current.kind === 'current-owner' && current.ownership.owner,
+				hosted(2, 'bravo')
+			);
+		}
+	);
+
+	test('projects ownership into each Omni session without reservations', () => {
+		const coordinator = createCoordinator();
+		coordinator.seed({ path: '/here', owner: hosted(1, 'here') });
+		coordinator.seed({ path: '/elsewhere', owner: hosted(2, 'elsewhere') });
+		coordinator.seed({ path: '/regular', owner: regular(3) });
+		coordinator.reserve('/pending', regular(0));
+
+		assert.deepStrictEqual(
+			createHucodeDesktopOwnershipState(1, coordinator.snapshot()),
+			[{
+				worktreePath: '/here',
+				location: 'this-omni',
+				windowId: 1,
+				instanceId: 'here',
+				phase: 'live',
+			}, {
+				worktreePath: '/elsewhere',
+				location: 'another-omni',
+				windowId: 2,
+				instanceId: 'elsewhere',
+				phase: 'live',
+			}, {
+				worktreePath: '/regular',
+				location: 'regular',
+				windowId: 3,
+				instanceId: undefined,
+				phase: 'live',
+			}]
+		);
 	});
 });

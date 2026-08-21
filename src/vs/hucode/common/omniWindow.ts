@@ -63,6 +63,16 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectSwitcherSectionOrder?: readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
+	readonly desktopOwnerships?: readonly IHucodeDesktopWorkbenchOwnershipState[];
+}
+
+/** Desktop-only live path ownership projected into one Omni shell. */
+export interface IHucodeDesktopWorkbenchOwnershipState {
+	readonly worktreePath: string;
+	readonly location: 'this-omni' | 'another-omni' | 'regular';
+	readonly windowId: number;
+	readonly instanceId?: string;
+	readonly phase: 'live' | 'recovering' | 'transferring';
 }
 
 /**

@@ -12,6 +12,8 @@ import {
 	isHostedWorkspaceOwnershipRetained,
 	type IHostedWorkspaceStateEntry,
 } from '../common/hostedWorkspaceState.js';
+import { IHucodeDesktopWorkbenchOwnershipState } from
+	'../common/omniWindow.js';
 
 export type HucodeDesktopWorkbenchOwner =
 	| {
@@ -83,6 +85,17 @@ export type HucodeDesktopWorkbenchPublishOutcome =
 		readonly ownership?: IHucodeDesktopWorkbenchOwnership;
 	};
 
+export type HucodeDesktopWorkbenchReassignOutcome =
+	| {
+		readonly kind: 'reassigned';
+		readonly reservation: IHucodeDesktopWorkbenchOwnershipToken;
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| {
+		readonly kind: 'stale';
+		readonly ownership?: IHucodeDesktopWorkbenchOwnership;
+	};
+
 export type HucodeDesktopWorkbenchReleaseOutcome =
 	| { readonly kind: 'released' }
 	| {
@@ -131,6 +144,65 @@ export interface IHucodeDesktopWorkbenchOwnershipCoordinatorOptions {
 	readonly canonicalizePath?: (path: string) => string;
 	readonly isCaseSensitive?: boolean;
 	readonly now?: () => number;
+	readonly onDidChange?: () => void;
+}
+
+/** Persisted restore claim used for cross-window startup arbitration. */
+export interface IHucodeDesktopRestoreCandidate {
+	readonly path: string;
+	readonly windowId: number;
+	readonly windowLastFocusTime: number;
+	readonly stableInstanceId: string;
+	readonly persistedActive: boolean;
+	readonly lastActiveAt?: number;
+}
+
+/** Persisted state from one Omni window used to build restore claims. */
+export interface IHucodeDesktopRestoreWindowSource {
+	readonly windowId: number;
+	readonly windowLastFocusTime: number;
+	readonly activeWorktreePath?: string;
+	readonly residentWorkspaces: readonly {
+		readonly path: string;
+		readonly projectId?: string;
+		readonly lastActiveAt?: number;
+	}[];
+	readonly retainedWorkbenches: readonly {
+		readonly path: string;
+		readonly id: string;
+		readonly desiredState: 'loaded' | 'unloaded';
+		readonly lastActiveAt?: number;
+	}[];
+}
+
+/** Result of an explicit hosted-to-regular ownership transfer. */
+export type HucodeDesktopWorkbenchTransferOutcome =
+	| {
+		readonly kind: 'transferred';
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| { readonly kind: 'vetoed' }
+	| { readonly kind: 'superseded' }
+	| { readonly kind: 'failed'; readonly error?: unknown };
+
+/** Typed result from the main-process desktop focus-or-open router. */
+export type HucodeDesktopWorkbenchRouteOutcome =
+	| {
+		readonly kind: 'focused-hosted' | 'opened-hosted';
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| {
+		readonly kind: 'focused-regular';
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| { readonly kind: 'superseded' }
+	| { readonly kind: 'failed'; readonly error?: unknown };
+
+export interface IHucodeDesktopWorkbenchTransferDelegate {
+	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
+	readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	closeHostedOwner(): Promise<boolean>;
+	openRegularWindow(): Promise<number>;
 }
 
 /**
@@ -142,6 +214,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	private readonly canonicalizePath: (path: string) => string;
 	private readonly isCaseSensitive: boolean;
 	private readonly now: () => number;
+	private readonly onDidChange: () => void;
 	private generation = 0;
 
 	constructor(
@@ -151,6 +224,11 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 			canonicalizeDesktopWorkbenchPath;
 		this.isCaseSensitive = options.isCaseSensitive ?? isLinux;
 		this.now = options.now ?? Date.now;
+		this.onDidChange = options.onDidChange ?? (() => { });
+	}
+
+	snapshot(): readonly IHucodeDesktopWorkbenchOwnership[] {
+		return Array.from(this.records.values(), record => record.ownership);
 	}
 
 	lookup(path: string): HucodeDesktopWorkbenchOwnershipLookup {
@@ -199,6 +277,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		};
 		const settlement = createSettlement();
 		this.records.set(key, { ownership, settlement });
+		this.onDidChange();
 		return {
 			kind: 'reserved',
 			reservation: toToken(ownership),
@@ -229,6 +308,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		} else {
 			record.settlement ??= createSettlement();
 		}
+		this.onDidChange();
 		return { kind: 'published', ownership: record.ownership };
 	}
 
@@ -236,6 +316,44 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		token: IHucodeDesktopWorkbenchOwnershipToken
 	): HucodeDesktopWorkbenchPublishOutcome {
 		return this.publish(token, 'recovering');
+	}
+
+	markTransferring(
+		token: IHucodeDesktopWorkbenchOwnershipToken
+	): HucodeDesktopWorkbenchPublishOutcome {
+		const record = this.getCurrentRecord(token);
+		if (!record) {
+			return this.staleOutcome(token);
+		}
+		record.ownership = {
+			...record.ownership,
+			phase: 'transferring',
+			updatedAt: this.now(),
+		};
+		record.settlement ??= createSettlement();
+		this.onDidChange();
+		return { kind: 'published', ownership: record.ownership };
+	}
+
+	reassign(
+		token: IHucodeDesktopWorkbenchOwnershipToken,
+		owner: HucodeDesktopWorkbenchOwner
+	): HucodeDesktopWorkbenchReassignOutcome {
+		const record = this.getCurrentRecord(token);
+		if (!record) {
+			return this.staleOutcome(token);
+		}
+		record.ownership = {
+			...record.ownership,
+			owner,
+			updatedAt: this.now(),
+		};
+		this.onDidChange();
+		return {
+			kind: 'reassigned',
+			reservation: toToken(record.ownership),
+			ownership: record.ownership,
+		};
 	}
 
 	release(
@@ -252,6 +370,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 
 		record.settlement?.resolve({ kind: 'released' });
 		this.records.delete(this.toKey(token.canonicalPath));
+		this.onDidChange();
 		return { kind: 'released' };
 	}
 
@@ -288,6 +407,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 				? createSettlement()
 				: undefined,
 		});
+		this.onDidChange();
 		return {
 			kind: 'published',
 			ownership,
@@ -306,6 +426,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 			if (ownsScope(record.ownership.owner) && !claimedKeys.has(key)) {
 				record.settlement?.resolve({ kind: 'released' });
 				this.records.delete(key);
+				this.onDidChange();
 			}
 		}
 		return claims.map(claim => this.seed(claim));
@@ -320,6 +441,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 			}
 			record.settlement?.resolve({ kind: 'released' });
 			this.records.delete(key);
+			this.onDidChange();
 		}
 	}
 
@@ -355,6 +477,194 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 			this.isCaseSensitive
 		);
 	}
+}
+
+/** Selects one persisted restore winner per canonical desktop path. */
+export function selectHucodeDesktopRestoreWinners(
+	candidates: readonly IHucodeDesktopRestoreCandidate[],
+	options: Pick<IHucodeDesktopWorkbenchOwnershipCoordinatorOptions,
+		'canonicalizePath' | 'isCaseSensitive'> = {}
+): ReadonlyMap<string, IHucodeDesktopRestoreCandidate> {
+	const canonicalizePath = options.canonicalizePath ??
+		canonicalizeDesktopWorkbenchPath;
+	const isCaseSensitive = options.isCaseSensitive ?? isLinux;
+	const winners = new Map<string, IHucodeDesktopRestoreCandidate>();
+	for (const candidate of candidates) {
+		const key = getProjectManagerPathComparisonKey(
+			canonicalizePath(candidate.path),
+			isCaseSensitive
+		);
+		const current = winners.get(key);
+		if (!current || compareRestoreCandidates(candidate, current) < 0) {
+			winners.set(key, candidate);
+		}
+	}
+	return winners;
+}
+
+export function getHucodeProjectRestoreCandidateId(
+	projectId: string,
+	path: string
+): string {
+	return `project:${projectId}:${path}`;
+}
+
+export function getHucodeRetainedRestoreCandidateId(id: string): string {
+	return `retained:${id}`;
+}
+
+export function getHucodeLegacyRetainedRestoreCandidateId(
+	path: string
+): string {
+	return `legacy-retained:${getProjectManagerPathComparisonKey(
+		canonicalizeDesktopWorkbenchPath(path),
+		isLinux
+	)}`;
+}
+
+/** Builds the restore claims the controller will submit for one Omni window. */
+export function createHucodeDesktopRestoreCandidates(
+	source: IHucodeDesktopRestoreWindowSource,
+	pathsEqual: (left: string, right: string) => boolean =
+		(left, right) => left === right
+): readonly IHucodeDesktopRestoreCandidate[] {
+	const isActive = (path: string) =>
+		source.activeWorktreePath !== undefined &&
+		pathsEqual(source.activeWorktreePath, path);
+	const retainedCandidates = new Map<
+		string,
+		IHucodeDesktopRestoreCandidate
+	>();
+	for (const retained of source.retainedWorkbenches) {
+		if (retained.desiredState !== 'loaded') {
+			continue;
+		}
+		const stableInstanceId = getHucodeRetainedRestoreCandidateId(
+			retained.id
+		);
+		retainedCandidates.set(stableInstanceId, {
+			path: retained.path,
+			windowId: source.windowId,
+			windowLastFocusTime: source.windowLastFocusTime,
+			stableInstanceId,
+			persistedActive: isActive(retained.path),
+			lastActiveAt: retained.lastActiveAt,
+		});
+	}
+
+	const projectCandidates: IHucodeDesktopRestoreCandidate[] = [];
+	for (const resident of source.residentWorkspaces) {
+		if (resident.projectId) {
+			projectCandidates.push({
+				path: resident.path,
+				windowId: source.windowId,
+				windowLastFocusTime: source.windowLastFocusTime,
+				stableInstanceId: getHucodeProjectRestoreCandidateId(
+					resident.projectId,
+					resident.path
+				),
+				persistedActive: isActive(resident.path),
+				lastActiveAt: resident.lastActiveAt,
+			});
+			continue;
+		}
+
+		const retained = source.retainedWorkbenches.find(candidate =>
+			pathsEqual(candidate.path, resident.path)
+		);
+		const stableInstanceId = retained
+			? getHucodeRetainedRestoreCandidateId(retained.id)
+			: getHucodeLegacyRetainedRestoreCandidateId(resident.path);
+		const path = retained?.path ?? resident.path;
+		retainedCandidates.set(stableInstanceId, {
+			path,
+			windowId: source.windowId,
+			windowLastFocusTime: source.windowLastFocusTime,
+			stableInstanceId,
+			persistedActive: isActive(path),
+			lastActiveAt: resident.lastActiveAt ?? retained?.lastActiveAt,
+		});
+	}
+
+	return [...projectCandidates, ...retainedCandidates.values()];
+}
+
+/** Runs a generation-safe hosted-to-regular ownership transfer. */
+export async function transferHucodeDesktopWorkbenchToRegularWindow(
+	delegate: IHucodeDesktopWorkbenchTransferDelegate
+): Promise<HucodeDesktopWorkbenchTransferOutcome> {
+	const { coordinator, ownership } = delegate;
+	const token = toToken(ownership);
+	if (ownership.owner.kind !== 'hosted' ||
+		coordinator.markTransferring(token).kind === 'stale') {
+		return { kind: 'superseded' };
+	}
+
+	let closed: boolean;
+	try {
+		closed = await delegate.closeHostedOwner();
+	} catch (error) {
+		coordinator.publish(token);
+		return { kind: 'failed', error };
+	}
+	if (!closed) {
+		coordinator.publish(token);
+		return { kind: 'vetoed' };
+	}
+
+	const afterClose = coordinator.lookup(ownership.canonicalPath);
+	if (afterClose.kind !== 'absent') {
+		return { kind: 'superseded' };
+	}
+
+	const pendingOwner = { kind: 'regular' as const, windowId: 0 };
+	const reserved = coordinator.reserve(ownership.displayPath, pendingOwner);
+	if (reserved.kind !== 'reserved') {
+		return { kind: 'superseded' };
+	}
+	try {
+		const windowId = await delegate.openRegularWindow();
+		const reassigned = coordinator.reassign(
+			reserved.reservation,
+			{ kind: 'regular', windowId }
+		);
+		if (reassigned.kind !== 'reassigned') {
+			return { kind: 'superseded' };
+		}
+		const published = coordinator.publish(reassigned.reservation);
+		return published.kind === 'published'
+			? { kind: 'transferred', ownership: published.ownership }
+			: { kind: 'superseded' };
+	} catch (error) {
+		coordinator.release(reserved.reservation);
+		return { kind: 'failed', error };
+	}
+}
+
+/** Projects global coordinator records into one Omni session's UI state. */
+export function createHucodeDesktopOwnershipState(
+	windowId: number,
+	ownerships: readonly IHucodeDesktopWorkbenchOwnership[]
+): readonly IHucodeDesktopWorkbenchOwnershipState[] {
+	return ownerships.flatMap(ownership => {
+		if (ownership.phase === 'reserved') {
+			return [];
+		}
+		const owner = ownership.owner;
+		return [{
+			worktreePath: ownership.displayPath,
+			location: owner.kind === 'regular'
+				? 'regular' as const
+				: owner.windowId === windowId
+					? 'this-omni' as const
+					: 'another-omni' as const,
+			windowId: owner.windowId,
+			instanceId: owner.kind === 'hosted'
+				? owner.instanceId
+				: undefined,
+			phase: ownership.phase,
+		}];
+	});
 }
 
 /** Validates a hosted owner against controller state and releases stale claims. */
@@ -399,6 +709,17 @@ function ownersEqual(
 			right.kind === 'hosted' &&
 			left.instanceId === right.instanceId
 		));
+}
+
+function compareRestoreCandidates(
+	left: IHucodeDesktopRestoreCandidate,
+	right: IHucodeDesktopRestoreCandidate
+): number {
+	return Number(right.persistedActive) - Number(left.persistedActive) ||
+		(right.lastActiveAt ?? 0) - (left.lastActiveAt ?? 0) ||
+		right.windowLastFocusTime - left.windowLastFocusTime ||
+		left.windowId - right.windowId ||
+		left.stableInstanceId.localeCompare(right.stableInstanceId);
 }
 
 function toToken(

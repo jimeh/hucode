@@ -329,3 +329,6 @@ as the required Hucode instruction set for work in this fork.
   per-workbench hosted unload instead. Any future awaited shell-close path must
   add admission guards that reject workbenches opened after its shutdown
   snapshot.
+- Hosted-to-regular desktop transfer reserves the regular owner before calling
+  `windowsMainService.open()`. Keep that nested open marked as already admitted;
+  routing it through regular admission again deadlocks on its own reservation.

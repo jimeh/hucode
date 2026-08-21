@@ -71,6 +71,54 @@ suite('ProjectSwitcherTreeModel', () => {
 		);
 	});
 
+	test('maps external desktop ownership to restrained row indicators', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'project',
+				worktrees: [
+					createWorktree('/repos/other-omni'),
+					createWorktree('/repos/regular'),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				desktopOwnerships: [{
+					worktreePath: '/repos/other-omni',
+					location: 'another-omni',
+					windowId: 2,
+					instanceId: 'other-instance',
+					phase: 'live',
+				}, {
+					worktreePath: '/repos/regular',
+					location: 'regular',
+					windowId: 3,
+					phase: 'live',
+				}],
+			},
+		});
+
+		const otherOmni = getWorktree(model.roots, '/repos/other-omni');
+		const regular = getWorktree(model.roots, '/repos/regular');
+		assert.deepStrictEqual({
+			otherLocation: otherOmni.desktopOwnershipLocation,
+			otherIcon: otherOmni.themeIcon?.id,
+			otherTooltip: otherOmni.tooltip,
+			regularLocation: regular.desktopOwnershipLocation,
+			regularIcon: regular.themeIcon?.id,
+			regularTooltip: regular.tooltip,
+		}, {
+			otherLocation: 'another-omni',
+			otherIcon: 'window',
+			otherTooltip: '/repos/other-omni\nOpen in another Omni window',
+			regularLocation: 'regular',
+			regularIcon: 'window',
+			regularTooltip: '/repos/regular\nOpen in a regular window',
+		});
+	});
+
 	test('ignores transient section collapse changes during tree sync', () => {
 		const collapsedSections = new Set(['section:workbenches']);
 
