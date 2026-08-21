@@ -294,6 +294,10 @@ as the required Hucode instruction set for work in this fork.
 - Shell controller ownership ends when its host fires `onDidClose`, even if a
   later global window-destroy event also arrives. Release on both signals
   idempotently so a closed host cannot retain controller state.
+- `IWindowsMainService.onDidOpenWindow` fires before a `CodeWindow` has loaded
+  its workspace configuration, and `onWillLoadWindow` can still be vetoed.
+  Seed regular-window path ownership from existing configurations, reconcile
+  it on `onDidSignalReadyWindow`, and release it on window destruction.
 - Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
   CDP. Identify them through
   `window.vscode.context.resolveConfiguration()` — their URLs are identical.

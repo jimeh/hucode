@@ -293,6 +293,13 @@ export function isHostedWorkspaceRestorable(
 	return isHostedWorkspaceAvailable(entry) || entry.state === 'dormant';
 }
 
+/** Returns whether an entry still owns its live hosted-workbench path. */
+export function isHostedWorkspaceOwnershipRetained(
+	entry: IHostedWorkspaceStateEntry
+): boolean {
+	return isHostedWorkspaceRestorable(entry) || entry.state === 'crashed';
+}
+
 /**
  * Waits until a hosted workspace leaves its pending-ready state.
  */

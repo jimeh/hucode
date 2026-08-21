@@ -45,6 +45,8 @@ import {
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
+import { HucodeDesktopWorkbenchOwnershipCoordinator } from
+	'../../electron-main/desktopWorkbenchOwnership.js';
 import {
 	IHostedWorkspaceContractState,
 	IHostedWorkspaceLifecycleContractAdapter,
@@ -455,6 +457,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly normalWindowPaths?: readonly string[];
 		readonly profiles?: readonly IUserDataProfile[];
 		readonly shellProfile?: IUserDataProfile;
+		readonly ownershipCoordinator?:
+		HucodeDesktopWorkbenchOwnershipCoordinator;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -542,6 +546,8 @@ suite('ResidentHostedWorkspacesController', () => {
 			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
 			window,
+			options.ownershipCoordinator ??
+			new HucodeDesktopWorkbenchOwnershipCoordinator(),
 			id => trustedProcessIds.push(id),
 			id => untrustedProcessIds.push(id),
 			id => trustedWebContentsIds.push(id),
@@ -632,6 +638,294 @@ suite('ResidentHostedWorkspacesController', () => {
 			'shell'
 		);
 	});
+
+	test('admits a hosted path to only one Omni window', async () => {
+		const worktreePath = createWorktree('owned-by-first-window');
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const first = createController({
+			ids: ['first-instance'],
+			ownershipCoordinator,
+			windowId: 1,
+		});
+		const second = createController({
+			ids: ['second-instance'],
+			ownershipCoordinator,
+			windowId: 2,
+		});
+
+		await first.controller.openWorkspace(worktreePath, 'project');
+		await second.controller.openWorkspace(worktreePath, 'project');
+
+		assert.deepStrictEqual({
+			firstInstances: first.controller.getState().instances.length,
+			firstViews: first.viewFactory.views.length,
+			secondInstances: second.controller.getState().instances.length,
+			secondViews: second.viewFactory.views.length,
+		}, {
+			firstInstances: 1,
+			firstViews: 1,
+			secondInstances: 0,
+			secondViews: 0,
+		});
+		const owner = ownershipCoordinator.lookup(worktreePath);
+		assert.strictEqual(owner.kind, 'current-owner');
+		assert.deepStrictEqual(
+			owner.kind === 'current-owner' && owner.ownership.owner,
+			{
+				kind: 'hosted',
+				windowId: 1,
+				instanceId: 'first-instance',
+			}
+		);
+	});
+
+	test('serializes concurrent hosted creation across Omni windows',
+		async () => {
+			const worktreePath = createWorktree('concurrent-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const firstLoad = new DeferredPromise<void>();
+			const first = createController({
+				ids: ['first-instance'],
+				loadUrlPromises: [firstLoad.p],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+
+			const firstOpen = first.controller.openWorkspace(worktreePath);
+			for (let attempt = 0;
+				attempt < 20 && first.viewFactory.views.length < 1;
+				attempt++
+			) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(first.viewFactory.views.length, 1);
+			const secondOpen = second.controller.openWorkspace(worktreePath);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+
+			await firstLoad.complete();
+			await Promise.all([firstOpen, secondOpen]);
+
+			assert.deepStrictEqual({
+				first: first.controller.getState().instances.length,
+				second: second.controller.getState().instances.length,
+				secondViews: second.viewFactory.views.length,
+			}, { first: 1, second: 0, secondViews: 0 });
+		}
+	);
+
+	test('retries a concurrent admission after the first creation fails',
+		async () => {
+			const worktreePath = createWorktree('failed-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const firstLoad = new DeferredPromise<void>();
+			const first = createController({
+				ids: ['first-instance'],
+				loadUrlErrors: [new Error('expected load failure')],
+				loadUrlPromises: [firstLoad.p],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+
+			const firstOpen = first.controller.openWorkspace(worktreePath);
+			for (let attempt = 0;
+				attempt < 20 && first.viewFactory.views.length < 1;
+				attempt++
+			) {
+				await Promise.resolve();
+			}
+			const secondOpen = second.controller.openWorkspace(worktreePath);
+			await firstLoad.complete();
+
+			const [firstResult, secondResult] = await Promise.allSettled([
+				firstOpen,
+				secondOpen,
+			]);
+			assert.strictEqual(firstResult.status, 'rejected');
+			assert.strictEqual(secondResult.status, 'fulfilled');
+			assert.deepStrictEqual({
+				first: first.controller.getState().instances.length,
+				second: second.controller.getState().instances.length,
+				secondViews: second.viewFactory.views.length,
+			}, { first: 0, second: 1, secondViews: 1 });
+		}
+	);
+
+	test('keeps Add Workbench unloaded when a regular window owns its path',
+		async () => {
+			const worktreePath = createWorktree('regular-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			ownershipCoordinator.seed({
+				path: worktreePath,
+				owner: { kind: 'regular', windowId: 42 },
+			});
+			const fixture = createController({ ownershipCoordinator });
+
+			await fixture.controller.retainAndOpenWorkbench(
+				URI.file(worktreePath)
+			);
+
+			assert.deepStrictEqual({
+				instances: fixture.controller.getState().instances.length,
+				views: fixture.viewFactory.views.length,
+				retained: fixture.controller.getState().retainedWorkbenches?.map(
+					record => record.desiredState
+				),
+			}, { instances: 0, views: 0, retained: ['unloaded'] });
+		}
+	);
+
+	test('arbitrates duplicate restore entries across Omni windows', async () => {
+		const worktreePath = createWorktree('restored-owner');
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const restoreEntries = [{
+			projectId: 'project',
+			worktreePath,
+			state: 'active' as const,
+		}];
+		const first = createController({
+			activeWorktreePath: worktreePath,
+			ids: ['first-instance'],
+			ownershipCoordinator,
+			restoreEntries,
+			windowId: 1,
+		});
+		const second = createController({
+			activeWorktreePath: worktreePath,
+			ids: ['second-instance'],
+			ownershipCoordinator,
+			restoreEntries,
+			windowId: 2,
+		});
+
+		await Promise.all([
+			first.controller.ensureRestored(),
+			second.controller.ensureRestored(),
+		]);
+
+		assert.deepStrictEqual({
+			first: first.controller.getState().instances.length,
+			second: second.controller.getState().instances.length,
+			totalViews:
+				first.viewFactory.views.length + second.viewFactory.views.length,
+		}, { first: 1, second: 0, totalViews: 1 });
+	});
+
+	test('holds recovery ownership until the crashed instance closes',
+		async () => {
+			const worktreePath = createWorktree('recovering-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openWorkspace(worktreePath, 'project');
+			first.viewFactory.views[0].rawWebContents.emit(
+				'render-process-gone'
+			);
+			const recovering = ownershipCoordinator.lookup(worktreePath);
+			assert.strictEqual(
+				recovering.kind === 'current-owner' &&
+				recovering.ownership.phase,
+				'recovering'
+			);
+
+			const secondOpen = second.controller.openWorkspace(
+				worktreePath,
+				'project'
+			);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			await first.controller.closeWorkspace('first-instance');
+			await secondOpen;
+
+			const owner = ownershipCoordinator.lookup(worktreePath);
+			assert.strictEqual(owner.kind, 'current-owner');
+			assert.deepStrictEqual(
+				owner.kind === 'current-owner' && owner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 2,
+					instanceId: 'second-instance',
+				}
+			);
+		}
+	);
+
+	test('keeps dormant workbenches owned and releases ownership on disposal',
+		async () => {
+			const worktreePath = createWorktree('dormant-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance', 'dormant-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openWorkspace(worktreePath, 'project');
+			first.controller.notifyHostedWorkspaceReady('first-instance');
+
+			await first.controller.suspendWorkspace('first-instance');
+			await second.controller.openWorkspace(worktreePath, 'project');
+
+			assert.strictEqual(
+				first.controller.getState().instances[0].state,
+				'dormant'
+			);
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			assert.strictEqual(
+				ownershipCoordinator.lookup(worktreePath).kind,
+				'current-owner'
+			);
+			const dormantOwner = ownershipCoordinator.lookup(worktreePath);
+			assert.deepStrictEqual(
+				dormantOwner.kind === 'current-owner' &&
+				dormantOwner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 1,
+					instanceId: 'dormant-instance',
+				}
+			);
+
+			first.controller.dispose();
+			assert.deepStrictEqual(
+				ownershipCoordinator.lookup(worktreePath),
+				{ kind: 'absent' }
+			);
+		}
+	);
 
 	function createLifecycleContractAdapter():
 		IHostedWorkspaceLifecycleContractAdapter {

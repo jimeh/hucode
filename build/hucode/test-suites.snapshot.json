@@ -32,6 +32,7 @@
 		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
 		"src/vs/hucode/test/electron-browser/omniCommandService.test.ts",
 		"src/vs/hucode/test/electron-browser/shellControllerServiceAdapter.test.ts",
+		"src/vs/hucode/test/electron-main/desktopWorkbenchOwnership.test.ts",
 		"src/vs/hucode/test/electron-main/hostedShellMainService.test.ts",
 		"src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
 		"src/vs/hucode/test/electron-main/omniFileOpen.test.ts",
