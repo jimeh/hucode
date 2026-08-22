@@ -95,6 +95,28 @@ suite('HucodeWebTabOwnershipCoordinator', () => {
 		);
 	});
 
+	test('restore discovery never activates the owner tab', async () => {
+		const environment = new FakeOwnershipEnvironment();
+		const owner = disposables.add(environment.create('profile', 'owner'));
+		const restoring = disposables.add(environment.create('profile', 'restore'));
+		const admission = await owner.admit('/srv/project');
+		assert.strictEqual(admission.kind, 'acquired');
+		if (admission.kind !== 'acquired') {
+			return;
+		}
+		let activations = 0;
+		owner.publish(admission.claim, 'instance', async () => {
+			activations++;
+			return true;
+		});
+
+		const result = await restoring.admit('/srv/project', 'restore');
+		assert.deepStrictEqual({ result, activations }, {
+			result: { kind: 'owned-elsewhere' },
+			activations: 0,
+		});
+	});
+
 	test('does not create a duplicate when the owner cannot confirm activation',
 		async () => {
 			const environment = new FakeOwnershipEnvironment();

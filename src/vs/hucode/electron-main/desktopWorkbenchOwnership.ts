@@ -4,6 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { realpathSync } from 'fs';
+import { Event } from '../../base/common/event.js';
+import {
+	DisposableMap,
+	DisposableStore,
+	type IDisposable,
+} from '../../base/common/lifecycle.js';
 import { normalize, resolve } from '../../base/common/path.js';
 import { isLinux } from '../../base/common/platform.js';
 import { getProjectManagerPathComparisonKey } from
@@ -56,6 +62,11 @@ export type HucodeDesktopWorkbenchOwnershipSettlement =
 	| {
 		readonly kind: 'published';
 		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| {
+		readonly kind: 'recovering';
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+		readonly settled: Promise<HucodeDesktopWorkbenchOwnershipSettlement>;
 	}
 	| { readonly kind: 'released' };
 
@@ -147,6 +158,11 @@ export interface IHucodeDesktopWorkbenchOwnershipCoordinatorOptions {
 	readonly onDidChange?: () => void;
 }
 
+export interface IHucodeDesktopWorkbenchReservationOptions {
+	/** Route a recovering owner instead of waiting for recovery to settle. */
+	readonly routeRecoveringOwner?: boolean;
+}
+
 /** Persisted restore claim used for cross-window startup arbitration. */
 export interface IHucodeDesktopRestoreCandidate {
 	readonly path: string;
@@ -183,6 +199,21 @@ export type HucodeDesktopWorkbenchTransferOutcome =
 	}
 	| { readonly kind: 'vetoed' }
 	| { readonly kind: 'superseded' }
+	| {
+		readonly kind: 'failed';
+		readonly error?: unknown;
+		readonly recovery?: HucodeDesktopWorkbenchTransferRecoveryOutcome;
+	};
+
+export type HucodeDesktopWorkbenchTransferRecoveryOutcome =
+	| {
+		readonly kind: 'restored';
+		readonly ownership: IHucodeDesktopWorkbenchOwnership;
+	}
+	| {
+		readonly kind: 'superseded';
+		readonly ownership?: IHucodeDesktopWorkbenchOwnership;
+	}
 	| { readonly kind: 'failed'; readonly error?: unknown };
 
 /** Typed result from the main-process desktop focus-or-open router. */
@@ -203,6 +234,338 @@ export interface IHucodeDesktopWorkbenchTransferDelegate {
 	readonly ownership: IHucodeDesktopWorkbenchOwnership;
 	closeHostedOwner(): Promise<boolean>;
 	openRegularWindow(): Promise<number>;
+	recoverHostedOwner(): Promise<
+		HucodeDesktopWorkbenchTransferRecoveryOutcome
+	>;
+}
+
+export type HucodeNativeOpenPayloadDisposition =
+	'delivered' | 'consumed' | 'preserve';
+
+export function shouldAwaitHucodeRegularWindowLoadCommit(
+	ownershipAlreadyReserved?: boolean,
+	explicitlyRequested?: boolean
+): boolean {
+	return ownershipAlreadyReserved === true || explicitlyRequested === true;
+}
+
+/** Serializes ownership-sensitive loads that selected the same native window. */
+export class HucodeRegularWindowLoadCoordinator {
+	private readonly tails = new Map<number, Promise<void>>();
+
+	async run<T>(windowId: number, operation: () => Promise<T>): Promise<T> {
+		const previous = this.tails.get(windowId) ?? Promise.resolve();
+		let release!: () => void;
+		const turn = new Promise<void>(resolve => release = resolve);
+		const tail = previous.catch(() => undefined).then(() => turn);
+		this.tails.set(windowId, tail);
+		await previous.catch(() => undefined);
+		try {
+			return await operation();
+		} finally {
+			release();
+			if (this.tails.get(windowId) === tail) {
+				this.tails.delete(windowId);
+			}
+		}
+	}
+}
+
+export interface IHucodeRegularOwnershipWindow {
+	readonly id: number;
+	readonly isOmniWindow?: boolean;
+	readonly onDidClose: Event<void>;
+	readonly onDidDestroy: Event<void>;
+}
+
+/** Releases regular ownership when its native window closes or is destroyed. */
+export class HucodeRegularWindowOwnershipLifetimes implements IDisposable {
+	private readonly windows = new DisposableMap<number>();
+
+	constructor(
+		private readonly coordinator:
+			HucodeDesktopWorkbenchOwnershipCoordinator
+	) { }
+
+	add(window: IHucodeRegularOwnershipWindow): void {
+		if (window.isOmniWindow || this.windows.has(window.id)) {
+			return;
+		}
+
+		const lifecycle = new DisposableStore();
+		lifecycle.add(Event.any(
+			window.onDidClose,
+			window.onDidDestroy
+		)(() => {
+			this.coordinator.releaseOwners(owner =>
+				owner.kind === 'regular' && owner.windowId === window.id
+			);
+			this.windows.deleteAndLeak(window.id)?.dispose();
+		}));
+		this.windows.set(window.id, lifecycle);
+	}
+
+	dispose(): void {
+		this.windows.dispose();
+	}
+}
+
+export type HucodeRegularWorkbenchOpenAttempt<T> =
+	| {
+		readonly kind: 'committed';
+		readonly windowId: number;
+		readonly value: T;
+		readonly filesDelivered: boolean;
+	}
+	| { readonly kind: 'vetoed' }
+	| { readonly kind: 'failed'; readonly error?: unknown };
+
+export type HucodeRegularWorkbenchAdmissionOutcome<T> =
+	| {
+		readonly kind: 'opened' | 'focused-regular' | 'focused-hosted';
+		readonly value: T;
+		readonly filesDelivered: boolean;
+		readonly payloadDisposition: HucodeNativeOpenPayloadDisposition;
+	}
+	| {
+		readonly kind: 'vetoed' | 'superseded';
+		readonly payloadDisposition: HucodeNativeOpenPayloadDisposition;
+	}
+	| {
+		readonly kind: 'failed';
+		readonly error?: unknown;
+		readonly payloadDisposition: HucodeNativeOpenPayloadDisposition;
+	};
+
+export function retainHucodeNativeOpenPayloadAfterAdmission<T>(
+	payload: T | undefined,
+	outcome: HucodeRegularWorkbenchAdmissionOutcome<unknown>
+): T | undefined {
+	return outcome.payloadDisposition === 'preserve' ? payload : undefined;
+}
+
+export function shouldSettleHucodeNativeOpenWaitMarkerAfterAdmission(
+	hasNativeOpenPayload: boolean,
+	outcome: HucodeRegularWorkbenchAdmissionOutcome<unknown>
+): boolean {
+	return hasNativeOpenPayload &&
+		outcome.payloadDisposition === 'consumed' &&
+		(outcome.kind === 'vetoed' || outcome.kind === 'superseded');
+}
+
+export type HucodeRegularWindowTargetCommitOutcome =
+	| { readonly kind: 'committed' }
+	| {
+		readonly kind: 'failed';
+		readonly reason: 'closed' | 'destroyed' | 'wrong-target' | 'timeout';
+	};
+
+export interface IHucodeRegularWindowTargetCommitWaiter {
+	readonly result: Promise<HucodeRegularWindowTargetCommitOutcome>;
+	dispose(): void;
+}
+
+/** Waits for one native window load to signal renderer readiness. */
+export function waitForHucodeRegularWindowLoadCommit(options: {
+	readonly onDidSignalReady: Event<void>;
+	readonly onDidClose: Event<void>;
+	readonly onDidDestroy: Event<void>;
+}): IHucodeRegularWindowTargetCommitWaiter {
+	const disposables = new DisposableStore();
+	let settled = false;
+	let complete!: (outcome: HucodeRegularWindowTargetCommitOutcome) => void;
+	const result = new Promise<HucodeRegularWindowTargetCommitOutcome>(resolve => {
+		complete = resolve;
+	});
+	const finish = (outcome: HucodeRegularWindowTargetCommitOutcome) => {
+		if (settled) {
+			return;
+		}
+		settled = true;
+		disposables.dispose();
+		complete(outcome);
+	};
+	disposables.add(Event.once(options.onDidSignalReady)(() =>
+		finish({ kind: 'committed' })));
+	disposables.add(Event.once(options.onDidClose)(() =>
+		finish({ kind: 'failed', reason: 'closed' })));
+	disposables.add(Event.once(options.onDidDestroy)(() =>
+		finish({ kind: 'failed', reason: 'destroyed' })));
+	return {
+		result,
+		dispose: () => disposables.dispose(),
+	};
+}
+
+export function discardHucodeFailedRegularWindowTarget(
+	target: {
+		isDestroyed(): boolean;
+		destroy(): void;
+	} | null | undefined
+): void {
+	if (target && !target.isDestroyed()) {
+		target.destroy();
+	}
+}
+
+export function shouldDiscardHucodeFailedRegularWindowTarget(
+	outcome: Extract<
+		HucodeRegularWindowTargetCommitOutcome,
+		{ readonly kind: 'failed' }
+	>
+): boolean {
+	return outcome.reason === 'timeout' || outcome.reason === 'wrong-target';
+}
+
+export function shouldDiscardHucodeRegularWindowAfterOpenFailure(
+	outcome: Extract<
+		HucodeRegularWindowTargetCommitOutcome,
+		{ readonly kind: 'failed' }
+	> | undefined
+): boolean {
+	return !outcome || shouldDiscardHucodeFailedRegularWindowTarget(outcome);
+}
+
+export function isHucodeRegularWindowAvailableForQueuedLoad<T>(options: {
+	readonly window: T;
+	readonly registeredWindow: T | undefined;
+	readonly nativeWindow: { isDestroyed(): boolean } | null | undefined;
+}): boolean {
+	return options.registeredWindow === options.window &&
+		!!options.nativeWindow &&
+		!options.nativeWindow.isDestroyed();
+}
+
+/** Waits for renderer readiness, then verifies the window committed its target. */
+export function waitForHucodeRegularWindowTargetCommit<T>(options: {
+	readonly onDidSignalReady: Event<void>;
+	readonly onDidClose: Event<void>;
+	readonly onDidDestroy: Event<void>;
+	readonly getTarget: () => T | undefined;
+	readonly expectedTarget: T;
+	readonly targetsEqual: (actual: T, expected: T) => boolean;
+	readonly timeoutMs: number;
+}): IHucodeRegularWindowTargetCommitWaiter {
+	const disposables = new DisposableStore();
+	let settled = false;
+	let complete!: (outcome: HucodeRegularWindowTargetCommitOutcome) => void;
+	const result = new Promise<HucodeRegularWindowTargetCommitOutcome>(resolve => {
+		complete = resolve;
+	});
+	const finish = (outcome: HucodeRegularWindowTargetCommitOutcome) => {
+		if (settled) {
+			return;
+		}
+		settled = true;
+		disposables.dispose();
+		complete(outcome);
+	};
+	disposables.add(Event.once(options.onDidSignalReady)(() => {
+		const actual = options.getTarget();
+		finish(actual && options.targetsEqual(actual, options.expectedTarget)
+			? { kind: 'committed' }
+			: { kind: 'failed', reason: 'wrong-target' });
+	}));
+	disposables.add(Event.once(options.onDidClose)(() =>
+		finish({ kind: 'failed', reason: 'closed' })));
+	disposables.add(Event.once(options.onDidDestroy)(() =>
+		finish({ kind: 'failed', reason: 'destroyed' })));
+	const timeoutHandle = setTimeout(() =>
+		finish({ kind: 'failed', reason: 'timeout' }), options.timeoutMs);
+	disposables.add({ dispose: () => clearTimeout(timeoutHandle) });
+	return {
+		result,
+		dispose: () => disposables.dispose(),
+	};
+}
+
+export interface IHucodeRegularWorkbenchAdmissionDelegate<T> {
+	readonly coordinator: HucodeDesktopWorkbenchOwnershipCoordinator;
+	readonly path: string;
+	readonly pendingOwner: Extract<
+		HucodeDesktopWorkbenchOwner,
+		{ readonly kind: 'regular' }
+	>;
+	resolveCurrent(
+		ownership: IHucodeDesktopWorkbenchOwnership
+	): Promise<
+		| HucodeRegularWorkbenchAdmissionOutcome<T>
+		| { readonly kind: 'stale' }
+		| { readonly kind: 'retry' }
+	>;
+	openRegularWindow(): Promise<HucodeRegularWorkbenchOpenAttempt<T>>;
+}
+
+/** Keeps a regular admission reserved until the target has actually loaded. */
+export async function admitHucodeRegularWorkbench<T>(
+	delegate: IHucodeRegularWorkbenchAdmissionDelegate<T>
+): Promise<HucodeRegularWorkbenchAdmissionOutcome<T>> {
+	while (true) {
+		const admission = delegate.coordinator.reserve(
+			delegate.path,
+			delegate.pendingOwner,
+			{ routeRecoveringOwner: true }
+		);
+		if (admission.kind === 'reserved-conflict') {
+			await admission.settled;
+			continue;
+		}
+		if (admission.kind === 'current-owner') {
+			const resolved = await delegate.resolveCurrent(admission.ownership);
+			if (resolved.kind === 'retry') {
+				continue;
+			}
+			if (resolved.kind === 'stale') {
+				delegate.coordinator.release({
+					canonicalPath: admission.ownership.canonicalPath,
+					owner: admission.ownership.owner,
+					generation: admission.ownership.generation,
+				});
+				continue;
+			}
+			return resolved;
+		}
+
+		const opened = await delegate.openRegularWindow();
+		if (opened.kind !== 'committed') {
+			delegate.coordinator.release(admission.reservation);
+			return opened.kind === 'vetoed'
+				? { kind: 'vetoed', payloadDisposition: 'consumed' }
+				: {
+					kind: 'failed',
+					error: opened.error,
+					payloadDisposition: 'preserve',
+				};
+		}
+		const reassigned = delegate.coordinator.reassign(
+			admission.reservation,
+			{ kind: 'regular', windowId: opened.windowId }
+		);
+		if (reassigned.kind !== 'reassigned') {
+			return {
+				kind: 'superseded',
+				payloadDisposition: opened.filesDelivered
+					? 'delivered'
+					: 'consumed',
+			};
+		}
+		const published = delegate.coordinator.publish(reassigned.reservation);
+		return published.kind === 'published'
+			? {
+				kind: 'opened',
+				value: opened.value,
+				filesDelivered: opened.filesDelivered,
+				payloadDisposition: opened.filesDelivered
+					? 'delivered'
+					: 'preserve',
+			}
+			: {
+				kind: 'superseded',
+				payloadDisposition: opened.filesDelivered
+					? 'delivered'
+					: 'consumed',
+			};
+	}
 }
 
 /**
@@ -240,7 +603,8 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 
 	reserve(
 		path: string,
-		owner: HucodeDesktopWorkbenchOwner
+		owner: HucodeDesktopWorkbenchOwner,
+		options: IHucodeDesktopWorkbenchReservationOptions = {}
 	): HucodeDesktopWorkbenchReservationOutcome {
 		const canonicalPath = this.canonicalizePath(path);
 		const key = this.toCanonicalKey(canonicalPath);
@@ -252,7 +616,11 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 					ownership: existing.ownership,
 				};
 			}
-			if (existing.settlement) {
+			if (existing.settlement &&
+				(existing.ownership.phase === 'reserved' ||
+					existing.ownership.phase === 'transferring' ||
+					(existing.ownership.phase === 'recovering' &&
+						!options.routeRecoveringOwner))) {
 				return {
 					kind: 'reserved-conflict',
 					ownership: existing.ownership,
@@ -294,6 +662,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 			return this.staleOutcome(token);
 		}
 
+		const previousPhase = record.ownership.phase;
 		record.ownership = {
 			...record.ownership,
 			phase,
@@ -305,6 +674,14 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 				ownership: record.ownership,
 			});
 			record.settlement = undefined;
+		} else if (previousPhase !== 'recovering') {
+			const recoverySettlement = createSettlement();
+			record.settlement?.resolve({
+				kind: 'recovering',
+				ownership: record.ownership,
+				settled: recoverySettlement.promise,
+			});
+			record.settlement = recoverySettlement;
 		} else {
 			record.settlement ??= createSettlement();
 		}
@@ -604,12 +981,14 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 	try {
 		closed = await delegate.closeHostedOwner();
 	} catch (error) {
-		coordinator.publish(token);
-		return { kind: 'failed', error };
+		return restoreHucodeTransferringOwner(coordinator, token)
+			? { kind: 'failed', error }
+			: { kind: 'superseded' };
 	}
 	if (!closed) {
-		coordinator.publish(token);
-		return { kind: 'vetoed' };
+		return restoreHucodeTransferringOwner(coordinator, token)
+			? { kind: 'vetoed' }
+			: { kind: 'superseded' };
 	}
 
 	const afterClose = coordinator.lookup(ownership.canonicalPath);
@@ -637,8 +1016,44 @@ export async function transferHucodeDesktopWorkbenchToRegularWindow(
 			: { kind: 'superseded' };
 	} catch (error) {
 		coordinator.release(reserved.reservation);
-		return { kind: 'failed', error };
+		let recovery: HucodeDesktopWorkbenchTransferRecoveryOutcome;
+		try {
+			recovery = await delegate.recoverHostedOwner();
+		} catch (recoveryError) {
+			recovery = { kind: 'failed', error: recoveryError };
+		}
+		if (recovery.kind === 'restored') {
+			const current = coordinator.lookup(ownership.canonicalPath);
+			if (current.kind !== 'current-owner' ||
+				current.ownership.generation !== recovery.ownership.generation ||
+				current.ownership.owner.kind !== 'hosted' ||
+				recovery.ownership.owner.kind !== 'hosted' ||
+				current.ownership.owner.windowId !==
+				recovery.ownership.owner.windowId ||
+				current.ownership.owner.instanceId !==
+				recovery.ownership.owner.instanceId) {
+				recovery = {
+					kind: 'superseded',
+					ownership: current.kind === 'current-owner'
+						? current.ownership
+						: undefined,
+				};
+			}
+		}
+		return { kind: 'failed', error, recovery };
 	}
+}
+
+function restoreHucodeTransferringOwner(
+	coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
+	token: IHucodeDesktopWorkbenchOwnershipToken
+): boolean {
+	const current = coordinator.lookup(token.canonicalPath);
+	return current.kind === 'current-owner' &&
+		current.ownership.generation === token.generation &&
+		ownersEqual(current.ownership.owner, token.owner) &&
+		current.ownership.phase === 'transferring' &&
+		coordinator.publish(token).kind === 'published';
 }
 
 /** Projects global coordinator records into one Omni session's UI state. */

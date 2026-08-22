@@ -190,6 +190,13 @@ the user to close the other tabs or use a supported browser. Web paths use the
 server's configured case semantics, but a browser cannot prove that two
 different paths are server-side symlink aliases.
 
+Hosted-workbench lifecycle and retained-workbench state is stored in the
+top-level tab's browser session. It survives a reload, but one tab cannot
+overwrite another tab's restore intent. A duplicated tab may begin with the
+browser's copied session snapshot; non-activating restore arbitration keeps
+only the ownership winner loaded and leaves losing retained workbenches
+unloaded in that duplicated tab.
+
 ## Current Scope
 
 Omni's hosted-workbench path is centered on single-folder workbenches. VS Code

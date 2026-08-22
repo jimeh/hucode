@@ -63,7 +63,10 @@ export interface IHucodeWebTabOwnershipClaim {
 }
 
 export interface IHucodeWebTabOwnershipCoordinator extends IDisposable {
-	admit(pathKey: string): Promise<HucodeWebTabOwnershipAdmission>;
+	admit(
+		pathKey: string,
+		intent?: HucodeWebTabOwnershipAdmissionIntent
+	): Promise<HucodeWebTabOwnershipAdmission>;
 	publish(
 		claim: IHucodeWebTabOwnershipClaim,
 		instanceId: string,
@@ -72,6 +75,8 @@ export interface IHucodeWebTabOwnershipCoordinator extends IDisposable {
 	abandon(claim: IHucodeWebTabOwnershipClaim): boolean;
 	release(claim: IHucodeWebTabOwnershipClaim): boolean;
 }
+
+export type HucodeWebTabOwnershipAdmissionIntent = 'activate' | 'restore';
 
 export type HucodeWebTabOwnershipAdmission =
 	| {
@@ -156,7 +161,10 @@ export class HucodeWebTabOwnershipCoordinator extends Disposable
 		}));
 	}
 
-	async admit(pathKey: string): Promise<HucodeWebTabOwnershipAdmission> {
+	async admit(
+		pathKey: string,
+		intent: HucodeWebTabOwnershipAdmissionIntent = 'activate'
+	): Promise<HucodeWebTabOwnershipAdmission> {
 		const existing = this.local.get(pathKey);
 		if (existing) {
 			if (existing.owner) {
@@ -169,11 +177,11 @@ export class HucodeWebTabOwnershipCoordinator extends Disposable
 		if (pending) {
 			const admission = await pending;
 			return admission.kind === 'acquired'
-				? this.admit(pathKey)
+				? this.admit(pathKey, intent)
 				: admission;
 		}
 
-		const admission = this.acquireUnowned(pathKey);
+		const admission = this.acquireUnowned(pathKey, intent);
 		this.pendingAdmissions.set(pathKey, admission);
 		try {
 			return await admission;
@@ -185,14 +193,17 @@ export class HucodeWebTabOwnershipCoordinator extends Disposable
 	}
 
 	private async acquireUnowned(
-		pathKey: string
+		pathKey: string,
+		intent: HucodeWebTabOwnershipAdmissionIntent
 	): Promise<HucodeWebTabOwnershipAdmission> {
 		const lock = await this.locks.acquire(this.lockName(pathKey));
 		if (lock.kind === 'unavailable') {
 			return { kind: 'unavailable' };
 		}
 		if (lock.kind === 'held') {
-			return this.requestActivation(pathKey);
+			return intent === 'restore'
+				? { kind: 'owned-elsewhere' }
+				: this.requestActivation(pathKey);
 		}
 		if (this.disposed) {
 			lock.handle.dispose();

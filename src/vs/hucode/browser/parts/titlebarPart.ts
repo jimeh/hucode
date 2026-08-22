@@ -92,6 +92,21 @@ import {
 	MenuWorkbenchToolBar,
 } from '../../../platform/actions/browser/toolbar.js';
 
+/** Resolves projected title colors against the same opaque shell surface as theme colors. */
+export function resolveHucodeOmniTitleBackground(
+	projected: string | undefined,
+	fallback: string | null | undefined,
+	theme: IColorTheme
+): string {
+	const color = projected ? Color.Format.CSS.parse(projected) : undefined;
+	if (color) {
+		return (color.isOpaque()
+			? color
+			: color.makeOpaque(WORKBENCH_BACKGROUND(theme))).toString();
+	}
+	return fallback ?? '';
+}
+
 /**
  * Omni-specific titlebar part.
  *
@@ -326,7 +341,7 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		const makeOpaque = (color: Color, theme: IColorTheme) => color.isOpaque()
 			? color
 			: color.makeOpaque(WORKBENCH_BACKGROUND(theme));
-		const titleBackground = (projectedTitleBackground ?? (this.getColor(
+		const fallbackTitleBackground = this.getColor(
 			modernUI
 				? this.isInactive
 					? TITLE_BAR_INACTIVE_BACKGROUND
@@ -335,7 +350,12 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 			makeOpaque
 		) || (modernUI && this.isInactive
 			? this.getColor(TITLE_BAR_ACTIVE_BACKGROUND, makeOpaque)
-			: undefined))) || '';
+			: undefined);
+		const titleBackground = resolveHucodeOmniTitleBackground(
+			projectedTitleBackground,
+			fallbackTitleBackground,
+			this.themeService.getColorTheme()
+		);
 		this.element.style.backgroundColor = titleBackground;
 
 		const workbenchContainer = this.layoutService.getContainer(

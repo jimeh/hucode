@@ -105,16 +105,32 @@ import {
 	registerHucodeShellControllerOwnerLifecycle,
 } from './shellControllerPortAcceptor.js';
 import {
+	admitHucodeRegularWorkbench,
 	canonicalizeDesktopWorkbenchPath,
 	createHucodeDesktopRestoreCandidates,
 	createHucodeDesktopOwnershipState,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
+	HucodeRegularWindowOwnershipLifetimes,
 	type HucodeDesktopWorkbenchRouteOutcome,
+	type HucodeDesktopWorkbenchTransferRecoveryOutcome,
 	type IHucodeDesktopWorkbenchOwnership,
+	type HucodeRegularWorkbenchAdmissionOutcome,
+	type HucodeRegularWorkbenchOpenAttempt,
 	selectHucodeDesktopRestoreWinners,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 } from './desktopWorkbenchOwnership.js';
+
+class HucodeRegularOpenAttemptError extends Error {
+	constructor(
+		readonly attempt: Exclude<
+			HucodeRegularWorkbenchOpenAttempt<ICodeWindow>,
+			{ readonly kind: 'committed' }
+		>
+	) {
+		super('Regular workbench window did not commit its open.');
+	}
+}
 
 /**
  * Main-process hosted workspace controller for Hucode Omni-windows.
@@ -124,6 +140,10 @@ export class HucodeShellMainService extends Disposable
 
 	declare readonly _serviceBrand: undefined;
 	readonly supportsWorkspaceScreenshotOverlay = true;
+
+	getActiveHostedWorkspaceProfile(windowId: number) {
+		return this.controllers.get(windowId)?.getActiveWorkspaceProfile();
+	}
 
 	private readonly _onDidChangeWindowState =
 		this._register(new Emitter<IHucodeShellWindowStateChange>());
@@ -148,6 +168,8 @@ export class HucodeShellMainService extends Disposable
 	);
 	private readonly ownershipCoordinator:
 		HucodeDesktopWorkbenchOwnershipCoordinator;
+	private readonly regularWindowOwnershipLifetimes:
+		HucodeRegularWindowOwnershipLifetimes;
 	private regularAdmissionId = 0;
 	private ownershipBroadcastPending = false;
 
@@ -176,6 +198,11 @@ export class HucodeShellMainService extends Disposable
 			new HucodeDesktopWorkbenchOwnershipCoordinator({
 				onDidChange: () => this.scheduleOwnershipBroadcast(),
 			});
+		this.regularWindowOwnershipLifetimes = this._register(
+			new HucodeRegularWindowOwnershipLifetimes(
+				this.ownershipCoordinator
+			)
+		);
 
 		this.controllers = this._register(new ShellControllerStore(
 			windowId => this.windowsMainService.getWindowById(windowId),
@@ -215,8 +242,12 @@ export class HucodeShellMainService extends Disposable
 			this.shellControllerConnections.deleteAndDispose(window.id)
 		));
 		for (const window of this.windowsMainService.getWindows()) {
+			this.regularWindowOwnershipLifetimes.add(window);
 			this.reconcileRegularWindowOwnership(window);
 		}
+		this._register(this.windowsMainService.onDidOpenWindow(window =>
+			this.regularWindowOwnershipLifetimes.add(window)
+		));
 		this._register(this.windowsMainService.onDidSignalReadyWindow(window =>
 			this.reconcileRegularWindowOwnership(window)
 		));
@@ -261,8 +292,14 @@ export class HucodeShellMainService extends Disposable
 
 	async openRegularWorkbenchWithAdmission(
 		workbenchPath: string,
-		openRegularWindow: () => Promise<ICodeWindow>
-	): Promise<ICodeWindow> {
+		request: {
+			readonly filesToOpen?: INativeOpenFileRequest;
+			readonly forceStandalone?: boolean;
+			openRegularWindow(): Promise<
+				HucodeRegularWorkbenchOpenAttempt<ICodeWindow>
+			>;
+		}
+	): Promise<HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow>> {
 		for (const window of this.windowsMainService.getWindows()) {
 			this.reconcileRegularWindowOwnership(window);
 		}
@@ -274,62 +311,113 @@ export class HucodeShellMainService extends Disposable
 			kind: 'regular' as const,
 			windowId: -(++this.regularAdmissionId),
 		};
-		while (true) {
-			const admission = this.ownershipCoordinator.reserve(
-				workbenchPath,
-				pendingOwner
-			);
-			if (admission.kind === 'reserved-conflict') {
-				await admission.settled;
-				continue;
-			}
-			if (admission.kind === 'current-owner') {
-				const owner = admission.ownership.owner;
-				const window = this.windowsMainService.getWindowById(owner.windowId);
-				if (owner.kind === 'regular' && window && !window.isOmniWindow) {
-					window.focus();
-					return window;
-				}
-				if (owner.kind === 'hosted') {
-					const outcome = await this.routeWorkspaceOpen(
-						owner.windowId,
-						workbenchPath
-					);
-					if (outcome.kind === 'focused-hosted' ||
-						outcome.kind === 'opened-hosted') {
-						const omniWindow = this.windowsMainService.getWindowById(
-							outcome.ownership.owner.windowId
-						);
-						if (omniWindow) {
-							return omniWindow;
-						}
-					}
-				}
-				throw new Error(
-					`Desktop workbench ownership for ${workbenchPath} is stale.`
-				);
-			}
+		return admitHucodeRegularWorkbench({
+			coordinator: this.ownershipCoordinator,
+			path: workbenchPath,
+			pendingOwner,
+			openRegularWindow: request.openRegularWindow,
+			resolveCurrent: ownership => this.resolveRegularAdmissionOwner(
+				ownership,
+				request
+			),
+		});
+	}
 
-			try {
-				const window = await openRegularWindow();
-				const reassigned = this.ownershipCoordinator.reassign(
-					admission.reservation,
-					{ kind: 'regular', windowId: window.id }
-				);
-				if (reassigned.kind !== 'reassigned' ||
-					this.ownershipCoordinator.publish(
-						reassigned.reservation
-					).kind !== 'published') {
-					throw new Error(
-						`Desktop workbench open for ${workbenchPath} was superseded.`
-					);
-				}
-				return window;
-			} catch (error) {
-				this.ownershipCoordinator.release(admission.reservation);
-				throw error;
-			}
+	private async resolveRegularAdmissionOwner(
+		ownership: IHucodeDesktopWorkbenchOwnership,
+		request: {
+			readonly filesToOpen?: INativeOpenFileRequest;
+			readonly forceStandalone?: boolean;
+			openRegularWindow(): Promise<
+				HucodeRegularWorkbenchOpenAttempt<ICodeWindow>
+			>;
 		}
+	): Promise<
+		HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow> |
+		{ readonly kind: 'stale' | 'retry' }
+	> {
+		const owner = ownership.owner;
+		if (owner.kind === 'regular') {
+			const window = this.windowsMainService.getWindowById(owner.windowId);
+			if (!window || window.isOmniWindow) {
+				return { kind: 'stale' };
+			}
+			window.focus();
+			if (request.filesToOpen) {
+				window.sendWhenReady(
+					'vscode:openFiles',
+					CancellationToken.None,
+					request.filesToOpen
+				);
+			}
+			return {
+				kind: 'focused-regular',
+				value: window,
+				filesDelivered: !!request.filesToOpen,
+				payloadDisposition: request.filesToOpen
+					? 'delivered'
+					: 'preserve',
+			};
+		}
+
+		const controller = this.controllers.get(owner.windowId);
+		if (!controller) {
+			return { kind: 'stale' };
+		}
+		const instance = validateHucodeDesktopHostedOwnership(
+			this.ownershipCoordinator,
+			ownership,
+			controller.getState().instances
+		);
+		if (!instance) {
+			return { kind: 'stale' };
+		}
+		if (request.forceStandalone) {
+			return this.transferHostedAdmissionToRegular(
+				controller,
+				instance.instanceId,
+				instance.projectId,
+				ownership,
+				request.openRegularWindow
+			);
+		}
+
+		const route = await this.routeWorkspaceOpen(
+			owner.windowId,
+			ownership.displayPath
+		);
+		if (route.kind === 'failed') {
+			return {
+				...route,
+				payloadDisposition: 'preserve',
+			};
+		}
+		if (route.kind === 'superseded') {
+			return { kind: 'retry' };
+		}
+		const window = this.windowsMainService.getWindowById(
+			route.ownership.owner.windowId
+		);
+		if (!window) {
+			return { kind: 'stale' };
+		}
+		let filesDelivered = false;
+		if (request.filesToOpen) {
+			filesDelivered = await this.deliverFilesToRoute(
+				route,
+				request.filesToOpen
+			);
+		}
+		return {
+			kind: route.kind === 'focused-regular'
+				? 'focused-regular'
+				: 'focused-hosted',
+			value: window,
+			filesDelivered,
+			payloadDisposition: request.filesToOpen
+				? filesDelivered ? 'delivered' : 'preserve'
+				: 'preserve',
+		};
 	}
 
 	/** Accepts a sender-derived hosted-shell capability request. */
@@ -671,7 +759,7 @@ export class HucodeShellMainService extends Disposable
 			for (const window of this.windowsMainService.getWindows()) {
 				const controller = this.controllers.get(window.id);
 				if (window.isOmniWindow && controller) {
-					this.fireWindowState(window.id, controller.getState());
+					controller.notifyExternalStateChanged();
 				}
 			}
 		});
@@ -1085,6 +1173,16 @@ export class HucodeShellMainService extends Disposable
 		if (outcome.kind === 'failed' || outcome.kind === 'superseded') {
 			return false;
 		}
+		return this.deliverFilesToRoute(outcome, request, projectId);
+	}
+
+	private async deliverFilesToRoute(
+		outcome: Exclude<HucodeDesktopWorkbenchRouteOutcome, {
+			readonly kind: 'failed' | 'superseded';
+		}>,
+		request: INativeOpenFileRequest,
+		projectId?: string
+	): Promise<boolean> {
 		if (outcome.kind === 'focused-regular') {
 			const window = this.windowsMainService.getWindowById(
 				outcome.ownership.owner.windowId
@@ -1183,8 +1281,112 @@ export class HucodeShellMainService extends Disposable
 				}
 				return window.id;
 			},
+			recoverHostedOwner: () => this.recoverHostedTransferOwner(
+				controller,
+				lookup.ownership,
+				instance.projectId
+			),
 		});
 		return outcome.kind === 'transferred';
+	}
+
+	private async transferHostedAdmissionToRegular(
+		controller: ResidentHostedWorkspacesController,
+		instanceId: string,
+		projectId: string | undefined,
+		ownership: IHucodeDesktopWorkbenchOwnership,
+		openRegularWindow: () => Promise<
+			HucodeRegularWorkbenchOpenAttempt<ICodeWindow>
+		>
+	): Promise<
+		HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow> |
+		{ readonly kind: 'stale' | 'retry' }
+	> {
+		let opened: HucodeRegularWorkbenchOpenAttempt<ICodeWindow> | undefined;
+		const outcome = await transferHucodeDesktopWorkbenchToRegularWindow({
+			coordinator: this.ownershipCoordinator,
+			ownership,
+			closeHostedOwner: () => controller.closeWorkspace(instanceId),
+			openRegularWindow: async () => {
+				opened = await openRegularWindow();
+				if (opened.kind !== 'committed') {
+					throw new HucodeRegularOpenAttemptError(opened);
+				}
+				return opened.windowId;
+			},
+			recoverHostedOwner: () => this.recoverHostedTransferOwner(
+				controller,
+				ownership,
+				projectId
+			),
+		});
+		if (outcome.kind === 'transferred' && opened?.kind === 'committed') {
+			return {
+				kind: 'opened',
+				value: opened.value,
+				filesDelivered: opened.filesDelivered,
+				payloadDisposition: opened.filesDelivered
+					? 'delivered'
+					: 'preserve',
+			};
+		}
+		if (outcome.kind === 'failed' &&
+			outcome.error instanceof HucodeRegularOpenAttemptError) {
+			return outcome.error.attempt.kind === 'vetoed'
+				? { kind: 'vetoed', payloadDisposition: 'consumed' }
+				: {
+					kind: 'failed',
+					error: outcome.error.attempt.error,
+					payloadDisposition: 'preserve',
+				};
+		}
+		return outcome.kind === 'vetoed'
+			? { kind: 'vetoed', payloadDisposition: 'consumed' }
+			: outcome.kind === 'superseded'
+				? { kind: 'retry' }
+				: outcome.kind === 'failed'
+					? {
+						kind: 'failed',
+						error: outcome.error,
+						payloadDisposition: 'preserve',
+					}
+					: { kind: 'retry' };
+	}
+
+	private async recoverHostedTransferOwner(
+		controller: ResidentHostedWorkspacesController,
+		previousOwnership: IHucodeDesktopWorkbenchOwnership,
+		projectId?: string
+	): Promise<HucodeDesktopWorkbenchTransferRecoveryOutcome> {
+		const recovered = await controller.recoverTransferredWorkspace(
+			previousOwnership.displayPath,
+			projectId
+		);
+		const current = this.ownershipCoordinator.lookup(
+			previousOwnership.canonicalPath
+		);
+		if (current.kind !== 'current-owner') {
+			return { kind: 'failed' };
+		}
+		if (current.ownership.owner.kind !== 'hosted' ||
+			previousOwnership.owner.kind !== 'hosted' ||
+			current.ownership.owner.windowId !==
+			previousOwnership.owner.windowId) {
+			return {
+				kind: 'superseded',
+				ownership: current.ownership,
+			};
+		}
+		if (!recovered) {
+			return { kind: 'failed' };
+		}
+		if (current.ownership.owner.instanceId !== recovered.instanceId) {
+			return {
+				kind: 'superseded',
+				ownership: current.ownership,
+			};
+		}
+		return { kind: 'restored', ownership: current.ownership };
 	}
 
 	async notifyHostedWorkspaceReady(

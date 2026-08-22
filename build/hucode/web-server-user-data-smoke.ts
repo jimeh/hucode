@@ -382,7 +382,6 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		await openWorkspaceThroughSmokeDriver(page, alphaPath, deadline);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
-			{ label: 'Bravo', state: 'unloaded', active: false },
 		]);
 		await waitForHostedFrame(page, alphaPath, deadline);
 
@@ -423,8 +422,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			`navigation, clipboard/focus bridging, one shell-owned project ` +
 			`event stream, a shell action, unload, and command-driven ` +
 			`connection recovery across Alpha and Bravo; verified same-profile ` +
-			`tab activation, duplicate prevention, crash takeover, and separate ` +
-			`browser-profile isolation`
+			`tab activation, duplicate prevention, tab-local lifecycle state, ` +
+			`crash takeover, and separate browser-profile isolation`
 		);
 	} catch (error) {
 		if (page) {

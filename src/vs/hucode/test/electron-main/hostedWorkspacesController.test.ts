@@ -499,6 +499,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			true
 		);
 		const profiles = options.profiles ?? [shellProfile];
+		const workspaceProfileOverrides = new Map<string, IUserDataProfile>();
 		const defaultProfile = profiles.find(profile => profile.isDefault) ??
 			shellProfile;
 		const userDataProfilesMainService = {
@@ -510,11 +511,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				readonly configPath?: URI;
 			}) {
 				const resource = workspace.uri ?? workspace.configPath;
-				return resource && profiles.find(profile =>
-					profile.workspaces?.some(candidate =>
-						candidate.toString() === resource.toString()
-					)
-				);
+				return resource && (
+					workspaceProfileOverrides.get(resource.toString()) ??
+					profiles.find(profile =>
+						profile.workspaces?.some(candidate =>
+							candidate.toString() === resource.toString()
+						)
+					));
 			},
 		} as unknown as IUserDataProfilesMainService;
 		const window = {
@@ -608,6 +611,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			untrustedProcessIds,
 			untrustedWebContentsIds,
 			viewFactory,
+			workspaceProfileOverrides,
 			window,
 		};
 	}
@@ -631,6 +635,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		await fixture.controller.openAdmittedWorkspace(firstPath);
 		await fixture.controller.openAdmittedWorkspace(secondPath);
 		await fixture.controller.openAdmittedWorkspace(unassociatedPath);
+		await fixture.controller.openAdmittedWorkspace(firstPath);
 
 		const configurations = fixture.protocolMainService.objectUrls.map(
 			objectUrl => objectUrl.value as INativeWindowConfiguration
@@ -644,6 +649,39 @@ suite('ResidentHostedWorkspacesController', () => {
 			fixture.window.config?.profiles.profile.id,
 			'shell'
 		);
+		assert.strictEqual(
+			fixture.controller.getActiveWorkspaceProfile()?.id,
+			'first-profile'
+		);
+	});
+
+	test('refreshes the workspace profile before developer reload', async () => {
+		const worktreePath = createWorktree('profile-reload');
+		const defaultProfile = createProfile('default', [], true);
+		const firstProfile = createProfile('first', [URI.file(worktreePath)]);
+		const secondProfile = createProfile('second');
+		const fixture = createController({
+			profiles: [defaultProfile, firstProfile, secondProfile],
+		});
+
+		await fixture.controller.openAdmittedWorkspace(worktreePath);
+		fixture.workspaceProfileOverrides.set(
+			URI.file(worktreePath).toString(),
+			secondProfile
+		);
+		fixture.controller.reloadWorkspace();
+
+		const configuration = fixture.protocolMainService.objectUrls[0]
+			.value as INativeWindowConfiguration;
+		assert.deepStrictEqual({
+			profile: configuration.profiles.profile.id,
+			profiles: configuration.profiles.all.map(profile => profile.id),
+			reloads: fixture.viewFactory.views[0].rawWebContents.reloadCalls.length,
+		}, {
+			profile: 'second',
+			profiles: ['default', 'first', 'second'],
+			reloads: 1,
+		});
 	});
 
 	test('admits a hosted path to only one Omni window', async () => {
@@ -900,6 +938,62 @@ suite('ResidentHostedWorkspacesController', () => {
 
 			const owner = ownershipCoordinator.lookup(worktreePath);
 			assert.strictEqual(owner.kind, 'current-owner');
+			assert.deepStrictEqual(
+				owner.kind === 'current-owner' && owner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 2,
+					instanceId: 'second-instance',
+				}
+			);
+		}
+	);
+
+	test('keeps a hosted waiter through the transition into recovery',
+		async () => {
+			const worktreePath = createWorktree('transitioning-recovery-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+			const lookup = ownershipCoordinator.lookup(worktreePath);
+			if (lookup.kind !== 'current-owner') {
+				assert.fail('expected first hosted owner');
+			}
+			const token = {
+				canonicalPath: lookup.ownership.canonicalPath,
+				owner: lookup.ownership.owner,
+				generation: lookup.ownership.generation,
+			};
+			ownershipCoordinator.markTransferring(token);
+
+			const secondOpen = second.controller.openAdmittedWorkspace(
+				worktreePath,
+				'project'
+			);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			ownershipCoordinator.markRecovering(token);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+
+			await first.controller.closeWorkspace('first-instance');
+			await secondOpen;
+			assert.strictEqual(second.viewFactory.views.length, 1);
+			const owner = ownershipCoordinator.lookup(worktreePath);
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
 				{
@@ -2707,6 +2801,52 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 	});
 
+	test('external ownership projection waits for a coherent lifecycle state',
+		async () => {
+			const alpha = createWorktree('external-state-deferral');
+			const { controller, ipcMain, stateChanges, viewFactory } =
+				createController();
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
+			const instanceId = controller.getState().activeInstanceId;
+			assert.ok(instanceId);
+			controller.notifyHostedWorkspaceReady(instanceId);
+			const webContents = viewFactory.views[0].rawWebContents;
+			webContents.autoBeforeUnloadReply = false;
+			const beforeClose = stateChanges.length;
+
+			const closing = controller.closeWorkspace(instanceId);
+			let beforeUnloadRequest = webContents.sent.find(
+				message => message.channel === 'vscode:onBeforeUnload'
+			);
+			for (let attempt = 0;
+				attempt < 20 && !beforeUnloadRequest;
+				attempt++
+			) {
+				await Promise.resolve();
+				beforeUnloadRequest = webContents.sent.find(
+					message => message.channel === 'vscode:onBeforeUnload'
+				);
+			}
+			const request = beforeUnloadRequest?.request as {
+				cancelChannel: string;
+			} | undefined;
+			assert.ok(request);
+			controller.notifyExternalStateChanged();
+			assert.strictEqual(stateChanges.length, beforeClose);
+			ipcMain.emitReply(request.cancelChannel);
+			assert.strictEqual(await closing, false);
+
+			assert.strictEqual(stateChanges.length, beforeClose + 1);
+			assert.deepStrictEqual(
+				stateChanges.at(-1)?.instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId, state: 'active' }]
+			);
+		}
+	);
+
 	test('closing active workspace unloads it and activates next MRU', async () => {
 		const alpha = createWorktree('alpha');
 		const bravo = createWorktree('bravo');
@@ -3053,7 +3193,18 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const alpha = createWorktree('alpha-reactivated-rollback-failure');
 			const bravo = createWorktree('bravo-reactivated-rollback-failure');
-			const { controller, ipcMain, viewFactory } = createController();
+			const defaultProfile = createProfile('default', [], true);
+			const firstProfile = createProfile('first', [URI.file(alpha)]);
+			const secondProfile = createProfile('second');
+			const {
+				controller,
+				ipcMain,
+				protocolMainService,
+				viewFactory,
+				workspaceProfileOverrides,
+			} = createController({
+				profiles: [defaultProfile, firstProfile, secondProfile],
+			});
 
 			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
@@ -3076,8 +3227,14 @@ suite('ResidentHostedWorkspacesController', () => {
 			};
 			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			workspaceProfileOverrides.set(
+				URI.file(alpha).toString(),
+				secondProfile
+			);
 			ipcMain.emitReply(beforeUnload.okChannel);
 			await closing;
+			const configuration = protocolMainService.objectUrls[0]
+				.value as INativeWindowConfiguration;
 
 			assert.deepStrictEqual({
 				activeInstanceId: controller.getState().activeInstanceId,
@@ -3089,6 +3246,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					instance.instanceId === 'instance-1'
 				)?.state,
 				reloadCalls: hostedWebContents.reloadCalls.length,
+				profile: configuration.profiles.profile.id,
 				closeCalls: hostedWebContents.closeCalls,
 			}, {
 				activeInstanceId: 'instance-1',
@@ -3099,6 +3257,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				],
 				state: 'loading',
 				reloadCalls: 1,
+				profile: 'second',
 				closeCalls: [],
 			});
 		}
@@ -5054,7 +5213,17 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('stale hosted shell binding cannot control a reloading view',
 		async () => {
 			const alpha = createWorktree('alpha');
-			const { controller, viewFactory } = createController();
+			const defaultProfile = createProfile('default', [], true);
+			const firstProfile = createProfile('first', [URI.file(alpha)]);
+			const secondProfile = createProfile('second');
+			const {
+				controller,
+				protocolMainService,
+				viewFactory,
+				workspaceProfileOverrides,
+			} = createController({
+				profiles: [defaultProfile, firstProfile, secondProfile],
+			});
 
 			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
@@ -5068,10 +5237,19 @@ suite('ResidentHostedWorkspacesController', () => {
 				false
 			);
 			const current = controller.acquireHostedShellBinding(1)!;
+			workspaceProfileOverrides.set(
+				URI.file(alpha).toString(),
+				secondProfile
+			);
 			assert.strictEqual(controller.reloadHostedShellSelf(current), true);
 			assert.strictEqual(
 				viewFactory.views[0].rawWebContents.reloadCalls.length,
 				1
+			);
+			assert.strictEqual(
+				(protocolMainService.objectUrls[0]
+					.value as INativeWindowConfiguration).profiles.profile.id,
+				'second'
 			);
 		});
 
@@ -5152,6 +5330,45 @@ suite('ResidentHostedWorkspacesController', () => {
 			[{ folderUri: alpha, desiredState: 'unloaded' }]
 		);
 	});
+
+	test('failed standalone transfer recovery recreates a usable hosted owner',
+		async () => {
+			const alpha = createWorktree('transfer-recovery');
+			const { controller } = createController();
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			assert.strictEqual(
+				await controller.closeHostedShellSelf(binding),
+				true
+			);
+			const recovered = await controller.recoverTransferredWorkspace(alpha);
+			assert.ok(recovered);
+			assert.notStrictEqual(recovered.instanceId, 'instance-1');
+			assert.strictEqual(recovered.state, 'loading');
+			assert.deepStrictEqual(
+				controller.getState().retainedWorkbenches?.map(record => ({
+					folderUri: URI.revive(record.folderUri).fsPath,
+					desiredState: record.desiredState,
+				})),
+				[{ folderUri: alpha, desiredState: 'loaded' }]
+			);
+			controller.notifyHostedWorkspaceReady(recovered.instanceId);
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+					worktreePath: instance.worktreePath,
+				})),
+				[{
+					instanceId: recovered.instanceId,
+					state: 'active',
+					worktreePath: alpha,
+				}]
+			);
+		}
+	);
 
 	test('hosted navigation focuses a workbench in another Omni window',
 		async () => {

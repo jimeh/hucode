@@ -85,6 +85,26 @@ export function getHucodeOmniShellProfile<TProfile>(
 	return isOmniWindow ? applicationDefaultProfile : undefined;
 }
 
+/** Selects the profile inherited by a generic regular New Window request. */
+export function getHucodeNewWindowDefaultProfile<TProfile>(options: {
+	readonly configuredProfile?: TProfile;
+	readonly lastActiveProfile?: TProfile & { readonly isAgentsWindowProfile?: boolean };
+	readonly lastActiveIsOmni?: boolean;
+	readonly activeHostedProfile?: TProfile;
+	readonly applicationDefaultProfile: TProfile;
+}): TProfile {
+	if (options.configuredProfile) {
+		return options.configuredProfile;
+	}
+	if (options.lastActiveIsOmni) {
+		return options.activeHostedProfile ?? options.applicationDefaultProfile;
+	}
+	if (options.lastActiveProfile?.isAgentsWindowProfile) {
+		return options.applicationDefaultProfile;
+	}
+	return options.lastActiveProfile ?? options.applicationDefaultProfile;
+}
+
 /**
  * Identifies Hucode Omni paths in the main-process open plan.
  */

@@ -74,6 +74,7 @@ import {
 	IWebHucodeShellExternalOwnerReporter,
 	IWebHucodeShellPersistedState,
 	IWebHucodeShellPersistenceAdapter,
+	SessionStorageWebHucodeShellPersistence,
 	IWebHucodeHostedNavigationProjectManager,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
@@ -91,6 +92,55 @@ suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let bootstrapDocumentSequence = 0;
 	const buildIdentity = getServerProductSegment(product);
+
+	test('session persistence survives reload without sharing later tab writes', () => {
+		const firstStorage = new MemorySessionStorage();
+		const firstPage = new SessionStorageWebHucodeShellPersistence(
+			firstStorage
+		);
+		const firstState: IWebHucodeShellPersistedState = {
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'one',
+				worktreePath: '/srv/one',
+			}],
+			activeWorktreePath: '/srv/one',
+		};
+		firstPage.save(firstState);
+		assert.deepStrictEqual(
+			new SessionStorageWebHucodeShellPersistence(firstStorage).load(),
+			firstState
+		);
+
+		const duplicatedStorage = firstStorage.copy();
+		const duplicatePage = new SessionStorageWebHucodeShellPersistence(
+			duplicatedStorage
+		);
+		duplicatePage.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'two',
+				worktreePath: '/srv/two',
+			}],
+			activeWorktreePath: '/srv/two',
+		});
+
+		assert.strictEqual(firstPage.load()?.activeWorktreePath, '/srv/one');
+		assert.strictEqual(duplicatePage.load()?.activeWorktreePath, '/srv/two');
+	});
+
+	test('session persistence tolerates blocked storage access', () => {
+		const persistence = new SessionStorageWebHucodeShellPersistence(
+			undefined,
+			() => { throw new Error('blocked'); }
+		);
+
+		assert.doesNotThrow(() => persistence.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [],
+		}));
+		assert.strictEqual(persistence.load(), undefined);
+	});
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -5169,6 +5219,7 @@ suite('WebHucodeShellService', () => {
 				activeWorktreePath: '/tmp/retained-elsewhere',
 			});
 			const ownership = new ExternallyOwnedTabCoordinator();
+			const reporter = new RecordingExternalOwnerReporter();
 			const { service, surface, browser } = createService(
 				new FakeBrowserAdapter(),
 				persistence,
@@ -5178,7 +5229,8 @@ suite('WebHucodeShellService', () => {
 				undefined,
 				undefined,
 				true,
-				ownership
+				ownership,
+				reporter
 			);
 
 			const state = await service.getWindowState(browser.windowId);
@@ -5187,10 +5239,14 @@ suite('WebHucodeShellService', () => {
 				instances: state.instances.length,
 				iframes: surface.querySelectorAll('iframe').length,
 				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				admissionIntents: ownership.admissionIntents,
+				reports: reporter.paths,
 			}, {
 				instances: 0,
 				iframes: 0,
 				desiredState: 'unloaded',
+				admissionIntents: ['restore'],
+				reports: [],
 			});
 		});
 
@@ -6470,6 +6526,26 @@ class FakePersistence implements IWebHucodeShellPersistenceAdapter {
 	}
 }
 
+class MemorySessionStorage {
+	private readonly values: Map<string, string>;
+
+	constructor(values: ReadonlyMap<string, string> = new Map()) {
+		this.values = new Map(values);
+	}
+
+	getItem(key: string): string | null {
+		return this.values.get(key) ?? null;
+	}
+
+	setItem(key: string, value: string): void {
+		this.values.set(key, value);
+	}
+
+	copy(): MemorySessionStorage {
+		return new MemorySessionStorage(this.values);
+	}
+}
+
 class ThrowOncePersistence extends FakePersistence {
 	throwNextSave = false;
 
@@ -6775,9 +6851,14 @@ class SingleTabOwnershipCoordinator
 class ExternallyOwnedTabCoordinator
 	implements IHucodeWebTabOwnershipCoordinator {
 	readonly admittedPaths: string[] = [];
+	readonly admissionIntents: Array<string | undefined> = [];
 
-	async admit(pathKey: string): Promise<HucodeWebTabOwnershipAdmission> {
+	async admit(
+		pathKey: string,
+		intent?: 'activate' | 'restore'
+	): Promise<HucodeWebTabOwnershipAdmission> {
 		this.admittedPaths.push(pathKey);
+		this.admissionIntents.push(intent);
 		return {
 			kind: 'owned-elsewhere',
 			owner: {

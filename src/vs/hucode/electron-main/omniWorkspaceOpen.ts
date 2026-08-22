@@ -15,7 +15,7 @@ import { INativeOpenFileRequest, IPath } from '../../platform/window/common/wind
 import { ICodeWindow } from '../../platform/window/electron-main/window.js';
 import { IHucodeShellMainService } from './omniWindow.js';
 
-interface IHucodeFilesToOpen {
+export interface IHucodeFilesToOpen {
 	filesToOpenOrCreate: IPath[];
 	filesToDiff: IPath[];
 	filesToMerge: IPath[];
@@ -124,7 +124,7 @@ export function findHucodeProjectWorktreeByPath(
 	return undefined;
 }
 
-function toNativeOpenFileRequest(
+export function toNativeOpenFileRequest(
 	filesToOpen: IHucodeFilesToOpen,
 	termProgram: string | undefined
 ): INativeOpenFileRequest {

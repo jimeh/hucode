@@ -24,6 +24,8 @@ import { IThemeMainService } from
 	'../../platform/theme/electron-main/themeMainService.js';
 import { IUserDataProfilesMainService } from
 	'../../platform/userDataProfile/electron-main/userDataProfile.js';
+import { IUserDataProfile } from
+	'../../platform/userDataProfile/common/userDataProfile.js';
 import {
 	ICodeWindow,
 	UnloadReason,
@@ -443,6 +445,11 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.onStateChange(state);
 	}
 
+	/** Re-emits shell-owned projection state without bypassing lifecycle batching. */
+	notifyExternalStateChanged(): void {
+		this.emitState();
+	}
+
 	private hasLoadedWorkbench(): boolean {
 		return hasLoadedHostedWorkspace(
 			this.instancesById.values(),
@@ -501,6 +508,25 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		return this.instancesById.get(this.activeInstanceId);
+	}
+
+	getActiveWorkspaceProfile(): IUserDataProfile | undefined {
+		const instance = this.getActiveInstance();
+		if (!instance) {
+			return undefined;
+		}
+		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
+			instance.worktreePath
+		);
+		const workspace = workspaceFolderStat &&
+			getSingleFolderWorkspaceIdentifier(
+				URI.file(instance.worktreePath),
+				workspaceFolderStat
+			);
+		return workspace
+			? this.userDataProfilesMainService.getProfileForWorkspace(workspace) ??
+			this.userDataProfilesMainService.defaultProfile
+			: undefined;
 	}
 
 	private updateInstanceState(
@@ -879,7 +905,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				return false;
 			}
 
-			const settled = await outcome.settled;
+			let settled = await outcome.settled;
+			while (settled.kind === 'recovering') {
+				settled = await settled.settled;
+			}
 			if (settled.kind === 'published') {
 				return false;
 			}
@@ -1459,6 +1488,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	async retainAndOpenAdmittedWorkbench(folderUri: URI): Promise<void> {
 		this.retainedWorkbenches.retain(folderUri, 'unloaded');
 		await this.openAdmittedWorkspace(folderUri.fsPath);
+	}
+
+	/** Recreates a usable hosted owner after a standalone transfer failed. */
+	async recoverTransferredWorkspace(
+		worktreePath: string,
+		projectId?: string
+	): Promise<IHucodeHostedWorkbenchInstance | undefined> {
+		await this.openAdmittedWorkspace(worktreePath, projectId);
+		return this.getState().instances.find(instance =>
+			instance.worktreePath === worktreePath && (
+				instance.state === 'loading' ||
+				instance.state === 'loaded' ||
+				instance.state === 'active'
+			)
+		);
 	}
 
 	/** Records an arbitrary workbench before main-process admission. */
@@ -2551,10 +2595,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
-		const webContents = this.getLiveWebContents(instance);
-		if (!webContents) {
+		if (!this.refreshHostedConfiguration(instance)) {
 			return;
 		}
+		const webContents = this.getLiveWebContents(instance)!;
 
 		this.logService.trace(
 			'[HucodeShellMainService] Reloading hosted workspace after an ' +
@@ -3097,16 +3141,37 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	reloadWorkspace(): void {
-		this.getActiveInstance()?.view?.webContents.reload();
+		const instance = this.getActiveInstance();
+		if (instance && this.refreshHostedConfiguration(instance)) {
+			instance.view!.webContents.reload();
+		}
 	}
 
 	reloadHostedShellSelf(binding: IHucodeHostedShellBinding): boolean {
-		const webContents = this.getBoundHostedShellInstance(binding)
-			?.view?.webContents;
-		if (!webContents || webContents.isDestroyed()) {
+		const instance = this.getBoundHostedShellInstance(binding);
+		if (!instance || !this.refreshHostedConfiguration(instance)) {
 			return false;
 		}
-		webContents.reload();
+		instance.view!.webContents.reload();
+		return true;
+	}
+
+	private refreshHostedConfiguration(
+		instance: IHostedWorkbenchInstance
+	): boolean {
+		const webContents = this.getLiveWebContents(instance);
+		const configObjectUrl = instance.configObjectUrl;
+		const workspaceFolderStat = this.getHostedWorkspaceFolderStat(
+			instance.worktreePath
+		);
+		if (!webContents || !configObjectUrl || !workspaceFolderStat) {
+			return false;
+		}
+		configObjectUrl.update(this.createHostedConfiguration(
+			instance,
+			webContents.id,
+			workspaceFolderStat
+		));
 		return true;
 	}
 
