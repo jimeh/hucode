@@ -190,15 +190,37 @@ export const HUCODE_HOSTED_APPEARANCE_COLOR_IDS = Object.freeze([
 	'foreground',
 	'descriptionForeground',
 	'disabledForeground',
+	'contrastBorder',
+	'contrastActiveBorder',
 	'focusBorder',
 	'icon.foreground',
 	'button.background',
 	'button.foreground',
 	'button.hoverBackground',
+	'scrollbar.shadow',
+	'scrollbar.background',
+	'scrollbarSlider.background',
+	'scrollbarSlider.hoverBackground',
+	'scrollbarSlider.activeBackground',
+	'list.focusBackground',
+	'list.focusForeground',
+	'list.focusOutline',
+	'list.focusAndSelectionOutline',
+	'list.activeSelectionBackground',
+	'list.activeSelectionForeground',
+	'list.activeSelectionIconForeground',
 	'list.hoverBackground',
+	'list.hoverForeground',
 	'list.inactiveSelectionBackground',
 	'list.inactiveSelectionForeground',
+	'list.inactiveSelectionIconForeground',
+	'list.inactiveFocusBackground',
+	'list.inactiveFocusOutline',
+	'list.dropBackground',
+	'list.dropBetweenBackground',
 	'list.warningForeground',
+	'tree.indentGuidesStroke',
+	'tree.inactiveIndentGuidesStroke',
 	'panel.background',
 	'panel.border',
 	'panelSectionHeader.border',
@@ -218,8 +240,10 @@ export const HUCODE_HOSTED_APPEARANCE_COLOR_IDS = Object.freeze([
 	'toolbar.hoverBackground',
 	'widget.border',
 	'editor.background',
+	'editor.border',
 	'editorWidget.border',
 	'surface.background',
+	'surface.foreground',
 	'surface.border',
 	'sessionsSidebar.background',
 	'sessionsSidebarHeader.background',
@@ -236,6 +260,7 @@ export type HucodeHostedAppearanceColorId =
 /** Minimal resolved appearance published by one hosted workbench. */
 export interface IHucodeHostedAppearanceSnapshot {
 	readonly colorScheme: HucodeHostedAppearanceColorScheme;
+	readonly workbenchBackground: string;
 	readonly colors: Readonly<Partial<Record<
 		HucodeHostedAppearanceColorId,
 		string
@@ -642,6 +667,7 @@ export function isHucodeHostedAppearanceSnapshot(
 	}
 	const allowedProperties = new Set([
 		'colorScheme',
+		'workbenchBackground',
 		'colors',
 		'modernUI',
 		'modernUIUppercaseViewHeaders',
@@ -659,8 +685,18 @@ export function isHucodeHostedAppearanceSnapshot(
 	}
 	if (typeof candidate.modernUI !== 'boolean' ||
 		typeof candidate.modernUIUppercaseViewHeaders !== 'boolean' ||
+		typeof candidate.workbenchBackground !== 'string' ||
+		candidate.workbenchBackground.length === 0 ||
+		candidate.workbenchBackground.length > 64 ||
 		!candidate.colors || typeof candidate.colors !== 'object' ||
 		Array.isArray(candidate.colors)) {
+		return false;
+	}
+	try {
+		if (Color.Format.CSS.parse(candidate.workbenchBackground) === null) {
+			return false;
+		}
+	} catch {
 		return false;
 	}
 	const allowedColors = new Set<string>(HUCODE_HOSTED_APPEARANCE_COLOR_IDS);

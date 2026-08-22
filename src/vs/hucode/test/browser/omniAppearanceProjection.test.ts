@@ -38,14 +38,37 @@ suite('Hucode Omni appearance projection', () => {
 		] as const) {
 			const snapshot = createHucodeHostedAppearanceSnapshot({
 				type,
-				getColor: id => id === 'sideBar.background'
-					? Color.fromHex('#123456')
-					: undefined,
+				getColor: id => {
+					switch (id) {
+						case 'sideBar.background':
+							return Color.fromHex('#123456');
+						case 'scrollbarSlider.background':
+							return Color.fromHex('#234567');
+						case 'list.focusOutline':
+							return Color.fromHex('#345678');
+						default:
+							return undefined;
+					}
+				},
 			} as IWorkbenchColorTheme, true, false);
 			assert.strictEqual(snapshot.colorScheme, colorScheme);
 			assert.strictEqual(
+				snapshot.workbenchBackground,
+				colorScheme === 'light' ? '#f3f3f3' :
+					colorScheme === 'hc-light' ? '#ffffff' :
+						colorScheme === 'hc-dark' ? '#000000' : '#252526'
+			);
+			assert.strictEqual(
 				snapshot.colors['sideBar.background'],
 				'#123456'
+			);
+			assert.strictEqual(
+				snapshot.colors['scrollbarSlider.background'],
+				'#234567'
+			);
+			assert.strictEqual(
+				snapshot.colors['list.focusOutline'],
+				'#345678'
 			);
 			assert.strictEqual(snapshot.modernUI, true);
 			assert.strictEqual(
@@ -263,6 +286,8 @@ suite('Hucode Omni appearance projection', () => {
 				...appearance('hc-dark', '#101010', true, true),
 				colors: {
 					'sideBar.background': '#101010',
+					'scrollbarSlider.background': '#303030',
+					'list.focusOutline': '#404040',
 					'titleBar.activeBackground': '#202020',
 					'titleBar.activeForeground': '#fefefe',
 					'sideBar.foreground': '#fafafa',
@@ -279,6 +304,17 @@ suite('Hucode Omni appearance projection', () => {
 				container.style.getPropertyValue('--vscode-sideBar-background'),
 				'#101010'
 			);
+			assert.strictEqual(container.style.backgroundColor, 'rgb(16, 16, 16)');
+			assert.strictEqual(
+				container.style.getPropertyValue(
+					'--vscode-scrollbarSlider-background'
+				),
+				'#303030'
+			);
+			assert.strictEqual(
+				container.style.getPropertyValue('--vscode-list-focusOutline'),
+				'#404040'
+			);
 			assert.strictEqual(title.style.backgroundColor, 'rgb(32, 32, 32)');
 			assert.strictEqual(sidebar.style.color, 'rgb(250, 250, 250)');
 			assert.strictEqual(layouts, 1);
@@ -292,6 +328,7 @@ suite('Hucode Omni appearance projection', () => {
 				container.style.getPropertyValue('--vscode-sideBar-background'),
 				''
 			);
+			assert.strictEqual(container.style.backgroundColor, '');
 			assert.strictEqual(layouts, 2);
 			assert.strictEqual(partStyleUpdates, 4);
 			assert.deepStrictEqual(partAppearances.slice(2), [
@@ -309,6 +346,7 @@ function appearance(
 ): IHucodeHostedAppearanceSnapshot {
 	return {
 		colorScheme,
+		workbenchBackground: background,
 		colors: { 'sideBar.background': background },
 		modernUI,
 		modernUIUppercaseViewHeaders,

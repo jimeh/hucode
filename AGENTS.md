@@ -231,6 +231,12 @@ as the required Hucode instruction set for work in this fork.
   workbench configurations must resolve the ordinary workspace association
   independently; copying the shell's `profiles.profile` into a child silently
   makes every hosted workbench use the shell profile.
+- Serve-web profile IPC must explicitly revive workspace identifiers after URI
+  transformation because browser-originated URI components can lack `$mid`.
+  Clone profile `workspaces` arrays before `transformOutgoingURIs`; it mutates
+  nested containers and can otherwise replace the server's live `URI` objects.
+  Bootstrap profile associations must map workspace URIs to the remote scheme
+  alongside the profile resource URIs.
 - Native `IProjectManagerService` calls cross a generic `ProxyChannel`, which
   does not support `CancellationToken` method arguments. Keep request tokens
   web-only, or replace the generic proxy with a cancellation-aware channel

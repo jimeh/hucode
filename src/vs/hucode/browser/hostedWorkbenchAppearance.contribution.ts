@@ -19,6 +19,7 @@ import {
 	registerWorkbenchContribution2,
 	WorkbenchPhase,
 } from '../../workbench/common/contributions.js';
+import { WORKBENCH_BACKGROUND } from '../../workbench/common/theme.js';
 import { IWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/common/environmentService.js';
 import { LayoutSettings } from
@@ -44,6 +45,7 @@ export function createHucodeHostedAppearanceSnapshot(
 	}
 	return {
 		colorScheme: toHostedAppearanceColorScheme(theme.type),
+		workbenchBackground: WORKBENCH_BACKGROUND(theme).toString(),
 		colors,
 		modernUI,
 		modernUIUppercaseViewHeaders,

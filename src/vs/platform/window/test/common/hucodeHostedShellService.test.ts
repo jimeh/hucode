@@ -210,24 +210,35 @@ suite('HucodeHostedShellService', () => {
 			state.navigationSnapshot);
 		assert.strictEqual(await facade.publishAppearance!({
 			colorScheme: 'dark',
+			workbenchBackground: '#252526',
 			colors: { 'sideBar.background': '#112233' },
 			modernUI: true,
 			modernUIUppercaseViewHeaders: false,
 		}), HucodeHostedShellOperationOutcome.Accepted);
 		assert.strictEqual(await facade.publishAppearance!({
 			colorScheme: 'dark',
+			workbenchBackground: '#252526',
 			colors: { unregistered: '#112233' } as never,
 			modernUI: true,
 			modernUIUppercaseViewHeaders: false,
 		}), HucodeHostedShellOperationOutcome.Unsupported);
 		assert.strictEqual(await facade.publishAppearance!({
 			colorScheme: 'dark',
+			workbenchBackground: '#252526',
 			colors: { 'sideBar.background': 'url(https://invalid.example)' },
 			modernUI: true,
 			modernUIUppercaseViewHeaders: false,
 		}), HucodeHostedShellOperationOutcome.Unsupported);
 		assert.strictEqual(await facade.publishAppearance!({
 			colorScheme: 'dark',
+			workbenchBackground: 'url(https://invalid.example)',
+			colors: {},
+			modernUI: true,
+			modernUIUppercaseViewHeaders: false,
+		}), HucodeHostedShellOperationOutcome.Unsupported);
+		assert.strictEqual(await facade.publishAppearance!({
+			colorScheme: 'dark',
+			workbenchBackground: '#252526',
 			colors: {},
 			modernUI: true,
 			modernUIUppercaseViewHeaders: false,
@@ -534,6 +545,7 @@ suite('HucodeHostedShellService', () => {
 			for (const run of [
 				() => staleFacade.publishAppearance!({
 					colorScheme: 'light',
+					workbenchBackground: '#f3f3f3',
 					colors: {},
 					modernUI: false,
 					modernUIUppercaseViewHeaders: false,

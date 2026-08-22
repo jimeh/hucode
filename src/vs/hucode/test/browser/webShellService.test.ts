@@ -1683,6 +1683,7 @@ suite('WebHucodeShellService', () => {
 			connectChild(browser, surface, betaId);
 			const alphaAppearance = {
 				colorScheme: 'light' as const,
+				workbenchBackground: '#f3f3f3',
 				colors: { 'sideBar.background': '#eeeeee' },
 				modernUI: false,
 				modernUIUppercaseViewHeaders: false,

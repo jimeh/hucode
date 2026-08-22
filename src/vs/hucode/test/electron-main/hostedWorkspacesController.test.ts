@@ -5065,6 +5065,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const current = controller.acquireHostedShellBinding(1)!;
 		const appearance = {
 			colorScheme: 'hc-dark' as const,
+			workbenchBackground: '#000000',
 			colors: { 'sideBar.background': '#010203' },
 			modernUI: true,
 			modernUIUppercaseViewHeaders: true,

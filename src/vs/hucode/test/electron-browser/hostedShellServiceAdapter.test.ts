@@ -119,6 +119,7 @@ suite('DesktopHostedShellServiceAdapter', () => {
 			assert.strictEqual(
 				await adapter.publishAppearance({
 					colorScheme: 'dark',
+					workbenchBackground: '#252526',
 					colors: {},
 					modernUI: false,
 					modernUIUppercaseViewHeaders: false,

@@ -198,6 +198,7 @@ export class OmniAppearanceProjectionContribution extends Disposable
 	): void {
 		container.classList.remove(...BASE_THEME_CLASSES);
 		container.classList.add(toThemeClass(snapshot.colorScheme));
+		container.style.backgroundColor = snapshot.workbenchBackground;
 		for (const id of HUCODE_HOSTED_APPEARANCE_COLOR_IDS) {
 			const value = snapshot.colors[id];
 			if (value) {
@@ -220,6 +221,7 @@ export class OmniAppearanceProjectionContribution extends Disposable
 		container.classList.add(toThemeClass(
 			this.themeService.getColorTheme().type
 		));
+		container.style.backgroundColor = '';
 		for (const id of HUCODE_HOSTED_APPEARANCE_COLOR_IDS) {
 			container.style.removeProperty(asCssVariableName(id));
 		}
