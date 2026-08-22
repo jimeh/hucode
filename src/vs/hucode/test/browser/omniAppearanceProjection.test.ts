@@ -90,9 +90,11 @@ suite('Hucode Omni appearance projection', () => {
 		const registered = new Set(
 			registry.getColors().map(contribution => contribution.id)
 		);
-		assert.strictEqual(registered.has('sessionsSidebar.background'), true);
-		assert.strictEqual(registered.has('sessionsPanel.background'), true);
-		assert.strictEqual(registered.has('hucodeOmniTitle.background'), true);
+		assert.deepStrictEqual([
+			registered.has('sessionsSidebar.background'),
+			registered.has('sessionsPanel.background'),
+			registered.has('hucodeOmniTitle.background'),
+		], [true, true, true]);
 	});
 
 	test('projects active cache and preserves it across shell focus', () => {

@@ -79,6 +79,15 @@ export function isHucodeHostedShellServiceAvailable(
 	)[hucodeHostedShellCachedAvailability]?.() ?? true;
 }
 
+/** Reports whether this workbench holds an authoritatively bound connection. */
+export function hasHucodeHostedShellConnection(
+	service: IHucodeHostedShellService
+): boolean {
+	return (service as IHucodeHostedShellService &
+		HucodeHostedShellCachedAvailability
+	)[hucodeHostedShellCachedAvailability]?.() === true;
+}
+
 /** Attaches local availability metadata without widening the remote surface. */
 export function withHucodeHostedShellCachedAvailability<
 	T extends IHucodeHostedShellService

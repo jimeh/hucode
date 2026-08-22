@@ -509,6 +509,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return this.instancesById.get(this.activeInstanceId);
 	}
 
+	/** Returns the profile associated with the active hosted workspace. */
 	getActiveWorkspaceProfile(): IUserDataProfile | undefined {
 		const instance = this.getActiveInstance();
 		if (!instance) {
@@ -584,6 +585,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return true;
 	}
 
+	/** Publishes appearance for the current binding and reports acceptance. */
 	publishHostedShellAppearance(
 		binding: IHucodeHostedShellBinding,
 		appearance: IHucodeHostedAppearanceSnapshot

@@ -17,6 +17,7 @@ import { IProductService } from '../../../../platform/product/common/productServ
 import { IRequestService, asJson } from '../../../../platform/request/common/request.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IUserDataProfile, IUserDataProfileOptions, IUserDataProfilesService, IUserDataProfileUpdateOptions } from '../../../../platform/userDataProfile/common/userDataProfile.js';
+import { hasHucodeHostedShellConnection, IHucodeHostedShellService } from '../../../../platform/window/common/hucodeHostedShellService.js';
 import { isEmptyWorkspaceIdentifier, IWorkspaceContextService, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
 import { CONFIG_NEW_WINDOW_PROFILE } from '../../../common/configuration.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
@@ -35,6 +36,7 @@ export class UserDataProfileManagementService extends Disposable implements IUse
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IExtensionService private readonly extensionService: IExtensionService,
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IHucodeHostedShellService private readonly hucodeHostedShellService: IHucodeHostedShellService,
 		@IProductService private readonly productService: IProductService,
 		@IRequestService private readonly requestService: IRequestService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -196,7 +198,9 @@ export class UserDataProfileManagementService extends Disposable implements IUse
 
 		if (shouldRestartExtensionHosts) {
 			if (isRemoteWindow) {
-				if (this.environmentService.isHostedOmniWorkspace && this.environmentService.hostedInstanceId) {
+				if (this.environmentService.isHostedOmniWorkspace &&
+					this.environmentService.hostedInstanceId &&
+					hasHucodeHostedShellConnection(this.hucodeHostedShellService)) {
 					await this.hostService.reload();
 				} else {
 					const { confirmed } = await this.dialogService.confirm({

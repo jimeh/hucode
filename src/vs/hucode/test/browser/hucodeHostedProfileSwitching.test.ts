@@ -14,6 +14,10 @@ import {
 	IUserDataProfile,
 	toUserDataProfile,
 } from '../../../platform/userDataProfile/common/userDataProfile.js';
+import {
+	IHucodeHostedShellService,
+	withHucodeHostedShellCachedAvailability,
+} from '../../../platform/window/common/hucodeHostedShellService.js';
 import { UserDataProfileManagementService } from
 	'../../../workbench/services/userDataProfile/browser/userDataProfileManagement.js';
 
@@ -21,6 +25,23 @@ suite('Hucode hosted profile switching', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('reloads a hosted web workbench without a second confirmation', async () => {
+		assert.deepStrictEqual(await switchHostedProfile(true), {
+			currentProfileId: 'selected',
+			confirmationCount: 0,
+		});
+	});
+
+	test('keeps confirmation for unauthenticated hosted URL flags', async () => {
+		assert.deepStrictEqual(await switchHostedProfile(false), {
+			currentProfileId: 'selected',
+			confirmationCount: 1,
+		});
+	});
+
+	async function switchHostedProfile(authenticated: boolean): Promise<{
+		readonly currentProfileId: string;
+		readonly confirmationCount: number;
+	}> {
 		const workspace = URI.file('/workspace');
 		const defaultProfile = profile('default', [], true);
 		const selectedProfile = profile('selected', [workspace]);
@@ -64,6 +85,12 @@ suite('Hucode hosted profile switching', () => {
 				isHostedOmniWorkspace: true,
 				hostedInstanceId: 'instance-1',
 			} as never,
+			authenticated
+				? withHucodeHostedShellCachedAvailability(
+					{} as IHucodeHostedShellService,
+					() => true
+				)
+				: {} as IHucodeHostedShellService,
 			{} as never,
 			{} as never,
 			{ getValue: () => undefined } as never,
@@ -80,9 +107,11 @@ suite('Hucode hosted profile switching', () => {
 		});
 		await reloaded.p;
 
-		assert.strictEqual(currentProfile.id, selectedProfile.id);
-		assert.strictEqual(confirmationCount, 0);
-	});
+		return {
+			currentProfileId: currentProfile.id,
+			confirmationCount,
+		};
+	}
 });
 
 function profile(
