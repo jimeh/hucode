@@ -14,7 +14,10 @@ import { IProjectManagerService } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
 	'../../../workbench/services/host/browser/host.js';
-import { IHucodeShellControllerService } from
+import {
+	HucodeStandaloneWorkspaceOpenDisposition,
+	IHucodeShellControllerService,
+} from
 	'../../../platform/window/common/hucodeShellControllerService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -61,7 +64,7 @@ suite('OmniSelectionOpen', () => {
 		options: {
 			readonly focusNormalResult?: boolean | Error;
 			readonly prepareDisposition?:
-			'opened' | 'open-by-caller' | 'failed';
+			HucodeStandaloneWorkspaceOpenDisposition;
 		} = {}
 	): IHucodeShellControllerService {
 		const focusNormalResult = options.focusNormalResult ?? false;

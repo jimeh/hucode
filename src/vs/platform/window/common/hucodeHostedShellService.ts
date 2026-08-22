@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../../base/common/buffer.js';
+import { Color } from '../../../base/common/color.js';
 import { Event } from '../../../base/common/event.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { Schemas } from '../../../base/common/network.js';
@@ -639,6 +640,16 @@ export function isHucodeHostedAppearanceSnapshot(
 	if (!value || typeof value !== 'object') {
 		return false;
 	}
+	const allowedProperties = new Set([
+		'colorScheme',
+		'colors',
+		'modernUI',
+		'modernUIUppercaseViewHeaders',
+	]);
+	if (!Object.keys(value).every(property =>
+		allowedProperties.has(property))) {
+		return false;
+	}
 	const candidate = value as Partial<IHucodeHostedAppearanceSnapshot>;
 	if (candidate.colorScheme !== 'light' &&
 		candidate.colorScheme !== 'dark' &&
@@ -653,11 +664,17 @@ export function isHucodeHostedAppearanceSnapshot(
 		return false;
 	}
 	const allowedColors = new Set<string>(HUCODE_HOSTED_APPEARANCE_COLOR_IDS);
-	return Object.entries(candidate.colors).every(([id, color]) =>
-		allowedColors.has(id) &&
-		typeof color === 'string' &&
-		color.length > 0 && color.length <= 64
-	);
+	return Object.entries(candidate.colors).every(([id, color]) => {
+		if (!allowedColors.has(id) || typeof color !== 'string' ||
+			color.length === 0 || color.length > 64) {
+			return false;
+		}
+		try {
+			return Color.Format.CSS.parse(color) !== null;
+		} catch {
+			return false;
+		}
+	});
 }
 
 function projectHostedShellState(

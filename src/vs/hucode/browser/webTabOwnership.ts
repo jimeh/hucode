@@ -321,7 +321,13 @@ export class HucodeWebTabOwnershipCoordinator extends Disposable
 			this.local.get(message.pathKey) !== ownership) {
 			return;
 		}
-		const focusAccepted = await ownership.activate();
+		let focusAccepted = false;
+		try {
+			focusAccepted = await ownership.activate();
+		} catch {
+			// The path remains owned; report the failed activation promptly so the
+			// requester does not wait for its discovery timeout.
+		}
 		const currentOwner = ownership.owner;
 		if (this.local.get(message.pathKey) !== ownership ||
 			currentOwner?.generation !== owner.generation) {

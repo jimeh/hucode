@@ -95,6 +95,33 @@ suite('HucodeWebTabOwnershipCoordinator', () => {
 		);
 	});
 
+	test('reports rejected activation without waiting for discovery timeout',
+		async () => {
+			const environment = new FakeOwnershipEnvironment();
+			const owner = disposables.add(environment.create('profile', 'owner'));
+			const requester = disposables.add(
+				environment.create('profile', 'requester')
+			);
+			const admission = await owner.admit('/srv/project');
+			assert.strictEqual(admission.kind, 'acquired');
+			if (admission.kind !== 'acquired') {
+				return;
+			}
+			owner.publish(admission.claim, 'instance', async () => {
+				throw new Error('activation failed');
+			});
+
+			const result = await requester.admit('/srv/project');
+
+			assert.strictEqual(result.kind, 'owned-elsewhere');
+			assert.strictEqual(
+				result.kind === 'owned-elsewhere' && result.focusAccepted,
+				false
+			);
+			assert.strictEqual(environment.pendingTimers, 0);
+		}
+	);
+
 	test('restore discovery never activates the owner tab', async () => {
 		const environment = new FakeOwnershipEnvironment();
 		const owner = disposables.add(environment.create('profile', 'owner'));
@@ -247,6 +274,10 @@ class FakeOwnershipEnvironment {
 	async waitForMessages(): Promise<void> {
 		await Promise.resolve();
 		await Promise.resolve();
+	}
+
+	get pendingTimers(): number {
+		return this.timers.size;
 	}
 }
 

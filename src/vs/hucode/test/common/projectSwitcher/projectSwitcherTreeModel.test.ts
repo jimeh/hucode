@@ -222,6 +222,12 @@ suite('ProjectSwitcherTreeModel', () => {
 				folderStatus: 'missing',
 				order: 3,
 			}],
+			desktopOwnerships: [{
+				worktreePath: '/scratch/missing',
+				location: 'regular',
+				windowId: 2,
+				phase: 'live',
+			}],
 		};
 		const model = buildProjectSwitcherTreeModel({
 			projects: [createProject({
@@ -242,24 +248,28 @@ suite('ProjectSwitcherTreeModel', () => {
 			hasCustomLabel: item.hasCustomLabel,
 			state: item.hostedWorkbenchState,
 			isActive: item.isActive,
+			icon: item.themeIcon?.id,
 		})), [{
 			label: 'Scratch One',
 			description: 'label:/scratch/first',
 			hasCustomLabel: true,
 			state: 'dormant',
 			isActive: false,
+			icon: 'debug-pause',
 		}, {
 			label: 'second',
 			description: 'label:/scratch/second',
 			hasCustomLabel: false,
 			state: 'unloaded',
 			isActive: false,
+			icon: 'circle-outline',
 		}, {
 			label: 'missing',
 			description: 'label:/scratch/missing',
 			hasCustomLabel: false,
 			state: 'missing',
 			isActive: false,
+			icon: 'warning',
 		}]);
 	});
 

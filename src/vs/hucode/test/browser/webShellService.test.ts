@@ -1704,11 +1704,18 @@ suite('WebHucodeShellService', () => {
 				colorScheme: 'hc-light',
 				modernUI: true,
 			}), HucodeHostedShellOperationOutcome.Accepted);
+			const finalState = await service.getWindowState(browser.windowId);
 			assert.strictEqual(
-				(await service.getWindowState(browser.windowId)).instances.find(
+				finalState.instances.find(
 					instance => instance.instanceId === betaId
 				)?.appearance?.colorScheme,
 				'hc-light'
+			);
+			assert.deepStrictEqual(
+				finalState.instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
 			);
 		});
 

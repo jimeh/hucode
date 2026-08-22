@@ -681,16 +681,16 @@ function toRetainedWorkbenchElement(
 			desktopOwnership?.location
 		),
 		contextValue: WORKBENCH_CONTEXT_VALUE,
-		themeIcon: desktopOwnership?.location === 'another-omni' ||
-			desktopOwnership?.location === 'regular'
-			? Codicon.window
-			: state === 'restore-pending' || state === 'loading'
-				? ThemeIcon.modify(Codicon.loading, 'spin')
-				: state === 'dormant' ? Codicon.debugPause
-					: state === 'unloaded' ? Codicon.circleOutline
-						: state === 'missing' ? Codicon.warning
-							: state === 'crashed' ? Codicon.warning
-								: Codicon.window,
+		themeIcon: state === 'missing' || state === 'crashed'
+			? Codicon.warning
+			: desktopOwnership?.location === 'another-omni' ||
+				desktopOwnership?.location === 'regular'
+				? Codicon.window
+				: state === 'restore-pending' || state === 'loading'
+					? ThemeIcon.modify(Codicon.loading, 'spin')
+					: state === 'dormant' ? Codicon.debugPause
+						: state === 'unloaded' ? Codicon.circleOutline
+							: Codicon.window,
 	};
 	itemsById.set(item.handle, item);
 	return { element: item };

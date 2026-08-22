@@ -220,6 +220,19 @@ suite('HucodeHostedShellService', () => {
 			modernUI: true,
 			modernUIUppercaseViewHeaders: false,
 		}), HucodeHostedShellOperationOutcome.Unsupported);
+		assert.strictEqual(await facade.publishAppearance!({
+			colorScheme: 'dark',
+			colors: { 'sideBar.background': 'url(https://invalid.example)' },
+			modernUI: true,
+			modernUIUppercaseViewHeaders: false,
+		}), HucodeHostedShellOperationOutcome.Unsupported);
+		assert.strictEqual(await facade.publishAppearance!({
+			colorScheme: 'dark',
+			colors: {},
+			modernUI: true,
+			modernUIUppercaseViewHeaders: false,
+			unexpected: true,
+		} as never), HucodeHostedShellOperationOutcome.Unsupported);
 		assert.strictEqual(JSON.stringify(
 			await facade.getNavigationSnapshot!()
 		).includes('instanceId'), false);

@@ -63,6 +63,7 @@ suite('OmniCommandService', () => {
 			} as unknown as IHucodeShellControllerService;
 			const environmentService = {
 				isOmniWindow: true,
+				isOmniShellWindow: true,
 				window: { id: 42 },
 			} as Partial<IWorkbenchEnvironmentService> as
 				IWorkbenchEnvironmentService;
@@ -168,7 +169,7 @@ suite('OmniCommandService', () => {
 		}
 	);
 
-	test('keeps profile changes out of the shell when no child accepts them',
+	test('does not run profile changes locally when no child accepts them',
 		async () => {
 			const commandId = 'workbench.profiles.actions.switchProfile';
 			const shellCalls: INativeRunActionInWindowRequest[] = [];
@@ -190,7 +191,10 @@ suite('OmniCommandService', () => {
 				instantiationService,
 				new NullExtensionService(),
 				new NullLogService(),
-				{ isOmniWindow: true } as IWorkbenchEnvironmentService,
+				{
+					isOmniWindow: true,
+					isOmniShellWindow: true,
+				} as IWorkbenchEnvironmentService,
 				new HucodeOmniCommandForwardingContext()
 			));
 			let localCalls = 0;
@@ -212,6 +216,42 @@ suite('OmniCommandService', () => {
 			}]);
 		}
 	);
+
+	test('does not forward commands from an untrusted Omni URL flag', async () => {
+		const commandId = 'workbench.profiles.actions.switchProfile';
+		let shellCalls = 0;
+		const shellService = {
+			runActionInWorkspace(): Promise<boolean> {
+				shellCalls++;
+				return Promise.resolve(true);
+			},
+		} as unknown as IHucodeShellControllerService;
+		const instantiationService = new InstantiationService(
+			new ServiceCollection([
+				IHucodeShellControllerService,
+				shellService,
+			])
+		);
+		const service = disposables.add(new OmniCommandService(
+			instantiationService,
+			new NullExtensionService(),
+			new NullLogService(),
+			{
+				isOmniWindow: true,
+				isOmniShellWindow: false,
+			} as IWorkbenchEnvironmentService,
+			new HucodeOmniCommandForwardingContext()
+		));
+		let localCalls = 0;
+		disposables.add(CommandsRegistry.registerCommand(commandId, () => {
+			localCalls++;
+		}));
+
+		await service.executeCommand(commandId);
+
+		assert.strictEqual(localCalls, 1);
+		assert.strictEqual(shellCalls, 0);
+	});
 
 	test('forwards Projects clipboard events to the hosted workbench',
 		async () => {

@@ -89,6 +89,10 @@ export class HucodeOmniAppearanceProjectionModel {
 			instance.instanceId === state.activeInstanceId
 		);
 		if (!active?.appearance) {
+			if (this.projectedSnapshot !== undefined) {
+				this.projectedSnapshot = undefined;
+				this.apply(undefined);
+			}
 			return;
 		}
 		const serialized = JSON.stringify(active.appearance);

@@ -46,7 +46,7 @@ export class OmniCommandService extends CommandService {
 		const hostedProfileAction =
 			isHucodeHostedWorkbenchProfileAction(id);
 		if (
-			!this.environmentService.isOmniWindow ||
+			!this.environmentService.isOmniShellWindow ||
 			this.commandForwardingContext.isForwardingDisabledFor(id) ||
 			isHucodeOmniShellAction(id) ||
 			(

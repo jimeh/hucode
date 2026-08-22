@@ -526,7 +526,17 @@ export async function admitHucodeRegularWorkbench<T>(
 			return resolved;
 		}
 
-		const opened = await delegate.openRegularWindow();
+		let opened: HucodeRegularWorkbenchOpenAttempt<T>;
+		try {
+			opened = await delegate.openRegularWindow();
+		} catch (error) {
+			delegate.coordinator.release(admission.reservation);
+			return {
+				kind: 'failed',
+				error,
+				payloadDisposition: 'preserve',
+			};
+		}
 		if (opened.kind !== 'committed') {
 			delegate.coordinator.release(admission.reservation);
 			return opened.kind === 'vetoed'
@@ -738,7 +748,9 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	): HucodeDesktopWorkbenchReleaseOutcome {
 		const record = this.getCurrentRecord(token);
 		if (!record) {
-			const current = this.records.get(this.toKey(token.canonicalPath));
+			const current = this.records.get(
+				this.toCanonicalKey(token.canonicalPath)
+			);
 			return {
 				kind: 'stale',
 				ownership: current?.ownership,
@@ -746,7 +758,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		}
 
 		record.settlement?.resolve({ kind: 'released' });
-		this.records.delete(this.toKey(token.canonicalPath));
+		this.records.delete(this.toCanonicalKey(token.canonicalPath));
 		this.onDidChange();
 		return { kind: 'released' };
 	}
@@ -825,7 +837,9 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 	private getCurrentRecord(
 		token: IHucodeDesktopWorkbenchOwnershipToken
 	): IInternalOwnershipRecord | undefined {
-		const record = this.records.get(this.toKey(token.canonicalPath));
+		const record = this.records.get(
+			this.toCanonicalKey(token.canonicalPath)
+		);
 		return record &&
 			record.ownership.generation === token.generation &&
 			ownersEqual(record.ownership.owner, token.owner)
@@ -839,7 +853,7 @@ export class HucodeDesktopWorkbenchOwnershipCoordinator {
 		return {
 			kind: 'stale',
 			ownership: this.records.get(
-				this.toKey(token.canonicalPath)
+				this.toCanonicalKey(token.canonicalPath)
 			)?.ownership,
 		};
 	}

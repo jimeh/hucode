@@ -295,6 +295,48 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		);
 	}
 
+	test('releases a regular reservation when opening rejects', async () => {
+		const coordinator = createCoordinator();
+		const failure = new Error('open rejected');
+
+		const result = await admitHucodeRegularWorkbench({
+			coordinator,
+			path: '/repo',
+			pendingOwner: regular(-1),
+			resolveCurrent: async () => ({ kind: 'stale' }),
+			openRegularWindow: async () => { throw failure; },
+		});
+
+		assert.deepStrictEqual(result, {
+			kind: 'failed',
+			error: failure,
+			payloadDisposition: 'preserve',
+		});
+		assert.deepStrictEqual(coordinator.lookup('/repo'), {
+			kind: 'absent',
+		});
+	});
+
+	test('ownership tokens retain their original canonical key', () => {
+		let canonicalization = 0;
+		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator({
+			canonicalizePath: () => canonicalization++ === 0
+				? '/canonical/first'
+				: '/canonical/replacement',
+			isCaseSensitive: true,
+		});
+		const reservation = coordinator.reserve('/link', regular(-1));
+		assert.strictEqual(reservation.kind, 'reserved');
+		if (reservation.kind !== 'reserved') {
+			return;
+		}
+
+		assert.deepStrictEqual(coordinator.release(reservation.reservation), {
+			kind: 'released',
+		});
+		assert.deepStrictEqual(coordinator.snapshot(), []);
+	});
+
 	test('does not publish over a replacement created during regular load',
 		async () => {
 			const coordinator = createCoordinator();

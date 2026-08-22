@@ -66,13 +66,23 @@ suite('HucodeOmniCommandRouting', () => {
 		assert.deepStrictEqual([
 			'workbench.profiles.actions.switchProfile',
 			'workbench.profiles.actions.profileEntry.work',
+			'workbench.profiles.actions.manageProfiles',
+			'workbench.profiles.actions.deleteProfile',
 			'workbench.profiles.actions.newWindowWithProfile',
 			'workbench.profiles.actions.createTemporaryProfile',
+			'workbench.profiles.actions.futureCommand',
+			'workbench.profiles.actions.profileEntry',
+			'workbench.profiles.actions.profileEntry.',
 		].map(commandId =>
 			isHucodeHostedWorkbenchProfileAction(commandId)
 		), [
 			true,
 			true,
+			true,
+			true,
+			false,
+			false,
+			false,
 			false,
 			false,
 		]);

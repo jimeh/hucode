@@ -910,6 +910,10 @@ export class HucodeShellMainService extends Disposable
 						await pending.settled;
 						continue;
 					}
+					if (pending.kind === 'reserved') {
+						this.ownershipCoordinator.release(pending.reservation);
+						continue;
+					}
 				}
 
 				const owner = lookup.ownership.owner;

@@ -227,7 +227,7 @@ as the required Hucode instruction set for work in this fork.
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves
   nothing.
-- Keep the Omni shell on the application Default profile. Desktop hosted
+- Keep the Omni shell on the application Default profile. Desktop-hosted
   workbench configurations must resolve the ordinary workspace association
   independently; copying the shell's `profiles.profile` into a child silently
   makes every hosted workbench use the shell profile.

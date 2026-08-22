@@ -82,7 +82,7 @@ suite('Hucode Omni appearance projection', () => {
 		assert.deepStrictEqual(applied, [dark, light]);
 	});
 
-	test('ignores inactive updates, awaits uncached active, and clears last', () => {
+	test('ignores inactive updates and clears an uncached active projection', () => {
 		const applied: Array<IHucodeHostedAppearanceSnapshot | undefined> = [];
 		const model = new HucodeOmniAppearanceProjectionModel(snapshot =>
 			applied.push(snapshot)
@@ -102,14 +102,19 @@ suite('Hucode Omni appearance projection', () => {
 			instance('one', dark),
 			instance('two'),
 		]));
-		assert.deepStrictEqual(applied, [dark]);
+		assert.deepStrictEqual(applied, [dark, undefined]);
 
 		model.update(state('two', [
 			instance('one', dark),
 			instance('two', inactivePreview),
 		]));
 		model.update(state(undefined, []));
-		assert.deepStrictEqual(applied, [dark, inactivePreview, undefined]);
+		assert.deepStrictEqual(applied, [
+			dark,
+			undefined,
+			inactivePreview,
+			undefined,
+		]);
 	});
 
 	test('applies persisted, preview, cancel, and Modern UI changes', () => {

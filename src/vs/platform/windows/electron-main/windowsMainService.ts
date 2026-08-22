@@ -494,7 +494,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		}
 
 		// Open based on config
-		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
+		const { windows: usedWindows, filesOpenedInWindow, admissionErrors } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
 
 		this.logService.trace(`windowsManager#open used window count ${usedWindows.length} (workspacesToOpen: ${workspacesToOpen.length}, foldersToOpen: ${foldersToOpen.length}, emptyToRestore: ${emptyWindowsWithBackupsToRestore.length}, maybeOpenEmptyWindow: ${maybeOpenEmptyWindow})`);
 
@@ -571,6 +571,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// Handle `<app> chat`
 		this.handleChatRequest(openConfig, usedWindows);
 
+		if (admissionErrors.length === 1) {
+			throw admissionErrors[0];
+		}
+		if (admissionErrors.length > 1) {
+			throw new AggregateError(
+				admissionErrors,
+				'Multiple regular workbench windows failed to open.'
+			);
+		}
+
 		return usedWindows;
 	}
 
@@ -642,11 +652,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		filesToOpen: IFilesToOpen | undefined,
 		foldersToAdd: ISingleFolderWorkspacePathToOpen[],
 		foldersToRemove: ISingleFolderWorkspacePathToOpen[]
-	): Promise<{ windows: ICodeWindow[]; filesOpenedInWindow: ICodeWindow | undefined }> {
+	): Promise<{
+		windows: ICodeWindow[];
+		filesOpenedInWindow: ICodeWindow | undefined;
+		admissionErrors: unknown[];
+	}> {
 
 		// Keep track of used windows and remember
 		// if files have been opened in one of them
 		const usedWindows: ICodeWindow[] = [];
+		const admissionErrors: unknown[] = [];
 		let filesOpenedInWindow: ICodeWindow | undefined = undefined;
 		function addUsedWindow(window: ICodeWindow, openedFiles?: boolean): void {
 			usedWindows.push(window);
@@ -831,9 +846,9 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 					admission
 				);
 				if (admission.kind === 'failed') {
-					throw admission.error ?? new Error(
+					admissionErrors.push(admission.error ?? new Error(
 						'Regular workbench window failed to open.'
-					);
+					));
 				}
 				if (admission.kind === 'opened' ||
 					admission.kind === 'focused-regular' ||
@@ -946,9 +961,9 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 					admission
 				);
 				if (admission.kind === 'failed') {
-					throw admission.error ?? new Error(
+					admissionErrors.push(admission.error ?? new Error(
 						'Regular workbench window failed to open.'
-					);
+					));
 				}
 				if (admission.kind === 'opened' ||
 					admission.kind === 'focused-regular' ||
@@ -992,7 +1007,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			addUsedWindow(await this.doOpenEmpty(openConfig, openFolderInNewWindow, remoteAuthority, filesToOpen), !!filesToOpen);
 		}
 
-		return { windows: distinct(usedWindows), filesOpenedInWindow };
+		return {
+			windows: distinct(usedWindows),
+			filesOpenedInWindow,
+			admissionErrors,
+		};
 	}
 
 	private doOpenFilesInExistingWindow(configuration: IOpenConfiguration, window: ICodeWindow, filesToOpen?: IFilesToOpen): ICodeWindow {
