@@ -15,7 +15,6 @@ import { IEnvironmentMainService } from '../../../platform/environment/electron-
 import { IBrowserViewMainService } from '../../../platform/browserView/electron-main/browserViewMainService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { IIPCObjectUrl, IProtocolMainService } from '../../../platform/protocol/electron-main/protocol.js';
-import { IThemeMainService } from '../../../platform/theme/electron-main/themeMainService.js';
 import {
 	IUserDataProfile,
 	toUserDataProfile,
@@ -551,7 +550,6 @@ suite('ResidentHostedWorkspacesController', () => {
 			protocolMainService as unknown as IProtocolMainService,
 			{ useCodeCache: false } as unknown as IEnvironmentMainService,
 			userDataProfilesMainService,
-			{ getBackgroundColor: () => '#111111' } as IThemeMainService,
 			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
 			window,
@@ -652,6 +650,14 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(
 			fixture.controller.getActiveWorkspaceProfile()?.id,
 			'first-profile'
+		);
+		assert.deepStrictEqual(
+			configurations.map(configuration => configuration.partsSplash),
+			[undefined, undefined, undefined]
+		);
+		assert.deepStrictEqual(
+			fixture.viewFactory.views.map(view => view.backgroundColors),
+			[['#00000000'], ['#00000000'], ['#00000000']]
 		);
 	});
 
@@ -5058,7 +5064,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	test('appearance cache is bound to the current hosted connection', async () => {
 		const alpha = createWorktree('appearance-alpha');
-		const { controller } = createController();
+		const { controller, viewFactory } = createController();
 		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const stale = controller.acquireHostedShellBinding(1)!;
@@ -5082,6 +5088,10 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.deepStrictEqual(
 			controller.getState().instances[0].appearance,
 			appearance
+		);
+		assert.deepStrictEqual(
+			viewFactory.views[0].backgroundColors,
+			['#00000000', '#000000']
 		);
 	});
 

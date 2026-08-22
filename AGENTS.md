@@ -231,6 +231,12 @@ as the required Hucode instruction set for work in this fork.
   workbench configurations must resolve the ordinary workspace association
   independently; copying the shell's `profiles.profile` into a child silently
   makes every hosted workbench use the shell profile.
+- Hosted appearance publication must load Hucode's color registrations before
+  resolving snapshots. Otherwise standard VS Code colors project correctly
+  while `sessionsSidebar.*`, `sessionsPanel.*`, and other Hucode colors remain
+  on the shell profile. Desktop child configurations must also omit the Omni
+  shell's `partsSplash`; keep the native hosted view transparent until its own
+  appearance snapshot supplies the resolved background.
 - Serve-web profile IPC must explicitly revive workspace identifiers after URI
   transformation because browser-originated URI components can lack `$mid`.
   Clone profile `workspaces` arrays before `transformOutgoingURIs`; it mutates

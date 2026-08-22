@@ -7,6 +7,11 @@ import assert from 'assert';
 import { Color } from '../../../base/common/color.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { ColorScheme } from '../../../platform/theme/common/theme.js';
+import { Registry } from '../../../platform/registry/common/platform.js';
+import {
+	Extensions as ThemingExtensions,
+	IColorRegistry,
+} from '../../../platform/theme/common/colorRegistry.js';
 import { IHucodeHostedAppearanceSnapshot } from
 	'../../../platform/window/common/hucodeHostedShellService.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
@@ -76,6 +81,18 @@ suite('Hucode Omni appearance projection', () => {
 				false
 			);
 		}
+	});
+
+	test('registers shell semantic colors in hosted workbenches', () => {
+		const registry = Registry.as<IColorRegistry>(
+			ThemingExtensions.ColorContribution
+		);
+		const registered = new Set(
+			registry.getColors().map(contribution => contribution.id)
+		);
+		assert.strictEqual(registered.has('sessionsSidebar.background'), true);
+		assert.strictEqual(registered.has('sessionsPanel.background'), true);
+		assert.strictEqual(registered.has('hucodeOmniTitle.background'), true);
 	});
 
 	test('projects active cache and preserves it across shell focus', () => {

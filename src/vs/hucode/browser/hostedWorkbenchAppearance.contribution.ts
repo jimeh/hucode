@@ -29,6 +29,7 @@ import { IWorkbenchThemeService, IWorkbenchColorTheme } from
 import { IUserDataProfileService } from
 	'../../workbench/services/userDataProfile/common/userDataProfile.js';
 import { observeHucodeHostedShellState } from './hostedShellStateObserver.js';
+import '../common/theme.js';
 
 /** Creates a transport-safe snapshot from the fully resolved hosted theme. */
 export function createHucodeHostedAppearanceSnapshot(

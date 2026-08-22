@@ -31,8 +31,6 @@ import { IProjectManagerMainService } from
 	'../../platform/projectManager/electron-main/projectManager.js';
 import { isSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspace/common/workspace.js';
-import { IThemeMainService } from
-	'../../platform/theme/electron-main/themeMainService.js';
 import { IUserDataProfilesMainService } from
 	'../../platform/userDataProfile/electron-main/userDataProfile.js';
 import {
@@ -182,8 +180,6 @@ export class HucodeShellMainService extends Disposable
 		@IUserDataProfilesMainService
 		private readonly userDataProfilesMainService:
 			IUserDataProfilesMainService,
-		@IThemeMainService
-		private readonly themeMainService: IThemeMainService,
 		@ILogService
 		private readonly logService: ILogService,
 		@IBrowserViewMainService
@@ -1531,7 +1527,6 @@ export class HucodeShellMainService extends Disposable
 				this.protocolMainService,
 				this.environmentMainService,
 				this.userDataProfilesMainService,
-				this.themeMainService,
 				this.logService,
 				this.browserViewMainService,
 				window,

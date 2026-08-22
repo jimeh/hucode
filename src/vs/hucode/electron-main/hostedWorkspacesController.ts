@@ -20,8 +20,6 @@ import {
 	IIPCObjectUrl,
 	IProtocolMainService,
 } from '../../platform/protocol/electron-main/protocol.js';
-import { IThemeMainService } from
-	'../../platform/theme/electron-main/themeMainService.js';
 import { IUserDataProfilesMainService } from
 	'../../platform/userDataProfile/electron-main/userDataProfile.js';
 import { IUserDataProfile } from
@@ -184,6 +182,8 @@ interface ICrashRecoveryOperation {
 
 type OmniFocusedSurface = 'shell' | 'workspace';
 
+const TRANSPARENT_HOSTED_BACKGROUND = '#00000000';
+
 function unloadReasonRank(reason: UnloadReason): number {
 	switch (reason) {
 		case UnloadReason.RELOAD:
@@ -268,7 +268,6 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		private readonly environmentMainService: IEnvironmentMainService,
 		private readonly userDataProfilesMainService:
 			IUserDataProfilesMainService,
-		private readonly themeMainService: IThemeMainService,
 		private readonly logService: ILogService,
 		private readonly browserViewMainService: IBrowserViewMainService,
 		private readonly window: ICodeWindow,
@@ -594,6 +593,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return false;
 		}
 		instance.appearance = appearance;
+		instance.view?.setBackgroundColor(appearance.workbenchBackground);
 		this.emitState();
 		return true;
 	}
@@ -2166,7 +2166,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			)
 		);
 
-		view.setBackgroundColor(this.themeMainService.getBackgroundColor());
+		view.setBackgroundColor(
+			instance.appearance?.workbenchBackground ??
+			TRANSPARENT_HOSTED_BACKGROUND
+		);
 		view.setVisible(false);
 		view.webContents.on('focus', () => {
 			if (!this.instancesById.has(instance.instanceId)) {
@@ -2324,6 +2327,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		return {
 			...baseConfig,
+			partsSplash: undefined,
 			profiles: {
 				home: this.userDataProfilesMainService.profilesHome,
 				all: this.userDataProfilesMainService.profiles,
