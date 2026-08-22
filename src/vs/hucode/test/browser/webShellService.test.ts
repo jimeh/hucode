@@ -1581,12 +1581,15 @@ suite('WebHucodeShellService', () => {
 				instances: state.instances.length,
 				iframes: surface.querySelectorAll('iframe').length,
 				admittedPaths: ownership.admittedPaths,
-				reports: reporter.paths,
+				reports: reporter.reports,
 			}, {
 				instances: 0,
 				iframes: 0,
 				admittedPaths: ['/tmp/owned-elsewhere'],
-				reports: ['/tmp/owned-elsewhere'],
+				reports: [{
+					worktreePath: '/tmp/owned-elsewhere',
+					admissionKind: 'owned-elsewhere',
+				}],
 			});
 		});
 
@@ -5248,7 +5251,7 @@ suite('WebHucodeShellService', () => {
 				iframes: surface.querySelectorAll('iframe').length,
 				desiredState: state.retainedWorkbenches?.[0].desiredState,
 				admissionIntents: ownership.admissionIntents,
-				reports: reporter.paths,
+				reports: reporter.reports,
 			}, {
 				instances: 0,
 				iframes: 0,
@@ -6895,10 +6898,19 @@ class ExternallyOwnedTabCoordinator
 
 class RecordingExternalOwnerReporter
 	implements IWebHucodeShellExternalOwnerReporter {
-	readonly paths: string[] = [];
+	readonly reports: Array<{
+		readonly worktreePath: string;
+		readonly admissionKind: 'owned-elsewhere' | 'unavailable';
+	}> = [];
 
-	report(worktreePath: string): void {
-		this.paths.push(worktreePath);
+	report(
+		worktreePath: string,
+		admission: Extract<
+			HucodeWebTabOwnershipAdmission,
+			{ readonly kind: 'owned-elsewhere' | 'unavailable' }
+		>
+	): void {
+		this.reports.push({ worktreePath, admissionKind: admission.kind });
 	}
 }
 
