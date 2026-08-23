@@ -25,6 +25,7 @@ import { FileSystemProviderErrorCode, toFileSystemProviderErrorCode } from '../.
 import { DiskFileSystemProvider } from '../../../platform/files/node/diskFileSystemProvider.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import product from '../../../platform/product/common/product.js';
+import { DidChangeProfilesEvent } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import { UriIdentityService } from '../../../platform/uriIdentity/common/uriIdentityService.js';
 import { HucodeWebUserDataProfilesChannel, validateWebProfileCatalog } from '../../node/hucodeWebUserDataProfiles.js';
 import { HUCODE_WEB_USER_DATA_API_PATH, HucodeWebUserDataServer, HucodeWebUserDataServerOptions, isHucodeWebUserDataNonGetRequestAllowed } from '../../node/hucodeWebUserDataServer.js';
@@ -195,6 +196,80 @@ suite('HucodeWebUserDataServer', () => {
 			/Invalid web user-data profile identifier/,
 		);
 		assert.deepStrictEqual(await fs.readdir(join(testHome, 'WebUser', 'User', 'profiles')), ['Foo']);
+	});
+
+	test('revives workspace URIs before associating a profile', async () => {
+		await invoke(server, 'POST', '/initialize-empty', {});
+		const channel = new HucodeWebUserDataProfilesChannel(
+			server.profilesService!,
+			() => createURITransformer('test')
+		);
+		const created = await channel.call<{ id: string }>(
+			null,
+			'createNamedProfile',
+			['Diagnostic']
+		);
+		const folder = URI.file(join(testHome, 'workspace'));
+		const workspaceIdentifier = {
+			id: 'workspace',
+			uri: folder.with({ scheme: Schemas.vscodeRemote, authority: 'test' }),
+		};
+		const serializedWorkspaceIdentifier = JSON.parse(JSON.stringify(workspaceIdentifier));
+		delete serializedWorkspaceIdentifier.uri.$mid;
+		const defaultProfileChange = Event.toPromise(
+			channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')
+		);
+
+		await channel.call(null, 'setProfileForWorkspace', [
+			serializedWorkspaceIdentifier,
+			{ id: server.profilesService!.defaultProfile.id },
+		]);
+		await defaultProfileChange;
+
+		const profileChange = Event.toPromise(
+			channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')
+		);
+		const serializedArguments = [
+			serializedWorkspaceIdentifier,
+			{ id: created.id },
+		];
+
+		await channel.call(null, 'setProfileForWorkspace', serializedArguments);
+
+		const change = await profileChange;
+		assert.strictEqual(
+			change.updated.some(profile => profile.id === created.id),
+			true
+		);
+		assert.strictEqual(
+			change.updated.some(profile => profile.id === server.profilesService!.defaultProfile.id),
+			true
+		);
+		assert.strictEqual(
+			server.profilesService!.getProfileForWorkspace({
+				id: workspaceIdentifier.id,
+				uri: folder,
+			})?.id,
+			created.id
+		);
+		assert.strictEqual(
+			server.profilesService!.profiles.every(profile =>
+				profile.workspaces?.every(URI.isUri) ?? true
+			),
+			true
+		);
+		const catalog = JSON.parse(await fs.readFile(
+			join(testHome, 'WebUser', 'profiles.json'),
+			'utf8'
+		));
+		assert.strictEqual(
+			catalog.associations.workspaces[folder.toString()],
+			created.id
+		);
+		assert.strictEqual(
+			catalog.associations.emptyWindows?.workspace,
+			undefined
+		);
 	});
 
 	test('rejects case-folded migrated profile collisions before staging files', async () => {

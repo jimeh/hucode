@@ -59,6 +59,13 @@ The shell treats each workspace as a hosted unit with:
 - lifecycle state
 - unload and shutdown handshake state
 
+Each hosted renderer remains an ordinary VS Code profile consumer. Desktop
+creation resolves the folder's upstream workspace-profile association, with
+Default as the fallback, and profile switching stays inside that renderer. The
+Omni shell itself is pinned to an internal Default profile; neither that profile
+nor profile equality participates in hosted-shell trust, project visibility, or
+workbench admission.
+
 Desktop and web share `HostedWorkspaceStateModel` for path indexing, active
 selection, ready transitions, sidebar state, and public state projection. The
 desktop `ResidentHostedWorkspacesController` injects Electron view behavior;
@@ -97,6 +104,14 @@ protocol. Same-origin window `postMessage` is only used for the bootstrap
 handshake: `Ready` and `Focus` from the iframe, and the `Port` transfer from the
 shell.
 
+Hosted workbenches publish a minimal resolved appearance snapshot over this
+trusted capability. It contains the base color scheme, registered colors needed
+by shell-owned surfaces, and the two Modern UI presentation flags. The shell
+caches snapshots by hosted instance and projects only the active instance onto
+its DOM classes and CSS variables. Projection never writes configuration,
+profile storage, or Settings Sync, and stale connection generations cannot
+replace a current snapshot.
+
 ### Serve-Web Routing
 
 Hucode serve-web enables its web routes and Projects API by default through the
@@ -130,6 +145,8 @@ Key services:
   git worktree operations.
 - `src/vs/hucode/electron-main/shellMainService.ts` owns hosted workspace
   creation, restore, focus, shutdown, and command forwarding.
+- `src/vs/hucode/electron-main/desktopWorkbenchOwnership.ts` is the sole
+  canonical-path admission authority across regular and hosted windows.
 - `src/vs/platform/browserView/electron-main/browserViewMainService.ts` owns
   integrated browser views and hosted-workspace browser ownership.
 
@@ -240,6 +257,33 @@ The `hucode.omni.restoreHostedWorkbenches` setting controls eager startup on
 desktop and serve-web. `active` (the default) restores the last selected
 workbench and leaves the rest dormant, `all` restores every desired-loaded
 workbench, and `none` leaves every desired-loaded workbench dormant.
+
+### Live Workbench Ownership
+
+Desktop uses one main-process ownership coordinator for every ingress that can
+open a folder or workspace: shell actions, restore and recovery, hosted
+navigation, external opens, and regular-window creation. The coordinator
+canonicalizes filesystem paths, arbitrates reservations atomically, and binds
+publish and release to a generation. A stale crash, close, or open completion
+therefore cannot clear or replace a newer owner.
+
+Regular windows and hosted workbenches are both seeded into this authority.
+Opening an existing owner produces a typed focus result rather than another
+renderer. A hosted-to-standalone reopen is a generation-safe transfer with an
+unload preparation step; failure or veto retains the hosted owner. Persisted
+duplicate restores use deterministic activity and window ordering. Losing
+project claims are discarded, while losing retained arbitrary workbenches stay
+unloaded in their session.
+
+Serve-web keeps live ownership in the browser rather than the project service
+or server user data. A same-origin, browser-profile-scoped coordinator combines
+Web Locks for crash-recoverable exclusion with `BroadcastChannel` messages for
+owner discovery and exact-workbench activation. Focus is best effort, but a
+denied focus or missing activation acknowledgement never permits a duplicate.
+Different browser profiles, devices, and origins are intentionally independent.
+The browser uses server-configured path case semantics but cannot collapse
+server-side symlink aliases. A browser without Web Locks fails closed for an
+ambiguous multi-tab open.
 
 ### Integrated Browser Views
 

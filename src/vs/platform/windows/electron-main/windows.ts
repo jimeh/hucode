@@ -103,6 +103,8 @@ export interface IOpenConfiguration extends IBaseOpenConfiguration {
 	readonly forceReuseWindow?: boolean;
 	readonly forceEmpty?: boolean;
 	readonly forceOmniWindow?: boolean;
+	/** The Hucode desktop ownership coordinator already reserved this open. */
+	readonly hucodeDesktopOwnershipAlreadyReserved?: boolean;
 	readonly diffMode?: boolean;
 	readonly mergeMode?: boolean;
 	addMode?: boolean;

@@ -5,12 +5,17 @@
 
 import assert from 'assert';
 import { Disposable, IDisposable } from '../../../base/common/lifecycle.js';
+import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import { IHucodeWebWorkbenchConfiguration } from
 	'../../../platform/environment/common/hucodeWebConfiguration.js';
+import { toUserDataProfile } from
+	'../../../platform/userDataProfile/common/userDataProfile.js';
 import type { IWorkbenchConstructionOptions } from
 	'../../../workbench/browser/web.api.js';
+import { toHucodeRemoteUserDataProfile } from
+	'../../browser/workbench/hucodeWebUserDataBootstrap.js';
 import {
 	resolveHucodeWebWorkbenchCreate,
 	toHucodeWebWorkbenchOptions,
@@ -72,5 +77,29 @@ suite('HucodeWebWorkbenchEntrypoint', () => {
 			absolute: 'https://cdn.example/pre',
 			absent: undefined,
 		});
+	});
+
+	test('normalizes bootstrap profile workspaces to remote URIs', () => {
+		const profile = toUserDataProfile(
+			'diagnostic',
+			'Diagnostic',
+			URI.file('/user/profiles/diagnostic'),
+			URI.file('/cache'),
+			{ workspaces: [URI.file('/workspace')] }
+		);
+
+		const remote = toHucodeRemoteUserDataProfile(
+			profile,
+			URI.parse('vscode-remote://server/user')
+		);
+
+		assert.strictEqual(
+			URI.revive(remote.location).toString(),
+			'vscode-remote://server/user/profiles/diagnostic'
+		);
+		assert.deepStrictEqual(
+			remote.workspaces?.map(workspace => URI.revive(workspace).toString()),
+			['vscode-remote://server/workspace']
+		);
 	});
 });

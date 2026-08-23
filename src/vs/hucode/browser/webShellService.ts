@@ -5,6 +5,7 @@
 
 import { getWindowId } from '../../base/browser/dom.js';
 import { mainWindow } from '../../base/browser/window.js';
+import { localize } from '../../nls.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter, Event } from '../../base/common/event.js';
 import { getServerProductSegment, Schemas } from '../../base/common/network.js';
@@ -30,6 +31,8 @@ import {
 import { InstantiationType, registerSingleton } from
 	'../../platform/instantiation/common/extensions.js';
 import { ILogService } from '../../platform/log/common/log.js';
+import { INotificationService } from
+	'../../platform/notification/common/notification.js';
 import {
 	INativeOpenFileRequest,
 	INativeRunActionInWindowRequest,
@@ -50,6 +53,7 @@ import {
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellCapability,
 	HucodeHostedShellOperationOutcome,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedShellAuthorityState,
 	IHucodeHostedShellBinding,
@@ -114,8 +118,6 @@ import {
 	IHucodeRetainedWorkbench,
 	RetainedWorkbenchCatalog,
 } from '../common/retainedWorkbench.js';
-import { IStorageService, StorageScope, StorageTarget } from
-	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { IProjectManagerService, ProjectRecord } from
@@ -123,6 +125,12 @@ import { IProjectManagerService, ProjectRecord } from
 import product from '../../platform/product/common/product.js';
 import { showHucodeWebVersionMismatchBlocker } from
 	'./hucodeWebVersionMismatch.js';
+import {
+	createHucodeWebTabOwnershipCoordinator,
+	HucodeWebTabOwnershipAdmission,
+	IHucodeWebTabOwnershipCoordinator,
+	IHucodeWebTabOwnershipClaim,
+} from './webTabOwnership.js';
 
 interface IHostedIframeConnection {
 	readonly workbench: IHucodeOmniWebWorkbenchClient;
@@ -144,6 +152,7 @@ interface IHostedIframeInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
 	protocolVersion?: number;
@@ -159,6 +168,7 @@ interface IHostedIframeInstance {
 	pendingUnload?: Promise<boolean>;
 	pendingUnloadDisposition?: HostedUnloadDisposition;
 	timedOutLegacyUnload?: ITimedOutLegacyUnloadClaim;
+	ownership?: IHucodeWebTabOwnershipClaim;
 }
 
 interface IProjectCatalogSnapshot {
@@ -273,20 +283,29 @@ const silentWebShellLog: IWebHucodeShellLogService = {
 const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
 	'hucode.omni.webRetainedWorkbenches';
 
-class StorageServiceWebHucodeShellPersistence
+export class SessionStorageWebHucodeShellPersistence
 	implements IWebHucodeShellPersistenceAdapter {
+	private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | undefined;
 
-	constructor(private readonly storageService: IStorageService) { }
+	constructor(
+		storage?: Pick<Storage, 'getItem' | 'setItem'>,
+		getDefaultStorage: () => Pick<Storage, 'getItem' | 'setItem'> =
+			() => mainWindow.sessionStorage
+	) {
+		try {
+			this.storage = storage ?? getDefaultStorage();
+		} catch {
+			// Browser policy may reject sessionStorage access itself.
+			this.storage = undefined;
+		}
+	}
 
 	load(): IWebHucodeShellPersistedState | undefined {
-		const raw = this.storageService.get(
-			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
-			StorageScope.PROFILE
-		);
-		if (!raw) {
-			return undefined;
-		}
 		try {
+			const raw = this.storage?.getItem(WEB_OMNI_WORKBENCHES_STORAGE_KEY);
+			if (!raw) {
+				return undefined;
+			}
 			return sanitizeWebHucodeShellPersistedState(JSON.parse(raw));
 		} catch {
 			return undefined;
@@ -294,12 +313,14 @@ class StorageServiceWebHucodeShellPersistence
 	}
 
 	save(state: IWebHucodeShellPersistedState): void {
-		this.storageService.store(
-			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
-			JSON.stringify(state),
-			StorageScope.PROFILE,
-			StorageTarget.MACHINE
-		);
+		try {
+			this.storage?.setItem(
+				WEB_OMNI_WORKBENCHES_STORAGE_KEY,
+				JSON.stringify(state)
+			);
+		} catch {
+			// A blocked or exhausted session store disables restoration only.
+		}
 	}
 }
 
@@ -399,6 +420,7 @@ export interface IWebHucodeShellBrowserAdapter {
 	open(url: string): void;
 	focusIframe(iframe: HTMLIFrameElement): void;
 	focusIframeContent(iframe: HTMLIFrameElement): void;
+	focusWindow(): boolean;
 	createMessageChannel(): MessageChannel;
 	postPortMessage(
 		iframe: HTMLIFrameElement,
@@ -427,6 +449,10 @@ function defaultWebHucodeShellBrowserAdapter():
 		},
 		focusIframe: iframe => iframe.focus(),
 		focusIframeContent: iframe => iframe.contentWindow?.focus(),
+		focusWindow: () => {
+			mainWindow.focus();
+			return mainWindow.document.hasFocus();
+		},
 		createMessageChannel: () => new MessageChannel(),
 		postPortMessage: (iframe, message, port) => {
 			iframe.contentWindow?.postMessage(
@@ -438,6 +464,20 @@ function defaultWebHucodeShellBrowserAdapter():
 		showVersionMismatch: () => showHucodeWebVersionMismatchBlocker(),
 	};
 }
+
+export interface IWebHucodeShellExternalOwnerReporter {
+	report(
+		worktreePath: string,
+		admission: Extract<
+			HucodeWebTabOwnershipAdmission,
+			{ readonly kind: 'owned-elsewhere' | 'unavailable' }
+		>
+	): void;
+}
+
+const silentExternalOwnerReporter: IWebHucodeShellExternalOwnerReporter = {
+	report: () => { },
+};
 
 /**
  * Browser implementation of the Hucode Omni shell service.
@@ -508,6 +548,12 @@ export class WebHucodeShellController extends Disposable
 			silentWebShellLog,
 		private readonly navigationProjectManager?:
 			IWebHucodeHostedNavigationProjectManager,
+		private readonly tabOwnership: IHucodeWebTabOwnershipCoordinator =
+			createHucodeWebTabOwnershipCoordinator(
+				`${browser.origin}|${options.remoteAuthority ?? ''}`
+			),
+		private readonly externalOwnerReporter:
+			IWebHucodeShellExternalOwnerReporter = silentExternalOwnerReporter,
 	) {
 		super();
 
@@ -528,6 +574,7 @@ export class WebHucodeShellController extends Disposable
 			uri => this.toPathKey(uri.fsPath),
 			generateUuid
 		);
+		this._register(this.tabOwnership);
 		this.initialization = this.restorePersistedWorkbenches(persisted);
 		this._register(this.hostSurfaceService.onDidChangeSurface(surface => {
 			if (surface) {
@@ -573,8 +620,31 @@ export class WebHucodeShellController extends Disposable
 	): Promise<boolean> {
 		await this.initialization;
 		let instance = this.getInstanceByPath(worktreePath);
-		if (!instance || !isHostedWorkspaceRestorable(instance)) {
+		if (instance?.state === 'crashed') {
 			return false;
+		}
+		if (!instance || !isHostedWorkspaceRestorable(instance)) {
+			const admission = await this.tabOwnership.admit(
+				this.toPathKey(worktreePath)
+			);
+			if (admission.kind === 'acquired') {
+				this.tabOwnership.abandon(admission.claim);
+				return false;
+			}
+			if (admission.kind === 'reserved-here') {
+				this.tabOwnership.abandon(admission.claim);
+				return true;
+			}
+			if (admission.kind === 'owned-here') {
+				instance = this.instancesById.get(admission.owner.instanceId);
+				if (!instance || instance.ownership?.generation !==
+					admission.owner.generation) {
+					return false;
+				}
+			} else {
+				this.externalOwnerReporter.report(worktreePath, admission);
+				return true;
+			}
 		}
 
 		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
@@ -770,7 +840,7 @@ export class WebHucodeShellController extends Disposable
 		if (!canApply()) {
 			return this.getState();
 		}
-		const existing = this.getInstanceByPath(worktreePath);
+		let existing = this.getInstanceByPath(worktreePath);
 		const projectCatalogGeneration =
 			this.projectCatalogSnapshot?.generation;
 		let effectiveProjectId = this.resolveProjectIdAgainstCatalog(
@@ -792,7 +862,7 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		const retainedWorkbenchId = retained?.id;
-		if (existing && isHostedWorkspaceAvailable(existing)) {
+		if (existing?.ownership && isHostedWorkspaceAvailable(existing)) {
 			existing.projectId = effectiveProjectId;
 			existing.retainedWorkbenchId = retained?.id;
 			if (retained?.folderStatus === 'missing') {
@@ -812,9 +882,68 @@ export class WebHucodeShellController extends Disposable
 			return this.getState();
 		}
 
-		const folderExists = knownFolderExists ??
-			await this.folderAccess.exists(worktreePath);
+		let ownership = existing?.ownership;
+		if (!ownership) {
+			const admission = await this.tabOwnership.admit(
+				this.toPathKey(worktreePath)
+			);
+			if (!canApply()) {
+				if (admission.kind === 'acquired' ||
+					admission.kind === 'reserved-here') {
+					this.tabOwnership.abandon(admission.claim);
+				}
+				return this.getState();
+			}
+			if (admission.kind === 'owned-here') {
+				const owner = this.instancesById.get(admission.owner.instanceId);
+				if (!owner || owner.ownership?.generation !==
+					admission.owner.generation) {
+					this.tabOwnership.release({
+						pathKey: this.toPathKey(worktreePath),
+						generation: admission.owner.generation,
+					});
+					return this.doOpenWorkspace(
+						windowId,
+						worktreePath,
+						projectId,
+						focus,
+						activationIntent,
+						canActivate,
+						knownFolderExists,
+						canApply
+					);
+				}
+				existing = owner;
+				ownership = owner.ownership;
+			} else if (admission.kind === 'acquired' ||
+				admission.kind === 'reserved-here') {
+				ownership = admission.claim;
+			} else {
+				if (!effectiveProjectId && retained) {
+					this.retainedWorkbenches.update(retained.id, {
+						desiredState: 'unloaded',
+					});
+				}
+				this.externalOwnerReporter.report(worktreePath, admission);
+				this.emitState();
+				return this.getState();
+			}
+		}
+
+		let folderExists: boolean;
+		try {
+			folderExists = knownFolderExists ??
+				await this.folderAccess.exists(worktreePath);
+		} catch (error) {
+			if (!existing && ownership) {
+				this.tabOwnership.abandon(ownership);
+			}
+			throw error;
+		}
 		if (!canApply()) {
+			if (!existing && ownership) {
+				this.tabOwnership.abandon(ownership);
+			}
 			return this.getState();
 		}
 		retained = this.retainedWorkbenches.getByUri(URI.file(worktreePath));
@@ -837,6 +966,8 @@ export class WebHucodeShellController extends Disposable
 			);
 		}
 		if (currentInstance && isHostedWorkspaceAvailable(currentInstance)) {
+			currentInstance.ownership ??= ownership;
+			this.publishInstanceOwnership(currentInstance);
 			currentInstance.projectId = effectiveProjectId;
 			currentInstance.retainedWorkbenchId = retained?.id;
 			if (retained?.folderStatus === 'missing') {
@@ -858,6 +989,9 @@ export class WebHucodeShellController extends Disposable
 			retained.id !== retainedWorkbenchId ||
 			retained.desiredState !== 'loaded'
 		) && !invalidatedByNewCatalog) {
+			if (!currentInstance && ownership) {
+				this.tabOwnership.abandon(ownership);
+			}
 			this.focusActiveInstanceIfCurrent(
 				activationIntent,
 				focus,
@@ -870,6 +1004,8 @@ export class WebHucodeShellController extends Disposable
 			await this.deferStateEmission(async () => {
 				if (currentInstance) {
 					this.removeInstance(currentInstance);
+				} else if (ownership) {
+					this.tabOwnership.abandon(ownership);
 				}
 				if (retained) {
 					this.retainedWorkbenches.update(retained.id, {
@@ -895,7 +1031,7 @@ export class WebHucodeShellController extends Disposable
 			if (currentInstance.state === 'dormant') {
 				this.hostedWorkspaces.removeInstance(currentInstance);
 			} else {
-				this.removeInstance(currentInstance);
+				this.removeInstance(currentInstance, false);
 			}
 		}
 
@@ -904,7 +1040,12 @@ export class WebHucodeShellController extends Disposable
 			effectiveProjectId,
 			retained?.id
 		);
+		instance.ownership = ownership;
 		this.hostedWorkspaces.addInstance(instance);
+		if (!this.publishInstanceOwnership(instance)) {
+			this.removeInstance(instance);
+			return this.getState();
+		}
 		this.attachIframe(instance);
 		if (activationIntent === this.activationIntentGeneration &&
 			canActivate()) {
@@ -1885,6 +2026,14 @@ export class WebHucodeShellController extends Disposable
 				}
 				this.emitState();
 			},
+			publishAppearance: async (current, appearance) => {
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				instance.appearance = appearance;
+				this.emitState();
+				return true;
+			},
 			closeSelf: async current => {
 				await this.initialization;
 				if (!this.isCurrentHostedBinding(instance, current)) {
@@ -2100,7 +2249,11 @@ export class WebHucodeShellController extends Disposable
 				this.toPathKey(a) === this.toPathKey(b));
 
 		for (const candidate of plan.dormant) {
-			this.hostedWorkspaces.addInstance({
+			const ownership = await this.admitRestoreCandidate(candidate);
+			if (!ownership) {
+				continue;
+			}
+			const instance: IHostedIframeInstance = {
 				instanceId: generateUuid(),
 				projectId: candidate.projectId,
 				retainedWorkbenchId: candidate.retainedWorkbenchId,
@@ -2111,20 +2264,34 @@ export class WebHucodeShellController extends Disposable
 				lastActiveAt: candidate.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
-			});
+				ownership,
+			};
+			this.hostedWorkspaces.addInstance(instance);
+			if (!this.publishInstanceOwnership(instance)) {
+				this.removeInstance(instance);
+			}
 		}
 
 		let activeInstance: IHostedIframeInstance | undefined;
-		for (const [index, candidate] of plan.eager.entries()) {
+		for (const candidate of plan.eager) {
+			const ownership = await this.admitRestoreCandidate(candidate);
+			if (!ownership) {
+				continue;
+			}
 			const instance = this.createInstance(
 				candidate.worktreePath,
 				candidate.projectId,
 				candidate.retainedWorkbenchId
 			);
 			instance.lastActiveAt = candidate.lastActiveAt;
+			instance.ownership = ownership;
 			this.hostedWorkspaces.addInstance(instance);
+			if (!this.publishInstanceOwnership(instance)) {
+				this.removeInstance(instance);
+				continue;
+			}
 			this.attachIframe(instance);
-			if (index === 0) {
+			if (!activeInstance) {
 				activeInstance = instance;
 			}
 		}
@@ -2134,6 +2301,29 @@ export class WebHucodeShellController extends Disposable
 		if (!activeInstance) {
 			this.emitState();
 		}
+	}
+
+	private async admitRestoreCandidate(candidate: {
+		readonly worktreePath: string;
+		readonly projectId?: string;
+		readonly retainedWorkbenchId?: string;
+	}): Promise<IHucodeWebTabOwnershipClaim | undefined> {
+		const admission = await this.tabOwnership.admit(
+			this.toPathKey(candidate.worktreePath),
+			'restore'
+		);
+		if (admission.kind === 'acquired') {
+			return admission.claim;
+		}
+		if (admission.kind === 'reserved-here') {
+			this.tabOwnership.abandon(admission.claim);
+		}
+		if (candidate.retainedWorkbenchId) {
+			this.retainedWorkbenches.update(candidate.retainedWorkbenchId, {
+				desiredState: 'unloaded',
+			});
+		}
+		return undefined;
 	}
 
 	private async filterAvailableRestoreCandidates(
@@ -2197,6 +2387,46 @@ export class WebHucodeShellController extends Disposable
 			lifecycleGeneration: 0,
 			connectionGeneration: 0,
 		};
+	}
+
+	private publishInstanceOwnership(instance: IHostedIframeInstance): boolean {
+		const claim = instance.ownership;
+		if (!claim) {
+			return false;
+		}
+		return this.tabOwnership.publish(
+			claim,
+			instance.instanceId,
+			() => this.activateInstanceFromOtherTab(instance, claim)
+		);
+	}
+
+	private async activateInstanceFromOtherTab(
+		instance: IHostedIframeInstance,
+		claim: IHucodeWebTabOwnershipClaim
+	): Promise<boolean> {
+		if (this.instancesById.get(instance.instanceId) !== instance ||
+			instance.ownership?.generation !== claim.generation) {
+			return false;
+		}
+		if (!isHostedWorkspaceAvailable(instance)) {
+			await this.doOpenWorkspace(
+				this.windowId,
+				instance.worktreePath,
+				instance.projectId,
+				true
+			);
+			instance = this.getAvailableInstanceByPath(instance.worktreePath) ??
+				instance;
+		}
+		if (this.instancesById.get(instance.instanceId) !== instance ||
+			instance.ownership?.generation !== claim.generation ||
+			!isHostedWorkspaceAvailable(instance)) {
+			return false;
+		}
+		this.activateInstance(instance);
+		this.focusIframe(instance);
+		return this.browser.focusWindow();
 	}
 
 	private createHostedIframe(
@@ -2265,7 +2495,10 @@ export class WebHucodeShellController extends Disposable
 		this.emitState();
 	}
 
-	private removeInstance(instance: IHostedIframeInstance): void {
+	private removeInstance(
+		instance: IHostedIframeInstance,
+		releaseOwnership = true
+	): void {
 		const wasActive = this.activeInstanceId === instance.instanceId;
 		instance.state = 'unloaded';
 		instance.pendingReloadConnectionGeneration = undefined;
@@ -2274,6 +2507,10 @@ export class WebHucodeShellController extends Disposable
 		this.disposeConnection(instance);
 		instance.iframe?.remove();
 		this.hostedWorkspaces.removeInstance(instance);
+		if (releaseOwnership && instance.ownership) {
+			this.tabOwnership.release(instance.ownership);
+			instance.ownership = undefined;
+		}
 		if (wasActive && !this.shuttingDown) {
 			const next = getMostRecentHostedWorkspace(this.instancesById.values());
 			if (next) {
@@ -2431,7 +2668,10 @@ export class WebHucodeShellController extends Disposable
 		// handshake. Once a current-protocol workbench commits, removal is
 		// unconditional; the workbench has already shut down irreversibly.
 		instance.pendingUnload = undefined;
-		this.removeInstance(instance);
+		this.removeInstance(
+			instance,
+			!(ownsPath && disposition === 'suspend')
+		);
 		if (ownsPath) {
 			this.applyUnloadDisposition(instance, disposition);
 		}
@@ -2452,7 +2692,7 @@ export class WebHucodeShellController extends Disposable
 		}
 
 		if (disposition === 'suspend') {
-			this.hostedWorkspaces.addInstance({
+			const dormant: IHostedIframeInstance = {
 				instanceId: generateUuid(),
 				projectId: instance.projectId,
 				retainedWorkbenchId: instance.retainedWorkbenchId,
@@ -2463,7 +2703,12 @@ export class WebHucodeShellController extends Disposable
 				lastActiveAt: instance.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
-			});
+				ownership: instance.ownership,
+			};
+			this.hostedWorkspaces.addInstance(dormant);
+			if (!this.publishInstanceOwnership(dormant)) {
+				this.removeInstance(dormant);
+			}
 			this.emitState();
 			return;
 		}
@@ -2936,6 +3181,46 @@ function emptyState(): IHucodeHostedWorkspaceState {
 	return createEmptyHostedWorkspaceState();
 }
 
+class NotificationWebHucodeShellExternalOwnerReporter
+	implements IWebHucodeShellExternalOwnerReporter {
+
+	constructor(
+		private readonly notificationService: INotificationService
+	) { }
+
+	report(
+		worktreePath: string,
+		admission: Extract<
+			HucodeWebTabOwnershipAdmission,
+			{ readonly kind: 'owned-elsewhere' | 'unavailable' }
+		>
+	): void {
+		if (admission.kind === 'unavailable') {
+			this.notificationService.warn(localize(
+				'hucodeOmni.webTabOwnershipUnavailable',
+				"Hucode cannot safely coordinate '{0}' between browser tabs. Close the other Omni tabs or use a browser with Web Locks support.",
+				worktreePath
+			));
+			return;
+		}
+		if (!admission.owner) {
+			this.notificationService.info(localize(
+				'hucodeOmni.webTabOwnerUnconfirmed',
+				"'{0}' is already open in another Omni tab, but that tab did not confirm activation.",
+				worktreePath
+			));
+			return;
+		}
+		if (admission.focusAccepted === false) {
+			this.notificationService.info(localize(
+				'hucodeOmni.webTabOwnerFocusDenied',
+				"Activated '{0}' in another Omni tab. The browser did not allow Hucode to focus that tab.",
+				worktreePath
+			));
+		}
+	}
+}
+
 /**
  * Dependency-injected web shell service that wires the shell controller to the
  * serve-web environment configuration and host surface.
@@ -2948,10 +3233,10 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IHucodeWebOmniHostSurfaceService
 		hostSurfaceService: IHucodeWebOmniHostSurfaceService,
 		@IConfigurationService configurationService: IConfigurationService,
-		@IStorageService storageService: IStorageService,
 		@IFileService fileService: IFileService,
 		@ILogService logService: ILogService,
 		@IProjectManagerService projectManagerService: IProjectManagerService,
+		@INotificationService notificationService: INotificationService,
 	) {
 		super({
 			workbenchRoute: getHucodeOmniWorkbenchRoute(
@@ -2965,13 +3250,16 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			),
 			remoteAuthority: environmentService.remoteAuthority,
 		}, commandService, hostSurfaceService, undefined,
-			new StorageServiceWebHucodeShellPersistence(storageService),
+			new SessionStorageWebHucodeShellPersistence(),
 			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
 				HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING
 			) ?? 'active', createWebHucodeShellFolderAccess(
 				environmentService.remoteAuthority,
 				resource => fileService.stat(resource)
-			), logService, projectManagerService);
+			), logService, projectManagerService, undefined,
+			new NotificationWebHucodeShellExternalOwnerReporter(
+				notificationService
+			));
 	}
 }
 

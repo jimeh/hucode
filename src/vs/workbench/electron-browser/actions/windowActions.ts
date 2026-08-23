@@ -99,10 +99,10 @@ export class NewOmniWindowAction extends Action2 {
 		super({
 			id: 'workbench.action.newOmniWindow',
 			title: {
-				...localize2('newOmniWindow', 'New Omni-Window'),
+				...localize2('newOmniWindow', 'New Omni Window'),
 				mnemonicTitle: localize(
 					{ key: 'miNewOmniWindow', comment: ['&& denotes a mnemonic'] },
-					'New O&&mni-Window'
+					'New O&&mni Window'
 				),
 			},
 			f1: true,

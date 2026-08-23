@@ -71,11 +71,18 @@ import {
 	getWebHucodeShellFolderResource,
 	IWebHucodeShellBrowserAdapter,
 	IWebHucodeShellFolderAccess,
+	IWebHucodeShellExternalOwnerReporter,
 	IWebHucodeShellPersistedState,
 	IWebHucodeShellPersistenceAdapter,
+	SessionStorageWebHucodeShellPersistence,
 	IWebHucodeHostedNavigationProjectManager,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
+import {
+	HucodeWebTabOwnershipAdmission,
+	IHucodeWebTabOwnershipClaim,
+	IHucodeWebTabOwnershipCoordinator,
+} from '../../browser/webTabOwnership.js';
 import {
 	IHostedWorkspaceContractState,
 	IHostedWorkspaceLifecycleContractAdapter,
@@ -85,6 +92,55 @@ suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let bootstrapDocumentSequence = 0;
 	const buildIdentity = getServerProductSegment(product);
+
+	test('session persistence survives reload without sharing later tab writes', () => {
+		const firstStorage = new MemorySessionStorage();
+		const firstPage = new SessionStorageWebHucodeShellPersistence(
+			firstStorage
+		);
+		const firstState: IWebHucodeShellPersistedState = {
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'one',
+				worktreePath: '/srv/one',
+			}],
+			activeWorktreePath: '/srv/one',
+		};
+		firstPage.save(firstState);
+		assert.deepStrictEqual(
+			new SessionStorageWebHucodeShellPersistence(firstStorage).load(),
+			firstState
+		);
+
+		const duplicatedStorage = firstStorage.copy();
+		const duplicatePage = new SessionStorageWebHucodeShellPersistence(
+			duplicatedStorage
+		);
+		duplicatePage.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'two',
+				worktreePath: '/srv/two',
+			}],
+			activeWorktreePath: '/srv/two',
+		});
+
+		assert.strictEqual(firstPage.load()?.activeWorktreePath, '/srv/one');
+		assert.strictEqual(duplicatePage.load()?.activeWorktreePath, '/srv/two');
+	});
+
+	test('session persistence tolerates blocked storage access', () => {
+		const persistence = new SessionStorageWebHucodeShellPersistence(
+			undefined,
+			() => { throw new Error('blocked'); }
+		);
+
+		assert.doesNotThrow(() => persistence.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [],
+		}));
+		assert.strictEqual(persistence.load(), undefined);
+	});
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -161,7 +217,10 @@ suite('WebHucodeShellService', () => {
 			): Promise<T>;
 		} = { async executeCommand<T>() { return undefined as T; } },
 		navigationProjectManager?: IWebHucodeHostedNavigationProjectManager,
-		serverPathCaseSensitive = true
+		serverPathCaseSensitive = true,
+		tabOwnership: IHucodeWebTabOwnershipCoordinator =
+			new SingleTabOwnershipCoordinator(),
+		externalOwnerReporter?: IWebHucodeShellExternalOwnerReporter
 	): {
 		readonly service: WebHucodeShellController;
 		readonly surface: HTMLElement;
@@ -190,7 +249,9 @@ suite('WebHucodeShellService', () => {
 			restorePolicy,
 			folderAccess,
 			logService,
-			navigationProjectManager
+			navigationProjectManager,
+			tabOwnership,
+			externalOwnerReporter
 		));
 		return { service, surface, browser, logService };
 	}
@@ -1481,15 +1542,103 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual({
 			pathname: src.pathname,
 			folder: src.searchParams.get('folder'),
+			profile: src.searchParams.get('profile'),
 			isHostedOmniWorkspace: payload.get('isHostedOmniWorkspace'),
 			hostedInstanceId: payload.get('hostedInstanceId'),
 		}, {
 			pathname: '/omni/workbench',
 			folder: '/tmp/hucode-worktree',
+			profile: null,
 			isHostedOmniWorkspace: 'true',
 			hostedInstanceId: state.instances[0].instanceId,
 		});
 	});
+
+	test('does not create a project iframe when another tab owns the path',
+		async () => {
+			const ownership = new ExternallyOwnedTabCoordinator();
+			const reporter = new RecordingExternalOwnerReporter();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true,
+				ownership,
+				reporter
+			);
+
+			const state = await service.openAndFocusWorkspace(
+				browser.windowId,
+				'/tmp/owned-elsewhere',
+				'project'
+			);
+
+			assert.deepStrictEqual({
+				instances: state.instances.length,
+				iframes: surface.querySelectorAll('iframe').length,
+				admittedPaths: ownership.admittedPaths,
+				reports: reporter.reports,
+			}, {
+				instances: 0,
+				iframes: 0,
+				admittedPaths: ['/tmp/owned-elsewhere'],
+				reports: [{
+					worktreePath: '/tmp/owned-elsewhere',
+					admissionKind: 'owned-elsewhere',
+				}],
+			});
+		});
+
+	test('activates the exact owned workbench for another tab request',
+		async () => {
+			const ownership = new SingleTabOwnershipCoordinator();
+			const browser = new FakeBrowserAdapter();
+			const { service } = createService(
+				browser,
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true,
+				ownership
+			);
+			await service.openWorkspace(
+				browser.windowId,
+				'/tmp/activate-alpha',
+				'alpha'
+			);
+			await service.openWorkspace(
+				browser.windowId,
+				'/tmp/activate-beta',
+				'beta'
+			);
+			browser.windowFocusAccepted = false;
+
+			const focusAccepted = await ownership.activateFromOtherTab(
+				'/tmp/activate-alpha'
+			);
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				focusAccepted,
+				activePath: state.instances.find(instance =>
+					instance.instanceId === state.activeInstanceId
+				)?.worktreePath,
+				iframeFocus: browser.iframeFocusCalls.at(-1),
+				windowFocusCalls: browser.windowFocusCalls,
+			}, {
+				focusAccepted: false,
+				activePath: '/tmp/activate-alpha',
+				iframeFocus: '/tmp/activate-alpha',
+				windowFocusCalls: 1,
+			});
+		});
 
 	test('serves the hosted capability over the transferred message port', async () => {
 		const { service, surface, browser } = createService();
@@ -1519,6 +1668,60 @@ suite('WebHucodeShellService', () => {
 		const change = await raceTimeout(stateChange, 2000);
 		assert.strictEqual(change?.projectSwitcherCanGoBack, true);
 	});
+
+	test('caches appearance per instance across web connection replacement',
+		async () => {
+			const { service, surface, browser } = createService();
+			const alphaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-alpha'
+			);
+			const alphaId = alphaState.activeInstanceId!;
+			const alpha = connectChild(browser, surface, alphaId);
+			const betaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-beta'
+			);
+			const betaId = betaState.activeInstanceId!;
+			connectChild(browser, surface, betaId);
+			const alphaAppearance = {
+				colorScheme: 'light' as const,
+				workbenchBackground: '#f3f3f3',
+				colors: { 'sideBar.background': '#eeeeee' },
+				modernUI: false,
+				modernUIUppercaseViewHeaders: false,
+			};
+			assert.strictEqual(
+				await alpha.shell.publishAppearance!(alphaAppearance),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(
+				(await service.getWindowState(browser.windowId)).instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
+			);
+
+			const currentBeta = connectChild(browser, surface, betaId);
+			assert.strictEqual(await currentBeta.shell.publishAppearance!({
+				...alphaAppearance,
+				colorScheme: 'hc-light',
+				modernUI: true,
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			const finalState = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				finalState.instances.find(
+					instance => instance.instanceId === betaId
+				)?.appearance?.colorScheme,
+				'hc-light'
+			);
+			assert.deepStrictEqual(
+				finalState.instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
+			);
+		});
 
 	test('does not register the removed legacy hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
@@ -4561,6 +4764,53 @@ suite('WebHucodeShellService', () => {
 		assert.strictEqual(crashedInstance.state, 'crashed');
 	});
 
+	test('recovers a crashed iframe under the existing tab ownership claim',
+		async () => {
+			const ownership = new SingleTabOwnershipCoordinator();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true,
+				ownership
+			);
+			const opened = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/recover-owned',
+				'project'
+			);
+			const crashedId = opened.instances[0].instanceId;
+			await crashInstance(
+				service,
+				browser,
+				surface,
+				browser.windowId,
+				crashedId
+			);
+
+			const recovered = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/recover-owned',
+				'project'
+			);
+
+			assert.deepStrictEqual({
+				instanceCount: recovered.instances.length,
+				freshInstance: recovered.instances[0].instanceId !== crashedId,
+				state: recovered.instances[0].state,
+				admissions: ownership.admittedPaths,
+			}, {
+				instanceCount: 1,
+				freshInstance: true,
+				state: 'loading',
+				admissions: ['/tmp/recover-owned'],
+			});
+		});
+
 	test('reopens hosted iframes as normal workbench URLs', async () => {
 		const { service, surface, browser } = createService();
 		const windowId = browser.windowId;
@@ -4965,6 +5215,51 @@ suite('WebHucodeShellService', () => {
 			'unloaded'
 		);
 	});
+
+	test('keeps a retained restore loser unloaded when another tab owns it',
+		async () => {
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'retained',
+					folderUri: URI.file('/tmp/retained-elsewhere').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+					lastActiveAt: 10,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/retained-elsewhere',
+			});
+			const ownership = new ExternallyOwnedTabCoordinator();
+			const reporter = new RecordingExternalOwnerReporter();
+			const { service, surface, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'active',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true,
+				ownership,
+				reporter
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+
+			assert.deepStrictEqual({
+				instances: state.instances.length,
+				iframes: surface.querySelectorAll('iframe').length,
+				desiredState: state.retainedWorkbenches?.[0].desiredState,
+				admissionIntents: ownership.admissionIntents,
+				reports: reporter.reports,
+			}, {
+				instances: 0,
+				iframes: 0,
+				desiredState: 'unloaded',
+				admissionIntents: ['restore'],
+				reports: [],
+			});
+		});
 
 	test('removes a dormant workbench when its folder becomes missing',
 		async () => {
@@ -6242,6 +6537,26 @@ class FakePersistence implements IWebHucodeShellPersistenceAdapter {
 	}
 }
 
+class MemorySessionStorage {
+	private readonly values: Map<string, string>;
+
+	constructor(values: ReadonlyMap<string, string> = new Map()) {
+		this.values = new Map(values);
+	}
+
+	getItem(key: string): string | null {
+		return this.values.get(key) ?? null;
+	}
+
+	setItem(key: string, value: string): void {
+		this.values.set(key, value);
+	}
+
+	copy(): MemorySessionStorage {
+		return new MemorySessionStorage(this.values);
+	}
+}
+
 class ThrowOncePersistence extends FakePersistence {
 	throwNextSave = false;
 
@@ -6459,6 +6774,146 @@ interface IPostedPortMessage {
 	readonly port: MessagePort;
 }
 
+class SingleTabOwnershipCoordinator
+	implements IHucodeWebTabOwnershipCoordinator {
+	private sequence = 0;
+	readonly admittedPaths: string[] = [];
+	private readonly owners = new Map<string, {
+		readonly claim: IHucodeWebTabOwnershipClaim;
+		instanceId?: string;
+		activate?: () => Promise<boolean>;
+		reservations: number;
+	}>();
+
+	async admit(pathKey: string): Promise<HucodeWebTabOwnershipAdmission> {
+		this.admittedPaths.push(pathKey);
+		const existing = this.owners.get(pathKey);
+		if (existing?.instanceId) {
+			return {
+				kind: 'owned-here' as const,
+				owner: {
+					tabId: 'single-tab',
+					instanceId: existing.instanceId,
+					generation: existing.claim.generation,
+				},
+			};
+		}
+		if (existing) {
+			existing.reservations++;
+			return { kind: 'reserved-here', claim: existing.claim };
+		}
+		const claim = {
+			pathKey,
+			generation: `single-tab-${++this.sequence}`,
+		};
+		this.owners.set(pathKey, {
+			claim,
+			reservations: 1,
+		});
+		return { kind: 'acquired' as const, claim };
+	}
+
+	publish(
+		claim: IHucodeWebTabOwnershipClaim,
+		instanceId: string,
+		activate: () => Promise<boolean>
+	): boolean {
+		const current = this.owners.get(claim.pathKey);
+		if (current?.claim.generation !== claim.generation) {
+			return false;
+		}
+		current.instanceId = instanceId;
+		current.activate = activate;
+		current.reservations = 0;
+		return true;
+	}
+
+	async activateFromOtherTab(pathKey: string): Promise<boolean | undefined> {
+		return this.owners.get(pathKey)?.activate?.();
+	}
+
+	abandon(claim: IHucodeWebTabOwnershipClaim): boolean {
+		const owner = this.owners.get(claim.pathKey);
+		if (!owner || owner.claim.generation !== claim.generation ||
+			owner.instanceId) {
+			return false;
+		}
+		owner.reservations--;
+		if (owner.reservations > 0) {
+			return true;
+		}
+		return this.release(claim);
+	}
+
+	release(claim: IHucodeWebTabOwnershipClaim): boolean {
+		if (this.owners.get(claim.pathKey)?.claim.generation !==
+			claim.generation) {
+			return false;
+		}
+		this.owners.delete(claim.pathKey);
+		return true;
+	}
+
+	dispose(): void {
+		this.owners.clear();
+	}
+}
+
+class ExternallyOwnedTabCoordinator
+	implements IHucodeWebTabOwnershipCoordinator {
+	readonly admittedPaths: string[] = [];
+	readonly admissionIntents: Array<string | undefined> = [];
+
+	async admit(
+		pathKey: string,
+		intent?: 'activate' | 'restore'
+	): Promise<HucodeWebTabOwnershipAdmission> {
+		this.admittedPaths.push(pathKey);
+		this.admissionIntents.push(intent);
+		return {
+			kind: 'owned-elsewhere',
+			owner: {
+				tabId: 'other-tab',
+				instanceId: 'other-instance',
+				generation: 'other-generation',
+			},
+			focusAccepted: true,
+		};
+	}
+
+	publish(): boolean {
+		return false;
+	}
+
+	abandon(): boolean {
+		return false;
+	}
+
+	release(): boolean {
+		return false;
+	}
+
+	dispose(): void { }
+}
+
+class RecordingExternalOwnerReporter
+	implements IWebHucodeShellExternalOwnerReporter {
+	readonly reports: Array<{
+		readonly worktreePath: string;
+		readonly admissionKind: 'owned-elsewhere' | 'unavailable';
+	}> = [];
+
+	report(
+		worktreePath: string,
+		admission: Extract<
+			HucodeWebTabOwnershipAdmission,
+			{ readonly kind: 'owned-elsewhere' | 'unavailable' }
+		>
+	): void {
+		this.reports.push({ worktreePath, admissionKind: admission.kind });
+	}
+}
+
 class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly windowId = 1;
 	readonly origin = location.origin;
@@ -6468,6 +6923,8 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly focusedIframes: HTMLIFrameElement[] = [];
 	readonly contentFocusedIframes: HTMLIFrameElement[] = [];
 	contentFocusCalls = 0;
+	windowFocusAccepted = true;
+	windowFocusCalls = 0;
 	versionMismatchCount = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
@@ -6508,6 +6965,11 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	focusIframeContent(iframe: HTMLIFrameElement): void {
 		this.contentFocusCalls++;
 		this.contentFocusedIframes.push(iframe);
+	}
+
+	focusWindow(): boolean {
+		this.windowFocusCalls++;
+		return this.windowFocusAccepted;
 	}
 
 	createMessageChannel(): MessageChannel {

@@ -91,7 +91,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			executablePath: chromium.executablePath(),
 			headless: true,
 		});
-		page = await browser.newPage();
+		const context = await browser.newContext();
+		page = await context.newPage();
 		await page.context().grantPermissions(
 			['clipboard-read', 'clipboard-write'],
 			{ origin: new URL(launch.url).origin }
@@ -331,6 +332,88 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 				[...projectEventStreamUrls].join(', ')
 			);
 		}
+
+		const ownerPage = page;
+		const requesterPage = await ownerPage.context().newPage();
+		requesterPage.on('pageerror', error =>
+			pageErrors.push(error.stack ?? error.message));
+		requesterPage.on('console', message => {
+			if (message.type() === 'error') {
+				consoleErrors.push(message.text());
+			}
+		});
+		const requesterReadiness = Promise.all([
+			observeServerUserDataBootstrap(requesterPage, deadline),
+			requesterPage.waitForSelector(omniWorkbenchSelector, {
+				state: 'visible',
+				timeout: remainingTime(deadline),
+			}),
+		]);
+		void requesterReadiness.catch(() => undefined);
+		await requesterPage.goto(launch.url, {
+			waitUntil: 'domcontentloaded',
+			timeout: remainingTime(deadline),
+		});
+		await requesterReadiness;
+		await waitForWebSmokeTestDriver(requesterPage, deadline);
+
+		await openWorkspaceThroughSmokeDriver(
+			requesterPage,
+			alphaPath,
+			deadline
+		);
+		await waitForWebWorkbenchState(ownerPage, deadline, [
+			{ label: 'Alpha', state: 'active', active: true },
+			{ label: 'Bravo', state: 'loaded', active: false },
+		]);
+		await assertHostedFrameAbsent(requesterPage, alphaPath);
+
+		const ownerCrash = new Promise<void>(resolve =>
+			ownerPage.once('crash', () => resolve()));
+		const ownerSession = await ownerPage.context().newCDPSession(ownerPage);
+		void ownerSession.send('Page.crash').catch(() => undefined);
+		await withDeadline(
+			ownerCrash,
+			Date.now() + commandTimeout(deadline),
+			'owning Omni tab crash'
+		);
+
+		page = requesterPage;
+		await openWorkspaceThroughSmokeDriver(page, alphaPath, deadline);
+		await waitForWebWorkbenchState(page, deadline, [
+			{ label: 'Alpha', state: 'active', active: true },
+		]);
+		await waitForHostedFrame(page, alphaPath, deadline);
+
+		const isolatedContext = await browser.newContext();
+		const isolatedPage = await isolatedContext.newPage();
+		isolatedPage.on('pageerror', error =>
+			pageErrors.push(error.stack ?? error.message));
+		isolatedPage.on('console', message => {
+			if (message.type() === 'error') {
+				consoleErrors.push(message.text());
+			}
+		});
+		const isolatedReadiness = Promise.all([
+			observeServerUserDataBootstrap(isolatedPage, deadline),
+			isolatedPage.waitForSelector(omniWorkbenchSelector, {
+				state: 'visible',
+				timeout: remainingTime(deadline),
+			}),
+		]);
+		void isolatedReadiness.catch(() => undefined);
+		await isolatedPage.goto(launch.url, {
+			waitUntil: 'domcontentloaded',
+			timeout: remainingTime(deadline),
+		});
+		await isolatedReadiness;
+		await waitForWebSmokeTestDriver(isolatedPage, deadline);
+		await openWorkspaceThroughSmokeDriver(
+			isolatedPage,
+			alphaPath,
+			deadline
+		);
+		await waitForHostedFrame(isolatedPage, alphaPath, deadline);
 		targetInventory = await formatWebTargetInventory(page);
 
 		console.log(
@@ -338,7 +421,9 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			`${bootstrap.pathname} (${bootstrap.status}); exercised hosted ` +
 			`navigation, clipboard/focus bridging, one shell-owned project ` +
 			`event stream, a shell action, unload, and command-driven ` +
-			`connection recovery across Alpha and Bravo`
+			`connection recovery across Alpha and Bravo; verified same-profile ` +
+			`tab activation, duplicate prevention, tab-local lifecycle state, ` +
+			`crash takeover, and separate browser-profile isolation`
 		);
 	} catch (error) {
 		if (page) {
@@ -680,6 +765,20 @@ async function waitForHostedFrame(
 		`Timed out waiting for hosted frame ${worktreePath}; ` +
 		`last inventory ${lastInventory}`
 	);
+}
+
+async function assertHostedFrameAbsent(
+	page: Page,
+	worktreePath: string
+): Promise<void> {
+	const matches = page.frames().filter(frame =>
+		getWebFrameWorktreePath(frame) === worktreePath);
+	if (matches.length) {
+		throw new Error(
+			`Expected ${worktreePath} to remain owned by another Omni tab, ` +
+			`but the requesting tab created ${matches.length} hosted frame(s)`
+		);
+	}
 }
 
 function getWebFrameHostedInstanceId(frame: Frame): string | undefined {

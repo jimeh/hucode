@@ -14,6 +14,7 @@ import {
 	TITLE_BAR_ACTIVE_BACKGROUND,
 	TITLE_BAR_INACTIVE_BACKGROUND,
 } from '../../../../workbench/common/theme.js';
+import { ColorScheme } from '../../../../platform/theme/common/theme.js';
 import { shouldApplyFloatingEditorLayout } from
 	'../../../../workbench/browser/parts/editor/editorPart.js';
 import { AuxiliaryBarPart } from
@@ -21,7 +22,10 @@ import { AuxiliaryBarPart } from
 import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
 import { PanelPart } from '../../../browser/parts/panelPart.js';
 import { ProjectsPart } from '../../../browser/parts/projectsPart.js';
-import { TitlebarPart } from '../../../browser/parts/titlebarPart.js';
+import {
+	resolveHucodeOmniTitleBackground,
+	TitlebarPart,
+} from '../../../browser/parts/titlebarPart.js';
 import {
 	hucodeOmniTitleBackground,
 	hucodeOmniTitleForeground,
@@ -165,6 +169,9 @@ suite('Omni Parts', () => {
 				getContainer: () => container,
 			},
 			getColor: (id: string) => colors.get(id) ?? null,
+			themeService: {
+				getColorTheme: () => ({ type: ColorScheme.DARK }),
+			},
 		});
 
 		TitlebarPart.prototype.updateStyles.call(host);
@@ -227,6 +234,9 @@ suite('Omni Parts', () => {
 				getContainer: () => container,
 			},
 			getColor: (id: string) => colors.get(id) ?? null,
+			themeService: {
+				getColorTheme: () => ({ type: ColorScheme.DARK }),
+			},
 		});
 
 		TitlebarPart.prototype.updateStyles.call(host);
@@ -240,6 +250,17 @@ suite('Omni Parts', () => {
 			background: 'rgb(25, 26, 27)',
 			shellBackground: '#191A1B',
 		});
+	});
+
+	test('TitlebarPart makes projected alpha colors opaque against the workbench', () => {
+		assert.strictEqual(
+			resolveHucodeOmniTitleBackground(
+				'rgba(255, 0, 0, 0.5)',
+				'#000000',
+				{ type: ColorScheme.DARK } as never
+			),
+			'#921213'
+		);
 	});
 
 	test('OmniHostPart exposes a loaded active workbench', () => {

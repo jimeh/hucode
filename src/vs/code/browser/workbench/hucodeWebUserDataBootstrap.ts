@@ -321,10 +321,10 @@ async function requestJson<T>(url: string, init?: RequestInit, allowConflict = f
 }
 
 function setResult(profiles: readonly UriDto<IUserDataProfile>[], home: URI): void {
-	setHucodeWebUserDataBootstrapResult({ profiles: profiles.map(profile => remoteProfile(profile, home)), profilesHome: home.with({ path: `${home.path}/profiles` }) });
+	setHucodeWebUserDataBootstrapResult({ profiles: profiles.map(profile => toHucodeRemoteUserDataProfile(profile, home)), profilesHome: home.with({ path: `${home.path}/profiles` }) });
 }
 
-function remoteProfile(profile: UriDto<IUserDataProfile>, home: URI): UriDto<IUserDataProfile> {
+export function toHucodeRemoteUserDataProfile(profile: UriDto<IUserDataProfile>, home: URI): UriDto<IUserDataProfile> {
 	const remote = (value: unknown) => URI.revive(value as never).with({ scheme: home.scheme, authority: home.authority });
 	return {
 		...profile,
@@ -340,6 +340,7 @@ function remoteProfile(profile: UriDto<IUserDataProfile>, home: URI): UriDto<IUs
 		languageModelsResource: remote(profile.languageModelsResource),
 		cacheHome: remote(profile.cacheHome),
 		agentPluginsHome: remote(profile.agentPluginsHome),
+		workspaces: profile.workspaces?.map(remote),
 	};
 }
 
