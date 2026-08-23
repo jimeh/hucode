@@ -275,15 +275,17 @@ duplicate restores use deterministic activity and window ordering. Losing
 project claims are discarded, while losing retained arbitrary workbenches stay
 unloaded in their session.
 
-Serve-web keeps live ownership in the browser rather than the project service
-or server user data. A same-origin, browser-profile-scoped coordinator combines
-Web Locks for crash-recoverable exclusion with `BroadcastChannel` messages for
-owner discovery and exact-workbench activation. Focus is best effort, but a
-denied focus or missing activation acknowledgement never permits a duplicate.
-Different browser profiles, devices, and origins are intentionally independent.
-The browser uses server-configured path case semantics but cannot collapse
-server-side symlink aliases. A browser without Web Locks fails closed for an
-ambiguous multi-tab open.
+Serve-web keeps live ownership inside each Omni tab. Its
+`HostedWorkspaceStateModel` indexes instances by the server-configured path
+comparison key, and open paths re-check that index after asynchronous folder
+preflight so concurrent requests in one tab converge on one renderer. The
+retained-workbench catalog uses the same comparison boundary for arbitrary
+folders.
+
+The project catalog remains server-backed and shared, but it does not own live
+browser renderers. Separate tabs, browser profiles, devices, and origins may
+host the same path independently; serve-web does not use Web Locks, cross-tab
+activation messages, or server-side ownership leases.
 
 ### Integrated Browser Views
 

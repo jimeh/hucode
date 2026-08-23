@@ -1,7 +1,7 @@
 ---
 title: Omni Sessions, Workbench Ownership, and Appearance Projection Plan
 status: implementation complete; pending review
-last_updated: 2026-08-21
+last_updated: 2026-08-23
 tracking_issue: https://github.com/jimeh/hucode/issues/191
 supersedes: Omni Profile Spaces Implementation Plan
 ---
@@ -18,8 +18,8 @@ wrong product boundary.
 
 The revised plan keeps Omni windows useful as independent workbench sessions,
 allows each hosted workbench to use any regular profile, prevents the same path
-from being live in more than one window, and makes the Omni shell visually
-follow the active hosted workbench.
+from being live in more than one desktop window, and makes the Omni shell
+visually follow the active hosted workbench. Serve-web tabs remain independent.
 
 Once the implementation lands and its durable contracts are reflected in
 `omni.md` and `architecture.md`, move this plan to `docs/hucode/archive/`.
@@ -49,13 +49,13 @@ This plan covers:
 
 - one global projects catalog shared by profiles and Omni windows;
 - independent per-window Omni session and retained-workbench state;
-- race-safe live path ownership across regular and Omni windows;
+- race-safe desktop path ownership across regular and Omni windows;
 - focus-or-open routing for every folder and workspace ingress;
 - deterministic restoration when multiple sessions claim the same path;
 - ordinary, independently switchable profiles in hosted workbenches;
 - a fixed internal shell profile with no profile-specific Omni-window action;
 - active-workbench color-theme and Modern UI projection into the shell;
-- desktop and serve-web ownership scopes and behavior;
+- desktop ownership and serve-web tab-local behavior;
 - disposition of the implementation in PR #193; and
 - staged delivery, focused tests, and runtime acceptance evidence.
 
@@ -83,10 +83,11 @@ This plan does not cover:
 - **Hosted workbench**: one VS Code workbench renderer hosted by an Omni
   session. It uses an ordinary VS Code profile associated with its workspace.
 - **Regular workbench**: a standalone VS Code window outside an Omni session.
-- **Live owner**: the regular window or hosted workbench that currently owns a
-  canonical folder or workspace path.
-- **Ownership reservation**: a short-lived claim held while a workbench is
-  being created, restored, transferred, or recovered.
+- **Live owner**: on desktop, the regular window or hosted workbench that
+  currently owns a canonical folder or workspace path. On serve-web, ownership
+  is local to one Omni tab.
+- **Ownership reservation**: a desktop short-lived claim held while a
+  workbench is being created, restored, transferred, or recovered.
 - **Shell profile**: the stable internal profile used to bootstrap the Omni
   shell's own workbench services. It is an implementation detail.
 - **Appearance snapshot**: the resolved active color scheme, registered theme
@@ -122,8 +123,8 @@ This plan does not cover:
 | Project definitions and discovered worktrees | Application project manager | One global catalog and shared Git runtime. |
 | Project ordering, labels, and pins | Global project catalog | Not duplicated by profile. |
 | Active hosted workbench | Omni session | Exactly one active instance per session. |
-| Resident, dormant, crashed, and restore-pending entries | Omni session | Subject to global live ownership admission. |
-| Retained arbitrary workbench records | Omni session | May exist unloaded in more than one session; only one may be live. |
+| Resident, dormant, crashed, and restore-pending entries | Omni session | Desktop entries are subject to global live ownership admission; serve-web entries are tab-local. |
+| Retained arbitrary workbench records | Omni session | Desktop sessions may share unloaded records, but only one may be live; serve-web tabs are independent. |
 | Workbench profile association | Upstream profile service | The usual workspace-to-profile association remains authoritative. |
 | Live canonical-path owner and reservations | Desktop main process | Cross-window, race-safe authority. |
 | Omni window geometry and window restoration | Desktop window services | Independent of profile. |
@@ -423,24 +424,15 @@ The project catalog remains server-side and global within its existing
 user-data authority. Live workbench ownership must not become global across all
 users, machines, or browsers connected to a server.
 
-Define serve-web ownership scope as one browser profile and origin. Coordinate
-same-origin Omni tabs with a browser-side owner registry using `BroadcastChannel`
-and a crash-recoverable per-path lock or lease. The exact primitive should be
-prototyped before committing storage schema; Web Locks is preferred when
-available, with a lease-backed fallback if Hucode supports browsers without it.
+Serve-web ownership is instead scoped to one Omni tab. The tab-local hosted
+workspace model and retained catalog deduplicate normalized paths, including a
+second lookup after asynchronous folder preflight. Different tabs may host the
+same path independently. No Web Lock, cross-tab activation channel, browser
+lease, or server-side live-owner record is part of the contract.
 
-Within that scope:
-
-- duplicate open and restore requests elect one owner;
-- the losing tab asks the owner to activate the hosted workbench;
-- focusing the owning browser tab is best-effort because browsers may reject
-  programmatic focus; and
-- when focus is denied, the requester shows a clear notification with the
-  owning tab/session identity rather than opening a duplicate.
-
-Separate browser profiles, devices, or origins may open the same server path.
-That is outside the ownership scope and must not be blocked by server-global
-state.
+This was revised on 2026-08-23 after runtime testing found that Web Locks fail
+closed on ordinary non-secure HTTP origins and can report an unresponsive owner
+without enough trustworthy browser state to recover or explain it.
 
 Appearance projection uses the same typed hosted-shell protocol and snapshot
 semantics on web. A full page reload remains required after a server protocol
@@ -454,12 +446,14 @@ Keep current global project-manager storage. Do not introduce profile-keyed
 catalog records or migrate projects between profiles.
 
 Keep existing per-window or per-page session storage for active, resident,
-dormant, and retained workbench entries. Add only the ownership metadata needed
-for deterministic restore and diagnostics, such as activity time and stable
-session identity, if it is not already present.
+dormant, and retained workbench entries. Preserve activity metadata needed for
+deterministic desktop restore, but do not add serve-web cross-tab ownership
+metadata.
 
-The live ownership registry is runtime state, not durable truth. Persisted
-session entries are claims that must pass admission again after startup.
+The desktop live ownership registry is runtime state, not durable truth, so
+persisted desktop session entries must pass admission again after startup.
+Serve-web session entries are local restore intent and need no cross-tab
+admission.
 
 ### Existing installations
 
@@ -586,17 +580,16 @@ Exit evidence: switching between hosted workbenches with visibly different
 themes and Modern UI settings updates the entire Omni window without changing
 shell settings.
 
-### Slice 5: Serve-web tab ownership
+### Slice 5: Serve-web tab-local ownership
 
-- Prototype and select the browser lock/lease primitive.
-- Add same-origin, browser-profile-scoped ownership and tab messaging.
-- Arbitrate concurrent open, restore, release, and crashed-tab recovery.
-- Activate the owning hosted workbench and focus its tab when the browser
-  permits; otherwise report the existing owner clearly.
-- Verify that different browser profiles and devices remain independent.
+- Keep path deduplication inside each Omni tab's hosted workspace model.
+- Re-check tab-local state after asynchronous folder preflight so simultaneous
+  opens converge on one iframe.
+- Keep lifecycle persistence in session storage so tabs evolve independently.
+- Verify that two tabs can intentionally host the same path.
 
-Exit evidence: two Omni tabs in one browser do not host the same path, while a
-separate browser profile is not incorrectly blocked.
+Exit evidence: simultaneous opens in one tab create one workbench, while two
+Omni tabs can each host the same path without browser capability requirements.
 
 ### Slice 6: Integration proof and durable documentation
 
@@ -675,8 +668,8 @@ arbitrary folder:
    preview and cancellation.
 8. Crash and recover the owner, then close it and verify ownership releases.
 
-Serve-web repeats the applicable scenarios in two same-origin tabs and then in
-a separate browser profile to prove the intended ownership boundary.
+Serve-web repeats simultaneous same-path opens in one tab, then opens the same
+path in a second tab to prove the intended tab-local boundary.
 
 ### Validation commands
 
@@ -718,8 +711,8 @@ desktop and serve-web launch/smoke paths for the runtime matrix.
       without visible fallback flicker.
 - [ ] Native menus and keybindings target the correct focused renderer under
       mixed profiles.
-- [ ] Same-browser serve-web tabs arbitrate duplicates without imposing a
-      server-global lock.
+- [ ] Serve-web deduplicates concurrent opens within one tab while allowing the
+      same path in another tab.
 - [ ] PR #193 is closed or reshaped so no same-profile invariant remains.
 - [ ] Focused tests, generated suite checks, compile, validation, hygiene, and
       desktop/serve-web runtime evidence pass.
@@ -735,8 +728,7 @@ desktop and serve-web launch/smoke paths for the runtime matrix.
 | Theme projection diverges from child rendering | Publish resolved colors and scheme, not a theme ID; cover customizations and previews. |
 | Modern UI projection changes classes without geometry | Centralize application in a projection service that also requests shell relayout. |
 | Shell settings are accidentally overwritten | Keep projection ephemeral and outside configuration/Settings Sync. |
-| Browser tabs cannot force-focus one another | Make activation reliable, focus best-effort, and show the owner when browser policy denies focus. |
-| Web ownership blocks unrelated users or devices | Scope coordination to one browser profile and origin, not the server project manager. |
+| Cross-tab ownership depends on browser security and liveness heuristics | Keep live ownership tab-local and allow independent tabs. |
 | Old profile-space work is merged for convenience | Gate the first slice on explicit retain/rework/drop review of PR #193. |
 | Upstream changes broaden the fork patch surface | Keep coordinator, projection, protocol, and UX code under `src/vs/hucode/`; use narrow upstream seams. |
 
@@ -750,9 +742,8 @@ choice in its PR:
    recovery UI remains actionable, or use a bounded lease after recovery is
    explicitly abandoned? The default recommendation is no time-based expiry;
    release on an explicit lifecycle transition.
-2. Can Web Locks plus `BroadcastChannel` cover every supported serve-web
-   browser, or is a lease-backed fallback required? This determines only the
-   browser coordination mechanism, not the ownership scope.
+2. Serve-web deliberately has no cross-tab ownership primitive. Revisit that
+   product decision before introducing Web Locks, messaging, or a lease.
 3. Which existing shell parts require programmatic style refresh in addition
    to CSS variable replacement? Inventory this from runtime evidence before
    finalizing the appearance snapshot's color set.
