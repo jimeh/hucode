@@ -590,9 +590,10 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 					return {
 						async newCDPSession() {
 							return {
-								async send(method: string): Promise<void> {
+								send(method: string): Promise<void> {
 									assert.strictEqual(method, 'Page.crash');
 									crashListener?.();
+									return new Promise(() => undefined);
 								},
 								detach(): Promise<void> {
 									detachCalls++;
