@@ -299,11 +299,13 @@ as the required Hucode instruction set for work in this fork.
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
   iframe.
-- Serve-web live workbench ownership is limited to one origin and browser
-  profile through Web Locks and cross-tab messaging. Its keys use the server's
-  configured path case semantics, but the browser cannot resolve server-side
-  symlinks; do not move this ephemeral state into project/user-data storage or
-  claim coordination across browser profiles, devices, or path aliases.
+- Serve-web live workbench ownership is tab-local. `HostedWorkspaceStateModel`
+  and `RetainedWorkbenchCatalog` deduplicate paths within one Omni tab using
+  the server's configured path case semantics, and open paths must re-check
+  the model after asynchronous preflight. Different tabs may host the same
+  path independently. This path-based comparison cannot collapse distinct
+  server-side symlink aliases. Do not add Web Locks, cross-tab messages, or
+  server-side leases unless the product contract changes.
 - The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
   resolves a separate stable `playwright-core`. Build smoke helpers shared by
   desktop and serve-web must use `@playwright/test` consistently; mixing their

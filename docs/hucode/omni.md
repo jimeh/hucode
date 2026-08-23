@@ -175,27 +175,21 @@ not exist. By default, routes beneath the configured server base path are:
 | `/workbench` | Regular standalone web workbench |
 | `/omni/workbench` | Hosted workbench used by Omni iframes |
 
-Serve-web prevents duplicate hosted paths between same-origin tabs in one
-browser profile by using Web Locks for ownership and `BroadcastChannel` for
-activation. Selecting a path owned by another tab activates the exact hosted
-workbench there and asks the browser to focus that tab. Browser focus is best
-effort; if it is denied or the owner cannot confirm activation, Hucode reports
-the existing owner and does not create a duplicate.
+Serve-web workbench ownership is tab-local. Within one Omni tab, normalized
+paths identify one resident workbench, and concurrent opens converge on that
+instance after asynchronous folder checks. The server-backed project catalog
+is still shared, but it does not make hosted renderers or active-workbench
+state global. Path comparison cannot collapse distinct server-side symlink
+aliases, so aliases may produce separate workbenches within one tab.
 
-This web ownership boundary is deliberately browser-local. Separate browser
-profiles, devices, and origins are independent, and no live lock is written to
-server project or user data. Browsers without Web Locks cannot safely
-coordinate multiple Omni tabs, so Hucode refuses the ambiguous open and asks
-the user to close the other tabs or use a supported browser. Web paths use the
-server's configured case semantics, but a browser cannot prove that two
-different paths are server-side symlink aliases.
+Different tabs, browser profiles, devices, and origins may therefore host the
+same path independently. Hucode does not use Web Locks, cross-tab messages, or
+server-side leases to activate or exclude another tab.
 
 Hosted-workbench lifecycle and retained-workbench state is stored in the
 top-level tab's browser session. It survives a reload, but one tab cannot
 overwrite another tab's restore intent. A duplicated tab may begin with the
-browser's copied session snapshot; non-activating restore arbitration keeps
-only the ownership winner loaded and leaves losing retained workbenches
-unloaded in that duplicated tab.
+browser's copied session snapshot and then restore and evolve independently.
 
 ## Current Scope
 
