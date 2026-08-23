@@ -148,6 +148,7 @@ import {
 import {
 	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
+	HUCODE_OMNI_SECTION_INDENT_SETTING,
 	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
 	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
@@ -164,8 +165,10 @@ import {
 	reorderProjectSwitcherOmniSections,
 } from '../../common/projectSwitcher/projectSwitcherViewState.js';
 import {
+	getProjectSwitcherSectionIndentAdjustment,
 	getProjectSwitcherTreeIndent,
 	onDidChangeProjectSwitcherTreeIndent,
+	PROJECT_SWITCHER_DEFAULT_INDENT,
 } from './projectSwitcherTreeIndent.js';
 import {
 	canSuspendHostedWorkbench,
@@ -207,7 +210,8 @@ const PROJECT_SWITCHER_STALE_REFRESH_INTERVAL = 60 * 1000;
 
 const PROJECT_SWITCHER_ITEM_HEIGHT = 22;
 const MODERN_PROJECT_SWITCHER_SECTION_HEIGHT = 28;
-const PROJECT_SWITCHER_DEFAULT_INDENT = 8;
+const PROJECT_SWITCHER_SECTION_INDENT_ADJUSTMENT_CSS_VARIABLE =
+	'--hucode-omni-section-indent-adjustment';
 const PROJECT_SWITCHER_VIEW_STATE_STORAGE_KEY =
 	'hucode.projectSwitcher.viewState';
 const PROJECT_SWITCHER_HISTORY_LIMIT = 100;
@@ -1323,6 +1327,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				this.configurationService
 			)(indent => {
 				this.tree?.updateOptions({ indent });
+				this.updateSectionIndentAdjustment();
 			}));
 			this._register(this.hostService.onDidChangeFocus(focused => {
 				if (focused) {
@@ -1347,6 +1352,11 @@ export class ProjectSwitcherWidget extends Disposable {
 								) === true
 							),
 						});
+					}
+					if (event.affectsConfiguration(
+						HUCODE_OMNI_SECTION_INDENT_SETTING
+					)) {
+						this.updateSectionIndentAdjustment();
 					}
 					if (modernUIChanged || event.affectsConfiguration(
 						HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
@@ -1417,6 +1427,7 @@ export class ProjectSwitcherWidget extends Disposable {
 			container,
 			dom.$('.hucode-project-switcher-tree.file-icon-themable-tree')
 		);
+		this.updateSectionIndentAdjustment();
 		this.pointerInteractionWindow = dom.getWindow(this.treeContainer);
 		this._register(dom.addDisposableListener(
 			this.treeContainer,
@@ -1571,6 +1582,16 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (this.environmentService.isOmniWindow) {
 			void this.initializeOmniHostedWorkspaceState();
 		}
+	}
+
+	private updateSectionIndentAdjustment(): void {
+		this.treeContainer?.style.setProperty(
+			PROJECT_SWITCHER_SECTION_INDENT_ADJUSTMENT_CSS_VARIABLE,
+			`${getProjectSwitcherSectionIndentAdjustment(
+				this.environmentService.isOmniWindow,
+				this.configurationService
+			)}px`
+		);
 	}
 
 	layout(width: number, height: number): void {

@@ -68,8 +68,11 @@ import {
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 } from
 	'../../../../platform/window/common/hucodeOmniCommandRouting.js';
-import { IHucodeRetainedWorkbench } from
-	'../../../common/retainedWorkbench.js';
+import {
+	HUCODE_OMNI_SECTION_INDENT_SETTING,
+	HUCODE_OMNI_TREE_INDENT_SETTING,
+	IHucodeRetainedWorkbench,
+} from '../../../common/retainedWorkbench.js';
 import {
 	createHucodeHostedNavigationSnapshot,
 	filterSwitchWorktreePicks,
@@ -157,6 +160,140 @@ suite('ProjectSwitcherContribution', () => {
 			classicOmni: 0,
 			modernOmni: 4,
 			modernStandalone: 0,
+		});
+	});
+
+	test('styles section descendants and Modern UI sticky headers', () => {
+		const append = (parent: HTMLElement, className: string) => {
+			const element = mainWindow.document.createElement('div');
+			element.className = className;
+			parent.appendChild(element);
+			return element;
+		};
+		const root = mainWindow.document.createElement('div');
+		root.className = 'style-override hucode-omni-workbench ' +
+			'modern-ui-uppercase-view-headers';
+		root.style.setProperty(
+			'--hucode-omni-section-indent-adjustment',
+			'-16px'
+		);
+		const view = append(root, 'hucode-project-switcher-view');
+		const list = append(view, 'monaco-list');
+		const scrollable = append(list, 'monaco-scrollable-element');
+		scrollable.style.position = 'relative';
+		scrollable.style.width = '200px';
+		scrollable.style.height = '100px';
+		const stickyContainer = append(
+			scrollable,
+			'monaco-tree-sticky-container'
+		);
+		const stickyRow = append(
+			stickyContainer,
+			'monaco-tree-sticky-row monaco-list-row'
+		);
+		stickyRow.dataset.index = '4';
+		stickyRow.style.height = '28px';
+		const stickyTreeRow = append(stickyRow, 'monaco-tl-row');
+		append(stickyTreeRow, 'monaco-tl-indent');
+		append(stickyTreeRow, 'monaco-tl-twistie');
+		const stickyContents = append(stickyTreeRow, 'monaco-tl-contents');
+		const section = append(
+			stickyContents,
+			'hucode-project-switcher-section'
+		);
+
+		const normalSectionRow = append(list, 'monaco-list-row');
+		normalSectionRow.dataset.index = '5';
+		append(normalSectionRow, 'hucode-project-switcher-section');
+
+		const contentRow = append(list, 'monaco-list-row');
+		const contentTreeRow = append(contentRow, 'monaco-tl-row');
+		const contentIndent = append(contentTreeRow, 'monaco-tl-indent');
+		const contentTwistie = append(contentTreeRow, 'monaco-tl-twistie');
+		contentTwistie.style.paddingLeft = '16px';
+		const contentContents = append(contentTreeRow, 'monaco-tl-contents');
+		append(contentContents, 'hucode-project-switcher-project');
+
+		const classicRoot = mainWindow.document.createElement('div');
+		classicRoot.className = 'hucode-omni-workbench';
+		classicRoot.style.setProperty(
+			'--hucode-omni-section-indent-adjustment',
+			'-16px'
+		);
+		const classicView = append(
+			classicRoot,
+			'hucode-project-switcher-view'
+		);
+		const classicList = append(classicView, 'monaco-list');
+		const classicRow = append(classicList, 'monaco-list-row');
+		const classicTreeRow = append(classicRow, 'monaco-tl-row');
+		const classicIndent = append(classicTreeRow, 'monaco-tl-indent');
+		const classicTwistie = append(classicTreeRow, 'monaco-tl-twistie');
+		classicTwistie.style.paddingLeft = '16px';
+		const classicContents = append(classicTreeRow, 'monaco-tl-contents');
+		append(classicContents, 'hucode-project-switcher-project');
+
+		mainWindow.document.body.appendChild(root);
+		mainWindow.document.body.appendChild(classicRoot);
+		disposables.add(toDisposable(() => root.remove()));
+		disposables.add(toDisposable(() => classicRoot.remove()));
+
+		assert.deepStrictEqual({
+			sticky: {
+				left: mainWindow.getComputedStyle(stickyRow).left,
+				right: mainWindow.getComputedStyle(stickyRow).right,
+				width: stickyRow.getBoundingClientRect().width,
+				separator: mainWindow.getComputedStyle(
+					stickyRow,
+					'::before'
+				).content,
+			},
+			normalSeparator: mainWindow.getComputedStyle(
+				normalSectionRow,
+				'::before'
+			).content,
+			sectionTransform: mainWindow.getComputedStyle(section).textTransform,
+			content: {
+				indentLeft: mainWindow.getComputedStyle(contentIndent).left,
+				twistieMarginLeft: mainWindow.getComputedStyle(
+					contentTwistie
+				).marginLeft,
+				netSyntheticIndent: parseFloat(mainWindow.getComputedStyle(
+					contentTwistie
+				).paddingLeft) + parseFloat(mainWindow.getComputedStyle(
+					contentTwistie
+				).marginLeft),
+			},
+			classicContent: {
+				indentLeft: mainWindow.getComputedStyle(classicIndent).left,
+				twistieMarginLeft: mainWindow.getComputedStyle(
+					classicTwistie
+				).marginLeft,
+				netSyntheticIndent: parseFloat(mainWindow.getComputedStyle(
+					classicTwistie
+				).paddingLeft) + parseFloat(mainWindow.getComputedStyle(
+					classicTwistie
+				).marginLeft),
+			},
+		}, {
+			sticky: {
+				left: '4px',
+				right: '4px',
+				width: 192,
+				separator: 'none',
+			},
+			normalSeparator: '""',
+			sectionTransform: 'uppercase',
+			content: {
+				indentLeft: '2px',
+				twistieMarginLeft: '-14px',
+				netSyntheticIndent: 2,
+			},
+			classicContent: {
+				indentLeft: '8px',
+				twistieMarginLeft: '-8px',
+				netSyntheticIndent: 8,
+			},
 		});
 	});
 
@@ -1011,7 +1148,10 @@ suite('ProjectSwitcherContribution', () => {
 		)));
 		const subscriptions: string[] = [];
 		const treeLayouts: Array<{ height: number; width: number }> = [];
-		const treeOptionUpdates: Array<{ readonly paddingTop?: number }> = [];
+		const treeOptionUpdates: Array<{
+			readonly indent?: number;
+			readonly paddingTop?: number;
+		}> = [];
 		let treeOptions: {
 			readonly accessibilityProvider: {
 				getWidgetAriaLabel(): string;
@@ -1027,6 +1167,10 @@ suite('ProjectSwitcherContribution', () => {
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
 		let treeSetChildrenCalls = 0;
 		let modernUI = false;
+		const configuredIndents: {
+			section?: number;
+			tree?: number;
+		} = {};
 		const tree = {
 			contextKeyService: {
 				createKey: () => ({ set: () => undefined }),
@@ -1041,7 +1185,10 @@ suite('ProjectSwitcherContribution', () => {
 			isCollapsed: () => false,
 			layout: (height: number, width: number) =>
 				treeLayouts.push({ height, width }),
-			updateOptions: (options: { readonly paddingTop?: number }) =>
+			updateOptions: (options: {
+				readonly indent?: number;
+				readonly paddingTop?: number;
+			}) =>
 				treeOptionUpdates.push(options),
 			getFocus: () => [],
 			getSelection: () => [],
@@ -1162,9 +1309,18 @@ suite('ProjectSwitcherContribution', () => {
 					subscriptions.push('configuration');
 					return configurationChanges.event(listener);
 				},
-				getValue: (key: string) => key === LayoutSettings.MODERN_UI
-					? modernUI
-					: undefined,
+				getValue: (key: string) => {
+					switch (key) {
+						case LayoutSettings.MODERN_UI:
+							return modernUI;
+						case HUCODE_OMNI_SECTION_INDENT_SETTING:
+							return configuredIndents.section;
+						case HUCODE_OMNI_TREE_INDENT_SETTING:
+							return configuredIndents.tree;
+						default:
+							return undefined;
+					}
+				},
 			} as unknown as IConfigurationService,
 			{ warn: (value: unknown) => warnings.push(value) } as never,
 		));
@@ -1263,6 +1419,12 @@ suite('ProjectSwitcherContribution', () => {
 		const treeContainer = container.querySelector(
 			'.hucode-project-switcher-tree'
 		) as HTMLElement;
+		assert.strictEqual(
+			treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+			'-16px'
+		);
 		const row = mainWindow.document.createElement('button');
 		treeContainer.appendChild(row);
 		disposables.add(addDisposableListener(row, 'pointerdown', () => {
@@ -1351,7 +1513,42 @@ suite('ProjectSwitcherContribution', () => {
 			affectsConfiguration: (key: string) =>
 				key === LayoutSettings.MODERN_UI,
 		} as unknown as IConfigurationChangeEvent);
-		assert.deepStrictEqual(treeOptionUpdates, [{ paddingTop: 4 }]);
+		assert.deepStrictEqual({
+			treeOptionUpdates,
+			sectionIndentAdjustment: treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+		}, {
+			treeOptionUpdates: [{ paddingTop: 4 }],
+			sectionIndentAdjustment: '-16px',
+		});
+
+		configuredIndents.section = 4;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === HUCODE_OMNI_SECTION_INDENT_SETTING,
+		} as unknown as IConfigurationChangeEvent);
+		assert.strictEqual(
+			treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+			'-12px'
+		);
+
+		configuredIndents.tree = 16;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === HUCODE_OMNI_TREE_INDENT_SETTING,
+		} as unknown as IConfigurationChangeEvent);
+		assert.deepStrictEqual({
+			treeOptionUpdates,
+			sectionIndentAdjustment: treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+		}, {
+			treeOptionUpdates: [{ paddingTop: 4 }, { indent: 16 }],
+			sectionIndentAdjustment: '-20px',
+		});
 
 		widget.dispose();
 		await timeout(0);
