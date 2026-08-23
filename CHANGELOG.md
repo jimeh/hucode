@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.75 - 2026-08-23
+
+### Features
+
+- **omni:** support independent profiles and global workbench ownership (#194)
+
 ## 0.0.74 - 2026-08-19
 
 ### Features
