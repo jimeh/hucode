@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.76 - 2026-08-23
+
+### Bug Fixes
+
+- **omni:** allow independent serve-web tabs (#196)
+- **omni:** refine Projects sidebar sections (#195)
+
 ## 0.0.75 - 2026-08-23
 
 ### Features
