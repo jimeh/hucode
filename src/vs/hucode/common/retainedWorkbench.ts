@@ -30,6 +30,19 @@ export const HUCODE_OMNI_TREE_INDENT_MINIMUM = 4;
 /** Maximum indentation for the Omni Projects tree. */
 export const HUCODE_OMNI_TREE_INDENT_MAXIMUM = 40;
 
+/** User setting adjusting indentation below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_SETTING =
+	'hucode.omni.sectionIndent';
+
+/** Default indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_DEFAULT = 0;
+
+/** Minimum indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_MINIMUM = 0;
+
+/** Maximum indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_MAXIMUM = 40;
+
 /** Layout variants supported by Omni sidebar workbench rows. */
 export type HucodeOmniItemLayout = 'compact' | 'twoLine';
 
