@@ -25,6 +25,7 @@ import {
 } from './omni-hosted-command-smoke.ts';
 
 const defaultTimeoutMs = 300_000;
+const maximumCrashWaitMs = 30_000;
 const maximumLaunchAttempts = 3;
 const maximumLogLength = 64 * 1024;
 const pollIntervalMs = 100;
@@ -1250,6 +1251,7 @@ export async function runLinuxOmniSmoke(
 		);
 
 		const bravoPage = getTargetPage(runtime, restoredBravo);
+		reportLinuxOmniPhaseProgress('crash Bravo', 'starting', deadline);
 		await crashLinuxOmniPage(bravoPage, deadline);
 		crashedPages.add(bravoPage);
 		runtime = await waitForLinuxOmniPhase(
@@ -1475,6 +1477,7 @@ async function waitForLinuxOmniPhase(
 				},
 				expectation
 			);
+			reportLinuxOmniPhaseProgress(phase, 'completed', deadline);
 			return runtime;
 		} catch (error) {
 			lastError = error instanceof Error
@@ -1758,20 +1761,48 @@ export async function crashLinuxOmniPage(
 	page: Page,
 	deadline: number
 ): Promise<void> {
+	const crashDeadline = Math.min(
+		deadline,
+		Date.now() + maximumCrashWaitMs
+	);
+	let crashListener: () => void;
 	const crashEvent = new Promise<void>(resolve => {
-		page.once('crash', () => resolve());
+		crashListener = resolve;
+		page.once('crash', crashListener);
 	});
-	const session = await runLinuxOmniBoundedProbe(
-		deadline,
-		'Bravo crash CDP session creation',
-		() => getPageContext(page).newCDPSession(page)
-	);
-	void session.send('Page.crash').catch(() => undefined);
-	await waitForPromise(
-		crashEvent,
-		deadline,
-		'Timed out waiting for the Bravo renderer crash event'
-	);
+	let crashCommandError: Error | undefined;
+	try {
+		const session = await runLinuxOmniBoundedProbe(
+			crashDeadline,
+			'Bravo crash CDP session creation',
+			() => getPageContext(page).newCDPSession(page)
+		);
+		void session.send('Page.crash').catch(error => {
+			crashCommandError = error instanceof Error
+				? error
+				: new Error(String(error));
+		});
+		try {
+			await waitForPromise(
+				crashEvent,
+				crashDeadline,
+				'Timed out waiting for the Bravo renderer crash event'
+			);
+		} catch (error) {
+			if (!crashCommandError) {
+				throw error;
+			}
+			const detail = error instanceof Error
+				? error.message
+				: String(error);
+			throw new Error(
+				`${detail}; Page.crash command failed: ` +
+					crashCommandError.message
+			);
+		}
+	} finally {
+		page.off('crash', crashListener!);
+	}
 }
 
 async function quitLinuxOmniThroughKeyboard(
@@ -1812,6 +1843,18 @@ async function quitLinuxOmniThroughKeyboard(
 			)} after Ctrl+Q from ${focusedTarget}`
 		);
 	}
+	reportLinuxOmniPhaseProgress('quit', 'completed', deadline);
+}
+
+function reportLinuxOmniPhaseProgress(
+	phase: LinuxOmniLifecyclePhase,
+	status: 'starting' | 'completed',
+	deadline: number
+): void {
+	console.log(
+		`Linux Omni lifecycle phase ${status}: ${phase} ` +
+			`(${Math.max(0, deadline - Date.now())}ms remaining)`
+	);
 }
 
 function getPageContext(page: Page): BrowserContext {

@@ -952,7 +952,15 @@ jobs:
           set -euo pipefail
           dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \
             --app ../VSCode-linux-x64 \
-            --timeout-ms 300000
+            --timeout-ms 600000
+
+      - name: Upload packaged Omni smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: packaged-omni-smoke-diagnostics
+          path: .build/hucode-smoke-artifacts/
+          if-no-files-found: ignore
 
   package:
     name: Package (${{ matrix.platform }}-${{ matrix.arch }})

@@ -286,7 +286,14 @@ suite('Hucode release workflow contract', () => {
 			// leaving the `--app` line behind stops npm forwarding the path.
 			assert.match(
 				launchStep,
-				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64 \\\n\s+--timeout-ms 300000/
+				/dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \\\n\s+--app \.\.\/VSCode-linux-x64 \\\n\s+--timeout-ms 600000/
+			);
+		});
+
+		test('uploads lifecycle diagnostics after a smoke failure', () => {
+			assert.match(
+				launchStep,
+				/- name: Upload packaged Omni smoke diagnostics\n\s+if: failure\(\)\n\s+uses: actions\/upload-artifact@[^\n]+\n\s+with:\n\s+name: packaged-omni-smoke-diagnostics\n\s+path: \.build\/hucode-smoke-artifacts\/\n\s+if-no-files-found: ignore/
 			);
 		});
 
