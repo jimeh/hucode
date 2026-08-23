@@ -303,8 +303,9 @@ as the required Hucode instruction set for work in this fork.
   and `RetainedWorkbenchCatalog` deduplicate paths within one Omni tab using
   the server's configured path case semantics, and open paths must re-check
   the model after asynchronous preflight. Different tabs may host the same
-  path independently; do not add Web Locks, cross-tab messages, or server-side
-  leases unless the product contract changes.
+  path independently. This path-based comparison cannot collapse distinct
+  server-side symlink aliases. Do not add Web Locks, cross-tab messages, or
+  server-side leases unless the product contract changes.
 - The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
   resolves a separate stable `playwright-core`. Build smoke helpers shared by
   desktop and serve-web must use `@playwright/test` consistently; mixing their

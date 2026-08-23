@@ -333,46 +333,46 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			);
 		}
 
-		const ownerPage = page;
-		const requesterPage = await ownerPage.context().newPage();
-		requesterPage.on('pageerror', error =>
+		const firstTabPage = page;
+		const secondTabPage = await firstTabPage.context().newPage();
+		secondTabPage.on('pageerror', error =>
 			pageErrors.push(error.stack ?? error.message));
-		requesterPage.on('console', message => {
+		secondTabPage.on('console', message => {
 			if (message.type() === 'error') {
 				consoleErrors.push(message.text());
 			}
 		});
-		const requesterReadiness = Promise.all([
-			observeServerUserDataBootstrap(requesterPage, deadline),
-			requesterPage.waitForSelector(omniWorkbenchSelector, {
+		const secondTabReadiness = Promise.all([
+			observeServerUserDataBootstrap(secondTabPage, deadline),
+			secondTabPage.waitForSelector(omniWorkbenchSelector, {
 				state: 'visible',
 				timeout: remainingTime(deadline),
 			}),
 		]);
-		void requesterReadiness.catch(() => undefined);
-		await requesterPage.goto(launch.url, {
+		void secondTabReadiness.catch(() => undefined);
+		await secondTabPage.goto(launch.url, {
 			waitUntil: 'domcontentloaded',
 			timeout: remainingTime(deadline),
 		});
-		await requesterReadiness;
-		await waitForWebSmokeTestDriver(requesterPage, deadline);
+		await secondTabReadiness;
+		await waitForWebSmokeTestDriver(secondTabPage, deadline);
 
 		await openWorkspaceThroughSmokeDriver(
-			requesterPage,
+			secondTabPage,
 			alphaPath,
 			deadline
 		);
-		await waitForWebWorkbenchState(requesterPage, deadline, [
+		await waitForWebWorkbenchState(secondTabPage, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
 		]);
-		await waitForHostedFrame(requesterPage, alphaPath, deadline);
-		await waitForWebWorkbenchState(ownerPage, deadline, [
+		await waitForHostedFrame(secondTabPage, alphaPath, deadline);
+		await waitForWebWorkbenchState(firstTabPage, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
 			{ label: 'Bravo', state: 'loaded', active: false },
 		]);
-		await waitForHostedFrame(ownerPage, alphaPath, deadline);
+		await waitForHostedFrame(firstTabPage, alphaPath, deadline);
 
-		page = requesterPage;
+		page = secondTabPage;
 		targetInventory = await formatWebTargetInventory(page);
 
 		console.log(

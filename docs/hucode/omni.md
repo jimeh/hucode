@@ -179,7 +179,8 @@ Serve-web workbench ownership is tab-local. Within one Omni tab, normalized
 paths identify one resident workbench, and concurrent opens converge on that
 instance after asynchronous folder checks. The server-backed project catalog
 is still shared, but it does not make hosted renderers or active-workbench
-state global.
+state global. Path comparison cannot collapse distinct server-side symlink
+aliases, so aliases may produce separate workbenches within one tab.
 
 Different tabs, browser profiles, devices, and origins may therefore host the
 same path independently. Hucode does not use Web Locks, cross-tab messages, or
