@@ -545,9 +545,14 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 	test('bounds CDP session creation by the lifecycle deadline',
 		{ timeout: 500 },
 		async () => {
+			let removedCrashListeners = 0;
 			const page = {
 				once(event: string): void {
 					assert.strictEqual(event, 'crash');
+				},
+				off(event: string): void {
+					assert.strictEqual(event, 'crash');
+					removedCrashListeners++;
 				},
 				context() {
 					return {
@@ -562,6 +567,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				crashLinuxOmniPage(page as never, Date.now() + 10),
 				/Timed out during Bravo crash CDP session creation/
 			);
+			assert.strictEqual(removedCrashListeners, 1);
 		}
 	);
 
@@ -569,10 +575,16 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 		async () => {
 			let crashListener: (() => void) | undefined;
 			let detachCalls = 0;
+			let removedCrashListeners = 0;
 			const page = {
 				once(event: string, listener: () => void): void {
 					assert.strictEqual(event, 'crash');
 					crashListener = listener;
+				},
+				off(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					assert.strictEqual(listener, crashListener);
+					removedCrashListeners++;
 				},
 				context() {
 					return {
@@ -598,6 +610,45 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 				() => crashLinuxOmniPage(page as never, Date.now() + 500)
 			));
 			assert.strictEqual(detachCalls, 0);
+			assert.strictEqual(removedCrashListeners, 1);
+		}
+	);
+
+	test('reports a rejected crash command when no crash event follows',
+		{ timeout: 500 },
+		async () => {
+			let crashListener: (() => void) | undefined;
+			let removedCrashListeners = 0;
+			const page = {
+				once(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					crashListener = listener;
+				},
+				off(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					assert.strictEqual(listener, crashListener);
+					removedCrashListeners++;
+				},
+				context() {
+					return {
+						async newCDPSession() {
+							return {
+								send(): Promise<void> {
+									return Promise.reject(
+										new Error('Page.crash unavailable')
+									);
+								},
+							};
+						},
+					};
+				},
+			};
+
+			await assert.rejects(
+				crashLinuxOmniPage(page as never, Date.now() + 10),
+				/Timed out waiting for the Bravo renderer crash event.*Page\.crash unavailable/
+			);
+			assert.strictEqual(removedCrashListeners, 1);
 		}
 	);
 
