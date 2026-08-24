@@ -1049,6 +1049,12 @@ export async function runLinuxOmniSmoke(
 			false,
 			getRemainingTimeout(deadline)
 		);
+		await waitForLinuxHostedWorkspaceSidebarLayout(
+			shellPage,
+			hostedPage,
+			false,
+			deadline
+		);
 		await runHostedWorkbenchSmokeCommand(
 			hostedPage,
 			hostedPage,
@@ -1059,6 +1065,12 @@ export async function runLinuxOmniSmoke(
 			shellPage,
 			true,
 			getRemainingTimeout(deadline)
+		);
+		await waitForLinuxHostedWorkspaceSidebarLayout(
+			shellPage,
+			hostedPage,
+			true,
+			deadline
 		);
 		const reloadNavigation = hostedPage.waitForNavigation({
 			waitUntil: 'domcontentloaded',
@@ -1958,6 +1970,62 @@ function reportLinuxOmniPhaseProgress(
 	console.log(
 		`Linux Omni lifecycle phase ${status}: ${phase} ` +
 			`(${Math.max(0, deadline - Date.now())}ms remaining)`
+	);
+}
+
+async function waitForLinuxHostedWorkspaceSidebarLayout(
+	shellPage: Page,
+	hostedPage: Page,
+	visible: boolean,
+	deadline: number
+): Promise<void> {
+	let lastObserved = '<not observed>';
+	while (Date.now() < deadline) {
+		const [shell, hostedWidth] = await Promise.all([
+			runLinuxOmniBoundedProbe(
+				deadline,
+				'Projects sidebar layout probe',
+				() => shellPage.evaluate(() => {
+					const targetGlobal = globalThis as unknown as {
+						readonly document: {
+							getElementById(id: string): {
+								getBoundingClientRect(): { readonly width: number };
+							} | null;
+						};
+						readonly innerWidth: number;
+					};
+					const sidebar = targetGlobal.document.getElementById(
+						'workbench.parts.sidebar'
+					);
+					const bounds = sidebar?.getBoundingClientRect();
+					return {
+						windowWidth: targetGlobal.innerWidth,
+						sidebarWidth: bounds?.width ?? 0,
+					};
+				})
+			),
+			runLinuxOmniBoundedProbe(
+				deadline,
+				'hosted workspace width probe',
+				() => hostedPage.evaluate(() => (
+					globalThis as unknown as { readonly innerWidth: number }
+				).innerWidth)
+			),
+		]);
+		const expectedMaximumWidth = shell.windowWidth - shell.sidebarWidth;
+		const matches = visible
+			? shell.sidebarWidth > 0 && hostedWidth <= expectedMaximumWidth + 1
+			: shell.sidebarWidth === 0 && hostedWidth >= shell.windowWidth - 1;
+		if (matches) {
+			return;
+		}
+		lastObserved = JSON.stringify({ shell, hostedWidth });
+		await delay(Math.min(pollIntervalMs, deadline - Date.now()));
+	}
+
+	throw new Error(
+		`Timed out waiting for Projects sidebar native layout ` +
+		`${visible ? 'shown' : 'hidden'}; last observed ${lastObserved}`
 	);
 }
 

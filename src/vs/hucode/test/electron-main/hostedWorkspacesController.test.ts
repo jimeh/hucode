@@ -3780,6 +3780,34 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('showing projects sidebar restores cached hosted workspace bounds',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const sidebarBounds = { x: 300, y: 0, width: 900, height: 800 };
+			controller.layout(sidebarBounds);
+
+			controller.setProjectsSidebarVisible(false);
+			assert.deepStrictEqual(viewFactory.views[0].boundsCalls.at(-1), {
+				x: 0,
+				y: 0,
+				width: 1200,
+				height: 800,
+			});
+			controller.layout({ x: 0, y: 0, width: 1200, height: 800 });
+
+			controller.setProjectsSidebarVisible(true);
+
+			assert.deepStrictEqual(
+				viewFactory.views[0].boundsCalls.at(-1),
+				sidebarBounds
+			);
+		}
+	);
+
 	test('overlay occlusion restores active workspace with repaint',
 		async () => {
 			const alpha = createWorktree('alpha');

@@ -234,6 +234,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
+	private projectsSidebarBounds: IRectangle | undefined;
 	private restored = false;
 	private shuttingDown = false;
 	private terminalShutdownRequested = false;
@@ -2399,6 +2400,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 	layout(bounds: IRectangle): void {
 		this.bounds = bounds;
+		if (this.projectsSidebarVisible) {
+			this.projectsSidebarBounds = bounds;
+		}
 		if (!this.window.win) {
 			return;
 		}
@@ -3072,6 +3076,15 @@ export class ResidentHostedWorkspacesController extends Disposable {
 
 		if (!this.projectsSidebarVisible) {
 			this.expandActiveInstanceToWindowLeft();
+		} else {
+			const activeInstance = this.getActiveInstance();
+			if (activeInstance && this.isViewActuallyVisible(activeInstance)) {
+				this.setInstanceBounds(
+					activeInstance,
+					this.projectsSidebarBounds ?? this.bounds
+				);
+				this.bringInstanceToFront(activeInstance);
+			}
 		}
 		this.emitState();
 	}
