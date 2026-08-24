@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/projectSwitcher.css';
+import '../omniItemLayoutConfigurationMigration.js';
 import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
 import { IAction, Separator, toAction } from
@@ -146,7 +147,6 @@ import {
 	UNPINNED_SECTION,
 } from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import {
-	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HUCODE_OMNI_SECTION_INDENT_SETTING,
 	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
@@ -155,6 +155,7 @@ import {
 	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
 	HucodeOmniItemLayout,
+	normalizeHucodeOmniItemLayout,
 } from '../../common/retainedWorkbench.js';
 import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
@@ -228,7 +229,7 @@ export function getProjectSwitcherItemHeight(
 		return MODERN_PROJECT_SWITCHER_SECTION_HEIGHT;
 	}
 
-	return layout === 'twoLine'
+	return layout === 'default'
 		? PROJECT_SWITCHER_ITEM_HEIGHT * 2
 		: PROJECT_SWITCHER_ITEM_HEIGHT;
 }
@@ -562,7 +563,7 @@ export class ProjectSwitcherRenderer
 			'hucode-project-switcher-inline-icon';
 		templateData.pathIcon.className =
 			'hucode-project-switcher-inline-icon';
-		if (this.getItemLayout(item) === 'twoLine') {
+		if (this.getItemLayout(item) === 'default') {
 			templateData.container.classList.add(
 				'hucode-project-switcher-two-line'
 			);
@@ -1393,14 +1394,18 @@ export class ProjectSwitcherWidget extends Disposable {
 			return 'compact';
 		}
 		if (isRetainedWorkbenchItem(item)) {
-			return this.configurationService.getValue<HucodeOmniItemLayout>(
-				HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
-			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
+			return normalizeHucodeOmniItemLayout(
+				this.configurationService.getValue<unknown>(
+					HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING
+				)
+			);
 		}
 		if (isWorktreeItem(item)) {
-			return this.configurationService.getValue<HucodeOmniItemLayout>(
-				HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
-			) ?? HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
+			return normalizeHucodeOmniItemLayout(
+				this.configurationService.getValue<unknown>(
+					HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING
+				)
+			);
 		}
 		return 'compact';
 	}

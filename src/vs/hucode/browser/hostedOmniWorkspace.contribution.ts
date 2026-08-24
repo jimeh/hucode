@@ -81,6 +81,7 @@ import { observeHucodeHostedShellState } from
 	'./hostedShellStateObserver.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './hostedWorkbenchAppearance.contribution.js';
+import './omniItemLayoutConfigurationMigration.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
@@ -146,7 +147,7 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
 			order: 30,
-			enum: ['twoLine', 'compact'],
+			enum: ['default', 'compact'],
 			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
@@ -157,7 +158,7 @@ Registry.as<IConfigurationRegistry>(
 		[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
 			order: 20,
-			enum: ['twoLine', 'compact'],
+			enum: ['default', 'compact'],
 			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
