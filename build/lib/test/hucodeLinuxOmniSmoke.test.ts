@@ -17,6 +17,7 @@ import {
 	getLinuxOmniLaunchAttemptDeadline,
 	linuxOmniLifecyclePhases,
 	parseLinuxOmniSmokeOptions,
+	removeLinuxOmniTemporaryRoot,
 	resolveLinuxOmniExecutable,
 	runLinuxOmniBoundedProbe,
 	summarizeLinuxOmniRenderers,
@@ -139,6 +140,43 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			);
 		}
 	);
+
+	test('ignores exhausted ENOTEMPTY while removing the temporary profile',
+		async () => {
+			let observedOptions: unknown;
+			const cleanupError = Object.assign(new Error('directory not empty'), {
+				code: 'ENOTEMPTY',
+			});
+
+			await assert.doesNotReject(
+				removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke',
+					async (_temporaryRoot, options) => {
+						observedOptions = options;
+						throw cleanupError;
+					}
+				)
+			);
+			assert.deepStrictEqual(observedOptions, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		}
+	);
+
+	test('propagates other temporary profile cleanup errors', async () => {
+		const cleanupError = Object.assign(new Error('permission denied'), {
+			code: 'EACCES',
+		});
+
+		await assert.rejects(
+			removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke', async () => {
+				throw cleanupError;
+			}),
+			cleanupError
+		);
+	});
 
 	test('parses a caller-supplied packaged application path', () => {
 		assert.deepStrictEqual(
