@@ -2,6 +2,17 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.77 - 2026-08-24
+
+### Features
+
+- **omni:** add an actionable empty workbench view (#209)
+- **omni:** rename two-line list layout values to default (#207)
+
+### Bug Fixes
+
+- **omni:** restore Projects sidebar on Linux (#206)
+
 ## 0.0.76 - 2026-08-23
 
 ### Bug Fixes
