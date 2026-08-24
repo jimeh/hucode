@@ -2014,7 +2014,9 @@ async function waitForLinuxHostedWorkspaceSidebarLayout(
 		]);
 		const expectedMaximumWidth = shell.windowWidth - shell.sidebarWidth;
 		const matches = visible
-			? shell.sidebarWidth > 0 && hostedWidth <= expectedMaximumWidth + 1
+			? shell.sidebarWidth > 0
+				&& hostedWidth >= expectedMaximumWidth - 1
+				&& hostedWidth <= expectedMaximumWidth + 1
 			: shell.sidebarWidth === 0 && hostedWidth >= shell.windowWidth - 1;
 		if (matches) {
 			return;

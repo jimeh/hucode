@@ -3780,7 +3780,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
-	test('showing projects sidebar restores cached hosted workspace bounds',
+	test('showing projects sidebar restores cached inset at current window size',
 		async () => {
 			const alpha = createWorktree('alpha');
 			const { controller, viewFactory } = createController();
@@ -3797,13 +3797,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				width: 1200,
 				height: 800,
 			});
-			controller.layout({ x: 0, y: 0, width: 1200, height: 800 });
+			controller.layout({ x: 0, y: 0, width: 1600, height: 900 });
 
 			controller.setProjectsSidebarVisible(true);
 
 			assert.deepStrictEqual(
 				viewFactory.views[0].boundsCalls.at(-1),
-				sidebarBounds
+				{ x: 300, y: 0, width: 1300, height: 900 }
 			);
 		}
 	);
