@@ -336,6 +336,8 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			'hosted last active to Alpha',
 			'hosted quick switch to Bravo',
 			'hosted unload Bravo',
+			'last unload',
+			'restore Alpha after last unload',
 			'restore Bravo after hosted unload',
 			'suspend Bravo',
 			'restore Bravo',
@@ -384,6 +386,45 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			targetPaths: ['/tmp/smoke/Alpha'],
 			crashedRendererCount: 0,
 		});
+		assert.deepStrictEqual(expectations['last unload'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: [],
+			crashedRendererCount: 0,
+		});
+		assert.deepStrictEqual(
+			expectations['restore Alpha after last unload'],
+			{
+				rows: [
+					{
+						label: 'Alpha',
+						state: 'active',
+						active: true,
+						ariaDescription: '/tmp/smoke/Alpha',
+					},
+					{
+						label: 'Bravo',
+						state: 'unloaded',
+						active: false,
+						ariaDescription: '/tmp/smoke/Bravo',
+					},
+				],
+				targetPaths: ['/tmp/smoke/Alpha'],
+				crashedRendererCount: 0,
+			}
+		);
 		assert.deepStrictEqual(expectations['crash Bravo'], {
 			rows: [
 				{
