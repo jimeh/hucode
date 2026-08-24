@@ -26,6 +26,7 @@ import {
 	waitForOmniProjectsSmokeSurfaceFocus,
 	waitForOmniProjectsSidebarVisibility,
 } from './omni-hosted-command-smoke.ts';
+import { assertOmniLandingSmokeState } from './omni-landing-smoke.ts';
 
 const timeoutMs = 180_000;
 const pollIntervalMs = 100;
@@ -128,10 +129,20 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		});
 		const [bootstrap] = await readiness;
 		await waitForWebSmokeTestDriver(page, deadline);
+		await assertOmniLandingSmokeState(
+			page,
+			'first-workbench',
+			commandTimeout(deadline)
+		);
 		await openWorkspaceThroughSmokeDriver(page, alphaPath, deadline);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
 		]);
+		await assertOmniLandingSmokeState(
+			page,
+			'hidden',
+			commandTimeout(deadline)
+		);
 		await openWorkspaceThroughSmokeDriver(page, bravoPath, deadline);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'loaded', active: false },
@@ -333,6 +344,60 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			);
 		}
 
+		hostedFrame = await waitForHostedFrame(page, alphaPath, deadline);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			commandTimeout(deadline)
+		);
+		await waitForWebWorkbenchState(page, deadline, [
+			{ label: 'Alpha', state: 'unloaded', active: false },
+			{ label: 'Bravo', state: 'active', active: true },
+		]);
+		hostedFrame = await waitForHostedFrame(page, bravoPath, deadline);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			commandTimeout(deadline)
+		);
+		await waitForOmniProjectsSidebarVisibility(
+			page,
+			false,
+			commandTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			page,
+			hostedFrame,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			commandTimeout(deadline)
+		);
+		await waitForWebWorkbenchState(page, deadline, [
+			{ label: 'Alpha', state: 'unloaded', active: false },
+			{ label: 'Bravo', state: 'unloaded', active: false },
+		]);
+		await waitForOmniProjectsSidebarVisibility(
+			page,
+			true,
+			commandTimeout(deadline)
+		);
+		await assertOmniLandingSmokeState(
+			page,
+			'catalog',
+			commandTimeout(deadline)
+		);
+		await openWorkspaceThroughSmokeDriver(page, alphaPath, deadline);
+		await waitForWebWorkbenchState(page, deadline, [
+			{ label: 'Alpha', state: 'active', active: true },
+			{ label: 'Bravo', state: 'unloaded', active: false },
+		]);
+		await assertOmniLandingSmokeState(
+			page,
+			'hidden',
+			commandTimeout(deadline)
+		);
+
 		const firstTabPage = page;
 		const secondTabPage = await firstTabPage.context().newPage();
 		secondTabPage.on('pageerror', error =>
@@ -368,7 +433,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 		await waitForHostedFrame(secondTabPage, alphaPath, deadline);
 		await waitForWebWorkbenchState(firstTabPage, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
-			{ label: 'Bravo', state: 'loaded', active: false },
+			{ label: 'Bravo', state: 'unloaded', active: false },
 		]);
 		await waitForHostedFrame(firstTabPage, alphaPath, deadline);
 

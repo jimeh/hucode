@@ -23,6 +23,7 @@ import {
 	runHostedWorkbenchSmokeCommand,
 	waitForOmniProjectsSidebarVisibility,
 } from './omni-hosted-command-smoke.ts';
+import { assertOmniLandingSmokeState } from './omni-landing-smoke.ts';
 
 const defaultTimeoutMs = 300_000;
 const maximumCrashWaitMs = 30_000;
@@ -169,6 +170,8 @@ export const linuxOmniLifecyclePhases = [
 	'hosted last active to Alpha',
 	'hosted quick switch to Bravo',
 	'hosted unload Bravo',
+	'last unload',
+	'restore Alpha after last unload',
 	'restore Bravo after hosted unload',
 	'suspend Bravo',
 	'restore Bravo',
@@ -342,6 +345,34 @@ export function createLinuxOmniLifecycleExpectations(
 			crashedRendererCount: 0,
 		},
 		'hosted unload Bravo': {
+			rows: [
+				{
+					label: 'Alpha', state: 'active', active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'unloaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath],
+			crashedRendererCount: 0,
+		},
+		'last unload': {
+			rows: [
+				{
+					label: 'Alpha', state: 'unloaded', active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'unloaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [],
+			crashedRendererCount: 0,
+		},
+		'restore Alpha after last unload': {
 			rows: [
 				{
 					label: 'Alpha', state: 'active', active: true,
@@ -923,6 +954,11 @@ export async function runLinuxOmniSmoke(
 			getLifecycleExpectation(lifecycleExpectations, 'initial restore')
 		);
 		let shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'hidden',
+			getRemainingTimeout(deadline)
+		);
 		const initialAlpha = getWorkbenchTarget(
 			runtime,
 			alphaPath
@@ -1187,8 +1223,71 @@ export async function runLinuxOmniSmoke(
 				'hosted unload Bravo'
 			)
 		);
-
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			getRemainingTimeout(deadline)
+		);
 		shellPage = getShellPage(runtime);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			false,
+			getRemainingTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			getRemainingTimeout(deadline)
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'last unload',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'last unload')
+		);
+		shellPage = getShellPage(runtime);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			true,
+			getRemainingTimeout(deadline)
+		);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'catalog',
+			getRemainingTimeout(deadline)
+		);
+		await clickWorkbenchRow(
+			shellPage,
+			'Alpha',
+			deadline,
+			'restore Alpha after last unload'
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'restore Alpha after last unload',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'restore Alpha after last unload'
+			)
+		);
+		shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'hidden',
+			getRemainingTimeout(deadline)
+		);
+
 		await clickWorkbenchRow(
 			shellPage,
 			'Bravo',
@@ -1262,8 +1361,13 @@ export async function runLinuxOmniSmoke(
 			crashedPages,
 			getLifecycleExpectation(lifecycleExpectations, 'crash Bravo')
 		);
-
 		shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'crashed',
+			getRemainingTimeout(deadline)
+		);
+
 		await clickWorkbenchRow(
 			shellPage,
 			'Bravo',

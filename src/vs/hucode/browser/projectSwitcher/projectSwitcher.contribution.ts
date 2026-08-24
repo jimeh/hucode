@@ -96,6 +96,7 @@ import { IHucodeShellControllerService } from
 	'../../../platform/window/common/hucodeShellControllerService.js';
 import {
 	CREATE_WORKTREE_COMMAND_ID,
+	ADD_WORKBENCH_COMMAND_ID,
 	GO_BACK_WORKTREE_COMMAND_ID,
 	GO_FORWARD_WORKTREE_COMMAND_ID,
 	ADD_PROJECT_COMMAND_ID,
@@ -196,7 +197,6 @@ const REMOVE_PROJECT_COMMAND_ID = 'hucode.projectSwitcher.removeProject';
 const REMOVE_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.removeWorktree';
 const SUSPEND_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.suspendWorktree';
 const UNLOAD_WORKTREE_COMMAND_ID = 'hucode.projectSwitcher.unloadWorktree';
-const ADD_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.addWorkbench';
 const OPEN_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.openWorkbench';
 const RENAME_WORKBENCH_COMMAND_ID = 'hucode.projectSwitcher.renameWorkbench';
 const RESET_WORKBENCH_LABEL_COMMAND_ID =
