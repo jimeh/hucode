@@ -201,6 +201,16 @@ suite('ProjectSwitcherContribution', () => {
 			workbench: 'default',
 			worktree: 'compact',
 		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'compact');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'twoLine');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'compact',
+			worktree: 'default',
+		});
 	});
 
 	test('styles section descendants and Modern UI sticky headers', () => {
