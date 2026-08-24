@@ -1081,7 +1081,8 @@ export async function runLinuxOmniSmoke(
 				hostedPage,
 				hostedPage,
 				hostedWorkbenchSmokeCommands.reloadDesktop,
-				getRemainingTimeout(deadline)
+				getRemainingTimeout(deadline),
+				{ surfaceMayClose: true }
 			),
 			reloadNavigation,
 		]);
@@ -1105,7 +1106,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.switchWorkbench,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1194,7 +1195,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.quickSwitchLoaded,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1222,7 +1223,8 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedPage,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			getRemainingTimeout(deadline)
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1255,7 +1257,8 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedPage,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			getRemainingTimeout(deadline)
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1461,7 +1464,12 @@ export async function runLinuxOmniSmoke(
 		if (launch) {
 			await terminateProcessGroup(launch.child);
 		}
-		await fs.rm(temporaryRoot, { recursive: true, force: true });
+		await fs.rm(temporaryRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 200,
+		});
 	}
 }
 

@@ -155,7 +155,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			hostedFrame,
 			hostedWorkbenchSmokeCommands.switchWorkbench,
 			commandTimeout(deadline),
-			'Alpha'
+			{ selectionLabel: 'Alpha' }
 		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
@@ -274,7 +274,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			hostedFrame,
 			hostedWorkbenchSmokeCommands.quickSwitchLoaded,
 			commandTimeout(deadline),
-			'Alpha'
+			{ selectionLabel: 'Alpha' }
 		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'active', active: true },
@@ -292,7 +292,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			hostedFrame,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			commandTimeout(deadline)
+			commandTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'unloaded', active: false },
@@ -309,7 +310,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			beforeReload,
 			hostedWorkbenchSmokeCommands.reloadWeb,
-			commandTimeout(deadline)
+			commandTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		const afterReload = await waitForHostedFrame(
 			page,
@@ -349,7 +351,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			hostedFrame,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			commandTimeout(deadline)
+			commandTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'unloaded', active: false },
@@ -371,7 +374,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			page,
 			hostedFrame,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			commandTimeout(deadline)
+			commandTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		await waitForWebWorkbenchState(page, deadline, [
 			{ label: 'Alpha', state: 'unloaded', active: false },
