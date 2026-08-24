@@ -9,6 +9,7 @@
 		"src/vs/hucode/test/browser/hucodeWebVersionMismatch.test.ts",
 		"src/vs/hucode/test/browser/omniAppearanceProjection.test.ts",
 		"src/vs/hucode/test/browser/omniConfigurationService.test.ts",
+		"src/vs/hucode/test/browser/omniItemLayoutConfigurationMigration.test.ts",
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",
 		"src/vs/hucode/test/browser/omniSmokeTestDriver.test.ts",

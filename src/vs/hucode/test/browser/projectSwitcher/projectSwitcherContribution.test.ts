@@ -71,6 +71,8 @@ import {
 import {
 	HUCODE_OMNI_SECTION_INDENT_SETTING,
 	HUCODE_OMNI_TREE_INDENT_SETTING,
+	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
+	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
 	IHucodeRetainedWorkbench,
 } from '../../../common/retainedWorkbench.js';
 import {
@@ -138,16 +140,16 @@ suite('ProjectSwitcherContribution', () => {
 				'compact',
 				true
 			),
-			modernTwoLineItem: getProjectSwitcherItemHeight(
+			modernDefaultItem: getProjectSwitcherItemHeight(
 				workbench,
-				'twoLine',
+				'default',
 				true
 			),
 		}, {
 			classicSection: 22,
 			modernSection: 28,
 			modernCompactItem: 22,
-			modernTwoLineItem: 44,
+			modernDefaultItem: 44,
 		});
 	});
 
@@ -160,6 +162,54 @@ suite('ProjectSwitcherContribution', () => {
 			classicOmni: 0,
 			modernOmni: 4,
 			modernStandalone: 0,
+		});
+	});
+
+	test('keeps workbench and worktree item layouts independent', () => {
+		const values = new Map<string, unknown>([
+			[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'compact'],
+			[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'default'],
+		]);
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			environmentService: { isOmniWindow: true },
+			configurationService: {
+				getValue: (key: string) => values.get(key),
+			},
+		});
+		const getItemLayout = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'getItemLayout'
+		) as (
+			this: object,
+			item: ProjectSwitcherItem
+		) => 'default' | 'compact';
+
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'compact',
+			worktree: 'default',
+		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'default');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'compact');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'default',
+			worktree: 'compact',
+		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'compact');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'twoLine');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'compact',
+			worktree: 'default',
 		});
 	});
 
@@ -780,7 +830,7 @@ suite('ProjectSwitcherContribution', () => {
 	);
 
 	test('renders independent name branch and path fields in source order', () => {
-		let layout: 'compact' | 'twoLine' = 'compact';
+		let layout: 'compact' | 'default' = 'compact';
 		const renderer = new ProjectSwitcherRenderer(
 			() => layout,
 			() => true,
@@ -800,9 +850,9 @@ suite('ProjectSwitcherContribution', () => {
 			text: element.textContent,
 			display: (element as HTMLElement).style.display,
 		}));
-		layout = 'twoLine';
+		layout = 'default';
 		renderer.renderElement(treeNode(item), 0, template);
-		const twoLine = {
+		const defaultLayout = {
 			branch: template.description.textContent,
 			branchDisplay: template.description.style.display,
 			path: template.path.textContent,
@@ -811,7 +861,7 @@ suite('ProjectSwitcherContribution', () => {
 
 		assert.deepStrictEqual({
 			compact,
-			twoLine,
+			defaultLayout,
 			twoLineClass: template.container.classList.contains(
 				'hucode-project-switcher-two-line'
 			),
@@ -835,7 +885,7 @@ suite('ProjectSwitcherContribution', () => {
 				text: '',
 				display: 'none',
 			}],
-			twoLine: {
+			defaultLayout: {
 				branch: 'feature/topic',
 				branchDisplay: '',
 				path: '/repo.worktrees/feature',
@@ -851,7 +901,7 @@ suite('ProjectSwitcherContribution', () => {
 	test('toggles inline metadata icons without decorating project paths', () => {
 		let showInlineIcons = true;
 		const renderer = new ProjectSwitcherRenderer(
-			() => 'twoLine',
+			() => 'default',
 			() => showInlineIcons,
 			{ executeCommand: async () => undefined } as unknown as ICommandService
 		);

@@ -10,11 +10,29 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 import {
 	createHostedWorkbenchRestorePlan,
 	deserializeRetainedWorkbenches,
+	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
+	normalizeHucodeOmniItemLayout,
 	RetainedWorkbenchCatalog,
 } from '../../common/retainedWorkbench.js';
 
 suite('RetainedWorkbench', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('normalizes public, legacy, absent, and invalid item layouts', () => {
+		assert.deepStrictEqual({
+			publicDefault: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
+			compact: normalizeHucodeOmniItemLayout('compact'),
+			legacy: normalizeHucodeOmniItemLayout('twoLine'),
+			absent: normalizeHucodeOmniItemLayout(undefined),
+			invalid: normalizeHucodeOmniItemLayout('invalid'),
+		}, {
+			publicDefault: 'default',
+			compact: 'compact',
+			legacy: 'default',
+			absent: 'default',
+			invalid: 'default',
+		});
+	});
 
 	test('retains folders with stable identity and manual order', () => {
 		let nextId = 0;
