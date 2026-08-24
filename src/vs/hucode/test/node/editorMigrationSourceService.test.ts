@@ -576,6 +576,32 @@ suite('EditorMigrationSourceService', () => {
 		assert.deepStrictEqual(result.diagnostics.map(item => item.code), ['candidateAbsent', 'candidateAbsent']);
 	});
 
+	test('classifies snippet directories by successful direct reads', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const vscode = resolveEditorMigrationCandidatePaths('vscode', linuxEnvironment);
+		const snippets = joinPath(vscode.userData, 'snippets');
+		fileSystem.addDirectory(snippets);
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		let discovery = await service.discoverSources({}, CancellationToken.None);
+		assert.deepStrictEqual(discovery.sources, []);
+
+		fileSystem.addFile(joinPath(vscode.userData, 'settings.json'), '{}');
+		discovery = await service.discoverSources({}, CancellationToken.None);
+		let snapshot = await service.readSourceProfile(discovery.sources[0].ref, ['snippets'], CancellationToken.None);
+		assert.deepStrictEqual(categoryValue(snapshot.categories[0]), ['snippets', 'absent', undefined]);
+
+		fileSystem.addFile(joinPath(snippets, 'malformed.json'), '{ malformed');
+		discovery = await service.discoverSources({}, CancellationToken.None);
+		snapshot = await service.readSourceProfile(discovery.sources[0].ref, ['snippets'], CancellationToken.None);
+		assert.deepStrictEqual(categoryValue(snapshot.categories[0]), ['snippets', 'unreadable', undefined]);
+
+		fileSystem.addFile(joinPath(snippets, 'valid.code-snippets'), '{"Valid":{}}');
+		discovery = await service.discoverSources({}, CancellationToken.None);
+		snapshot = await service.readSourceProfile(discovery.sources[0].ref, ['snippets'], CancellationToken.None);
+		assert.deepStrictEqual(categoryValue(snapshot.categories[0]), ['snippets', 'present', ['valid.code-snippets']]);
+	});
+
 	test('preserves diagnostics when an existing profile has no usable categories', async () => {
 		const fileSystem = new FixtureFileSystem();
 		const vscode = resolveEditorMigrationCandidatePaths('vscode', linuxEnvironment);

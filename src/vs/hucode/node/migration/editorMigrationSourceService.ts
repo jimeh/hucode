@@ -449,7 +449,7 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 			contentEntries.push({ name: entry.name, state: 'present', hash: raw.contentHash! });
 			newestModificationTime = Math.max(newestModificationTime, raw.mtime ?? 0);
 		}
-		const state: EditorMigrationResourceState = anyUnreadable && snippets.length === 0 ? 'unreadable' : 'present';
+		const state: EditorMigrationResourceState = snippets.length > 0 ? 'present' : anyUnreadable ? 'unreadable' : 'absent';
 		const aggregate = sha256String(JSON.stringify(contentEntries));
 		let canonical = resource;
 		try {
