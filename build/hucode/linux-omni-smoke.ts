@@ -42,6 +42,16 @@ const smokeArtifactRoot = path.join(
 	'hucode-smoke-artifacts'
 );
 
+type LinuxOmniTemporaryRootRemover = (
+	temporaryRoot: string,
+	options: {
+		readonly recursive: true;
+		readonly force: true;
+		readonly maxRetries: number;
+		readonly retryDelay: number;
+	}
+) => Promise<void>;
+
 type LinuxOmniWorkbenchLabel = typeof workbenchLabels[number];
 const linuxOmniWorkbenchStates = [
 	'restore-pending',
@@ -1081,7 +1091,8 @@ export async function runLinuxOmniSmoke(
 				hostedPage,
 				hostedPage,
 				hostedWorkbenchSmokeCommands.reloadDesktop,
-				getRemainingTimeout(deadline)
+				getRemainingTimeout(deadline),
+				{ surfaceMayClose: true }
 			),
 			reloadNavigation,
 		]);
@@ -1105,7 +1116,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.switchWorkbench,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1194,7 +1205,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.quickSwitchLoaded,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1222,7 +1233,8 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedPage,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			getRemainingTimeout(deadline)
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1255,7 +1267,8 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedPage,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			getRemainingTimeout(deadline)
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1461,7 +1474,26 @@ export async function runLinuxOmniSmoke(
 		if (launch) {
 			await terminateProcessGroup(launch.child);
 		}
-		await fs.rm(temporaryRoot, { recursive: true, force: true });
+		await removeLinuxOmniTemporaryRoot(temporaryRoot);
+	}
+}
+
+/** Removes a smoke profile, ignoring only exhausted late Chromium cache writes. */
+export async function removeLinuxOmniTemporaryRoot(
+	temporaryRoot: string,
+	remove: LinuxOmniTemporaryRootRemover = fs.rm
+): Promise<void> {
+	try {
+		await remove(temporaryRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 200,
+		});
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException)?.code !== 'ENOTEMPTY') {
+			throw error;
+		}
 	}
 }
 

@@ -17,11 +17,15 @@ import {
 	getLinuxOmniLaunchAttemptDeadline,
 	linuxOmniLifecyclePhases,
 	parseLinuxOmniSmokeOptions,
+	removeLinuxOmniTemporaryRoot,
 	resolveLinuxOmniExecutable,
 	runLinuxOmniBoundedProbe,
 	summarizeLinuxOmniRenderers,
 } from '../../hucode/linux-omni-smoke.ts';
-import { hostedWorkbenchSmokeCommands } from
+import {
+	hostedWorkbenchSmokeCommands,
+	waitForHostedWorkbenchSmokeCommandCompletion,
+} from
 	'../../hucode/omni-hosted-command-smoke.ts';
 
 suite('Hucode Linux Omni lifecycle smoke', () => {
@@ -39,6 +43,139 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			reloadDesktop: 'Reload Hosted Workbench',
 			reloadWeb: 'Omni-Window: Reload Workbench',
 		});
+	});
+
+	test('accepts expected hosted surface closure after command dispatch',
+		async () => {
+			const closedError = new Error(
+				'locator.waitFor: Target page, context or browser has been closed'
+			);
+			const widget = {
+				async waitFor(options: { readonly state: string }): Promise<void> {
+					assert.strictEqual(options.state, 'hidden');
+					throw closedError;
+				},
+			};
+			const surface = {
+				isClosed: () => true,
+			};
+
+			await assert.doesNotReject(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				)
+			);
+		}
+	);
+
+	test('accepts expected hosted frame detachment after command dispatch',
+		async () => {
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw new Error('locator.waitFor: Frame was detached');
+				},
+			};
+			const surface = {
+				isDetached: () => true,
+			};
+
+			await assert.doesNotReject(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				)
+			);
+		}
+	);
+
+	test('rejects command completion errors while the hosted surface remains',
+		async () => {
+			const completionError = new Error('Quick Input did not hide');
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw completionError;
+				},
+			};
+			const surface = {
+				isClosed: () => false,
+			};
+
+			await assert.rejects(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				),
+				completionError
+			);
+		}
+	);
+
+	test('rejects unexpected hosted surface closure after command dispatch',
+		async () => {
+			const closedError = new Error('Target page has been closed');
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw closedError;
+				},
+			};
+			const surface = {
+				isClosed: () => true,
+			};
+
+			await assert.rejects(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					false
+				),
+				closedError
+			);
+		}
+	);
+
+	test('ignores exhausted ENOTEMPTY while removing the temporary profile',
+		async () => {
+			let observedOptions: unknown;
+			const cleanupError = Object.assign(new Error('directory not empty'), {
+				code: 'ENOTEMPTY',
+			});
+
+			await assert.doesNotReject(
+				removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke',
+					async (_temporaryRoot, options) => {
+						observedOptions = options;
+						throw cleanupError;
+					}
+				)
+			);
+			assert.deepStrictEqual(observedOptions, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		}
+	);
+
+	test('propagates other temporary profile cleanup errors', async () => {
+		const cleanupError = Object.assign(new Error('permission denied'), {
+			code: 'EACCES',
+		});
+
+		await assert.rejects(
+			removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke', async () => {
+				throw cleanupError;
+			}),
+			cleanupError
+		);
 	});
 
 	test('parses a caller-supplied packaged application path', () => {
