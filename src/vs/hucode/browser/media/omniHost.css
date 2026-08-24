@@ -343,6 +343,12 @@
 }
 
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
+	.hucode-omni-host-empty:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -3px;
+}
+
+.monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-empty-content {
 	display: flex;
 	flex-direction: column;
@@ -385,7 +391,8 @@
 	box-sizing: border-box;
 	min-height: 28px;
 	padding: 4px 12px;
-	border: 1px solid transparent;
+	border-width: 1px;
+	border-style: solid;
 	border-radius: 2px;
 	font: inherit;
 	line-height: 18px;
@@ -395,6 +402,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-empty-action.primary {
 	background: var(--vscode-button-background);
+	border-color: var(--vscode-button-border, transparent);
 	color: var(--vscode-button-foreground);
 }
 
@@ -406,6 +414,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window
 	.hucode-omni-host-empty-action.secondary {
 	background: var(--vscode-button-secondaryBackground);
+	border-color: var(--vscode-button-secondaryBorder, var(--vscode-button-border, transparent));
 	color: var(--vscode-button-secondaryForeground);
 }
 

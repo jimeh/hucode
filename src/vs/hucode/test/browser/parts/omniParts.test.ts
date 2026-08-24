@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { DeferredPromise } from '../../../../base/common/async.js';
+import { Emitter } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
@@ -16,8 +17,16 @@ import {
 	TITLE_BAR_INACTIVE_BACKGROUND,
 } from '../../../../workbench/common/theme.js';
 import { ColorScheme } from '../../../../platform/theme/common/theme.js';
+import { TestThemeService } from
+	'../../../../platform/theme/test/common/testThemeService.js';
+import { MockContextKeyService } from
+	'../../../../platform/keybinding/test/common/mockKeybindingService.js';
 import { shouldApplyFloatingEditorLayout } from
 	'../../../../workbench/browser/parts/editor/editorPart.js';
+import { TestLayoutService } from
+	'../../../../workbench/test/browser/workbenchTestServices.js';
+import { TestStorageService } from
+	'../../../../workbench/test/common/workbenchTestServices.js';
 import { AuxiliaryBarPart } from
 	'../../../browser/parts/auxiliaryBarPart.js';
 import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
@@ -326,6 +335,12 @@ suite('Omni Parts', () => {
 		await Promise.resolve();
 
 		assert.deepStrictEqual({
+			regionRole: harness.emptyState.getAttribute('role'),
+			regionTabIndex: harness.emptyState.tabIndex,
+			labelledBy: harness.emptyState.getAttribute('aria-labelledby'),
+			describedBy: harness.emptyState.getAttribute('aria-describedby'),
+			headingId: heading?.id,
+			descriptionId: description?.id,
 			heading: heading?.textContent,
 			description: description?.textContent,
 			buttonLabels: buttons.map(button => button.textContent),
@@ -333,6 +348,12 @@ suite('Omni Parts', () => {
 			buttonTabIndexes: buttons.map(button => button.tabIndex),
 			commands: harness.commands,
 		}, {
+			regionRole: 'region',
+			regionTabIndex: -1,
+			labelledBy: 'hucode-omni-host-empty-heading',
+			describedBy: 'hucode-omni-host-empty-description',
+			headingId: 'hucode-omni-host-empty-heading',
+			descriptionId: 'hucode-omni-host-empty-description',
 			heading: 'Open your first workbench',
 			description: 'A project is a saved Git repository. A workbench can be any folder.',
 			buttonLabels: ['Add Project', 'Open Folder as Workbench'],
@@ -343,6 +364,67 @@ suite('Omni Parts', () => {
 				ADD_WORKBENCH_COMMAND_ID,
 			],
 		});
+	});
+
+	test('OmniHostPart keeps catalog copy until shell and project hydration are authoritative', async () => {
+		const projectsReady = new DeferredPromise<readonly ProjectRecord[]>();
+		const shellStateReady =
+			new DeferredPromise<IHucodeHostedWorkspaceState>();
+		const harness = createOmniHostLandingHarness({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [],
+		}, undefined, {
+			getProjects: () => projectsReady.p,
+		});
+		Object.assign(harness.host, {
+			didHydrateShellState: false,
+			didReceiveStateChange: false,
+			configurationService: { getValue: () => 'active' },
+			shellService: {
+				supportsWorkspaceScreenshotOverlay: false,
+				setHostedWorkbenchRestorePolicy: async () => undefined,
+				getState: () => shellStateReady.p,
+				setWorkspaceOverlayOcclusion: async () => undefined,
+			},
+		});
+		const initialize = Reflect.get(
+			OmniHostPart.prototype,
+			'initialize'
+		) as (this: object) => Promise<void>;
+		const initializeProjects = Reflect.get(
+			OmniHostPart.prototype,
+			'initializeProjects'
+		) as (this: object) => Promise<void>;
+		renderOmniHostState(harness.host);
+		const headings = [readOmniHostLanding(harness.emptyState).heading];
+
+		const shellInitialization = initialize.call(harness.host);
+		const projectInitialization = initializeProjects.call(harness.host);
+		projectsReady.complete([]);
+		await projectInitialization;
+		headings.push(readOmniHostLanding(harness.emptyState).heading);
+		shellStateReady.complete({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [],
+			retainedWorkbenches: [{
+				id: 'scratch',
+				folderUri: URI.file('/scratch').toJSON(),
+				desiredState: 'unloaded',
+				order: 0,
+			}],
+		});
+		await shellInitialization;
+		headings.push(readOmniHostLanding(harness.emptyState).heading);
+
+		assert.deepStrictEqual(headings, [
+			'Choose a project or workbench',
+			'Choose a project or workbench',
+			'Choose a project or workbench',
+		]);
 	});
 
 	test('OmniHostPart leads with Projects for project and retained catalogs', () => {
@@ -416,28 +498,111 @@ suite('Omni Parts', () => {
 	});
 
 	test('OmniHostPart keeps a live project event over a late initial snapshot', async () => {
+		const stateEmitter = new Emitter<IHucodeHostedWorkspaceState>();
+		const projectsEmitter = new Emitter<readonly ProjectRecord[]>();
 		const projectsReady = new DeferredPromise<readonly ProjectRecord[]>();
+		const shellStateReady =
+			new DeferredPromise<IHucodeHostedWorkspaceState>();
 		const liveProjects = [projectRecord({ label: 'Live' })];
-		const harness = createOmniHostLandingHarness({
+		const emptyState: IHucodeHostedWorkspaceState = {
 			projectsSidebarVisible: true,
 			projectSwitcherCanGoBack: false,
 			projectSwitcherCanGoForward: false,
 			instances: [],
-		}, undefined, {
-			getProjects: () => projectsReady.p,
-		});
-		const initializeProjects = Reflect.get(
-			OmniHostPart.prototype,
-			'initializeProjects'
-		) as (this: object) => Promise<void>;
+		};
+		const workbenchContainer = mainWindow.document.createElement('div');
+		const parent = mainWindow.document.createElement('div');
+		const layoutService = new TestLayoutService();
+		layoutService.getContainer = () => workbenchContainer;
+		const storageService = new TestStorageService();
+		const contextKeyService = new MockContextKeyService();
+		let surface: HTMLElement | undefined;
+		const part = new OmniHostPart(
+			new TestThemeService(),
+			storageService,
+			layoutService,
+			contextKeyService,
+			{ getValue: () => 'active' } as never,
+			{
+				supportsWorkspaceScreenshotOverlay: false,
+				onDidChangeState: stateEmitter.event,
+				setHostedWorkbenchRestorePolicy: async () => undefined,
+				getState: () => shellStateReady.p,
+				setWorkspaceOverlayOcclusion: async () => undefined,
+			} as never,
+			{
+				getSurface: () => surface,
+				setSurface: (value: HTMLElement | undefined) => surface = value,
+			} as never,
+			{
+				onDidChangeProjects: projectsEmitter.event,
+				getProjects: () => projectsReady.p,
+			} as never,
+			{ executeCommand: async () => undefined } as never
+		);
 
-		const initialization = initializeProjects.call(harness.host);
-		Reflect.set(harness.host, 'didReceiveProjectsChange', true);
-		Reflect.set(harness.host, 'projects', liveProjects);
-		projectsReady.complete([]);
-		await initialization;
+		try {
+			part.create(parent);
+			stateEmitter.fire(emptyState);
+			projectsEmitter.fire(liveProjects);
+			assert.strictEqual(
+				readOmniHostLanding(
+					parent.querySelector('.hucode-omni-host-empty')!
+				).heading,
+				'Choose a project or workbench'
+			);
 
-		assert.strictEqual(Reflect.get(harness.host, 'projects'), liveProjects);
+			projectsReady.complete([]);
+			shellStateReady.complete(emptyState);
+			await Promise.resolve();
+			await Promise.resolve();
+
+			assert.strictEqual(Reflect.get(part, 'projects'), liveProjects);
+		} finally {
+			part.dispose();
+			storageService.dispose();
+			contextKeyService.dispose();
+			stateEmitter.dispose();
+			projectsEmitter.dispose();
+		}
+	});
+
+	test('OmniHostPart focuses the active available workbench', () => {
+		assert.deepStrictEqual(runOmniHostFocus({
+			activeInstanceId: 'active',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('active', 'active')],
+		}, false, true), ['workbench']);
+	});
+
+	test('OmniHostPart focuses Add Project on an empty clean landing', () => {
+		assert.deepStrictEqual(runOmniHostFocus({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [],
+		}, true, false), ['add-project']);
+	});
+
+	test('OmniHostPart focuses Add Project when a loaded workbench is inactive', () => {
+		assert.deepStrictEqual(runOmniHostFocus({
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('loaded', 'loaded')],
+		}, true, false), ['add-project']);
+	});
+
+	test('OmniHostPart focuses the accessible crash landing region', () => {
+		assert.deepStrictEqual(runOmniHostFocus({
+			activeInstanceId: 'crashed',
+			projectsSidebarVisible: true,
+			projectSwitcherCanGoBack: false,
+			projectSwitcherCanGoForward: false,
+			instances: [hostedInstance('crashed', 'crashed')],
+		}, true, false), ['landing']);
 	});
 
 	test('OmniHostPart rejects crashed active state and re-shows an empty sidebar', () => {
@@ -591,6 +756,7 @@ suite('Omni Parts', () => {
 		const initialization = initialize.call(host);
 		await Promise.resolve();
 		Reflect.set(host, 'didReceiveStateChange', true);
+		Reflect.set(host, 'didHydrateShellState', true);
 		Reflect.set(host, 'state', liveState);
 		snapshotReady.complete(snapshotState);
 		await initialization;
@@ -978,6 +1144,7 @@ function createOmniHostRenderHarness(
 		hasScreenshot: false,
 		activeInstanceId: 'old',
 		state,
+		didHydrateShellState: true,
 		hasLoadedWorkbenchContext: {
 			set: (loaded: boolean) => loadedContexts.push(loaded),
 		},
@@ -1003,6 +1170,34 @@ function createOmniHostRenderHarness(
 		setSidebarVisible: (visible: boolean) =>
 			currentSidebarVisible = visible,
 	};
+}
+
+function runOmniHostFocus(
+	state: IHucodeHostedWorkspaceState,
+	emptyVisible: boolean,
+	surfaceVisible: boolean
+): string[] {
+	const transitions: string[] = [];
+	const emptyState = mainWindow.document.createElement('div');
+	const surface = mainWindow.document.createElement('div');
+	emptyState.classList.toggle('hidden', !emptyVisible);
+	surface.classList.toggle('hidden', !surfaceVisible);
+	emptyState.focus = () => transitions.push('landing');
+	const host = prototypeHost(OmniHostPart.prototype, {
+		state,
+		emptyState,
+		surface,
+		addProjectButton: { focus: () => transitions.push('add-project') },
+		shellService: {
+			focusWorkspace: async () => {
+				transitions.push('workbench');
+			},
+		},
+		getContainer: () => ({ focus: () => transitions.push('container') }),
+	});
+
+	OmniHostPart.prototype.focus.call(host);
+	return transitions;
 }
 
 function createOmniHostLandingHarness(

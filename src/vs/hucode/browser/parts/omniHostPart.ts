@@ -71,6 +71,7 @@ export class OmniHostPart extends Part {
 	private emptyHeading: HTMLHeadingElement | undefined;
 	private emptyDescription: HTMLParagraphElement | undefined;
 	private emptyActions: HTMLElement | undefined;
+	private addProjectButton: HTMLButtonElement | undefined;
 	private screenshot: HTMLElement | undefined;
 	private screenshotImage: HTMLImageElement | undefined;
 	private state: IHucodeHostedWorkspaceState = {
@@ -80,6 +81,7 @@ export class OmniHostPart extends Part {
 		instances: [],
 	};
 	private didReceiveStateChange = false;
+	private didHydrateShellState = false;
 	private projects: readonly ProjectRecord[] | undefined;
 	private didReceiveProjectsChange = false;
 	private bodyHeight = 0;
@@ -125,6 +127,7 @@ export class OmniHostPart extends Part {
 
 		this._register(this.shellService.onDidChangeState(state => {
 			this.didReceiveStateChange = true;
+			this.didHydrateShellState = true;
 			this.state = state;
 			this.renderState();
 			this.scheduleHostedWorkspaceLayout();
@@ -174,6 +177,8 @@ export class OmniHostPart extends Part {
 
 	private createLandingView(root: HTMLElement): void {
 		this.emptyState = append(root, $('.hucode-omni-host-empty'));
+		this.emptyState.tabIndex = -1;
+		this.emptyState.setAttribute('role', 'region');
 		const content = append(
 			this.emptyState,
 			$('.hucode-omni-host-empty-content')
@@ -182,26 +187,36 @@ export class OmniHostPart extends Part {
 			content,
 			$<HTMLHeadingElement>('h2.hucode-omni-host-empty-heading')
 		);
+		this.emptyHeading.id = 'hucode-omni-host-empty-heading';
 		this.emptyDescription = append(
 			content,
 			$<HTMLParagraphElement>('p.hucode-omni-host-empty-description')
+		);
+		this.emptyDescription.id = 'hucode-omni-host-empty-description';
+		this.emptyState.setAttribute(
+			'aria-labelledby',
+			this.emptyHeading.id
+		);
+		this.emptyState.setAttribute(
+			'aria-describedby',
+			this.emptyDescription.id
 		);
 		this.emptyActions = append(
 			content,
 			$('.hucode-omni-host-empty-actions')
 		);
-		const addProjectButton = append(
+		this.addProjectButton = append(
 			this.emptyActions,
 			$<HTMLButtonElement>(
 				'button.hucode-omni-host-empty-action.primary'
 			)
 		);
-		addProjectButton.type = 'button';
-		addProjectButton.textContent = localize(
+		this.addProjectButton.type = 'button';
+		this.addProjectButton.textContent = localize(
 			'omniEmptyAddProject',
 			'Add Project'
 		);
-		this._register(addDisposableListener(addProjectButton, 'click', () => {
+		this._register(addDisposableListener(this.addProjectButton, 'click', () => {
 			void this.commandService.executeCommand(ADD_PROJECT_COMMAND_ID)
 				.catch(onUnexpectedError);
 		}));
@@ -244,8 +259,26 @@ export class OmniHostPart extends Part {
 	}
 
 	focus(): void {
+		const activeInstance = this.getAvailableActiveInstance();
+		if (
+			activeInstance
+			&& this.surface
+			&& !this.surface.classList.contains('hidden')
+		) {
+			void this.shellService.focusWorkspace().catch(onUnexpectedError);
+			return;
+		}
+
+		if (this.emptyState && !this.emptyState.classList.contains('hidden')) {
+			if (this.getActiveInstance()?.state === 'crashed') {
+				this.emptyState.focus();
+			} else {
+				this.addProjectButton?.focus();
+			}
+			return;
+		}
+
 		this.getContainer()?.focus();
-		void this.shellService.focusWorkspace().catch(onUnexpectedError);
 	}
 
 	override toJSON(): object {
@@ -262,6 +295,7 @@ export class OmniHostPart extends Part {
 		if (this.didReceiveStateChange) {
 			return;
 		}
+		this.didHydrateShellState = true;
 		this.state = initialState;
 		this.renderState();
 		this.scheduleHostedWorkspaceLayout();
@@ -291,12 +325,7 @@ export class OmniHostPart extends Part {
 			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
 		}
 
-		const activeInstance = this.state.activeInstanceId
-			? this.state.instances.find(instance =>
-				instance.instanceId === this.state.activeInstanceId
-				&& this.isLoadedWorkbench(instance)
-			)
-			: undefined;
+		const activeInstance = this.getAvailableActiveInstance();
 		const activeInstanceId = activeInstance?.instanceId;
 		const activeInstanceChanged = this.activeInstanceId !== activeInstanceId;
 		this.activeInstanceId = activeInstanceId;
@@ -342,7 +371,8 @@ export class OmniHostPart extends Part {
 		}
 
 		const retainedWorkbenches = this.state.retainedWorkbenches ?? [];
-		const catalogIsAuthoritativelyEmpty = this.projects?.length === 0
+		const catalogIsAuthoritativelyEmpty = this.didHydrateShellState
+			&& this.projects?.length === 0
 			&& retainedWorkbenches.length === 0;
 		if (catalogIsAuthoritativelyEmpty) {
 			this.emptyHeading.textContent = localize(
@@ -448,6 +478,14 @@ export class OmniHostPart extends Part {
 			? this.state.instances.find(instance =>
 				instance.instanceId === this.state.activeInstanceId
 			)
+			: undefined;
+	}
+
+	private getAvailableActiveInstance():
+		IHucodeHostedWorkbenchInstance | undefined {
+		const activeInstance = this.getActiveInstance();
+		return activeInstance && this.isLoadedWorkbench(activeInstance)
+			? activeInstance
 			: undefined;
 	}
 
