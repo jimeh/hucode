@@ -211,13 +211,20 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 		const catalog = await this.readCatalog(profile.adapter, profile.logicalUserRoot, profile.catalogResource, token);
 		const current = catalog.profiles.find(candidate => candidate.id === profile.identity.id);
 		if (!current) {
-			const diagnostics = catalog.diagnostics.length > 0 ? catalog.diagnostics : [{
+			const diagnostics = catalog.fingerprintEntry.state === 'absent' ? [{
+				code: 'candidateAbsent' as const,
+				severity: 'info' as const,
+				scope: 'catalog' as const,
+				adapterId: profile.adapter.identity.id,
+				profileId: profile.identity.id,
+				details: { path: profile.catalogResource.fsPath },
+			}] : catalog.diagnostics.length > 0 ? catalog.diagnostics : [{
 				code: 'unsupportedNamedProfileCatalogSchema' as const,
 				severity: 'warning' as const,
 				scope: 'profile' as const,
 				adapterId: profile.adapter.identity.id,
 				profileId: profile.identity.id,
-				details: { path: profile.catalogResource.fsPath, entry: profile.identity.id },
+				details: { path: profile.catalogResource.fsPath },
 			}];
 			return { diagnostics };
 		}
@@ -569,6 +576,7 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 		}
 		const profiles: EditorMigrationParsedCatalogProfile[] = [];
 		const diagnostics: EditorMigrationDiagnostic[] = [];
+		const profileIds = new Set<string>();
 		for (let index = 0; index < container['userDataProfiles'].length; index++) {
 			const parsed = adapter.parseCatalogProfile(container['userDataProfiles'][index], userRoot);
 			if (parsed.kind !== 'valid') {
@@ -578,6 +586,11 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 				diagnostics.push({ code: 'unsupportedNamedProfileCatalogSchema', severity: 'warning', scope: 'profile', adapterId: adapter.identity.id, details: { path: resource.fsPath, entry: String(index) } });
 				continue;
 			}
+			if (profileIds.has(parsed.profile.id)) {
+				diagnostics.push({ code: 'unsupportedNamedProfileCatalogSchema', severity: 'warning', scope: 'profile', adapterId: adapter.identity.id, details: { path: resource.fsPath, entry: String(index) } });
+				continue;
+			}
+			profileIds.add(parsed.profile.id);
 			profiles.push(parsed.profile);
 		}
 		return { profiles, diagnostics, fingerprintEntry: toFingerprintEntry('profileCatalog', raw) };

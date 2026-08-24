@@ -5,7 +5,7 @@
 
 import { posix, win32 } from '../../../base/common/path.js';
 import { basename, dirname, joinPath } from '../../../base/common/resources.js';
-import { URI, UriComponents } from '../../../base/common/uri.js';
+import { URI } from '../../../base/common/uri.js';
 import {
 	EditorMigrationAdapterId,
 	EditorMigrationCategory,
@@ -99,8 +99,12 @@ export class CodeFamilyEditorMigrationSourceAdapter implements IEditorMigrationS
 			}
 			id = location;
 			profileLocation = joinPath(userRoot, 'profiles', id);
-		} else if (isUriComponents(location)) {
-			profileLocation = URI.revive(location);
+		} else {
+			const parsedLocation = parseStoredUri(location);
+			if (!parsedLocation) {
+				return { kind: 'invalid' };
+			}
+			profileLocation = parsedLocation;
 			const profilesHome = joinPath(userRoot, 'profiles');
 			const relativeParent = normalizeSlash(dirname(profileLocation).path);
 			const expectedParent = normalizeSlash(profilesHome.path);
@@ -118,8 +122,6 @@ export class CodeFamilyEditorMigrationSourceAdapter implements IEditorMigrationS
 			if (!isSinglePathSegment(id) || id === 'builtin') {
 				return id === 'builtin' ? { kind: 'builtin' } : { kind: 'invalid' };
 			}
-		} else {
-			return { kind: 'invalid' };
 		}
 
 		if (value['icon'] !== undefined && typeof value['icon'] !== 'string') {
@@ -203,8 +205,30 @@ function isJsonObject(value: EditorMigrationJsonValue | undefined): value is { r
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isUriComponents(value: EditorMigrationJsonValue): value is EditorMigrationJsonValue & UriComponents {
-	return isJsonObject(value) && typeof value['scheme'] === 'string' && typeof value['path'] === 'string';
+function parseStoredUri(value: EditorMigrationJsonValue): URI | undefined {
+	if (!isJsonObject(value)
+		|| typeof value['scheme'] !== 'string'
+		|| typeof value['path'] !== 'string'
+		|| !isOptionalString(value['authority'])
+		|| !isOptionalString(value['query'])
+		|| !isOptionalString(value['fragment'])) {
+		return undefined;
+	}
+	try {
+		return URI.from({
+			scheme: value['scheme'],
+			authority: value['authority'],
+			path: value['path'],
+			query: value['query'],
+			fragment: value['fragment'],
+		}, true);
+	} catch {
+		return undefined;
+	}
+}
+
+function isOptionalString(value: EditorMigrationJsonValue | undefined): value is string | undefined {
+	return value === undefined || typeof value === 'string';
 }
 
 function isSinglePathSegment(value: string): boolean {

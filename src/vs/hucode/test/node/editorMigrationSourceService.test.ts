@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { createHash } from 'crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
@@ -122,6 +122,84 @@ suite('EditorMigrationSourceService', () => {
 		}
 	});
 
+	test('classifies native directory open failures into source diagnostics', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'hucode-editor-migration-errors-'));
+		try {
+			const diskProvider = disposables.add(new DiskFileSystemProvider(new NullLogService()));
+			const nativeFileSystem = new NativeEditorMigrationSourceFileSystem(new NativeEditorMigrationDiskProvider(diskProvider));
+			const missing = URI.file(join(root, 'missing'));
+			let missingError: unknown;
+			try {
+				await nativeFileSystem.readDirectory(missing, CancellationToken.None);
+			} catch (error) {
+				missingError = error;
+			}
+
+			assert.ok(missingError instanceof EditorMigrationSourceFileError && missingError.kind === 'notFound');
+			const adapter = getEditorMigrationSourceAdapter('vscode');
+			const diagnostics = [adapter.diagnosticFromError(missingError, 'resource', missing, 'default', 'snippets').code];
+			for (const [nativeCode, expectedKind, expectedDiagnostic] of [
+				['ENOTDIR', 'notFound', 'candidateAbsent'],
+				['EACCES', 'permission', 'permissionDeniedOrLocked'],
+				['EPERM', 'permission', 'permissionDeniedOrLocked'],
+			] as const) {
+				const resource = URI.file(join(root, nativeCode));
+				const fileSystem = new NativeEditorMigrationSourceFileSystem(createNativeProvider({
+					openDirectory: async () => {
+						const error = new Error(nativeCode) as NodeJS.ErrnoException;
+						error.code = nativeCode;
+						throw error;
+					},
+				}));
+				let classified: unknown;
+				try {
+					await fileSystem.readDirectory(resource, CancellationToken.None);
+				} catch (error) {
+					classified = error;
+				}
+				assert.ok(classified instanceof EditorMigrationSourceFileError && classified.kind === expectedKind);
+				diagnostics.push(adapter.diagnosticFromError(classified, 'resource', resource, 'default', 'snippets').code);
+				assert.strictEqual(diagnostics.at(-1), expectedDiagnostic);
+			}
+			assert.deepStrictEqual(diagnostics, ['candidateAbsent', 'candidateAbsent', 'permissionDeniedOrLocked', 'permissionDeniedOrLocked']);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test('discovers direct symlinked snippet files without traversing linked directories', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'hucode-editor-migration-symlink-'));
+		try {
+			const environment: EditorMigrationPathEnvironment = {
+				platform: 'linux',
+				homePath: join(root, 'home'),
+				xdgConfigHome: join(root, 'config'),
+			};
+			const source = resolveEditorMigrationCandidatePaths('vscode', environment);
+			const snippets = join(source.userData.fsPath, 'snippets');
+			const linkedDirectory = join(root, 'linked-directory');
+			await mkdir(snippets, { recursive: true });
+			await mkdir(source.extensions.fsPath, { recursive: true });
+			await mkdir(linkedDirectory, { recursive: true });
+			await writeFile(join(source.userData.fsPath, 'settings.json'), '{}');
+			await writeFile(join(source.userData.fsPath, 'keybindings.json'), '[]');
+			await writeFile(join(source.extensions.fsPath, 'extensions.json'), '[]');
+			await writeFile(join(root, 'linked-source.json'), '{"Linked":{}}');
+			await writeFile(join(linkedDirectory, 'nested.json'), '{"Nested":{}}');
+			await symlink(join(root, 'linked-source.json'), join(snippets, 'linked.json'));
+			await symlink(linkedDirectory, join(snippets, 'linked-directory'));
+
+			const diskProvider = disposables.add(new DiskFileSystemProvider(new NullLogService()));
+			const service = disposables.add(new EditorMigrationSourceService(new NativeEditorMigrationSourceFileSystem(new NativeEditorMigrationDiskProvider(diskProvider)), environment));
+			const discovery = await service.discoverSources({}, CancellationToken.None);
+			const snapshot = await service.readSourceProfile(discovery.sources[0].ref, ['snippets'], CancellationToken.None);
+
+			assert.deepStrictEqual(categoryValue(snapshot.categories[0]), ['snippets', 'present', ['linked.json']]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test('discovers VS Code, Insiders, and Cursor defaults with deterministic order', async () => {
 		const fileSystem = new FixtureFileSystem();
 		for (const adapter of ['cursor', 'vscode-insiders', 'vscode'] as const) {
@@ -161,6 +239,7 @@ suite('EditorMigrationSourceService', () => {
 	test('keeps Default and valid named profiles when catalog entries are invalid or builtin', async () => {
 		const fileSystem = new FixtureFileSystem();
 		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const cachedLocation = joinPath(source.userData, 'profiles', 'cached-safe');
 		fileSystem.addFile(joinPath(source.userData, 'globalStorage', 'storage.json'), JSON.stringify({
 			userDataProfiles: [
 				{ name: 'Work', location: 'work', icon: 'briefcase', useDefaultFlags: { settings: true } },
@@ -171,10 +250,14 @@ suite('EditorMigrationSourceService', () => {
 				{ name: 'Foreign authority', location: { ...joinPath(source.userData, 'profiles', 'foreign').toJSON(), authority: 'attacker' } },
 				{ name: 'Queried', location: { ...joinPath(source.userData, 'profiles', 'queried').toJSON(), query: 'outside=true' } },
 				{ name: 'Fragmented', location: { ...joinPath(source.userData, 'profiles', 'fragmented').toJSON(), fragment: 'outside' } },
+				{ name: 'Illegal scheme', location: { scheme: 'bad scheme', path: cachedLocation.path } },
+				{ name: 'Scheme with delimiter', location: { scheme: 'file:', path: cachedLocation.path } },
+				{ name: 'Cached path', location: { scheme: cachedLocation.scheme, authority: cachedLocation.authority, path: cachedLocation.path, query: '', fragment: '', fsPath: '/attacker/spoofed' } },
 			],
 		}));
 		fileSystem.addFile(joinPath(source.userData, 'profiles', 'work', 'keybindings.json'), '[]');
 		fileSystem.addFile(joinPath(source.userData, 'profiles', 'legacy-uri', 'settings.json'), '{"legacy":true}');
+		fileSystem.addFile(joinPath(cachedLocation, 'settings.json'), '{"cached":true}');
 		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
 
 		const result = await service.discoverSources({}, CancellationToken.None);
@@ -182,14 +265,42 @@ suite('EditorMigrationSourceService', () => {
 		assert.deepStrictEqual(result.sources.map(item => [item.profile.id, item.profile.name]), [
 			['default', 'Default'],
 			['work', 'Work'],
+			['cached-safe', 'Cached path'],
 			['legacy-uri', 'Legacy URI'],
 		]);
+		assert.strictEqual(result.sources.find(item => item.profile.id === 'cached-safe')?.localPaths.userData, cachedLocation.fsPath);
 		assert.deepStrictEqual(result.diagnostics.map(diagnostic => [diagnostic.code, diagnostic.details?.entry]), [
 			['unsupportedNamedProfileCatalogSchema', '2'],
 			['unsupportedNamedProfileCatalogSchema', '5'],
 			['unsupportedNamedProfileCatalogSchema', '6'],
 			['unsupportedNamedProfileCatalogSchema', '7'],
+			['unsupportedNamedProfileCatalogSchema', '8'],
+			['unsupportedNamedProfileCatalogSchema', '9'],
 		]);
+	});
+
+	test('retains the first valid catalog entry for a duplicate profile ID', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		fileSystem.addFile(joinPath(source.userData, 'globalStorage', 'storage.json'), JSON.stringify({
+			userDataProfiles: [
+				{ name: 'First', location: 'duplicate' },
+				{ name: 'Second', location: 'duplicate', useDefaultFlags: { settings: true } },
+			],
+		}));
+		fileSystem.addFile(joinPath(source.userData, 'profiles', 'duplicate', 'settings.json'), '{"retained":"first"}');
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const retained = discovery.sources.find(item => item.profile.id === 'duplicate')!;
+		assert.strictEqual(retained.profile.name, 'First');
+		assert.deepStrictEqual(discovery.diagnostics.map(item => [item.code, item.details?.entry]), [
+			['unsupportedNamedProfileCatalogSchema', '1'],
+		]);
+
+		const snapshot = await service.readSourceProfile(retained.ref, ['settings'], CancellationToken.None);
+		assert.strictEqual(snapshot.profile.name, 'First');
+		assert.deepStrictEqual(categoryValue(snapshot.categories[0]), ['settings', 'present', { retained: 'first' }]);
 	});
 
 	test('discovers a separately declared Cursor named-profile fixture', async () => {
@@ -235,6 +346,25 @@ suite('EditorMigrationSourceService', () => {
 		const unavailable = await service.verifySourceSnapshot(named.ref, current.fingerprint, CancellationToken.None);
 		assert.strictEqual(unavailable.status, 'unavailable');
 		assert.deepStrictEqual(unavailable.diagnostics.map(item => item.code), ['unsupportedNamedProfileCatalogSchema']);
+	});
+
+	test('reports a removed named profile catalog as absent', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const catalog = joinPath(source.userData, 'globalStorage', 'storage.json');
+		fileSystem.addFile(catalog, JSON.stringify({ userDataProfiles: [{ name: 'Work', location: 'work' }] }));
+		fileSystem.addFile(joinPath(source.userData, 'profiles', 'work', 'settings.json'), '{}');
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const named = discovery.sources.find(item => item.profile.id === 'work')!;
+
+		fileSystem.remove(catalog);
+		const verification = await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None);
+
+		assert.strictEqual(verification.status, 'unavailable');
+		assert.deepStrictEqual(verification.diagnostics.map(item => [item.code, item.scope, item.details]), [
+			['candidateAbsent', 'catalog', { path: catalog.fsPath }],
+		]);
 	});
 
 	test('falls back to Default resources for every supported inheritance flag', async () => {

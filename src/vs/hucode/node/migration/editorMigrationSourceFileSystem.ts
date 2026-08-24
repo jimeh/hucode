@@ -9,9 +9,10 @@ import { VSBuffer } from '../../../base/common/buffer.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { CancellationError, isCancellationError } from '../../../base/common/errors.js';
 import { Disposable, IDisposable } from '../../../base/common/lifecycle.js';
+import { joinPath } from '../../../base/common/resources.js';
 import { consumeStream, ReadableStreamEvents } from '../../../base/common/stream.js';
 import { URI } from '../../../base/common/uri.js';
-import { FileSystemProviderErrorCode, FileType, IFileReadStreamOptions, IStat, toFileSystemProviderErrorCode } from '../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, FileType, IFileReadStreamOptions, IStat, toFileSystemProviderErrorCode } from '../../../platform/files/common/files.js';
 
 /** Maximum entries accepted from a known source directory. */
 export const EDITOR_MIGRATION_MAX_DIRECTORY_ENTRIES = 4096;
@@ -83,12 +84,24 @@ export class NativeEditorMigrationDiskProvider implements IEditorMigrationDiskPr
 	}
 
 	async openDirectory(resource: URI): Promise<IEditorMigrationDirectoryHandle> {
-		const directory = await opendir(resource.fsPath);
+		let directory;
+		try {
+			directory = await opendir(resource.fsPath);
+		} catch (error) {
+			throw normalizeNativeFileError(error);
+		}
 		return {
 			read: async () => {
 				const entry = await directory.read();
 				if (!entry) {
 					return undefined;
+				}
+				if (entry.isSymbolicLink()) {
+					try {
+						return [entry.name, (await this.provider.stat(joinPath(resource, entry.name))).type];
+					} catch {
+						return [entry.name, FileType.Unknown];
+					}
 				}
 				return [entry.name, entry.isFile() ? FileType.File : entry.isDirectory() ? FileType.Directory : FileType.Unknown];
 			},
@@ -313,8 +326,8 @@ function translateFileError(error: unknown, resource: URI): Error {
 	if (isCancellationError(error)) {
 		return new CancellationError();
 	}
-	const code = toFileSystemProviderErrorCode(error instanceof Error ? error : undefined);
-	if (code === FileSystemProviderErrorCode.FileNotFound) {
+	const code = toFileSystemProviderErrorCode(normalizeNativeFileError(error));
+	if (code === FileSystemProviderErrorCode.FileNotFound || code === FileSystemProviderErrorCode.FileNotADirectory) {
 		return new EditorMigrationSourceFileError('notFound', resource);
 	}
 	if (code === FileSystemProviderErrorCode.NoPermissions || code === FileSystemProviderErrorCode.FileWriteLocked) {
@@ -324,4 +337,25 @@ function translateFileError(error: unknown, resource: URI): Error {
 		return new EditorMigrationSourceFileError('oversized', resource);
 	}
 	return new EditorMigrationSourceFileError('other', resource);
+}
+
+function normalizeNativeFileError(error: unknown): Error {
+	if (!(error instanceof Error)) {
+		return new Error(String(error));
+	}
+	if (toFileSystemProviderErrorCode(error) !== FileSystemProviderErrorCode.Unknown) {
+		return error;
+	}
+	const code = (error as NodeJS.ErrnoException).code;
+	switch (code) {
+		case 'ENOENT':
+			return createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
+		case 'ENOTDIR':
+			return createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotADirectory);
+		case 'EACCES':
+		case 'EPERM':
+			return createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
+		default:
+			return error;
+	}
 }
