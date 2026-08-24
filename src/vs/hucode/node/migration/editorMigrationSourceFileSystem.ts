@@ -3,10 +3,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { opendir } from 'fs/promises';
 import { CancellationToken, CancellationTokenSource } from '../../../base/common/cancellation.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { DeferredPromise } from '../../../base/common/async.js';
-import { CancellationError } from '../../../base/common/errors.js';
+import { CancellationError, isCancellationError } from '../../../base/common/errors.js';
 import { Disposable, IDisposable } from '../../../base/common/lifecycle.js';
 import { consumeStream, ReadableStreamEvents } from '../../../base/common/stream.js';
 import { URI } from '../../../base/common/uri.js';
@@ -60,8 +61,40 @@ export class EditorMigrationSourceFileError extends Error {
 export interface IEditorMigrationDiskProvider {
 	realpath(resource: URI): Promise<string>;
 	stat(resource: URI): Promise<IStat>;
-	readdir(resource: URI): Promise<[string, FileType][]>;
+	openDirectory(resource: URI): Promise<IEditorMigrationDirectoryHandle>;
 	readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array>;
+}
+
+export interface IEditorMigrationDirectoryHandle {
+	read(): Promise<readonly [string, FileType] | undefined>;
+	close(): Promise<void>;
+}
+
+type EditorMigrationDiskProviderBase = Omit<IEditorMigrationDiskProvider, 'openDirectory'>;
+
+/** Adds incremental native directory enumeration to the existing local disk provider. */
+export class NativeEditorMigrationDiskProvider implements IEditorMigrationDiskProvider {
+	constructor(private readonly provider: EditorMigrationDiskProviderBase) { }
+
+	realpath(resource: URI): Promise<string> { return this.provider.realpath(resource); }
+	stat(resource: URI): Promise<IStat> { return this.provider.stat(resource); }
+	readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
+		return this.provider.readFileStream(resource, options, token);
+	}
+
+	async openDirectory(resource: URI): Promise<IEditorMigrationDirectoryHandle> {
+		const directory = await opendir(resource.fsPath);
+		return {
+			read: async () => {
+				const entry = await directory.read();
+				if (!entry) {
+					return undefined;
+				}
+				return [entry.name, entry.isFile() ? FileType.File : entry.isDirectory() ? FileType.Directory : FileType.Unknown];
+			},
+			close: () => directory.close(),
+		};
+	}
 }
 
 /** Wraps the local disk provider without exposing any mutation method. */
@@ -96,18 +129,29 @@ export class NativeEditorMigrationSourceFileSystem implements IEditorMigrationSo
 
 	async readDirectory(resource: URI, token: CancellationToken): Promise<readonly EditorMigrationSourceDirectoryEntry[]> {
 		throwIfCancelled(token);
+		let handle: IEditorMigrationDirectoryHandle | undefined;
 		try {
-			const entries = await this.provider.readdir(resource);
-			throwIfCancelled(token);
-			if (entries.length > EDITOR_MIGRATION_MAX_DIRECTORY_ENTRIES) {
-				throw new EditorMigrationSourceFileError('oversized', resource, EDITOR_MIGRATION_MAX_DIRECTORY_ENTRIES);
+			handle = await this.provider.openDirectory(resource);
+			const entries: EditorMigrationSourceDirectoryEntry[] = [];
+			while (true) {
+				throwIfCancelled(token);
+				const entry = await handle.read();
+				throwIfCancelled(token);
+				if (!entry) {
+					return entries;
+				}
+				if (entries.length === EDITOR_MIGRATION_MAX_DIRECTORY_ENTRIES) {
+					throw new EditorMigrationSourceFileError('oversized', resource, EDITOR_MIGRATION_MAX_DIRECTORY_ENTRIES);
+				}
+				entries.push({ name: entry[0], type: toSourceFileType(entry[1]) });
 			}
-			return entries.map(([name, type]) => ({ name, type: toSourceFileType(type) }));
 		} catch (error) {
 			if (error instanceof EditorMigrationSourceFileError) {
 				throw error;
 			}
 			throw translateFileError(error, resource);
+		} finally {
+			await handle?.close().catch(() => undefined);
 		}
 	}
 
@@ -148,10 +192,16 @@ interface PendingOperation {
 	cancellationListener: IDisposable;
 }
 
+interface ActiveOperation {
+	readonly deferred: DeferredPromise<unknown>;
+	readonly source: CancellationTokenSource;
+	readonly cancellationListener: IDisposable;
+}
+
 /** Small cancellable scheduler whose queued promises always settle. */
 export class EditorMigrationSourceOperationScheduler extends Disposable {
 	private readonly pending: PendingOperation[] = [];
-	private readonly active = new Set<CancellationTokenSource>();
+	private readonly active = new Set<ActiveOperation>();
 	private disposed = false;
 
 	constructor(private readonly maximumConcurrency: number) {
@@ -194,8 +244,11 @@ export class EditorMigrationSourceOperationScheduler extends Disposable {
 			operation.cancellationListener.dispose();
 			void operation.deferred.error(new CancellationError());
 		}
-		for (const source of this.active) {
-			source.dispose(true);
+		for (const operation of this.active) {
+			operation.source.dispose(true);
+			if (!operation.deferred.isSettled) {
+				void operation.deferred.error(new CancellationError());
+			}
 		}
 		super.dispose();
 	}
@@ -209,12 +262,30 @@ export class EditorMigrationSourceOperationScheduler extends Disposable {
 				continue;
 			}
 			const source = new CancellationTokenSource(operation.token);
-			this.active.add(source);
+			const active: ActiveOperation = {
+				deferred: operation.deferred,
+				source,
+				cancellationListener: operation.token.onCancellationRequested(() => {
+					if (!operation.deferred.isSettled) {
+						void operation.deferred.error(new CancellationError());
+					}
+				}),
+			};
+			this.active.add(active);
 			void operation.factory(source.token).then(
-				value => operation.deferred.complete(value),
-				error => operation.deferred.error(error)
+				value => {
+					if (!operation.deferred.isSettled) {
+						void operation.deferred.complete(value);
+					}
+				},
+				error => {
+					if (!operation.deferred.isSettled) {
+						void operation.deferred.error(isCancellationError(error) ? new CancellationError() : error);
+					}
+				}
 			).finally(() => {
-				this.active.delete(source);
+				this.active.delete(active);
+				active.cancellationListener.dispose();
 				source.dispose();
 				this.drain();
 			});
@@ -239,8 +310,8 @@ function toSourceFileType(type: FileType): 'file' | 'directory' | 'other' {
 }
 
 function translateFileError(error: unknown, resource: URI): Error {
-	if (error instanceof CancellationError) {
-		return error;
+	if (isCancellationError(error)) {
+		return new CancellationError();
 	}
 	const code = toFileSystemProviderErrorCode(error instanceof Error ? error : undefined);
 	if (code === FileSystemProviderErrorCode.FileNotFound) {

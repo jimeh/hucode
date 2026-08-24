@@ -14,7 +14,7 @@ import {
 	EditorMigrationSourceProfileRef,
 	IEditorMigrationSourceService,
 } from '../../common/migration/editorMigrationSource.js';
-import { NativeEditorMigrationSourceFileSystem } from '../../node/migration/editorMigrationSourceFileSystem.js';
+import { NativeEditorMigrationDiskProvider, NativeEditorMigrationSourceFileSystem } from '../../node/migration/editorMigrationSourceFileSystem.js';
 import { EditorMigrationSourceService } from '../../node/migration/editorMigrationSourceService.js';
 
 interface ReadSourceProfileArguments {
@@ -58,7 +58,7 @@ export function createEditorMigrationSourceChannel(provider: DiskFileSystemProvi
 	readonly service: EditorMigrationSourceService;
 	readonly channel: EditorMigrationSourceChannel;
 } {
-	const service = new EditorMigrationSourceService(new NativeEditorMigrationSourceFileSystem(provider));
+	const service = new EditorMigrationSourceService(new NativeEditorMigrationSourceFileSystem(new NativeEditorMigrationDiskProvider(provider)));
 	return { service, channel: new EditorMigrationSourceChannel(service) };
 }
 

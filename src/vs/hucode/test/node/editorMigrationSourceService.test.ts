@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { createHash } from 'crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { DeferredPromise } from '../../../base/common/async.js';
@@ -12,11 +13,14 @@ import { CancellationToken, CancellationTokenSource } from '../../../base/common
 import { CancellationError } from '../../../base/common/errors.js';
 import { join } from '../../../base/common/path.js';
 import { basename, dirname, joinPath } from '../../../base/common/resources.js';
+import { newWriteableStream } from '../../../base/common/stream.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { FileType } from '../../../platform/files/common/files.js';
 import { DiskFileSystemProvider } from '../../../platform/files/node/diskFileSystemProvider.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { EditorMigrationCategorySnapshot } from '../../common/migration/editorMigrationSource.js';
+import { getEditorMigrationSourceAdapter } from '../../node/migration/editorMigrationSourceAdapters.js';
 import {
 	EDITOR_MIGRATION_SETTINGS_MAX_BYTES,
 	EditorMigrationPathEnvironment,
@@ -29,7 +33,9 @@ import {
 	EditorMigrationSourceFileStat,
 	EditorMigrationSourceOperationScheduler,
 	EditorMigrationSourceReadLimits,
+	IEditorMigrationDiskProvider,
 	IEditorMigrationSourceFileSystem,
+	NativeEditorMigrationDiskProvider,
 	NativeEditorMigrationSourceFileSystem,
 } from '../../node/migration/editorMigrationSourceFileSystem.js';
 
@@ -68,6 +74,28 @@ suite('EditorMigrationSourceService', () => {
 		}
 	});
 
+	test('discovers every supported adapter across every supported default layout', async () => {
+		const environments: readonly EditorMigrationPathEnvironment[] = [
+			{ platform: 'darwin', homePath: '/Users/jim' },
+			{ platform: 'linux', homePath: '/home/jim' },
+			{ platform: 'linux', homePath: '/home/jim', xdgConfigHome: '/xdg' },
+			{ platform: 'win32', homePath: 'C:\\Users\\jim', appDataPath: 'D:\\Roaming' },
+		];
+		for (const environment of environments) {
+			for (const adapter of ['vscode', 'vscode-insiders', 'cursor'] as const) {
+				const fileSystem = new FixtureFileSystem();
+				populateDefault(fileSystem, adapter, environment);
+				const service = new EditorMigrationSourceService(fileSystem, environment);
+				try {
+					const result = await service.discoverSources({}, CancellationToken.None);
+					assert.deepStrictEqual(result.sources.map(item => item.adapter.id), [adapter]);
+				} finally {
+					service.dispose();
+				}
+			}
+		}
+	});
+
 	test('reads a temporary editor fixture through the native bounded filesystem', async () => {
 		const root = await mkdtemp(join(tmpdir(), 'hucode-editor-migration-'));
 		try {
@@ -85,7 +113,7 @@ suite('EditorMigrationSourceService', () => {
 			await writeFile(join(source.extensions.fsPath, 'extensions.json'), extensionManifest('native.extension'));
 
 			const provider = disposables.add(new DiskFileSystemProvider(new NullLogService()));
-			const service = disposables.add(new EditorMigrationSourceService(new NativeEditorMigrationSourceFileSystem(provider), environment));
+			const service = disposables.add(new EditorMigrationSourceService(new NativeEditorMigrationSourceFileSystem(new NativeEditorMigrationDiskProvider(provider)), environment));
 			const result = await service.discoverSources({}, CancellationToken.None);
 
 			assert.deepStrictEqual(result.sources.map(item => [item.adapter.id, item.ranking.completeness]), [['vscode', 4]]);
@@ -140,6 +168,9 @@ suite('EditorMigrationSourceService', () => {
 				{ name: 'Invalid', location: 'invalid', useDefaultFlags: { mystery: true } },
 				{ name: 'Builtin', location: 'builtin' },
 				{ name: 'Builtin URI', location: joinPath(source.userData, 'profiles', 'builtin', 'template').toJSON() },
+				{ name: 'Foreign authority', location: { ...joinPath(source.userData, 'profiles', 'foreign').toJSON(), authority: 'attacker' } },
+				{ name: 'Queried', location: { ...joinPath(source.userData, 'profiles', 'queried').toJSON(), query: 'outside=true' } },
+				{ name: 'Fragmented', location: { ...joinPath(source.userData, 'profiles', 'fragmented').toJSON(), fragment: 'outside' } },
 			],
 		}));
 		fileSystem.addFile(joinPath(source.userData, 'profiles', 'work', 'keybindings.json'), '[]');
@@ -155,7 +186,55 @@ suite('EditorMigrationSourceService', () => {
 		]);
 		assert.deepStrictEqual(result.diagnostics.map(diagnostic => [diagnostic.code, diagnostic.details?.entry]), [
 			['unsupportedNamedProfileCatalogSchema', '2'],
+			['unsupportedNamedProfileCatalogSchema', '5'],
+			['unsupportedNamedProfileCatalogSchema', '6'],
+			['unsupportedNamedProfileCatalogSchema', '7'],
 		]);
+	});
+
+	test('discovers a separately declared Cursor named-profile fixture', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const fixture = populateCursorNamedFixture(fileSystem, linuxEnvironment);
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		const result = await service.discoverSources({}, CancellationToken.None);
+
+		assert.deepStrictEqual(result.sources.map(item => [item.adapter.id, item.profile.id]), [
+			['cursor', 'default'],
+			['cursor', fixture.profileId],
+		]);
+	});
+
+	test('keeps catalog definitions and fingerprints coherent across catalog races', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const catalogResource = joinPath(source.userData, 'globalStorage', 'storage.json');
+		const catalogA = JSON.stringify({ userDataProfiles: [{ name: 'Work A', location: 'work' }] });
+		const catalogB = JSON.stringify({ userDataProfiles: [{ name: 'Work B', location: 'work', useDefaultFlags: { settings: true } }] });
+		fileSystem.sequenceFile(catalogResource, [catalogA, catalogB]);
+		fileSystem.addFile(joinPath(source.userData, 'settings.json'), '{"catalog":"b"}');
+		fileSystem.addFile(joinPath(source.userData, 'profiles', 'work', 'settings.json'), '{"catalog":"a"}');
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const named = discovery.sources.find(item => item.profile.id === 'work')!;
+		assert.strictEqual(fileSystem.fileReadCount(catalogResource), 1);
+		assert.strictEqual(named.profile.name, 'Work A');
+		assert.strictEqual(named.localPaths.userData.endsWith('/work'), true);
+		assert.strictEqual(named.discoveryFingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, sha256(catalogA));
+
+		const current = await service.readSourceProfile(named.ref, ['settings'], CancellationToken.None);
+		assert.strictEqual(fileSystem.fileReadCount(catalogResource), 2);
+		assert.strictEqual(current.profile.name, 'Work B');
+		assert.deepStrictEqual(categoryValue(current.categories[0]), ['settings', 'present', { catalog: 'b' }]);
+		assert.strictEqual(current.fingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, sha256(catalogB));
+		assert.notStrictEqual(current.fingerprint.value, named.discoveryFingerprint.value);
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None)).status, 'changed');
+
+		fileSystem.sequenceFile(catalogResource, [JSON.stringify({ userDataProfiles: [] })]);
+		const unavailable = await service.verifySourceSnapshot(named.ref, current.fingerprint, CancellationToken.None);
+		assert.strictEqual(unavailable.status, 'unavailable');
+		assert.deepStrictEqual(unavailable.diagnostics.map(item => item.code), ['unsupportedNamedProfileCatalogSchema']);
 	});
 
 	test('falls back to Default resources for every supported inheritance flag', async () => {
@@ -296,6 +375,65 @@ suite('EditorMigrationSourceService', () => {
 		assert.deepStrictEqual(result.diagnostics.map(item => item.code), ['duplicateAlias']);
 	});
 
+	test('deduplicates case-folded canonical roots on Windows', async () => {
+		const environment: EditorMigrationPathEnvironment = { platform: 'win32', homePath: 'C:\\Users\\jim', appDataPath: 'D:\\Roaming' };
+		const fileSystem = new FixtureFileSystem();
+		const vscode = populateDefault(fileSystem, 'vscode', environment);
+		const cursor = populateDefault(fileSystem, 'cursor', environment);
+		fileSystem.alias(vscode.userData, URI.file('C:\\Canonical\\Editor'));
+		fileSystem.alias(cursor.userData, URI.file('c:\\canonical\\editor'));
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, environment));
+
+		const result = await service.discoverSources({}, CancellationToken.None);
+
+		assert.deepStrictEqual(result.sources.map(item => item.adapter.id), ['vscode']);
+		assert.deepStrictEqual(result.diagnostics.map(item => item.code), ['duplicateAlias']);
+	});
+
+	test('deduplicates named profile IDs that resolve to the same canonical root', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const firstRoot = joinPath(source.userData, 'profiles', 'first');
+		const secondRoot = joinPath(source.userData, 'profiles', 'second');
+		fileSystem.addFile(joinPath(source.userData, 'globalStorage', 'storage.json'), JSON.stringify({
+			userDataProfiles: [{ name: 'First', location: 'first' }, { name: 'Second', location: 'second' }],
+		}));
+		fileSystem.addFile(joinPath(firstRoot, 'settings.json'), '{"first":true}');
+		fileSystem.addFile(joinPath(secondRoot, 'settings.json'), '{"second":true}');
+		fileSystem.alias(firstRoot, URI.file('/canonical/profile'));
+		fileSystem.alias(secondRoot, URI.file('/canonical/profile'));
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		const result = await service.discoverSources({}, CancellationToken.None);
+
+		assert.deepStrictEqual(result.sources.map(item => item.profile.id), ['default', 'first']);
+		assert.deepStrictEqual(result.diagnostics.map(item => [item.code, item.profileId]), [['duplicateAlias', 'second']]);
+	});
+
+	test('ignores fresh malformed resource mtimes when ranking usable sources', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const vscode = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const cursor = populateDefault(fileSystem, 'cursor', linuxEnvironment);
+		for (const source of [vscode, cursor]) {
+			fileSystem.remove(joinPath(source.userData, 'snippets', 'language.json'));
+			fileSystem.remove(joinPath(source.extensions, 'extensions.json'));
+		}
+		fileSystem.remove(joinPath(vscode.userData, 'keybindings.json'));
+		fileSystem.remove(joinPath(cursor.userData, 'settings.json'));
+		fileSystem.setAllModificationTimes(5);
+		fileSystem.setModificationTime(joinPath(vscode.userData, 'settings.json'), 10);
+		fileSystem.addFile(joinPath(cursor.userData, 'settings.json'), '{ malformed');
+		fileSystem.setModificationTime(joinPath(cursor.userData, 'settings.json'), 100);
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+
+		const result = await service.discoverSources({}, CancellationToken.None);
+
+		assert.deepStrictEqual(result.sources.map(item => [item.adapter.id, item.ranking.newestModificationTime]), [
+			['vscode', 10],
+			['cursor', 5],
+		]);
+	});
+
 	test('reports absent candidates without treating empty roots as usable', async () => {
 		const fileSystem = new FixtureFileSystem();
 		const vscode = resolveEditorMigrationCandidatePaths('vscode', linuxEnvironment);
@@ -321,6 +459,98 @@ suite('EditorMigrationSourceService', () => {
 		assert.deepStrictEqual(result.diagnostics.map(item => [item.code, item.adapterId, item.category]), [
 			['malformedKnownResource', 'vscode', 'settings'],
 		]);
+	});
+
+	test('rejects a canceled profile read while its final provider stat remains blocked', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const block = fileSystem.blockStat(joinPath(source.extensions, 'extensions.json'));
+		const cancellation = new CancellationTokenSource();
+		const pending = service.readSourceProfile(discovery.sources[0].ref, ['extensions'], cancellation.token);
+		await block.started.p;
+
+		cancellation.cancel();
+		await assert.rejects(pending, error => error instanceof CancellationError);
+		block.release.complete();
+		await block.finished.p;
+		cancellation.dispose();
+	});
+
+	test('keeps canceled active work admitted until the underlying operation settles', async () => {
+		const scheduler = disposables.add(new EditorMigrationSourceOperationScheduler(1));
+		const started = new DeferredPromise<void>();
+		const release = new DeferredPromise<void>();
+		const cancellation = new CancellationTokenSource();
+		const active = scheduler.run(async () => {
+			started.complete();
+			await release.p;
+			return 'late';
+		}, cancellation.token);
+		await started.p;
+		cancellation.cancel();
+		await assert.rejects(active, error => error instanceof CancellationError);
+
+		let queuedStarted = false;
+		const queued = scheduler.run(async () => {
+			queuedStarted = true;
+			return 'queued';
+		}, CancellationToken.None);
+		await Promise.resolve();
+		assert.strictEqual(queuedStarted, false);
+		release.complete();
+		assert.strictEqual(await queued, 'queued');
+		cancellation.dispose();
+	});
+
+	test('stops native directory enumeration at limit plus one and closes the handle', async () => {
+		let reads = 0;
+		let closed = false;
+		const provider = createNativeProvider({
+			openDirectory: async () => ({
+				read: async () => [`entry-${++reads}.json`, FileType.File],
+				close: async () => { closed = true; },
+			}),
+		});
+		const fileSystem = new NativeEditorMigrationSourceFileSystem(provider);
+
+		const resource = URI.file('/oversized');
+		let readError: unknown;
+		try {
+			await fileSystem.readDirectory(resource, CancellationToken.None);
+		} catch (error) {
+			readError = error;
+		}
+		assert.ok(readError instanceof EditorMigrationSourceFileError && readError.kind === 'oversized');
+		assert.strictEqual(getEditorMigrationSourceAdapter('vscode').diagnosticFromError(readError, 'resource', resource, 'default', 'snippets').code, 'oversizedResource');
+		assert.strictEqual(reads, 4097);
+		assert.strictEqual(closed, true);
+	});
+
+	test('normalizes named native cancellation errors during an active stream read', async () => {
+		const streamStarted = new DeferredPromise<void>();
+		const provider = createNativeProvider({
+			readFileStream: (_resource, _options, token) => {
+				const stream = newWriteableStream<Uint8Array>(chunks => chunks[0]);
+				const listener = token.onCancellationRequested(() => {
+					listener.dispose();
+					const error = new Error('Canceled');
+					error.name = 'Canceled';
+					stream.error(error);
+				});
+				streamStarted.complete();
+				return stream;
+			},
+		});
+		const fileSystem = new NativeEditorMigrationSourceFileSystem(provider);
+		const cancellation = new CancellationTokenSource();
+		const pending = fileSystem.readFile(URI.file('/blocked.json'), { maxBytes: 16 }, cancellation.token);
+		await streamStarted.p;
+
+		cancellation.cancel();
+		await assert.rejects(pending, error => error instanceof CancellationError);
+		cancellation.dispose();
 	});
 
 	test('settles cancellation before admission, while queued, and during active work', async () => {
@@ -384,8 +614,32 @@ function populateDefault(fileSystem: FixtureFileSystem, adapter: 'vscode' | 'vsc
 	return paths;
 }
 
+function populateCursorNamedFixture(fileSystem: FixtureFileSystem, environment: EditorMigrationPathEnvironment): { readonly profileId: string } {
+	const source = populateDefault(fileSystem, 'cursor', environment, { settings: '{"cursor.default":true}' });
+	const profileId = 'cursor-work';
+	fileSystem.addFile(joinPath(source.userData, 'globalStorage', 'storage.json'), JSON.stringify({
+		userDataProfiles: [{ name: 'Cursor Work', location: profileId, useDefaultFlags: { extensions: true } }],
+	}));
+	fileSystem.addFile(joinPath(source.userData, 'profiles', profileId, 'settings.json'), '{"cursor.named":true}');
+	return { profileId };
+}
+
 function extensionManifest(id: string): string {
 	return JSON.stringify([{ identifier: { id, uuid: 'uuid' }, version: '1.2.3', location: { path: '/ignored' }, metadata: { preRelease: false, hasPreReleaseVersion: true } }]);
+}
+
+function sha256(value: string): string {
+	return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function createNativeProvider(overrides: Partial<IEditorMigrationDiskProvider>): IEditorMigrationDiskProvider {
+	return {
+		realpath: async resource => resource.fsPath,
+		stat: async () => ({ type: FileType.File, ctime: 1, mtime: 1, size: 1 }),
+		openDirectory: async () => ({ read: async () => undefined, close: async () => undefined }),
+		readFileStream: () => { throw new Error('Unexpected file stream read'); },
+		...overrides,
+	};
 }
 
 function categoryValue(category: EditorMigrationCategorySnapshot): readonly unknown[] {
@@ -399,10 +653,13 @@ function categoryValue(category: EditorMigrationCategorySnapshot): readonly unkn
 
 class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 	private readonly files = new Map<string, { contents: VSBuffer; mtime: number }>();
+	private readonly fileSequences = new Map<string, VSBuffer[]>();
+	private readonly fileReadCounts = new Map<string, number>();
 	private readonly directories = new Map<string, Map<string, EditorMigrationSourceDirectoryEntry>>();
 	private readonly aliases = new Map<string, URI>();
 	private readonly locked = new Set<string>();
 	private readonly changing = new Set<string>();
+	private readonly blockedStats = new Map<string, { readonly started: DeferredPromise<void>; readonly release: DeferredPromise<void>; readonly finished: DeferredPromise<void> }>();
 	private clock = 1;
 	readonly directoryReads: URI[] = [];
 
@@ -426,6 +683,19 @@ class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 		this.directories.get(parent.toString())!.set(basename(resource), { name: basename(resource), type: 'file' });
 	}
 
+	sequenceFile(resource: URI, contents: readonly string[]): void {
+		if (contents.length === 0) {
+			throw new Error('A file sequence requires at least one value');
+		}
+		this.addFile(resource, contents[0]);
+		this.fileSequences.set(resource.toString(), contents.map(value => VSBuffer.fromString(value)));
+		this.fileReadCounts.set(resource.toString(), 0);
+	}
+
+	fileReadCount(resource: URI): number {
+		return this.fileReadCounts.get(resource.toString()) ?? 0;
+	}
+
 	remove(resource: URI): void {
 		this.files.delete(resource.toString());
 		this.directories.delete(resource.toString());
@@ -442,6 +712,12 @@ class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 
 	changeDuringRead(resource: URI): void {
 		this.changing.add(resource.toString());
+	}
+
+	blockStat(resource: URI): { readonly started: DeferredPromise<void>; readonly release: DeferredPromise<void>; readonly finished: DeferredPromise<void> } {
+		const block = { started: new DeferredPromise<void>(), release: new DeferredPromise<void>(), finished: new DeferredPromise<void>() };
+		this.blockedStats.set(resource.toString(), block);
+		return block;
 	}
 
 	setAllModificationTimes(mtime: number): void {
@@ -461,6 +737,12 @@ class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 
 	async stat(resource: URI, token: CancellationToken): Promise<EditorMigrationSourceFileStat> {
 		this.check(resource, token);
+		const block = this.blockedStats.get(resource.toString());
+		if (block) {
+			block.started.complete();
+			await block.release.p;
+			block.finished.complete();
+		}
 		const file = this.files.get(resource.toString());
 		if (file) {
 			return { type: 'file', size: file.contents.byteLength, mtime: file.mtime };
@@ -483,7 +765,8 @@ class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 
 	async readFile(resource: URI, limits: EditorMigrationSourceReadLimits, token: CancellationToken): Promise<VSBuffer> {
 		this.check(resource, token);
-		const file = this.files.get(resource.toString());
+		const key = resource.toString();
+		const file = this.files.get(key);
 		if (!file) {
 			throw new EditorMigrationSourceFileError('notFound', resource);
 		}
@@ -492,6 +775,12 @@ class FixtureFileSystem implements IEditorMigrationSourceFileSystem {
 		}
 		if (this.changing.has(resource.toString())) {
 			throw new EditorMigrationSourceFileError('changed', resource);
+		}
+		const sequence = this.fileSequences.get(key);
+		if (sequence) {
+			const count = this.fileReadCounts.get(key) ?? 0;
+			this.fileReadCounts.set(key, count + 1);
+			return sequence[Math.min(count, sequence.length - 1)];
 		}
 		return file.contents;
 	}
