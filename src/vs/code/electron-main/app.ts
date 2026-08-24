@@ -48,6 +48,8 @@ import {
 } from '../../platform/projectManager/common/projectManager.js';
 import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
 import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
+import { EDITOR_MIGRATION_SOURCE_CHANNEL_NAME } from '../../hucode/common/migration/editorMigrationSource.js';
+import { createEditorMigrationSourceChannel } from '../../hucode/electron-main/migration/editorMigrationSourceChannel.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { isLaunchedFromCli } from '../../platform/environment/node/argvHelper.js';
@@ -1369,6 +1371,14 @@ export class CodeApplication extends Disposable {
 		const fileSystemProviderChannel = disposables.add(new DiskFileSystemProviderChannel(diskFileSystemProvider, this.logService, this.environmentMainService));
 		mainProcessElectronServer.registerChannel(LOCAL_FILE_SYSTEM_CHANNEL_NAME, fileSystemProviderChannel);
 		sharedProcessClient.then(client => client.registerChannel(LOCAL_FILE_SYSTEM_CHANNEL_NAME, fileSystemProviderChannel));
+
+		// Hucode editor migration sources (desktop only, read only)
+		const editorMigrationSource = createEditorMigrationSourceChannel(diskFileSystemProvider);
+		disposables.add(editorMigrationSource.service);
+		mainProcessElectronServer.registerChannel(
+			EDITOR_MIGRATION_SOURCE_CHANNEL_NAME,
+			editorMigrationSource.channel
+		);
 
 		// User Data Profiles
 		const userDataProfilesService = ProxyChannel.fromService(accessor.get(IUserDataProfilesMainService), disposables);
