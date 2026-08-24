@@ -634,6 +634,11 @@ human-facing guides rather than replacing them.
   pointer-transparent over the hosted surface and re-add the active hosted view
   when showing, laying out, or focusing it so Electron keeps it topmost.
   Otherwise hosted titlebar controls can turn into shell window-drag hit areas.
+- Keep the last sidebar-visible hosted-workspace inset in the main process and
+  combine it with the current window extent when showing Projects. A
+  full-window hosted `WebContentsView` can cover the shell renderer on Linux,
+  so the next renderer layout frame is not a reliable way to uncover the
+  sidebar.
 - Hidden resident hosted workbenches should be removed from the window
   `contentView`, not just `setVisible(false)`. Invisible Electron view siblings
   can still disturb native hit testing when several workbenches restore at
