@@ -2408,7 +2408,50 @@ export default defineConfig(
 		},
 		rules: {
 			'no-restricted-imports': [
-				'warn',
+				'error',
+				{
+					'paths': [
+						{
+							'name': 'child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'node:child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'fs/promises',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs/promises',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						}
+					]
+				}
+			]
+		}
+	},
+	// The native filesystem adapter owns the one capability source discovery
+	// needs: bounded read-only directory enumeration.
+	{
+		files: [
+			'src/vs/hucode/node/migration/editorMigrationSourceFileSystem.ts',
+		],
+		languageOptions: {
+			parser: tseslint.parser,
+		},
+		rules: {
+			'no-restricted-imports': [
+				'error',
 				{
 					'paths': [
 						{
