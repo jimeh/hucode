@@ -16,6 +16,10 @@ after it has independent test and runtime evidence. The final activation change
 will only replace startup routing, connect versioned completion state, and turn
 the Hucode experience on for new installations.
 
+The [editor migration architecture and implementation plan](editor-migration-architecture-plan.md)
+defines the reusable service boundaries and issue-by-issue implementation below
+this product plan.
+
 Serve-web onboarding is deliberately deferred. Its useful migration sources may
 include browser-owned Hucode data, server-owned Hucode data, a desktop Hucode
 export, or an uploaded profile. The desktop design must leave room for new source
@@ -240,17 +244,21 @@ Extension classifications are:
 - incompatible with the current platform or product version;
 - excluded because the extension belongs to the source editor.
 
-If the source, target, or gallery result changes before Apply, the flow returns
-to Review. Apply never silently resolves a different plan.
+If the source, target, choices, policy, or exact reviewed gallery selections
+change before Apply is admitted, the flow returns to Review. After admission,
+an exact extension release that becomes unavailable is an item result. Apply
+never silently resolves a different release or plan.
 
 ### Apply
 
 Apply receives an accepted plan and explicit target profile. It does not infer
 the target from the current window or shell profile.
 
-The operation order is:
+The [editor migration architecture plan](editor-migration-architecture-plan.md#issue-202-journaled-apply-and-recovery)
+owns the detailed operation order. At the product level, Apply must:
 
-1. persist the admitted operation and pre-apply fingerprints;
+1. persist the admitted operation, full reviewed plan, and pre-apply
+   fingerprints;
 2. snapshot every selected file-backed target resource;
 3. apply settings, keybindings, and snippets with atomic writes where the file
    provider supports them;
@@ -266,6 +274,10 @@ File-backed categories can return to their pre-operation snapshots. Successful
 extension installs remain installed if another extension fails. The result
 reports every successful, skipped, unavailable, incompatible, canceled, and
 failed item.
+
+Automatic rollback must not overwrite target files changed after Apply. A
+drifted file requires an explicit recovery choice and another snapshot before
+restoring the pre-operation value.
 
 Cancellation before Apply leaves the target unchanged. Cancellation after
 writes begin stops only at documented safe boundaries and leaves a resumable
