@@ -142,6 +142,7 @@ suite('EditorMigrationSourceService', () => {
 				['ENOTDIR', 'notFound', 'candidateAbsent'],
 				['EACCES', 'permission', 'permissionDeniedOrLocked'],
 				['EPERM', 'permission', 'permissionDeniedOrLocked'],
+				['EBUSY', 'permission', 'permissionDeniedOrLocked'],
 			] as const) {
 				const resource = URI.file(join(root, nativeCode));
 				const fileSystem = new NativeEditorMigrationSourceFileSystem(createNativeProvider({
@@ -161,7 +162,7 @@ suite('EditorMigrationSourceService', () => {
 				diagnostics.push(adapter.diagnosticFromError(classified, 'resource', resource, 'default', 'snippets').code);
 				assert.strictEqual(diagnostics.at(-1), expectedDiagnostic);
 			}
-			assert.deepStrictEqual(diagnostics, ['candidateAbsent', 'candidateAbsent', 'permissionDeniedOrLocked', 'permissionDeniedOrLocked']);
+			assert.deepStrictEqual(diagnostics, ['candidateAbsent', 'candidateAbsent', 'permissionDeniedOrLocked', 'permissionDeniedOrLocked', 'permissionDeniedOrLocked']);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -682,6 +683,39 @@ suite('EditorMigrationSourceService', () => {
 		assert.strictEqual(getEditorMigrationSourceAdapter('vscode').diagnosticFromError(readError, 'resource', resource, 'default', 'snippets').code, 'oversizedResource');
 		assert.strictEqual(reads, 4097);
 		assert.strictEqual(closed, true);
+	});
+
+	test('stops native directory processing after cancellation and closes the handle', async () => {
+		const blocked = new DeferredPromise<void>();
+		const release = new DeferredPromise<void>();
+		let reads = 0;
+		let closed = false;
+		const provider = createNativeProvider({
+			openDirectory: async () => ({
+				read: async () => {
+					reads++;
+					if (reads === 1) {
+						return ['first.json', FileType.File];
+					}
+					blocked.complete();
+					await release.p;
+					return ['second.json', FileType.File];
+				},
+				close: async () => { closed = true; },
+			}),
+		});
+		const fileSystem = new NativeEditorMigrationSourceFileSystem(provider);
+		const cancellation = new CancellationTokenSource();
+		const pending = fileSystem.readDirectory(URI.file('/cancelled'), cancellation.token);
+		await blocked.p;
+
+		cancellation.cancel();
+		release.complete();
+
+		await assert.rejects(pending, error => error instanceof CancellationError);
+		assert.strictEqual(reads, 2);
+		assert.strictEqual(closed, true);
+		cancellation.dispose();
 	});
 
 	test('normalizes named native cancellation errors during an active stream read', async () => {

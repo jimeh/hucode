@@ -784,6 +784,12 @@ human-facing guides rather than replacing them.
 
 ## Other Hucode Gotchas
 
+- Editor profile discovery modules named `editorMigrationSource*` have scoped
+  ESLint import restrictions. Keep them behind
+  `IEditorMigrationSourceFileSystem`; only the native wrapper may import
+  `opendir`. Put later migration-apply writes and process execution in separate
+  modules with explicit capabilities rather than relaxing the discovery rule.
+
 - Server-backed WebUser file handles are owned by the exact deserialized IPC
   context object, not `remoteAuthority`, `clientId`, or other context fields.
   Release them from `SocketServer.onDidRemoveConnection`, and take the owner

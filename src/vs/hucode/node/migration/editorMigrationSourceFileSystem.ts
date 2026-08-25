@@ -354,6 +354,7 @@ function normalizeNativeFileError(error: unknown): Error {
 			return createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotADirectory);
 		case 'EACCES':
 		case 'EPERM':
+		case 'EBUSY':
 			return createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
 		default:
 			return error;

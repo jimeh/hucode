@@ -2396,6 +2396,52 @@ export default defineConfig(
 			]
 		}
 	},
+	// Hucode editor source discovery is a read-only boundary. Keep mutation and
+	// process-launch capabilities out of its production modules.
+	{
+		files: [
+			'src/vs/hucode/node/migration/editorMigrationSource*.ts',
+			'src/vs/hucode/electron-main/migration/editorMigrationSource*.ts',
+		],
+		languageOptions: {
+			parser: tseslint.parser,
+		},
+		rules: {
+			'no-restricted-imports': [
+				'warn',
+				{
+					'paths': [
+						{
+							'name': 'child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'node:child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'fs/promises',
+							'allowImportNames': ['opendir'],
+							'message': 'Only opendir is allowed for bounded read-only directory enumeration.'
+						},
+						{
+							'name': 'node:fs/promises',
+							'allowImportNames': ['opendir'],
+							'message': 'Only opendir is allowed for bounded read-only directory enumeration.'
+						}
+					]
+				}
+			]
+		}
+	},
 	{
 		// `IAgentSessionsService` and the agent sessions model are provider-internal
 		// to Copilot. Only the Copilot chat sessions provider may consume them; the

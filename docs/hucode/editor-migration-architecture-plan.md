@@ -632,16 +632,21 @@ The fixture matrix must cover:
 - valid Default with an invalid named-profile catalog;
 - symlinked roots, duplicate aliases, case differences, and overlapping
   candidates;
-- deterministic ranking under reversed enumeration and completion order;
+- deterministic ranking under reversed enumeration, plus reversed completion
+  order once discovery admits concurrent reads;
 - cancellation before admission, while queued, during a read, and during
   directory processing;
 - settings and keybindings JSON with comments;
 - snippets with accepted files, ignored entries, and forbidden recursion;
 - extension manifests without extension-directory traversal.
 
-A write-spy filesystem fake must fail the test if production discovery attempts
-any mutation. A process-launch spy must likewise prove that no adapter starts an
-editor or helper executable.
+Keep production discovery behind the narrow read-only filesystem capability.
+Scoped ESLint restrictions must reject direct `fs` imports, `fs/promises`
+operations other than the native wrapper's bounded `opendir`, and
+`child_process` imports in source-discovery modules. This static rule guards the
+escape paths that an injected runtime spy cannot observe. If a future design
+adds an injected mutation or process-launch capability, add a behavioral spy for
+that capability before production code may use it.
 
 New behavioral tests must first fail at the intended assertion. Test output
 must confirm that the new cases ran. Add new Hucode suites to the generated test

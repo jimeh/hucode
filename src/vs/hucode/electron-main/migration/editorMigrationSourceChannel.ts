@@ -8,6 +8,7 @@ import { Event } from '../../../base/common/event.js';
 import { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { DiskFileSystemProvider } from '../../../platform/files/node/diskFileSystemProvider.js';
 import {
+	EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
 	EditorMigrationCategory,
 	EditorMigrationDiscoveryOptions,
 	EditorMigrationSourceFingerprint,
@@ -92,7 +93,7 @@ function isRef(value: unknown): value is EditorMigrationSourceProfileRef {
 
 function isFingerprint(value: unknown): value is EditorMigrationSourceFingerprint {
 	return isObject(value)
-		&& value.schemaVersion === 1
+		&& value.schemaVersion === EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION
 		&& value.algorithm === 'sha256'
 		&& typeof value.value === 'string'
 		&& Array.isArray(value.categories)

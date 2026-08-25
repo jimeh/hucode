@@ -12,6 +12,7 @@ import {
 	EditorMigrationCategory,
 	EditorMigrationDiscoveryOptions,
 	EditorMigrationDiscoveryResult,
+	EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
 	EditorMigrationSourceFingerprint,
 	EditorMigrationSourceProfileRef,
 	EditorMigrationSourceSnapshot,
@@ -40,7 +41,16 @@ suite('EditorMigrationSourceChannel', () => {
 	test('rejects malformed arguments and unknown commands', async () => {
 		const server = new EditorMigrationSourceChannel(new WaitingSourceService());
 
+		await assert.rejects(server.call('', 'discoverSources', { includeAbsentCandidateDiagnostics: 'yes' }, CancellationToken.None), /Invalid editor migration discovery options/);
 		await assert.rejects(server.call('', 'readSourceProfile', { ref: { value: 'ref' }, categories: ['unknown'] }, CancellationToken.None), /Invalid readSourceProfile arguments/);
+		await assert.rejects(server.call('', 'verifySourceSnapshot', {
+			ref: { value: 'ref' },
+			fingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION + 1, algorithm: 'sha256', value: 'value', categories: [], entries: [] },
+		}, CancellationToken.None), /Invalid verifySourceSnapshot arguments/);
+		await assert.rejects(server.call('', 'verifySourceSnapshot', {
+			ref: { value: 'ref' },
+			fingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'md5', value: 'value', categories: [], entries: [] },
+		}, CancellationToken.None), /Invalid verifySourceSnapshot arguments/);
 		await assert.rejects(server.call('', 'unknown', undefined, CancellationToken.None), /Unknown editor migration source command/);
 	});
 });
