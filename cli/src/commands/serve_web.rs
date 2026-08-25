@@ -530,7 +530,8 @@ mod response {
 			.body(full_body(concatcp!(
 				"<!doctype html><html><head><meta charset=\"utf-8\">",
 				"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
-				"<style>html,body{height:100%;margin:0}body{display:flex;align-items:center;",
+				"<style>:root{color-scheme:light dark}html,body{height:100%;margin:0}",
+				"body{display:flex;align-items:center;",
 				"justify-content:center;padding:24px;box-sizing:border-box;font-family:",
 				"system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;",
 				"text-align:center}</style>",
@@ -1083,6 +1084,7 @@ mod tests {
 		let body = response.into_body().collect().await.unwrap().to_bytes();
 		let html = std::str::from_utf8(&body).unwrap();
 		assert!(html.starts_with("<!doctype html>"));
+		assert!(html.contains(":root{color-scheme:light dark}"));
 		assert!(html.contains("align-items:center"));
 		assert!(html.contains("justify-content:center"));
 		assert!(html.contains(
