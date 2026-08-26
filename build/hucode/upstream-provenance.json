@@ -84,8 +84,8 @@
 			"reason": "Hucode admits authenticated user-data requests and owns the setup-service lifecycle needed to drain them",
 			"upstream": {
 				"path": "src/vs/server/node/remoteExtensionHostAgentServer.ts",
-				"lastSyncedBaseline": "1.134.0",
-				"blob": "119a8bc6d6a4b59ffb6f372a150218d2d6836aec"
+				"lastSyncedBaseline": "1.135.0",
+				"blob": "2fc682eb1ccdca205d19ef344beadbf96ff81266"
 			},
 			"testSuites": []
 		},
@@ -117,8 +117,8 @@
 			"reason": "Hucode serves the migration API and injects trusted storage configuration into every web route",
 			"upstream": {
 				"path": "src/vs/server/node/webClientServer.ts",
-				"lastSyncedBaseline": "1.134.0",
-				"blob": "24b6c3dba9f188f0f2be0ae53f0f608c81710ad1"
+				"lastSyncedBaseline": "1.135.0",
+				"blob": "a0567fd399bca84a2e09c7e392544a7accdbdd56"
 			},
 			"testSuites": []
 		},
@@ -227,8 +227,8 @@
 			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/workbench.ts",
-				"lastSyncedBaseline": "1.134.0",
-				"blob": "b7cefca90e5fe65f885bd2fd1437e2f97d805180"
+				"lastSyncedBaseline": "1.135.0",
+				"blob": "83de6aa65c4b218386372cd1181f34e0ad23ea04"
 			},
 			"testSuites": []
 		},

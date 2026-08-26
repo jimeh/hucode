@@ -294,10 +294,10 @@ suite('Hucode upstream provenance', () => {
 			['cli/src/commands/args.rs', '1.134.0'],
 			['src/vs/hucode/browser/parts/panelPart.ts', '1.134.0'],
 			['src/vs/hucode/browser/parts/titlebarPart.ts', '1.134.0'],
-			['src/vs/hucode/browser/workbench.ts', '1.134.0'],
-			['src/vs/server/node/remoteExtensionHostAgentServer.ts', '1.134.0'],
+			['src/vs/hucode/browser/workbench.ts', '1.135.0'],
+			['src/vs/server/node/remoteExtensionHostAgentServer.ts', '1.135.0'],
 			['src/vs/server/node/serverServices.ts', '1.134.0'],
-			['src/vs/server/node/webClientServer.ts', '1.134.0'],
+			['src/vs/server/node/webClientServer.ts', '1.135.0'],
 			[
 				'src/vs/sessions/contrib/automations/browser/'
 					+ 'automationStorageService.ts',
