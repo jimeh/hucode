@@ -7,6 +7,7 @@ import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Event } from '../../../base/common/event.js';
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { getServerProductSegment } from '../../../base/common/network.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -19,6 +20,7 @@ import {
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
+import product from '../../../platform/product/common/product.js';
 import {
 	HucodeHostedOmniWebConnectionService,
 	IHucodeHostedOmniWebConnectionService,
@@ -31,6 +33,7 @@ import {
 	'../../browser/hostedOmniWebShellService.js';
 
 const INSTANCE_ID = 'hosted-instance';
+const BUILD_IDENTITY = getServerProductSegment(product);
 
 suite('HucodeHostedOmniWebConnectionService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -60,6 +63,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 		connectionBootstrap: { readonly id: string; readonly attempt: number },
 		overrides?: {
 			readonly instanceId?: string;
+			readonly buildIdentity?: string | 'none';
 			readonly hostedShellProtocolVersion?: number;
 			readonly hostedShellCapabilities?: readonly string[];
 		}): object {
@@ -67,6 +71,9 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			type: HucodeOmniWebParentMessageType.Port,
 			instanceId: overrides?.instanceId ?? INSTANCE_ID,
 			connectionBootstrap,
+			...(overrides?.buildIdentity === 'none' ? {} : {
+				buildIdentity: overrides?.buildIdentity ?? BUILD_IDENTITY,
+			}),
 			hostedShellProtocolVersion: overrides?.hostedShellProtocolVersion ??
 				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: overrides?.hostedShellCapabilities ??
@@ -196,6 +203,7 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 				type: HucodeOmniWebChildMessageType.Ready,
 				instanceId: INSTANCE_ID,
 				connectionBootstrap: bootstrap,
+				buildIdentity: BUILD_IDENTITY,
 				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 				hostedShellProtocolVersion:
 					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
@@ -372,6 +380,64 @@ suite('HucodeHostedOmniWebConnectionService', () => {
 			assert.ok(await service.whenConnected());
 		});
 
+	test('blocks mismatched shell builds and stops readiness retries', async () => {
+		const browser = new ManualConnectionBrowserAdapter(true);
+		const { service } = createService(true, browser, {
+			initialConnectionTimeoutMs: 50,
+			readyRetryDelaysMs: [10],
+		});
+		service.signalReady();
+		const port = trackedPort();
+		browser.emitFromParent(portMessage(postedBootstrap(browser), {
+			buildIdentity: 'stable-different',
+		}), port.port);
+
+		assert.strictEqual(port.wasClosed(), true);
+		assert.strictEqual(browser.versionMismatchCount, 1);
+		assert.deepStrictEqual(browser.pendingDelays, []);
+		assert.strictEqual(await service.whenConnected(), undefined);
+
+		const later = trackedPort();
+		browser.emitFromParent(
+			portMessage(postedBootstrap(browser)),
+			later.port
+		);
+		assert.strictEqual(later.wasClosed(), true);
+	});
+
+	test('blocks a legacy shell port without build identity', async () => {
+		const { service, browser } = createService();
+		service.signalReady();
+		const port = trackedPort();
+		browser.emitFromParent(portMessage(postedBootstrap(browser), {
+			buildIdentity: 'none',
+		}), port.port);
+
+		assert.strictEqual(port.wasClosed(), true);
+		assert.strictEqual(browser.versionMismatchCount, 1);
+		assert.strictEqual(await service.whenConnected(), undefined);
+	});
+
+	test('does not block malformed or unauthenticated port traffic', async () => {
+		const { service, browser } = createService();
+		service.signalReady();
+		const bootstrap = postedBootstrap(browser);
+		browser.emitFromStranger(portMessage(bootstrap, {
+			buildIdentity: 'stable-different',
+		}), new MessageChannel().port1);
+		browser.emitFromParent({
+			...portMessage(bootstrap),
+			buildIdentity: 42,
+		}, new MessageChannel().port1);
+		assert.strictEqual(browser.versionMismatchCount, 0);
+
+		browser.emitFromParent(
+			portMessage(bootstrap),
+			new MessageChannel().port1
+		);
+		assert.ok(await service.whenConnected());
+	});
+
 
 	test('keeps cached availability false after disposal during connection',
 		async () => {
@@ -421,6 +487,7 @@ class FakeConnectionBrowserAdapter
 
 	readonly origin = location.origin;
 	readonly postedMessages: object[] = [];
+	versionMismatchCount = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
 
@@ -452,6 +519,10 @@ class FakeConnectionBrowserAdapter
 
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void {
 		clearTimeout(handle);
+	}
+
+	showVersionMismatch(): void {
+		this.versionMismatchCount++;
 	}
 
 	emitFromParent(data: object, port?: MessagePort): void {

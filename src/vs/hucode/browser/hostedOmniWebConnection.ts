@@ -6,6 +6,7 @@
 import { mainWindow } from '../../base/browser/window.js';
 import { DeferredPromise } from '../../base/common/async.js';
 import { Emitter, Event } from '../../base/common/event.js';
+import { getServerProductSegment } from '../../base/common/network.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import {
 	Disposable,
@@ -33,6 +34,7 @@ import {
 import {
 	HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 	HUCODE_OMNI_WEB_WORKBENCH_CHANNEL,
+	getHucodeOmniWebBuildCompatibility,
 	HucodeOmniWebChildMessageType,
 	HucodeOmniWebParentMessageType,
 	isHucodeOmniWebConnectionBootstrapMetadata,
@@ -41,6 +43,9 @@ import {
 } from '../../platform/window/common/hucodeOmniWebMessages.js';
 import { IWorkbenchEnvironmentService } from
 	'../../workbench/services/environment/common/environmentService.js';
+import product from '../../platform/product/common/product.js';
+import { showHucodeWebVersionMismatchBlocker } from
+	'./hucodeWebVersionMismatch.js';
 
 export const IHucodeHostedOmniWebConnectionService =
 	createDecorator<IHucodeHostedOmniWebConnectionService>(
@@ -108,6 +113,7 @@ export interface IHostedOmniWebConnectionBrowserAdapter {
 		delay: number
 	): ReturnType<typeof setTimeout>;
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
+	showVersionMismatch(): void;
 }
 
 /** Retry and deadline values for the hosted iframe bootstrap. */
@@ -138,6 +144,7 @@ function createMainWindowConnectionAdapter():
 		},
 		setTimeout: (callback, delay) => setTimeout(callback, delay),
 		clearTimeout: handle => clearTimeout(handle),
+		showVersionMismatch: () => showHucodeWebVersionMismatchBlocker(),
 	};
 }
 
@@ -166,6 +173,8 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	private readyRetryTimer: ReturnType<typeof setTimeout> | undefined;
 	private initialConnectionTimer: ReturnType<typeof setTimeout> | undefined;
 	private disposed = false;
+	private versionMismatchBlocked = false;
+	private readonly buildIdentity = getServerProductSegment(product);
 	private readonly _onDidConnect =
 		this._register(new Emitter<IHucodeHostedOmniWebConnection>());
 	readonly onDidConnect = this._onDidConnect.event;
@@ -204,10 +213,34 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				return;
 			}
 			const port = event.ports[0];
-			if (!isPortMessage(event.data, this.instanceId!)) {
-				if (isPortMessageTarget(event.data, this.instanceId!)) {
-					port.close();
-				}
+			if (!isPortMessageTarget(event.data, this.instanceId!)) {
+				return;
+			}
+			if (this.versionMismatchBlocked) {
+				port.close();
+				return;
+			}
+			if (!isPortMessageWireShape(event.data, this.instanceId!)) {
+				port.close();
+				return;
+			}
+			const bootstrap = event.data.connectionBootstrap;
+			if (bootstrap.id !== this.bootstrapId ||
+				bootstrap.attempt !== this.connectionAttempt) {
+				port.close();
+				return;
+			}
+			const compatibility = getHucodeOmniWebBuildCompatibility(
+				event.data,
+				this.buildIdentity
+			);
+			if (compatibility === 'mismatch') {
+				port.close();
+				this.blockForVersionMismatch();
+				return;
+			}
+			if (compatibility !== 'match') {
+				port.close();
 				return;
 			}
 			const hostedShellCapabilities =
@@ -216,12 +249,6 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 					event.data.hostedShellCapabilities
 				);
 			if (!hostedShellCapabilities) {
-				port.close();
-				return;
-			}
-			const bootstrap = event.data.connectionBootstrap;
-			if (bootstrap.id !== this.bootstrapId ||
-				bootstrap.attempt !== this.connectionAttempt) {
 				port.close();
 				return;
 			}
@@ -276,7 +303,8 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 	}
 
 	signalReady(): void {
-		if (!this.instanceId || this.connection || this.readyStarted) {
+		if (!this.instanceId || this.connection || this.readyStarted ||
+			this.versionMismatchBlocked) {
 			return;
 		}
 		this.readyStarted = true;
@@ -295,6 +323,7 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 				id: this.bootstrapId,
 				attempt: this.connectionAttempt,
 			},
+			buildIdentity: this.buildIdentity,
 			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 			hostedShellProtocolVersion:
 				HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
@@ -357,6 +386,17 @@ export class HucodeHostedOmniWebConnectionService extends Disposable
 		}
 	}
 
+	private blockForVersionMismatch(): void {
+		if (this.versionMismatchBlocked) {
+			return;
+		}
+		this.versionMismatchBlocked = true;
+		this.clearReadyRetryTimer();
+		this.clearInitialConnectionTimer();
+		void this.initialConnection.complete(undefined);
+		this.browser.showVersionMismatch();
+	}
+
 	private shutdown(): void {
 		if (this.disposed) {
 			return;
@@ -382,10 +422,16 @@ function isPortMessageTarget(value: unknown, instanceId: string): boolean {
 		message.instanceId === instanceId;
 }
 
-function isPortMessage(
+/**
+ * Validates required port-message fields while leaving the optional build
+ * identity untyped for compatibility classification.
+ */
+function isPortMessageWireShape(
 	value: unknown,
 	instanceId: string
-): value is IHucodeOmniWebPortMessage {
+): value is Omit<IHucodeOmniWebPortMessage, 'buildIdentity'> & {
+	readonly buildIdentity?: unknown;
+} {
 	if (!value || typeof value !== 'object') {
 		return false;
 	}
@@ -394,6 +440,7 @@ function isPortMessage(
 		readonly type?: unknown;
 		readonly instanceId?: unknown;
 		readonly connectionBootstrap?: unknown;
+		readonly buildIdentity?: unknown;
 		readonly hostedShellProtocolVersion?: unknown;
 		readonly hostedShellCapabilities?: unknown;
 	};

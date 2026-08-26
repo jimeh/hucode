@@ -816,7 +816,11 @@ export class WebviewElement extends Disposable implements IWebviewElement, Webvi
 						? `bytes ${range.start}-${rangeEnd}/${result.size}`
 						: undefined;
 					if (WebviewElement._supportsTransferableStreams.value) {
-						const streamCts = this.platform === 'electron' ? new CancellationTokenSource(token) : undefined;
+						// Hucode: Extend VS Code #326272's stream cancellation to
+						// serve-web too. See jimeh/hucode#83 and microsoft/vscode#319468.
+						const streamCts = this.platform === 'electron' || this.platform === 'browser'
+							? new CancellationTokenSource(token)
+							: undefined;
 						let controller: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined;
 						let closed = false;
 						const close = () => {

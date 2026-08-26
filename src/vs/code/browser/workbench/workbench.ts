@@ -21,6 +21,8 @@ import { isFolderToOpen, isWorkspaceToOpen } from '../../../platform/window/comm
 import type { IWorkbenchConstructionOptions, IWorkspace, IWorkspaceProvider } from '../../../workbench/browser/web.api.js';
 import { AuthenticationSessionInfo } from '../../../workbench/services/authentication/browser/authenticationService.js';
 import type { IURLCallbackProvider } from '../../../workbench/services/url/browser/urlService.js';
+import { resolveHucodeWebWorkbenchCreate } from './hucodeWebWorkbenchEntrypoint.js';
+import { isHucodeServerUserDataConfiguration } from '../../../platform/environment/common/hucodeWebConfiguration.js';
 import { create } from '../../../workbench/workbench.web.main.internal.js';
 
 interface ISecretStorageCrypto {
@@ -601,7 +603,7 @@ function readCookie(name: string): string | undefined {
 	return undefined;
 }
 
-(function () {
+(async function () {
 
 	// Find config by checking for DOM
 	// eslint-disable-next-line no-restricted-syntax
@@ -615,14 +617,16 @@ function readCookie(name: string): string | undefined {
 	const secretStorageCrypto = secretStorageKeyPath && ServerKeyedAESCrypto.supported()
 		? new ServerKeyedAESCrypto(secretStorageKeyPath) : new TransparentCrypto();
 
+	const createWorkbench = await resolveHucodeWebWorkbenchCreate(config, create);
+
 	// Create workbench
-	create(mainWindow.document.body, {
+	createWorkbench(mainWindow.document.body, {
 		...config,
 		windowIndicator: config.windowIndicator ?? { label: '$(remote)', tooltip: `${product.nameShort} Web` },
 		settingsSyncOptions: config.settingsSyncOptions ? { enabled: config.settingsSyncOptions.enabled, } : undefined,
 		workspaceProvider: WorkspaceProvider.create(config),
 		urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute),
-		secretStorageProvider: config.remoteAuthority && !secretStorageKeyPath
+		secretStorageProvider: config.remoteAuthority && !secretStorageKeyPath && !isHucodeServerUserDataConfiguration(config)
 			? undefined /* with a remote without embedder-preferred storage, store on the remote */
 			: new LocalStorageSecretStorageProvider(secretStorageCrypto),
 	});

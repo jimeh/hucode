@@ -58,6 +58,20 @@ export function isHucodeOmniWebConnectionBootstrapMetadata(value: {
 		(bootstrap.attempt as number) > 0;
 }
 
+/** Compares the build identity of an authenticated Omni web peer. */
+export function getHucodeOmniWebBuildCompatibility(
+	message: { readonly buildIdentity?: unknown },
+	buildIdentity: string
+): 'match' | 'mismatch' | undefined {
+	if (message.buildIdentity === undefined) {
+		return 'mismatch';
+	}
+	if (typeof message.buildIdentity !== 'string') {
+		return undefined;
+	}
+	return message.buildIdentity === buildIdentity ? 'match' : 'mismatch';
+}
+
 /**
  * Message transferring the shell IPC port into a hosted iframe workbench.
  */
@@ -66,6 +80,8 @@ export interface IHucodeOmniWebPortMessage {
 	readonly instanceId: string;
 	/** Correlates retryable bootstraps for the current document. */
 	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
+	/** Exact shell build that owns the transferred port. */
+	readonly buildIdentity: string;
 	/** Negotiated independently from the hosted unload protocol. */
 	readonly hostedShellProtocolVersion: number;
 	readonly hostedShellCapabilities: readonly HucodeHostedShellCapability[];
@@ -96,6 +112,9 @@ export interface IHucodeOmniWebReadyMessage {
 
 	/** Current document identity and its monotonic bootstrap attempt. */
 	readonly connectionBootstrap: IHucodeOmniWebConnectionBootstrap;
+
+	/** Exact hosted-workbench build requesting a shell connection. */
+	readonly buildIdentity: string;
 
 	/**
 	 * {@link HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION} as the workbench knows
