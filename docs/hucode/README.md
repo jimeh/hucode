@@ -28,6 +28,9 @@ separate application window for each one.
   Plan](omni-profile-spaces-plan.md) records global live-path ownership,
   independent hosted profiles, and a shell that follows the active workbench's
   appearance on desktop and serve-web.
+- [First-Launch Onboarding and Editor Migration Plan](onboarding-plan.md)
+  defines the desktop onboarding, reusable migration flow, safe import
+  boundaries, Omni setup, and staged delivery tracked by issue #192.
 
 ## Developing Hucode
 
