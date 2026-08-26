@@ -1242,6 +1242,7 @@
 		"--vg-inner-fade"
 	],
 	"sizes": [
+		"--hucode-omni-section-indent-adjustment",
 		"--segmented-icon-toggle-cell-radius",
 		"--segmented-icon-toggle-cell-width",
 		"--segmented-icon-toggle-height",

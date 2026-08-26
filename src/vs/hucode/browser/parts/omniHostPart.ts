@@ -6,6 +6,7 @@
 import '../media/omniHost.css';
 import {
 	$,
+	addDisposableListener,
 	append,
 } from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
@@ -40,6 +41,16 @@ import { isHostedWorkspaceAvailable } from
 import { HasLoadedWorkbenchContext } from '../omniProjectsSidebarActions.js';
 import { IHucodeWebOmniHostSurfaceService } from
 	'../webOmniHostSurfaceService.js';
+import { ICommandService } from
+	'../../../platform/commands/common/commands.js';
+import {
+	IProjectManagerService,
+	ProjectRecord,
+} from '../../../platform/projectManager/common/projectManager.js';
+import {
+	ADD_PROJECT_COMMAND_ID,
+	ADD_WORKBENCH_COMMAND_ID,
+} from '../projectSwitcher/projectSwitcherCommon.js';
 
 /**
  * Dedicated Omni shell host surface.
@@ -57,6 +68,10 @@ export class OmniHostPart extends Part {
 
 	private surface: HTMLElement | undefined;
 	private emptyState: HTMLElement | undefined;
+	private emptyHeading: HTMLHeadingElement | undefined;
+	private emptyDescription: HTMLParagraphElement | undefined;
+	private emptyActions: HTMLElement | undefined;
+	private addProjectButton: HTMLButtonElement | undefined;
 	private screenshot: HTMLElement | undefined;
 	private screenshotImage: HTMLImageElement | undefined;
 	private state: IHucodeHostedWorkspaceState = {
@@ -66,6 +81,9 @@ export class OmniHostPart extends Part {
 		instances: [],
 	};
 	private didReceiveStateChange = false;
+	private didHydrateShellState = false;
+	private projects: readonly ProjectRecord[] | undefined;
+	private didReceiveProjectsChange = false;
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private layoutScheduled = false;
@@ -91,6 +109,10 @@ export class OmniHostPart extends Part {
 		private readonly shellService: IHucodeShellControllerService,
 		@IHucodeWebOmniHostSurfaceService
 		private readonly hostSurfaceService: IHucodeWebOmniHostSurfaceService,
+		@IProjectManagerService
+		private readonly projectManagerService: IProjectManagerService,
+		@ICommandService
+		private readonly commandService: ICommandService,
 	) {
 		super(
 			Parts.HUCODE_OMNI_HOST_PART,
@@ -105,9 +127,15 @@ export class OmniHostPart extends Part {
 
 		this._register(this.shellService.onDidChangeState(state => {
 			this.didReceiveStateChange = true;
+			this.didHydrateShellState = true;
 			this.state = state;
 			this.renderState();
 			this.scheduleHostedWorkspaceLayout();
+		}));
+		this._register(this.projectManagerService.onDidChangeProjects(projects => {
+			this.didReceiveProjectsChange = true;
+			this.projects = projects;
+			this.renderState();
 		}));
 
 		this._register(this.overlayManager.onDidChangeOverlayState(() => {
@@ -140,17 +168,74 @@ export class OmniHostPart extends Part {
 		this.screenshotImage.setAttribute('aria-hidden', 'true');
 		this.surface = append(root, $('.hucode-omni-host-surface'));
 		this.hostSurfaceService.setSurface(this.surface);
-		this.emptyState = append(
-			root,
-			$('.hucode-omni-host-empty', undefined,
-				localize(
-					'omniEmptyState',
-					'Select a workbench or project worktree from the sidebar to load it into this window'
-				))
-		);
+		this.createLandingView(root);
 
 		void this.initialize();
+		void this.initializeProjects().catch(onUnexpectedError);
 		return content;
+	}
+
+	private createLandingView(root: HTMLElement): void {
+		this.emptyState = append(root, $('.hucode-omni-host-empty'));
+		this.emptyState.tabIndex = -1;
+		this.emptyState.setAttribute('role', 'region');
+		const content = append(
+			this.emptyState,
+			$('.hucode-omni-host-empty-content')
+		);
+		this.emptyHeading = append(
+			content,
+			$<HTMLHeadingElement>('h2.hucode-omni-host-empty-heading')
+		);
+		this.emptyHeading.id = 'hucode-omni-host-empty-heading';
+		this.emptyDescription = append(
+			content,
+			$<HTMLParagraphElement>('p.hucode-omni-host-empty-description')
+		);
+		this.emptyDescription.id = 'hucode-omni-host-empty-description';
+		this.emptyState.setAttribute(
+			'aria-labelledby',
+			this.emptyHeading.id
+		);
+		this.emptyState.setAttribute(
+			'aria-describedby',
+			this.emptyDescription.id
+		);
+		this.emptyActions = append(
+			content,
+			$('.hucode-omni-host-empty-actions')
+		);
+		this.addProjectButton = append(
+			this.emptyActions,
+			$<HTMLButtonElement>(
+				'button.hucode-omni-host-empty-action.primary'
+			)
+		);
+		this.addProjectButton.type = 'button';
+		this.addProjectButton.textContent = localize(
+			'omniEmptyAddProject',
+			'Add Project'
+		);
+		this._register(addDisposableListener(this.addProjectButton, 'click', () => {
+			void this.commandService.executeCommand(ADD_PROJECT_COMMAND_ID)
+				.catch(onUnexpectedError);
+		}));
+
+		const addWorkbenchButton = append(
+			this.emptyActions,
+			$<HTMLButtonElement>(
+				'button.hucode-omni-host-empty-action.secondary'
+			)
+		);
+		addWorkbenchButton.type = 'button';
+		addWorkbenchButton.textContent = localize(
+			'omniEmptyAddWorkbench',
+			'Open Folder as Workbench'
+		);
+		this._register(addDisposableListener(addWorkbenchButton, 'click', () => {
+			void this.commandService.executeCommand(ADD_WORKBENCH_COMMAND_ID)
+				.catch(onUnexpectedError);
+		}));
 	}
 
 	override dispose(): void {
@@ -174,8 +259,26 @@ export class OmniHostPart extends Part {
 	}
 
 	focus(): void {
+		const activeInstance = this.getAvailableActiveInstance();
+		if (
+			activeInstance
+			&& this.surface
+			&& !this.surface.classList.contains('hidden')
+		) {
+			void this.shellService.focusWorkspace().catch(onUnexpectedError);
+			return;
+		}
+
+		if (this.emptyState && !this.emptyState.classList.contains('hidden')) {
+			if (this.getActiveInstance()?.state === 'crashed') {
+				this.emptyState.focus();
+			} else {
+				this.addProjectButton?.focus();
+			}
+			return;
+		}
+
 		this.getContainer()?.focus();
-		void this.shellService.focusWorkspace().catch(onUnexpectedError);
 	}
 
 	override toJSON(): object {
@@ -192,9 +295,19 @@ export class OmniHostPart extends Part {
 		if (this.didReceiveStateChange) {
 			return;
 		}
+		this.didHydrateShellState = true;
 		this.state = initialState;
 		this.renderState();
 		this.scheduleHostedWorkspaceLayout();
+	}
+
+	private async initializeProjects(): Promise<void> {
+		const initialProjects = await this.projectManagerService.getProjects();
+		if (this.didReceiveProjectsChange) {
+			return;
+		}
+		this.projects = initialProjects;
+		this.renderState();
 	}
 
 	private renderState(): void {
@@ -212,12 +325,7 @@ export class OmniHostPart extends Part {
 			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
 		}
 
-		const activeInstance = this.state.activeInstanceId
-			? this.state.instances.find(instance =>
-				instance.instanceId === this.state.activeInstanceId
-				&& this.isLoadedWorkbench(instance)
-			)
-			: undefined;
+		const activeInstance = this.getAvailableActiveInstance();
 		const activeInstanceId = activeInstance?.instanceId;
 		const activeInstanceChanged = this.activeInstanceId !== activeInstanceId;
 		this.activeInstanceId = activeInstanceId;
@@ -235,11 +343,57 @@ export class OmniHostPart extends Part {
 		}
 
 		this.setHostEmpty(!hasLoadedWorkbench);
+		this.renderLandingState();
 		this.emptyState.classList.remove('hidden');
 		this.surface.classList.add('hidden');
 		this.stopScreenshotRefresh();
 		this.clearOverlayOcclusion();
 		this.clearScreenshot();
+	}
+
+	private renderLandingState(): void {
+		if (!this.emptyHeading || !this.emptyDescription || !this.emptyActions) {
+			return;
+		}
+
+		const activeInstance = this.getActiveInstance();
+		if (activeInstance?.state === 'crashed') {
+			this.emptyHeading.textContent = localize(
+				'omniCrashedHeading',
+				'Workbench crashed'
+			);
+			this.emptyDescription.textContent = localize(
+				'omniCrashedDescription',
+				'Select the crashed workbench in Projects to reopen it.'
+			);
+			this.emptyActions.classList.add('hidden');
+			return;
+		}
+
+		const retainedWorkbenches = this.state.retainedWorkbenches ?? [];
+		const catalogIsAuthoritativelyEmpty = this.didHydrateShellState
+			&& this.projects?.length === 0
+			&& retainedWorkbenches.length === 0;
+		if (catalogIsAuthoritativelyEmpty) {
+			this.emptyHeading.textContent = localize(
+				'omniFirstWorkbenchHeading',
+				'Open your first workbench'
+			);
+			this.emptyDescription.textContent = localize(
+				'omniFirstWorkbenchDescription',
+				'A project is a saved Git repository. A workbench can be any folder.'
+			);
+		} else {
+			this.emptyHeading.textContent = localize(
+				'omniSelectWorkbenchHeading',
+				'Choose a project or workbench'
+			);
+			this.emptyDescription.textContent = localize(
+				'omniSelectWorkbenchDescription',
+				'Select an item from Projects to open it here.'
+			);
+		}
+		this.emptyActions.classList.remove('hidden');
 	}
 
 	private scheduleHostedWorkspaceLayout(): void {
@@ -324,6 +478,14 @@ export class OmniHostPart extends Part {
 			? this.state.instances.find(instance =>
 				instance.instanceId === this.state.activeInstanceId
 			)
+			: undefined;
+	}
+
+	private getAvailableActiveInstance():
+		IHucodeHostedWorkbenchInstance | undefined {
+		const activeInstance = this.getActiveInstance();
+		return activeInstance && this.isLoadedWorkbench(activeInstance)
+			? activeInstance
 			: undefined;
 	}
 

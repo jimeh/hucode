@@ -331,6 +331,15 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   `Page.crash` without awaiting its response, and await the event instead; the
   command response never arrives after the target dies, and the crashed page
   remains in `context.pages()` until recovery destroys the crashed view.
+- Hosted unload and reload smoke commands can destroy their Playwright `Page`
+  or detach their `Frame` before Quick Input reports itself hidden. Mark only
+  those command calls with `surfaceMayClose`, then rely on the following exact
+  lifecycle assertion. Keep ordinary command completion strict so a renderer
+  crash still fails the smoke.
+- Linux Omni smoke profile cleanup can race late Chromium cache writes after
+  the process group exits. Keep bounded `fs.rm` retries for the temporary root;
+  an `ENOTEMPTY` after all lifecycle phases pass is cleanup noise, not a product
+  failure.
 - Editor copy and cut commands synchronously emit nested document clipboard
   events. Local Omni clipboard fallback must keep those nested events inside the
   per-window forwarding-disabled scope or it can cancel and re-forward itself.
