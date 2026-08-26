@@ -129,6 +129,53 @@
 	width: auto;
 }
 
+/* Sticky rows have a more specific upstream width: 100% rule. Restore the
+ * Modern UI row inset so their rounded right edge is not clipped. */
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view .monaco-list
+	.monaco-tree-sticky-container
+	.monaco-tree-sticky-row.monaco-list-row {
+	width: auto;
+}
+
+/* Synthetic sections group the tree without adding visual hierarchy. Replace
+ * that first indent while preserving each real nested level below it. */
+.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not(:has(.hucode-project-switcher-section))
+	.monaco-tl-twistie {
+	margin-left: calc(
+		var(--hucode-omni-section-indent-adjustment, 0px) + 8px
+	);
+}
+
+.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not(:has(.hucode-project-switcher-section))
+	.monaco-tl-indent {
+	left: calc(
+		24px + var(--hucode-omni-section-indent-adjustment, 0px)
+	);
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not(:has(.hucode-project-switcher-section))
+	.monaco-tl-twistie {
+	margin-left: calc(
+		var(--hucode-omni-section-indent-adjustment, 0px) + 2px
+	);
+}
+
+.style-override.hucode-omni-workbench
+	.hucode-project-switcher-view
+	.monaco-list-row:not(:has(.hucode-project-switcher-section))
+	.monaco-tl-indent {
+	left: calc(
+		18px + var(--hucode-omni-section-indent-adjustment, 0px)
+	);
+}
+
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
 	.monaco-list-row:not(.drop-target):not(.selected):not(.focused):has(.hucode-project-switcher-section) {
@@ -158,7 +205,7 @@
 
 .style-override.hucode-omni-workbench
 	.hucode-project-switcher-view
-	.monaco-list-row:not(.drop-target-before):not([data-index='0']):has(.hucode-project-switcher-section)::before {
+	.monaco-list-row:not(.monaco-tree-sticky-row):not(.drop-target-before):not([data-index='0']):has(.hucode-project-switcher-section)::before {
 	content: '';
 	position: absolute;
 	top: 0;
@@ -378,6 +425,11 @@
 	font-weight: var(--vscode-fontWeight-semiBold);
 	text-transform: capitalize;
 	letter-spacing: normal;
+}
+
+.style-override.hucode-omni-workbench.modern-ui-uppercase-view-headers
+	.hucode-project-switcher-section {
+	text-transform: uppercase;
 }
 
 .hucode-project-switcher-section-actions,

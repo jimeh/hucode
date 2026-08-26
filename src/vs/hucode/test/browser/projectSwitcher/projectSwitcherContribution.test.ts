@@ -68,8 +68,13 @@ import {
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 } from
 	'../../../../platform/window/common/hucodeOmniCommandRouting.js';
-import { IHucodeRetainedWorkbench } from
-	'../../../common/retainedWorkbench.js';
+import {
+	HUCODE_OMNI_SECTION_INDENT_SETTING,
+	HUCODE_OMNI_TREE_INDENT_SETTING,
+	HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING,
+	HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING,
+	IHucodeRetainedWorkbench,
+} from '../../../common/retainedWorkbench.js';
 import {
 	createHucodeHostedNavigationSnapshot,
 	filterSwitchWorktreePicks,
@@ -135,16 +140,16 @@ suite('ProjectSwitcherContribution', () => {
 				'compact',
 				true
 			),
-			modernTwoLineItem: getProjectSwitcherItemHeight(
+			modernDefaultItem: getProjectSwitcherItemHeight(
 				workbench,
-				'twoLine',
+				'default',
 				true
 			),
 		}, {
 			classicSection: 22,
 			modernSection: 28,
 			modernCompactItem: 22,
-			modernTwoLineItem: 44,
+			modernDefaultItem: 44,
 		});
 	});
 
@@ -157,6 +162,188 @@ suite('ProjectSwitcherContribution', () => {
 			classicOmni: 0,
 			modernOmni: 4,
 			modernStandalone: 0,
+		});
+	});
+
+	test('keeps workbench and worktree item layouts independent', () => {
+		const values = new Map<string, unknown>([
+			[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'compact'],
+			[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'default'],
+		]);
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			environmentService: { isOmniWindow: true },
+			configurationService: {
+				getValue: (key: string) => values.get(key),
+			},
+		});
+		const getItemLayout = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'getItemLayout'
+		) as (
+			this: object,
+			item: ProjectSwitcherItem
+		) => 'default' | 'compact';
+
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'compact',
+			worktree: 'default',
+		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'default');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'compact');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'default',
+			worktree: 'compact',
+		});
+
+		values.set(HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING, 'compact');
+		values.set(HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING, 'twoLine');
+		assert.deepStrictEqual({
+			workbench: getItemLayout.call(host, retainedWorkbenchItem()),
+			worktree: getItemLayout.call(host, worktreeItem()),
+		}, {
+			workbench: 'compact',
+			worktree: 'default',
+		});
+	});
+
+	test('styles section descendants and Modern UI sticky headers', () => {
+		const append = (parent: HTMLElement, className: string) => {
+			const element = mainWindow.document.createElement('div');
+			element.className = className;
+			parent.appendChild(element);
+			return element;
+		};
+		const root = mainWindow.document.createElement('div');
+		root.className = 'style-override hucode-omni-workbench ' +
+			'modern-ui-uppercase-view-headers';
+		root.style.setProperty(
+			'--hucode-omni-section-indent-adjustment',
+			'-16px'
+		);
+		const view = append(root, 'hucode-project-switcher-view');
+		const list = append(view, 'monaco-list');
+		const scrollable = append(list, 'monaco-scrollable-element');
+		scrollable.style.position = 'relative';
+		scrollable.style.width = '200px';
+		scrollable.style.height = '100px';
+		const stickyContainer = append(
+			scrollable,
+			'monaco-tree-sticky-container'
+		);
+		const stickyRow = append(
+			stickyContainer,
+			'monaco-tree-sticky-row monaco-list-row'
+		);
+		stickyRow.dataset.index = '4';
+		stickyRow.style.height = '28px';
+		const stickyTreeRow = append(stickyRow, 'monaco-tl-row');
+		append(stickyTreeRow, 'monaco-tl-indent');
+		append(stickyTreeRow, 'monaco-tl-twistie');
+		const stickyContents = append(stickyTreeRow, 'monaco-tl-contents');
+		const section = append(
+			stickyContents,
+			'hucode-project-switcher-section'
+		);
+
+		const normalSectionRow = append(list, 'monaco-list-row');
+		normalSectionRow.dataset.index = '5';
+		append(normalSectionRow, 'hucode-project-switcher-section');
+
+		const contentRow = append(list, 'monaco-list-row');
+		const contentTreeRow = append(contentRow, 'monaco-tl-row');
+		const contentIndent = append(contentTreeRow, 'monaco-tl-indent');
+		const contentTwistie = append(contentTreeRow, 'monaco-tl-twistie');
+		contentTwistie.style.paddingLeft = '16px';
+		const contentContents = append(contentTreeRow, 'monaco-tl-contents');
+		append(contentContents, 'hucode-project-switcher-project');
+
+		const classicRoot = mainWindow.document.createElement('div');
+		classicRoot.className = 'hucode-omni-workbench';
+		classicRoot.style.setProperty(
+			'--hucode-omni-section-indent-adjustment',
+			'-16px'
+		);
+		const classicView = append(
+			classicRoot,
+			'hucode-project-switcher-view'
+		);
+		const classicList = append(classicView, 'monaco-list');
+		const classicRow = append(classicList, 'monaco-list-row');
+		const classicTreeRow = append(classicRow, 'monaco-tl-row');
+		const classicIndent = append(classicTreeRow, 'monaco-tl-indent');
+		const classicTwistie = append(classicTreeRow, 'monaco-tl-twistie');
+		classicTwistie.style.paddingLeft = '16px';
+		const classicContents = append(classicTreeRow, 'monaco-tl-contents');
+		append(classicContents, 'hucode-project-switcher-project');
+
+		mainWindow.document.body.appendChild(root);
+		mainWindow.document.body.appendChild(classicRoot);
+		disposables.add(toDisposable(() => root.remove()));
+		disposables.add(toDisposable(() => classicRoot.remove()));
+
+		assert.deepStrictEqual({
+			sticky: {
+				left: mainWindow.getComputedStyle(stickyRow).left,
+				right: mainWindow.getComputedStyle(stickyRow).right,
+				width: stickyRow.getBoundingClientRect().width,
+				separator: mainWindow.getComputedStyle(
+					stickyRow,
+					'::before'
+				).content,
+			},
+			normalSeparator: mainWindow.getComputedStyle(
+				normalSectionRow,
+				'::before'
+			).content,
+			sectionTransform: mainWindow.getComputedStyle(section).textTransform,
+			content: {
+				indentLeft: mainWindow.getComputedStyle(contentIndent).left,
+				twistieMarginLeft: mainWindow.getComputedStyle(
+					contentTwistie
+				).marginLeft,
+				netSyntheticIndent: parseFloat(mainWindow.getComputedStyle(
+					contentTwistie
+				).paddingLeft) + parseFloat(mainWindow.getComputedStyle(
+					contentTwistie
+				).marginLeft),
+			},
+			classicContent: {
+				indentLeft: mainWindow.getComputedStyle(classicIndent).left,
+				twistieMarginLeft: mainWindow.getComputedStyle(
+					classicTwistie
+				).marginLeft,
+				netSyntheticIndent: parseFloat(mainWindow.getComputedStyle(
+					classicTwistie
+				).paddingLeft) + parseFloat(mainWindow.getComputedStyle(
+					classicTwistie
+				).marginLeft),
+			},
+		}, {
+			sticky: {
+				left: '4px',
+				right: '4px',
+				width: 192,
+				separator: 'none',
+			},
+			normalSeparator: '""',
+			sectionTransform: 'uppercase',
+			content: {
+				indentLeft: '2px',
+				twistieMarginLeft: '-14px',
+				netSyntheticIndent: 2,
+			},
+			classicContent: {
+				indentLeft: '8px',
+				twistieMarginLeft: '-8px',
+				netSyntheticIndent: 8,
+			},
 		});
 	});
 
@@ -396,9 +583,11 @@ suite('ProjectSwitcherContribution', () => {
 
 	test('recycled rows clear active ARIA and actions before rendering a section', () => {
 		const commands: Array<{ id: string; args: readonly unknown[] }> = [];
+		const sidebarUnloads: ProjectSwitcherItem[] = [];
 		const renderer = new ProjectSwitcherRenderer(
 			() => 'compact',
 			() => true,
+			async item => { sidebarUnloads.push(item); },
 			{
 				executeCommand: async (id: string, ...args: unknown[]) => {
 					commands.push({ id, args });
@@ -420,6 +609,7 @@ suite('ProjectSwitcherContribution', () => {
 			active: row.classList.contains('hucode-project-switcher-active-row'),
 			ariaCurrent: row.getAttribute('aria-current'),
 			trailingLabel: template.trailingAction.button.getAttribute('aria-label'),
+			sidebarUnloadIds: sidebarUnloads.map(item => item.id),
 			commands: [...commands],
 		};
 
@@ -449,14 +639,10 @@ suite('ProjectSwitcherContribution', () => {
 				active: true,
 				ariaCurrent: 'true',
 				trailingLabel: 'Unload',
-				commands: [{
-					id: 'hucode.projectSwitcher.unloadWorktree',
-					args: [{
-						$treeViewId: 'workbench.hucode.projectSwitcher.view',
-						$treeItemHandle:
-							'worktree:project-1:%2Frepo%2Ffeature',
-					}],
-				}],
+				sidebarUnloadIds: [
+					'worktree:project-1:%2Frepo%2Ffeature',
+				],
+				commands: [],
 			},
 			recycled: {
 				active: false,
@@ -469,6 +655,35 @@ suite('ProjectSwitcherContribution', () => {
 			},
 		});
 
+		renderer.disposeTemplate(template);
+	});
+
+	test('routes both inline unload actions through the sidebar handler', () => {
+		const unloadedItems: ProjectSwitcherItem[] = [];
+		const renderer = new ProjectSwitcherRenderer(
+			() => 'compact',
+			() => true,
+			async item => { unloadedItems.push(item); },
+			{
+				executeCommand: async () => {
+					assert.fail('inline unload bypassed the sidebar handler');
+				},
+			} as unknown as ICommandService
+		);
+		const container = mainWindow.document.createElement('div');
+		const template = renderer.renderTemplate(container);
+		const worktree = worktreeItem({ hostedWorkbenchState: 'loaded' });
+		const workbench = retainedWorkbenchItem({
+			desiredState: 'loaded',
+			hostedWorkbenchState: 'loaded',
+		});
+
+		for (const item of [worktree, workbench]) {
+			renderer.renderElement(treeNode(item), 0, template);
+			template.trailingAction.button.click();
+		}
+
+		assert.deepStrictEqual(unloadedItems, [worktree, workbench]);
 		renderer.disposeTemplate(template);
 	});
 
@@ -643,10 +858,11 @@ suite('ProjectSwitcherContribution', () => {
 	);
 
 	test('renders independent name branch and path fields in source order', () => {
-		let layout: 'compact' | 'twoLine' = 'compact';
+		let layout: 'compact' | 'default' = 'compact';
 		const renderer = new ProjectSwitcherRenderer(
 			() => layout,
 			() => true,
+			async () => undefined,
 			{ executeCommand: async () => undefined } as unknown as ICommandService
 		);
 		const container = mainWindow.document.createElement('div');
@@ -663,9 +879,9 @@ suite('ProjectSwitcherContribution', () => {
 			text: element.textContent,
 			display: (element as HTMLElement).style.display,
 		}));
-		layout = 'twoLine';
+		layout = 'default';
 		renderer.renderElement(treeNode(item), 0, template);
-		const twoLine = {
+		const defaultLayout = {
 			branch: template.description.textContent,
 			branchDisplay: template.description.style.display,
 			path: template.path.textContent,
@@ -674,7 +890,7 @@ suite('ProjectSwitcherContribution', () => {
 
 		assert.deepStrictEqual({
 			compact,
-			twoLine,
+			defaultLayout,
 			twoLineClass: template.container.classList.contains(
 				'hucode-project-switcher-two-line'
 			),
@@ -698,7 +914,7 @@ suite('ProjectSwitcherContribution', () => {
 				text: '',
 				display: 'none',
 			}],
-			twoLine: {
+			defaultLayout: {
 				branch: 'feature/topic',
 				branchDisplay: '',
 				path: '/repo.worktrees/feature',
@@ -714,8 +930,9 @@ suite('ProjectSwitcherContribution', () => {
 	test('toggles inline metadata icons without decorating project paths', () => {
 		let showInlineIcons = true;
 		const renderer = new ProjectSwitcherRenderer(
-			() => 'twoLine',
+			() => 'default',
 			() => showInlineIcons,
+			async () => undefined,
 			{ executeCommand: async () => undefined } as unknown as ICommandService
 		);
 		const container = mainWindow.document.createElement('div');
@@ -1011,7 +1228,10 @@ suite('ProjectSwitcherContribution', () => {
 		)));
 		const subscriptions: string[] = [];
 		const treeLayouts: Array<{ height: number; width: number }> = [];
-		const treeOptionUpdates: Array<{ readonly paddingTop?: number }> = [];
+		const treeOptionUpdates: Array<{
+			readonly indent?: number;
+			readonly paddingTop?: number;
+		}> = [];
 		let treeOptions: {
 			readonly accessibilityProvider: {
 				getWidgetAriaLabel(): string;
@@ -1027,6 +1247,10 @@ suite('ProjectSwitcherContribution', () => {
 		let renderers: readonly ProjectSwitcherRenderer[] = [];
 		let treeSetChildrenCalls = 0;
 		let modernUI = false;
+		const configuredIndents: {
+			section?: number;
+			tree?: number;
+		} = {};
 		const tree = {
 			contextKeyService: {
 				createKey: () => ({ set: () => undefined }),
@@ -1041,7 +1265,10 @@ suite('ProjectSwitcherContribution', () => {
 			isCollapsed: () => false,
 			layout: (height: number, width: number) =>
 				treeLayouts.push({ height, width }),
-			updateOptions: (options: { readonly paddingTop?: number }) =>
+			updateOptions: (options: {
+				readonly indent?: number;
+				readonly paddingTop?: number;
+			}) =>
 				treeOptionUpdates.push(options),
 			getFocus: () => [],
 			getSelection: () => [],
@@ -1059,6 +1286,10 @@ suite('ProjectSwitcherContribution', () => {
 					return new ProjectSwitcherRenderer(
 						args[0] as (item: ProjectSwitcherItem) => 'compact',
 						args[1] as () => boolean,
+						args[2] as (
+							item: ProjectSwitcherWorktreeItem |
+								ProjectSwitcherWorkbenchItem
+						) => Promise<void>,
 						commandService
 					);
 				}
@@ -1162,9 +1393,18 @@ suite('ProjectSwitcherContribution', () => {
 					subscriptions.push('configuration');
 					return configurationChanges.event(listener);
 				},
-				getValue: (key: string) => key === LayoutSettings.MODERN_UI
-					? modernUI
-					: undefined,
+				getValue: (key: string) => {
+					switch (key) {
+						case LayoutSettings.MODERN_UI:
+							return modernUI;
+						case HUCODE_OMNI_SECTION_INDENT_SETTING:
+							return configuredIndents.section;
+						case HUCODE_OMNI_TREE_INDENT_SETTING:
+							return configuredIndents.tree;
+						default:
+							return undefined;
+					}
+				},
 			} as unknown as IConfigurationService,
 			{ warn: (value: unknown) => warnings.push(value) } as never,
 		));
@@ -1263,6 +1503,12 @@ suite('ProjectSwitcherContribution', () => {
 		const treeContainer = container.querySelector(
 			'.hucode-project-switcher-tree'
 		) as HTMLElement;
+		assert.strictEqual(
+			treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+			'-16px'
+		);
 		const row = mainWindow.document.createElement('button');
 		treeContainer.appendChild(row);
 		disposables.add(addDisposableListener(row, 'pointerdown', () => {
@@ -1351,7 +1597,42 @@ suite('ProjectSwitcherContribution', () => {
 			affectsConfiguration: (key: string) =>
 				key === LayoutSettings.MODERN_UI,
 		} as unknown as IConfigurationChangeEvent);
-		assert.deepStrictEqual(treeOptionUpdates, [{ paddingTop: 4 }]);
+		assert.deepStrictEqual({
+			treeOptionUpdates,
+			sectionIndentAdjustment: treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+		}, {
+			treeOptionUpdates: [{ paddingTop: 4 }],
+			sectionIndentAdjustment: '-16px',
+		});
+
+		configuredIndents.section = 4;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === HUCODE_OMNI_SECTION_INDENT_SETTING,
+		} as unknown as IConfigurationChangeEvent);
+		assert.strictEqual(
+			treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+			'-12px'
+		);
+
+		configuredIndents.tree = 16;
+		configurationChanges.fire({
+			affectsConfiguration: (key: string) =>
+				key === HUCODE_OMNI_TREE_INDENT_SETTING,
+		} as unknown as IConfigurationChangeEvent);
+		assert.deepStrictEqual({
+			treeOptionUpdates,
+			sectionIndentAdjustment: treeContainer.style.getPropertyValue(
+				'--hucode-omni-section-indent-adjustment'
+			),
+		}, {
+			treeOptionUpdates: [{ paddingTop: 4 }, { indent: 16 }],
+			sectionIndentAdjustment: '-20px',
+		});
 
 		widget.dispose();
 		await timeout(0);
@@ -1678,6 +1959,59 @@ suite('ProjectSwitcherContribution', () => {
 			{ projectId: 'project-1', worktreePath: '/repo/feature' }
 		);
 	});
+
+	test('routes both context-menu unload actions through the sidebar handler',
+		async () => {
+			const unloadedItems: ProjectSwitcherItem[] = [];
+			const worktree = worktreeItem({ hostedWorkbenchState: 'loaded' });
+			const workbench = retainedWorkbenchItem({
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'loaded',
+			});
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				getHostedWorkbenchInstance: (path: string) => ({
+					instanceId: path === worktree.worktreePath
+						? 'worktree-instance'
+						: 'workbench-instance',
+					worktreePath: path,
+					state: 'loaded',
+					visible: false,
+					focused: false,
+				}),
+				unloadFromSidebar: async (item: ProjectSwitcherItem) => {
+					unloadedItems.push(item);
+				},
+				commandService: {
+					executeCommand: async () => {
+						assert.fail('context unload bypassed the sidebar handler');
+					},
+				},
+				hostService: {},
+				shellService: {},
+				projectManagerService: {},
+				notificationService: {},
+			});
+			const getContextActions = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'getContextActions'
+			) as (this: object, item: ProjectSwitcherItem) => readonly {
+				readonly id: string;
+				run(): Promise<void>;
+			}[];
+
+			for (const [item, actionId] of [
+				[worktree, 'hucode.projectSwitcher.unloadWorktree'],
+				[workbench, 'hucode.projectSwitcher.unloadWorkbench'],
+			] as const) {
+				const action = getContextActions.call(host, item).find(candidate =>
+					candidate.id === actionId
+				);
+				assert.ok(action, `missing ${actionId} context action`);
+				await action.run();
+			}
+
+			assert.deepStrictEqual(unloadedItems, [worktree, workbench]);
+		});
 
 	test('persists user project collapse changes outside tree synchronization', () => {
 		const collapsedProjectIds = new Set<string>();
@@ -2209,6 +2543,431 @@ suite('ProjectSwitcherContribution', () => {
 		assert.deepStrictEqual(selectionOptions, [{ reveal: true }]);
 	});
 
+	test('does not reveal a promoted workbench after a sidebar unload',
+		async () => {
+			const current = worktreeItem({
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const promoted = retainedWorkbenchItem({
+				isActive: true,
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'active',
+			});
+			const currentState: IHucodeHostedWorkspaceState = {
+				...hostedState('instance-1'),
+				instances: [{
+					instanceId: 'instance-1',
+					projectId: 'project-1',
+					worktreePath: current.worktreePath,
+					state: 'active',
+					visible: true,
+					focused: true,
+				}, {
+					instanceId: 'instance-2',
+					worktreePath: promoted.worktreePath,
+					state: 'loaded',
+					visible: false,
+					focused: false,
+				}],
+			};
+			const nextState: IHucodeHostedWorkspaceState = {
+				...hostedState('instance-2'),
+				instances: [{
+					instanceId: 'instance-2',
+					worktreePath: promoted.worktreePath,
+					state: 'active',
+					visible: true,
+					focused: true,
+				}],
+			};
+			let reveals = 0;
+			const selections: ProjectSwitcherItem[][] = [];
+			const focus: ProjectSwitcherItem[][] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: currentState,
+				pendingSidebarUnload: {
+					itemId: current.id,
+					instanceId: 'instance-1',
+					observedRemoval: false,
+				},
+				didSynchronizeCurrentWorktreeItem: true,
+				lastSynchronizedCurrentWorktreeItemId: current.id,
+				environmentService: { isOmniWindow: true },
+				collapsedOmniSections: new Set<string>(),
+				tree: {
+					hasElement: () => true,
+					reveal: async () => { reveals++; },
+					setSelection: (items: ProjectSwitcherItem[]) => {
+						selections.push(items);
+					},
+					setFocus: (items: ProjectSwitcherItem[]) => {
+						focus.push(items);
+					},
+				},
+				projects: [],
+				itemsById: new Map<string, ProjectSwitcherItem>([
+					[current.id, current],
+				]),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => {
+					host.itemsById = new Map<string, ProjectSwitcherItem>([
+						[promoted.id, promoted],
+					]);
+				},
+				updateItemContext: () => undefined,
+				viewItemContext: { set: () => undefined },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, nextState);
+			await Promise.resolve();
+
+			assert.deepStrictEqual({ reveals, selections, focus }, {
+				reveals: 0,
+				selections: [[promoted]],
+				focus: [[promoted]],
+			});
+			assert.strictEqual(host.pendingSidebarUnload, undefined);
+			assert.strictEqual(
+				Reflect.get(host, 'pendingSidebarUnloadRevealInstanceId'),
+				undefined
+			);
+		});
+
+	test('preserves sidebar scroll across split unload promotion state',
+		async () => {
+			const current = worktreeItem({
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const promoted = retainedWorkbenchItem({
+				isActive: true,
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'active',
+			});
+			const ordinary = worktreeItem({
+				id: 'worktree:project-1:%2Frepo%2Fordinary',
+				handle: 'worktree:project-1:%2Frepo%2Fordinary',
+				worktreePath: '/repo/ordinary',
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const currentInstance = {
+				instanceId: 'instance-1',
+				projectId: 'project-1',
+				worktreePath: current.worktreePath,
+				state: 'active' as const,
+				visible: true,
+				focused: true,
+			};
+			const promotedInstance = {
+				instanceId: 'instance-2',
+				worktreePath: promoted.worktreePath,
+				state: 'loaded' as const,
+				visible: false,
+				focused: false,
+			};
+			const ordinaryInstance = {
+				instanceId: 'instance-3',
+				projectId: 'project-1',
+				worktreePath: ordinary.worktreePath,
+				state: 'loaded' as const,
+				visible: false,
+				focused: false,
+			};
+			const reveals: ProjectSwitcherItem[] = [];
+			const selections: ProjectSwitcherItem[][] = [];
+			const focus: ProjectSwitcherItem[][] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: {
+					...hostedState('instance-1'),
+					instances: [
+						currentInstance,
+						promotedInstance,
+						ordinaryInstance,
+					],
+				},
+				pendingSidebarUnload: {
+					itemId: current.id,
+					instanceId: 'instance-1',
+					observedRemoval: false,
+				},
+				didSynchronizeCurrentWorktreeItem: true,
+				lastSynchronizedCurrentWorktreeItemId: current.id,
+				environmentService: { isOmniWindow: true },
+				collapsedOmniSections: new Set<string>(),
+				tree: {
+					hasElement: () => true,
+					reveal: async (item: ProjectSwitcherItem) => {
+						reveals.push(item);
+					},
+					setSelection: (items: ProjectSwitcherItem[]) => {
+						selections.push(items);
+					},
+					setFocus: (items: ProjectSwitcherItem[]) => {
+						focus.push(items);
+					},
+				},
+				projects: [],
+				itemsById: new Map<string, ProjectSwitcherItem>([
+					[current.id, current],
+				]),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => {
+					const activeInstanceId =
+						host.omniHostedWorkspaceState.activeInstanceId;
+					const activeItem = activeInstanceId === 'instance-2'
+						? promoted
+						: activeInstanceId === 'instance-3'
+							? ordinary
+							: undefined;
+					host.itemsById = activeItem
+						? new Map([[activeItem.id, activeItem]])
+						: new Map();
+				},
+				updateItemContext: () => undefined,
+				viewItemContext: { set: () => undefined },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, {
+				...hostedState(),
+				instances: [promotedInstance, ordinaryInstance],
+			});
+			await Promise.resolve();
+
+			updateState.call(host, {
+				...hostedState('instance-2'),
+				instances: [{
+					...promotedInstance,
+					state: 'active',
+					visible: true,
+				}, ordinaryInstance],
+			});
+			await Promise.resolve();
+
+			updateState.call(host, {
+				...hostedState('instance-3'),
+				instances: [{
+					...promotedInstance,
+					state: 'loaded',
+					visible: false,
+				}, {
+					...ordinaryInstance,
+					state: 'active',
+					visible: true,
+				}],
+			});
+			await Promise.resolve();
+			await Promise.resolve();
+
+			assert.deepStrictEqual({ reveals, selections, focus }, {
+				reveals: [ordinary],
+				selections: [[], [promoted], [ordinary]],
+				focus: [[], [promoted], [ordinary]],
+			});
+			assert.strictEqual(host.pendingSidebarUnload, undefined);
+			assert.strictEqual(
+				Reflect.get(host, 'pendingSidebarUnloadRevealInstanceId'),
+				undefined
+			);
+		});
+
+	test('does not suppress an unrelated activation during a sidebar unload',
+		async () => {
+			const current = worktreeItem({
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const activated = retainedWorkbenchItem({
+				isActive: true,
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'active',
+			});
+			const currentInstance = {
+				instanceId: 'instance-1',
+				projectId: 'project-1',
+				worktreePath: current.worktreePath,
+				state: 'active' as const,
+				visible: true,
+				focused: true,
+			};
+			const activatedInstance = {
+				instanceId: 'instance-2',
+				worktreePath: activated.worktreePath,
+				state: 'loaded' as const,
+				visible: false,
+				focused: false,
+			};
+			const currentState: IHucodeHostedWorkspaceState = {
+				...hostedState('instance-1'),
+				instances: [currentInstance, activatedInstance],
+			};
+			const selectionOptions: Array<{ reveal: boolean }> = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: currentState,
+				pendingSidebarUnload: {
+					itemId: current.id,
+					instanceId: 'instance-1',
+					observedRemoval: false,
+				},
+				didSynchronizeCurrentWorktreeItem: true,
+				lastSynchronizedCurrentWorktreeItemId: current.id,
+				environmentService: { isOmniWindow: true },
+				tree: {},
+				projects: [],
+				itemsById: new Map<string, ProjectSwitcherItem>([
+					[current.id, current],
+				]),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => {
+					host.itemsById = new Map<string, ProjectSwitcherItem>([
+						[activated.id, activated],
+					]);
+				},
+				updateItemContext: () => undefined,
+				updateCurrentWorktreeSelection: async (
+					options: { reveal: boolean }
+				) => { selectionOptions.push(options); },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, {
+				...hostedState('instance-2'),
+				instances: [
+					{ ...currentInstance, state: 'loaded', visible: false },
+					{ ...activatedInstance, state: 'active', visible: true },
+				],
+			});
+			await Promise.resolve();
+
+			assert.deepStrictEqual(selectionOptions, [{ reveal: true }]);
+			assert.strictEqual(host.pendingSidebarUnload, undefined);
+		});
+
+	test('clears sidebar unload state after vetoes and failures', async () => {
+		const current = worktreeItem({
+			isActive: true,
+			hostedWorkbenchState: 'active',
+		});
+		const state = hostedStateWithInstance();
+		const veto = new DeferredPromise<void>();
+		const commandError = new Error('unload failed');
+		const commandRuns = [
+			() => veto.p,
+			async () => { throw commandError; },
+		];
+		const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+			omniHostedWorkspaceState: state,
+			environmentService: { isOmniWindow: true },
+			itemsById: new Map<string, ProjectSwitcherItem>([
+				[current.id, current],
+			]),
+			commandService: {
+				executeCommand: () => commandRuns.shift()!(),
+			},
+		});
+		const unloadFromSidebar = Reflect.get(
+			ProjectSwitcherWidget.prototype,
+			'unloadFromSidebar'
+		) as (
+			this: object,
+			item: ProjectSwitcherWorktreeItem
+		) => Promise<void>;
+
+		const vetoedUnload = unloadFromSidebar.call(host, current);
+		assert.deepStrictEqual(
+			Reflect.get(host, 'pendingSidebarUnload'),
+			{
+				itemId: current.id,
+				instanceId: 'instance-1',
+				observedRemoval: false,
+			}
+		);
+		veto.complete();
+		await vetoedUnload;
+		assert.strictEqual(
+			Reflect.get(host, 'pendingSidebarUnload'),
+			undefined
+		);
+
+		await assert.rejects(
+			unloadFromSidebar.call(host, current),
+			commandError
+		);
+		assert.strictEqual(
+			Reflect.get(host, 'pendingSidebarUnload'),
+			undefined
+		);
+	});
+
+	test('does not arm scroll preservation when unloading an inactive item',
+		async () => {
+			const current = worktreeItem({
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const inactive = retainedWorkbenchItem({
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'loaded',
+			});
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: {
+					...hostedState('instance-1'),
+					instances: [{
+						instanceId: 'instance-1',
+						projectId: 'project-1',
+						worktreePath: current.worktreePath,
+						state: 'active',
+						visible: true,
+						focused: true,
+					}, {
+						instanceId: 'instance-2',
+						worktreePath: inactive.worktreePath,
+						state: 'loaded',
+						visible: false,
+						focused: false,
+					}],
+				},
+				environmentService: { isOmniWindow: true },
+				itemsById: new Map<string, ProjectSwitcherItem>([
+					[current.id, current],
+					[inactive.id, inactive],
+				]),
+				commandService: { executeCommand: async () => undefined },
+			});
+			const unloadFromSidebar = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'unloadFromSidebar'
+			) as (
+				this: object,
+				item: ProjectSwitcherWorkbenchItem
+			) => Promise<void>;
+
+			await unloadFromSidebar.call(host, inactive);
+
+			assert.strictEqual(
+				Reflect.get(host, 'pendingSidebarUnload'),
+				undefined
+			);
+		});
+
 	test('reveals an active worktree when its item first becomes available',
 		async () => {
 			const state = hostedStateWithInstance();
@@ -2310,6 +3069,49 @@ suite('ProjectSwitcherContribution', () => {
 				renders: [latestProjects],
 				selections: [true],
 			});
+		});
+
+	test('keeps unload reveal suppression through primary pointer release',
+		async () => {
+			const selections: boolean[] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				isPrimaryPointerInteraction: true,
+				primaryPointerStartCurrentWorktreeItemId: 'old',
+				pendingProjectsRender: undefined,
+				pendingCurrentWorktreeSelection: false,
+				pendingSidebarUnloadRevealInstanceId: 'instance-2',
+				omniHostedWorkspaceState: hostedState('instance-2'),
+				getCurrentWorktreeItem: () => ({ id: 'new' }),
+				updateCurrentWorktreeSelectionNow: async (
+					options: { reveal: boolean }
+				) => { selections.push(options.reveal); },
+				notificationService: {
+					error: (error: unknown) => assert.fail(String(error)),
+				},
+			});
+			const updateSelection = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateCurrentWorktreeSelection'
+			) as (
+				this: object,
+				options: { reveal: boolean }
+			) => Promise<void>;
+			const endPointerInteraction = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'endPrimaryPointerInteraction'
+			) as (this: object) => void;
+
+			await updateSelection.call(host, { reveal: true });
+			assert.deepStrictEqual(selections, []);
+
+			endPointerInteraction.call(host);
+			await Promise.resolve();
+
+			assert.deepStrictEqual(selections, [false]);
+			assert.strictEqual(
+				Reflect.get(host, 'pendingSidebarUnloadRevealInstanceId'),
+				undefined
+			);
 		});
 
 	test('starts tree-update deferral only for the primary pointer button', () => {

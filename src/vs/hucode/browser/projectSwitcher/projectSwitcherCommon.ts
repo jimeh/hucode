@@ -22,6 +22,8 @@ export {
 
 export const SWITCH_WORKTREE_COMMAND_ID =
 	'hucode.projectSwitcher.switchWorktree';
+export const ADD_WORKBENCH_COMMAND_ID =
+	'hucode.projectSwitcher.addWorkbench';
 export const ProjectSwitcherCanGoBackContext = new RawContextKey<boolean>(
 	'hucode.projectSwitcher.canGoBack',
 	false,

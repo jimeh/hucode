@@ -30,12 +30,32 @@ export const HUCODE_OMNI_TREE_INDENT_MINIMUM = 4;
 /** Maximum indentation for the Omni Projects tree. */
 export const HUCODE_OMNI_TREE_INDENT_MAXIMUM = 40;
 
+/** User setting adjusting indentation below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_SETTING =
+	'hucode.omni.sectionIndent';
+
+/** Default indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_DEFAULT = 0;
+
+/** Minimum indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_MINIMUM = 0;
+
+/** Maximum indentation adjustment below synthetic Omni sections. */
+export const HUCODE_OMNI_SECTION_INDENT_MAXIMUM = 40;
+
 /** Layout variants supported by Omni sidebar workbench rows. */
-export type HucodeOmniItemLayout = 'compact' | 'twoLine';
+export type HucodeOmniItemLayout = 'default' | 'compact';
 
 /** Default layout for Omni sidebar workbench and worktree rows. */
 export const HUCODE_OMNI_ITEM_LAYOUT_DEFAULT: HucodeOmniItemLayout =
-	'twoLine';
+	'default';
+
+/** Normalizes persisted Omni item layout values at the configuration boundary. */
+export function normalizeHucodeOmniItemLayout(
+	value: unknown
+): HucodeOmniItemLayout {
+	return value === 'compact' ? 'compact' : HUCODE_OMNI_ITEM_LAYOUT_DEFAULT;
+}
 
 /** User setting controlling arbitrary workbench row layout. */
 export const HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING =
