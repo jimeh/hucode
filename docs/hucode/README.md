@@ -31,6 +31,10 @@ separate application window for each one.
 - [First-Launch Onboarding and Editor Migration Plan](onboarding-plan.md)
   defines the desktop onboarding, reusable migration flow, safe import
   boundaries, Omni setup, and staged delivery tracked by issue #192.
+- [Editor Migration Architecture and Implementation
+  Plan](editor-migration-architecture-plan.md) defines the read-only source
+  adapters, normalized contracts, pure planning, recoverable Apply, and the
+  implementation sequence beginning with issue #200.
 
 ## Developing Hucode
 
