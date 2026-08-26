@@ -65,6 +65,7 @@ export interface ICodeWindow extends IBaseWindow {
 
 	readonly isExtensionDevelopmentHost: boolean;
 	readonly isExtensionTestHost: boolean;
+	readonly isOmniWindow: boolean;
 
 	readonly isReady: boolean;
 	ready(): Promise<ICodeWindow>;

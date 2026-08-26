@@ -187,6 +187,7 @@ export interface IBrowserViewWindowConfiguration {
 
 export interface IBrowserViewBounds {
 	windowId: number;
+	hostedWebContentsId?: number;
 	x: number;
 	y: number;
 	width: number;
@@ -262,6 +263,8 @@ export function matchesBrowserViewAudience(candidate: IBrowserViewAudience, patt
 export interface IBrowserViewInfo {
 	readonly id: string;
 	readonly hostWindowId: number;
+	/** Hosted Omni workbench webContents ID that owns this view, if any. */
+	readonly hostedWebContentsId?: number;
 	readonly owner: IBrowserViewOwner;
 	readonly associatedResource?: UriComponents;
 	readonly state: IBrowserViewState;
@@ -288,6 +291,8 @@ export interface IBrowserViewCreatedEvent {
 /** Host, ownership, storage, and initial access for a newly created browser view. */
 export interface IBrowserViewCreationContext {
 	readonly hostWindowId: number;
+	/** Hosted Omni workbench webContents ID that owns this view, if any. */
+	readonly hostedWebContentsId?: number;
 	readonly owner: IBrowserViewOwner;
 	readonly session: BrowserViewSessionSelector;
 	/** Grants automation clients access before the view is announced to other processes. */
