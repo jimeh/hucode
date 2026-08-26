@@ -2640,6 +2640,150 @@ suite('ProjectSwitcherContribution', () => {
 			);
 		});
 
+	test('preserves sidebar scroll across split unload promotion state',
+		async () => {
+			const current = worktreeItem({
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const promoted = retainedWorkbenchItem({
+				isActive: true,
+				desiredState: 'loaded',
+				hostedWorkbenchState: 'active',
+			});
+			const ordinary = worktreeItem({
+				id: 'worktree:project-1:%2Frepo%2Fordinary',
+				handle: 'worktree:project-1:%2Frepo%2Fordinary',
+				worktreePath: '/repo/ordinary',
+				isActive: true,
+				hostedWorkbenchState: 'active',
+			});
+			const currentInstance = {
+				instanceId: 'instance-1',
+				projectId: 'project-1',
+				worktreePath: current.worktreePath,
+				state: 'active' as const,
+				visible: true,
+				focused: true,
+			};
+			const promotedInstance = {
+				instanceId: 'instance-2',
+				worktreePath: promoted.worktreePath,
+				state: 'loaded' as const,
+				visible: false,
+				focused: false,
+			};
+			const ordinaryInstance = {
+				instanceId: 'instance-3',
+				projectId: 'project-1',
+				worktreePath: ordinary.worktreePath,
+				state: 'loaded' as const,
+				visible: false,
+				focused: false,
+			};
+			const reveals: ProjectSwitcherItem[] = [];
+			const selections: ProjectSwitcherItem[][] = [];
+			const focus: ProjectSwitcherItem[][] = [];
+			const host = prototypeHost(ProjectSwitcherWidget.prototype, {
+				omniHostedWorkspaceState: {
+					...hostedState('instance-1'),
+					instances: [
+						currentInstance,
+						promotedInstance,
+						ordinaryInstance,
+					],
+				},
+				pendingSidebarUnload: {
+					itemId: current.id,
+					instanceId: 'instance-1',
+					observedRemoval: false,
+				},
+				didSynchronizeCurrentWorktreeItem: true,
+				lastSynchronizedCurrentWorktreeItemId: current.id,
+				environmentService: { isOmniWindow: true },
+				collapsedOmniSections: new Set<string>(),
+				tree: {
+					hasElement: () => true,
+					reveal: async (item: ProjectSwitcherItem) => {
+						reveals.push(item);
+					},
+					setSelection: (items: ProjectSwitcherItem[]) => {
+						selections.push(items);
+					},
+					setFocus: (items: ProjectSwitcherItem[]) => {
+						focus.push(items);
+					},
+				},
+				projects: [],
+				itemsById: new Map<string, ProjectSwitcherItem>([
+					[current.id, current],
+				]),
+				updateGitWorktreeTargets: () => undefined,
+				renderProjects: () => {
+					const activeInstanceId =
+						host.omniHostedWorkspaceState.activeInstanceId;
+					const activeItem = activeInstanceId === 'instance-2'
+						? promoted
+						: activeInstanceId === 'instance-3'
+							? ordinary
+							: undefined;
+					host.itemsById = activeItem
+						? new Map([[activeItem.id, activeItem]])
+						: new Map();
+				},
+				updateItemContext: () => undefined,
+				viewItemContext: { set: () => undefined },
+				syncOmniActiveWorktree: async () => undefined,
+				recordActiveWorktree: () => undefined,
+			});
+			const updateState = Reflect.get(
+				ProjectSwitcherWidget.prototype,
+				'updateOmniHostedWorkspaceState'
+			) as (this: object, state: IHucodeHostedWorkspaceState) => void;
+
+			updateState.call(host, {
+				...hostedState(),
+				instances: [promotedInstance, ordinaryInstance],
+			});
+			await Promise.resolve();
+
+			updateState.call(host, {
+				...hostedState('instance-2'),
+				instances: [{
+					...promotedInstance,
+					state: 'active',
+					visible: true,
+				}, ordinaryInstance],
+			});
+			await Promise.resolve();
+
+			updateState.call(host, {
+				...hostedState('instance-3'),
+				instances: [{
+					...promotedInstance,
+					state: 'loaded',
+					visible: false,
+				}, {
+					...ordinaryInstance,
+					state: 'active',
+					visible: true,
+				}],
+			});
+			await Promise.resolve();
+			await Promise.resolve();
+
+			assert.deepStrictEqual({ reveals, selections, focus }, {
+				reveals: [ordinary],
+				selections: [[], [promoted], [ordinary]],
+				focus: [[], [promoted], [ordinary]],
+			});
+			assert.strictEqual(host.pendingSidebarUnload, undefined);
+			assert.strictEqual(
+				Reflect.get(host, 'pendingSidebarUnloadRevealInstanceId'),
+				undefined
+			);
+		});
+
 	test('does not suppress an unrelated activation during a sidebar unload',
 		async () => {
 			const current = worktreeItem({
