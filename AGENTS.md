@@ -194,6 +194,9 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   between pointerdown and click. Keep focus-only state updates from rebuilding
   or revealing the tree, and defer passive tree reconciliation until the
   primary-pointer interaction finishes so the clicked row cannot move.
+- Sidebar-origin unload suppression must survive that primary-pointer deferral.
+  Keep it tied to the exact unloaded hosted instance and promoted instance so a
+  later unrelated activation still reveals normally.
 - Serve-web project SSE snapshots must wait for the corresponding project-state
   write generation, including hydration and background refresh. A disconnected
   request may cancel queued work and active read-only Git commands, but once a

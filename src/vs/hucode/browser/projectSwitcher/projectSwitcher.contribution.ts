@@ -436,6 +436,12 @@ interface ProjectSwitcherActionTemplate {
 	currentAction?: () => void;
 }
 
+interface PendingSidebarUnload {
+	readonly itemId: string;
+	readonly instanceId: string;
+	observedRemoval: boolean;
+}
+
 /**
  * Renders reusable Project Switcher tree rows and their inline actions.
  */
@@ -450,6 +456,9 @@ export class ProjectSwitcherRenderer
 			item: ProjectSwitcherItem
 		) => HucodeOmniItemLayout,
 		private readonly showInlineIcons: () => boolean,
+		private readonly unloadFromSidebar: (
+			item: ProjectSwitcherWorktreeItem | ProjectSwitcherWorkbenchItem
+		) => Promise<void>,
 		@ICommandService
 		private readonly commandService: ICommandService,
 	) {
@@ -747,10 +756,7 @@ export class ProjectSwitcherRenderer
 					label,
 					Codicon.chromeMinimize,
 					() => {
-						void this.commandService.executeCommand(
-							UNLOAD_WORKTREE_COMMAND_ID,
-							toHandleArg(item)
-						);
+						void this.unloadFromSidebar(item);
 					}
 				);
 			} else {
@@ -839,10 +845,12 @@ export class ProjectSwitcherRenderer
 				: localize('dismissWorkbenchButton', 'Dismiss Workbench'),
 			shouldUnload ? Codicon.chromeMinimize : Codicon.close,
 			() => {
+				if (shouldUnload) {
+					void this.unloadFromSidebar(item);
+					return;
+				}
 				void this.commandService.executeCommand(
-					shouldUnload
-						? UNLOAD_WORKBENCH_COMMAND_ID
-						: DISMISS_WORKBENCH_COMMAND_ID,
+					DISMISS_WORKBENCH_COMMAND_ID,
 					toHandleArg(item)
 				);
 			}
@@ -1238,6 +1246,8 @@ export class ProjectSwitcherWidget extends Disposable {
 	private pendingCurrentWorktreeSelection = false;
 	private pointerInteractionReleaseHandle: number | undefined;
 	private pointerInteractionWindow: Window | undefined;
+	private pendingSidebarUnload: PendingSidebarUnload | undefined;
+	private pendingSidebarUnloadRevealInstanceId: string | undefined;
 
 	constructor(
 		@IInstantiationService
@@ -1283,6 +1293,8 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.primaryPointerStartCurrentWorktreeItemId = undefined;
 			this.pendingProjectsRender = undefined;
 			this.pendingCurrentWorktreeSelection = false;
+			this.pendingSidebarUnload = undefined;
+			this.pendingSidebarUnloadRevealInstanceId = undefined;
 			this.saveState();
 			this.canGoBackContext.set(false);
 			this.canGoForwardContext.set(false);
@@ -1505,7 +1517,10 @@ export class ProjectSwitcherWidget extends Disposable {
 				(item: ProjectSwitcherItem) => this.getItemLayout(item),
 				() => this.configurationService.getValue<boolean>(
 					HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING
-				) ?? true
+				) ?? true,
+				(item: ProjectSwitcherWorktreeItem |
+					ProjectSwitcherWorkbenchItem) =>
+					this.unloadFromSidebar(item)
 			)],
 			{
 				accessibilityProvider: new ProjectSwitcherAccessibilityProvider(),
@@ -1833,7 +1848,8 @@ export class ProjectSwitcherWidget extends Disposable {
 			this.lastSynchronizedCurrentWorktreeItemId =
 				currentWorktreeItemId;
 			void this.updateCurrentWorktreeSelectionNow({
-				reveal: currentWorktreeItemId !== undefined &&
+				reveal: !this.consumeSidebarUnloadRevealSuppression() &&
+					currentWorktreeItemId !== undefined &&
 					currentWorktreeItemId !== initialCurrentWorktreeItemId,
 			}).catch(error => this.notificationService.error(String(error)));
 		}
@@ -1959,6 +1975,14 @@ export class ProjectSwitcherWidget extends Disposable {
 		if (hasSameProjectSwitcherHostedWorkspaceState(previousState, state)) {
 			return;
 		}
+		const preserveSidebarScroll =
+			this.shouldPreserveSidebarScrollAfterUnload(
+				state,
+				previousCurrentWorktreeItemId
+			);
+		if (preserveSidebarScroll) {
+			this.pendingSidebarUnloadRevealInstanceId = state.activeInstanceId;
+		}
 		void this.updateGitWorktreeTargets(state);
 		if (!this.tree) {
 			return;
@@ -1969,7 +1993,7 @@ export class ProjectSwitcherWidget extends Disposable {
 		void this.updateCurrentWorktreeSelection({
 			reveal: this.shouldRevealCurrentWorktree(
 				previousCurrentWorktreeItemId
-			),
+			) && !preserveSidebarScroll,
 		}).catch(error => {
 			this.notificationService.error(String(error));
 		});
@@ -2025,6 +2049,88 @@ export class ProjectSwitcherWidget extends Disposable {
 		return this.omniHostedWorkspaceState.instances.find(instance =>
 			pathsEqual(instance.worktreePath, worktreePath)
 		);
+	}
+
+	private async unloadFromSidebar(
+		item: ProjectSwitcherWorktreeItem | ProjectSwitcherWorkbenchItem
+	): Promise<void> {
+		const hostedWorkbench = this.getHostedWorkbenchInstance(
+			item.worktreePath
+		);
+		const hostedWorkbenchInstanceId = hostedWorkbench?.instanceId;
+		const currentItem = this.getCurrentWorktreeItem();
+		let pendingUnload: PendingSidebarUnload | undefined;
+		if (
+			hostedWorkbenchInstanceId !== undefined &&
+			hostedWorkbenchInstanceId ===
+			this.omniHostedWorkspaceState.activeInstanceId &&
+			currentItem?.id === item.id
+		) {
+			pendingUnload = {
+				itemId: item.id,
+				instanceId: hostedWorkbenchInstanceId,
+				observedRemoval: false,
+			};
+			this.pendingSidebarUnload = pendingUnload;
+		}
+
+		try {
+			await this.commandService.executeCommand(
+				isRetainedWorkbenchItem(item)
+					? UNLOAD_WORKBENCH_COMMAND_ID
+					: UNLOAD_WORKTREE_COMMAND_ID,
+				toHandleArg(item)
+			);
+		} finally {
+			if (pendingUnload && this.pendingSidebarUnload === pendingUnload) {
+				this.pendingSidebarUnload = undefined;
+			}
+		}
+	}
+
+	private shouldPreserveSidebarScrollAfterUnload(
+		state: IHucodeHostedWorkspaceState,
+		previousCurrentWorktreeItemId: string | undefined
+	): boolean {
+		const pendingUnload = this.pendingSidebarUnload;
+		if (!pendingUnload) {
+			return false;
+		}
+		if (
+			!pendingUnload.observedRemoval &&
+			previousCurrentWorktreeItemId !== pendingUnload.itemId
+		) {
+			this.pendingSidebarUnload = undefined;
+			return false;
+		}
+
+		const pendingInstanceStillExists = state.instances.some(instance =>
+			instance.instanceId === pendingUnload.instanceId
+		);
+		if (pendingInstanceStillExists) {
+			if (
+				state.activeInstanceId !== undefined &&
+				state.activeInstanceId !== pendingUnload.instanceId
+			) {
+				this.pendingSidebarUnload = undefined;
+			}
+			return false;
+		}
+
+		pendingUnload.observedRemoval = true;
+		if (!state.activeInstanceId) {
+			return false;
+		}
+
+		this.pendingSidebarUnload = undefined;
+		return true;
+	}
+
+	private consumeSidebarUnloadRevealSuppression(): boolean {
+		const instanceId = this.pendingSidebarUnloadRevealInstanceId;
+		this.pendingSidebarUnloadRevealInstanceId = undefined;
+		return instanceId !== undefined &&
+			instanceId === this.omniHostedWorkspaceState.activeInstanceId;
 	}
 
 	private getActiveWorktreePath(): string | undefined {
@@ -2185,10 +2291,7 @@ export class ProjectSwitcherWidget extends Disposable {
 						'unloadRetainedWorkbench',
 						'Unload Workbench'
 					),
-					run: () => this.commandService.executeCommand(
-						UNLOAD_WORKBENCH_COMMAND_ID,
-						handle
-					),
+					run: () => this.unloadFromSidebar(item),
 				})] : []),
 				new Separator(),
 				toAction({
@@ -2278,10 +2381,7 @@ export class ProjectSwitcherWidget extends Disposable {
 					? [toAction({
 						id: UNLOAD_WORKTREE_COMMAND_ID,
 						label: localize('unloadWorkbench', 'Unload'),
-						run: () => this.commandService.executeCommand(
-							UNLOAD_WORKTREE_COMMAND_ID,
-							worktreeHandle
-						),
+						run: () => this.unloadFromSidebar(item),
 					})]
 					: [];
 			}
@@ -2364,10 +2464,7 @@ export class ProjectSwitcherWidget extends Disposable {
 				actions.push(toAction({
 					id: UNLOAD_WORKTREE_COMMAND_ID,
 					label: localize('unloadWorkbench', 'Unload'),
-					run: () => this.commandService.executeCommand(
-						UNLOAD_WORKTREE_COMMAND_ID,
-						worktreeHandle
-					),
+					run: () => this.unloadFromSidebar(item),
 				}));
 			}
 			if (!item.isMain) {
@@ -2454,7 +2551,10 @@ export class ProjectSwitcherWidget extends Disposable {
 			return;
 		}
 
-		await this.updateCurrentWorktreeSelectionNow(options);
+		const suppressReveal = this.consumeSidebarUnloadRevealSuppression();
+		await this.updateCurrentWorktreeSelectionNow({
+			reveal: options.reveal && !suppressReveal,
+		});
 	}
 
 	private async updateCurrentWorktreeSelectionNow(
