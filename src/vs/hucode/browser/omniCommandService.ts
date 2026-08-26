@@ -9,6 +9,7 @@ import { IInstantiationService } from '../../platform/instantiation/common/insta
 import { ILogService } from '../../platform/log/common/log.js';
 import {
 	IHucodeOmniCommandForwardingContext,
+	isHucodeHostedWorkbenchProfileAction,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
@@ -42,18 +43,29 @@ export class OmniCommandService extends CommandService {
 	}
 
 	override async executeCommand<T>(id: string, ...args: unknown[]): Promise<T> {
+		const hostedProfileAction =
+			isHucodeHostedWorkbenchProfileAction(id);
 		if (
-			!this.environmentService.isOmniWindow ||
-			!isHucodeOmniProjectsFocus() ||
-			isHucodeOmniLocalInputFocus() ||
+			!this.environmentService.isOmniShellWindow ||
 			this.commandForwardingContext.isForwardingDisabledFor(id) ||
-			isHucodeOmniShellAction(id)
+			isHucodeOmniShellAction(id) ||
+			(
+				!hostedProfileAction &&
+				(
+					!isHucodeOmniProjectsFocus() ||
+					isHucodeOmniLocalInputFocus()
+				)
+			)
 		) {
 			return super.executeCommand(id, ...args);
 		}
 
 		const forwarded = await this.tryForwardCommand(id, args);
-		if (forwarded || isHucodeOmniShellLayoutAction(id)) {
+		if (
+			forwarded ||
+			hostedProfileAction ||
+			isHucodeOmniShellLayoutAction(id)
+		) {
 			return undefined as T;
 		}
 

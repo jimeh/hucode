@@ -14,7 +14,10 @@ import { IProjectManagerService } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { IHostService } from
 	'../../../workbench/services/host/browser/host.js';
-import { IHucodeShellControllerService } from
+import {
+	HucodeStandaloneWorkspaceOpenDisposition,
+	IHucodeShellControllerService,
+} from
 	'../../../platform/window/common/hucodeShellControllerService.js';
 import { IProjectSwitcherSelectionTarget } from
 	'../../common/projectSwitcher/switchProjectWorktreeModel.js';
@@ -60,7 +63,8 @@ suite('OmniSelectionOpen', () => {
 		calls: string[],
 		options: {
 			readonly focusNormalResult?: boolean | Error;
-			readonly prepareSucceeds?: boolean;
+			readonly prepareDisposition?:
+			HucodeStandaloneWorkspaceOpenDisposition;
 		} = {}
 	): IHucodeShellControllerService {
 		const focusNormalResult = options.focusNormalResult ?? false;
@@ -93,7 +97,7 @@ suite('OmniSelectionOpen', () => {
 					`prepare:${URI.revive(request.folderUri).fsPath}:` +
 					`${request.retainedWorkbenchId ?? ''}`
 				);
-				return options.prepareSucceeds ?? true;
+				return options.prepareDisposition ?? 'open-by-caller';
 			},
 		} as unknown as IHucodeShellControllerService;
 	}
@@ -168,15 +172,13 @@ suite('OmniSelectionOpen', () => {
 		]);
 	});
 
-	test('prepares ownership before focusing standalone window', async () => {
+	test('accepts a standalone transfer completed by the main process', async () => {
 		const calls: string[] = [];
 
 		await openSelectionInStandaloneWindow(
 			selection,
 			host(calls),
-			shell(calls, {
-				focusNormalResult: true,
-			}),
+			shell(calls, { prepareDisposition: 'opened' }),
 			projectManager(calls),
 			notifications([]),
 			'Select first'
@@ -184,7 +186,6 @@ suite('OmniSelectionOpen', () => {
 
 		assert.deepStrictEqual(calls, [
 			'prepare:/repo:',
-			'focusNormal:/repo',
 			'setLastActive:project:/repo',
 		]);
 	});
@@ -214,7 +215,7 @@ suite('OmniSelectionOpen', () => {
 				selection,
 				host(calls),
 				shell(calls, {
-					prepareSucceeds: false,
+					prepareDisposition: 'failed',
 				}),
 				projectManager(calls),
 				notifications([]),
@@ -242,7 +243,6 @@ suite('OmniSelectionOpen', () => {
 
 		assert.deepStrictEqual(calls, [
 			'prepare:/repo:retained',
-			'focusNormal:/repo',
 			'hostOpen',
 			JSON.stringify({
 				toOpen: [{ folderUri: URI.file('/repo') }],
@@ -257,7 +257,7 @@ suite('OmniSelectionOpen', () => {
 		await openSelectionInStandaloneWindow(
 			{ worktreePath: '/repo' },
 			host(calls),
-			shell(calls, { prepareSucceeds: false }),
+			shell(calls, { prepareDisposition: 'failed' }),
 			projectManager(calls),
 			notifications([]),
 			'Select first',
@@ -283,7 +283,6 @@ suite('OmniSelectionOpen', () => {
 
 			assert.deepStrictEqual(calls, [
 				'prepare:/repo:retained',
-				'focusNormal:/repo',
 				'hostOpen',
 				JSON.stringify({
 					toOpen: [{ folderUri: URI.file('/repo') }],
@@ -308,7 +307,6 @@ suite('OmniSelectionOpen', () => {
 
 			assert.deepStrictEqual(calls, [
 				'prepare:/repo:',
-				'focusNormal:/repo',
 				'hostOpen',
 				JSON.stringify({
 					toOpen: [{ folderUri: URI.file('/repo') }],
@@ -319,33 +317,4 @@ suite('OmniSelectionOpen', () => {
 		}
 	);
 
-	test('opens standalone window when normal-window lookup fails',
-		async () => {
-			const calls: string[] = [];
-
-			await withExpectedUnexpectedError(() =>
-				openSelectionInStandaloneWindow(
-					selection,
-					host(calls),
-					shell(calls, {
-						focusNormalResult: new Error('lookup failed'),
-					}),
-					projectManager(calls),
-					notifications([]),
-					'Select first'
-				)
-			);
-
-			assert.deepStrictEqual(calls, [
-				'prepare:/repo:',
-				'focusNormal:/repo',
-				'hostOpen',
-				JSON.stringify({
-					toOpen: [{ folderUri: URI.file('/repo') }],
-					options: { forceNewWindow: true },
-				}),
-				'setLastActive:project:/repo',
-			]);
-		}
-	);
 });

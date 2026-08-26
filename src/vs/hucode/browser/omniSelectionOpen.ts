@@ -78,17 +78,14 @@ export async function openSelectionInStandaloneWindow(
 		return;
 	}
 
-	if (!await shellService.prepareWorkspaceForStandaloneOpen({
+	const disposition = await shellService.prepareWorkspaceForStandaloneOpen({
 		folderUri: URI.file(selection.worktreePath).toJSON(),
 		retainedWorkbenchId: retainedWorkbench?.id,
-	})) {
+	});
+	if (disposition === 'failed') {
 		return;
 	}
-
-	if (await focusNormalWindowByPathBestEffort(
-		shellService,
-		selection.worktreePath
-	)) {
+	if (disposition === 'opened') {
 		await setLastActiveWorktreeBestEffort(
 			projectManagerService,
 			selection.projectId,
