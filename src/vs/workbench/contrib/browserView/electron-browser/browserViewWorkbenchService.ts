@@ -42,6 +42,7 @@ import { INativeWorkbenchEnvironmentService } from '../../../services/environmen
 import { ITunnelProxyInfo } from '../../../../platform/tunnel/common/tunnelProxy.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { raceTimeout } from '../../../../base/common/async.js';
+import { getHostedBrowserViewWebContentsId, ownsBrowserView } from '../common/browserViewOwnership.js';
 
 export const BrowserMaxHistoryEntriesSettingId = 'workbench.browser.maxHistoryEntries';
 export const BrowserRemoteProxyEnabledSettingId = 'workbench.browser.enableRemoteProxy';
@@ -175,7 +176,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 
 		// Listen for new browser views
 		this._register(this._browserViewService.onDidCreateBrowserView(e => {
-			if (e.info.hostWindowId !== this._mainWindowId) {
+			if (!ownsBrowserView(
+				e.info,
+				this._mainWindowId,
+				this.environmentService
+			)) {
 				return; // Not for this window
 			}
 
@@ -364,6 +369,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 					id,
 					{
 						hostWindowId: this._mainWindowId,
+						hostedWebContentsId: getHostedBrowserViewWebContentsId(this.environmentService),
 						owner: createOptions?.owner ?? { type: 'user' },
 						associatedResource,
 						session: createOptions?.session ?? { scope: await this._resolveStorageScope() },
@@ -374,10 +380,11 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 				);
 				return this._createModel(info);
 			});
-			input.onWillDispose(() => {
+			const inputDisposeListener = this._register(input.onWillDispose(() => {
+				inputDisposeListener.dispose();
 				this._known.delete(id);
 				this._onDidChangeBrowserViews.fire();
-			});
+			}));
 			if (model) {
 				input.model = model;
 			}
@@ -428,6 +435,13 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 	private async _initializeExistingViews(): Promise<void> {
 		const views = await this._browserViewService.getBrowserViews(this._mainWindowId);
 		for (const info of views) {
+			if (!ownsBrowserView(
+				info,
+				this._mainWindowId,
+				this.environmentService
+			)) {
+				continue;
+			}
 			this._createModel(info);
 		}
 	}
