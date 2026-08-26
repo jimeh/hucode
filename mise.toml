@@ -1,0 +1,41 @@
+[settings]
+idiomatic_version_file_enable_tools = ["node"]
+
+lockfile = true
+minimum_release_age = "3d"
+minimum_release_age_excludes = ["github:jimeh/treeboot"]
+
+[settings.task]
+run_auto_install = true
+
+[tools]
+"github:colbymchenry/codegraph" = "1"
+"github:jimeh/treeboot" = "latest"
+pinact = "latest"
+
+[tasks."setup"]
+description = "Install dependencies and prepare the CodeGraph index"
+run = [{ tasks = ["deps:install", "codegraph:setup"] }]
+
+[tasks."deps:install"]
+description = "Install dependencies"
+run = """
+if [ -n "${TREEBOOT_WORKTREE_PATH:-}" ]; then
+	npm run hucode:seed-worktree-node-modules
+fi
+npm install
+"""
+
+[tasks."codegraph:setup"]
+description = "Initialize or update the local CodeGraph index"
+run = """
+if [ -d .codegraph ]; then
+	codegraph sync
+else
+	codegraph init
+fi
+"""
+
+[tasks.treeboot]
+description = "Bootstrap the current worktree with treeboot"
+run = "treeboot"
