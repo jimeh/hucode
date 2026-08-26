@@ -265,6 +265,9 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   stays fail-closed, and only subsequent calls may use a replacement
   connection. Do not replay an operation whose delivery may be ambiguous or
   preserve the stale connection as though it were still usable.
+- Electron `did-start-loading` includes subframe activity. Invalidate a hosted
+  shell binding only for a `did-start-navigation` event that is both main-frame
+  and cross-document; keep load events for renderer trust bookkeeping.
 - Desktop hosted-shell response timeouts close the renderer MessagePort. Keep
   the main-side port-close listener bound to that connection generation so the
   pending operation loses authority before reacquisition; a late close from an

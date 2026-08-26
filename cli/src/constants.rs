@@ -35,6 +35,11 @@ pub const PROTOCOL_VERSION_TAG_PREFIX: &str = "protocolv";
 pub const PROTOCOL_VERSION_TAG: &str = concatcp!("protocolv", PROTOCOL_VERSION);
 
 pub const VSCODE_CLI_VERSION: Option<&'static str> = option_env!("VSCODE_CLI_VERSION");
+pub const HUCODE_VERSION: Option<&'static str> = option_env!("VSCODE_CLI_HUCODE_VERSION");
+pub const DISPLAY_VERSION: Option<&'static str> = match HUCODE_VERSION {
+	Some(version) => Some(version),
+	None => VSCODE_CLI_VERSION,
+};
 pub const VSCODE_CLI_AI_KEY: Option<&'static str> = option_env!("VSCODE_CLI_AI_KEY");
 pub const VSCODE_CLI_AI_ENDPOINT: Option<&'static str> = option_env!("VSCODE_CLI_AI_ENDPOINT");
 pub const VSCODE_CLI_QUALITY: Option<&'static str> = option_env!("VSCODE_CLI_QUALITY");

@@ -32,6 +32,7 @@ import { IOpenedAuxiliaryWindow, IOpenedMainWindow, isOpenedAuxiliaryWindow } fr
 import { IsAuxiliaryWindowContext, IsAuxiliaryWindowFocusedContext, IsWindowAlwaysOnTopContext } from '../../common/contextkeys.js';
 import { isAuxiliaryWindow, mainWindow } from '../../../base/browser/window.js';
 import { ContextKeyExpr } from '../../../platform/contextkey/common/contextkey.js';
+import { NewHucodeOmniWindowContext } from './hucodeOmniWindowAction.js';
 
 export class CloseWindowAction extends Action2 {
 
@@ -89,6 +90,34 @@ export class CloseOtherWindowsAction extends Action2 {
 				nativeHostService.closeWindow({ targetWindowId: window.id });
 			}
 		}
+	}
+}
+
+export class NewOmniWindowAction extends Action2 {
+
+	constructor() {
+		super({
+			id: 'workbench.action.newOmniWindow',
+			title: {
+				...localize2('newOmniWindow', 'New Omni-Window'),
+				mnemonicTitle: localize(
+					{ key: 'miNewOmniWindow', comment: ['&& denotes a mnemonic'] },
+					'New O&&mni-Window'
+				),
+			},
+			f1: true,
+			precondition: NewHucodeOmniWindowContext,
+			menu: {
+				id: MenuId.MenubarFileMenu,
+				group: '1_new',
+				order: 5,
+				when: NewHucodeOmniWindowContext
+			}
+		});
+	}
+
+	override run(accessor: ServicesAccessor): Promise<void> {
+		return accessor.get(INativeHostService).openOmniWindow();
 	}
 }
 
