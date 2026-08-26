@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hucode VS Code Upgrade"
+  short_description: "Replay Hucode onto a new VS Code release"
+  default_prompt: "Use $hucode-upgrade-vscode to upgrade Hucode to the next VS Code release series."
