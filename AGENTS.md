@@ -36,6 +36,13 @@ as the required Hucode instruction set for work in this fork.
   `hucode-upgrade-vscode` skill and follow
   [Repo Strategy](docs/hucode/repo-strategy.md).
 
+## Worktree bootstrap
+
+If a linked worktree is missing files or dependencies needed for development,
+run `mise run treeboot` before setting it up manually. The task follows
+`.treeboot.toml`; in Hucode it seeds reusable `node_modules`, installs
+dependencies, and initializes or updates the worktree-local CodeGraph index.
+
 ## Repository hygiene notes
 
 - npm is this repository's package manager. Do not run `pnpm` or `yarn`.
