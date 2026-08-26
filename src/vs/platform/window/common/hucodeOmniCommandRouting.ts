@@ -14,6 +14,17 @@ const HUCODE_OMNI_SHELL_ACTION_PREFIXES = [
 	'hucode.projectSwitcher.',
 ];
 
+const HUCODE_HOSTED_WORKBENCH_PROFILE_ACTION_IDS = new Set([
+	'workbench.profiles.actions.switchProfile',
+	'workbench.profiles.actions.manageProfiles',
+	'workbench.profiles.actions.exportProfile',
+	'workbench.profiles.actions.createFromCurrentProfile',
+	'workbench.profiles.actions.createProfile',
+	'workbench.profiles.actions.deleteProfile',
+]);
+const HUCODE_HOSTED_WORKBENCH_PROFILE_ENTRY_ACTION_PREFIX =
+	'workbench.profiles.actions.profileEntry.';
+
 export const UNLOAD_CURRENT_WORKTREE_COMMAND_ID =
 	'workbench.action.omniWindow.unloadCurrentWorktree';
 export const FOCUS_PROJECT_PANE_COMMAND_ID =
@@ -218,6 +229,21 @@ export function isHucodeOmniExplicitShellAction(commandId: string): boolean {
  */
 export function isHucodeOmniShellLayoutAction(commandId: string): boolean {
 	return HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS.has(commandId);
+}
+
+/**
+ * Returns whether a profile action belongs to the active hosted workbench.
+ * Creating a separate regular window remains an application-level action.
+ */
+export function isHucodeHostedWorkbenchProfileAction(
+	commandId: string
+): boolean {
+	return HUCODE_HOSTED_WORKBENCH_PROFILE_ACTION_IDS.has(commandId) ||
+		(commandId.length >
+			HUCODE_HOSTED_WORKBENCH_PROFILE_ENTRY_ACTION_PREFIX.length &&
+			commandId.startsWith(
+				HUCODE_HOSTED_WORKBENCH_PROFILE_ENTRY_ACTION_PREFIX
+			));
 }
 
 /**

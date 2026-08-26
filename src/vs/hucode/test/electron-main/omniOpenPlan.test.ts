@@ -11,9 +11,11 @@ import {
 	distinctHucodeOmniWindowPaths,
 	filterHucodePreserveRestorePaths,
 	getHucodeDefaultStartupWindowPath,
+	getHucodeNewWindowDefaultProfile,
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
+	getHucodeOmniShellProfile,
 	getHucodeRegularFileOpenWindows,
 	isHucodeOmniPathToOpen,
 	openNewHucodeOmniWindow
@@ -116,7 +118,7 @@ suite('HucodeOmniOpenPlan', () => {
 		);
 	});
 
-	test('builds Omni browser window options from open config', () => {
+	test('builds profile-neutral Omni browser window options', () => {
 		assert.deepStrictEqual(
 			getHucodeOmniBrowserWindowOptions(
 				{
@@ -136,14 +138,59 @@ suite('HucodeOmniOpenPlan', () => {
 				initialStartup: true,
 				forceNewWindow: true,
 				forceNewTabbedWindow: true,
-				forceProfile: 'Profile',
-				forceTempProfile: true,
+				forceProfile: undefined,
+				forceTempProfile: undefined,
 				isOmniWindow: true,
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined,
 				omniRetainedWorkbenches: undefined,
 			}
 		);
+	});
+
+	test('uses the application default profile only for Omni shells', () => {
+		const applicationDefault = { id: 'default' };
+
+		assert.strictEqual(
+			getHucodeOmniShellProfile(
+				true,
+				applicationDefault
+			),
+			applicationDefault
+		);
+		assert.strictEqual(
+			getHucodeOmniShellProfile(
+				false,
+				applicationDefault
+			),
+			undefined
+		);
+	});
+
+	test('generic New Window inherits the active hosted profile', () => {
+		const applicationDefault = { id: 'default' };
+		const shellProfile = { id: 'shell' };
+		const hostedProfile = { id: 'hosted' };
+		const configuredProfile = { id: 'configured' };
+
+		assert.strictEqual(getHucodeNewWindowDefaultProfile({
+			lastActiveProfile: shellProfile,
+			lastActiveIsOmni: true,
+			activeHostedProfile: hostedProfile,
+			applicationDefaultProfile: applicationDefault,
+		}), hostedProfile);
+		assert.strictEqual(getHucodeNewWindowDefaultProfile({
+			configuredProfile,
+			lastActiveProfile: shellProfile,
+			lastActiveIsOmni: true,
+			activeHostedProfile: hostedProfile,
+			applicationDefaultProfile: applicationDefault,
+		}), configuredProfile);
+		assert.strictEqual(getHucodeNewWindowDefaultProfile({
+			lastActiveProfile: hostedProfile,
+			lastActiveIsOmni: false,
+			applicationDefaultProfile: applicationDefault,
+		}), hostedProfile);
 	});
 
 	test('opens and focuses a distinct Omni window for every request', async () => {

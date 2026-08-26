@@ -39,6 +39,8 @@ import { ProjectSwitcherWidget } from
 	'../projectSwitcher/projectSwitcher.contribution.js';
 import { IConfigurationService } from
 	'../../../platform/configuration/common/configuration.js';
+import { getHucodeOmniProjectedAppearance } from
+	'../omniAppearanceProjection.contribution.js';
 
 // Keep in sync with the floating Projects card geometry in media/omniHost.css.
 const MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET = 1;
@@ -174,21 +176,31 @@ export class ProjectsPart extends Part {
 
 	override updateStyles(): void {
 		super.updateStyles();
+		const projectedAppearance = getHucodeOmniProjectedAppearance();
 
 		const container = this.getContainer();
 		if (container) {
 			container.style.backgroundColor =
-				this.getColor(sessionsSidebarBackground) || '';
-			container.style.color = this.getColor(SIDE_BAR_FOREGROUND) || '';
+				projectedAppearance?.colors['sessionsSidebar.background'] ??
+				projectedAppearance?.colors['sideBar.background'] ??
+				(this.getColor(sessionsSidebarBackground) || '');
+			container.style.color =
+				projectedAppearance?.colors['sideBar.foreground'] ??
+				(this.getColor(SIDE_BAR_FOREGROUND) || '');
 		}
 
 		if (this.titleAreaElement) {
 			this.titleAreaElement.style.backgroundColor =
 				this.layoutService.isFloatingPanelsEnabled()
 					? 'var(--modern-ui-shell-background)'
-					: this.getColor(sessionsSidebarHeaderBackground) || '';
+					: projectedAppearance?.colors[
+					'sessionsSidebarHeader.background'
+					] ?? (this.getColor(sessionsSidebarHeaderBackground) || '');
 			this.titleAreaElement.style.color =
-				this.getColor(sessionsSidebarHeaderForeground) || '';
+				projectedAppearance?.colors[
+				'sessionsSidebarHeader.foreground'
+				] ??
+				(this.getColor(sessionsSidebarHeaderForeground) || '');
 		}
 	}
 

@@ -15,7 +15,12 @@ import { IEnvironmentMainService } from '../../../platform/environment/electron-
 import { IBrowserViewMainService } from '../../../platform/browserView/electron-main/browserViewMainService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { IIPCObjectUrl, IProtocolMainService } from '../../../platform/protocol/electron-main/protocol.js';
-import { IThemeMainService } from '../../../platform/theme/electron-main/themeMainService.js';
+import {
+	IUserDataProfile,
+	toUserDataProfile,
+} from '../../../platform/userDataProfile/common/userDataProfile.js';
+import { IUserDataProfilesMainService } from
+	'../../../platform/userDataProfile/electron-main/userDataProfile.js';
 import { UnloadReason, ICodeWindow } from '../../../platform/window/electron-main/window.js';
 import { INativeWindowConfiguration, IRectangle } from '../../../platform/window/common/window.js';
 import {
@@ -36,9 +41,15 @@ import {
 	IHostedWorkbenchView,
 	IHostedWorkbenchViewFactory,
 	IHostedWorkspaceIpcMain,
+	IResidentHostedWorkspacesControllerOptions,
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
+import {
+	createHucodeDesktopRestoreCandidates,
+	HucodeDesktopWorkbenchOwnershipCoordinator,
+	selectHucodeDesktopRestoreWinners,
+} from '../../electron-main/desktopWorkbenchOwnership.js';
 import {
 	IHostedWorkspaceContractState,
 	IHostedWorkspaceLifecycleContractAdapter,
@@ -412,6 +423,24 @@ suite('ResidentHostedWorkspacesController', () => {
 		return worktreePath;
 	}
 
+	function createProfile(
+		id: string,
+		workspaces: readonly URI[] = [],
+		isDefault = false
+	): IUserDataProfile {
+		const profilesHome = URI.file('/profiles');
+		return {
+			...toUserDataProfile(
+				id,
+				id,
+				URI.joinPath(profilesHome, id),
+				URI.file('/profile-cache'),
+				{ workspaces }
+			),
+			isDefault,
+		};
+	}
+
 	function createController(options: {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
 		readonly retainedWorkbenches?: INativeWindowConfiguration['omniRetainedWorkbenches'];
@@ -429,6 +458,12 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly hostedWindowPaths?: readonly string[];
 		readonly hostedWindowFocusOutcome?: HucodeHostedShellOperationOutcome;
 		readonly normalWindowPaths?: readonly string[];
+		readonly profiles?: readonly IUserDataProfile[];
+		readonly shellProfile?: IUserDataProfile;
+		readonly ownershipCoordinator?:
+		HucodeDesktopWorkbenchOwnershipCoordinator;
+		readonly shouldRestoreCandidate?: IResidentHostedWorkspacesControllerOptions[
+		'shouldRestoreCandidate'];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -457,6 +492,33 @@ suite('ResidentHostedWorkspacesController', () => {
 			'instance-3',
 			'instance-4',
 		])];
+		const shellProfile = options.shellProfile ?? createProfile(
+			'default',
+			[],
+			true
+		);
+		const profiles = options.profiles ?? [shellProfile];
+		const workspaceProfileOverrides = new Map<string, IUserDataProfile>();
+		const defaultProfile = profiles.find(profile => profile.isDefault) ??
+			shellProfile;
+		const userDataProfilesMainService = {
+			profilesHome: URI.file('/profiles'),
+			profiles,
+			defaultProfile,
+			getProfileForWorkspace(workspace: {
+				readonly uri?: URI;
+				readonly configPath?: URI;
+			}) {
+				const resource = workspace.uri ?? workspace.configPath;
+				return resource && (
+					workspaceProfileOverrides.get(resource.toString()) ??
+					profiles.find(profile =>
+						profile.workspaces?.some(candidate =>
+							candidate.toString() === resource.toString()
+						)
+					));
+			},
+		} as unknown as IUserDataProfilesMainService;
 		const window = {
 			id: options.windowId ?? 1,
 			win: new TestBrowserWindow() as unknown as Electron.BrowserWindow,
@@ -474,6 +536,11 @@ suite('ResidentHostedWorkspacesController', () => {
 				filesToMerge: undefined,
 				backupPath: undefined,
 				isOmniWindow: true,
+				profiles: {
+					home: URI.file('/profiles'),
+					all: profiles,
+					profile: shellProfile,
+				},
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
 				omniRetainedWorkbenches: options.retainedWorkbenches,
@@ -482,10 +549,12 @@ suite('ResidentHostedWorkspacesController', () => {
 		const controller = disposables.add(new ResidentHostedWorkspacesController(
 			protocolMainService as unknown as IProtocolMainService,
 			{ useCodeCache: false } as unknown as IEnvironmentMainService,
-			{ getBackgroundColor: () => '#111111' } as IThemeMainService,
+			userDataProfilesMainService,
 			logService,
 			browserViewMainService as unknown as IBrowserViewMainService,
 			window,
+			options.ownershipCoordinator ??
+			new HucodeDesktopWorkbenchOwnershipCoordinator(),
 			id => trustedProcessIds.push(id),
 			id => untrustedProcessIds.push(id),
 			id => trustedWebContentsIds.push(id),
@@ -518,6 +587,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				readyTimeoutMs: options.readyTimeoutMs ?? 100,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
+				shouldRestoreCandidate: options.shouldRestoreCandidate,
 				viewFactory,
 				ipc: ipcMain,
 			}
@@ -539,9 +609,569 @@ suite('ResidentHostedWorkspacesController', () => {
 			untrustedProcessIds,
 			untrustedWebContentsIds,
 			viewFactory,
+			workspaceProfileOverrides,
 			window,
 		};
 	}
+
+	test('uses workspace profiles without changing the shell profile', async () => {
+		const firstPath = createWorktree('first');
+		const secondPath = createWorktree('second');
+		const unassociatedPath = createWorktree('unassociated');
+		const defaultProfile = createProfile('default', [], true);
+		const shellProfile = createProfile('shell');
+		const firstProfile = createProfile('first-profile', [URI.file(firstPath)]);
+		const secondProfile = createProfile(
+			'second-profile',
+			[URI.file(secondPath)]
+		);
+		const fixture = createController({
+			profiles: [defaultProfile, shellProfile, firstProfile, secondProfile],
+			shellProfile,
+		});
+
+		await fixture.controller.openAdmittedWorkspace(firstPath);
+		await fixture.controller.openAdmittedWorkspace(secondPath);
+		await fixture.controller.openAdmittedWorkspace(unassociatedPath);
+		await fixture.controller.openAdmittedWorkspace(firstPath);
+
+		const configurations = fixture.protocolMainService.objectUrls.map(
+			objectUrl => objectUrl.value as INativeWindowConfiguration
+		);
+		assert.deepStrictEqual(
+			configurations.map(configuration =>
+				configuration.profiles.profile.id),
+			['first-profile', 'second-profile', 'default']
+		);
+		assert.strictEqual(
+			fixture.window.config?.profiles.profile.id,
+			'shell'
+		);
+		assert.strictEqual(
+			fixture.controller.getActiveWorkspaceProfile()?.id,
+			'first-profile'
+		);
+		assert.deepStrictEqual(
+			configurations.map(configuration => configuration.partsSplash),
+			[undefined, undefined, undefined]
+		);
+		assert.deepStrictEqual(
+			fixture.viewFactory.views.map(view => view.backgroundColors),
+			[['#00000000'], ['#00000000'], ['#00000000']]
+		);
+	});
+
+	test('refreshes the workspace profile before developer reload', async () => {
+		const worktreePath = createWorktree('profile-reload');
+		const defaultProfile = createProfile('default', [], true);
+		const firstProfile = createProfile('first', [URI.file(worktreePath)]);
+		const secondProfile = createProfile('second');
+		const fixture = createController({
+			profiles: [defaultProfile, firstProfile, secondProfile],
+		});
+
+		await fixture.controller.openAdmittedWorkspace(worktreePath);
+		fixture.workspaceProfileOverrides.set(
+			URI.file(worktreePath).toString(),
+			secondProfile
+		);
+		fixture.controller.reloadWorkspace();
+
+		const configuration = fixture.protocolMainService.objectUrls[0]
+			.value as INativeWindowConfiguration;
+		assert.deepStrictEqual({
+			profile: configuration.profiles.profile.id,
+			profiles: configuration.profiles.all.map(profile => profile.id),
+			reloads: fixture.viewFactory.views[0].rawWebContents.reloadCalls.length,
+		}, {
+			profile: 'second',
+			profiles: ['default', 'first', 'second'],
+			reloads: 1,
+		});
+	});
+
+	test('admits a hosted path to only one Omni window', async () => {
+		const worktreePath = createWorktree('owned-by-first-window');
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const first = createController({
+			ids: ['first-instance'],
+			ownershipCoordinator,
+			windowId: 1,
+		});
+		const second = createController({
+			ids: ['second-instance'],
+			ownershipCoordinator,
+			windowId: 2,
+		});
+
+		await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+		await second.controller.openAdmittedWorkspace(worktreePath, 'project');
+
+		assert.deepStrictEqual({
+			firstInstances: first.controller.getState().instances.length,
+			firstViews: first.viewFactory.views.length,
+			secondInstances: second.controller.getState().instances.length,
+			secondViews: second.viewFactory.views.length,
+		}, {
+			firstInstances: 1,
+			firstViews: 1,
+			secondInstances: 0,
+			secondViews: 0,
+		});
+		const owner = ownershipCoordinator.lookup(worktreePath);
+		assert.strictEqual(owner.kind, 'current-owner');
+		assert.deepStrictEqual(
+			owner.kind === 'current-owner' && owner.ownership.owner,
+			{
+				kind: 'hosted',
+				windowId: 1,
+				instanceId: 'first-instance',
+			}
+		);
+	});
+
+	test('serializes concurrent hosted creation across Omni windows',
+		async () => {
+			const worktreePath = createWorktree('concurrent-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const firstLoad = new DeferredPromise<void>();
+			const first = createController({
+				ids: ['first-instance'],
+				loadUrlPromises: [firstLoad.p],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+
+			const firstOpen = first.controller.openAdmittedWorkspace(worktreePath);
+			for (let attempt = 0;
+				attempt < 20 && first.viewFactory.views.length < 1;
+				attempt++
+			) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(first.viewFactory.views.length, 1);
+			const secondOpen = second.controller.openAdmittedWorkspace(worktreePath);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+
+			await firstLoad.complete();
+			await Promise.all([firstOpen, secondOpen]);
+
+			assert.deepStrictEqual({
+				first: first.controller.getState().instances.length,
+				second: second.controller.getState().instances.length,
+				secondViews: second.viewFactory.views.length,
+			}, { first: 1, second: 0, secondViews: 0 });
+		}
+	);
+
+	test('retries a concurrent admission after the first creation fails',
+		async () => {
+			const worktreePath = createWorktree('failed-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const firstLoad = new DeferredPromise<void>();
+			const first = createController({
+				ids: ['first-instance'],
+				loadUrlErrors: [new Error('expected load failure')],
+				loadUrlPromises: [firstLoad.p],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+
+			const firstOpen = first.controller.openAdmittedWorkspace(worktreePath);
+			for (let attempt = 0;
+				attempt < 20 && first.viewFactory.views.length < 1;
+				attempt++
+			) {
+				await Promise.resolve();
+			}
+			const secondOpen = second.controller.openAdmittedWorkspace(worktreePath);
+			await firstLoad.complete();
+
+			const [firstResult, secondResult] = await Promise.allSettled([
+				firstOpen,
+				secondOpen,
+			]);
+			assert.strictEqual(firstResult.status, 'rejected');
+			assert.strictEqual(secondResult.status, 'fulfilled');
+			assert.deepStrictEqual({
+				first: first.controller.getState().instances.length,
+				second: second.controller.getState().instances.length,
+				secondViews: second.viewFactory.views.length,
+			}, { first: 0, second: 1, secondViews: 1 });
+		}
+	);
+
+	test('keeps Add Workbench unloaded when a regular window owns its path',
+		async () => {
+			const worktreePath = createWorktree('regular-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			ownershipCoordinator.seed({
+				path: worktreePath,
+				owner: { kind: 'regular', windowId: 42 },
+			});
+			const fixture = createController({ ownershipCoordinator });
+
+			await fixture.controller.retainAndOpenAdmittedWorkbench(
+				URI.file(worktreePath)
+			);
+
+			assert.deepStrictEqual({
+				instances: fixture.controller.getState().instances.length,
+				views: fixture.viewFactory.views.length,
+				retained: fixture.controller.getState().retainedWorkbenches?.map(
+					record => record.desiredState
+				),
+			}, { instances: 0, views: 0, retained: ['unloaded'] });
+		}
+	);
+
+	test('arbitrates duplicate restore entries across Omni windows', async () => {
+		const worktreePath = createWorktree('restored-owner');
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const restoreEntries = [{
+			projectId: 'project',
+			worktreePath,
+			state: 'active' as const,
+		}];
+		const first = createController({
+			activeWorktreePath: worktreePath,
+			ids: ['first-instance'],
+			ownershipCoordinator,
+			restoreEntries,
+			windowId: 1,
+		});
+		const second = createController({
+			activeWorktreePath: worktreePath,
+			ids: ['second-instance'],
+			ownershipCoordinator,
+			restoreEntries,
+			windowId: 2,
+		});
+
+		await Promise.all([
+			first.controller.ensureRestored(),
+			second.controller.ensureRestored(),
+		]);
+
+		assert.deepStrictEqual({
+			first: first.controller.getState().instances.length,
+			second: second.controller.getState().instances.length,
+			totalViews:
+				first.viewFactory.views.length + second.viewFactory.views.length,
+		}, { first: 1, second: 0, totalViews: 1 });
+	});
+
+	test('keeps a losing retained restore record unloaded', async () => {
+		const worktreePath = createWorktree('losing-retained-restore');
+		const fixture = createController({
+			activeWorktreePath: worktreePath,
+			retainedWorkbenches: [{
+				id: 'retained-loser',
+				folderUri: URI.file(worktreePath).toJSON(),
+				desiredState: 'loaded',
+				order: 0,
+				lastActiveAt: 100,
+			}],
+			shouldRestoreCandidate: () => false,
+		});
+
+		await fixture.controller.ensureRestored();
+
+		assert.deepStrictEqual(fixture.controller.getState().instances, []);
+		assert.deepStrictEqual(
+			fixture.controller.getState().retainedWorkbenches?.map(record => ({
+				id: record.id,
+				desiredState: record.desiredState,
+			})),
+			[{ id: 'retained-loser', desiredState: 'unloaded' }]
+		);
+	});
+
+	test('holds recovery ownership until the crashed instance closes',
+		async () => {
+			const worktreePath = createWorktree('recovering-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+			first.viewFactory.views[0].rawWebContents.emit(
+				'render-process-gone'
+			);
+			const recovering = ownershipCoordinator.lookup(worktreePath);
+			assert.strictEqual(
+				recovering.kind === 'current-owner' &&
+				recovering.ownership.phase,
+				'recovering'
+			);
+
+			const secondOpen = second.controller.openAdmittedWorkspace(
+				worktreePath,
+				'project'
+			);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			await first.controller.closeWorkspace('first-instance');
+			await secondOpen;
+
+			const owner = ownershipCoordinator.lookup(worktreePath);
+			assert.strictEqual(owner.kind, 'current-owner');
+			assert.deepStrictEqual(
+				owner.kind === 'current-owner' && owner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 2,
+					instanceId: 'second-instance',
+				}
+			);
+		}
+	);
+
+	test('keeps a hosted waiter through the transition into recovery',
+		async () => {
+			const worktreePath = createWorktree('transitioning-recovery-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+			const lookup = ownershipCoordinator.lookup(worktreePath);
+			if (lookup.kind !== 'current-owner') {
+				assert.fail('expected first hosted owner');
+			}
+			const token = {
+				canonicalPath: lookup.ownership.canonicalPath,
+				owner: lookup.ownership.owner,
+				generation: lookup.ownership.generation,
+			};
+			ownershipCoordinator.markTransferring(token);
+
+			const secondOpen = second.controller.openAdmittedWorkspace(
+				worktreePath,
+				'project'
+			);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			ownershipCoordinator.markRecovering(token);
+			for (let attempt = 0; attempt < 5; attempt++) {
+				await Promise.resolve();
+			}
+			assert.strictEqual(second.viewFactory.views.length, 0);
+
+			await first.controller.closeWorkspace('first-instance');
+			await secondOpen;
+			assert.strictEqual(second.viewFactory.views.length, 1);
+			const owner = ownershipCoordinator.lookup(worktreePath);
+			assert.deepStrictEqual(
+				owner.kind === 'current-owner' && owner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 2,
+					instanceId: 'second-instance',
+				}
+			);
+		}
+	);
+
+	test('reassigns crash recovery before a fresh instance loads', async () => {
+		const worktreePath = createWorktree('fresh-recovery-owner');
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const recoveryLoad = new DeferredPromise<void>();
+		const first = createController({
+			ids: ['first-instance', 'fresh-instance'],
+			loadUrlPromises: [Promise.resolve(), recoveryLoad.p],
+			ownershipCoordinator,
+			windowId: 1,
+		});
+		const second = createController({
+			ids: ['second-instance'],
+			ownershipCoordinator,
+			windowId: 2,
+		});
+		await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+		first.viewFactory.views[0].rawWebContents.emit('render-process-gone');
+
+		const recovering = first.controller.openAdmittedWorkspace(
+			worktreePath,
+			'project'
+		);
+		for (let attempt = 0;
+			attempt < 20 && first.viewFactory.views.length < 2;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		const recoveryOwner = ownershipCoordinator.lookup(worktreePath);
+		assert.deepStrictEqual(
+			recoveryOwner.kind === 'current-owner' &&
+			recoveryOwner.ownership.owner,
+			{
+				kind: 'hosted',
+				windowId: 1,
+				instanceId: 'fresh-instance',
+			}
+		);
+
+		const competing = second.controller.openAdmittedWorkspace(worktreePath);
+		for (let attempt = 0; attempt < 5; attempt++) {
+			await Promise.resolve();
+		}
+		assert.strictEqual(second.viewFactory.views.length, 0);
+		await recoveryLoad.complete();
+		await Promise.all([recovering, competing]);
+
+		assert.strictEqual(first.controller.getState().instances[0].instanceId,
+			'fresh-instance');
+		assert.strictEqual(second.controller.getState().instances.length, 0);
+	});
+
+	test('keeps a canceled crash recovery reopenable', async () => {
+		const worktreePath = createWorktree('canceled-recovery-owner');
+		const recoveryLoad = new DeferredPromise<void>();
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const fixture = createController({
+			ids: ['first-instance', 'fresh-instance'],
+			loadUrlPromises: [
+				Promise.resolve(),
+				recoveryLoad.p,
+				Promise.resolve(),
+			],
+			ownershipCoordinator,
+			windowId: 1,
+		});
+		await fixture.controller.openAdmittedWorkspace(
+			worktreePath,
+			'project'
+		);
+		fixture.viewFactory.views[0].rawWebContents.emit('render-process-gone');
+		let current = true;
+		const recovering = fixture.controller.openAdmittedWorkspace(
+			worktreePath,
+			'project',
+			() => current,
+			() => current
+		);
+		for (let attempt = 0;
+			attempt < 20 && fixture.viewFactory.views.length < 2;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		current = false;
+		await recoveryLoad.complete();
+		await recovering;
+
+		assert.strictEqual(
+			fixture.controller.getState().instances[0].state,
+			'restore-pending'
+		);
+		const pendingOwner = ownershipCoordinator.lookup(worktreePath);
+		assert.strictEqual(
+			pendingOwner.kind === 'current-owner' &&
+			pendingOwner.ownership.phase,
+			'recovering'
+		);
+
+		current = true;
+		await fixture.controller.openAdmittedWorkspace(
+			worktreePath,
+			'project'
+		);
+		assert.strictEqual(fixture.viewFactory.views.length, 3);
+		assert.strictEqual(
+			fixture.controller.getState().instances[0].state,
+			'loading'
+		);
+	});
+
+	test('keeps dormant workbenches owned and releases ownership on disposal',
+		async () => {
+			const worktreePath = createWorktree('dormant-owner');
+			const ownershipCoordinator =
+				new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const first = createController({
+				ids: ['first-instance', 'dormant-instance'],
+				ownershipCoordinator,
+				windowId: 1,
+			});
+			const second = createController({
+				ids: ['second-instance'],
+				ownershipCoordinator,
+				windowId: 2,
+			});
+			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
+			first.controller.notifyHostedWorkspaceReady('first-instance');
+
+			await first.controller.suspendWorkspace('first-instance');
+			await second.controller.openAdmittedWorkspace(worktreePath, 'project');
+
+			assert.strictEqual(
+				first.controller.getState().instances[0].state,
+				'dormant'
+			);
+			assert.strictEqual(second.viewFactory.views.length, 0);
+			assert.strictEqual(
+				ownershipCoordinator.lookup(worktreePath).kind,
+				'current-owner'
+			);
+			const dormantOwner = ownershipCoordinator.lookup(worktreePath);
+			assert.deepStrictEqual(
+				dormantOwner.kind === 'current-owner' &&
+				dormantOwner.ownership.owner,
+				{
+					kind: 'hosted',
+					windowId: 1,
+					instanceId: 'dormant-instance',
+				}
+			);
+
+			first.controller.dispose();
+			assert.deepStrictEqual(
+				ownershipCoordinator.lookup(worktreePath),
+				{ kind: 'absent' }
+			);
+		}
+	);
 
 	function createLifecycleContractAdapter():
 		IHostedWorkspaceLifecycleContractAdapter {
@@ -615,9 +1245,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				const alpha = createWorktree('alpha');
 				const beta = createWorktree('beta');
 				const harness = createController();
-				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				await harness.controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				harness.controller.notifyHostedWorkspaceReady('instance-1');
-				await harness.controller.openWorkspace(beta, 'project-beta');
+				await harness.controller.openAdmittedWorkspace(beta, 'project-beta');
 				harness.controller.notifyHostedWorkspaceReady('instance-2');
 
 				const phases: string[] = [];
@@ -633,7 +1263,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				);
 				const closing = harness.controller.closeWorkspace('instance-1');
 				await prepareStarted.p;
-				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				await harness.controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				await prepareGate.complete();
 				await closing;
 
@@ -645,7 +1275,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			async coherentRetainedClose() {
 				const scratch = createWorktree('scratch');
 				const harness = createController();
-				await harness.controller.retainAndOpenWorkbench(URI.file(scratch));
+				await harness.controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 				harness.controller.notifyHostedWorkspaceReady('instance-1');
 				const beforeClose = harness.stateChanges.length;
 
@@ -743,7 +1373,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			async vetoThenShutdown() {
 				const alpha = createWorktree('alpha');
 				const harness = createController();
-				await harness.controller.openWorkspace(alpha, 'project-alpha');
+				await harness.controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				harness.controller.notifyHostedWorkspaceReady('instance-1');
 				const closePhases: string[] = [];
 				configureUnload(harness, 0, closePhases, 'veto');
@@ -783,7 +1413,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					[bravo, 'project-bravo', 'instance-2'],
 					[charlie, 'project-charlie', 'instance-3'],
 				] as const) {
-					await harness.controller.openWorkspace(path, projectId);
+					await harness.controller.openAdmittedWorkspace(path, projectId);
 					harness.controller.notifyHostedWorkspaceReady(instanceId);
 				}
 
@@ -913,7 +1543,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const scratch = createWorktree('scratch');
 		const { controller, stateChanges } = createController();
 
-		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 		const workbenchId = controller.getState().retainedWorkbenches?.[0].id;
 		assert.ok(workbenchId);
 
@@ -938,7 +1568,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('generic close emits one coherent retained unload state', async () => {
 		const scratch = createWorktree('scratch-close');
 		const { controller, stateChanges } = createController();
-		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 		const beforeCloseChanges = stateChanges.length;
 
 		await controller.closeWorkspace();
@@ -1057,12 +1687,91 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		});
 
+	test('keeps one legacy retained entry restorable under arbitration',
+		async () => {
+			const scratch = createWorktree('legacy-arbitrated-scratch');
+			const { controller, viewFactory } = createController({
+				restoreEntries: [{
+					worktreePath: scratch,
+					state: 'active',
+				}],
+				activeWorktreePath: scratch,
+				shouldRestoreCandidate: candidate =>
+					candidate.stableInstanceId ===
+					`legacy-retained:${scratch}`,
+			});
+
+			await controller.ensureRestored();
+
+			assert.strictEqual(controller.getState().instances.length, 1);
+			assert.strictEqual(viewFactory.views.length, 1);
+			assert.strictEqual(
+				controller.getState().retainedWorkbenches?.[0].desiredState,
+				'loaded'
+			);
+		}
+	);
+
+	test('arbitrates duplicate legacy retained entries without dropping loser',
+		async () => {
+			const scratch = createWorktree('legacy-duplicate-scratch');
+			const candidates = [1, 2].flatMap(windowId =>
+				createHucodeDesktopRestoreCandidates({
+					windowId,
+					windowLastFocusTime: 50,
+					activeWorktreePath: scratch,
+					residentWorkspaces: [{ path: scratch }],
+					retainedWorkbenches: [],
+				})
+			);
+			const winner = selectHucodeDesktopRestoreWinners(candidates)
+				.values().next().value;
+			assert.ok(winner);
+			const createRestoreFilter = (windowId: number) =>
+				(candidate: { path: string; stableInstanceId: string }) =>
+					winner.windowId === windowId &&
+					winner.path === candidate.path &&
+					winner.stableInstanceId === candidate.stableInstanceId;
+			const restoreEntries = [{
+				worktreePath: scratch,
+				state: 'active' as const,
+			}];
+			const first = createController({
+				restoreEntries,
+				activeWorktreePath: scratch,
+				shouldRestoreCandidate: createRestoreFilter(1),
+				windowId: 1,
+			});
+			const second = createController({
+				restoreEntries,
+				activeWorktreePath: scratch,
+				shouldRestoreCandidate: createRestoreFilter(2),
+				windowId: 2,
+			});
+
+			await Promise.all([
+				first.controller.ensureRestored(),
+				second.controller.ensureRestored(),
+			]);
+
+			assert.strictEqual(first.controller.getState().instances.length, 1);
+			assert.strictEqual(second.controller.getState().instances.length, 0);
+			assert.deepStrictEqual(
+				second.controller.getState().retainedWorkbenches?.map(record => ({
+					path: URI.revive(record.folderUri).fsPath,
+					desiredState: record.desiredState,
+				})),
+				[{ path: scratch, desiredState: 'unloaded' }]
+			);
+		}
+	);
+
 	test('persists retained workbench reorder in window state', async () => {
 		const first = createWorktree('reorder-first');
 		const second = createWorktree('reorder-second');
 		const { controller, window } = createController();
-		await controller.retainAndOpenWorkbench(URI.file(first));
-		await controller.retainAndOpenWorkbench(URI.file(second));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(first));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(second));
 		const ids = controller.getState().retainedWorkbenches?.map(record =>
 			record.id
 		) ?? [];
@@ -1081,7 +1790,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('persists and emits retained workbench label changes', async () => {
 		const scratch = createWorktree('renamed-scratch');
 		const { controller, stateChanges, window } = createController();
-		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 		const workbenchId = controller.getState().retainedWorkbenches?.[0].id;
 		assert.ok(workbenchId);
 		const beforeRenameChanges = stateChanges.length;
@@ -1135,11 +1844,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const adoptedPath = createWorktree('stale-reopen');
 			const { controller, window } = createController();
-			await controller.openWorkspace(adoptedPath, 'removed-project');
+			await controller.openAdmittedWorkspace(adoptedPath, 'removed-project');
 			await controller
 				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
 
-			await controller.openWorkspace(adoptedPath, 'removed-project');
+			await controller.openAdmittedWorkspace(adoptedPath, 'removed-project');
 
 			const state = controller.getState();
 			assert.strictEqual(state.instances[0].projectId, undefined);
@@ -1164,7 +1873,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const adoptedPath = createWorktree('crashed-stale-reopen');
 			const teardownStarted = new DeferredPromise<void>();
 			const { controller, viewFactory, window } = createController();
-			await controller.openWorkspace(adoptedPath, 'removed-project');
+			await controller.openAdmittedWorkspace(adoptedPath, 'removed-project');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
@@ -1174,7 +1883,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				catalogUpdate = controller
 					.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
 			};
-			const reopening = controller.openWorkspace(
+			const reopening = controller.openAdmittedWorkspace(
 				adoptedPath,
 				'removed-project'
 			);
@@ -1206,19 +1915,19 @@ suite('ResidentHostedWorkspacesController', () => {
 			const replacedPath = createWorktree('crashed-replacement');
 			const teardownStarted = new DeferredPromise<void>();
 			const { controller, viewFactory, window } = createController();
-			await controller.openWorkspace(replacedPath, 'project-old');
+			await controller.openAdmittedWorkspace(replacedPath, 'project-old');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
 			let replacementOpen: Promise<void> | undefined;
 			viewFactory.views[0].rawWebContents.closeHook = () => {
 				teardownStarted.complete();
-				replacementOpen = controller.openWorkspace(
+				replacementOpen = controller.openAdmittedWorkspace(
 					replacedPath,
 					'project-new'
 				);
 			};
-			const staleReopen = controller.openWorkspace(
+			const staleReopen = controller.openAdmittedWorkspace(
 				replacedPath,
 				'project-old'
 			);
@@ -1248,7 +1957,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const promotedPath = createWorktree('promoted-live');
 			const { controller, window } = createController();
-			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(promotedPath));
 			await controller
 				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
 
@@ -1256,7 +1965,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				projectId: 'project',
 				folderUri: URI.file(promotedPath),
 			}]);
-			await controller.openWorkspace(promotedPath, 'project');
+			await controller.openAdmittedWorkspace(promotedPath, 'project');
 
 			const state = controller.getState();
 			assert.strictEqual(state.instances[0].projectId, 'project');
@@ -1277,7 +1986,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const promotedPath = createWorktree('crashed-promotion');
 			const teardownStarted = new DeferredPromise<void>();
 			const { controller, viewFactory, window } = createController();
-			await controller.retainAndOpenWorkbench(URI.file(promotedPath));
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(promotedPath));
 			controller.notifyHostedWorkspaceReady('instance-1');
 			await controller
 				.reconcileRetainedWorkbenchesWithCompleteProjectCatalog([]);
@@ -1292,7 +2001,7 @@ suite('ResidentHostedWorkspacesController', () => {
 						folderUri: URI.file(promotedPath),
 					}]);
 			};
-			const reopening = controller.openWorkspace(promotedPath);
+			const reopening = controller.openAdmittedWorkspace(promotedPath);
 			await teardownStarted.p;
 			assert.ok(catalogUpdate);
 			await catalogUpdate;
@@ -1327,9 +2036,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				restorePolicy: 'none',
 			});
 			await controller.ensureRestored();
-			await controller.openWorkspace(alpha, 'removed-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'removed-alpha');
 			controller.notifyHostedWorkspaceReady('instance-2');
-			await controller.openWorkspace(bravo, 'removed-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'removed-bravo');
 			controller.notifyHostedWorkspaceReady('instance-3');
 
 			await controller
@@ -1462,7 +2171,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('adopts a loading orphan before it becomes ready', async () => {
 		const loading = createWorktree('loading-orphan');
 		const { controller } = createController();
-		await controller.openWorkspace(loading, 'removed-owner');
+		await controller.openAdmittedWorkspace(loading, 'removed-owner');
 		assert.strictEqual(controller.getState().instances[0].state, 'loading');
 
 		await controller
@@ -1482,7 +2191,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const retained = createWorktree('already-retained');
 			const { controller, stateChanges } = createController();
-			await controller.openWorkspace(retained);
+			await controller.openAdmittedWorkspace(retained);
 			const changesBeforeReconcile = stateChanges.length;
 
 			await controller
@@ -1498,7 +2207,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('leaves crashed project workbenches out of orphan adoption', async () => {
 		const crashed = createWorktree('crashed-orphan');
 		const { controller, stateChanges, viewFactory } = createController();
-		await controller.openWorkspace(crashed, 'removed-project');
+		await controller.openAdmittedWorkspace(crashed, 'removed-project');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.emit('render-process-gone');
 		const changesBeforeReconcile = stateChanges.length;
@@ -1711,7 +2420,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			loadUrlPromises: [slowLoad.p, fastLoad.p],
 		});
 
-		const openAlpha = controller.openWorkspace(alpha);
+		const openAlpha = controller.openAdmittedWorkspace(alpha);
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 1;
 			attempt++
@@ -1719,7 +2428,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await Promise.resolve();
 		}
 		assert.strictEqual(viewFactory.views.length, 1);
-		const openBravo = controller.openWorkspace(bravo);
+		const openBravo = controller.openAdmittedWorkspace(bravo);
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 2;
 			attempt++
@@ -1761,14 +2470,14 @@ suite('ResidentHostedWorkspacesController', () => {
 			loadUrlPromises: [load.p],
 		});
 
-		const first = controller.openWorkspace(alpha, 'project-alpha');
+		const first = controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 1;
 			attempt++
 		) {
 			await Promise.resolve();
 		}
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 		assert.strictEqual(viewFactory.views.length, 1);
 		load.complete();
@@ -1784,7 +2493,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const { controller, protocolMainService, viewFactory } =
 			createController();
 
-		await controller.retainAndOpenWorkbench(URI.file(missing));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(missing));
 
 		assert.deepStrictEqual({
 			instances: controller.getState().instances,
@@ -1827,13 +2536,13 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo');
 		const { controller, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		now = 2000;
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
 		now = 3000;
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 		assert.strictEqual(viewFactory.views.length, 2);
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
@@ -1866,7 +2575,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		});
 
 		await assert.rejects(
-			() => controller.openWorkspace(alpha, 'project-alpha'),
+			() => controller.openAdmittedWorkspace(alpha, 'project-alpha'),
 			/load failed/
 		);
 
@@ -1874,7 +2583,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		assert.strictEqual(protocolMainService.objectUrls[0].disposed, true);
 		assert.strictEqual(viewFactory.views[0].rawWebContents.closeCalls.length, 1);
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('recovered-instance');
 
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
@@ -1900,7 +2609,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		stateChanges.length = 0;
 
 		await assert.rejects(
-			() => controller.retainAndOpenWorkbench(URI.file(scratch)),
+			() => controller.retainAndOpenAdmittedWorkbench(URI.file(scratch)),
 			/load failed/
 		);
 
@@ -1924,7 +2633,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller, protocolMainService } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		await controller.closeWorkspace();
 
@@ -1935,16 +2644,25 @@ suite('ResidentHostedWorkspacesController', () => {
 
 	test('opening crashed workspace creates a new resident view', async () => {
 		const alpha = createWorktree('alpha');
-		const { controller, viewFactory } = createController();
+		const ownershipCoordinator =
+			new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const { controller, viewFactory } = createController({
+			ownershipCoordinator,
+		});
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.emit('render-process-gone');
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-2');
 
 		assert.strictEqual(viewFactory.views.length, 2);
+		const ownership = ownershipCoordinator.lookup(alpha);
+		assert.deepStrictEqual(
+			ownership.kind === 'current-owner' && ownership.ownership.owner,
+			{ kind: 'hosted', windowId: 1, instanceId: 'instance-2' }
+		);
 		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
 			instanceId: instance.instanceId,
 			worktreePath: instance.worktreePath,
@@ -1967,7 +2685,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		};
 		const { controller, viewFactory } = createController();
 
-		const openPromise = controller.openFilesInWorkspace(
+		const openPromise = controller.openFilesInAdmittedWorkspace(
 			alpha,
 			request,
 			'project-alpha'
@@ -2006,7 +2724,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		};
 		const { controller, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const openPromise = controller.openFilesInActiveWorkspace(request);
 		await Promise.resolve();
 
@@ -2029,7 +2747,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			readyTimeoutMs: 1,
 		});
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 		assert.strictEqual(
 			await controller.openFilesInActiveWorkspace({
@@ -2047,8 +2765,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const first = createController({ ipcMain, windowId: 1 });
 		const second = createController({ ipcMain, windowId: 2 });
 
-		await first.controller.openWorkspace(alpha, 'project-alpha');
-		await second.controller.openWorkspace(bravo, 'project-bravo');
+		await first.controller.openAdmittedWorkspace(alpha, 'project-alpha');
+		await second.controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		first.controller.notifyHostedWorkspaceReady('instance-1');
 		second.controller.notifyHostedWorkspaceReady('instance-1');
 
@@ -2089,6 +2807,52 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 	});
 
+	test('external ownership projection waits for a coherent lifecycle state',
+		async () => {
+			const alpha = createWorktree('external-state-deferral');
+			const { controller, ipcMain, stateChanges, viewFactory } =
+				createController();
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
+			const instanceId = controller.getState().activeInstanceId;
+			assert.ok(instanceId);
+			controller.notifyHostedWorkspaceReady(instanceId);
+			const webContents = viewFactory.views[0].rawWebContents;
+			webContents.autoBeforeUnloadReply = false;
+			const beforeClose = stateChanges.length;
+
+			const closing = controller.closeWorkspace(instanceId);
+			let beforeUnloadRequest = webContents.sent.find(
+				message => message.channel === 'vscode:onBeforeUnload'
+			);
+			for (let attempt = 0;
+				attempt < 20 && !beforeUnloadRequest;
+				attempt++
+			) {
+				await Promise.resolve();
+				beforeUnloadRequest = webContents.sent.find(
+					message => message.channel === 'vscode:onBeforeUnload'
+				);
+			}
+			const request = beforeUnloadRequest?.request as {
+				cancelChannel: string;
+			} | undefined;
+			assert.ok(request);
+			controller.notifyExternalStateChanged();
+			assert.strictEqual(stateChanges.length, beforeClose);
+			ipcMain.emitReply(request.cancelChannel);
+			assert.strictEqual(await closing, false);
+
+			assert.strictEqual(stateChanges.length, beforeClose + 1);
+			assert.deepStrictEqual(
+				stateChanges.at(-1)?.instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+				})),
+				[{ instanceId, state: 'active' }]
+			);
+		}
+	);
+
 	test('closing active workspace unloads it and activates next MRU', async () => {
 		const alpha = createWorktree('alpha');
 		const bravo = createWorktree('bravo');
@@ -2100,10 +2864,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			viewFactory,
 		} = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		now = 2000;
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
 		await controller.closeWorkspace();
 
@@ -2135,10 +2899,10 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('suspend-active-bravo');
 		const { controller, stateChanges, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		now = 2000;
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
 		const changesBeforeSuspend = stateChanges.length;
 
@@ -2168,12 +2932,12 @@ suite('ResidentHostedWorkspacesController', () => {
 			const project = createWorktree('suspend-project');
 			const { controller } = createController();
 
-			await controller.retainAndOpenWorkbench(URI.file(scratch));
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 			const retainedInstanceId = controller.getState().activeInstanceId;
 			assert.ok(retainedInstanceId);
 			controller.notifyHostedWorkspaceReady(retainedInstanceId);
 			now = 2000;
-			await controller.openWorkspace(project, 'project');
+			await controller.openAdmittedWorkspace(project, 'project');
 			const projectInstanceId = controller.getState().activeInstanceId;
 			assert.ok(projectInstanceId);
 			controller.notifyHostedWorkspaceReady(projectInstanceId);
@@ -2202,7 +2966,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const scratch = createWorktree('suspend-veto');
 			const { controller, ipcMain, viewFactory } = createController();
 
-			await controller.retainAndOpenWorkbench(URI.file(scratch));
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 			const instanceId = controller.getState().activeInstanceId;
 			assert.ok(instanceId);
 			controller.notifyHostedWorkspaceReady(instanceId);
@@ -2239,7 +3003,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('suspend-guards');
 		const { controller, stateChanges, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const loadingState = controller.getState();
 		const instanceId = loadingState.activeInstanceId;
 		assert.ok(instanceId);
@@ -2281,7 +3045,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			} = createController({ beforeUnloadTimeoutMs: 5 });
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const hostedView = viewFactory.views[0];
 			let beforeUnload: {
@@ -2348,7 +3112,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			} = createController();
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const hostedView = viewFactory.views[0];
 			hostedView.rawWebContents.sendHook = channel => {
@@ -2391,19 +3155,19 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo-reactivated');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		viewFactory.views[0].rawWebContents.autoBeforeUnloadReply = false;
 
 		const closing = controller.closeWorkspace('instance-1');
 		await Promise.resolve();
 		const beforeUnload = viewFactory.views[0].rawWebContents.sent[0]
 			.request as { okChannel: string };
-		await controller.openWorkspace(bravo, 'project-bravo');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		ipcMain.emitReply(beforeUnload.okChannel);
 		await closing;
 
@@ -2435,13 +3199,24 @@ suite('ResidentHostedWorkspacesController', () => {
 		async () => {
 			const alpha = createWorktree('alpha-reactivated-rollback-failure');
 			const bravo = createWorktree('bravo-reactivated-rollback-failure');
-			const { controller, ipcMain, viewFactory } = createController();
+			const defaultProfile = createProfile('default', [], true);
+			const firstProfile = createProfile('first', [URI.file(alpha)]);
+			const secondProfile = createProfile('second');
+			const {
+				controller,
+				ipcMain,
+				protocolMainService,
+				viewFactory,
+				workspaceProfileOverrides,
+			} = createController({
+				profiles: [defaultProfile, firstProfile, secondProfile],
+			});
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			const hostedWebContents = viewFactory.views[0].rawWebContents;
 			hostedWebContents.autoBeforeUnloadReply = false;
 			hostedWebContents.sendHook = channel => {
@@ -2456,10 +3231,16 @@ suite('ResidentHostedWorkspacesController', () => {
 			const beforeUnload = hostedWebContents.sent[0].request as {
 				okChannel: string;
 			};
-			await controller.openWorkspace(bravo, 'project-bravo');
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			workspaceProfileOverrides.set(
+				URI.file(alpha).toString(),
+				secondProfile
+			);
 			ipcMain.emitReply(beforeUnload.okChannel);
 			await closing;
+			const configuration = protocolMainService.objectUrls[0]
+				.value as INativeWindowConfiguration;
 
 			assert.deepStrictEqual({
 				activeInstanceId: controller.getState().activeInstanceId,
@@ -2471,6 +3252,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					instance.instanceId === 'instance-1'
 				)?.state,
 				reloadCalls: hostedWebContents.reloadCalls.length,
+				profile: configuration.profiles.profile.id,
 				closeCalls: hostedWebContents.closeCalls,
 			}, {
 				activeInstanceId: 'instance-1',
@@ -2481,6 +3263,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				],
 				state: 'loading',
 				reloadCalls: 1,
+				profile: 'second',
 				closeCalls: [],
 			});
 		}
@@ -2493,11 +3276,11 @@ suite('ResidentHostedWorkspacesController', () => {
 			beforeUnloadTimeoutMs: 5,
 		});
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const hostedWebContents = viewFactory.views[0].rawWebContents;
 		hostedWebContents.autoBeforeUnloadReply = false;
 		hostedWebContents.autoPreparationRollbackReply = false;
@@ -2507,8 +3290,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const beforeUnload = hostedWebContents.sent[0].request as {
 			okChannel: string;
 		};
-		await controller.openWorkspace(bravo, 'project-bravo');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		ipcMain.emitReply(beforeUnload.okChannel);
 		await closing;
 
@@ -2547,11 +3330,11 @@ suite('ResidentHostedWorkspacesController', () => {
 				);
 				const { controller, ipcMain, viewFactory } = createController();
 
-				await controller.openWorkspace(alpha, 'project-alpha');
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				controller.notifyHostedWorkspaceReady('instance-1');
-				await controller.openWorkspace(bravo, 'project-bravo');
+				await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 				controller.notifyHostedWorkspaceReady('instance-2');
-				await controller.openWorkspace(alpha, 'project-alpha');
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				const hostedWebContents = viewFactory.views[0].rawWebContents;
 				hostedWebContents.autoBeforeUnloadReply = false;
 				hostedWebContents.autoPreparationRollbackReply = false;
@@ -2577,8 +3360,8 @@ suite('ResidentHostedWorkspacesController', () => {
 				const beforeUnload = hostedWebContents.sent[0].request as {
 					okChannel: string;
 				};
-				await controller.openWorkspace(bravo, 'project-bravo');
-				await controller.openWorkspace(alpha, 'project-alpha');
+				await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 				ipcMain.emitReply(beforeUnload.okChannel);
 				await closing;
 
@@ -2598,11 +3381,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo-rollback-destroyed');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const hostedWebContents = viewFactory.views[0].rawWebContents;
 		hostedWebContents.autoBeforeUnloadReply = false;
 		hostedWebContents.autoPreparationRollbackReply = false;
@@ -2621,8 +3404,8 @@ suite('ResidentHostedWorkspacesController', () => {
 		const beforeUnload = hostedWebContents.sent[0].request as {
 			okChannel: string;
 		};
-		await controller.openWorkspace(bravo, 'project-bravo');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		ipcMain.emitReply(beforeUnload.okChannel);
 		await closing;
 
@@ -2656,11 +3439,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo-overlapping-preparation');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const hostedWebContents = viewFactory.views[0].rawWebContents;
 		hostedWebContents.autoBeforeUnloadReply = false;
 		hostedWebContents.autoPreparationRollbackReply = false;
@@ -2693,8 +3476,8 @@ suite('ResidentHostedWorkspacesController', () => {
 			preparationId?: string;
 		};
 
-		await controller.openWorkspace(bravo, 'project-bravo');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const secondClose = controller.closeWorkspace('instance-1');
 		await Promise.resolve();
 		const secondPreparation = hostedWebContents.sent[1].request as {
@@ -2740,11 +3523,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo-reactivated-after-will');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		const willUnload = new DeferredPromise<{ replyChannel: string }>();
 		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 			if (channel === 'vscode:onBeforeUnload') {
@@ -2759,8 +3542,8 @@ suite('ResidentHostedWorkspacesController', () => {
 
 		const closing = controller.closeWorkspace('instance-1');
 		const willUnloadRequest = await willUnload.p;
-		await controller.openWorkspace(bravo, 'project-bravo');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		ipcMain.emitReply(willUnloadRequest.replyChannel);
 		await closing;
 
@@ -2789,10 +3572,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			const bravo = createWorktree('bravo-loading-reactivated-after-will');
 			const { controller, ipcMain, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			const willUnload = new DeferredPromise<{ replyChannel: string }>();
 			viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 				if (channel === 'vscode:onBeforeUnload') {
@@ -2807,8 +3590,8 @@ suite('ResidentHostedWorkspacesController', () => {
 
 			const closing = controller.closeWorkspace('instance-1');
 			const willUnloadRequest = await willUnload.p;
-			await controller.openWorkspace(bravo, 'project-bravo');
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			ipcMain.emitReply(willUnloadRequest.replyChannel);
 			await closing;
 
@@ -2823,7 +3606,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha-overlapping-close');
 		const { controller, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 
 		const committed = await Promise.all([
@@ -2844,18 +3627,18 @@ suite('ResidentHostedWorkspacesController', () => {
 		const bravo = createWorktree('bravo-newer-activation');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		viewFactory.views[0].rawWebContents.autoBeforeUnloadReply = false;
 
 		const closing = controller.closeWorkspace('instance-1');
 		await Promise.resolve();
 		const beforeUnload = viewFactory.views[0].rawWebContents.sent[0]
 			.request as { okChannel: string };
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		ipcMain.emitReply(beforeUnload.okChannel);
 		await closing;
 
@@ -2878,13 +3661,13 @@ suite('ResidentHostedWorkspacesController', () => {
 			const { browserViewMainService, controller, viewFactory, window } =
 				createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			now = 3000;
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
 				{ id: 2, visible: false },
@@ -2900,7 +3683,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			now = 4000;
 			const bravoInvalidateCallsBefore =
 				viewFactory.views[1].rawWebContents.invalidateCalls.length;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 
 			assert.deepStrictEqual(browserViewMainService.visibleCalls.slice(-2), [
 				{ id: 1, visible: false },
@@ -2925,10 +3708,10 @@ suite('ResidentHostedWorkspacesController', () => {
 				createController();
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 
 			assert.deepStrictEqual(controller.getState().instances.map(instance => ({
@@ -2962,9 +3745,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			const bravo = createWorktree('bravo');
 			const { controller, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			const alphaView = viewFactory.views[0];
 			const bravoView = viewFactory.views[1];
@@ -2985,7 +3768,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				bravoBounds: latestBounds,
 			});
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 			assert.deepStrictEqual({
 				alphaBounds: alphaView.boundsCalls.at(-1),
@@ -3007,7 +3790,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				window,
 			} = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
 
@@ -3056,13 +3839,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				createController();
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			now = 3000;
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 			controller.setWorkspaceOverlayOcclusion(true);
 			await controller.closeWorkspace('instance-1');
@@ -3107,13 +3890,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				createController();
 			const browserWindow = window.win as unknown as TestBrowserWindow;
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			now = 3000;
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 			controller.setWorkspaceOverlayOcclusion(true);
 			await controller.closeWorkspace('instance-1');
@@ -3141,10 +3924,10 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 			} = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			await controller.closeWorkspace('instance-1');
 
@@ -3170,7 +3953,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		controller.setProjectsSidebarVisible(false);
 
@@ -3186,7 +3969,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller, ipcMain, viewFactory } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
 			if (channel === 'vscode:onBeforeUnload') {
@@ -3228,7 +4011,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				willUnloadTimeoutMs: 5,
 			});
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			viewFactory.views[0].rawWebContents.sendHook = () => true;
 
@@ -3272,7 +4055,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			} = createController();
 			const phasesByWebContentsId = new Map<number, string[]>();
 			for (const [index, path] of paths.entries()) {
-				await controller.openWorkspace(path, `project-${index + 1}`);
+				await controller.openAdmittedWorkspace(path, `project-${index + 1}`);
 				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
 				const view = viewFactory.views[index].rawWebContents;
 				const phases: string[] = [];
@@ -3410,7 +4193,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 			} = createController();
 			for (const [index, path] of paths.entries()) {
-				await controller.openWorkspace(path, `project-${index + 1}`);
+				await controller.openAdmittedWorkspace(path, `project-${index + 1}`);
 				controller.notifyHostedWorkspaceReady(`instance-${index + 1}`);
 			}
 
@@ -3461,7 +4244,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			stateChanges,
 			viewFactory,
 		} = createController();
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		let releasePreparation: (() => void) | undefined;
 		viewFactory.views[0].rawWebContents.sendHook = (channel, request) => {
@@ -3485,7 +4268,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const stateChangeCountBeforeLateOpen = stateChanges.length;
 		const viewCountBeforeLateOpen = viewFactory.views.length;
 
-		await controller.openWorkspace(late, 'project-late');
+		await controller.openAdmittedWorkspace(late, 'project-late');
 
 		assert.deepStrictEqual(controller.getState(), stateBeforeLateOpen);
 		assert.strictEqual(
@@ -3517,7 +4300,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				controller,
 				viewFactory,
 			} = createController();
-			await controller.openWorkspace(alpha, `project-${suffix}-alpha`);
+			await controller.openAdmittedWorkspace(alpha, `project-${suffix}-alpha`);
 			controller.notifyHostedWorkspaceReady('instance-1');
 
 			const firstShutdown = controller.shutdownAllWorkspaces(reason);
@@ -3526,7 +4309,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				firstShutdown
 			);
 			await firstShutdown;
-			await controller.openWorkspace(bravo, `project-${suffix}-bravo`);
+			await controller.openAdmittedWorkspace(bravo, `project-${suffix}-bravo`);
 			controller.notifyHostedWorkspaceReady('instance-2');
 
 			assert.strictEqual(viewFactory.views.length, 2);
@@ -3559,7 +4342,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				'unloaded'
 			);
 
-			await controller.openWorkspace(charlie, `project-${suffix}-charlie`);
+			await controller.openAdmittedWorkspace(charlie, `project-${suffix}-charlie`);
 			controller.notifyHostedWorkspaceReady('instance-3');
 			assert.strictEqual(viewFactory.views.length, 3);
 			assert.strictEqual(
@@ -3580,13 +4363,13 @@ suite('ResidentHostedWorkspacesController', () => {
 				const alpha = createWorktree(`${suffix}-alpha`);
 				const blocked = createWorktree(`${suffix}-blocked`);
 				const { controller, viewFactory } = createController();
-				await controller.openWorkspace(alpha, `project-${suffix}`);
+				await controller.openAdmittedWorkspace(alpha, `project-${suffix}`);
 				controller.notifyHostedWorkspaceReady('instance-1');
 				await controller.shutdownAllWorkspaces(reason);
 				const frozenState = structuredClone(controller.getState());
 				const frozenViewCount = viewFactory.views.length;
 
-				await controller.openWorkspace(blocked, 'project-blocked');
+				await controller.openAdmittedWorkspace(blocked, 'project-blocked');
 
 				assert.deepStrictEqual(controller.getState(), frozenState);
 				assert.strictEqual(viewFactory.views.length, frozenViewCount);
@@ -3637,7 +4420,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					ipcMain,
 					viewFactory,
 				} = createController();
-				await controller.openWorkspace(alpha, `project-${suffix}`);
+				await controller.openAdmittedWorkspace(alpha, `project-${suffix}`);
 				controller.notifyHostedWorkspaceReady('instance-1');
 				let releasePreparation: (() => void) | undefined;
 				let preparationCount = 0;
@@ -3725,7 +4508,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				const frozenState = structuredClone(controller.getState());
 				const frozenViewCount = viewFactory.views.length;
 
-				await controller.openWorkspace(blocked, 'project-blocked');
+				await controller.openAdmittedWorkspace(blocked, 'project-blocked');
 
 				assert.deepStrictEqual(controller.getState(), frozenState);
 				assert.strictEqual(viewFactory.views.length, frozenViewCount);
@@ -3793,7 +4576,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			loadUrlPromises: [heldLoad.p],
 		});
 
-		const open = controller.openWorkspace(alpha, 'project-alpha');
+		const open = controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		for (let attempt = 0;
 			attempt < 20 && viewFactory.views.length < 1;
 			attempt++
@@ -3836,7 +4619,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					loadUrlPromises: [heldLoad.p],
 				});
 
-				const open = controller.openWorkspace(
+				const open = controller.openAdmittedWorkspace(
 					alpha,
 					`project-${outcome}`
 				);
@@ -3882,9 +4665,9 @@ suite('ResidentHostedWorkspacesController', () => {
 		const scratch = createWorktree('scratch');
 		const { controller, viewFactory, window } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
-		await controller.retainAndOpenWorkbench(URI.file(scratch));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
 		controller.notifyHostedWorkspaceReady('instance-2');
 		viewFactory.views[1].blurWhenHidden = true;
 		viewFactory.views[1].rawWebContents.focus();
@@ -3915,7 +4698,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			viewFactory,
 		} = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		controller.setProjectsSidebarVisible(false);
 
@@ -3958,7 +4741,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			viewFactory,
 		} = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.setProcessId(2001);
 		viewFactory.views[0].rawWebContents.startNavigation(false, true);
@@ -3978,13 +4761,13 @@ suite('ResidentHostedWorkspacesController', () => {
 			const bravo = createWorktree('bravo');
 			const { controller, window } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			now = 3000;
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 
 			assert.strictEqual(window.config?.omniActiveWorktreePath, alpha);
 			assert.deepStrictEqual(window.config?.omniResidentWorkspaces, [
@@ -4010,13 +4793,13 @@ suite('ResidentHostedWorkspacesController', () => {
 			const charlie = createWorktree('charlie');
 			const { controller, viewFactory, window } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			now = 2000;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			now = 3000;
-			await controller.openWorkspace(charlie, 'project-charlie');
+			await controller.openAdmittedWorkspace(charlie, 'project-charlie');
 			controller.notifyHostedWorkspaceReady('instance-3');
 
 			viewFactory.views[1].rawWebContents.emit('render-process-gone');
@@ -4125,7 +4908,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller, viewFactory, window } = createController();
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const shellWebContents = window.win!.webContents as unknown as
 			TestWebContents;
@@ -4152,7 +4935,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const alpha = createWorktree('alpha');
 			const { controller, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			viewFactory.views[0].rawWebContents.focus();
 
@@ -4169,7 +4952,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const alpha = createWorktree('alpha');
 			const { controller, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 
 			const pasted = controller.triggerPasteInWorkspace();
@@ -4185,7 +4968,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const { controller, viewFactory } = createController();
 		let prevented = false;
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		viewFactory.views[0].rawWebContents.emit('before-input-event', {
 			preventDefault() {
@@ -4215,7 +4998,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				invalidatedHostedShellWebContentsIds,
 			} = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			assert.strictEqual(
 				controller.acquireHostedShellBinding(999),
@@ -4252,7 +5035,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 			} = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const binding = controller.acquireHostedShellBinding(1)!;
 
@@ -4279,16 +5062,49 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		});
 
+	test('appearance cache is bound to the current hosted connection', async () => {
+		const alpha = createWorktree('appearance-alpha');
+		const { controller, viewFactory } = createController();
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		const stale = controller.acquireHostedShellBinding(1)!;
+		const current = controller.acquireHostedShellBinding(1)!;
+		const appearance = {
+			colorScheme: 'hc-dark' as const,
+			workbenchBackground: '#000000',
+			colors: { 'sideBar.background': '#010203' },
+			modernUI: true,
+			modernUIUppercaseViewHeaders: true,
+		};
+
+		assert.strictEqual(
+			controller.publishHostedShellAppearance(stale, appearance),
+			false
+		);
+		assert.strictEqual(
+			controller.publishHostedShellAppearance(current, appearance),
+			true
+		);
+		assert.deepStrictEqual(
+			controller.getState().instances[0].appearance,
+			appearance
+		);
+		assert.deepStrictEqual(
+			viewFactory.views[0].backgroundColors,
+			['#00000000', '#000000']
+		);
+	});
+
 	test('bound paste, screenshot, focus, and action never retarget',
 		async () => {
 			const alpha = createWorktree('alpha');
 			const bravo = createWorktree('bravo');
 			const { controller, viewFactory, window } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const alphaBinding = controller.acquireHostedShellBinding(1)!;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			const bravoBinding = controller.acquireHostedShellBinding(2)!;
 
@@ -4366,11 +5182,11 @@ suite('ResidentHostedWorkspacesController', () => {
 			const bravo = createWorktree('bravo');
 			const { controller, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			controller.acquireHostedShellBinding(1);
 			const alphaBinding = controller.acquireHostedShellBinding(1)!;
-			await controller.openWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			const bravoBinding = controller.acquireHostedShellBinding(2)!;
 			const navigationSnapshot = controller
@@ -4408,9 +5224,19 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('stale hosted shell binding cannot control a reloading view',
 		async () => {
 			const alpha = createWorktree('alpha');
-			const { controller, viewFactory } = createController();
+			const defaultProfile = createProfile('default', [], true);
+			const firstProfile = createProfile('first', [URI.file(alpha)]);
+			const secondProfile = createProfile('second');
+			const {
+				controller,
+				protocolMainService,
+				viewFactory,
+				workspaceProfileOverrides,
+			} = createController({
+				profiles: [defaultProfile, firstProfile, secondProfile],
+			});
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const stale = controller.acquireHostedShellBinding(1)!;
 			viewFactory.views[0].rawWebContents.startNavigation(false, true);
@@ -4422,10 +5248,19 @@ suite('ResidentHostedWorkspacesController', () => {
 				false
 			);
 			const current = controller.acquireHostedShellBinding(1)!;
+			workspaceProfileOverrides.set(
+				URI.file(alpha).toString(),
+				secondProfile
+			);
 			assert.strictEqual(controller.reloadHostedShellSelf(current), true);
 			assert.strictEqual(
 				viewFactory.views[0].rawWebContents.reloadCalls.length,
 				1
+			);
+			assert.strictEqual(
+				(protocolMainService.objectUrls[0]
+					.value as INativeWindowConfiguration).profiles.profile.id,
+				'second'
 			);
 		});
 
@@ -4434,7 +5269,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const alpha = createWorktree('alpha');
 			const { controller, ipcMain, viewFactory } = createController();
 
-			await controller.openWorkspace(alpha, 'project-alpha');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const binding = controller.acquireHostedShellBinding(1)!;
 			const hostedWebContents = viewFactory.views[0].rawWebContents;
@@ -4467,7 +5302,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller } = createController();
 
-		await controller.retainAndOpenWorkbench(URI.file(alpha));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const staleBinding = controller.acquireHostedShellBinding(1)!;
 		controller.acquireHostedShellBinding(1);
@@ -4489,7 +5324,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const alpha = createWorktree('alpha');
 		const { controller } = createController();
 
-		await controller.retainAndOpenWorkbench(URI.file(alpha));
+		await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const binding = controller.acquireHostedShellBinding(1)!;
 
@@ -4507,6 +5342,45 @@ suite('ResidentHostedWorkspacesController', () => {
 		);
 	});
 
+	test('failed standalone transfer recovery recreates a usable hosted owner',
+		async () => {
+			const alpha = createWorktree('transfer-recovery');
+			const { controller } = createController();
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(alpha));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			assert.strictEqual(
+				await controller.closeHostedShellSelf(binding),
+				true
+			);
+			const recovered = await controller.recoverTransferredWorkspace(alpha);
+			assert.ok(recovered);
+			assert.notStrictEqual(recovered.instanceId, 'instance-1');
+			assert.strictEqual(recovered.state, 'loading');
+			assert.deepStrictEqual(
+				controller.getState().retainedWorkbenches?.map(record => ({
+					folderUri: URI.revive(record.folderUri).fsPath,
+					desiredState: record.desiredState,
+				})),
+				[{ folderUri: alpha, desiredState: 'loaded' }]
+			);
+			controller.notifyHostedWorkspaceReady(recovered.instanceId);
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => ({
+					instanceId: instance.instanceId,
+					state: instance.state,
+					worktreePath: instance.worktreePath,
+				})),
+				[{
+					instanceId: recovered.instanceId,
+					state: 'active',
+					worktreePath: alpha,
+				}]
+			);
+		}
+	);
+
 	test('hosted navigation focuses a workbench in another Omni window',
 		async () => {
 			const caller = createWorktree('cross-shell-caller');
@@ -4519,7 +5393,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 			} = createController({ hostedWindowPaths: [target] });
 
-			await controller.openWorkspace(caller, 'project-caller');
+			await controller.openAdmittedWorkspace(caller, 'project-caller');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const binding = controller.acquireHostedShellBinding(1)!;
 
@@ -4553,9 +5427,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 			} = createController();
 
-			await controller.openWorkspace(target, 'project-target');
+			await controller.openAdmittedWorkspace(target, 'project-target');
 			controller.notifyHostedWorkspaceReady('instance-1');
-			await controller.openWorkspace(caller, 'project-caller');
+			await controller.openAdmittedWorkspace(caller, 'project-caller');
 			controller.notifyHostedWorkspaceReady('instance-2');
 			const binding = controller.acquireHostedShellBinding(2)!;
 
@@ -4591,7 +5465,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					HucodeHostedShellOperationOutcome.Superseded,
 			});
 
-			await controller.openWorkspace(caller, 'project-caller');
+			await controller.openAdmittedWorkspace(caller, 'project-caller');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const binding = controller.acquireHostedShellBinding(1)!;
 
@@ -4622,7 +5496,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			viewFactory,
 		} = createController({ normalWindowPaths: [target] });
 
-		await controller.openWorkspace(caller, 'project-caller');
+		await controller.openAdmittedWorkspace(caller, 'project-caller');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const binding = controller.acquireHostedShellBinding(1)!;
 
@@ -4656,10 +5530,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			],
 		});
 
-		await controller.openWorkspace(alpha, 'project-alpha');
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
 		controller.notifyHostedWorkspaceReady('instance-1');
 		const alphaBinding = controller.acquireHostedShellBinding(1)!;
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		controller.notifyHostedWorkspaceReady('instance-2');
 		assert.strictEqual(
 			controller.focusHostedShellSelf(alphaBinding),
@@ -4683,7 +5557,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			}
 		);
 		await Promise.resolve();
-		await controller.openWorkspace(bravo, 'project-bravo');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
 		void heldLoad.complete();
 
 		assert.strictEqual(
@@ -4734,7 +5608,7 @@ suite('ResidentHostedWorkspacesController', () => {
 					}],
 				});
 
-			await controller.openWorkspace(caller, 'project-caller');
+			await controller.openAdmittedWorkspace(caller, 'project-caller');
 			controller.notifyHostedWorkspaceReady('instance-1');
 			const binding = controller.acquireHostedShellBinding(1)!;
 			const navigation = controller.navigateHostedShellToFolder(
@@ -4797,9 +5671,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			}],
 		});
 
-		await controller.openWorkspace(caller, 'project-caller');
+		await controller.openAdmittedWorkspace(caller, 'project-caller');
 		let canApply = true;
-		const open = controller.openWorkspace(
+		const open = controller.openAdmittedWorkspace(
 			target,
 			'project-target',
 			() => true,
@@ -4860,11 +5734,11 @@ suite('ResidentHostedWorkspacesController', () => {
 					deferDestroyedEvents: [false, false, true],
 				});
 
-			await controller.retainAndOpenWorkbench(URI.file(target));
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(target));
 			const targetInstanceId = controller.getState().activeInstanceId;
 			assert.ok(targetInstanceId);
 			controller.notifyHostedWorkspaceReady(targetInstanceId);
-			await controller.openWorkspace(caller, 'project-caller');
+			await controller.openAdmittedWorkspace(caller, 'project-caller');
 			const callerState = controller.getState().instances.find(instance =>
 				instance.worktreePath === caller);
 			assert.ok(callerState?.webContentsId);

@@ -19,6 +19,12 @@ The Projects sidebar combines two related catalogs:
 If an arbitrary workbench later becomes a known project worktree, the project
 record becomes authoritative and Hucode removes the duplicate catalog entry.
 
+The project catalog is global. Every Omni window and serve-web tab sees the
+same saved projects and discovered worktrees. Each Omni session separately
+tracks its active, loaded, dormant, and restored workbench state, so two Omni
+windows can hold different working sets without turning profiles into project
+namespaces.
+
 A common workflow is:
 
 1. Add an existing repository as a project.
@@ -78,6 +84,50 @@ The related actions have deliberately different meanings:
 Hidden loaded workbenches still use memory and processes. Suspend or unload
 them when fast switching is less important than resource use.
 
+## Profiles and Appearance
+
+Each hosted workbench uses normal VS Code profile behavior. On startup it uses
+the profile associated with its folder, or Default when there is no association.
+You can switch that workbench to another profile from the standard Profiles UI;
+the switch updates its settings, keyboard shortcuts, storage, and extensions
+without changing the Omni shell or sibling workbenches.
+
+The Omni shell uses a stable internal Default profile for its own services. It
+does not scope the project catalog, choose hosted-workbench profiles, or grant
+hosted capabilities. Hucode therefore provides one **New Omni Window** action,
+not a profile-specific Omni-window variant. Profile-switching commands and
+shortcuts are routed to the active hosted workbench.
+
+To keep one Omni window visually coherent, the shell follows the active hosted
+workbench's resolved light, dark, or high-contrast colors, including relevant
+color customizations. It also follows the active workbench's Modern UI and
+uppercase-view-header settings. This projection is temporary: it does not
+write the shell profile, alter Settings Sync, or change another workbench. Theme
+IDs, editor token colors, file and product icons, zoom, and display language are
+not projected.
+
+When focus moves to Projects, the shell keeps the last active workbench's
+appearance. It returns to its own fallback appearance after the last hosted
+workbench is removed.
+
+## Live Workbench Ownership
+
+Within one running desktop application, a canonical folder or workspace path
+has at most one live owner across regular windows and hosted workbenches. If an
+Omni action, Quick Pick, file or folder open, or external launch requests an
+already-open path, Hucode focuses the existing regular window or activates the
+exact hosted workbench in its owning Omni window instead of opening a duplicate.
+
+Projects rows use a restrained window indicator when a target is open in
+another Omni window or a regular window. Selecting that row follows the owner.
+Reopening a hosted workbench in a standalone window is an explicit transfer:
+Hucode first completes the hosted unload handshake, then opens and records the
+regular owner. A veto or failed open keeps or restores the hosted owner.
+
+Startup restore is arbitrated globally on desktop. Only one session restores a
+duplicate project claim; a losing retained arbitrary workbench remains in its
+session as unloaded so it can still be selected later.
+
 ## Startup Restoration
 
 `hucode.omni.restoreHostedWorkbenches` controls which previously desired-loaded
@@ -125,8 +175,21 @@ not exist. By default, routes beneath the configured server base path are:
 | `/workbench` | Regular standalone web workbench |
 | `/omni/workbench` | Hosted workbench used by Omni iframes |
 
-Browser limitations still apply. A web shell cannot focus an existing browser
-tab in the same way the desktop app can focus a native view.
+Serve-web workbench ownership is tab-local. Within one Omni tab, normalized
+paths identify one resident workbench, and concurrent opens converge on that
+instance after asynchronous folder checks. The server-backed project catalog
+is still shared, but it does not make hosted renderers or active-workbench
+state global. Path comparison cannot collapse distinct server-side symlink
+aliases, so aliases may produce separate workbenches within one tab.
+
+Different tabs, browser profiles, devices, and origins may therefore host the
+same path independently. Hucode does not use Web Locks, cross-tab messages, or
+server-side leases to activate or exclude another tab.
+
+Hosted-workbench lifecycle and retained-workbench state is stored in the
+top-level tab's browser session. It survives a reload, but one tab cannot
+overwrite another tab's restore intent. A duplicated tab may begin with the
+browser's copied session snapshot and then restore and evolve independently.
 
 ## Current Scope
 

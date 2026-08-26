@@ -16,6 +16,7 @@ import {
 	hasLoadedHostedWorkspace,
 	HostedWorkspaceStateModel,
 	isHostedWorkspaceAvailable,
+	isHostedWorkspaceOwnershipRetained,
 	isHostedWorkspacePendingReady,
 	isHostedWorkspaceRestorable,
 	sortRestoreEntries,
@@ -64,19 +65,27 @@ suite('HostedWorkspaceState', () => {
 		], candidate => candidate.instanceId === 'loaded'), false);
 	});
 
-	test('distinguishes dormant restore state from live availability', () => {
+	test('distinguishes restore snapshots from live path ownership', () => {
 		const dormant = entry('dormant', { state: 'dormant' });
+		const crashed = entry('crashed', { state: 'crashed' });
+		const unloaded = entry('unloaded', { state: 'unloaded' });
 
 		assert.deepStrictEqual({
 			dormantAvailable: isHostedWorkspaceAvailable(dormant),
 			dormantRestorable: isHostedWorkspaceRestorable(dormant),
-			unloadedRestorable: isHostedWorkspaceRestorable(
-				entry('unloaded', { state: 'unloaded' })
-			),
+			dormantOwnsPath: isHostedWorkspaceOwnershipRetained(dormant),
+			crashedRestorable: isHostedWorkspaceRestorable(crashed),
+			crashedOwnsPath: isHostedWorkspaceOwnershipRetained(crashed),
+			unloadedRestorable: isHostedWorkspaceRestorable(unloaded),
+			unloadedOwnsPath: isHostedWorkspaceOwnershipRetained(unloaded),
 		}, {
 			dormantAvailable: false,
 			dormantRestorable: true,
+			dormantOwnsPath: true,
+			crashedRestorable: false,
+			crashedOwnsPath: true,
 			unloadedRestorable: false,
+			unloadedOwnsPath: false,
 		});
 	});
 

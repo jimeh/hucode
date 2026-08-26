@@ -234,6 +234,22 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves
   nothing.
+- Keep the Omni shell on the application Default profile. Desktop-hosted
+  workbench configurations must resolve the ordinary workspace association
+  independently; copying the shell's `profiles.profile` into a child silently
+  makes every hosted workbench use the shell profile.
+- Hosted appearance publication must load Hucode's color registrations before
+  resolving snapshots. Otherwise standard VS Code colors project correctly
+  while `sessionsSidebar.*`, `sessionsPanel.*`, and other Hucode colors remain
+  on the shell profile. Desktop child configurations must also omit the Omni
+  shell's `partsSplash`; keep the native hosted view transparent until its own
+  appearance snapshot supplies the resolved background.
+- Serve-web profile IPC must explicitly revive workspace identifiers after URI
+  transformation because browser-originated URI components can lack `$mid`.
+  Clone profile `workspaces` arrays before `transformOutgoingURIs`; it mutates
+  nested containers and can otherwise replace the server's live `URI` objects.
+  Bootstrap profile associations must map workspace URIs to the remote scheme
+  alongside the profile resource URIs.
 - Native `IProjectManagerService` calls cross a generic `ProxyChannel`, which
   does not support `CancellationToken` method arguments. Keep request tokens
   web-only, or replace the generic proxy with a cancellation-aware channel
@@ -290,6 +306,13 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   cancel restoration without awaiting initialization, and restoration must
   check cancellation after each asynchronous preflight before attaching an
   iframe.
+- Serve-web live workbench ownership is tab-local. `HostedWorkspaceStateModel`
+  and `RetainedWorkbenchCatalog` deduplicate paths within one Omni tab using
+  the server's configured path case semantics, and open paths must re-check
+  the model after asynchronous preflight. Different tabs may host the same
+  path independently. This path-based comparison cannot collapse distinct
+  server-side symlink aliases. Do not add Web Locks, cross-tab messages, or
+  server-side leases unless the product contract changes.
 - The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
   resolves a separate stable `playwright-core`. Build smoke helpers shared by
   desktop and serve-web must use `@playwright/test` consistently; mixing their
@@ -297,6 +320,10 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
 - Shell controller ownership ends when its host fires `onDidClose`, even if a
   later global window-destroy event also arrives. Release on both signals
   idempotently so a closed host cannot retain controller state.
+- `IWindowsMainService.onDidOpenWindow` fires before a `CodeWindow` has loaded
+  its workspace configuration, and `onWillLoadWindow` can still be vetoed.
+  Seed regular-window path ownership from existing configurations, reconcile
+  it on `onDidSignalReadyWindow`, and release it on window destruction.
 - Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
   CDP. Identify them through
   `window.vscode.context.resolveConfiguration()` — their URLs are identical.
@@ -328,3 +355,6 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   per-workbench hosted unload instead. Any future awaited shell-close path must
   add admission guards that reject workbenches opened after its shutdown
   snapshot.
+- Hosted-to-regular desktop transfer reserves the regular owner before calling
+  `windowsMainService.open()`. Keep that nested open marked as already admitted;
+  routing it through regular admission again deadlocks on its own reservation.
