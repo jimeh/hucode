@@ -2,6 +2,18 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.78 - 2026-08-27
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.135.0
+- **migration:** discover VS Code and Cursor profiles (#212)
+
+### Bug Fixes
+
+- **cli:** respect color scheme on serve-web download page (#213)
+- **omni:** preserve sidebar scroll when unloading workbenches (#214)
+
 ## 0.0.77 - 2026-08-24
 
 ### Features
