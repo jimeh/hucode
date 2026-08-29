@@ -24,8 +24,45 @@ suite('EditorMigrationPlanner', () => {
 	test('uses published SHA-256 vectors and canonical object ordering', async () => {
 		assert.strictEqual(canonicalizeEditorMigrationValue({ z: 1, a: { y: 2, x: 3 } }), '{"a":{"x":3,"y":2},"z":1}');
 		assert.strictEqual(canonicalizeEditorMigrationValue({ '\u{10000}': 1, '\uE000': 2 }), '{"\uE000":2,"\u{10000}":1}');
+		assert.strictEqual(canonicalizeEditorMigrationValue({ present: true, omitted: undefined }), '{"present":true}');
 		assert.strictEqual(await fingerprintEditorMigrationValue('abc'), '6cc43f858fbb763301637b5af970e2a46b46f461f27e5a0f41e009c59b827b25');
 		assert.strictEqual(await fingerprintEditorMigrationValue({ b: 2, a: 1 }), await fingerprintEditorMigrationValue({ a: 1, b: 2 }));
+		for (const invalid of [[undefined], { value: () => undefined }, { value: Symbol('invalid') }, { value: BigInt(1) }]) {
+			assert.throws(() => canonicalizeEditorMigrationValue(invalid), /canonical JSON/);
+		}
+	});
+
+	test('drafts and freezes real-shaped source snapshots with undefined optional properties', () => {
+		const fixture = source();
+		const realShapedSource = {
+			...fixture,
+			categories: fixture.categories.map(category => {
+				if (category.category === 'snippets') {
+					return { ...category, state: 'absent' as const, value: undefined };
+				}
+				if (category.category === 'extensions') {
+					return {
+						...category,
+						value: category.value?.map(extension => ({
+							...extension,
+							uuid: undefined,
+							preRelease: extension.preRelease,
+							hasPreReleaseVersion: undefined,
+						})),
+					};
+				}
+				return category;
+			}),
+		} satisfies EditorMigrationSourceSnapshot;
+
+		const draft = createEditorMigrationPlanDraft(realShapedSource, target(), evidence());
+
+		assert.ok(Object.isFrozen(draft));
+		assert.ok(Object.isFrozen(draft.source));
+		assert.strictEqual(Object.keys(draft.source.categories.find(category => category.category === 'snippets')!).includes('value'), false);
+		const extension = draft.source.categories.find(category => category.category === 'extensions')?.value?.[0];
+		assert.strictEqual(extension && Object.keys(extension).includes('uuid'), false);
+		assert.strictEqual(extension && Object.keys(extension).includes('hasPreReleaseVersion'), false);
 	});
 
 	test('assigns every static and registry settings exclusion reason', () => {
@@ -157,19 +194,22 @@ suite('EditorMigrationPlanner', () => {
 	});
 
 	test('parses current and legacy extension manifests without retaining mutable metadata', () => {
+		const metadataUuid = '11111111-1111-4111-8111-111111111111';
+		const identifierUuid = '22222222-2222-4222-8222-222222222222';
 		const parsed = parseEditorMigrationExtensionManifest(JSON.stringify({
 			extensions: [
-				{ identifier: { id: 'Pub.One', uuid: 'uuid' }, version: '1.0.0', metadata: { preRelease: true, isApplicationScoped: true }, location: { path: '/private' } },
+				{ identifier: { id: 'Pub.One', uuid: identifierUuid }, version: '1.0.0', metadata: { id: metadataUuid, preRelease: true, isApplicationScoped: true }, location: { path: '/private' } },
 				{ id: 'pub.two', version: '2.0.0', applicationScoped: false },
 			]
 		}));
 		assert.deepStrictEqual(parsed, [
-			{ id: 'pub.one', uuid: 'uuid', version: '1.0.0', preRelease: true, applicationScoped: true },
+			{ id: 'pub.one', uuid: metadataUuid, version: '1.0.0', preRelease: true, applicationScoped: true },
 			{ id: 'pub.two', version: '2.0.0', applicationScoped: false },
 		]);
 		assert.deepStrictEqual(effectiveEditorMigrationExtensions([parsed[1]], parsed), [parsed[0], parsed[1]]);
 		assert.throws(() => parseEditorMigrationExtensionManifest('{'), /malformed JSON/);
 		assert.throws(() => parseEditorMigrationExtensionManifest('[{"id":"bad","version":"1"}]'), /invalid identity/);
+		assert.throws(() => parseEditorMigrationExtensionManifest('[{"id":"pub.bad","version":"1","metadata":{"id":"not-a-uuid"}}]'), /invalid UUID/);
 	});
 
 	test('selects duplicate extension versions with semver and deterministic codepoint fallback', () => {

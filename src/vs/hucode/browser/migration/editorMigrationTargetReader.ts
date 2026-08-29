@@ -189,7 +189,7 @@ export class EditorMigrationTargetReader {
 			throwIfCancelled(token);
 			const raw = await this.readStableFile(joinPath(resource, child.name), FILE_MAX_BYTES, token);
 			if (!raw) {
-				continue;
+				throw new EditorMigrationPlanningError('resourceUnavailable', `Target snippet '${child.name}' disappeared during planning read`);
 			}
 			totalBytes += raw.bytes;
 			if (totalBytes > SNIPPETS_MAX_BYTES) {
@@ -201,11 +201,23 @@ export class EditorMigrationTargetReader {
 			}
 			snippets.push({ name: child.name, contents: contents as Record<string, EditorMigrationJsonValue>, contentHash: raw.hash });
 		}
+		let after;
+		try {
+			after = await this.fileService.stat(resource);
+		} catch (error) {
+			throw new EditorMigrationPlanningError('resourceUnavailable', 'Target snippets changed during planning read');
+		}
+		if (directory.etag !== after.etag || directory.mtime !== after.mtime || directory.size !== after.size) {
+			throw new EditorMigrationPlanningError('resourceUnavailable', 'Target snippets changed during planning read');
+		}
+		if (snippets.length === 0) {
+			return { category: 'snippets', ownership: inherited ? 'default' : 'target', ownerProfileId, state: 'absent', contentHash: await absentHash('snippets'), value: [] };
+		}
 		return {
 			category: 'snippets',
 			ownership: inherited ? 'default' : 'target',
 			ownerProfileId,
-			state: snippets.length ? 'present' : 'absent',
+			state: 'present',
 			contentHash: await fingerprintEditorMigrationValue(snippets.map(snippet => ({ name: snippet.name, contentHash: snippet.contentHash }))),
 			value: snippets,
 		};

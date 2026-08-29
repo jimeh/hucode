@@ -111,6 +111,10 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 			if (error instanceof CancellationError) {
 				throw error;
 			}
+			if (plan.target.selection.kind === 'existing' && error instanceof EditorMigrationPlanningError
+				&& (error.code === 'targetNotFound' || error.code === 'ineligibleTarget')) {
+				return { status: 'unavailable', reasons: ['profileCatalogChanged'] };
+			}
 			return { status: 'unavailable', reasons: [plan.target.selection.kind === 'proposed' ? 'proposedNameChanged' : 'targetContentChanged'] };
 		}
 		if (currentTarget.catalogFingerprint !== plan.target.catalogFingerprint) {
@@ -158,11 +162,14 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 		if (await fingerprintEditorMigrationValue(plan.choices) !== plan.fingerprints.choices) {
 			reasons.add('choicesChanged');
 		}
-		if (await fingerprintEditorMigrationValue(editorMigrationGalleryEvidence(currentEvidence, selectedCategories)) !== plan.fingerprints.gallery) {
+		const reviewedGallery = editorMigrationGalleryEvidence(plan.evidence, selectedCategories);
+		const currentGallery = editorMigrationGalleryEvidence(currentEvidence, selectedCategories);
+		if (await fingerprintEditorMigrationValue(reviewedGallery) !== plan.fingerprints.gallery
+			|| galleryClassificationChanged(reviewedGallery, currentGallery)) {
 			reasons.add('galleryChanged');
 		}
 		try {
-			if (!await this.verifyExactGallery(editorMigrationGalleryEvidence(plan.evidence, selectedCategories), currentTarget, token)) {
+			if (!await this.verifyExactGallery(reviewedGallery, currentTarget, token)) {
 				reasons.add('galleryChanged');
 			}
 		} catch (error) {
@@ -282,7 +289,14 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 				productVersion,
 				targetPlatform,
 			}, token))[0];
-			if (!exact || exact.version !== result.version || exact.properties.targetPlatform !== result.targetPlatform
+			if (!exact
+				|| exact.identifier.id.toLowerCase() !== result.id.toLowerCase()
+				|| normalizeOptionalIdentity(exact.identifier.uuid) !== normalizeOptionalIdentity(result.uuid)
+				|| exact.version !== result.version
+				|| exact.properties.targetPlatform !== result.targetPlatform
+				|| (exact.properties.isPreReleaseVersion === true ? 'preRelease' : 'stable') !== result.selectedChannel
+				|| (exact.properties.engine ?? '*') !== result.engine
+				|| result.galleryIdentity !== target.environment.galleryIdentity
 				|| !await this.extensionGalleryService.isExtensionCompatible(exact, result.selectedChannel === 'preRelease', targetPlatform, productVersion)) {
 				return false;
 			}
@@ -301,6 +315,24 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 			policyVersion: EDITOR_MIGRATION_POLICY_VERSION,
 		};
 	}
+}
+
+function galleryClassificationChanged(reviewed: readonly EditorMigrationGalleryResult[], current: readonly EditorMigrationGalleryResult[]): boolean {
+	const currentById = new Map(current.map(result => [result.id.toLowerCase(), result]));
+	for (const result of reviewed) {
+		if (result.status === 'available') {
+			continue;
+		}
+		const currentResult = currentById.get(result.id.toLowerCase());
+		if (!currentResult || currentResult.requestedChannel !== result.requestedChannel || currentResult.status !== result.status) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function normalizeOptionalIdentity(value: string | undefined): string | undefined {
+	return value?.toLowerCase();
 }
 
 function deduplicateSourceExtensions<T extends { readonly id: string }>(extensions: readonly T[]): T[] {

@@ -29,6 +29,9 @@ import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot, 
 import { EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationPlanningError, EditorMigrationReviewedPlan, EditorMigrationTargetEnvironment, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
 
 const ROOT = URI.file('editor-migration-target-tests').with({ scheme: 'hucode-target-test' });
+const FIRST_UUID = '11111111-1111-4111-8111-111111111111';
+const SECOND_UUID = '22222222-2222-4222-8222-222222222222';
+const THIRD_UUID = '33333333-3333-4333-8333-333333333333';
 const environment: EditorMigrationTargetEnvironment = {
 	targetPlatform: 'linux-x64',
 	productVersion: '1.100.0',
@@ -146,10 +149,13 @@ suite('EditorMigrationTargetReader', () => {
 
 	test('parses extension manifests directly and ignores metadata-only rewrites semantically', async () => {
 		const profile = await profilesService.createNamedProfile('Extensions');
-		const firstManifest = [{ identifier: { id: 'Pub.One', uuid: 'uuid' }, version: '1.2.3', metadata: { preRelease: false }, location: { path: '/first' } }];
+		const firstManifest = [{ identifier: { id: 'Pub.One', uuid: SECOND_UUID }, version: '1.2.3', metadata: { id: FIRST_UUID, preRelease: false }, location: { path: '/first' } }];
 		await fileService.writeFile(profile.extensionsResource, VSBuffer.fromString(JSON.stringify(firstManifest)));
 		const reader = new EditorMigrationTargetReader(fileService, profilesService);
 		const first = await reader.inspect({ kind: 'existing', profileId: profile.id }, ['extensions'], environment, [], CancellationToken.None);
+		const firstExtensions = first.categories[0];
+		assert.ok(firstExtensions?.category === 'extensions');
+		assert.strictEqual(firstExtensions.value?.[0]?.uuid, FIRST_UUID);
 
 		firstManifest[0].location.path = '/metadata-only-rewrite';
 		await fileService.writeFile(profile.extensionsResource, VSBuffer.fromString(JSON.stringify(firstManifest)));
@@ -158,6 +164,93 @@ suite('EditorMigrationTargetReader', () => {
 		assert.notStrictEqual(first.categories[0].contentHash, second.categories[0].contentHash);
 		assert.strictEqual(first.categories[0].semanticHash, second.categories[0].semanticHash);
 		assert.strictEqual(first.fingerprint, second.fingerprint);
+
+		firstManifest[0].metadata.id = THIRD_UUID;
+		await fileService.writeFile(profile.extensionsResource, VSBuffer.fromString(JSON.stringify(firstManifest)));
+		const uuidDrift = await reader.inspect({ kind: 'existing', profileId: profile.id }, ['extensions'], environment, [], CancellationToken.None);
+		assert.notStrictEqual(uuidDrift.categories[0].semanticHash, second.categories[0].semanticHash);
+		assert.notStrictEqual(uuidDrift.fingerprint, second.fingerprint);
+	});
+
+	test('reads effective named and inherited Default extension membership', async () => {
+		await fileService.writeFile(profilesService.defaultProfile.extensionsResource, VSBuffer.fromString(JSON.stringify([
+			{ id: 'pub.application', version: '1.0.0', metadata: { id: FIRST_UUID, isApplicationScoped: true } },
+			{ id: 'pub.default-only', version: '1.0.0', metadata: { id: SECOND_UUID } },
+		])));
+		const named = await profilesService.createNamedProfile('Named extensions');
+		await fileService.writeFile(named.extensionsResource, VSBuffer.fromString(JSON.stringify([
+			{ id: 'pub.named', version: '1.0.0', metadata: { id: THIRD_UUID } },
+		])));
+		const inherited = await profilesService.createNamedProfile('Inherited extensions', { useDefaultFlags: { extensions: true } });
+		const reader = new EditorMigrationTargetReader(fileService, profilesService);
+
+		const namedSnapshot = await reader.inspect({ kind: 'existing', profileId: named.id }, ['extensions'], environment, [], CancellationToken.None);
+		const inheritedSnapshot = await reader.inspect({ kind: 'existing', profileId: inherited.id }, ['extensions'], environment, [], CancellationToken.None);
+		const namedExtensions = namedSnapshot.categories[0];
+		const inheritedExtensions = inheritedSnapshot.categories[0];
+
+		assert.ok(namedExtensions?.category === 'extensions');
+		assert.deepStrictEqual(namedExtensions.value?.map(extension => extension.id), ['pub.application', 'pub.named']);
+		assert.ok(inheritedExtensions?.category === 'extensions');
+		assert.deepStrictEqual([inheritedExtensions.ownership, inheritedExtensions.ownerProfileId], ['default', profilesService.defaultProfile.id]);
+		assert.deepStrictEqual(inheritedExtensions.value?.map(extension => extension.id), ['pub.application', 'pub.default-only']);
+	});
+
+	test('canonicalizes absent snippets and rejects disappearing or changing directories', async () => {
+		const profile = await profilesService.createNamedProfile('Snippets');
+		const reader = new EditorMigrationTargetReader(fileService, profilesService);
+		const missing = await reader.inspect({ kind: 'existing', profileId: profile.id }, ['snippets'], environment, [], CancellationToken.None);
+		await fileService.createFolder(profile.snippetsHome);
+		const empty = await reader.inspect({ kind: 'existing', profileId: profile.id }, ['snippets'], environment, [], CancellationToken.None);
+
+		assert.deepStrictEqual([missing.categories[0].state, empty.categories[0].state], ['absent', 'absent']);
+		assert.strictEqual(empty.categories[0].contentHash, missing.categories[0].contentHash);
+
+		const snippetResource = joinPath(profile.snippetsHome, 'typescript.json');
+		await fileService.writeFile(snippetResource, VSBuffer.fromString('{"Log":{"prefix":"log","body":["console.log($1)"]}}'));
+		const nonEmpty = await reader.inspect({ kind: 'existing', profileId: profile.id }, ['snippets'], environment, [], CancellationToken.None);
+		const nonEmptySnippets = nonEmpty.categories[0];
+		assert.ok(nonEmptySnippets?.category === 'snippets');
+		assert.strictEqual(nonEmptySnippets.state, 'present');
+		assert.deepStrictEqual(nonEmptySnippets.value?.map(snippet => snippet.name), ['typescript.json']);
+
+		let removed = false;
+		const disappearingFiles = new Proxy(fileService, {
+			get(target, property, receiver) {
+				if (property === 'resolve') {
+					return async (resource: URI) => {
+						const result = await target.resolve(resource);
+						if (!removed && resource.toString() === profile.snippetsHome.toString()) {
+							removed = true;
+							await target.del(snippetResource);
+						}
+						return result;
+					};
+				}
+				return Reflect.get(target, property, receiver);
+			},
+		});
+		await assert.rejects(
+			() => new EditorMigrationTargetReader(disappearingFiles, profilesService).inspect({ kind: 'existing', profileId: profile.id }, ['snippets'], environment, [], CancellationToken.None),
+			(error: unknown) => error instanceof EditorMigrationPlanningError && error.code === 'resourceUnavailable' && /disappeared/.test(error.message),
+		);
+
+		await fileService.writeFile(snippetResource, VSBuffer.fromString('{}'));
+		const changingDirectoryFiles = new Proxy(fileService, {
+			get(target, property, receiver) {
+				if (property === 'stat') {
+					return async (resource: URI) => {
+						const stat = await target.stat(resource);
+						return resource.toString() === profile.snippetsHome.toString() ? { ...stat, mtime: stat.mtime + 1 } : stat;
+					};
+				}
+				return Reflect.get(target, property, receiver);
+			},
+		});
+		await assert.rejects(
+			() => new EditorMigrationTargetReader(changingDirectoryFiles, profilesService).inspect({ kind: 'existing', profileId: profile.id }, ['snippets'], environment, [], CancellationToken.None),
+			(error: unknown) => error instanceof EditorMigrationPlanningError && error.code === 'resourceUnavailable' && /snippets changed/.test(error.message),
+		);
 	});
 
 	test('rejects malformed manifests, changing resources, and cancellation', async () => {
@@ -382,21 +475,54 @@ suite('EditorMigrationTargetReader', () => {
 		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unavailable', reasons: ['sourceUnavailable'] });
 	});
 
-	test('reports compact and exact-coordinate gallery drift', async () => {
-		let available = true;
-		const extension = {
+	test('maps target eligibility drift separately from target resource failures', async () => {
+		const source = settingsSourceSnapshot('source-content');
+		const target = settingsTarget(profilesService.defaultProfile.id, 'target-content');
+		const service = new EditorMigrationPlanningService(
+			fileService,
+			mutationRejectingProxy(profilesService, []),
+			{ scanSystemExtensions: async () => [] } as unknown as IExtensionsScannerService,
+			{ isEnabled: () => true } as unknown as IExtensionGalleryService,
+			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
+			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
+			{ readSourceProfile: async () => source } as unknown as IEditorMigrationSourceService,
+		);
+		service.inspectTarget = async () => target;
+		const draft = await service.createDraftFromCurrentEvidence(source, target, CancellationToken.None);
+		const plan = await service.acceptDraft(draft, {
+			selectedCategories: ['settings'],
+			decisions: draft.decisions.filter(decision => decision.kind === 'conflict').map(decision => ({ id: decision.id, choice: 'preserveTarget' })),
+		});
+
+		for (const code of ['targetNotFound', 'ineligibleTarget'] as const) {
+			service.inspectTarget = async () => { throw new EditorMigrationPlanningError(code, code); };
+			assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unavailable', reasons: ['profileCatalogChanged'] });
+		}
+		for (const code of ['resourceUnavailable', 'invalidExtensionManifest'] as const) {
+			service.inspectTarget = async () => { throw new EditorMigrationPlanningError(code, code); };
+			assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unavailable', reasons: ['targetContentChanged'] });
+		}
+	});
+
+	test('keeps a reviewed exact gallery coordinate valid when latest advances', async () => {
+		let latestVersion = '1.0.0';
+		let exactAvailable = true;
+		const extension = (version: string) => ({
 			type: 'gallery',
 			identifier: { id: 'pub.available', uuid: 'gallery-uuid' },
-			version: '2.0.0',
+			version,
 			properties: { targetPlatform: TargetPlatform.LINUX_X64, isPreReleaseVersion: false, engine: '^1.100.0' },
-		} as unknown as IGalleryExtension;
+		} as unknown as IGalleryExtension);
 		const target = emptyExtensionTarget(profilesService.defaultProfile.id);
 		const source = sourceSnapshot();
 		const gallery = {
 			isEnabled: () => true,
-			getExtensions: async () => available ? [extension] : [],
-			getCompatibleExtension: async () => available ? extension : null,
-			isExtensionCompatible: async () => available,
+			getExtensions: async (queries: readonly IExtensionInfo[]) => {
+				const requestedVersion = queries[0].version;
+				return requestedVersion ? exactAvailable ? [extension(requestedVersion)] : [] : [extension(latestVersion)];
+			},
+			getCompatibleExtension: async (candidate: IGalleryExtension) => candidate,
+			isExtensionCompatible: async () => true,
 		} as unknown as IExtensionGalleryService;
 		const service = new EditorMigrationPlanningService(
 			fileService,
@@ -412,7 +538,43 @@ suite('EditorMigrationTargetReader', () => {
 		const plan = await service.acceptDraft(draft, { selectedCategories: ['extensions'], decisions: [] });
 
 		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unchanged', reasons: [] });
-		available = false;
+		latestVersion = '2.0.0';
+		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unchanged', reasons: [] });
+		exactAvailable = false;
+		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'changed', reasons: ['galleryChanged'] });
+	});
+
+	test('reopens review when compact unavailable evidence is reclassified', async () => {
+		let available = false;
+		const extension = {
+			type: 'gallery',
+			identifier: { id: 'pub.available', uuid: 'gallery-uuid' },
+			version: '1.0.0',
+			properties: { targetPlatform: TargetPlatform.LINUX_X64, isPreReleaseVersion: false, engine: '^1.100.0' },
+		} as unknown as IGalleryExtension;
+		const target = emptyExtensionTarget(profilesService.defaultProfile.id);
+		const source = sourceSnapshot();
+		const gallery = {
+			isEnabled: () => true,
+			getExtensions: async () => available ? [extension] : [],
+			getCompatibleExtension: async () => available ? extension : null,
+			isExtensionCompatible: async () => true,
+		} as unknown as IExtensionGalleryService;
+		const service = new EditorMigrationPlanningService(
+			fileService,
+			mutationRejectingProxy(profilesService, []),
+			{ scanSystemExtensions: async () => [] } as unknown as IExtensionsScannerService,
+			gallery,
+			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
+			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
+			{ readSourceProfile: async () => source } as unknown as IEditorMigrationSourceService,
+		);
+		service.inspectTarget = async () => target;
+		const draft = await service.createDraftFromCurrentEvidence(source, target, CancellationToken.None);
+		const plan = await service.acceptDraft(draft, { selectedCategories: ['extensions'], decisions: [] });
+
+		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'unchanged', reasons: [] });
+		available = true;
 		assert.deepStrictEqual(await service.verifyPlan(plan, CancellationToken.None), { status: 'changed', reasons: ['galleryChanged'] });
 	});
 });

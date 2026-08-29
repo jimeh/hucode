@@ -40,7 +40,10 @@ function normalize(value: unknown): unknown {
 		const result: Record<string, unknown> = {};
 		for (const key of Object.keys(value).sort(compareEditorMigrationCodePoints)) {
 			const item = (value as Record<string, unknown>)[key];
-			if (item === undefined || typeof item === 'function' || typeof item === 'symbol' || typeof item === 'bigint') {
+			if (item === undefined) {
+				continue;
+			}
+			if (typeof item === 'function' || typeof item === 'symbol' || typeof item === 'bigint') {
 				throw new EditorMigrationPlanningError('nonCanonicalInput', `Migration planning value '${key}' is not canonical JSON`);
 			}
 			result[key] = normalize(item);

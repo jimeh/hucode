@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as semver from '../../../base/common/semver/semver.js';
+import { isUUID } from '../../../base/common/uuid.js';
 import { EditorMigrationPlanningError, EditorMigrationTargetExtension } from './editorMigrationPlanning.js';
 import { canonicalizeEditorMigrationValue, compareEditorMigrationCodePoints as compare } from './editorMigrationPlanningCanonical.js';
 
@@ -32,9 +33,13 @@ export function parseEditorMigrationExtensionManifest(contents: string): readonl
 		}
 		const normalizedId = id.toLowerCase();
 		const metadata = isObject(entry.metadata) ? entry.metadata : undefined;
+		const uuid = metadata?.id ?? identifier?.uuid;
+		if (uuid !== undefined && (typeof uuid !== 'string' || !isUUID(uuid))) {
+			throw new EditorMigrationPlanningError('invalidExtensionManifest', 'Target extension manifest contains an invalid UUID');
+		}
 		const parsed: EditorMigrationTargetExtension = {
 			id: normalizedId,
-			...(typeof identifier?.uuid === 'string' ? { uuid: identifier.uuid } : {}),
+			...(typeof uuid === 'string' ? { uuid: uuid.toLowerCase() } : {}),
 			version,
 			...(typeof metadata?.preRelease === 'boolean' ? { preRelease: metadata.preRelease } : {}),
 			...(typeof metadata?.hasPreReleaseVersion === 'boolean' ? { hasPreReleaseVersion: metadata.hasPreReleaseVersion } : {}),
