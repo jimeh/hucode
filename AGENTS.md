@@ -370,3 +370,7 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
 - Hosted-to-regular desktop transfer reserves the regular owner before calling
   `windowsMainService.open()`. Keep that nested open marked as already admitted;
   routing it through regular admission again deadlocks on its own reservation.
+- `IFileService.stat()` can propagate a provider-level `FileSystemProviderError`
+  instead of wrapping it in `FileOperationError`. Read-only migration readers
+  that distinguish absent resources must classify both through
+  `toFileOperationResult()`.
