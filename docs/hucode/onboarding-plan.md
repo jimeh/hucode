@@ -33,8 +33,10 @@ adapters without choosing a web migration contract now.
   after onboarding but do not occupy a main step.
 - Full onboarding completion belongs to the Hucode user-data installation, not
   to a profile.
-- Each import names exactly one ordinary target profile. The Omni shell's
-  internal profile is never a target or a user-facing choice.
+- Each import names exactly one explicit target: Default, an existing ordinary
+  named profile, or a proposed new ordinary profile. Omni continues using
+  Default for its shell services, but the target is never inferred from the
+  current Omni window.
 - The first automatic source adapters cover Visual Studio Code, Visual Studio
   Code Insiders, and Cursor. Later editors get separate adapter work after the
   initial contract is proven.
@@ -62,9 +64,12 @@ adapters without choosing a web migration contract now.
 
 ### Omni profiles
 
-The Omni shell uses a stable internal profile to bootstrap shell services.
+The Omni shell uses the application Default profile to bootstrap shell services.
 Hosted workbenches use ordinary VS Code workspace-profile associations and may
-switch profiles independently. The projects catalog is global.
+switch profiles independently. The projects catalog is global. Importing into
+Default can therefore change settings and keybindings backing the live shell;
+Review must make that effect visible without treating the shell as target
+intent.
 
 Onboarding therefore has two separate state concerns:
 

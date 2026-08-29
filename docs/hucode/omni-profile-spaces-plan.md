@@ -37,8 +37,8 @@ path has at most one live workbench owner. Opening an already-owned path focuses
 the owning regular window or Omni window and, for an Omni owner, activates the
 relevant hosted workbench.
 
-The Omni shell retains a stable internal profile for its own services. That
-profile is not user-facing and does not determine project visibility or hosted
+The Omni shell retains the application Default profile for its own services.
+That bootstrap choice does not determine project visibility or hosted
 workbench profiles. The shell projects the active hosted workbench's resolved
 color theme and Modern UI presentation so the whole native window reads as one
 coherent interface.
@@ -53,7 +53,8 @@ This plan covers:
 - focus-or-open routing for every folder and workspace ingress;
 - deterministic restoration when multiple sessions claim the same path;
 - ordinary, independently switchable profiles in hosted workbenches;
-- a fixed internal shell profile with no profile-specific Omni-window action;
+- a fixed Default-backed shell profile with no profile-specific Omni-window
+  action;
 - active-workbench color-theme and Modern UI projection into the shell;
 - desktop ownership and serve-web tab-local behavior;
 - disposition of the implementation in PR #193; and
@@ -62,7 +63,7 @@ This plan covers:
 This plan does not cover:
 
 - profile-scoped project catalogs;
-- switching the Omni shell's internal profile in place;
+- switching the Omni shell's bootstrap profile in place;
 - a user-visible dedicated Omni profile;
 - synchronizing Omni session state through Settings Sync;
 - copying a hosted workbench's settings into the shell;
@@ -88,8 +89,8 @@ This plan does not cover:
   is local to one Omni tab.
 - **Ownership reservation**: a desktop short-lived claim held while a
   workbench is being created, restored, transferred, or recovered.
-- **Shell profile**: the stable internal profile used to bootstrap the Omni
-  shell's own workbench services. It is an implementation detail.
+- **Shell profile**: the application Default profile used to bootstrap the Omni
+  shell's own workbench services. It does not choose hosted profiles.
 - **Appearance snapshot**: the resolved active color scheme, registered theme
   colors, and Modern UI flags published by a hosted workbench to its shell.
 
@@ -335,9 +336,9 @@ profiles within one application process.
 
 ### Shell profile
 
-Launch each Omni shell with one stable internal profile. Prefer the existing
-default-profile bootstrap unless runtime characterization shows a separate
-internal profile is required to keep shell-only settings isolated.
+Launch each Omni shell with the application Default profile. Keep that existing
+bootstrap unless runtime characterization demonstrates a concrete isolation
+failure that justifies a separate shell-profile lifecycle.
 
 The shell profile has deliberately narrow authority:
 
@@ -747,6 +748,7 @@ choice in its PR:
 3. Which existing shell parts require programmatic style refresh in addition
    to CSS variable replacement? Inventory this from runtime evidence before
    finalizing the appearance snapshot's color set.
-4. Does the current default-profile bootstrap isolate shell-only settings well
-   enough, or should Hucode create an internal shell profile? The profile must
-   remain invisible and must not acquire product authority either way.
+4. Does runtime characterization reveal a concrete isolation failure in the
+   Default-backed shell? Only such evidence should reopen a separate hidden
+   shell-profile design, which would require its own lifecycle and authority
+   analysis.
