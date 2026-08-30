@@ -423,10 +423,12 @@ export function toEditorMigrationTelemetry(input: EditorMigrationTelemetryInput)
 	});
 }
 
+/** Normalizes publishers into a sorted, case-insensitive set. */
 function canonicalPublishers(publishers: readonly string[]): readonly string[] {
 	return [...new Set(publishers.map(publisher => publisher.trim().toLowerCase()).filter(Boolean))].sort();
 }
 
+/** Extracts the publisher segment from a canonical extension identifier. */
 function publisherFromExtensionId(id: string): string {
 	const separator = id.indexOf('.');
 	if (separator <= 0) {
@@ -435,16 +437,19 @@ function publisherFromExtensionId(id: string): string {
 	return id.slice(0, separator);
 }
 
+/** Compares two already-canonical string sequences for exact equality. */
 function equalStrings(left: readonly string[], right: readonly string[]): boolean {
 	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+/** Infers indentation and line-ending preferences from existing JSONC content. */
 function formatting(contents: string): { readonly tabSize: number; readonly insertSpaces: boolean; readonly eol: string } {
 	const eol = contents.includes('\r\n') ? '\r\n' : '\n';
 	const indentation = /(?:^|\r?\n)([ \t]+)["{/]/.exec(contents)?.[1] ?? '\t';
 	return { tabSize: indentation[0] === '\t' ? 4 : indentation.length, insertSpaces: indentation[0] !== '\t', eol };
 }
 
+/** Narrows an unknown value to a JSON object. */
 function isJsonObject(value: unknown): value is Readonly<Record<string, import('./editorMigrationSource.js').EditorMigrationJsonValue>> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

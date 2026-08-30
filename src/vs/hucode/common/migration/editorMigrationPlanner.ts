@@ -387,10 +387,12 @@ function toOperation(decision: EditorMigrationDraftDecision): EditorMigrationPla
 	}
 }
 
+/** Narrows a migration JSON value to an object. */
 function isJsonObject(value: EditorMigrationJsonValue): value is Readonly<Record<string, EditorMigrationJsonValue>> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Checks whether gallery evidence identifies an exact installable extension coordinate. */
 function isAvailableGalleryResult(value: EditorMigrationJsonValue): value is Extract<EditorMigrationGalleryResult, { readonly status: 'available' }> {
 	return isJsonObject(value)
 		&& typeof value.id === 'string'
