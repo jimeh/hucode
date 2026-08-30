@@ -8,7 +8,7 @@ import { applyEdits, setProperty } from '../../../base/common/jsonEdit.js';
 import { parse } from '../../../base/common/json.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
-import { EditorMigrationCategory } from './editorMigrationSource.js';
+import { EditorMigrationCategory, EditorMigrationJsonValue } from './editorMigrationSource.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanningEvidence, EditorMigrationReviewedPlan, EditorMigrationKeybindingOperation, EditorMigrationSetSettingOperation } from './editorMigrationPlanning.js';
 import { canonicalizeEditorMigrationValue, fingerprintEditorMigrationValue } from './editorMigrationPlanningCanonical.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft, editorMigrationKeybindingRowId } from './editorMigrationPlanner.js';
@@ -407,20 +407,31 @@ export interface EditorMigrationTelemetryInput {
 	readonly durationMs: number;
 }
 
+/** Exact telemetry-safe Apply event payload. */
+export interface EditorMigrationTelemetryPayload {
+	readonly operationSchemaVersion: number;
+	readonly planningSchemaVersion: number;
+	readonly aggregateOutcome: EditorMigrationAggregateOutcome;
+	readonly phase: string;
+	readonly outcomeCounts: Readonly<Partial<Record<EditorMigrationItemOutcome, number>>>;
+	readonly durationBucket: 'underMinute' | 'underFiveMinutes' | 'fiveMinutesOrMore';
+}
+
 /** Builds the intentionally closed telemetry payload. */
-export function toEditorMigrationTelemetry(input: EditorMigrationTelemetryInput): unknown {
+export function toEditorMigrationTelemetry(input: EditorMigrationTelemetryInput): EditorMigrationTelemetryPayload {
 	const outcomeCounts: Partial<Record<EditorMigrationItemOutcome, number>> = {};
 	for (const outcome of input.outcomes) {
 		outcomeCounts[outcome] = (outcomeCounts[outcome] ?? 0) + 1;
 	}
-	return Object.freeze({
+	const payload: EditorMigrationTelemetryPayload = {
 		operationSchemaVersion: input.operationSchemaVersion,
 		planningSchemaVersion: input.planningSchemaVersion,
 		aggregateOutcome: input.aggregateOutcome,
 		phase: input.phase,
 		outcomeCounts,
 		durationBucket: input.durationMs < 60_000 ? 'underMinute' : input.durationMs < 5 * 60_000 ? 'underFiveMinutes' : 'fiveMinutesOrMore',
-	});
+	};
+	return Object.freeze(payload);
 }
 
 /** Normalizes publishers into a sorted, case-insensitive set. */
@@ -450,6 +461,6 @@ function formatting(contents: string): { readonly tabSize: number; readonly inse
 }
 
 /** Narrows an unknown value to a JSON object. */
-function isJsonObject(value: unknown): value is Readonly<Record<string, import('./editorMigrationSource.js').EditorMigrationJsonValue>> {
+function isJsonObject(value: unknown): value is Readonly<Record<string, EditorMigrationJsonValue>> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -77,8 +77,17 @@ export class EditorMigrationOperationStore {
 		}
 		const result: EditorMigrationOperationSummary[] = [];
 		for (const child of children.filter(child => child.isDirectory).sort((a, b) => a.name.localeCompare(b.name))) {
+			let contents: string;
 			try {
-				const raw = JSON.parse((await this.fileService.readFile(joinPath(child.resource, 'operation.json'), { atomic: true })).value.toString()) as Partial<EditorMigrationOperation>;
+				contents = (await this.fileService.readFile(joinPath(child.resource, 'operation.json'), { atomic: true })).value.toString();
+			} catch (error) {
+				if (toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND) {
+					continue;
+				}
+				throw error;
+			}
+			try {
+				const raw = JSON.parse(contents) as Partial<EditorMigrationOperation>;
 				if (raw.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION) {
 					result.push({ id: child.name, stage: 'admitted', createdAt: 0, updatedAt: 0, recoverable: false, unsupportedSchemaVersion: typeof raw.schemaVersion === 'number' ? raw.schemaVersion : -1 });
 					continue;

@@ -9,7 +9,7 @@ import { joinPath } from '../../../base/common/resources.js';
 import { URI } from '../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { FileService } from '../../../platform/files/common/fileService.js';
-import { FileSystemProviderCapabilities } from '../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderCapabilities, FileSystemProviderErrorCode } from '../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
@@ -24,11 +24,12 @@ const ROOT = URI.from({ scheme: 'hucode-migration-store-test', path: '/User' });
 suite('EditorMigrationOperationStore', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let fileService: FileService;
+	let provider: AtomicInMemoryFileSystemProvider;
 	let store: EditorMigrationOperationStore;
 
 	setup(() => {
 		fileService = disposables.add(new FileService(new NullLogService()));
-		const provider = disposables.add(new AtomicInMemoryFileSystemProvider());
+		provider = disposables.add(new AtomicInMemoryFileSystemProvider());
 		disposables.add(fileService.registerProvider(ROOT.scheme, provider));
 		store = new EditorMigrationOperationStore(fileService, joinPath(ROOT, 'settings.json'));
 	});
@@ -89,6 +90,22 @@ suite('EditorMigrationOperationStore', () => {
 		assert.deepStrictEqual((await store.read('valid')).id, 'valid');
 	});
 
+	test('propagates transient journal read failures without misclassifying recovery data', async () => {
+		await store.create(await operation('temporarily-unavailable'));
+		provider.readFileError = createFileSystemProviderError('temporary journal read failure', FileSystemProviderErrorCode.Unavailable);
+
+		await assert.rejects(() => store.list(), /temporary journal read failure/);
+		provider.readFileError = undefined;
+		assert.deepStrictEqual((await store.list()).map(item => [item.id, item.unsupportedSchemaVersion]), [['temporarily-unavailable', undefined]]);
+	});
+
+	test('skips a journal removed while recovery operations are being enumerated', async () => {
+		await store.create(await operation('removed-during-list'));
+		provider.readFileError = createFileSystemProviderError('journal removed', FileSystemProviderErrorCode.FileNotFound);
+
+		assert.deepStrictEqual(await store.list(), []);
+	});
+
 	test('reads planner-independent persisted evidence but rejects aggregate fingerprint tampering', async () => {
 		const original = await operation('planner-independent');
 		const changedPlan = {
@@ -130,8 +147,17 @@ suite('EditorMigrationOperationStore', () => {
 });
 
 class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
+	readFileError: Error | undefined;
+
 	override get capabilities(): FileSystemProviderCapabilities {
 		return super.capabilities | FileSystemProviderCapabilities.FileAtomicRead | FileSystemProviderCapabilities.FileAtomicWrite;
+	}
+
+	override async readFile(resource: URI): Promise<Uint8Array> {
+		if (this.readFileError && resource.path.endsWith('/operation.json')) {
+			throw this.readFileError;
+		}
+		return await super.readFile(resource);
 	}
 }
 
