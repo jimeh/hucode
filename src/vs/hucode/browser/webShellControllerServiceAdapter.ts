@@ -202,6 +202,18 @@ export class WebShellControllerServiceAdapter
 			occluded
 		);
 	}
+	/** Denies migration writer leases because the web adapter has no privileged shell authority. */
+	acquireEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
+		return Promise.resolve(false);
+	}
+	/** Reports migration writer leases as invalid because the web adapter cannot hold them. */
+	validateEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
+		return Promise.resolve(false);
+	}
+	/** Completes without releasing a lease because the web adapter never acquires one. */
+	releaseEditorMigrationWriterLease(_operationId: string): Promise<void> {
+		return Promise.resolve();
+	}
 	shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]) {

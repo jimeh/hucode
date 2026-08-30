@@ -102,6 +102,7 @@ import {
 	IHucodeShellControllerPortOwner,
 	registerHucodeShellControllerOwnerLifecycle,
 } from './shellControllerPortAcceptor.js';
+import { bindEditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from './migration/editorMigrationWriterLease.js';
 import {
 	admitHucodeRegularWorkbench,
 	canonicalizeDesktopWorkbenchPath,
@@ -170,6 +171,7 @@ export class HucodeShellMainService extends Disposable
 		HucodeRegularWindowOwnershipLifetimes;
 	private regularAdmissionId = 0;
 	private ownershipBroadcastPending = false;
+	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
 
 	constructor(
 		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
@@ -608,7 +610,7 @@ export class HucodeShellMainService extends Disposable
 		client.registerChannel(
 			HUCODE_SHELL_CONTROLLER_CHANNEL,
 			createHucodeShellControllerServerChannel(
-				this.createShellControllerFacade(owner.windowId),
+				this.createShellControllerFacade(owner.windowId, connection),
 				connection
 			)
 		);
@@ -620,8 +622,10 @@ export class HucodeShellMainService extends Disposable
 
 	/** Maps the no-identity wire contract onto one authoritative shell window. */
 	private createShellControllerFacade(
-		windowId: number
+		windowId: number,
+		connection: DisposableStore
 	): IHucodeShellControllerService {
+		const editorMigrationWriterLease = bindEditorMigrationWriterLease(this.editorMigrationWriterLeaseAuthority, windowId, connection);
 		return {
 			_serviceBrand: undefined,
 			supportsWorkspaceScreenshotOverlay: true,
@@ -701,6 +705,9 @@ export class HucodeShellMainService extends Disposable
 				this.captureWorkspaceScreenshot(windowId, rect, quality),
 			setWorkspaceOverlayOcclusion: occluded =>
 				this.setWorkspaceOverlayOcclusion(windowId, occluded),
+			acquireEditorMigrationWriterLease: editorMigrationWriterLease.acquire,
+			validateEditorMigrationWriterLease: editorMigrationWriterLease.validate,
+			releaseEditorMigrationWriterLease: editorMigrationWriterLease.release,
 			shutdownWindowWorkspaces: reason =>
 				this.shutdownWindowWorkspaces(windowId, reason),
 		};

@@ -39,6 +39,10 @@ separate application window for each one.
   Plan](editor-migration-planning-plan.md) is the focused implementation plan
   for issue #201's explicit-target snapshots, deterministic category planning,
   extension compatibility, fingerprints, and drift verification.
+- [Editor Migration Apply and Recovery
+  Plan](editor-migration-apply-plan.md) is the focused implementation plan for
+  issue #202's admission, durable progress, inherited-resource materialization,
+  additive extension installation, restart recovery, rollback, and results.
 
 ## Developing Hucode
 

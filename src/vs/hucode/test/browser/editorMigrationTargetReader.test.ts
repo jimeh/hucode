@@ -26,7 +26,7 @@ import { UriIdentityService } from '../../../platform/uriIdentity/common/uriIden
 import { EditorMigrationPlanningService } from '../../browser/migration/editorMigrationPlanningService.js';
 import { EditorMigrationTargetReader } from '../../browser/migration/editorMigrationTargetReader.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot, IEditorMigrationSourceService } from '../../common/migration/editorMigrationSource.js';
-import { EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationPlanningError, EditorMigrationReviewedPlan, EditorMigrationTargetEnvironment, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
+import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationPlanningError, EditorMigrationReviewedPlan, EditorMigrationTargetEnvironment, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
 
 const ROOT = URI.file('editor-migration-target-tests').with({ scheme: 'hucode-target-test' });
 const FIRST_UUID = '11111111-1111-4111-8111-111111111111';
@@ -609,7 +609,7 @@ function sourceSnapshot(): EditorMigrationSourceSnapshot {
 
 function emptyExtensionTarget(profileId: string): EditorMigrationTargetSnapshot {
 	return {
-		schemaVersion: 1,
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
 		selection: { kind: 'existing', profileId },
 		profile: { id: profileId, name: 'Default', kind: 'default' },
 		eligible: true,
@@ -642,7 +642,7 @@ function settingsSourceSnapshot(contentHash: string): EditorMigrationSourceSnaps
 
 function settingsTarget(profileId: string, contentHash: string): EditorMigrationTargetSnapshot {
 	return {
-		schemaVersion: 1,
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
 		selection: { kind: 'existing', profileId },
 		profile: { id: profileId, name: 'Default', kind: 'default' },
 		eligible: true,
@@ -657,7 +657,7 @@ function settingsTarget(profileId: string, contentHash: string): EditorMigration
 
 function proposedSettingsTarget(nameAvailable: boolean, catalogFingerprint: string): EditorMigrationTargetSnapshot {
 	return {
-		schemaVersion: 1,
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
 		selection: { kind: 'proposed', name: 'New profile' },
 		eligible: true,
 		nameAvailable,
