@@ -11,6 +11,7 @@ import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot }
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
+	EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorizationIssuer,
 	deriveEditorMigrationAggregateOutcome,
 	editorMigrationPublishers,
@@ -18,6 +19,7 @@ import {
 	reduceEditorMigrationSettings,
 	toEditorMigrationTelemetry,
 	verifiedEditorMigrationPlanFingerprint,
+	verifiedPersistedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
 
 suite('EditorMigrationApply', () => {
@@ -77,6 +79,24 @@ suite('EditorMigrationApply', () => {
 		const plan = await reviewedPlan([]);
 		const authorization = await issuer.create(plan, []);
 		assert.deepStrictEqual((await issuer.consume(plan, authorization)).publishers, []);
+	});
+
+	test('validates persisted aggregates independently of current planner regeneration', async () => {
+		const plan = await reviewedPlan([]);
+		const changedSource = {
+			...plan,
+			source: {
+				...plan.source,
+				categories: [{ category: 'settings' as const, state: 'present' as const, value: { 'editor.wordWrap': 'off' } }],
+			},
+		};
+		await assert.rejects(() => verifiedEditorMigrationPlanFingerprint(changedSource), /non-canonical, stale, or corrupt/);
+		assert.strictEqual(await verifiedPersistedEditorMigrationPlanFingerprint(changedSource), plan.fingerprints.plan);
+		await assert.rejects(() => verifiedPersistedEditorMigrationPlanFingerprint({
+			...changedSource,
+			fingerprints: { ...changedSource.fingerprints, plan: 'tampered' },
+		}), /aggregate fingerprint is corrupt/);
+		assert.strictEqual(EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION, 2);
 	});
 
 	test('reduces settings and exact indexed keybinding replacements without touching unrelated rows', () => {

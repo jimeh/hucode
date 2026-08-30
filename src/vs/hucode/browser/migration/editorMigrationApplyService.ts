@@ -478,7 +478,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			throw new Error('Migration proposed target identity or options changed');
 		}
 		const expectedStates: EditorMigrationProfileFlags[] = [this.proposedProfileOptions(operation).useDefaultFlags ?? {}];
-		if (operation.stage === 'materializing' && operation.ownershipChange?.state === 'pending') {
+		if (operation.stage === 'materializing' && operation.ownershipChange) {
 			expectedStates.push(operation.ownershipChange.beforeFlags);
 		}
 		if (operation.stage === 'rollbackPending' && operation.rollbackIntent?.ownershipState === 'pending') {
@@ -526,11 +526,18 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			const intent = operation.ownershipChange;
 			const matchesBefore = flagsMatch(profile, intent.beforeFlags);
 			const matchesAfter = flagsMatch(profile, intent.afterFlags);
-			if ((intent.state === 'completed' && !matchesAfter) || (intent.state === 'pending' && !matchesBefore && !matchesAfter)) {
+			if (!matchesBefore && !matchesAfter) {
 				throw new Error('Migration target ownership changed during materialization');
 			}
-			if (matchesAfter) {
+			if (matchesAfter || intent.state === 'completed') {
 				await this.verifyMaterializedResources(operation, intent.categories);
+				if (intent.categories.includes('extensions') && !await this.matchesExpectedExtensionPostcondition(operation, profile)) {
+					throw new Error('Migration extension materialization drifted');
+				}
+			}
+			if (intent.state === 'completed' && matchesBefore) {
+				await this.assertWriterLease();
+				await this.profilesService.updateProfile(profile, { useDefaultFlags: flagsToUseDefault(intent.afterFlags) });
 			}
 			return operation;
 		}
@@ -566,6 +573,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				continue;
 			}
 			for (const snapshot of operation.snapshots.filter(entry => entry.category === category)) {
+				if (snapshot.category === 'snippets' && !snapshot.item) {
+					continue;
+				}
 				const current = await this.readRaw(URI.parse(snapshot.resource));
 				const currentHash = current ? await sha256(current.value) : await absentHash(category);
 				if (currentHash !== (snapshot.postApplyHash ?? snapshot.materializedHash)) {
@@ -611,14 +621,20 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 	}
 
 	private async verifyCatalogReplayPostconditions(operation: EditorMigrationOperation): Promise<void> {
+		const rollbackResources = new Set<string>();
 		if (operation.stage === 'rolledBack') {
 			if (!operation.rollbackIntent) {
 				throw new Error('Migration rollback journal has no durable intent');
 			}
 			await this.verifyRollbackRestoredResources(operation, operation.rollbackIntent);
-			return;
+			for (const progress of operation.rollbackIntent.resources) {
+				rollbackResources.add(`${progress.category}\0${progress.item ?? ''}\0${progress.resource}`);
+			}
 		}
 		for (const entry of operation.snapshots.filter(snapshot => snapshot.category !== 'extensions' && !(snapshot.category === 'snippets' && !snapshot.item))) {
+			if (rollbackResources.has(`${entry.category}\0${entry.item ?? ''}\0${entry.resource}`)) {
+				continue;
+			}
 			const current = await this.readRaw(URI.parse(entry.resource));
 			const currentHash = current ? await sha256(current.value) : await absentHash(entry.category);
 			const expectedHash = entry.postApplyHash ?? entry.materializedHash ?? entry.byteHash;

@@ -595,6 +595,31 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(profilesService.profiles.some(candidate => candidate.id === operation.target.profileId), true);
 	});
 
+	test('refuses to recreate a partially rolled-back proposed profile when an unrolled category drifted', async () => {
+		const base = await proposedSettingsPlan(['settings', 'keybindings']);
+		const plan = await finalizePlan({
+			...base,
+			operations: [...base.operations, {
+				id: 'keybindings:add', category: 'keybindings', kind: 'addKeybinding', item: 'ctrl+k',
+				source: { key: 'ctrl+k', command: 'workbench.action.files.save' },
+				relatedTargetIds: [],
+			} satisfies EditorMigrationPlanOperation],
+		});
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		await service.rollback(result.operationId, { categories: ['settings'] }, CancellationToken.None);
+		const operation = await service.getOperation(result.operationId);
+		const profile = profilesService.profiles.find(candidate => candidate.id === operation.target.profileId);
+		assert.ok(profile);
+		const keybindings = operation.snapshots.find(entry => entry.category === 'keybindings');
+		assert.ok(keybindings?.postApplyHash);
+		await fileService.writeFile(URI.parse(keybindings.resource), VSBuffer.fromString('[{"key":"ctrl+x","command":"drifted"}]\n'));
+		await profilesService.removeProfile(profile);
+
+		await assert.rejects(() => service.resume(result.operationId, CancellationToken.None), /keybindings data drifted/);
+		assert.strictEqual(profilesService.profiles.some(candidate => candidate.id === operation.target.profileId), false);
+	});
+
 	test('replays a settled inherited ownership update after catalog persistence loss', async () => {
 		const contents = '{\n\t"editor.fontSize": 12\n}\n';
 		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(contents));
@@ -607,6 +632,19 @@ suite('EditorMigrationApplyService', () => {
 		const resumed = await service.resume(result.operationId, CancellationToken.None);
 		assert.strictEqual(resumed.aggregateOutcome, 'completed');
 		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, undefined);
+	});
+
+	test('replays settled empty-snippets ownership without reading the directory marker', async () => {
+		const profile = await profilesService.createProfile('settled-empty-snippets', 'Settled Empty Snippets', { useDefaultFlags: { snippets: true } });
+		const plan = await inheritedEmptySnippetsWithAddPlan(profile.id, profile.name);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		await profilesService.updateProfile(profile, { useDefaultFlags: { snippets: true } });
+
+		const resumed = await service.resume(result.operationId, CancellationToken.None);
+		assert.strictEqual(resumed.aggregateOutcome, 'completed');
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.snippets, undefined);
+		assert.strictEqual(await fileService.exists(joinPath(profile.location, 'snippets', 'added.code-snippets')), true);
 	});
 
 	test('rejects existing target identity and ownership races before admission snapshots', async () => {
@@ -790,6 +828,24 @@ suite('EditorMigrationApplyService', () => {
 		assert.match((await fileService.readFile(joinPath(profile.location, 'settings.json'))).value.toString(), /"editor.wordWrap": "on"/);
 	});
 
+	test('replays completed materialization ownership after its catalog update is reverted', async () => {
+		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
+		const profile = await profilesService.createProfile('completed-ownership-revert', 'Completed Ownership Revert', { useDefaultFlags: { settings: true } });
+		const plan = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
+		const completed = await store.read(result.operationId);
+		assert.strictEqual(completed.ownershipChange?.state, 'completed');
+		await profilesService.updateProfile(profile, { useDefaultFlags: { settings: true } });
+		await store.update(completed, { ...completed, stage: 'materializing', results: [], aggregateOutcome: undefined });
+
+		const resumed = await service.resume(result.operationId, CancellationToken.None);
+		assert.strictEqual(resumed.aggregateOutcome, 'completed');
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, undefined);
+	});
+
 	test('rolls back an inherited no-op materialization with its proven seed hash', async () => {
 		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
 		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
@@ -926,6 +982,22 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(resumed.aggregateOutcome, 'rolledBack');
 		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, true);
 		assert.strictEqual(await fileService.exists(joinPath(profile.location, 'settings.json')), false);
+	});
+
+	test('replays rolled-back ownership after its catalog update is reverted', async () => {
+		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
+		const profile = await profilesService.createProfile('rolled-back-ownership-revert', 'Rolled Back Ownership Revert', { useDefaultFlags: { settings: true } });
+		const plan = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const rolledBack = await service.rollback(result.operationId, { categories: ['settings'] }, CancellationToken.None);
+		assert.strictEqual(rolledBack.aggregateOutcome, 'rolledBack');
+		await profilesService.updateProfile(profile, { useDefaultFlags: {} });
+
+		const resumed = await service.resume(result.operationId, CancellationToken.None);
+		assert.strictEqual(resumed.aggregateOutcome, 'rolledBack');
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, true);
 	});
 
 	test('keeps rollback recoverable when canceled after ownership restoration', async () => {

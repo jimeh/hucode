@@ -9,10 +9,13 @@ import { URI } from '../../../base/common/uri.js';
 import { FileOperationResult, FileSystemProviderCapabilities, IFileService, toFileOperationResult } from '../../../platform/files/common/files.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
+	EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationOperation,
 	EditorMigrationOperationSummary,
-	verifiedEditorMigrationPlanFingerprint,
+	editorMigrationPublishers,
+	verifiedPersistedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
+import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 
 /** Atomic local store for Apply journals and recovery payloads. */
 export class EditorMigrationOperationStore {
@@ -47,6 +50,7 @@ export class EditorMigrationOperationStore {
 			throw new Error(`Migration operation '${previous.id}' revision changed`);
 		}
 		const next: EditorMigrationOperation = { ...update, revision: previous.revision + 1, updatedAt: now };
+		await validateOperation(next, next.id);
 		await this.writeRecord(next);
 		return next;
 	}
@@ -147,11 +151,25 @@ export class EditorMigrationOperationStore {
 
 async function validateOperation(value: EditorMigrationOperation, operationId: string): Promise<void> {
 	if (!value || typeof value !== 'object' || value.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION || value.id !== operationId || !Number.isSafeInteger(value.revision)
-		|| !value.plan || !value.authorization || value.authorization.planFingerprint !== value.plan.fingerprints?.plan) {
+		|| !value.plan || !value.authorization
+		|| value.plan.schemaVersion !== EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION
+		|| value.authorization.planningSchemaVersion !== EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION
+		|| value.authorization.planningSchemaVersion !== value.plan.schemaVersion
+		|| value.authorization.planFingerprint !== value.plan.fingerprints?.plan
+		|| !Array.isArray(value.authorization.publishers)
+		|| !Number.isFinite(value.authorization.issuedAt)
+		|| !Number.isFinite(value.authorization.consumedAt)
+		|| value.authorization.consumedAt < value.authorization.issuedAt) {
 		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt schema`);
 	}
 	try {
-		await verifiedEditorMigrationPlanFingerprint(value.plan);
+		const planFingerprint = await verifiedPersistedEditorMigrationPlanFingerprint(value.plan);
+		const publishers = editorMigrationPublishers(value.plan);
+		if (value.authorization.planFingerprint !== planFingerprint
+			|| JSON.stringify(value.authorization.publishers) !== JSON.stringify(publishers)
+			|| value.authorization.publisherSetFingerprint !== await fingerprintEditorMigrationValue(publishers)) {
+			throw new Error('Authorization linkage is corrupt');
+		}
 	} catch {
 		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt plan fingerprint`);
 	}

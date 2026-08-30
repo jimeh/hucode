@@ -15,6 +15,9 @@ import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft, editorM
 /** Version of durable editor migration Apply operation records. */
 export const EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION = 1;
 
+/** Planning schema embedded in operation schema v1 journals. */
+export const EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION = 2;
+
 /** Opaque, short-lived proof that Review confirmed a plan's publishers. */
 export interface EditorMigrationApplyAuthorization {
 	readonly nonce: string;
@@ -125,6 +128,29 @@ export async function verifiedEditorMigrationPlanFingerprint(plan: EditorMigrati
 		throw new Error('Reviewed migration plan is non-canonical, stale, or corrupt');
 	}
 	return canonical.fingerprints.plan;
+}
+
+/** Verifies the stable plan aggregate embedded in a durable Apply journal. */
+export async function verifiedPersistedEditorMigrationPlanFingerprint(plan: EditorMigrationReviewedPlan): Promise<string> {
+	if (plan.schemaVersion !== EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION) {
+		throw new Error(`Unsupported persisted migration plan schema version '${plan.schemaVersion}'`);
+	}
+	const actual = await fingerprintEditorMigrationValue({
+		schemaVersion: plan.schemaVersion,
+		fingerprints: {
+			source: plan.fingerprints.source,
+			target: plan.fingerprints.target,
+			choices: plan.fingerprints.choices,
+			policy: plan.fingerprints.policy,
+			gallery: plan.fingerprints.gallery,
+		},
+		operations: plan.operations,
+		prerequisites: plan.prerequisites,
+	});
+	if (actual !== plan.fingerprints.plan) {
+		throw new Error('Persisted migration plan aggregate fingerprint is corrupt');
+	}
+	return actual;
 }
 
 /** Produces the complete settings JSONC text for reviewed assignments. */

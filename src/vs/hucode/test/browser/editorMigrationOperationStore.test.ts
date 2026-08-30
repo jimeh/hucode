@@ -16,6 +16,7 @@ import { EditorMigrationOperationStore } from '../../browser/migration/editorMig
 import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
+import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
 
 const ROOT = URI.from({ scheme: 'hucode-migration-store-test', path: '/User' });
@@ -84,6 +85,27 @@ suite('EditorMigrationOperationStore', () => {
 		assert.deepStrictEqual(listed.map(item => [item.id, item.unsupportedSchemaVersion]), [['corrupt', -1], ['valid', undefined]]);
 		assert.deepStrictEqual((await store.read('valid')).id, 'valid');
 	});
+
+	test('reads planner-independent persisted evidence but rejects aggregate fingerprint tampering', async () => {
+		const original = await operation('planner-independent');
+		const changedSource: EditorMigrationOperation = {
+			...original, plan: {
+				...original.plan,
+				source: {
+					...original.plan.source,
+					categories: [{ category: 'settings', state: 'present', value: { changedAfterAdmission: true } }],
+				},
+			}
+		};
+		await store.create(changedSource);
+		assert.deepStrictEqual((await store.read(changedSource.id)).plan.source.categories, changedSource.plan.source.categories);
+
+		await fileService.writeFile(joinPath(store.root, changedSource.id, 'operation.json'), VSBuffer.fromString(JSON.stringify({
+			...changedSource,
+			plan: { ...changedSource.plan, fingerprints: { ...changedSource.plan.fingerprints, plan: 'tampered' } },
+		})));
+		await assert.rejects(() => store.read(changedSource.id), /unsupported or corrupt/);
+	});
 });
 
 class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
@@ -119,7 +141,7 @@ async function operation(id: string): Promise<EditorMigrationOperation> {
 		createdAt: 10,
 		updatedAt: 10,
 		plan: reviewedPlan,
-		authorization: { planningSchemaVersion: 2, planFingerprint, publishers: [], publisherSetFingerprint: 'publishers', issuedAt: 1, consumedAt: 2 },
+		authorization: { planningSchemaVersion: 2, planFingerprint, publishers: [], publisherSetFingerprint: await fingerprintEditorMigrationValue([]), issuedAt: 1, consumedAt: 2 },
 		stage: 'admitted',
 		cancellationRequested: false,
 		target: { state: 'pending' },
