@@ -13,10 +13,13 @@ import { canonicalizeEditorMigrationValue, fingerprintEditorMigrationValue } fro
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft, editorMigrationKeybindingRowId } from './editorMigrationPlanner.js';
 
 /** Version of durable editor migration Apply operation records. */
-export const EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION = 1;
+export const EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION = 2;
 
-/** Planning schema embedded in operation schema v1 journals. */
+/** Planning schema embedded in operation schema v2 journals. */
 export const EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION = 2;
+
+/** Version of the complete-plan integrity envelope in operation schema v2. */
+export const EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION = 1;
 
 /** Opaque, short-lived proof that Review confirmed a plan's publishers. */
 export interface EditorMigrationApplyAuthorization {
@@ -151,6 +154,30 @@ export async function verifiedPersistedEditorMigrationPlanFingerprint(plan: Edit
 		throw new Error('Persisted migration plan aggregate fingerprint is corrupt');
 	}
 	return actual;
+}
+
+/** Versioned digest binding a durable operation to every raw reviewed-plan field. */
+export interface EditorMigrationOperationIntegrity {
+	readonly schemaVersion: typeof EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION;
+	readonly algorithm: 'sha256';
+	readonly planDigest: string;
+}
+
+/** Creates the complete-plan integrity envelope persisted at admission. */
+export async function createEditorMigrationOperationIntegrity(plan: EditorMigrationReviewedPlan): Promise<EditorMigrationOperationIntegrity> {
+	return Object.freeze({
+		schemaVersion: EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION,
+		algorithm: 'sha256',
+		planDigest: await fingerprintEditorMigrationValue(plan),
+	});
+}
+
+/** Verifies a durable complete-plan digest without invoking the current planner. */
+export async function verifyEditorMigrationOperationIntegrity(plan: EditorMigrationReviewedPlan, integrity: EditorMigrationOperationIntegrity): Promise<void> {
+	if (!integrity || integrity.schemaVersion !== EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION || integrity.algorithm !== 'sha256'
+		|| integrity.planDigest !== await fingerprintEditorMigrationValue(plan)) {
+		throw new Error('Persisted migration operation plan integrity is corrupt');
+	}
 }
 
 /** Produces the complete settings JSONC text for reviewed assignments. */
@@ -301,6 +328,7 @@ export interface EditorMigrationOperation {
 	readonly createdAt: number;
 	readonly updatedAt: number;
 	readonly plan: EditorMigrationReviewedPlan;
+	readonly integrity: EditorMigrationOperationIntegrity;
 	readonly authorization: EditorMigrationConsumedAuthorization;
 	readonly stage: EditorMigrationOperationStage;
 	readonly cancellationRequested: boolean;

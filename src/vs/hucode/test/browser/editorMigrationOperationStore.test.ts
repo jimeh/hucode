@@ -13,7 +13,7 @@ import { FileSystemProviderCapabilities } from '../../../platform/files/common/f
 import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
-import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationOperation, createEditorMigrationOperationIntegrity } from '../../common/migration/editorMigrationApply.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
@@ -50,12 +50,15 @@ suite('EditorMigrationOperationStore', () => {
 
 	test('lists unknown schemas without rewriting and removes acknowledged private data', async () => {
 		await store.create(await operation('supported'));
+		await fileService.createFolder(joinPath(store.root, 'legacy'));
+		await fileService.writeFile(joinPath(store.root, 'legacy', 'operation.json'), VSBuffer.fromString('{"schemaVersion":1,"id":"legacy"}'));
 		await fileService.createFolder(joinPath(store.root, 'future'));
 		await fileService.writeFile(joinPath(store.root, 'future', 'operation.json'), VSBuffer.fromString('{"schemaVersion":99,"id":"future"}'));
 
 		const listed = await store.list();
-		assert.deepStrictEqual(listed.map(item => [item.id, item.unsupportedSchemaVersion]), [['future', 99], ['supported', undefined]]);
+		assert.deepStrictEqual(listed.map(item => [item.id, item.unsupportedSchemaVersion]), [['future', 99], ['legacy', 1], ['supported', undefined]]);
 		assert.strictEqual((await fileService.readFile(joinPath(store.root, 'future', 'operation.json'))).value.toString(), '{"schemaVersion":99,"id":"future"}');
+		assert.strictEqual((await fileService.readFile(joinPath(store.root, 'legacy', 'operation.json'))).value.toString(), '{"schemaVersion":1,"id":"legacy"}');
 
 		await store.delete('supported');
 		assert.strictEqual(await fileService.exists(joinPath(store.root, 'supported')), false);
@@ -88,22 +91,40 @@ suite('EditorMigrationOperationStore', () => {
 
 	test('reads planner-independent persisted evidence but rejects aggregate fingerprint tampering', async () => {
 		const original = await operation('planner-independent');
+		const changedPlan = {
+			...original.plan,
+			source: {
+				...original.plan.source,
+				categories: [{ category: 'settings' as const, state: 'present' as const, value: { changedAfterAdmission: true } }],
+			},
+		};
 		const changedSource: EditorMigrationOperation = {
 			...original, plan: {
-				...original.plan,
-				source: {
-					...original.plan.source,
-					categories: [{ category: 'settings', state: 'present', value: { changedAfterAdmission: true } }],
-				},
-			}
+				...changedPlan,
+			},
+			integrity: await createEditorMigrationOperationIntegrity(changedPlan),
 		};
 		await store.create(changedSource);
 		assert.deepStrictEqual((await store.read(changedSource.id)).plan.source.categories, changedSource.plan.source.categories);
 
-		await fileService.writeFile(joinPath(store.root, changedSource.id, 'operation.json'), VSBuffer.fromString(JSON.stringify({
+		const mutations = [
+			{ ...changedSource.plan, target: { ...changedSource.plan.target, catalogFingerprint: 'tampered' } },
+			{ ...changedSource.plan, evidence: { ...changedSource.plan.evidence, keybindingPlatform: 'tampered' } },
+			{ ...changedSource.plan, choices: { ...changedSource.plan.choices, selectedCategories: [] } },
+		];
+		for (const plan of mutations) {
+			await writeRawOperation(fileService, store, { ...changedSource, plan });
+			await assert.rejects(() => store.read(changedSource.id), /unsupported or corrupt/);
+			assert.deepStrictEqual((await store.list()).map(item => [item.id, item.unsupportedSchemaVersion]), [[changedSource.id, -1]]);
+		}
+
+		const tamperedAggregatePlan = { ...changedSource.plan, fingerprints: { ...changedSource.plan.fingerprints, plan: 'tampered' } };
+		await writeRawOperation(fileService, store, {
 			...changedSource,
-			plan: { ...changedSource.plan, fingerprints: { ...changedSource.plan.fingerprints, plan: 'tampered' } },
-		})));
+			plan: tamperedAggregatePlan,
+			integrity: await createEditorMigrationOperationIntegrity(tamperedAggregatePlan),
+			authorization: { ...changedSource.authorization, planFingerprint: 'tampered' },
+		});
 		await assert.rejects(() => store.read(changedSource.id), /unsupported or corrupt/);
 	});
 });
@@ -135,12 +156,13 @@ async function operation(id: string): Promise<EditorMigrationOperation> {
 	const reviewedPlan = await acceptEditorMigrationPlanDraft(draft, { selectedCategories: ['settings'], decisions: [] });
 	const planFingerprint = reviewedPlan.fingerprints.plan;
 	return {
-		schemaVersion: 1,
+		schemaVersion: EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
 		id,
 		revision: 0,
 		createdAt: 10,
 		updatedAt: 10,
 		plan: reviewedPlan,
+		integrity: await createEditorMigrationOperationIntegrity(reviewedPlan),
 		authorization: { planningSchemaVersion: 2, planFingerprint, publishers: [], publisherSetFingerprint: await fingerprintEditorMigrationValue([]), issuedAt: 1, consumedAt: 2 },
 		stage: 'admitted',
 		cancellationRequested: false,
@@ -152,4 +174,8 @@ async function operation(id: string): Promise<EditorMigrationOperation> {
 		results: [],
 		acknowledged: false,
 	};
+}
+
+async function writeRawOperation(fileService: FileService, store: EditorMigrationOperationStore, operation: EditorMigrationOperation): Promise<void> {
+	await fileService.writeFile(joinPath(store.root, operation.id, 'operation.json'), VSBuffer.fromString(JSON.stringify(operation)));
 }

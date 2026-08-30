@@ -32,6 +32,7 @@ import {
 	EditorMigrationRollbackResourceProgress,
 	EditorMigrationSnapshotManifestEntry,
 	IEditorMigrationApplyService,
+	createEditorMigrationOperationIntegrity,
 	deriveEditorMigrationAggregateOutcome,
 	reduceEditorMigrationKeybindings,
 	reduceEditorMigrationSettings,
@@ -80,7 +81,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 					throw new Error(`Reviewed migration plan is no longer current: ${verification.reasons.join(', ')}`);
 				}
 				throwIfCancelled(token);
-				operation = this.newOperation(plan, consumed);
+				operation = await this.newOperation(plan, consumed);
 				await this.assertWriterLease();
 				await this.store.create(operation);
 				operation = await this.attachTarget(operation);
@@ -362,7 +363,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		});
 	}
 
-	private newOperation(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationConsumedAuthorization): EditorMigrationOperation {
+	private async newOperation(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationConsumedAuthorization): Promise<EditorMigrationOperation> {
 		const now = Date.now();
 		return {
 			schemaVersion: EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
@@ -371,6 +372,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			createdAt: now,
 			updatedAt: now,
 			plan,
+			integrity: await createEditorMigrationOperationIntegrity(plan),
 			authorization,
 			stage: 'admitted',
 			cancellationRequested: false,

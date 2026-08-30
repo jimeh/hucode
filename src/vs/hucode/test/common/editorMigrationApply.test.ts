@@ -11,8 +11,10 @@ import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot }
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
+	EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION,
 	EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorizationIssuer,
+	createEditorMigrationOperationIntegrity,
 	deriveEditorMigrationAggregateOutcome,
 	editorMigrationPublishers,
 	reduceEditorMigrationKeybindings,
@@ -20,6 +22,7 @@ import {
 	toEditorMigrationTelemetry,
 	verifiedEditorMigrationPlanFingerprint,
 	verifiedPersistedEditorMigrationPlanFingerprint,
+	verifyEditorMigrationOperationIntegrity,
 } from '../../common/migration/editorMigrationApply.js';
 
 suite('EditorMigrationApply', () => {
@@ -92,11 +95,15 @@ suite('EditorMigrationApply', () => {
 		};
 		await assert.rejects(() => verifiedEditorMigrationPlanFingerprint(changedSource), /non-canonical, stale, or corrupt/);
 		assert.strictEqual(await verifiedPersistedEditorMigrationPlanFingerprint(changedSource), plan.fingerprints.plan);
+		const integrity = await createEditorMigrationOperationIntegrity(changedSource);
+		await verifyEditorMigrationOperationIntegrity(changedSource, integrity);
+		await assert.rejects(() => verifyEditorMigrationOperationIntegrity(plan, integrity), /plan integrity is corrupt/);
 		await assert.rejects(() => verifiedPersistedEditorMigrationPlanFingerprint({
 			...changedSource,
 			fingerprints: { ...changedSource.fingerprints, plan: 'tampered' },
 		}), /aggregate fingerprint is corrupt/);
 		assert.strictEqual(EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION, 2);
+		assert.strictEqual(EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION, 1);
 	});
 
 	test('reduces settings and exact indexed keybinding replacements without touching unrelated rows', () => {
@@ -143,13 +150,13 @@ suite('EditorMigrationApply', () => {
 	});
 
 	test('derives durable aggregate outcomes and emits only telemetry-safe fields', () => {
-		assert.strictEqual(EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, 1);
+		assert.strictEqual(EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, 2);
 		assert.strictEqual(deriveEditorMigrationAggregateOutcome(['completed', 'alreadyPresent']), 'completed');
 		assert.strictEqual(deriveEditorMigrationAggregateOutcome(['completed', 'failed'], true), 'recoverable');
 		assert.strictEqual(deriveEditorMigrationAggregateOutcome(['completed', 'unavailable']), 'completedWithIssues');
 
 		const telemetry = toEditorMigrationTelemetry({
-			operationSchemaVersion: 1,
+			operationSchemaVersion: 2,
 			planningSchemaVersion: 2,
 			aggregateOutcome: 'completedWithIssues',
 			phase: 'settled',
@@ -157,7 +164,7 @@ suite('EditorMigrationApply', () => {
 			durationMs: 14_000,
 		});
 		assert.deepStrictEqual(telemetry, {
-			operationSchemaVersion: 1,
+			operationSchemaVersion: 2,
 			planningSchemaVersion: 2,
 			aggregateOutcome: 'completedWithIssues',
 			phase: 'settled',

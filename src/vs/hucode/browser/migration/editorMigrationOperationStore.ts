@@ -13,6 +13,7 @@ import {
 	EditorMigrationOperation,
 	EditorMigrationOperationSummary,
 	editorMigrationPublishers,
+	verifyEditorMigrationOperationIntegrity,
 	verifiedPersistedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
@@ -151,7 +152,7 @@ export class EditorMigrationOperationStore {
 
 async function validateOperation(value: EditorMigrationOperation, operationId: string): Promise<void> {
 	if (!value || typeof value !== 'object' || value.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION || value.id !== operationId || !Number.isSafeInteger(value.revision)
-		|| !value.plan || !value.authorization
+		|| !value.plan || !value.integrity || !value.authorization
 		|| value.plan.schemaVersion !== EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION
 		|| value.authorization.planningSchemaVersion !== EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION
 		|| value.authorization.planningSchemaVersion !== value.plan.schemaVersion
@@ -163,6 +164,7 @@ async function validateOperation(value: EditorMigrationOperation, operationId: s
 		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt schema`);
 	}
 	try {
+		await verifyEditorMigrationOperationIntegrity(value.plan, value.integrity);
 		const planFingerprint = await verifiedPersistedEditorMigrationPlanFingerprint(value.plan);
 		const publishers = editorMigrationPublishers(value.plan);
 		if (value.authorization.planFingerprint !== planFingerprint
