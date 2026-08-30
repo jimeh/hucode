@@ -110,7 +110,14 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			}
 			const operation = await this.store.read(summary.id);
 			if (operation.acknowledged) {
-				await this.store.delete(operation.id);
+				await this.withLease(async () => {
+					const current = await this.store.read(operation.id);
+					if (!current.acknowledged) {
+						return;
+					}
+					await this.assertWriterLease();
+					await this.store.delete(current.id);
+				});
 			} else if (summary.recoverable) {
 				result.push(summary);
 			}

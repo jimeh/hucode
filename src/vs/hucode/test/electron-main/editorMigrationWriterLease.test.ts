@@ -16,15 +16,16 @@ suite('EditorMigrationWriterLeaseAuthority', () => {
 		const first = authority.acquire(1, 'first');
 		assert.ok(first);
 		assert.strictEqual(authority.acquire(2, 'competing'), undefined);
-		assert.strictEqual(authority.holds(1, 'first'), true);
+		assert.strictEqual(authority.holds(first), true);
 
 		authority.release(first);
 		const replacement = authority.acquire(2, 'replacement');
 		assert.ok(replacement);
 		authority.release(first);
-		assert.strictEqual(authority.holds(2, 'replacement'), true);
+		assert.strictEqual(authority.holds(first), false);
+		assert.strictEqual(authority.holds(replacement), true);
 		authority.release(replacement);
-		assert.strictEqual(authority.holds(2, 'replacement'), false);
+		assert.strictEqual(authority.holds(replacement), false);
 	});
 
 	test('rejects empty operation identities', () => {
@@ -48,5 +49,21 @@ suite('EditorMigrationWriterLeaseAuthority', () => {
 		connection.dispose();
 		assert.strictEqual(await bound.validate('replacement'), false);
 		assert.ok(authority.acquire(2, 'competing'));
+	});
+
+	test('invalidates a disposed binding after the same identity is reacquired', async () => {
+		const authority = new EditorMigrationWriterLeaseAuthority();
+		const firstConnection = new DisposableStore();
+		const secondConnection = new DisposableStore();
+		const first = bindEditorMigrationWriterLease(authority, 1, firstConnection);
+		const second = bindEditorMigrationWriterLease(authority, 1, secondConnection);
+
+		assert.strictEqual(await first.acquire('shared'), true);
+		assert.strictEqual(await first.validate('shared'), true);
+		firstConnection.dispose();
+		assert.strictEqual(await second.acquire('shared'), true);
+		assert.strictEqual(await first.validate('shared'), false);
+		assert.strictEqual(await second.validate('shared'), true);
+		secondConnection.dispose();
 	});
 });

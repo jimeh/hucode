@@ -1,6 +1,6 @@
 # Hucode editor migration Apply and recovery plan
 
-Status: proposed
+Status: implemented
 
 Tracks: [#202](https://github.com/jimeh/hucode/issues/202), under the
 [settings import and onboarding epic](https://github.com/jimeh/hucode/issues/192)
@@ -143,12 +143,11 @@ directories. It is not a Default profile resource:
 <user-data-dir>/User/hucode/migration/operations/<operation-id>/
   operation.json
   snapshots/
-    settings.before
-    keybindings.before
-    snippets.before.json
+    <category>.before
+    <category>.hidden-owned
     snippets/<encoded-relative-name>
-    extensions.before
-    drift/<category>-<revision>
+    hidden-snippets/<encoded-relative-name>
+    drift/<category>-<revision>-<encoded-item>
 ```
 
 `operation.json` contains the full reviewed plan, target attachment, state
@@ -175,7 +174,7 @@ conventions, but the service should provide the equivalent of:
 createApplyAuthorization(
   plan: EditorMigrationReviewedPlan,
   confirmedPublishers: readonly string[]
-): EditorMigrationApplyAuthorization;
+): Promise<EditorMigrationApplyAuthorization>;
 
 apply(
   plan: EditorMigrationReviewedPlan,

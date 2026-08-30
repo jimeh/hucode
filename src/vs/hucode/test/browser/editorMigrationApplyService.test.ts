@@ -200,6 +200,22 @@ suite('EditorMigrationApplyService', () => {
 		assert.deepStrictEqual(await service.listRecoverableOperations(), []);
 	});
 
+	test('acquires the writer lease before cleaning acknowledged recovery data', async () => {
+		const plan = await proposedSettingsPlan();
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
+		const completed = await store.read(result.operationId);
+		await store.update(completed, { ...completed, acknowledged: true });
+		acquired.length = 0;
+		released.length = 0;
+
+		assert.deepStrictEqual(await service.listRecoverableOperations(), []);
+		assert.strictEqual(acquired.length, 1);
+		assert.deepStrictEqual(released, acquired);
+		await assert.rejects(() => store.read(result.operationId));
+	});
+
 	test('rejects a stale aggregate plan fingerprint before lease or journal admission', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
@@ -1022,6 +1038,7 @@ suite('EditorMigrationApplyService', () => {
 		const pending = await service.getOperation(result.operationId);
 		assert.strictEqual(pending.rollbackIntent?.ownershipState, 'restored');
 		assert.strictEqual(pending.rollbackIntent?.resources[0].state, 'pending');
+		profilesService.updateProfile = originalUpdateProfile;
 
 		const resumed = await service.resume(result.operationId, CancellationToken.None);
 		assert.strictEqual(resumed.aggregateOutcome, 'rolledBack');

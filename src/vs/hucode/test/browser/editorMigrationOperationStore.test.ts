@@ -163,7 +163,7 @@ async function operation(id: string): Promise<EditorMigrationOperation> {
 		updatedAt: 10,
 		plan: reviewedPlan,
 		integrity: await createEditorMigrationOperationIntegrity(reviewedPlan),
-		authorization: { planningSchemaVersion: 2, planFingerprint, publishers: [], publisherSetFingerprint: await fingerprintEditorMigrationValue([]), issuedAt: 1, consumedAt: 2 },
+		authorization: { planningSchemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, planFingerprint, publishers: [], publisherSetFingerprint: await fingerprintEditorMigrationValue([]), issuedAt: 1, consumedAt: 2 },
 		stage: 'admitted',
 		cancellationRequested: false,
 		target: { state: 'pending' },

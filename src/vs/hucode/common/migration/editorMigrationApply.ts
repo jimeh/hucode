@@ -6,6 +6,7 @@
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { applyEdits, setProperty } from '../../../base/common/jsonEdit.js';
 import { parse } from '../../../base/common/json.js';
+import { generateUuid } from '../../../base/common/uuid.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import { EditorMigrationCategory } from './editorMigrationSource.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanningEvidence, EditorMigrationReviewedPlan, EditorMigrationKeybindingOperation, EditorMigrationSetSettingOperation } from './editorMigrationPlanning.js';
@@ -47,7 +48,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 		readonly issuedAt: number;
 	}>();
 
-	constructor(private readonly now: () => number = Date.now, private readonly nonce: () => string = () => crypto.randomUUID()) { }
+	constructor(private readonly now: () => number = Date.now, private readonly nonce: () => string = generateUuid) { }
 
 	async create(plan: EditorMigrationReviewedPlan, confirmedPublishers: readonly string[]): Promise<EditorMigrationApplyAuthorization> {
 		const planFingerprint = await verifiedEditorMigrationPlanFingerprint(plan);

@@ -32,9 +32,9 @@ export class EditorMigrationWriterLeaseAuthority {
 		}
 	}
 
-	/** Returns whether the exact bound shell request still owns mutation authority. */
-	holds(windowId: number, operationId: string): boolean {
-		return this.current?.windowId === windowId && this.current.operationId === operationId;
+	/** Returns whether the exact lease generation still owns mutation authority. */
+	holds(lease: EditorMigrationWriterLease | undefined): boolean {
+		return lease !== undefined && this.current === lease;
 	}
 }
 
@@ -65,7 +65,7 @@ export function bindEditorMigrationWriterLease(
 			return Promise.resolve(true);
 		},
 		validate: operationId => Promise.resolve(
-			authority.holds(windowId, operationId) && lease?.operationId === operationId
+			lease?.operationId === operationId && authority.holds(lease)
 		),
 		release: operationId => {
 			if (lease?.operationId === operationId) {
