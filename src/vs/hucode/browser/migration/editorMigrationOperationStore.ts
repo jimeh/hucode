@@ -11,6 +11,7 @@ import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
 	EditorMigrationOperation,
 	EditorMigrationOperationSummary,
+	verifiedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
 
 /** Atomic local store for Apply journals and recovery payloads. */
@@ -23,6 +24,7 @@ export class EditorMigrationOperationStore {
 
 	/** Creates the first durable journal revision. */
 	async create(operation: EditorMigrationOperation): Promise<void> {
+		await validateOperation(operation, operation.id);
 		if (!this.fileService.hasCapability(this.root, FileSystemProviderCapabilities.FileAtomicRead)
 			|| !this.fileService.hasCapability(this.root, FileSystemProviderCapabilities.FileAtomicWrite)) {
 			throw new Error('Editor migration Apply requires atomic operation storage');
@@ -53,9 +55,7 @@ export class EditorMigrationOperationStore {
 	async read(operationId: string): Promise<EditorMigrationOperation> {
 		const contents = (await this.fileService.readFile(this.operationResource(operationId), { atomic: true })).value.toString();
 		const value = JSON.parse(contents) as EditorMigrationOperation;
-		if (!value || typeof value !== 'object' || value.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION || value.id !== operationId || !Number.isSafeInteger(value.revision)) {
-			throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt schema`);
-		}
+		await validateOperation(value, operationId);
 		return value;
 	}
 
@@ -75,10 +75,11 @@ export class EditorMigrationOperationStore {
 			try {
 				const raw = JSON.parse((await this.fileService.readFile(joinPath(child.resource, 'operation.json'), { atomic: true })).value.toString()) as Partial<EditorMigrationOperation>;
 				if (raw.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION) {
-					result.push({ id: child.name, stage: 'admitted', createdAt: 0, updatedAt: 0, recoverable: false, unsupportedSchemaVersion: raw.schemaVersion });
+					result.push({ id: child.name, stage: 'admitted', createdAt: 0, updatedAt: 0, recoverable: false, unsupportedSchemaVersion: typeof raw.schemaVersion === 'number' ? raw.schemaVersion : -1 });
 					continue;
 				}
 				const operation = raw as EditorMigrationOperation;
+				await validateOperation(operation, child.name);
 				result.push({
 					id: operation.id,
 					stage: operation.stage,
@@ -141,6 +142,18 @@ export class EditorMigrationOperationStore {
 
 	private async writeRecord(operation: EditorMigrationOperation): Promise<void> {
 		await this.fileService.writeFile(this.operationResource(operation.id), VSBuffer.fromString(`${JSON.stringify(operation, undefined, '\t')}\n`), { atomic: { postfix: '.hucode-tmp' } });
+	}
+}
+
+async function validateOperation(value: EditorMigrationOperation, operationId: string): Promise<void> {
+	if (!value || typeof value !== 'object' || value.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION || value.id !== operationId || !Number.isSafeInteger(value.revision)
+		|| !value.plan || !value.authorization || value.authorization.planFingerprint !== value.plan.fingerprints?.plan) {
+		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt schema`);
+	}
+	try {
+		await verifiedEditorMigrationPlanFingerprint(value.plan);
+	} catch {
+		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt plan fingerprint`);
 	}
 }
 

@@ -59,6 +59,7 @@ suite('EditorMigrationApplyService', () => {
 		planning = { verifyPlan: async () => ({ status: 'unchanged', reasons: [] }) } as unknown as IEditorMigrationPlanningService;
 		shell = {
 			acquireEditorMigrationWriterLease: async (id: string) => { acquired.push(id); return true; },
+			validateEditorMigrationWriterLease: async (id: string) => acquired.includes(id) && !released.includes(id),
 			releaseEditorMigrationWriterLease: async (id: string) => { released.push(id); },
 		} as unknown as IHucodeShellControllerService;
 		service = new EditorMigrationApplyService(
@@ -125,6 +126,34 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(installCalls, 1, 'recovery must reconcile the durable install intent without reinstalling');
 	});
 
+	test('places application-scoped extensions in the Default profile', async () => {
+		const profile = await profilesService.createProfile('application-scope-target', 'Application Scope Target');
+		const base = await extensionPlan(profile.id);
+		const plan = { ...base, target: { ...base.target, profile: { id: profile.id, name: profile.name, kind: 'named' as const }, categories: base.target.categories.map(category => ({ ...category, ownerProfileId: profile.id })) } };
+		const exact = { identifier: { id: 'pub.extension' }, version: '2.0.0', properties: { targetPlatform: 'linux-x64', isPreReleaseVersion: true, engine: '^1.135.0' } } as unknown as IGalleryExtension;
+		let installed: ILocalExtension[] = [];
+		let profileLocation: URI | undefined;
+		const extensionService = {
+			getInstalled: async () => installed,
+			installFromGallery: async (_gallery: IGalleryExtension, options: InstallOptions) => {
+				profileLocation = options.profileLocation;
+				const local = { identifier: exact.identifier, manifest: { name: 'extension', publisher: 'pub', version: exact.version, engines: { vscode: '^1.135.0' }, contributes: { localizations: [{ languageId: 'test', translations: [] }] } }, targetPlatform: 'linux-x64', isPreReleaseVersion: true, pinned: false, isApplicationScoped: true } as unknown as ILocalExtension;
+				installed = [local];
+				return local;
+			},
+		} as unknown as IProfileAwareExtensionManagementService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {
+			getExtensions: async () => [exact],
+			isExtensionCompatible: async () => true,
+			getManifest: async () => ({ name: 'extension', publisher: 'pub', version: exact.version, engines: { vscode: '^1.135.0' }, contributes: { localizations: [{ languageId: 'test', translations: [] }] } }),
+		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell);
+
+		const authorization = await service.createApplyAuthorization(plan, ['pub']);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		assert.strictEqual(result.aggregateOutcome, 'completed');
+		assert.strictEqual(profileLocation?.toString(), profilesService.defaultProfile.extensionsResource.toString());
+	});
+
 	test('admits and reconciles a settings write completed before its result checkpoint', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
@@ -147,7 +176,7 @@ suite('EditorMigrationApplyService', () => {
 
 		const recoverable = await service.listRecoverableOperations();
 		assert.deepStrictEqual(recoverable.map(item => item.id), [result.operationId]);
-		assert.strictEqual((await service.getOperation(result.operationId)).authorization.planFingerprint, 'plan');
+		assert.strictEqual((await service.getOperation(result.operationId)).authorization.planFingerprint, plan.fingerprints.plan);
 		await service.acknowledge(result.operationId);
 		await assert.rejects(() => service.getOperation(result.operationId));
 	});
@@ -163,6 +192,85 @@ suite('EditorMigrationApplyService', () => {
 		assert.deepStrictEqual(acquired, []);
 		assert.strictEqual(profilesService.profiles.some(profile => profile.name === 'Imported'), false);
 		assert.deepStrictEqual(await service.listRecoverableOperations(), []);
+	});
+
+	test('rejects a stale aggregate plan fingerprint before lease or journal admission', async () => {
+		const plan = await proposedSettingsPlan();
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const mutated = { ...plan, operations: [...plan.operations, { id: 'settings:editor.fontSize', category: 'settings' as const, kind: 'setSetting' as const, item: 'editor.fontSize', source: 18 }] };
+
+		await assert.rejects(() => service.apply(mutated, authorization, CancellationToken.None), /fingerprint is stale/);
+		assert.deepStrictEqual(acquired, []);
+		assert.deepStrictEqual(await service.listRecoverableOperations(), []);
+	});
+
+	test('stops at a durable boundary when the main writer lease loses authority', async () => {
+		const plan = await proposedSettingsPlan();
+		let validations = 0;
+		shell = {
+			acquireEditorMigrationWriterLease: async () => true,
+			validateEditorMigrationWriterLease: async () => ++validations === 1,
+			releaseEditorMigrationWriterLease: async () => { },
+		} as unknown as IHucodeShellControllerService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const profile = profilesService.profiles.find(candidate => candidate.name === 'Imported');
+		assert.ok(profile);
+		assert.strictEqual(await fileService.exists(profile.settingsResource), false);
+		assert.deepStrictEqual(result.results.map(item => [item.id, item.outcome]), [['settings', 'canceled']]);
+		assert.strictEqual(validations, 2);
+	});
+
+	test('does not let a second call substitute authority after the first lease is invalidated', async () => {
+		const firstPlan = await proposedSettingsPlan(['settings'], 'Lease A');
+		const secondPlan = await proposedSettingsPlan(['settings'], 'Lease B');
+		let unblockFirst!: () => void;
+		const firstBlocked = new Promise<void>(resolve => unblockFirst = resolve);
+		let verificationCalls = 0;
+		planning = {
+			verifyPlan: async () => {
+				if (++verificationCalls === 1) {
+					await firstBlocked;
+				}
+				return { status: 'unchanged', reasons: [] };
+			},
+		} as unknown as IEditorMigrationPlanningService;
+		let remoteAuthority: string | undefined;
+		let signalAcquired!: () => void;
+		const acquiredFirst = new Promise<void>(resolve => signalAcquired = resolve);
+		let acquisitionCalls = 0;
+		shell = {
+			acquireEditorMigrationWriterLease: async (id: string) => {
+				acquisitionCalls++;
+				if (remoteAuthority) {
+					return false;
+				}
+				remoteAuthority = id;
+				signalAcquired();
+				return true;
+			},
+			validateEditorMigrationWriterLease: async (id: string) => remoteAuthority === id,
+			releaseEditorMigrationWriterLease: async (id: string) => {
+				if (remoteAuthority === id) {
+					remoteAuthority = undefined;
+				}
+			},
+		} as unknown as IHucodeShellControllerService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell);
+		const firstAuthorization = await service.createApplyAuthorization(firstPlan, []);
+		const secondAuthorization = await service.createApplyAuthorization(secondPlan, []);
+		const first = service.apply(firstPlan, firstAuthorization, CancellationToken.None);
+		await acquiredFirst;
+		remoteAuthority = undefined;
+		const secondDisposition = await service.apply(secondPlan, secondAuthorization, CancellationToken.None).then(() => 'completed', () => 'rejected');
+		unblockFirst();
+		const firstResult = await first;
+
+		assert.strictEqual(secondDisposition, 'rejected');
+		assert.strictEqual(acquisitionCalls, 1);
+		assert.deepStrictEqual(firstResult.results.map(item => [item.id, item.outcome]), [['settings', 'canceled']]);
+		assert.strictEqual(profilesService.profiles.some(candidate => candidate.name === 'Lease A' || candidate.name === 'Lease B'), false);
 	});
 
 	test('settles cancellation requested after admission and between selected categories', async () => {
@@ -193,8 +301,81 @@ suite('EditorMigrationApplyService', () => {
 		assert.deepStrictEqual(between.results.map(item => [item.id, item.outcome]), [['settings', 'completed'], ['keybindings', 'canceled']]);
 	});
 
+	test('retries canceled snippet snapshotting from the next durable file boundary', async () => {
+		const snippets: readonly Pick<EditorMigrationSnippet, 'name' | 'contents'>[] = [
+			{ name: 'one.code-snippets', contents: { One: { prefix: 'one', body: ['one'] } } },
+			{ name: 'two.code-snippets', contents: { Two: { prefix: 'two', body: ['two'] } } },
+		];
+		for (const snippet of snippets) {
+			await fileService.writeFile(joinPath(profilesService.defaultProfile.snippetsHome, snippet.name), VSBuffer.fromString(snippetText(snippet.contents)));
+		}
+		const profile = await profilesService.createProfile('cancel-snapshot-snippets', 'Cancel Snapshot Snippets', { useDefaultFlags: { snippets: true } });
+		const plan = await inheritedSnippetsPlan(profile.id, profile.name, snippets);
+		const cancellation = disposables.add(new CancellationTokenSource());
+		let snapshotWrites = 0;
+		provider.onDidWriteFile = resource => {
+			if (resource.path.includes('/snapshots/snippets/encode') || resource.path.includes('/snapshots/snippets/one')) {
+				if (++snapshotWrites === 1) {
+					cancellation.cancel();
+				}
+			}
+		};
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const canceled = await service.apply(plan, authorization, cancellation.token);
+		const interrupted = await service.getOperation(canceled.operationId);
+		assert.strictEqual(interrupted.snapshotCompletedCategories?.includes('snippets'), false);
+		assert.strictEqual(interrupted.snapshots.filter(snapshot => snapshot.item).length, 1);
+
+		provider.onDidWriteFile = undefined;
+		const retried = await service.retry(canceled.operationId, CancellationToken.None);
+		assert.strictEqual(retried.aggregateOutcome, 'completed');
+		assert.strictEqual((await service.getOperation(canceled.operationId)).snapshots.filter(snapshot => snapshot.item).length, 2);
+	});
+
+	test('retries canceled snippet materialization and Apply without touching later files early', async () => {
+		const inheritedSnippets: readonly Pick<EditorMigrationSnippet, 'name' | 'contents'>[] = [
+			{ name: 'one.code-snippets', contents: { One: { prefix: 'one', body: ['one'] } } },
+			{ name: 'two.code-snippets', contents: { Two: { prefix: 'two', body: ['two'] } } },
+		];
+		for (const snippet of inheritedSnippets) {
+			await fileService.writeFile(joinPath(profilesService.defaultProfile.snippetsHome, snippet.name), VSBuffer.fromString(snippetText(snippet.contents)));
+		}
+		const inherited = await profilesService.createProfile('cancel-materialize-snippets', 'Cancel Materialize Snippets', { useDefaultFlags: { snippets: true } });
+		const inheritedPlan = await inheritedSnippetsPlan(inherited.id, inherited.name, inheritedSnippets);
+		const materializeCancellation = disposables.add(new CancellationTokenSource());
+		let materializedWrites = 0;
+		provider.onDidWriteFile = resource => {
+			if (resource.path.includes('/cancel-materialize-snippets/snippets/') && ++materializedWrites === 1) {
+				materializeCancellation.cancel();
+			}
+		};
+		const inheritedAuthorization = await service.createApplyAuthorization(inheritedPlan, []);
+		const canceledMaterialization = await service.apply(inheritedPlan, inheritedAuthorization, materializeCancellation.token);
+		assert.strictEqual(await fileService.exists(joinPath(inherited.location, 'snippets', 'two.code-snippets')), false);
+		provider.onDidWriteFile = undefined;
+		assert.strictEqual((await service.retry(canceledMaterialization.operationId, CancellationToken.None)).aggregateOutcome, 'completed');
+		assert.strictEqual(await fileService.exists(joinPath(inherited.location, 'snippets', 'two.code-snippets')), true);
+
+		const applyPlan = await proposedSnippetsPlan('Cancel Apply Snippets', ['one.code-snippets', 'two.code-snippets']);
+		const applyCancellation = disposables.add(new CancellationTokenSource());
+		let applyWrites = 0;
+		provider.onDidWriteFile = resource => {
+			if (resource.path.includes('/snippets/') && !resource.path.includes('/hucode/migration/') && ++applyWrites === 1) {
+				applyCancellation.cancel();
+			}
+		};
+		const applyAuthorization = await service.createApplyAuthorization(applyPlan, []);
+		const canceledApply = await service.apply(applyPlan, applyAuthorization, applyCancellation.token);
+		const applyProfile = profilesService.profiles.find(candidate => candidate.name === 'Cancel Apply Snippets');
+		assert.ok(applyProfile);
+		assert.strictEqual(await fileService.exists(joinPath(applyProfile.location, 'snippets', 'two.code-snippets')), false);
+		provider.onDidWriteFile = undefined;
+		assert.strictEqual((await service.retry(canceledApply.operationId, CancellationToken.None)).aggregateOutcome, 'completed');
+		assert.strictEqual(await fileService.exists(joinPath(applyProfile.location, 'snippets', 'two.code-snippets')), true);
+	});
+
 	test('reports an extensions category with no install operations', async () => {
-		const plan = { ...(await extensionPlan(profilesService.defaultProfile.id)), operations: [] };
+		const plan = await finalizePlan({ ...(await extensionPlan(profilesService.defaultProfile.id)), operations: [] });
 		const authorization = await service.createApplyAuthorization(plan, []);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
 		assert.deepStrictEqual(result.results.map(item => [item.id, item.outcome]), [['extensions', 'completed']]);
@@ -278,7 +459,7 @@ suite('EditorMigrationApplyService', () => {
 			throw new Error('Expected extension operation fixture');
 		}
 		const second = { ...firstOperation, id: 'extensions:other.missing', item: 'other.missing', source: { ...firstOperation.source, id: 'other.missing' } };
-		const plan = { ...base, operations: [...base.operations, second], fingerprints: { ...base.fingerprints, plan: 'mixed-extension-plan' } };
+		const plan = await finalizePlan({ ...base, operations: [...base.operations, second] });
 		const galleryExtension = (id: string) => ({ identifier: { id }, version: '2.0.0', properties: { targetPlatform: 'linux-x64', isPreReleaseVersion: true, engine: '^1.135.0' } }) as unknown as IGalleryExtension;
 		let missingAvailable = false;
 		let installs = 0;
@@ -351,12 +532,53 @@ suite('EditorMigrationApplyService', () => {
 		const operation = await service.getOperation(result.operationId);
 		const profile = profilesService.profiles.find(candidate => candidate.id === operation.target.profileId);
 		assert.ok(profile);
+		const store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
+		await store.update(operation, { ...operation, stage: 'applying', aggregateOutcome: undefined });
 		await profilesService.removeProfile(profile);
 
 		await service.resume(result.operationId, CancellationToken.None);
 		const recreated = profilesService.profiles.find(candidate => candidate.id === operation.target.profileId);
 		assert.strictEqual(recreated?.name, operation.target.profileName);
 		assert.strictEqual(recreated?.icon, 'zap');
+	});
+
+	test('does not recreate a user-deleted proposed profile after the operation settled', async () => {
+		const plan = await proposedSettingsPlan();
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const operation = await service.getOperation(result.operationId);
+		const profile = profilesService.profiles.find(candidate => candidate.id === operation.target.profileId);
+		assert.ok(profile);
+		await profilesService.removeProfile(profile);
+
+		const resumed = await service.resume(result.operationId, CancellationToken.None);
+		assert.strictEqual(resumed.aggregateOutcome, result.aggregateOutcome);
+		assert.strictEqual(profilesService.profiles.some(candidate => candidate.id === operation.target.profileId), false);
+	});
+
+	test('rejects existing target identity and ownership races before admission snapshots', async () => {
+		const contents = '{\n\t"editor.fontSize": 12\n}\n';
+		const renamed = await profilesService.createProfile('renamed-race', 'Before Rename');
+		await fileService.writeFile(renamed.settingsResource, VSBuffer.fromString(contents));
+		const renamePlanBase = await inheritedSettingsPlan(renamed.id, renamed.name, contents);
+		const renamePlan = await finalizePlan({ ...renamePlanBase, target: { ...renamePlanBase.target, categories: renamePlanBase.target.categories.map(category => ({ ...category, ownership: 'target' as const, ownerProfileId: renamed.id })) } });
+		const renameAuthorization = await service.createApplyAuthorization(renamePlan, []);
+		await profilesService.updateProfile(renamed, { name: 'After Rename' });
+		await assert.rejects(() => service.apply(renamePlan, renameAuthorization, CancellationToken.None), /identity changed after Review/);
+
+		const inherited = await profilesService.createProfile('ownership-race', 'Ownership Race', { useDefaultFlags: { settings: true } });
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(contents));
+		await fileService.writeFile(inherited.settingsResource, VSBuffer.fromString(contents));
+		const ownershipPlan = await inheritedSettingsPlan(inherited.id, inherited.name, contents);
+		const ownershipAuthorization = await service.createApplyAuthorization(ownershipPlan, []);
+		await profilesService.updateProfile(inherited, { useDefaultFlags: {} });
+		await assert.rejects(() => service.apply(ownershipPlan, ownershipAuthorization, CancellationToken.None), /ownership changed after Review/);
+
+		const owner = await profilesService.createProfile('owner-race', 'Owner Race', { useDefaultFlags: { settings: true } });
+		const ownerPlanBase = await inheritedSettingsPlan(owner.id, owner.name, contents);
+		const ownerPlan = { ...ownerPlanBase, target: { ...ownerPlanBase.target, categories: ownerPlanBase.target.categories.map(category => ({ ...category, ownerProfileId: 'wrong-owner' })) } };
+		const ownerAuthorization = await service.createApplyAuthorization(ownerPlan, []);
+		await assert.rejects(() => service.apply(ownerPlan, ownerAuthorization, CancellationToken.None), /ownership changed after Review/);
 	});
 
 	test('refuses a corrupt inherited snapshot before materialization writes target or Default', async () => {
@@ -416,6 +638,49 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual((await fileService.readFile(profilesService.defaultProfile.settingsResource)).value.toString(), defaultContents);
 	});
 
+	test('repairs completed materialization ownership before retrying a later failed item', async () => {
+		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
+		const profile = await profilesService.createProfile('repair-failed-result', 'Repair Failed Result', { useDefaultFlags: { settings: true } });
+		const plan = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
+		const completed = await store.read(result.operationId);
+		await profilesService.updateProfile(profile, { useDefaultFlags: { settings: true } });
+		await store.update(completed, {
+			...completed,
+			results: [{ id: 'settings', category: 'settings', outcome: 'failed', attempts: 1, diagnostic: { code: 'injected', message: 'later failure' } }],
+			aggregateOutcome: 'recoverable',
+		});
+
+		const retried = await service.retry(result.operationId, CancellationToken.None);
+		assert.deepStrictEqual(retried.results.map(item => [item.id, item.outcome, item.attempts]), [['settings', 'completed', 2]]);
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, undefined);
+	});
+
+	test('repairs completed extension materialization before an unavailable retry', async () => {
+		const profile = await profilesService.createProfile('repair-extension-result', 'Repair Extension Result', { useDefaultFlags: { extensions: true } });
+		const plan = await inheritedExtensionPlan(profile.id, profile.name);
+		const extensionService = {
+			copyExtensions: async (_from: URI, to: URI) => fileService.writeFile(to, VSBuffer.fromString('[]')),
+			getInstalled: async () => [],
+		} as unknown as IProfileAwareExtensionManagementService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {
+			getExtensions: async () => [],
+		} as unknown as IExtensionGalleryService, {
+			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
+		} as unknown as IExtensionManagementServerService, shell);
+		const authorization = await service.createApplyAuthorization(plan, ['pub']);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		assert.strictEqual(result.results.find(item => item.id === 'extensions:pub.extension')?.outcome, 'unavailable');
+		await profilesService.updateProfile(profile, { useDefaultFlags: { extensions: true } });
+
+		const retried = await service.retry(result.operationId, CancellationToken.None);
+		assert.strictEqual(retried.results.find(item => item.id === 'extensions:pub.extension')?.attempts, 2);
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.extensions, undefined);
+	});
+
 	test('reconciles ownership already changed while the materialization journal is pending', async () => {
 		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
 		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
@@ -439,7 +704,7 @@ suite('EditorMigrationApplyService', () => {
 		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
 		const profile = await profilesService.createProfile('noop-materialize', 'No-op Materialize', { useDefaultFlags: { settings: true } });
 		const base = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
-		const plan = { ...base, operations: [] };
+		const plan = await finalizePlan({ ...base, operations: [] });
 		const authorization = await service.createApplyAuthorization(plan, []);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
 		assert.deepStrictEqual(result.results.map(item => [item.id, item.outcome]), [['settings', 'alreadyPresent']]);
@@ -448,6 +713,54 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(rolledBack.aggregateOutcome, 'rolledBack');
 		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, true);
 		assert.strictEqual(await fileService.exists(joinPath(profile.location, 'settings.json')), false);
+	});
+
+	test('preserves unrelated profile inheritance flags through materialization and rollback', async () => {
+		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
+		const profile = await profilesService.createProfile('complete-flags', 'Complete Flags', { useDefaultFlags: { settings: true, tasks: true, prompts: true, mcp: true, languageModels: true, globalState: true } });
+		const plan = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		let current = profilesService.profiles.find(candidate => candidate.id === profile.id);
+		assert.deepStrictEqual(current?.useDefaultFlags, { tasks: true, prompts: true, mcp: true, languageModels: true, globalState: true });
+
+		await service.rollback(result.operationId, { categories: ['settings'] }, CancellationToken.None);
+		current = profilesService.profiles.find(candidate => candidate.id === profile.id);
+		assert.deepStrictEqual(current?.useDefaultFlags, { settings: true, tasks: true, prompts: true, mcp: true, languageModels: true, globalState: true });
+	});
+
+	test('preserves hidden owned resources while inherited and restores them on rollback', async () => {
+		const defaultContents = '{\n\t"editor.fontSize": 12\n}\n';
+		const hiddenContents = '{\n\t"editor.fontSize": 99\n}\n';
+		await fileService.writeFile(profilesService.defaultProfile.settingsResource, VSBuffer.fromString(defaultContents));
+		const profile = await profilesService.createProfile('hidden-owned', 'Hidden Owned', { useDefaultFlags: { settings: true } });
+		const ownedSettings = joinPath(profile.location, 'settings.json');
+		await fileService.writeFile(ownedSettings, VSBuffer.fromString(hiddenContents));
+		const plan = await inheritedSettingsPlan(profile.id, profile.name, defaultContents);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		assert.match((await fileService.readFile(ownedSettings)).value.toString(), /"editor.wordWrap": "on"/);
+
+		await service.rollback(result.operationId, { categories: ['settings'] }, CancellationToken.None);
+		assert.strictEqual((await fileService.readFile(ownedSettings)).value.toString(), hiddenContents);
+		assert.strictEqual(profilesService.profiles.find(candidate => candidate.id === profile.id)?.useDefaultFlags?.settings, true);
+	});
+
+	test('restores unrelated hidden snippets after inherited materialization rollback', async () => {
+		const defaultSnippet = { name: 'default.code-snippets', contents: { Default: { prefix: 'default', body: ['default'] } } };
+		await fileService.writeFile(joinPath(profilesService.defaultProfile.snippetsHome, defaultSnippet.name), VSBuffer.fromString(snippetText(defaultSnippet.contents)));
+		const profile = await profilesService.createProfile('hidden-snippets', 'Hidden Snippets', { useDefaultFlags: { snippets: true } });
+		const hiddenResource = joinPath(profile.location, 'snippets', 'hidden.code-snippets');
+		const hiddenContents = snippetText({ Hidden: { prefix: 'hidden', body: ['hidden'] } });
+		await fileService.writeFile(hiddenResource, VSBuffer.fromString(hiddenContents));
+		const plan = await inheritedSnippetsPlan(profile.id, profile.name, [defaultSnippet]);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		assert.strictEqual(await fileService.exists(hiddenResource), false);
+
+		await service.rollback(result.operationId, { categories: ['snippets'] }, CancellationToken.None);
+		assert.strictEqual((await fileService.readFile(hiddenResource)).value.toString(), hiddenContents);
 	});
 
 	test('resumes a durable rollback intent instead of returning to forward Apply', async () => {
@@ -710,7 +1023,7 @@ suite('EditorMigrationApplyService', () => {
 		const contents = '{\n\t"editor.wordWrap": "on"\n}\n';
 		await fileService.writeFile(profile.settingsResource, VSBuffer.fromString(contents));
 		const base = await inheritedSettingsPlan(profile.id, profile.name, contents);
-		const plan: EditorMigrationReviewedPlan = { ...base, target: { ...base.target, categories: [{ ...base.target.categories[0], ownership: 'target' }] }, operations: [] };
+		const plan = await finalizePlan({ ...base, target: { ...base.target, categories: [{ ...base.target.categories[0], ownership: 'target' }] }, operations: [] });
 		const authorization = await service.createApplyAuthorization(plan, []);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
 		assert.deepStrictEqual(result.results.map(item => [item.id, item.outcome]), [['settings', 'alreadyPresent']]);
@@ -781,7 +1094,7 @@ class TestEnvironmentService extends AbstractNativeEnvironmentService {
 async function proposedSettingsPlan(categories: readonly ('settings' | 'keybindings')[] = ['settings'], name = 'Imported'): Promise<EditorMigrationReviewedPlan> {
 	const absent = await fingerprintEditorMigrationValue({ category: 'settings', state: 'absent' });
 	const absentKeybindings = await fingerprintEditorMigrationValue({ category: 'keybindings', state: 'absent' });
-	return {
+	return await finalizePlan({
 		schemaVersion: 2,
 		source: {} as EditorMigrationReviewedPlan['source'],
 		target: {
@@ -804,20 +1117,20 @@ async function proposedSettingsPlan(categories: readonly ('settings' | 'keybindi
 		operations: [{ id: 'settings:editor.wordWrap', category: 'settings', kind: 'setSetting', item: 'editor.wordWrap', source: 'on' }],
 		exclusions: [], prerequisites: [], warnings: [],
 		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
-	};
+	});
 }
 
 async function inheritedSettingsPlan(profileId: string, profileName: string, contents: string): Promise<EditorMigrationReviewedPlan> {
 	const plan = await proposedSettingsPlan();
-	return {
+	return await finalizePlan({
 		...plan,
 		target: {
 			...plan.target,
 			selection: { kind: 'existing', profileId },
 			profile: { id: profileId, name: profileName, kind: 'named' },
-			categories: [{ category: 'settings', ownership: 'default', ownerProfileId: profileId, state: 'present', contentHash: await fingerprintBytes(contents), value: { 'editor.fontSize': 12 } }],
+			categories: [{ category: 'settings', ownership: 'default', state: 'present', contentHash: await fingerprintBytes(contents), value: { 'editor.fontSize': 12 } }],
 		},
-	};
+	});
 }
 
 async function proposedSnippetPlan(name: string): Promise<EditorMigrationReviewedPlan> {
@@ -827,13 +1140,13 @@ async function proposedSnippetPlan(name: string): Promise<EditorMigrationReviewe
 async function proposedSnippetsPlan(name: string, names: readonly string[]): Promise<EditorMigrationReviewedPlan> {
 	const plan = await proposedSettingsPlan([], name);
 	const absent = await fingerprintEditorMigrationValue({ category: 'snippets', state: 'absent' });
-	return {
+	return await finalizePlan({
 		...plan,
 		target: { ...plan.target, requestedCategories: ['snippets'], categories: [{ category: 'snippets', ownership: 'target', state: 'absent', contentHash: absent, value: [] }] },
 		choices: { selectedCategories: ['snippets'], decisions: [] },
 		operations: names.map(snippetName => ({ id: `snippets:${snippetName}`, category: 'snippets' as const, kind: 'addSnippet' as const, item: snippetName, source: { name: snippetName, contents: { Example: { prefix: snippetName, body: [snippetName] } }, contentHash: `source-${snippetName}` } })),
 		fingerprints: { ...plan.fingerprints, plan: 'snippet-plan' },
-	};
+	});
 }
 
 async function inheritedSnippetsPlan(
@@ -843,34 +1156,34 @@ async function inheritedSnippetsPlan(
 ): Promise<EditorMigrationReviewedPlan> {
 	const plan = await proposedSettingsPlan([], profileName);
 	const value = await Promise.all(snippets.map(async snippet => ({ ...snippet, contentHash: await fingerprintBytes(snippetText(snippet.contents)) })));
-	return {
+	return await finalizePlan({
 		...plan,
 		target: {
 			...plan.target,
 			selection: { kind: 'existing', profileId },
 			profile: { id: profileId, name: profileName, kind: 'named' },
 			requestedCategories: ['snippets'],
-			categories: [{ category: 'snippets', ownership: 'default', ownerProfileId: profileId, state: 'present', contentHash: await fingerprintEditorMigrationValue(value), value }],
+			categories: [{ category: 'snippets', ownership: 'default', state: 'present', contentHash: await fingerprintEditorMigrationValue(value), value }],
 		},
 		choices: { selectedCategories: ['snippets'], decisions: [] },
 		operations: [],
 		fingerprints: { ...plan.fingerprints, plan: 'inherited-snippets-plan' },
-	};
+	});
 }
 
 async function inheritedEmptySnippetsWithAddPlan(profileId: string, profileName: string): Promise<EditorMigrationReviewedPlan> {
 	const plan = await proposedSnippetsPlan(profileName, ['added.code-snippets']);
 	const absent = await fingerprintEditorMigrationValue({ category: 'snippets', state: 'absent' });
-	return {
+	return await finalizePlan({
 		...plan,
 		target: {
 			...plan.target,
 			selection: { kind: 'existing', profileId },
 			profile: { id: profileId, name: profileName, kind: 'named' },
-			categories: [{ category: 'snippets', ownership: 'default', ownerProfileId: profileId, state: 'absent', contentHash: absent, value: [] }],
+			categories: [{ category: 'snippets', ownership: 'default', state: 'absent', contentHash: absent, value: [] }],
 		},
 		fingerprints: { ...plan.fingerprints, plan: 'inherited-empty-snippets-add-plan' },
-	};
+	});
 }
 
 function snippetText(contents: EditorMigrationSnippet['contents']): string {
@@ -885,7 +1198,7 @@ async function fingerprintBytes(contents: string): Promise<string> {
 async function extensionPlan(profileId: string): Promise<EditorMigrationReviewedPlan> {
 	const absent = await fingerprintEditorMigrationValue({ category: 'extensions', state: 'absent' });
 	const semanticHash = await fingerprintEditorMigrationValue([]);
-	return {
+	return await finalizePlan({
 		schemaVersion: 2,
 		source: {} as EditorMigrationReviewedPlan['source'],
 		target: {
@@ -908,19 +1221,31 @@ async function extensionPlan(profileId: string): Promise<EditorMigrationReviewed
 		}],
 		exclusions: [], prerequisites: [], warnings: [],
 		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'extension-plan' },
-	};
+	});
 }
 
 async function inheritedExtensionPlan(profileId: string, profileName: string): Promise<EditorMigrationReviewedPlan> {
 	const plan = await extensionPlan(profileId);
-	return {
+	return await finalizePlan({
 		...plan,
 		target: {
 			...plan.target,
 			selection: { kind: 'existing', profileId },
 			profile: { id: profileId, name: profileName, kind: 'named' },
-			categories: plan.target.categories.map(category => ({ ...category, ownership: 'default' as const, ownerProfileId: profileId })),
+			categories: plan.target.categories.map(category => ({ ...category, ownership: 'default' as const, ownerProfileId: undefined })),
 		},
 		fingerprints: { ...plan.fingerprints, plan: `inherited-extension-plan-${profileId}` },
+	});
+}
+
+async function finalizePlan(plan: EditorMigrationReviewedPlan): Promise<EditorMigrationReviewedPlan> {
+	const fingerprints = {
+		source: plan.fingerprints.source,
+		target: plan.fingerprints.target,
+		choices: plan.fingerprints.choices,
+		policy: plan.fingerprints.policy,
+		gallery: plan.fingerprints.gallery,
 	};
+	const fingerprint = await fingerprintEditorMigrationValue({ schemaVersion: plan.schemaVersion, fingerprints, operations: plan.operations, prerequisites: plan.prerequisites });
+	return { ...plan, fingerprints: { ...fingerprints, plan: fingerprint } };
 }

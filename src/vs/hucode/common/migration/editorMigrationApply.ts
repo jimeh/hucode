@@ -44,6 +44,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 	constructor(private readonly now: () => number = Date.now, private readonly nonce: () => string = () => crypto.randomUUID()) { }
 
 	async create(plan: EditorMigrationReviewedPlan, confirmedPublishers: readonly string[]): Promise<EditorMigrationApplyAuthorization> {
+		const planFingerprint = await verifiedEditorMigrationPlanFingerprint(plan);
 		const expected = editorMigrationPublishers(plan);
 		const confirmed = canonicalPublishers(confirmedPublishers);
 		if (!equalStrings(expected, confirmed)) {
@@ -56,7 +57,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 		}
 		this.pending.set(nonce, {
 			planningSchemaVersion: plan.schemaVersion,
-			planFingerprint: plan.fingerprints.plan,
+			planFingerprint,
 			publishers: expected,
 			publisherSetFingerprint,
 			issuedAt: this.now(),
@@ -65,6 +66,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 	}
 
 	async consume(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization): Promise<EditorMigrationConsumedAuthorization> {
+		const planFingerprint = await verifiedEditorMigrationPlanFingerprint(plan);
 		if (!authorization || typeof authorization.nonce !== 'string' || typeof authorization.publisherSetFingerprint !== 'string') {
 			throw new Error('Apply authorization is malformed');
 		}
@@ -73,7 +75,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 			throw new Error('Apply authorization is unknown or has already been consumed');
 		}
 		if (pending.planningSchemaVersion !== plan.schemaVersion
-			|| pending.planFingerprint !== plan.fingerprints.plan
+			|| pending.planFingerprint !== planFingerprint
 			|| pending.publisherSetFingerprint !== authorization.publisherSetFingerprint
 			|| !equalStrings(pending.publishers, editorMigrationPublishers(plan))) {
 			throw new Error('Apply authorization does not match the reviewed plan');
@@ -93,6 +95,26 @@ export function editorMigrationPublishers(plan: EditorMigrationReviewedPlan): re
 	return canonicalPublishers(plan.operations
 		.filter(operation => operation.kind === 'installExtension')
 		.map(operation => publisherFromExtensionId(operation.source.id)));
+}
+
+/** Recomputes and verifies the canonical aggregate fingerprint of a reviewed plan. */
+export async function verifiedEditorMigrationPlanFingerprint(plan: EditorMigrationReviewedPlan): Promise<string> {
+	const actual = await fingerprintEditorMigrationValue({
+		schemaVersion: plan.schemaVersion,
+		fingerprints: {
+			source: plan.fingerprints.source,
+			target: plan.fingerprints.target,
+			choices: plan.fingerprints.choices,
+			policy: plan.fingerprints.policy,
+			gallery: plan.fingerprints.gallery,
+		},
+		operations: plan.operations,
+		prerequisites: plan.prerequisites,
+	});
+	if (actual !== plan.fingerprints.plan) {
+		throw new Error('Reviewed migration plan fingerprint is stale or corrupt');
+	}
+	return actual;
 }
 
 /** Produces the complete settings JSONC text for reviewed assignments. */
@@ -118,18 +140,21 @@ export function reduceEditorMigrationKeybindings(contents: string, evidence: Edi
 			throw new Error('Reviewed keybinding conflicts no longer match the target');
 		}
 		return { operation, indexes };
-	}).sort((left, right) => right.indexes[0] - left.indexes[0]);
+	});
 	const claimed = new Set<number>();
 	for (const replacement of replacements) {
 		if (replacement.indexes.some(index => claimed.has(index))) {
 			throw new Error('Reviewed keybinding replacements overlap');
 		}
 		replacement.indexes.forEach(index => claimed.add(index));
-		const { operation, indexes } = replacement;
-		for (const index of [...indexes].sort((a, b) => b - a)) {
-			result = applyEdits(result, setProperty(result, [index], undefined, formatting(result)));
+	}
+	const replacementByIndex = new Map(replacements.map(replacement => [replacement.indexes[0], replacement.operation.source]));
+	for (const index of [...claimed].sort((a, b) => b - a)) {
+		const replacement = replacementByIndex.get(index);
+		result = applyEdits(result, setProperty(result, [index], undefined, formatting(result)));
+		if (replacement) {
+			result = applyEdits(result, setProperty(result, [index], replacement, formatting(result)));
 		}
-		result = applyEdits(result, setProperty(result, [indexes[0]], operation.source, formatting(result)));
 	}
 	for (const operation of operations.filter(operation => operation.kind === 'addKeybinding')) {
 		result = applyEdits(result, setProperty(result, [-1], operation.source, formatting(result)));
@@ -167,11 +192,18 @@ export interface EditorMigrationSnapshotManifestEntry {
 	readonly resource: string;
 	readonly snapshotPath?: string;
 	readonly byteHash: string;
+	/** Hidden owned contents preserved before inherited data is materialized. */
+	readonly hiddenOwnedState?: 'absent' | 'present';
+	readonly hiddenOwnedSnapshotPath?: string;
+	readonly hiddenOwnedByteHash?: string;
 	readonly semanticHash?: string;
 	/** Hash proven immediately after an inherited resource is seeded locally. */
 	readonly materializedHash?: string;
 	readonly postApplyHash?: string;
 }
+
+/** Complete profile inheritance flags retained across ownership transitions. */
+export type EditorMigrationProfileFlags = Readonly<Record<string, boolean | undefined>>;
 
 /** Target identity reserved and attached by an admitted operation. */
 export interface EditorMigrationOperationTarget {
@@ -198,8 +230,8 @@ export interface EditorMigrationRollbackDriftSnapshot {
 /** Exact profile-ownership transition journaled before profile metadata changes. */
 export interface EditorMigrationOwnershipChangeIntent {
 	readonly categories: readonly EditorMigrationCategory[];
-	readonly beforeFlags: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>;
-	readonly afterFlags: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>;
+	readonly beforeFlags: EditorMigrationProfileFlags;
+	readonly afterFlags: EditorMigrationProfileFlags;
 	readonly state: 'pending' | 'completed';
 }
 
@@ -219,8 +251,8 @@ export interface EditorMigrationRollbackResourceProgress {
 export interface EditorMigrationRollbackIntent {
 	readonly categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
 	readonly forceCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
-	readonly beforeFlags: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>;
-	readonly afterFlags: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>;
+	readonly beforeFlags: EditorMigrationProfileFlags;
+	readonly afterFlags: EditorMigrationProfileFlags;
 	readonly ownershipState: 'pending' | 'restored';
 	readonly resources: readonly EditorMigrationRollbackResourceProgress[];
 }
@@ -238,6 +270,7 @@ export interface EditorMigrationOperation {
 	readonly cancellationRequested: boolean;
 	readonly target: EditorMigrationOperationTarget;
 	readonly snapshots: readonly EditorMigrationSnapshotManifestEntry[];
+	readonly snapshotCompletedCategories?: readonly EditorMigrationCategory[];
 	readonly ownershipChange?: EditorMigrationOwnershipChangeIntent;
 	readonly extensionInstallIntents: readonly EditorMigrationExtensionInstallIntent[];
 	readonly retryItemIds: readonly string[];

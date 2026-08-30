@@ -205,6 +205,9 @@ export class WebShellControllerServiceAdapter
 	acquireEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
 		return Promise.resolve(false);
 	}
+	validateEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
+		return Promise.resolve(false);
+	}
 	releaseEditorMigrationWriterLease(_operationId: string): Promise<void> {
 		return Promise.resolve();
 	}

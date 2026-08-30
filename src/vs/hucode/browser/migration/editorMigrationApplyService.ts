@@ -26,6 +26,7 @@ import {
 	EditorMigrationOperation,
 	EditorMigrationOperationResult,
 	EditorMigrationOperationSummary,
+	EditorMigrationProfileFlags,
 	EditorMigrationRollbackIntent,
 	EditorMigrationRollbackOptions,
 	EditorMigrationRollbackResourceProgress,
@@ -49,6 +50,8 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private readonly authorizationIssuer = new EditorMigrationApplyAuthorizationIssuer();
 	private readonly store: EditorMigrationOperationStore;
+	private activeLeaseOwner: string | undefined;
+	private leaseCallActive = false;
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
@@ -117,18 +120,15 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		return await this.withLease(async () => {
 			let operation = await this.store.read(operationId);
 			try {
+				if ((operation.stage === 'rolledBack' || operation.stage === 'settled') && operation.aggregateOutcome) {
+					return resultOf(operation);
+				}
 				operation = await this.reproveTarget(operation);
 				if (operation.stage === 'rollbackPending') {
 					if (!operation.rollbackIntent) {
 						throw new Error('Migration rollback journal has no durable intent');
 					}
 					return await this.continueRollback(operation, token);
-				}
-				if (operation.stage === 'rolledBack' && operation.aggregateOutcome) {
-					return resultOf(operation);
-				}
-				if (operation.stage === 'settled' && operation.aggregateOutcome) {
-					return resultOf(operation);
 				}
 				operation = await this.resumePreparation(operation, token);
 				return await this.execute(operation, token);
@@ -156,14 +156,10 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			}
 			try {
 				const retryItemIds = operation.results.filter(result => ['failed', 'unavailable', 'canceled'].includes(result.outcome)).map(result => result.id);
-				const retriesInheritedMaterialization = operation.plan.choices.selectedCategories.some(category =>
-					operation.snapshots.some(snapshot => snapshot.category === category && snapshot.ownership === 'default')
-					&& operation.results.some(result => result.id === category && ['failed', 'unavailable'].includes(result.outcome))
-					&& !operation.ownershipChange?.categories.includes(category)
-				);
+				const restartStage = preparationRestartStage(operation);
 				operation = await this.save(operation, {
 					...operation,
-					stage: retriesInheritedMaterialization ? 'materializing' : 'applying',
+					stage: restartStage,
 					aggregateOutcome: undefined,
 					cancellationRequested: false,
 					retryItemIds,
@@ -218,7 +214,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 						item: entry.item,
 						resource: entry.resource,
 						expectedPostApplyHash: entry.postApplyHash!,
-						expectedRestoredHash: entry.ownership === 'default' || entry.state === 'absent' ? await absentHash(category) : entry.byteHash,
+						expectedRestoredHash: entry.ownership === 'default'
+							? entry.hiddenOwnedByteHash ?? await absentHash(category)
+							: entry.state === 'absent' ? await absentHash(category) : entry.byteHash,
 						state: 'pending',
 					});
 				}
@@ -283,6 +281,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				throw new Error('Migration rollback profile ownership changed');
 			}
 			if (matchesBefore) {
+				await this.assertWriterLease();
 				await this.profilesService.updateProfile(profile, { useDefaultFlags: flagsToUseDefault(intent.afterFlags) });
 			}
 			const updatedProfile = this.requireAttachedProfile(operation);
@@ -373,6 +372,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			cancellationRequested: false,
 			target: { state: 'pending' },
 			snapshots: [],
+			snapshotCompletedCategories: [],
 			extensionInstallIntents: [],
 			retryItemIds: [],
 			rollbackDriftSnapshots: [],
@@ -401,6 +401,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		if (selection.kind === 'existing') {
 			const profile = this.profilesService.profiles.find(candidate => candidate.id === selection.profileId);
 			assertEligibleProfile(profile);
+			this.assertReviewedTargetEvidence(operation, profile);
 			return await this.save(operation, { ...operation, stage: 'snapshotting', target: { state: 'attached', profileId: profile.id, profileName: profile.name } });
 		}
 		const name = selection.name.trim();
@@ -409,6 +410,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		}
 		const reservedId = generateUuid();
 		operation = await this.save(operation, { ...operation, stage: 'attachingTarget', target: { state: 'reserved', profileId: reservedId, profileName: name } });
+		await this.assertWriterLease();
 		const profile = await this.profilesService.createProfile(reservedId, name, {
 			icon: selection.options?.icon,
 			useDefaultFlags: selection.options?.useDefaultFlags as UseDefaultProfileFlags | undefined,
@@ -430,6 +432,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				if (this.profilesService.profiles.some(candidate => !candidate.isTransient && candidate.name === operation.target.profileName)) {
 					throw new Error('Reserved migration profile name is owned by another profile');
 				}
+				await this.assertWriterLease();
 				profile = await this.profilesService.createProfile(operation.target.profileId, operation.target.profileName, {
 					...this.proposedProfileOptions(operation),
 				});
@@ -450,7 +453,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		if (selection.kind !== 'proposed') {
 			throw new Error('Migration operation does not target a proposed profile');
 		}
-		let useDefaultFlags: Record<string, boolean> = { ...(selection.options?.useDefaultFlags ?? {}) };
+		let useDefaultFlags: EditorMigrationProfileFlags = { ...(selection.options?.useDefaultFlags ?? {}) };
 		if (operation.stage === 'rollbackPending' || operation.stage === 'rolledBack') {
 			if (operation.rollbackIntent) {
 				useDefaultFlags = { ...operation.rollbackIntent.afterFlags };
@@ -467,7 +470,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		if (profile.id !== operation.target.profileId || profile.name !== operation.target.profileName || profile.icon !== this.proposedProfileOptions(operation).icon) {
 			throw new Error('Migration proposed target identity or options changed');
 		}
-		const expectedStates: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>[] = [this.proposedProfileOptions(operation).useDefaultFlags ?? {}];
+		const expectedStates: EditorMigrationProfileFlags[] = [this.proposedProfileOptions(operation).useDefaultFlags ?? {}];
 		if (operation.stage === 'materializing' && operation.ownershipChange?.state === 'pending') {
 			expectedStates.push(operation.ownershipChange.beforeFlags);
 		}
@@ -529,7 +532,8 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		const lost = operation.plan.choices.selectedCategories.filter(category =>
 			profile.useDefaultFlags?.[category]
 			&& operation.snapshots.some(snapshot => snapshot.category === category && snapshot.ownership === 'default')
-			&& !operation.results.some(result => result.id === category && (result.outcome === 'failed' || result.outcome === 'unavailable'))
+			&& operation.ownershipChange?.state === 'completed'
+			&& operation.ownershipChange.categories.includes(category)
 		);
 		if (!lost.length) {
 			return operation;
@@ -551,6 +555,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		}
 		const flags: Record<string, boolean> = { ...(profile.useDefaultFlags ?? {}) };
 		lost.forEach(category => delete flags[category]);
+		await this.assertWriterLease();
 		await this.profilesService.updateProfile(profile, { useDefaultFlags: flags });
 		return operation;
 	}
@@ -570,16 +575,20 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private async snapshotSelectedCategories(operation: EditorMigrationOperation, token: CancellationToken): Promise<EditorMigrationOperation> {
 		const profile = this.requireAttachedProfile(operation);
+		this.assertReviewedTargetEvidence(operation, profile);
 		for (const category of operation.plan.choices.selectedCategories) {
 			throwIfCancelled(token);
-			if (operation.snapshots.some(snapshot => snapshot.category === category)) {
+			if (operation.snapshotCompletedCategories?.includes(category)) {
 				continue;
 			}
 			const reviewed = requireTargetCategory(operation.plan, category);
 			const effective = effectiveCategoryResource(profile, this.profilesService.defaultProfile, category);
 			const ownedResource = ownedCategoryResource(profile, category);
 			if (category === 'snippets') {
-				operation = await this.snapshotSnippets(operation, reviewed, effective.resource, ownedResource);
+				operation = await this.snapshotSnippets(operation, reviewed, effective.resource, ownedResource, token);
+				if (!operation.results.some(result => result.id === category && result.outcome === 'failed')) {
+					operation = await this.markSnapshotComplete(operation, category);
+				}
 				continue;
 			}
 			const raw = await this.readRaw(effective.resource);
@@ -593,6 +602,8 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				continue;
 			}
 			const path = raw ? await this.store.writeSnapshot(operation.id, `${category}.before`, raw.value) : undefined;
+			const hiddenOwned = reviewed.ownership === 'default' && category !== 'extensions' ? await this.readRaw(ownedResource) : undefined;
+			const hiddenOwnedSnapshotPath = hiddenOwned ? await this.store.writeSnapshot(operation.id, `${category}.hidden-owned`, hiddenOwned.value) : undefined;
 			const entry: EditorMigrationSnapshotManifestEntry = {
 				category,
 				state: raw ? 'present' : 'absent',
@@ -601,19 +612,50 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				snapshotPath: path,
 				byteHash: hash,
 				semanticHash: category === 'extensions' ? reviewed.semanticHash : undefined,
+				...(reviewed.ownership === 'default' && category !== 'extensions' ? {
+					hiddenOwnedState: hiddenOwned ? 'present' as const : 'absent' as const,
+					hiddenOwnedSnapshotPath,
+					hiddenOwnedByteHash: hiddenOwned ? await sha256(hiddenOwned.value) : await absentHash(category),
+				} : {}),
 			};
 			operation = await this.save(operation, { ...operation, snapshots: [...operation.snapshots, entry] });
+			operation = await this.markSnapshotComplete(operation, category);
 		}
 		return await this.save(operation, { ...operation, stage: 'materializing' });
 	}
 
-	private async snapshotSnippets(operation: EditorMigrationOperation, reviewed: EditorMigrationTargetCategorySnapshot, effectiveResource: URI, ownedResource: URI): Promise<EditorMigrationOperation> {
+	private markSnapshotComplete(operation: EditorMigrationOperation, category: EditorMigrationCategory): Promise<EditorMigrationOperation> {
+		return this.save(operation, { ...operation, snapshotCompletedCategories: [...new Set([...(operation.snapshotCompletedCategories ?? []), category])] });
+	}
+
+	private assertReviewedTargetEvidence(operation: EditorMigrationOperation, profile: IUserDataProfile): void {
+		const reviewedProfile = operation.plan.target.profile;
+		if (reviewedProfile && (reviewedProfile.id !== profile.id || reviewedProfile.name !== profile.name || reviewedProfile.kind !== (profile.isDefault ? 'default' : 'named'))) {
+			throw new Error('Migration target profile identity changed after Review');
+		}
+		for (const category of operation.plan.choices.selectedCategories) {
+			const reviewed = requireTargetCategory(operation.plan, category);
+			const inherited = !profile.isDefault && Boolean(profile.useDefaultFlags?.[category]);
+			const ownership = inherited ? 'default' : 'target';
+			const ownerProfileId = inherited ? this.profilesService.defaultProfile.id : profile.id;
+			if (reviewed.ownership !== ownership || (reviewed.ownerProfileId !== undefined && reviewed.ownerProfileId !== ownerProfileId)) {
+				throw new Error(`Migration target ${category} ownership changed after Review`);
+			}
+		}
+	}
+
+	private async snapshotSnippets(operation: EditorMigrationOperation, reviewed: EditorMigrationTargetCategorySnapshot, effectiveResource: URI, ownedResource: URI, token: CancellationToken): Promise<EditorMigrationOperation> {
 		const expected = reviewed.category === 'snippets' ? reviewed.value ?? [] : [];
+		const hiddenNames = reviewed.ownership === 'default' ? await this.snippetNames(ownedResource) : [];
 		if (expected.length === 0) {
 			const entry: EditorMigrationSnapshotManifestEntry = { category: 'snippets', state: 'absent', ownership: reviewed.ownership, resource: (reviewed.ownership === 'default' ? ownedResource : effectiveResource).toString(), byteHash: reviewed.contentHash ?? await absentHash('snippets') };
-			return await this.save(operation, { ...operation, snapshots: [...operation.snapshots, entry] });
+			operation = await this.save(operation, { ...operation, snapshots: [...operation.snapshots, entry] });
 		}
 		for (const snippet of expected) {
+			throwIfCancelled(token);
+			if (operation.snapshots.some(snapshot => snapshot.category === 'snippets' && snapshot.item === snippet.name)) {
+				continue;
+			}
 			const target = safeSnippetResource(effectiveResource, snippet.name);
 			const ownedTarget = safeSnippetResource(ownedResource, snippet.name);
 			const raw = await this.readRaw(target);
@@ -622,9 +664,51 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				return await this.recordResult(operation, 'snippets', 'snippets', 'failed', 'targetDrift', 'Snippets changed after Review');
 			}
 			const path = await this.store.writeSnapshot(operation.id, `snippets/${encodeURIComponent(snippet.name)}`, raw.value);
-			operation = await this.save(operation, { ...operation, snapshots: [...operation.snapshots, { category: 'snippets', item: snippet.name, state: 'present', ownership: reviewed.ownership, resource: (reviewed.ownership === 'default' ? ownedTarget : target).toString(), snapshotPath: path, byteHash: hash }] });
+			const hidden = reviewed.ownership === 'default' ? await this.readRaw(ownedTarget) : undefined;
+			const hiddenPath = hidden ? await this.store.writeSnapshot(operation.id, `hidden-snippets/${encodeURIComponent(snippet.name)}`, hidden.value) : undefined;
+			operation = await this.save(operation, {
+				...operation, snapshots: [...operation.snapshots, {
+					category: 'snippets', item: snippet.name, state: 'present', ownership: reviewed.ownership,
+					resource: (reviewed.ownership === 'default' ? ownedTarget : target).toString(), snapshotPath: path, byteHash: hash,
+					...(reviewed.ownership === 'default' ? { hiddenOwnedState: hidden ? 'present' as const : 'absent' as const, hiddenOwnedSnapshotPath: hiddenPath, hiddenOwnedByteHash: hidden ? await sha256(hidden.value) : await absentHash('snippets') } : {}),
+				}]
+			});
+			throwIfCancelled(token);
+		}
+		for (const name of hiddenNames.filter(name => !expected.some(snippet => snippet.name === name))) {
+			throwIfCancelled(token);
+			const resource = safeSnippetResource(ownedResource, name);
+			if (operation.snapshots.some(snapshot => snapshot.category === 'snippets' && snapshot.resource === resource.toString())) {
+				continue;
+			}
+			const hidden = await this.readRaw(resource);
+			if (!hidden) {
+				continue;
+			}
+			const hiddenPath = await this.store.writeSnapshot(operation.id, `hidden-snippets/${encodeURIComponent(name)}`, hidden.value);
+			operation = await this.save(operation, {
+				...operation, snapshots: [...operation.snapshots, {
+					category: 'snippets', item: name, state: 'absent', ownership: 'default', resource: resource.toString(), byteHash: await absentHash('snippets'),
+					hiddenOwnedState: 'present', hiddenOwnedSnapshotPath: hiddenPath, hiddenOwnedByteHash: await sha256(hidden.value),
+				}]
+			});
+			throwIfCancelled(token);
 		}
 		return operation;
+	}
+
+	private async snippetNames(resource: URI): Promise<readonly string[]> {
+		try {
+			return ((await this.fileService.resolve(resource)).children ?? [])
+				.filter(child => child.isFile && /\.(?:json|code-snippets)$/i.test(child.name))
+				.map(child => child.name)
+				.sort((left, right) => left.localeCompare(right));
+		} catch (error) {
+			if (toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND) {
+				return [];
+			}
+			throw error;
+		}
 	}
 
 	private async materializeInheritedCategories(operation: EditorMigrationOperation, token: CancellationToken): Promise<EditorMigrationOperation> {
@@ -644,7 +728,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			const owned = ownedCategoryResource(profile, category);
 			if (category === 'snippets') {
 				for (const snapshot of operation.snapshots.filter(entry => entry.category === category && entry.ownership === 'default')) {
+					throwIfCancelled(token);
 					operation = await this.materializeSnapshot(operation, snapshot, snapshot.item ? safeSnippetResource(owned, snapshot.item) : owned);
+					throwIfCancelled(token);
 				}
 			} else if (category === 'extensions') {
 				if (operation.ownershipChange?.categories.includes(category)) {
@@ -657,6 +743,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				}
 				try {
 					const defaultSemanticBefore = await this.extensionSemanticHash(this.profilesService.defaultProfile);
+					await this.assertWriterLease();
 					await local.extensionManagementService.copyExtensions(this.profilesService.defaultProfile.extensionsResource, owned);
 					const copiedSemantic = await this.extensionSemanticHash(profile, true);
 					const reviewed = requireTargetCategory(operation.plan, 'extensions');
@@ -699,6 +786,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				throw new Error('Migration target ownership changed during materialization');
 			}
 			if (matchesBefore) {
+				await this.assertWriterLease();
 				await this.profilesService.updateProfile(profile, { useDefaultFlags: flagsToUseDefault(intent.afterFlags) });
 			}
 			profile = this.requireAttachedProfile(operation);
@@ -755,7 +843,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 					operation = await this.applyExtensions(operation, token);
 				}
 			} else if (!operation.results.some(result => result.id === category) || operation.retryItemIds.includes(category)) {
-				operation = await this.applyFileCategory(operation, category);
+				operation = await this.applyFileCategory(operation, category, token);
 			}
 			if (token.isCancellationRequested) {
 				operation = await this.cancelPending(operation);
@@ -771,14 +859,14 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		return resultOf(operation);
 	}
 
-	private async applyFileCategory(operation: EditorMigrationOperation, category: Exclude<EditorMigrationCategory, 'extensions'>): Promise<EditorMigrationOperation> {
+	private async applyFileCategory(operation: EditorMigrationOperation, category: Exclude<EditorMigrationCategory, 'extensions'>, token: CancellationToken): Promise<EditorMigrationOperation> {
 		const profile = this.requireAttachedProfile(operation);
 		if (operation.results.some(result => result.id === category && result.outcome === 'failed') && !operation.retryItemIds.includes(category)) {
 			return operation;
 		}
 		try {
 			if (category === 'snippets') {
-				return await this.applySnippets(operation, profile);
+				return await this.applySnippets(operation, profile, token);
 			}
 			const resource = ownedCategoryResource(profile, category);
 			const current = await this.readRaw(resource);
@@ -813,12 +901,16 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			operation = await this.withPostApplyHash(operation, category, resource, postApplyHash);
 			return await this.recordResult(operation, category, category, 'completed');
 		} catch (error) {
+			if (isCancellationError(error)) {
+				throw error;
+			}
 			return await this.recordResult(operation, category, category, 'failed', 'categoryWriteFailed', errorMessage(error));
 		}
 	}
 
-	private async applySnippets(operation: EditorMigrationOperation, profile: IUserDataProfile): Promise<EditorMigrationOperation> {
+	private async applySnippets(operation: EditorMigrationOperation, profile: IUserDataProfile, token: CancellationToken): Promise<EditorMigrationOperation> {
 		for (const item of operation.plan.operations.filter(item => item.category === 'snippets')) {
+			throwIfCancelled(token);
 			if (operation.results.some(result => result.id === item.id) && !operation.retryItemIds.includes(item.id)) {
 				continue;
 			}
@@ -843,6 +935,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			await this.writeAtomic(resource, contents, current?.mtime, current?.etag);
 			operation = await this.withPostApplyHash(operation, 'snippets', resource, postApplyHash, item.source.name);
 			operation = await this.recordResult(operation, item.id, 'snippets', 'completed');
+			throwIfCancelled(token);
 		}
 		return await this.recordResult(operation, 'snippets', 'snippets', operation.results.some(result => result.id !== 'snippets' && result.category === 'snippets' && result.outcome === 'failed') ? 'failed' : 'completed');
 	}
@@ -886,6 +979,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				return await this.recordResult(operation, item.id, 'extensions', 'failed', 'extensionInstallDrift', 'The in-flight extension installation used an unexpected profile location');
 			}
 			if (reconciled.pinned) {
+				await this.assertWriterLease();
 				reconciled = await local.extensionManagementService.updateMetadata(reconciled, { pinned: false }, actualProfile.extensionsResource);
 			}
 			if (reconciled.pinned) {
@@ -923,8 +1017,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			} else if (installIntent.actualProfileLocation !== expectedActualProfile.extensionsResource.toString()) {
 				return await this.recordResult(operation, item.id, 'extensions', 'failed', 'extensionInstallDrift', 'The reviewed extension scope changed after its install intent was recorded');
 			}
+			await this.assertWriterLease();
 			let installedExtension = await local.extensionManagementService.installFromGallery(exact, {
-				profileLocation: ownedCategoryResource(profile, 'extensions'),
+				profileLocation: expectedActualProfile.extensionsResource,
 				isMachineScoped: false,
 				donotIncludePackAndDependencies: true,
 				installGivenVersion: true,
@@ -935,6 +1030,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				throw new Error('Extension manager used an unexpected profile location');
 			}
 			if (installedExtension.pinned) {
+				await this.assertWriterLease();
 				installedExtension = await local.extensionManagementService.updateMetadata(installedExtension, { pinned: false }, actualProfile.extensionsResource);
 			}
 			if (installedExtension.pinned) {
@@ -973,7 +1069,18 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private async restoreSnapshot(operation: EditorMigrationOperation, entry: EditorMigrationSnapshotManifestEntry, resource: URI): Promise<void> {
 		if (entry.ownership === 'default') {
-			await this.deleteIfExists(resource, entry.category === 'snippets' && !entry.item);
+			if (entry.hiddenOwnedState === 'present') {
+				if (!entry.hiddenOwnedSnapshotPath || !entry.hiddenOwnedByteHash) {
+					throw new Error('Present hidden owned snapshot has no recovery payload');
+				}
+				const payload = await this.store.readSnapshot(operation.id, entry.hiddenOwnedSnapshotPath);
+				if (await sha256(payload) !== entry.hiddenOwnedByteHash) {
+					throw new Error('Hidden owned snapshot payload failed hash verification');
+				}
+				await this.writeAtomic(resource, payload);
+			} else {
+				await this.deleteIfExists(resource, entry.category === 'snippets' && !entry.item);
+			}
 			return;
 		}
 		if (entry.state === 'absent') {
@@ -1048,6 +1155,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private async deleteIfExists(resource: URI, recursive = false): Promise<void> {
 		try {
+			await this.assertWriterLease();
 			await this.fileService.del(resource, { recursive });
 		} catch (error) {
 			if (toFileOperationResult(error) !== FileOperationResult.FILE_NOT_FOUND) {
@@ -1070,6 +1178,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 	}
 
 	private async writeAtomic(resource: URI, contents: VSBuffer, mtime?: number, etag?: string): Promise<void> {
+		await this.assertWriterLease();
 		await this.fileService.createFolder(URI.joinPath(resource, '..'));
 		const atomic = this.fileService.hasCapability(resource, FileSystemProviderCapabilities.FileAtomicWrite) ? { postfix: '.hucode-migration-tmp' } : undefined;
 		await this.fileService.writeFile(resource, contents, { mtime, etag, atomic });
@@ -1080,28 +1189,51 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 	}
 
 	private async withLease<T>(task: () => Promise<T>): Promise<T> {
-		const owner = generateUuid();
-		if (!await this.shellControllerService.acquireEditorMigrationWriterLease(owner)) {
-			throw new Error('Another editor migration Apply operation holds the writer lease');
+		if (this.leaseCallActive) {
+			throw new Error('Another editor migration operation is already running in this window');
 		}
+		this.leaseCallActive = true;
+		const owner = generateUuid();
+		let acquired = false;
 		try {
+			if (!await this.shellControllerService.acquireEditorMigrationWriterLease(owner)) {
+				throw new Error('Another editor migration Apply operation holds the writer lease');
+			}
+			acquired = true;
+			this.activeLeaseOwner = owner;
 			return await task();
 		} finally {
-			await this.shellControllerService.releaseEditorMigrationWriterLease(owner);
+			if (this.activeLeaseOwner === owner) {
+				this.activeLeaseOwner = undefined;
+			}
+			try {
+				if (acquired) {
+					await this.shellControllerService.releaseEditorMigrationWriterLease(owner);
+				}
+			} finally {
+				this.leaseCallActive = false;
+			}
+		}
+	}
+
+	private async assertWriterLease(): Promise<void> {
+		if (!this.activeLeaseOwner || !await this.shellControllerService.validateEditorMigrationWriterLease(this.activeLeaseOwner)) {
+			throw new CancellationError();
 		}
 	}
 }
 
-function profileFlags(profile: IUserDataProfile): Partial<Record<EditorMigrationCategory, boolean>> {
-	return Object.fromEntries(CATEGORY_ORDER.map(category => [category, Boolean(profile.useDefaultFlags?.[category])])) as Partial<Record<EditorMigrationCategory, boolean>>;
+function profileFlags(profile: IUserDataProfile): EditorMigrationProfileFlags {
+	return { ...(profile.useDefaultFlags ?? {}) };
 }
 
-function flagsMatch(profile: IUserDataProfile, expected: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>): boolean {
-	return CATEGORY_ORDER.every(category => Boolean(profile.useDefaultFlags?.[category]) === Boolean(expected[category]));
+function flagsMatch(profile: IUserDataProfile, expected: EditorMigrationProfileFlags): boolean {
+	const actual = profile.useDefaultFlags ?? {};
+	return [...new Set([...Object.keys(actual), ...Object.keys(expected)])].every(key => Boolean(actual[key as keyof UseDefaultProfileFlags]) === Boolean(expected[key]));
 }
 
-function flagsToUseDefault(flags: Readonly<Partial<Record<EditorMigrationCategory, boolean>>>): UseDefaultProfileFlags {
-	return Object.fromEntries(CATEGORY_ORDER.filter(category => flags[category]).map(category => [category, true])) as UseDefaultProfileFlags;
+function flagsToUseDefault(flags: EditorMigrationProfileFlags): UseDefaultProfileFlags {
+	return Object.fromEntries(Object.entries(flags).filter(([, value]) => value).map(([key]) => [key, true])) as UseDefaultProfileFlags;
 }
 
 function sameRollbackResource(left: EditorMigrationRollbackResourceProgress, right: EditorMigrationRollbackResourceProgress): boolean {
@@ -1191,6 +1323,24 @@ function expectedResultIds(plan: EditorMigrationReviewedPlan): readonly string[]
 		...plan.choices.selectedCategories,
 		...plan.operations.filter(operation => operation.category === 'snippets' || operation.category === 'extensions').map(operation => operation.id),
 	])];
+}
+
+function preparationRestartStage(operation: EditorMigrationOperation): EditorMigrationOperation['stage'] {
+	if (operation.target.state === 'pending') {
+		return 'admitted';
+	}
+	if (operation.target.state === 'reserved') {
+		return 'attachingTarget';
+	}
+	if (operation.plan.choices.selectedCategories.some(category => !operation.snapshotCompletedCategories?.includes(category))) {
+		return 'snapshotting';
+	}
+	if (operation.plan.choices.selectedCategories.some(category =>
+		operation.snapshots.some(snapshot => snapshot.category === category && snapshot.ownership === 'default')
+		&& !(operation.ownershipChange?.state === 'completed' && operation.ownershipChange.categories.includes(category)))) {
+		return 'materializing';
+	}
+	return 'applying';
 }
 
 function deriveExtensionCategoryOutcome(outcomes: readonly EditorMigrationItemOutcome[]): EditorMigrationItemOutcome {

@@ -469,6 +469,10 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		return this.withShell(shell =>
 			shell.acquireEditorMigrationWriterLease(operationId));
 	}
+	validateEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.validateEditorMigrationWriterLease(operationId));
+	}
 	releaseEditorMigrationWriterLease(operationId: string) {
 		return this.withShell(shell =>
 			shell.releaseEditorMigrationWriterLease(operationId));

@@ -213,6 +213,8 @@ export interface IHucodeShellControllerService {
 	setWorkspaceOverlayOcclusion(occluded: boolean): Promise<void>;
 	/** Acquires Hucode's installation-wide editor migration writer lease. */
 	acquireEditorMigrationWriterLease(operationId: string): Promise<boolean>;
+	/** Checks that this bound shell connection still owns its writer lease. */
+	validateEditorMigrationWriterLease(operationId: string): Promise<boolean>;
 	/** Releases a writer lease held by this bound shell connection. */
 	releaseEditorMigrationWriterLease(operationId: string): Promise<void>;
 	shutdownWindowWorkspaces(reason: HucodeShellShutdownReason): Promise<void>;
@@ -254,6 +256,7 @@ export const HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS = Object.freeze([
 	'captureWorkspaceScreenshot',
 	'setWorkspaceOverlayOcclusion',
 	'acquireEditorMigrationWriterLease',
+	'validateEditorMigrationWriterLease',
 	'releaseEditorMigrationWriterLease',
 	'shutdownWindowWorkspaces',
 ] as const satisfies readonly (keyof IHucodeShellControllerService)[]);
@@ -365,6 +368,8 @@ export function createHucodeShellControllerClient(
 			remote.setWorkspaceOverlayOcclusion(occluded),
 		acquireEditorMigrationWriterLease: operationId =>
 			remote.acquireEditorMigrationWriterLease(operationId),
+		validateEditorMigrationWriterLease: operationId =>
+			remote.validateEditorMigrationWriterLease(operationId),
 		releaseEditorMigrationWriterLease: operationId =>
 			remote.releaseEditorMigrationWriterLease(operationId),
 		shutdownWindowWorkspaces: reason =>

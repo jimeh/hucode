@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
+import { editorMigrationKeybindingRowId } from '../../common/migration/editorMigrationPlanner.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorizationIssuer,
@@ -14,7 +15,9 @@ import {
 	reduceEditorMigrationKeybindings,
 	reduceEditorMigrationSettings,
 	toEditorMigrationTelemetry,
+	verifiedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
+import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 
 suite('EditorMigrationApply', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -22,13 +25,13 @@ suite('EditorMigrationApply', () => {
 	test('issues a single-use publisher authorization bound to the plan and exact publisher set', async () => {
 		let now = 1_000;
 		const issuer = new EditorMigrationApplyAuthorizationIssuer(() => now, () => 'nonce-1');
-		const plan = reviewedPlan('plan-a', ['Zed.One', 'alpha.two', 'alpha.three']);
+		const plan = await reviewedPlan(['Zed.One', 'alpha.two', 'alpha.three']);
 		assert.deepStrictEqual(editorMigrationPublishers(plan), ['alpha', 'zed']);
 
 		const authorization = await issuer.create(plan, [' ZED ', 'alpha']);
 		assert.deepStrictEqual(await issuer.consume(plan, authorization), {
 			planningSchemaVersion: plan.schemaVersion,
-			planFingerprint: 'plan-a',
+			planFingerprint: plan.fingerprints.plan,
 			publishers: ['alpha', 'zed'],
 			publisherSetFingerprint: authorization.publisherSetFingerprint,
 			issuedAt: 1_000,
@@ -37,7 +40,11 @@ suite('EditorMigrationApply', () => {
 		await assert.rejects(() => issuer.consume(plan, authorization), /already been consumed/);
 
 		const stale = await issuer.create(plan, ['alpha', 'zed']);
-		await assert.rejects(() => issuer.consume(reviewedPlan('plan-b', ['zed.one', 'alpha.two']), stale), /does not match/);
+		await assert.rejects(async () => issuer.consume(await reviewedPlan(['zed.one', 'alpha.two']), stale), /does not match/);
+		const first = plan.operations[0];
+		assert.strictEqual(first.kind, 'installExtension');
+		const mutated = { ...plan, operations: [...plan.operations, { ...first, id: 'extensions:zed.changed', item: 'zed.changed', source: { ...first.source, id: 'zed.changed' } }] } as EditorMigrationReviewedPlan;
+		await assert.rejects(() => issuer.create(mutated, ['alpha', 'zed']), /fingerprint is stale/);
 		now += 10 * 60 * 1_000 + 1;
 		await assert.rejects(() => issuer.consume(plan, stale), /expired/);
 		await assert.rejects(() => issuer.create(plan, ['alpha']), /publisher set does not match/);
@@ -45,7 +52,7 @@ suite('EditorMigrationApply', () => {
 
 	test('requires service authorization even when no extension publishers are selected', async () => {
 		const issuer = new EditorMigrationApplyAuthorizationIssuer(() => 5, () => 'empty-nonce');
-		const plan = reviewedPlan('empty', []);
+		const plan = await reviewedPlan([]);
 		const authorization = await issuer.create(plan, []);
 		assert.deepStrictEqual((await issuer.consume(plan, authorization)).publishers, []);
 	});
@@ -68,6 +75,29 @@ suite('EditorMigrationApply', () => {
 		assert.match(result, /"command": "new"/);
 		assert.match(result, /"command": "unrelated"/);
 		assert.doesNotMatch(result, /"command": "old"/);
+	});
+
+	test('applies interleaved multi-row keybinding replacements against the reviewed array', () => {
+		const evidence = { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: 'linux', gallery: [] };
+		const input = JSON.stringify([
+			{ key: 'ctrl+a', command: 'old.a' },
+			{ key: 'ctrl+u', command: 'keep.one' },
+			{ key: 'ctrl+b', command: 'old.b' },
+			{ key: 'ctrl+v', command: 'keep.two' },
+			{ key: 'ctrl+c', command: 'old.c' },
+		]);
+		const parsed = JSON.parse(input);
+		const rowId = (index: number) => editorMigrationKeybindingRowId(parsed[index], evidence, index);
+		const result = reduceEditorMigrationKeybindings(input, evidence, [
+			{ id: 'replace-ac', category: 'keybindings', kind: 'replaceKeybinding', item: 'replacement-ac', source: { key: 'ctrl+x', command: 'new.ac' }, relatedTargetIds: [rowId(0), rowId(4)] },
+			{ id: 'replace-b', category: 'keybindings', kind: 'replaceKeybinding', item: 'replacement-b', source: { key: 'ctrl+y', command: 'new.b' }, relatedTargetIds: [rowId(2), rowId(3)] },
+		]);
+
+		assert.deepStrictEqual(JSON.parse(result), [
+			{ key: 'ctrl+x', command: 'new.ac' },
+			{ key: 'ctrl+u', command: 'keep.one' },
+			{ key: 'ctrl+y', command: 'new.b' },
+		]);
 	});
 
 	test('derives durable aggregate outcomes and emits only telemetry-safe fields', () => {
@@ -96,8 +126,8 @@ suite('EditorMigrationApply', () => {
 	});
 });
 
-function reviewedPlan(planFingerprint: string, extensionIds: readonly string[]): EditorMigrationReviewedPlan {
-	return {
+async function reviewedPlan(extensionIds: readonly string[]): Promise<EditorMigrationReviewedPlan> {
+	const plan: EditorMigrationReviewedPlan = {
 		schemaVersion: 2,
 		source: {} as EditorMigrationReviewedPlan['source'],
 		target: {} as EditorMigrationReviewedPlan['target'],
@@ -108,6 +138,10 @@ function reviewedPlan(planFingerprint: string, extensionIds: readonly string[]):
 			source: { id, requestedChannel: 'stable', status: 'available', version: `${index + 1}.0.0`, targetPlatform: 'linux-x64', selectedChannel: 'stable', engine: '*', galleryIdentity: 'open-vsx' },
 		})),
 		exclusions: [], prerequisites: [], warnings: [],
-		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: planFingerprint },
+		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: '' },
 	};
+	const fingerprint = await fingerprintEditorMigrationValue({ schemaVersion: plan.schemaVersion, fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery' }, operations: plan.operations, prerequisites: plan.prerequisites });
+	const reviewed = { ...plan, fingerprints: { ...plan.fingerprints, plan: fingerprint } };
+	assert.strictEqual(await verifiedEditorMigrationPlanFingerprint(reviewed), fingerprint);
+	return reviewed;
 }

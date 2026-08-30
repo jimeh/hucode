@@ -626,6 +626,7 @@ export class HucodeShellMainService extends Disposable
 		connection: DisposableStore
 	): IHucodeShellControllerService {
 		let editorMigrationWriterLease: EditorMigrationWriterLease | undefined;
+		let disposeEditorMigrationWriterLease: (() => void) | undefined;
 		return {
 			_serviceBrand: undefined,
 			supportsWorkspaceScreenshotOverlay: true,
@@ -711,12 +712,18 @@ export class HucodeShellMainService extends Disposable
 					return Promise.resolve(false);
 				}
 				editorMigrationWriterLease = lease;
-				connection.add(toDisposable(() => this.editorMigrationWriterLeaseAuthority.release(lease)));
+				const release = connection.add(toDisposable(() => this.editorMigrationWriterLeaseAuthority.release(lease)));
+				disposeEditorMigrationWriterLease = () => release.dispose();
 				return Promise.resolve(true);
 			},
+			validateEditorMigrationWriterLease: operationId => Promise.resolve(
+				this.editorMigrationWriterLeaseAuthority.holds(windowId, operationId)
+				&& editorMigrationWriterLease?.operationId === operationId
+			),
 			releaseEditorMigrationWriterLease: operationId => {
 				if (editorMigrationWriterLease?.operationId === operationId) {
-					this.editorMigrationWriterLeaseAuthority.release(editorMigrationWriterLease);
+					disposeEditorMigrationWriterLease?.();
+					disposeEditorMigrationWriterLease = undefined;
 					editorMigrationWriterLease = undefined;
 				}
 				return Promise.resolve();

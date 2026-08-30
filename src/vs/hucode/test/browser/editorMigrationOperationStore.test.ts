@@ -14,6 +14,8 @@ import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMem
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
 import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
+import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 
 const ROOT = URI.from({ scheme: 'hucode-migration-store-test', path: '/User' });
 
@@ -30,7 +32,7 @@ suite('EditorMigrationOperationStore', () => {
 	});
 
 	test('atomically revisions journals and retains separately hashed snapshot payloads', async () => {
-		const initial = operation('one');
+		const initial = await operation('one');
 		await store.create(initial);
 		assert.deepStrictEqual(await store.read('one'), initial);
 
@@ -45,7 +47,7 @@ suite('EditorMigrationOperationStore', () => {
 	});
 
 	test('lists unknown schemas without rewriting and removes acknowledged private data', async () => {
-		await store.create(operation('supported'));
+		await store.create(await operation('supported'));
 		await fileService.createFolder(joinPath(store.root, 'future'));
 		await fileService.writeFile(joinPath(store.root, 'future', 'operation.json'), VSBuffer.fromString('{"schemaVersion":99,"id":"future"}'));
 
@@ -58,8 +60,8 @@ suite('EditorMigrationOperationStore', () => {
 	});
 
 	test('rejects traversal in operation and snapshot paths', async () => {
-		await assert.rejects(() => store.create(operation('../escape')), /invalid segment/);
-		await store.create(operation('safe'));
+		await assert.rejects(() => operation('../escape').then(value => store.create(value)), /invalid segment/);
+		await store.create(await operation('safe'));
 		await assert.rejects(() => store.writeSnapshot('safe', '../escape', VSBuffer.fromString('no')), /invalid segment/);
 	});
 
@@ -68,7 +70,18 @@ suite('EditorMigrationOperationStore', () => {
 		const nonAtomicFileService = disposables.add(new FileService(new NullLogService()));
 		disposables.add(nonAtomicFileService.registerProvider(root.scheme, disposables.add(new InMemoryFileSystemProvider())));
 		const nonAtomicStore = new EditorMigrationOperationStore(nonAtomicFileService, joinPath(root, 'settings.json'));
-		await assert.rejects(() => nonAtomicStore.create(operation('non-atomic')), /requires atomic operation storage/);
+		await assert.rejects(() => operation('non-atomic').then(value => nonAtomicStore.create(value)), /requires atomic operation storage/);
+	});
+
+	test('isolates a corrupt supported record while listing valid recovery operations', async () => {
+		await store.create(await operation('valid'));
+		const corrupt = await operation('corrupt');
+		await fileService.createFolder(joinPath(store.root, 'corrupt'));
+		await fileService.writeFile(joinPath(store.root, 'corrupt', 'operation.json'), VSBuffer.fromString(JSON.stringify({ ...corrupt, plan: { ...corrupt.plan, operations: [{ changed: true }] } })));
+
+		const listed = await store.list();
+		assert.deepStrictEqual(listed.map(item => [item.id, item.unsupportedSchemaVersion]), [['corrupt', -1], ['valid', undefined]]);
+		assert.deepStrictEqual((await store.read('valid')).id, 'valid');
 	});
 });
 
@@ -78,15 +91,26 @@ class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
 	}
 }
 
-function operation(id: string): EditorMigrationOperation {
+async function operation(id: string): Promise<EditorMigrationOperation> {
+	const plan: EditorMigrationReviewedPlan = {
+		schemaVersion: 2,
+		source: {} as EditorMigrationReviewedPlan['source'],
+		target: {} as EditorMigrationReviewedPlan['target'],
+		evidence: { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: '', gallery: [] },
+		choices: { selectedCategories: [], decisions: [] },
+		operations: [], exclusions: [], prerequisites: [], warnings: [],
+		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: '' },
+	};
+	const planFingerprint = await fingerprintEditorMigrationValue({ schemaVersion: 2, fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery' }, operations: [], prerequisites: [] });
+	const reviewedPlan = { ...plan, fingerprints: { ...plan.fingerprints, plan: planFingerprint } };
 	return {
 		schemaVersion: 1,
 		id,
 		revision: 0,
 		createdAt: 10,
 		updatedAt: 10,
-		plan: {} as EditorMigrationOperation['plan'],
-		authorization: { planningSchemaVersion: 2, planFingerprint: 'plan', publishers: [], publisherSetFingerprint: 'publishers', issuedAt: 1, consumedAt: 2 },
+		plan: reviewedPlan,
+		authorization: { planningSchemaVersion: 2, planFingerprint, publishers: [], publisherSetFingerprint: 'publishers', issuedAt: 1, consumedAt: 2 },
 		stage: 'admitted',
 		cancellationRequested: false,
 		target: { state: 'pending' },
