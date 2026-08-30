@@ -102,6 +102,7 @@ import {
 	IHucodeShellControllerPortOwner,
 	registerHucodeShellControllerOwnerLifecycle,
 } from './shellControllerPortAcceptor.js';
+import { EditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from './migration/editorMigrationWriterLease.js';
 import {
 	admitHucodeRegularWorkbench,
 	canonicalizeDesktopWorkbenchPath,
@@ -170,6 +171,7 @@ export class HucodeShellMainService extends Disposable
 		HucodeRegularWindowOwnershipLifetimes;
 	private regularAdmissionId = 0;
 	private ownershipBroadcastPending = false;
+	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
 
 	constructor(
 		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
@@ -608,7 +610,7 @@ export class HucodeShellMainService extends Disposable
 		client.registerChannel(
 			HUCODE_SHELL_CONTROLLER_CHANNEL,
 			createHucodeShellControllerServerChannel(
-				this.createShellControllerFacade(owner.windowId),
+				this.createShellControllerFacade(owner.windowId, connection),
 				connection
 			)
 		);
@@ -620,8 +622,10 @@ export class HucodeShellMainService extends Disposable
 
 	/** Maps the no-identity wire contract onto one authoritative shell window. */
 	private createShellControllerFacade(
-		windowId: number
+		windowId: number,
+		connection: DisposableStore
 	): IHucodeShellControllerService {
+		let editorMigrationWriterLease: EditorMigrationWriterLease | undefined;
 		return {
 			_serviceBrand: undefined,
 			supportsWorkspaceScreenshotOverlay: true,
@@ -701,6 +705,22 @@ export class HucodeShellMainService extends Disposable
 				this.captureWorkspaceScreenshot(windowId, rect, quality),
 			setWorkspaceOverlayOcclusion: occluded =>
 				this.setWorkspaceOverlayOcclusion(windowId, occluded),
+			acquireEditorMigrationWriterLease: operationId => {
+				const lease = this.editorMigrationWriterLeaseAuthority.acquire(windowId, operationId);
+				if (!lease) {
+					return Promise.resolve(false);
+				}
+				editorMigrationWriterLease = lease;
+				connection.add(toDisposable(() => this.editorMigrationWriterLeaseAuthority.release(lease)));
+				return Promise.resolve(true);
+			},
+			releaseEditorMigrationWriterLease: operationId => {
+				if (editorMigrationWriterLease?.operationId === operationId) {
+					this.editorMigrationWriterLeaseAuthority.release(editorMigrationWriterLease);
+					editorMigrationWriterLease = undefined;
+				}
+				return Promise.resolve();
+			},
 			shutdownWindowWorkspaces: reason =>
 				this.shutdownWindowWorkspaces(windowId, reason),
 		};

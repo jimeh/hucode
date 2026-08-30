@@ -202,6 +202,12 @@ export class WebShellControllerServiceAdapter
 			occluded
 		);
 	}
+	acquireEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
+		return Promise.resolve(false);
+	}
+	releaseEditorMigrationWriterLease(_operationId: string): Promise<void> {
+		return Promise.resolve();
+	}
 	shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]) {

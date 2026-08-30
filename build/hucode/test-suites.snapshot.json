@@ -2,6 +2,8 @@
 	"electron": [
 		"src/vs/base/test/browser/ui/dialog/hucodeDialogButtonOrder.test.ts",
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
+		"src/vs/hucode/test/browser/editorMigrationApplyService.test.ts",
+		"src/vs/hucode/test/browser/editorMigrationOperationStore.test.ts",
 		"src/vs/hucode/test/browser/editorMigrationTargetReader.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
@@ -38,6 +40,7 @@
 		"src/vs/hucode/test/electron-browser/shellControllerServiceAdapter.test.ts",
 		"src/vs/hucode/test/electron-main/desktopWorkbenchOwnership.test.ts",
 		"src/vs/hucode/test/electron-main/editorMigrationSourceChannel.test.ts",
+		"src/vs/hucode/test/electron-main/editorMigrationWriterLease.test.ts",
 		"src/vs/hucode/test/electron-main/hostedShellMainService.test.ts",
 		"src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts",
 		"src/vs/hucode/test/electron-main/omniFileOpen.test.ts",
@@ -76,6 +79,7 @@
 	],
 	"automatic": [
 		"src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts",
+		"src/vs/hucode/test/common/editorMigrationApply.test.ts",
 		"src/vs/hucode/test/common/editorMigrationPlanner.test.ts",
 		"src/vs/hucode/test/common/editorMigrationSourceRanking.test.ts",
 		"src/vs/hucode/test/common/hostedWorkspaceState.test.ts",

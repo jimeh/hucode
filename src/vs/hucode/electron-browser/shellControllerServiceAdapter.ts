@@ -465,6 +465,14 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		return this.withShell(shell =>
 			shell.setWorkspaceOverlayOcclusion(occluded));
 	}
+	acquireEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.acquireEditorMigrationWriterLease(operationId));
+	}
+	releaseEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.releaseEditorMigrationWriterLease(operationId));
+	}
 	async shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]): Promise<void> {
