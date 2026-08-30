@@ -14,8 +14,9 @@ import { InMemoryFileSystemProvider } from '../../../platform/files/common/inMem
 import { NullLogService } from '../../../platform/log/common/log.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
 import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
-import { EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
-import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
+import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
+import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
+import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
 
 const ROOT = URI.from({ scheme: 'hucode-migration-store-test', path: '/User' });
 
@@ -92,17 +93,25 @@ class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
 }
 
 async function operation(id: string): Promise<EditorMigrationOperation> {
-	const plan: EditorMigrationReviewedPlan = {
-		schemaVersion: 2,
-		source: {} as EditorMigrationReviewedPlan['source'],
-		target: {} as EditorMigrationReviewedPlan['target'],
-		evidence: { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: '', gallery: [] },
-		choices: { selectedCategories: [], decisions: [] },
-		operations: [], exclusions: [], prerequisites: [], warnings: [],
-		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: '' },
+	const source: EditorMigrationSourceSnapshot = {
+		schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
+		ref: { value: 'source-v1:store-test' },
+		adapter: { id: 'vscode' as const, productName: 'Visual Studio Code', channel: 'stable' as const, order: 0 },
+		profile: { id: 'default', name: 'Default', kind: 'default' as const },
+		categories: [{ category: 'settings' as const, state: 'present' as const, value: {} }], diagnostics: [],
+		fingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'sha256' as const, categories: ['settings' as const], entries: [], value: 'store-source' },
 	};
-	const planFingerprint = await fingerprintEditorMigrationValue({ schemaVersion: 2, fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery' }, operations: [], prerequisites: [] });
-	const reviewedPlan = { ...plan, fingerprints: { ...plan.fingerprints, plan: planFingerprint } };
+	const target: EditorMigrationTargetSnapshot = {
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+		selection: { kind: 'existing' as const, profileId: 'default' }, profile: { id: 'default', name: 'Default', kind: 'default' as const }, eligible: true,
+		catalogFingerprint: 'catalog', requestedCategories: ['settings' as const],
+		categories: [{ category: 'settings' as const, ownership: 'target' as const, ownerProfileId: 'default', state: 'absent' as const, contentHash: 'absent', value: {} }],
+		environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
+		builtIns: [], fingerprint: 'target',
+	};
+	const draft = createEditorMigrationPlanDraft(source, target, { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: '', gallery: [] });
+	const reviewedPlan = await acceptEditorMigrationPlanDraft(draft, { selectedCategories: ['settings'], decisions: [] });
+	const planFingerprint = reviewedPlan.fingerprints.plan;
 	return {
 		schemaVersion: 1,
 		id,

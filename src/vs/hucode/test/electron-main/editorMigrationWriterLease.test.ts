@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
-import { EditorMigrationWriterLeaseAuthority } from '../../electron-main/migration/editorMigrationWriterLease.js';
+import { bindEditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from '../../electron-main/migration/editorMigrationWriterLease.js';
 
 suite('EditorMigrationWriterLeaseAuthority', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -28,5 +29,24 @@ suite('EditorMigrationWriterLeaseAuthority', () => {
 
 	test('rejects empty operation identities', () => {
 		assert.strictEqual(new EditorMigrationWriterLeaseAuthority().acquire(1, ''), undefined);
+	});
+
+	test('binds reacquire, validation, explicit release, and connection disposal to one connection', async () => {
+		const authority = new EditorMigrationWriterLeaseAuthority();
+		const connection = new DisposableStore();
+		const bound = bindEditorMigrationWriterLease(authority, 1, connection);
+
+		assert.strictEqual(await bound.acquire('first'), true);
+		assert.strictEqual(await bound.acquire('replacement'), false);
+		assert.strictEqual(await bound.validate('first'), true);
+		assert.strictEqual(await bound.validate('replacement'), false);
+		await bound.release('replacement');
+		assert.strictEqual(await bound.validate('first'), true);
+		await bound.release('first');
+		assert.strictEqual(await bound.validate('first'), false);
+		assert.strictEqual(await bound.acquire('replacement'), true);
+		connection.dispose();
+		assert.strictEqual(await bound.validate('replacement'), false);
+		assert.ok(authority.acquire(2, 'competing'));
 	});
 });

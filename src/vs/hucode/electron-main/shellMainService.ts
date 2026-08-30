@@ -102,7 +102,7 @@ import {
 	IHucodeShellControllerPortOwner,
 	registerHucodeShellControllerOwnerLifecycle,
 } from './shellControllerPortAcceptor.js';
-import { EditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from './migration/editorMigrationWriterLease.js';
+import { bindEditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from './migration/editorMigrationWriterLease.js';
 import {
 	admitHucodeRegularWorkbench,
 	canonicalizeDesktopWorkbenchPath,
@@ -625,8 +625,7 @@ export class HucodeShellMainService extends Disposable
 		windowId: number,
 		connection: DisposableStore
 	): IHucodeShellControllerService {
-		let editorMigrationWriterLease: EditorMigrationWriterLease | undefined;
-		let disposeEditorMigrationWriterLease: (() => void) | undefined;
+		const editorMigrationWriterLease = bindEditorMigrationWriterLease(this.editorMigrationWriterLeaseAuthority, windowId, connection);
 		return {
 			_serviceBrand: undefined,
 			supportsWorkspaceScreenshotOverlay: true,
@@ -706,28 +705,9 @@ export class HucodeShellMainService extends Disposable
 				this.captureWorkspaceScreenshot(windowId, rect, quality),
 			setWorkspaceOverlayOcclusion: occluded =>
 				this.setWorkspaceOverlayOcclusion(windowId, occluded),
-			acquireEditorMigrationWriterLease: operationId => {
-				const lease = this.editorMigrationWriterLeaseAuthority.acquire(windowId, operationId);
-				if (!lease) {
-					return Promise.resolve(false);
-				}
-				editorMigrationWriterLease = lease;
-				const release = connection.add(toDisposable(() => this.editorMigrationWriterLeaseAuthority.release(lease)));
-				disposeEditorMigrationWriterLease = () => release.dispose();
-				return Promise.resolve(true);
-			},
-			validateEditorMigrationWriterLease: operationId => Promise.resolve(
-				this.editorMigrationWriterLeaseAuthority.holds(windowId, operationId)
-				&& editorMigrationWriterLease?.operationId === operationId
-			),
-			releaseEditorMigrationWriterLease: operationId => {
-				if (editorMigrationWriterLease?.operationId === operationId) {
-					disposeEditorMigrationWriterLease?.();
-					disposeEditorMigrationWriterLease = undefined;
-					editorMigrationWriterLease = undefined;
-				}
-				return Promise.resolve();
-			},
+			acquireEditorMigrationWriterLease: editorMigrationWriterLease.acquire,
+			validateEditorMigrationWriterLease: editorMigrationWriterLease.validate,
+			releaseEditorMigrationWriterLease: editorMigrationWriterLease.release,
 			shutdownWindowWorkspaces: reason =>
 				this.shutdownWindowWorkspaces(windowId, reason),
 		};

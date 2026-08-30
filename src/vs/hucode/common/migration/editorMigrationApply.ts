@@ -8,9 +8,9 @@ import { applyEdits, setProperty } from '../../../base/common/jsonEdit.js';
 import { parse } from '../../../base/common/json.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import { EditorMigrationCategory } from './editorMigrationSource.js';
-import { EditorMigrationPlanningEvidence, EditorMigrationReviewedPlan, EditorMigrationKeybindingOperation, EditorMigrationSetSettingOperation } from './editorMigrationPlanning.js';
-import { fingerprintEditorMigrationValue } from './editorMigrationPlanningCanonical.js';
-import { editorMigrationKeybindingRowId } from './editorMigrationPlanner.js';
+import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanningEvidence, EditorMigrationReviewedPlan, EditorMigrationKeybindingOperation, EditorMigrationSetSettingOperation } from './editorMigrationPlanning.js';
+import { canonicalizeEditorMigrationValue, fingerprintEditorMigrationValue } from './editorMigrationPlanningCanonical.js';
+import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft, editorMigrationKeybindingRowId } from './editorMigrationPlanner.js';
 
 /** Version of durable editor migration Apply operation records. */
 export const EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION = 1;
@@ -97,24 +97,34 @@ export function editorMigrationPublishers(plan: EditorMigrationReviewedPlan): re
 		.map(operation => publisherFromExtensionId(operation.source.id)));
 }
 
-/** Recomputes and verifies the canonical aggregate fingerprint of a reviewed plan. */
+/** Rebuilds and verifies the canonical reviewed plan and returns its fingerprint. */
 export async function verifiedEditorMigrationPlanFingerprint(plan: EditorMigrationReviewedPlan): Promise<string> {
-	const actual = await fingerprintEditorMigrationValue({
-		schemaVersion: plan.schemaVersion,
-		fingerprints: {
-			source: plan.fingerprints.source,
-			target: plan.fingerprints.target,
-			choices: plan.fingerprints.choices,
-			policy: plan.fingerprints.policy,
-			gallery: plan.fingerprints.gallery,
-		},
+	if (plan.schemaVersion !== EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION) {
+		throw new Error(`Unsupported reviewed migration plan schema version '${plan.schemaVersion}'`);
+	}
+	let canonical: EditorMigrationReviewedPlan;
+	try {
+		canonical = await acceptEditorMigrationPlanDraft(
+			createEditorMigrationPlanDraft(plan.source, plan.target, plan.evidence),
+			plan.choices,
+		);
+	} catch (error) {
+		throw new Error(`Reviewed migration plan is malformed: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	const actual = canonicalizeEditorMigrationValue({
 		operations: plan.operations,
 		prerequisites: plan.prerequisites,
+		fingerprints: plan.fingerprints,
 	});
-	if (actual !== plan.fingerprints.plan) {
-		throw new Error('Reviewed migration plan fingerprint is stale or corrupt');
+	const expected = canonicalizeEditorMigrationValue({
+		operations: canonical.operations,
+		prerequisites: canonical.prerequisites,
+		fingerprints: canonical.fingerprints,
+	});
+	if (actual !== expected) {
+		throw new Error('Reviewed migration plan is non-canonical, stale, or corrupt');
 	}
-	return actual;
+	return canonical.fingerprints.plan;
 }
 
 /** Produces the complete settings JSONC text for reviewed assignments. */

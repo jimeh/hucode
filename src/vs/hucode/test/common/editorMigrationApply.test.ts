@@ -5,8 +5,10 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
-import { EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
-import { editorMigrationKeybindingRowId } from '../../common/migration/editorMigrationPlanner.js';
+import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationReviewedPlan, EditorMigrationTargetSnapshot } from '../../common/migration/editorMigrationPlanning.js';
+import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft, editorMigrationKeybindingRowId } from '../../common/migration/editorMigrationPlanner.js';
+import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
+import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorizationIssuer,
@@ -17,7 +19,6 @@ import {
 	toEditorMigrationTelemetry,
 	verifiedEditorMigrationPlanFingerprint,
 } from '../../common/migration/editorMigrationApply.js';
-import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 
 suite('EditorMigrationApply', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -44,7 +45,28 @@ suite('EditorMigrationApply', () => {
 		const first = plan.operations[0];
 		assert.strictEqual(first.kind, 'installExtension');
 		const mutated = { ...plan, operations: [...plan.operations, { ...first, id: 'extensions:zed.changed', item: 'zed.changed', source: { ...first.source, id: 'zed.changed' } }] } as EditorMigrationReviewedPlan;
-		await assert.rejects(() => issuer.create(mutated, ['alpha', 'zed']), /fingerprint is stale/);
+		await assert.rejects(() => issuer.create(mutated, ['alpha', 'zed']), /non-canonical, stale, or corrupt/);
+		const forgedOperations = [...plan.operations, { ...first, id: 'extensions:zed.changed', item: 'zed.changed', source: { ...first.source, id: 'zed.changed' } }];
+		const forgedPlan = {
+			...plan,
+			operations: forgedOperations,
+			fingerprints: {
+				...plan.fingerprints,
+				plan: await fingerprintEditorMigrationValue({
+					schemaVersion: plan.schemaVersion,
+					fingerprints: {
+						source: plan.fingerprints.source,
+						target: plan.fingerprints.target,
+						choices: plan.fingerprints.choices,
+						policy: plan.fingerprints.policy,
+						gallery: plan.fingerprints.gallery,
+					},
+					operations: forgedOperations,
+					prerequisites: plan.prerequisites,
+				}),
+			},
+		} as EditorMigrationReviewedPlan;
+		await assert.rejects(() => verifiedEditorMigrationPlanFingerprint(forgedPlan), /non-canonical/);
 		now += 10 * 60 * 1_000 + 1;
 		await assert.rejects(() => issuer.consume(plan, stale), /expired/);
 		await assert.rejects(() => issuer.create(plan, ['alpha']), /publisher set does not match/);
@@ -127,21 +149,37 @@ suite('EditorMigrationApply', () => {
 });
 
 async function reviewedPlan(extensionIds: readonly string[]): Promise<EditorMigrationReviewedPlan> {
-	const plan: EditorMigrationReviewedPlan = {
-		schemaVersion: 2,
-		source: {} as EditorMigrationReviewedPlan['source'],
-		target: {} as EditorMigrationReviewedPlan['target'],
-		evidence: { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: '', gallery: [] },
-		choices: { selectedCategories: extensionIds.length ? ['extensions'] : ['settings'], decisions: [] },
-		operations: extensionIds.map((id, index) => ({
-			id: `extensions:${id}`, category: 'extensions', kind: 'installExtension', item: id,
-			source: { id, requestedChannel: 'stable', status: 'available', version: `${index + 1}.0.0`, targetPlatform: 'linux-x64', selectedChannel: 'stable', engine: '*', galleryIdentity: 'open-vsx' },
-		})),
-		exclusions: [], prerequisites: [], warnings: [],
-		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: '' },
+	const selectedCategories = extensionIds.length ? ['extensions'] as const : ['settings'] as const;
+	const sourceCategories: EditorMigrationSourceSnapshot['categories'] = extensionIds.length
+		? [{ category: 'extensions', state: 'present', value: extensionIds.map((id, index) => ({ id, version: `${index + 1}.0.0` })) }]
+		: [{ category: 'settings', state: 'present', value: { 'editor.wordWrap': 'on' } }];
+	const source: EditorMigrationSourceSnapshot = {
+		schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
+		ref: { value: 'source-v1:apply-common-test' },
+		adapter: { id: 'vscode', productName: 'Visual Studio Code', channel: 'stable', order: 0 },
+		profile: { id: 'default', name: 'Default', kind: 'default' },
+		categories: sourceCategories,
+		diagnostics: [],
+		fingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'sha256', categories: selectedCategories, entries: [], value: 'apply-common-source' },
 	};
-	const fingerprint = await fingerprintEditorMigrationValue({ schemaVersion: plan.schemaVersion, fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery' }, operations: plan.operations, prerequisites: plan.prerequisites });
-	const reviewed = { ...plan, fingerprints: { ...plan.fingerprints, plan: fingerprint } };
-	assert.strictEqual(await verifiedEditorMigrationPlanFingerprint(reviewed), fingerprint);
+	const gallery = extensionIds.map((id, index) => ({
+		id, requestedChannel: 'stable' as const, status: 'available' as const, version: `${index + 1}.0.0`, targetPlatform: 'linux-x64', selectedChannel: 'stable' as const, engine: '*', galleryIdentity: 'open-vsx',
+	}));
+	const target: EditorMigrationTargetSnapshot = {
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+		selection: { kind: 'existing' as const, profileId: 'default' },
+		profile: { id: 'default', name: 'Default', kind: 'default' as const },
+		eligible: true,
+		catalogFingerprint: 'catalog',
+		requestedCategories: selectedCategories,
+		categories: extensionIds.length
+			? [{ category: 'extensions' as const, ownership: 'target' as const, ownerProfileId: 'default', state: 'absent' as const, contentHash: 'absent', semanticHash: 'empty', value: [] }]
+			: [{ category: 'settings' as const, ownership: 'target' as const, ownerProfileId: 'default', state: 'absent' as const, contentHash: 'absent', value: {} }],
+		environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
+		builtIns: [], fingerprint: 'target',
+	};
+	const draft = createEditorMigrationPlanDraft(source, target, { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: '', gallery });
+	const reviewed = await acceptEditorMigrationPlanDraft(draft, { selectedCategories, decisions: [] });
+	assert.strictEqual(await verifiedEditorMigrationPlanFingerprint(reviewed), reviewed.fingerprints.plan);
 	return reviewed;
 }
