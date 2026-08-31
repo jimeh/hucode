@@ -298,6 +298,10 @@ suite('EditorMigrationFlowView', () => {
 		include.dispatchEvent(domEvent('change'));
 
 		assert.deepStrictEqual([...session.state.selectedCategories], ['settings', 'keybindings', 'snippets'], 'the inclusion control drives the state the view renders from');
+		const deselected = detailPane(parent).textContent ?? '';
+		assert.doesNotMatch(deselected, /will be imported\.\s*$|\d+ of 116 will be imported/, 'a deselected category must not claim any items will be imported');
+		assert.match(deselected, /Not included in this import\. None of its 116 source items will be imported\./);
+		assert.match(deselected, /These source items are listed under Not Imported\./);
 		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '0', '139'], '116 Extensions source items plus the 23 remaining Settings exclusions');
 		assert.match(footer(parent).textContent ?? '', /383 items ready to import\. 3 current values kept\. 139 held back\./);
 
@@ -496,6 +500,13 @@ suite('EditorMigrationFlowView', () => {
 		assert.strictEqual(settingsDetail.getElementsByClassName('hucode-editor-migration-conflict').length, 3);
 		assert.strictEqual([...settingsDetail.getElementsByTagName('input')].length, 0, 'confirmation must not reopen review choices');
 		assert.match(settingsDetail.textContent ?? '', /Keeping current value/);
+
+		const deselectedParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(deselectedParent, presentationSession({ ...state, selectedCategories: ['settings', 'keybindings', 'snippets'] }), () => { }));
+		selectSection(deselectedParent, 'extensions');
+		const readOnlyDetail = detailPane(deselectedParent).textContent ?? '';
+		assert.match(readOnlyDetail, /Not included in this import\. None of its 116 source items will be imported\./, 'the read-only review context branches the lead too');
+		assert.doesNotMatch(readOnlyDetail, /\d+ of 116 will be imported/);
 	});
 
 	test('shows four category progress states and at most one current item', () => {

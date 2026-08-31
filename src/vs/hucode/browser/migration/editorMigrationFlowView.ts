@@ -519,9 +519,12 @@ export class EditorMigrationFlowView extends Disposable {
 		const counts = editorMigrationCategoryCounts(draft, state.decisions, category);
 
 		parent.appendChild(element('h2', undefined, CATEGORY_LABELS[category], { tabIndex: '-1' }));
-		parent.appendChild(element('p', 'hucode-editor-migration-lead', conflicts.length
-			? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", counts.ready, available, conflicts.length)
-			: localize('editorMigration.review.lead', "{0} of {1} will be imported.", counts.ready, available)));
+		// A deselected category imports nothing, so its lead must never open with an import count.
+		parent.appendChild(element('p', 'hucode-editor-migration-lead', !included
+			? localize('editorMigration.review.leadExcluded', "Not included in this import. None of its {0} source items will be imported.", available)
+			: conflicts.length
+				? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", counts.ready, available, conflicts.length)
+				: localize('editorMigration.review.lead', "{0} of {1} will be imported.", counts.ready, available)));
 
 		if (!readOnly) {
 			const include = element('label', 'hucode-editor-migration-include');
@@ -536,7 +539,7 @@ export class EditorMigrationFlowView extends Disposable {
 		parent.appendChild(element('p', 'hucode-editor-migration-note', ownershipLabel(draft, category)));
 
 		if (!included) {
-			parent.appendChild(element('p', 'hucode-editor-migration-placeholder', localize('editorMigration.review.excludedCategory', "This category is not included. Its {0} source items are listed under Not Imported.", available)));
+			parent.appendChild(element('p', 'hucode-editor-migration-placeholder', localize('editorMigration.review.excludedCategory', "These source items are listed under Not Imported.")));
 			return;
 		}
 
