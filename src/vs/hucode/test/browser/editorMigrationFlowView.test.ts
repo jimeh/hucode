@@ -321,6 +321,13 @@ suite('EditorMigrationFlowView', () => {
 		restored.checked = true;
 		restored.dispatchEvent(domEvent('change'));
 		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62'], 're-including the category restores the exclusion-only accounting');
+
+		selectSection(parent, 'settings');
+		const inheritedInclude = includeCheckbox(parent, 'Include Settings in this import');
+		inheritedInclude.checked = false;
+		inheritedInclude.dispatchEvent(domEvent('change'));
+		assert.match(detailPane(parent).textContent ?? '', /Currently inherited from Default\./);
+		assert.doesNotMatch(detailPane(parent).textContent ?? '', /will copy it into Work before importing/, 'a deselected inherited category must not claim it will be materialized');
 	});
 
 	test('applies both bulk setting actions to differences hidden by the filter', async () => {

@@ -536,7 +536,7 @@ export class EditorMigrationFlowView extends Disposable {
 			include.append(checkbox, element('span', undefined, localize('editorMigration.review.include', "Include {0} in this import", CATEGORY_LABELS[category])));
 			parent.appendChild(include);
 		}
-		parent.appendChild(element('p', 'hucode-editor-migration-note', ownershipLabel(draft, category)));
+		parent.appendChild(element('p', 'hucode-editor-migration-note', ownershipLabel(draft, category, included)));
 
 		if (!included) {
 			parent.appendChild(element('p', 'hucode-editor-migration-placeholder', localize('editorMigration.review.excludedCategory', "These source items are listed under Not Imported.")));
@@ -1187,12 +1187,15 @@ function targetDisplayName(draft: EditorMigrationPlanDraft): string {
 	return draft.target.profile?.name ?? (draft.target.selection.kind === 'proposed' ? draft.target.selection.name : '');
 }
 
-function ownershipLabel(draft: EditorMigrationPlanDraft, category: EditorMigrationCategory): string {
+function ownershipLabel(draft: EditorMigrationPlanDraft, category: EditorMigrationCategory, included: boolean): string {
 	const snapshot = draft.target.categories.find(candidate => candidate.category === category);
 	const materializes = draft.prerequisites.some(prerequisite => prerequisite.category === category);
-	return snapshot?.ownership === 'default' || materializes
-		? localize('editorMigration.review.ownershipDefault', "Currently inherited from Default; Hucode will copy it into {0} before importing.", targetDisplayName(draft))
-		: localize('editorMigration.review.ownershipTarget', "Stored directly in {0}.", targetDisplayName(draft));
+	if (snapshot?.ownership === 'default' || materializes) {
+		return included
+			? localize('editorMigration.review.ownershipDefault', "Currently inherited from Default; Hucode will copy it into {0} before importing.", targetDisplayName(draft))
+			: localize('editorMigration.review.ownershipDefaultExcluded', "Currently inherited from Default.");
+	}
+	return localize('editorMigration.review.ownershipTarget', "Stored directly in {0}.", targetDisplayName(draft));
 }
 
 function additionsSummary(category: EditorMigrationCategory, count: number): string {
