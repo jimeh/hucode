@@ -457,7 +457,7 @@ export class EditorMigrationFlowView extends Disposable {
 			this.button(localize('editorMigration.results.copy', "Copy Report"), () => void this.session.copyReport(), 'results-copy'),
 			this.button(localize('editorMigration.results.another', "Import Another Setup"), () => void this.session.startImport(), 'results-another'),
 		);
-		if (operation.stage !== 'rolledBack' && !operation.rollbackIntent?.mutationStarted && operation.results.some(result => ['failed', 'unavailable', 'canceled'].includes(result.outcome))) {
+		if (operation.stage !== 'rolledBack' && operation.stage !== 'rollbackPending' && !operation.rollbackIntent?.mutationStarted && operation.results.some(result => ['failed', 'unavailable', 'canceled'].includes(result.outcome))) {
 			actions.appendChild(this.button(localize('editorMigration.results.retry', "Retry Failed Items"), () => void this.session.retry(operation.id), 'results-retry'));
 		}
 		if (operation.stage !== 'settled' && operation.stage !== 'rolledBack') {
@@ -601,6 +601,17 @@ export class EditorMigrationFlowView extends Disposable {
 		};
 		this.renderDisposables.add(list.onDidScroll(remember));
 		this.renderDisposables.add(list.onDidChangeFocus(remember));
+		this.renderDisposables.add(addDisposableListener(container, EventType.KEY_DOWN, event => {
+			const keyCode = new StandardKeyboardEvent(event).keyCode;
+			if (!items.length || (keyCode !== KeyCode.Home && keyCode !== KeyCode.End)) {
+				return;
+			}
+			const index = keyCode === KeyCode.Home ? 0 : items.length - 1;
+			event.preventDefault();
+			event.stopPropagation();
+			list.setFocus([index], event);
+			list.reveal(index);
+		}, true));
 		this.renderDisposables.add(list.onDidChangeSelection(event => {
 			if (activate && event.elements.length === 1 && isKeyboardEvent(event.browserEvent) && new StandardKeyboardEvent(event.browserEvent).keyCode === KeyCode.Enter) {
 				activate(event.elements[0]);

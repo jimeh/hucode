@@ -49,10 +49,11 @@ suite('EditorMigrationFlowView', () => {
 		const fullList = parent.querySelector('[data-migration-list-id="profiles"] .monaco-list') as HTMLElement;
 		assert.ok(fullList);
 		fullList.focus();
-		for (let index = 0; index < sources.length; index++) {
-			fullList.dispatchEvent(keyboardEvent('ArrowDown'));
-		}
-		assert.match(parent.textContent ?? '', /Profile 299/, 'keyboard navigation should focus an off-screen profile and scroll it into view');
+		fullList.dispatchEvent(keyboardEvent('End'));
+		assert.match(fullList.textContent ?? '', /Profile 299/, 'End should focus an off-screen profile and scroll it into view');
+		fullList.dispatchEvent(keyboardEvent('Home'));
+		assert.match(fullList.textContent ?? '', /Default/, 'Home should return to the first profile');
+		fullList.dispatchEvent(keyboardEvent('End'));
 		session.selectSourceProfile(sources[1].ref);
 		assert.match(parent.textContent ?? '', /Profile 299/, 'the off-screen focused window remains rendered after the update');
 
@@ -399,6 +400,25 @@ suite('EditorMigrationFlowView', () => {
 		assert.doesNotMatch(parent.textContent ?? '', /Retry Failed Items/);
 	});
 
+	test('offers Resume but not forward retry for an interrupted pre-mutation rollback', () => {
+		const draft = richDraft(richSnapshot(richSource()));
+		const plan = { ...draft, choices: { selectedCategories: ['snippets'] as const, decisions: [] }, operations: [], fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' } } satisfies EditorMigrationReviewedPlan;
+		const operation = {
+			id: 'interrupted-rollback', stage: 'rollbackPending', aggregateOutcome: 'recoverable', plan,
+			results: [{ id: 'snippets', category: 'snippets', outcome: 'failed', attempts: 1 }], extensionInstallIntents: [], snapshots: [],
+			rollbackIntent: {
+				categories: ['snippets'], forceCategories: [], ownershipState: 'pending', mutationStarted: false,
+				beforeFlags: {}, afterFlags: {}, resources: [
+					{ category: 'snippets', item: 'one.code-snippets', resource: 'private-resource-one', expectedPostApplyHash: 'after-one', expectedRestoredHash: 'before-one', state: 'pending' },
+				],
+			},
+		} as unknown as EditorMigrationOperation;
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, presentationSession(presentationState({ phase: 'results', operation })), () => { }));
+		assert.match(parent.textContent ?? '', /Resume/);
+		assert.doesNotMatch(parent.textContent ?? '', /Retry Failed Items/);
+	});
+
 	test('labels item results from reviewed operations while keeping category aggregates concise', () => {
 		const draft = richDraft(richSnapshot(richSource()));
 		const plan: EditorMigrationReviewedPlan = {
@@ -627,7 +647,9 @@ function domEvent(type: string): globalThis.Event {
 function keyboardEvent(key: string): KeyboardEvent {
 	const keyCode = new Map<string, number>([
 		['ArrowDown', 40],
+		['End', 35],
 		['Enter', 13],
+		['Home', 36],
 	]).get(key);
 	assert.notStrictEqual(keyCode, undefined, `missing key code for ${key}`);
 	const event = new mainWindow.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
