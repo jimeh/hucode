@@ -24,7 +24,7 @@ import { IHucodeShellControllerService } from '../../../platform/window/common/h
 import { IExtensionManagementServerService, IProfileAwareExtensionManagementService } from '../../../workbench/services/extensionManagement/common/extensionManagement.js';
 import { EditorMigrationApplyService } from '../../browser/migration/editorMigrationApplyService.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
-import { EditorMigrationApplyAuthorization } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationApplyAuthorization, EditorMigrationApplyError } from '../../common/migration/editorMigrationApply.js';
 import { IEditorMigrationPlanningService, EditorMigrationPlanOperation, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
@@ -42,9 +42,10 @@ suite('EditorMigrationApplyService', () => {
 	let service: EditorMigrationApplyService;
 	let planning: IEditorMigrationPlanningService;
 	let shell: IHucodeShellControllerService;
+	let logService: NullLogService;
 
 	setup(() => {
-		const logService = new NullLogService();
+		logService = new NullLogService();
 		fileService = disposables.add(new FileService(logService));
 		provider = disposables.add(new AtomicInMemoryFileSystemProvider());
 		disposables.add(fileService.registerProvider(ROOT.scheme, provider));
@@ -70,6 +71,7 @@ suite('EditorMigrationApplyService', () => {
 			{} as IExtensionGalleryService,
 			{ localExtensionManagementServer: null } as unknown as IExtensionManagementServerService,
 			shell,
+			logService,
 		);
 	});
 
@@ -107,7 +109,7 @@ suite('EditorMigrationApplyService', () => {
 		} as unknown as IExtensionGalleryService;
 		service = new EditorMigrationApplyService(fileService, profilesService, planning, gallery, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 
 		const authorization = await service.createApplyAuthorization(plan, ['pub']);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
@@ -147,7 +149,7 @@ suite('EditorMigrationApplyService', () => {
 			getExtensions: async () => [exact],
 			isExtensionCompatible: async () => true,
 			getManifest: async () => ({ name: 'extension', publisher: 'pub', version: exact.version, engines: { vscode: '^1.135.0' }, contributes: { localizations: [{ languageId: 'test', translations: [] }] } }),
-		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell, logService);
 
 		const authorization = await service.createApplyAuthorization(plan, ['pub']);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
@@ -187,6 +189,23 @@ suite('EditorMigrationApplyService', () => {
 		await assert.rejects(() => service.getOperation(result.operationId));
 	});
 
+	test('reports only durable monotonic revisions and ignores a failing progress reporter', async () => {
+		const plan = await proposedSettingsPlan();
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const revisions: number[] = [];
+		const result = await service.apply(plan, authorization, CancellationToken.None, progress => revisions.push(progress.revision));
+
+		assert.ok(revisions.length > 3);
+		assert.deepStrictEqual(revisions, [...new Set(revisions)].sort((a, b) => a - b));
+		assert.strictEqual(revisions[0], 0);
+		assert.strictEqual(revisions.at(-1), (await service.getOperation(result.operationId)).revision);
+
+		const secondPlan = await proposedSettingsPlan(['settings'], 'Reporter Failure');
+		const secondAuthorization = await service.createApplyAuthorization(secondPlan, []);
+		const second = await service.apply(secondPlan, secondAuthorization, CancellationToken.None, () => { throw new Error('presentation failed'); });
+		assert.strictEqual(second.aggregateOutcome, 'completed');
+	});
+
 	test('rejects missing authorization and pre-admission cancellation before lease, journal, or profile creation', async () => {
 		const plan = await proposedSettingsPlan();
 		await assert.rejects(() => service.apply(plan, undefined as unknown as EditorMigrationApplyAuthorization, CancellationToken.None), /malformed/);
@@ -216,6 +235,24 @@ suite('EditorMigrationApplyService', () => {
 		await assert.rejects(() => store.read(result.operationId));
 	});
 
+	test('lists other recovery records when acknowledged cleanup cannot acquire the writer lease', async () => {
+		const firstPlan = await proposedSettingsPlan(['settings'], 'Cleanup Deferred');
+		const first = await service.apply(firstPlan, await service.createApplyAuthorization(firstPlan, []), CancellationToken.None);
+		const secondPlan = await proposedSettingsPlan(['settings'], 'Still Recoverable');
+		const second = await service.apply(secondPlan, await service.createApplyAuthorization(secondPlan, []), CancellationToken.None);
+		const store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
+		const completed = await store.read(first.operationId);
+		await store.update(completed, { ...completed, acknowledged: true });
+		shell = {
+			acquireEditorMigrationWriterLease: async () => false,
+			releaseEditorMigrationWriterLease: async () => { },
+		} as unknown as IHucodeShellControllerService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell, logService);
+
+		assert.deepStrictEqual((await service.listRecoverableOperations()).map(summary => summary.id), [second.operationId]);
+		assert.strictEqual((await store.read(first.operationId)).acknowledged, true);
+	});
+
 	test('rejects a stale aggregate plan fingerprint before lease or journal admission', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
@@ -226,6 +263,20 @@ suite('EditorMigrationApplyService', () => {
 		assert.deepStrictEqual(await service.listRecoverableOperations(), []);
 	});
 
+	test('returns typed plan drift and writer contention failures', async () => {
+		const plan = await proposedSettingsPlan();
+		planning = { verifyPlan: async () => ({ status: 'changed', reasons: ['sourceChanged'] }) } as unknown as IEditorMigrationPlanningService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell, logService);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		await assert.rejects(() => service.apply(plan, authorization, CancellationToken.None), (error: EditorMigrationApplyError) => error.code === 'planDrift');
+
+		shell = { acquireEditorMigrationWriterLease: async () => false } as unknown as IHucodeShellControllerService;
+		planning = { verifyPlan: async () => ({ status: 'unchanged', reasons: [] }) } as unknown as IEditorMigrationPlanningService;
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell, logService);
+		const nextAuthorization = await service.createApplyAuthorization(plan, []);
+		await assert.rejects(() => service.apply(plan, nextAuthorization, CancellationToken.None), (error: EditorMigrationApplyError) => error.code === 'writerContention');
+	});
+
 	test('stops at a durable boundary when the main writer lease loses authority', async () => {
 		const plan = await proposedSettingsPlan();
 		let validations = 0;
@@ -234,7 +285,7 @@ suite('EditorMigrationApplyService', () => {
 			validateEditorMigrationWriterLease: async () => ++validations === 1,
 			releaseEditorMigrationWriterLease: async () => { },
 		} as unknown as IHucodeShellControllerService;
-		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell);
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell, logService);
 		const authorization = await service.createApplyAuthorization(plan, []);
 		await assert.rejects(() => service.apply(plan, authorization, CancellationToken.None), /writer lease authority was lost/);
 		const profile = profilesService.profiles.find(candidate => candidate.name === 'Imported');
@@ -280,7 +331,7 @@ suite('EditorMigrationApplyService', () => {
 				}
 			},
 		} as unknown as IHucodeShellControllerService;
-		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell);
+		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, { localExtensionManagementServer: null } as unknown as IExtensionManagementServerService, shell, logService);
 		const firstAuthorization = await service.createApplyAuthorization(firstPlan, []);
 		const secondAuthorization = await service.createApplyAuthorization(secondPlan, []);
 		const first = service.apply(firstPlan, firstAuthorization, CancellationToken.None);
@@ -440,7 +491,7 @@ suite('EditorMigrationApplyService', () => {
 			getManifest: async () => ({ name: 'extension', publisher: 'pub', version: exact.version, engines: { vscode: '^1.135.0' } }),
 		} as unknown as IExtensionGalleryService, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 
 		const retried = await service.retry(result.operationId, CancellationToken.None);
 		assert.deepStrictEqual(retried.results.map(item => [item.id, item.outcome, item.attempts]), [
@@ -458,7 +509,7 @@ suite('EditorMigrationApplyService', () => {
 			getExtensions: async () => { throw new CancellationError(); },
 		} as unknown as IExtensionGalleryService, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 		const authorization = await service.createApplyAuthorization(plan, ['pub']);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
 		assert.strictEqual(result.stage, 'settled');
@@ -494,7 +545,7 @@ suite('EditorMigrationApplyService', () => {
 		} as unknown as IExtensionGalleryService;
 		service = new EditorMigrationApplyService(fileService, profilesService, planning, gallery, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 
 		const authorization = await service.createApplyAuthorization(plan, ['other', 'pub']);
 		const first = await service.apply(plan, authorization, CancellationToken.None);
@@ -543,7 +594,7 @@ suite('EditorMigrationApplyService', () => {
 			getExtensions: async (queries: readonly { id: string }[]) => queries[0].id === 'pub.extension' || missingAvailable ? [galleryExtension(queries[0].id)] : [],
 			isExtensionCompatible: async () => true,
 			getManifest: async (galleryItem: IGalleryExtension) => ({ name: galleryItem.identifier.id.split('.')[1], publisher: galleryItem.identifier.id.split('.')[0], version: galleryItem.version, engines: { vscode: '^1.135.0' } }),
-		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell, logService);
 
 		const authorization = await service.createApplyAuthorization(plan, ['other', 'pub']);
 		const first = await service.apply(plan, authorization, CancellationToken.None);
@@ -572,7 +623,7 @@ suite('EditorMigrationApplyService', () => {
 		} as unknown as IProfileAwareExtensionManagementService;
 		service = new EditorMigrationApplyService(fileService, profilesService, planning, {} as IExtensionGalleryService, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 		const mismatchAuthorization = await service.createApplyAuthorization(mismatchPlan, ['pub']);
 		const mismatch = await service.apply(mismatchPlan, mismatchAuthorization, CancellationToken.None);
 		assert.strictEqual(mismatch.results.find(result => result.id === 'extensions')?.outcome, 'failed');
@@ -776,7 +827,7 @@ suite('EditorMigrationApplyService', () => {
 			getExtensions: async () => [],
 		} as unknown as IExtensionGalleryService, {
 			localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService },
-		} as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionManagementServerService, shell, logService);
 		const authorization = await service.createApplyAuthorization(plan, ['pub']);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
 		assert.strictEqual(result.results.find(item => item.id === plan.operations[0].id)?.outcome, 'unavailable');
@@ -818,7 +869,7 @@ suite('EditorMigrationApplyService', () => {
 		service = new EditorMigrationApplyService(fileService, profilesService, planning, {
 			getExtensions: async () => [exact], isExtensionCompatible: async () => true,
 			getManifest: async () => ({ name: 'extension', publisher: 'pub', version: exact.version, engines: { vscode: '^1.135.0' } }),
-		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell);
+		} as unknown as IExtensionGalleryService, { localExtensionManagementServer: { id: 'local', label: 'Local', extensionManagementService: extensionService } } as unknown as IExtensionManagementServerService, shell, logService);
 
 		const retried = await service.retry(first.operationId, CancellationToken.None);
 		assert.strictEqual(retried.aggregateOutcome, 'completed');
@@ -945,7 +996,7 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(await fileService.exists(profile.settingsResource), false);
 	});
 
-	test('rejects retry and conflicting rollback requests while exact rollback resumes', async () => {
+	test('rejects forward retry while a pre-mutation rollback request can be superseded', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
 		const result = await service.apply(plan, authorization, CancellationToken.None);
@@ -955,11 +1006,9 @@ suite('EditorMigrationApplyService', () => {
 
 		await assert.rejects(() => service.retry(result.operationId, CancellationToken.None), /rollback.*resume/i);
 		assert.strictEqual((await service.getOperation(result.operationId)).stage, 'rollbackPending');
-		await assert.rejects(() => service.rollback(result.operationId, { categories: ['settings'], forceCategories: ['settings'] }, CancellationToken.None), /does not match.*rollback/i);
-		assert.strictEqual((await service.getOperation(result.operationId)).stage, 'rollbackPending');
-
-		const resumed = await service.rollback(result.operationId, { categories: ['settings'] }, CancellationToken.None);
-		assert.strictEqual(resumed.aggregateOutcome, 'rolledBack');
+		const inspection = await service.inspectRollback(result.operationId, ['settings']);
+		const superseded = await service.rollback(result.operationId, { categories: ['settings'], forceCategories: ['settings'], inspectionFingerprint: inspection.fingerprint }, CancellationToken.None);
+		assert.strictEqual(superseded.aggregateOutcome, 'rolledBack');
 	});
 
 	test('acknowledges only settled or rolled-back operations', async () => {
@@ -1180,7 +1229,9 @@ suite('EditorMigrationApplyService', () => {
 		const forceProfile = profilesService.profiles.find(candidate => candidate.name === 'Imported Force');
 		assert.ok(forceProfile);
 		await fileService.writeFile(forceProfile.settingsResource, VSBuffer.fromString('{ "drift": true }'));
-		const forced = await service.rollback(forceResult.operationId, { categories: ['settings'], forceCategories: ['settings'] }, CancellationToken.None);
+		const inspection = await service.inspectRollback(forceResult.operationId, ['settings']);
+		assert.deepStrictEqual(inspection.driftedCategories, ['settings']);
+		const forced = await service.rollback(forceResult.operationId, { categories: ['settings'], forceCategories: ['settings'], inspectionFingerprint: inspection.fingerprint }, CancellationToken.None);
 		assert.strictEqual(forced.aggregateOutcome, 'rolledBack');
 		assert.strictEqual(await fileService.exists(forceProfile.settingsResource), false);
 		const forcedOperation = await service.getOperation(forceResult.operationId);

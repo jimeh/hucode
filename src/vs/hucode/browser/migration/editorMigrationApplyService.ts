@@ -13,12 +13,15 @@ import { IExtensionGalleryService, ILocalExtension, IProductVersion } from '../.
 import { isApplicationScopedExtension, TargetPlatform } from '../../../platform/extensions/common/extensions.js';
 import { FileOperationResult, FileSystemProviderCapabilities, IFileService, toFileOperationResult } from '../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
+import { ILogService } from '../../../platform/log/common/log.js';
 import { IUserDataProfile, IUserDataProfilesService, UseDefaultProfileFlags } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import { IHucodeShellControllerService } from '../../../platform/window/common/hucodeShellControllerService.js';
 import { IExtensionManagementServerService, IProfileAwareExtensionManagementService } from '../../../workbench/services/extensionManagement/common/extensionManagement.js';
 import {
 	EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorization,
+	EditorMigrationApplyError,
+	EditorMigrationApplyProgressReporter,
 	EditorMigrationApplyAuthorizationIssuer,
 	EditorMigrationConsumedAuthorization,
 	EditorMigrationItemOutcome,
@@ -28,6 +31,7 @@ import {
 	EditorMigrationOperationSummary,
 	EditorMigrationProfileFlags,
 	EditorMigrationRollbackIntent,
+	EditorMigrationRollbackInspection,
 	EditorMigrationRollbackOptions,
 	EditorMigrationRollbackResourceProgress,
 	EditorMigrationSnapshotManifestEntry,
@@ -36,6 +40,7 @@ import {
 	deriveEditorMigrationAggregateOutcome,
 	reduceEditorMigrationKeybindings,
 	reduceEditorMigrationSettings,
+	toEditorMigrationApplyProgress,
 } from '../../common/migration/editorMigrationApply.js';
 import { EditorMigrationCategory } from '../../common/migration/editorMigrationSource.js';
 import { effectiveEditorMigrationExtensions, parseEditorMigrationExtensionManifest } from '../../common/migration/editorMigrationExtensionManifest.js';
@@ -45,6 +50,18 @@ import { EditorMigrationOperationStore } from './editorMigrationOperationStore.j
 
 const CATEGORY_ORDER: readonly EditorMigrationCategory[] = ['settings', 'keybindings', 'snippets', 'extensions'];
 
+interface EditorMigrationRollbackObservation {
+	readonly progress: EditorMigrationRollbackResourceProgress;
+	readonly current: { readonly value: VSBuffer; readonly mtime: number; readonly etag: string } | undefined;
+	readonly currentHash: string;
+	readonly drifted: boolean;
+}
+
+interface EditorMigrationRollbackInspectionEvidence {
+	readonly inspection: EditorMigrationRollbackInspection;
+	readonly observations: readonly EditorMigrationRollbackObservation[];
+}
+
 /** Desktop Apply coordinator with durable per-boundary checkpoints. */
 export class EditorMigrationApplyService implements IEditorMigrationApplyService {
 	declare readonly _serviceBrand: undefined;
@@ -53,6 +70,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 	private readonly store: EditorMigrationOperationStore;
 	private activeLeaseOwner: string | undefined;
 	private leaseCallActive = false;
+	private progressReporter: EditorMigrationApplyProgressReporter | undefined;
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
@@ -61,6 +79,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		@IExtensionGalleryService private readonly extensionGalleryService: IExtensionGalleryService,
 		@IExtensionManagementServerService private readonly extensionManagementServerService: IExtensionManagementServerService,
 		@IHucodeShellControllerService private readonly shellControllerService: IHucodeShellControllerService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		this.store = new EditorMigrationOperationStore(fileService, profilesService.defaultProfile.settingsResource);
 	}
@@ -69,31 +88,38 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		return this.authorizationIssuer.create(plan, confirmedPublishers);
 	}
 
-	async apply(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization, token: CancellationToken): Promise<EditorMigrationOperationResult> {
-		throwIfCancelled(token);
-		const consumed = await this.authorizationIssuer.consume(plan, authorization);
-		throwIfCancelled(token);
-		return await this.withLease(async () => {
-			let operation: EditorMigrationOperation | undefined;
-			try {
-				const verification = await this.planningService.verifyPlan(plan, token);
-				if (verification.status !== 'unchanged') {
-					throw new Error(`Reviewed migration plan is no longer current: ${verification.reasons.join(', ')}`);
+	async apply(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult> {
+		return await this.withProgressReporter(reporter, async () => {
+			throwIfCancelled(token);
+			const consumed = await this.authorizationIssuer.consume(plan, authorization);
+			throwIfCancelled(token);
+			return await this.withLease(async () => {
+				let operation: EditorMigrationOperation | undefined;
+				try {
+					const verification = await this.planningService.verifyPlan(plan, token);
+					if (verification.status !== 'unchanged') {
+						throw new EditorMigrationApplyError('planDrift', `Reviewed migration plan is no longer current: ${verification.reasons.join(', ')}`);
+					}
+					throwIfCancelled(token);
+					operation = await this.newOperation(plan, consumed);
+					await this.assertWriterLease();
+					try {
+						await this.store.create(operation);
+					} catch (error) {
+						throw new EditorMigrationApplyError('journalUnavailable', `Editor migration journal could not be created: ${errorMessage(error)}`);
+					}
+					this.reportProgress(operation);
+					operation = await this.attachTarget(operation);
+					operation = await this.snapshotSelectedCategories(operation, token);
+					operation = await this.materializeInheritedCategories(operation, token);
+					return await this.execute(operation, token);
+				} catch (error) {
+					if (operation && isCancellationError(error)) {
+						return await this.finishCancellation(await this.store.read(operation.id));
+					}
+					throw error;
 				}
-				throwIfCancelled(token);
-				operation = await this.newOperation(plan, consumed);
-				await this.assertWriterLease();
-				await this.store.create(operation);
-				operation = await this.attachTarget(operation);
-				operation = await this.snapshotSelectedCategories(operation, token);
-				operation = await this.materializeInheritedCategories(operation, token);
-				return await this.execute(operation, token);
-			} catch (error) {
-				if (operation && isCancellationError(error)) {
-					return await this.finishCancellation(await this.store.read(operation.id));
-				}
-				throw error;
-			}
+			});
 		});
 	}
 
@@ -110,14 +136,18 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			}
 			const operation = await this.store.read(summary.id);
 			if (operation.acknowledged) {
-				await this.withLease(async () => {
-					const current = await this.store.read(operation.id);
-					if (!current.acknowledged) {
-						return;
-					}
-					await this.assertWriterLease();
-					await this.store.delete(current.id);
-				});
+				try {
+					await this.withLease(async () => {
+						const current = await this.store.read(operation.id);
+						if (!current.acknowledged) {
+							return;
+						}
+						await this.assertWriterLease();
+						await this.store.delete(current.id);
+					});
+				} catch (error) {
+					this.logService.debug(`Deferred acknowledged editor migration cleanup: ${errorMessage(error)}`);
+				}
 			} else if (summary.recoverable) {
 				result.push(summary);
 			}
@@ -125,8 +155,8 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		return result;
 	}
 
-	async resume(operationId: string, token: CancellationToken): Promise<EditorMigrationOperationResult> {
-		return await this.withLease(async () => {
+	async resume(operationId: string, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult> {
+		return await this.withProgressReporter(reporter, async () => await this.withLease(async () => {
 			let operation = await this.store.read(operationId);
 			try {
 				if ((operation.stage === 'rolledBack' || operation.stage === 'settled') && operation.aggregateOutcome) {
@@ -152,14 +182,17 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				}
 				throw error;
 			}
-		});
+		}));
 	}
 
-	async retry(operationId: string, token: CancellationToken): Promise<EditorMigrationOperationResult> {
-		return await this.withLease(async () => {
+	async retry(operationId: string, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult> {
+		return await this.withProgressReporter(reporter, async () => await this.withLease(async () => {
 			let operation = await this.store.read(operationId);
 			if (operation.stage === 'rollbackPending') {
 				throw new Error('Rollback is pending; use resume or repeat the exact rollback request');
+			}
+			if (operation.rollbackIntent?.mutationStarted) {
+				throw new Error('A migration with a partially completed rollback cannot resume forward Apply');
 			}
 			if (operation.stage === 'rolledBack') {
 				throw new Error('A rolled-back migration operation cannot be retried');
@@ -183,26 +216,37 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				}
 				throw error;
 			}
-		});
+		}));
 	}
 
-	async rollback(operationId: string, options: EditorMigrationRollbackOptions, token: CancellationToken): Promise<EditorMigrationOperationResult> {
-		return await this.withLease(async () => {
+	async inspectRollback(operationId: string, categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): Promise<EditorMigrationRollbackInspection> {
+		const operation = await this.store.read(operationId);
+		return (await this.rollbackInspectionEvidence(operation, uniqueFileCategories(categories))).inspection;
+	}
+
+	async rollback(operationId: string, options: EditorMigrationRollbackOptions, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult> {
+		return await this.withProgressReporter(reporter, async () => await this.withLease(async () => {
 			let operation = await this.store.read(operationId);
 			operation = await this.reproveTarget(operation);
 			if ((options.categories as readonly string[]).includes('extensions')) {
 				throw new Error('Extension rollback is not supported');
 			}
 			const categories = uniqueFileCategories(options.categories);
+			if (!categories.length) {
+				throw new Error('At least one rollback category is required');
+			}
 			const force = new Set(options.forceCategories ?? []);
 			if ([...force].some(category => !categories.includes(category))) {
 				throw new Error('Force rollback categories must be included in the requested rollback');
 			}
 			if (operation.stage === 'rollbackPending' && operation.rollbackIntent) {
-				if (!sameCategories(categories, operation.rollbackIntent.categories) || !sameCategories([...force], operation.rollbackIntent.forceCategories)) {
+				const sameRequest = sameCategories(categories, operation.rollbackIntent.categories) && sameCategories([...force], operation.rollbackIntent.forceCategories);
+				if (sameRequest) {
+					return await this.continueRollback(operation, token);
+				}
+				if (operation.rollbackIntent.mutationStarted) {
 					throw new Error('Requested rollback does not match the durable pending rollback');
 				}
-				return await this.continueRollback(operation, token);
 			}
 			const profile = this.requireAttachedProfile(operation);
 			for (const category of categories) {
@@ -213,24 +257,31 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 					throw new Error(`Cannot roll back ${category} because Apply did not prove a mutated postcondition`);
 				}
 			}
+			const evidence = await this.rollbackInspectionEvidence(operation, categories);
+			if (options.inspectionFingerprint && options.inspectionFingerprint !== evidence.inspection.fingerprint) {
+				throw new EditorMigrationApplyError('rollbackDrift', 'Migration rollback target changed after inspection');
+			}
+			if (evidence.inspection.driftedCategories.some(category => !force.has(category))) {
+				throw new EditorMigrationApplyError('rollbackDrift', `Migration rollback refused because ${evidence.inspection.driftedCategories.join(', ')} changed after Apply; inspect and confirm force rollback to continue`);
+			}
+			if (force.size && options.inspectionFingerprint !== evidence.inspection.fingerprint) {
+				throw new EditorMigrationApplyError('rollbackDrift', 'Force rollback requires a current inspection confirmation');
+			}
 			const inherited = categories.filter(category => operation.snapshots.some(snapshot => snapshot.category === category && snapshot.ownership === 'default'));
 			const resources: EditorMigrationRollbackResourceProgress[] = [];
-			for (const category of categories) {
-				for (const entry of operation.snapshots.filter(snapshot => snapshot.category === category && snapshot.postApplyHash)) {
-					if (entry.category === 'snippets' && !entry.item) {
-						continue;
-					}
-					resources.push({
-						category,
-						item: entry.item,
-						resource: entry.resource,
-						expectedPostApplyHash: entry.postApplyHash!,
-						expectedRestoredHash: entry.ownership === 'default'
-							? entry.hiddenOwnedByteHash ?? await absentHash(category)
-							: entry.state === 'absent' ? await absentHash(category) : entry.byteHash,
-						state: 'pending',
-					});
+			const driftSnapshots = [...operation.rollbackDriftSnapshots];
+			for (const observed of evidence.observations) {
+				let progress: EditorMigrationRollbackResourceProgress = {
+					...observed.progress,
+					state: observed.currentHash === observed.progress.expectedRestoredHash ? 'restored' : 'pending',
+				};
+				if (observed.drifted) {
+					const payload = observed.current?.value ?? VSBuffer.alloc(0);
+					const snapshotPath = await this.writeOperationSnapshot(operation.id, `drift/${observed.progress.category}-${operation.revision}-${encodeURIComponent(observed.progress.item ?? 'category')}`, payload);
+					progress = { ...progress, forceSnapshotPath: snapshotPath, forceObservedHash: observed.currentHash };
+					driftSnapshots.push({ category: progress.category, item: progress.item, resource: progress.resource, snapshotPath, byteHash: await sha256(payload) });
 				}
+				resources.push(progress);
 			}
 			const beforeFlags = profileFlags(profile);
 			const afterFlags = { ...beforeFlags };
@@ -243,11 +294,63 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				beforeFlags,
 				afterFlags,
 				ownershipState: 'pending',
+				mutationStarted: false,
 				resources,
 			};
-			operation = await this.save(operation, { ...operation, stage: 'rollbackPending', aggregateOutcome: 'recoverable', cancellationRequested: false, rollbackIntent });
+			operation = await this.save(operation, { ...operation, stage: 'rollbackPending', aggregateOutcome: 'recoverable', cancellationRequested: false, rollbackDriftSnapshots: driftSnapshots, rollbackIntent });
 			return await this.continueRollback(operation, token);
+		}));
+	}
+
+	private async rollbackInspectionEvidence(operation: EditorMigrationOperation, requestedCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): Promise<EditorMigrationRollbackInspectionEvidence> {
+		const eligibleCategories = uniqueFileCategories(operation.plan.choices.selectedCategories.filter((category): category is Exclude<EditorMigrationCategory, 'extensions'> => category !== 'extensions' && operation.snapshots.some(snapshot => snapshot.category === category && snapshot.postApplyHash)));
+		if (requestedCategories.some(category => !eligibleCategories.includes(category))) {
+			throw new Error('Rollback inspection includes a category without a proven Apply mutation');
+		}
+		const observations: EditorMigrationRollbackObservation[] = [];
+		for (const category of requestedCategories) {
+			for (const entry of operation.snapshots.filter(snapshot => snapshot.category === category && snapshot.postApplyHash)) {
+				if (entry.category === 'snippets' && !entry.item) {
+					continue;
+				}
+				const progress: EditorMigrationRollbackResourceProgress = {
+					category,
+					item: entry.item,
+					resource: entry.resource,
+					expectedPostApplyHash: entry.postApplyHash!,
+					expectedRestoredHash: entry.ownership === 'default'
+						? entry.hiddenOwnedByteHash ?? await absentHash(category)
+						: entry.state === 'absent' ? await absentHash(category) : entry.byteHash,
+					state: 'pending',
+				};
+				const current = await this.readRaw(URI.parse(progress.resource));
+				const currentHash = current ? await sha256(current.value) : await absentHash(category);
+				observations.push({
+					progress,
+					current,
+					currentHash,
+					drifted: currentHash !== progress.expectedPostApplyHash && currentHash !== progress.expectedRestoredHash,
+				});
+			}
+		}
+		const driftedCategories = uniqueFileCategories(observations.filter(observation => observation.drifted).map(observation => observation.progress.category));
+		const fingerprint = await fingerprintEditorMigrationValue({
+			operationId: operation.id,
+			operationRevision: operation.revision,
+			requestedCategories,
+			observations: observations.map(observation => ({
+				category: observation.progress.category,
+				item: observation.progress.item ?? null,
+				resource: observation.progress.resource,
+				currentHash: observation.currentHash,
+				expectedPostApplyHash: observation.progress.expectedPostApplyHash,
+				expectedRestoredHash: observation.progress.expectedRestoredHash,
+			})),
 		});
+		return {
+			inspection: Object.freeze({ operationId: operation.id, operationRevision: operation.revision, eligibleCategories, driftedCategories, fingerprint }),
+			observations,
+		};
 	}
 
 	private async continueRollback(operation: EditorMigrationOperation, token: CancellationToken): Promise<EditorMigrationOperationResult> {
@@ -268,17 +371,21 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				intent = operation.rollbackIntent!;
 				continue;
 			}
-			if (currentHash === progress.expectedPostApplyHash || progress.forceSnapshotPath) {
+			if (currentHash === progress.expectedPostApplyHash || (progress.forceObservedHash !== undefined && currentHash === progress.forceObservedHash)) {
 				continue;
 			}
-			if (!intent.forceCategories.includes(progress.category)) {
-				throw new Error(`Migration rollback refused because ${progress.category} changed after Apply`);
+			const message = `Migration rollback refused because ${progress.category} changed after inspection`;
+			if (intent.mutationStarted) {
+				return await this.settleRollbackRefusal(operation, message);
 			}
-			const payload = current?.value ?? VSBuffer.alloc(0);
-			const snapshotPath = await this.writeOperationSnapshot(operation.id, `drift/${progress.category}-${operation.revision}-${encodeURIComponent(progress.item ?? 'category')}`, payload);
-			const drift = { category: progress.category, item: progress.item, resource: progress.resource, snapshotPath, byteHash: await sha256(payload) };
-			operation = await this.updateRollbackResource(operation, progress, { ...progress, forceSnapshotPath: snapshotPath, forceObservedHash: currentHash }, drift);
-			intent = operation.rollbackIntent!;
+			operation = await this.save(operation, {
+				...operation,
+				stage: 'settled',
+				aggregateOutcome: aggregateForwardResults(operation),
+				cancellationRequested: false,
+				rollbackIntent: undefined,
+			});
+			throw new EditorMigrationApplyError('rollbackDrift', message);
 		}
 
 		if (token.isCancellationRequested) {
@@ -292,6 +399,8 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 				throw new Error('Migration rollback profile ownership changed');
 			}
 			if (matchesBefore && !sameFlags(intent.beforeFlags, intent.afterFlags)) {
+				operation = await this.markRollbackMutationStarted(operation);
+				intent = operation.rollbackIntent!;
 				await this.assertWriterLease();
 				await this.profilesService.updateProfile(profile, { useDefaultFlags: flagsToUseDefault(intent.afterFlags) });
 			}
@@ -311,11 +420,13 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			const currentHash = current ? await sha256(current.value) : await absentHash(progress.category);
 			if (currentHash !== progress.expectedRestoredHash) {
 				if (currentHash !== progress.expectedPostApplyHash && !progress.forceSnapshotPath) {
-					throw new Error(`Migration rollback refused because ${progress.category} changed after preflight`);
+					return await this.settleRollbackRefusal(operation, `Migration rollback refused because ${progress.category} changed after preflight`);
 				}
 				if (progress.forceObservedHash && currentHash !== progress.forceObservedHash) {
-					throw new Error(`Migration rollback refused because ${progress.category} changed after its force snapshot`);
+					return await this.settleRollbackRefusal(operation, `Migration rollback refused because ${progress.category} changed after its force snapshot`);
 				}
+				operation = await this.markRollbackMutationStarted(operation);
+				intent = operation.rollbackIntent!;
 				const entry = findRollbackSnapshot(operation, progress);
 				await this.restoreSnapshot(operation, entry, URI.parse(progress.resource));
 				const restored = await this.readRaw(URI.parse(progress.resource));
@@ -335,6 +446,22 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			operation = await this.recordResult(operation, category, category, 'completed');
 		}
 		operation = await this.save(operation, { ...operation, stage: 'rolledBack', aggregateOutcome: 'rolledBack', cancellationRequested: false });
+		return resultOf(operation);
+	}
+
+	private async markRollbackMutationStarted(operation: EditorMigrationOperation): Promise<EditorMigrationOperation> {
+		if (!operation.rollbackIntent || operation.rollbackIntent.mutationStarted) {
+			return operation;
+		}
+		return await this.save(operation, { ...operation, rollbackIntent: { ...operation.rollbackIntent, mutationStarted: true } });
+	}
+
+	private async settleRollbackRefusal(operation: EditorMigrationOperation, message: string): Promise<EditorMigrationOperationResult> {
+		const pendingCategories = uniqueFileCategories(operation.rollbackIntent?.resources.filter(resource => resource.state === 'pending').map(resource => resource.category) ?? []);
+		for (const category of pendingCategories) {
+			operation = await this.recordResult(operation, category, category, 'failed', 'rollbackDrift', message);
+		}
+		operation = await this.save(operation, { ...operation, stage: 'settled', aggregateOutcome: 'completedWithIssues', cancellationRequested: false });
 		return resultOf(operation);
 	}
 
@@ -1262,7 +1389,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private async save(previous: EditorMigrationOperation, next: EditorMigrationOperation): Promise<EditorMigrationOperation> {
 		await this.assertWriterLease();
-		return await this.store.update(previous, next);
+		const saved = await this.store.update(previous, next);
+		this.reportProgress(saved);
+		return saved;
 	}
 
 	private async writeOperationSnapshot(operationId: string, path: string, contents: VSBuffer): Promise<string> {
@@ -1331,14 +1460,14 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 
 	private async withLease<T>(task: () => Promise<T>): Promise<T> {
 		if (this.leaseCallActive) {
-			throw new Error('Another editor migration operation is already running in this window');
+			throw new EditorMigrationApplyError('writerContention', 'Another editor migration operation is already running in this window');
 		}
 		this.leaseCallActive = true;
 		const owner = generateUuid();
 		let acquired = false;
 		try {
 			if (!await this.shellControllerService.acquireEditorMigrationWriterLease(owner)) {
-				throw new Error('Another editor migration Apply operation holds the writer lease');
+				throw new EditorMigrationApplyError('writerContention', 'Another editor migration Apply operation holds the writer lease');
 			}
 			acquired = true;
 			this.activeLeaseOwner = owner;
@@ -1354,6 +1483,29 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			} finally {
 				this.leaseCallActive = false;
 			}
+		}
+	}
+
+	private async withProgressReporter<T>(reporter: EditorMigrationApplyProgressReporter | undefined, task: () => Promise<T>): Promise<T> {
+		if (this.progressReporter) {
+			throw new EditorMigrationApplyError('writerContention', 'Another editor migration operation is already reporting progress in this window');
+		}
+		this.progressReporter = reporter;
+		try {
+			return await task();
+		} finally {
+			this.progressReporter = undefined;
+		}
+	}
+
+	private reportProgress(operation: EditorMigrationOperation): void {
+		if (!this.progressReporter) {
+			return;
+		}
+		try {
+			this.progressReporter(toEditorMigrationApplyProgress(operation));
+		} catch (error) {
+			this.logService.warn(`Editor migration progress reporter failed: ${errorMessage(error)}`);
 		}
 	}
 
@@ -1504,6 +1656,10 @@ function deriveExtensionCategoryOutcome(outcomes: readonly EditorMigrationItemOu
 		}
 	}
 	return 'completed';
+}
+
+function aggregateForwardResults(operation: EditorMigrationOperation): EditorMigrationOperationResult['aggregateOutcome'] {
+	return deriveEditorMigrationAggregateOutcome(operation.results.map(result => result.outcome));
 }
 
 async function sha256(contents: VSBuffer): Promise<string> {

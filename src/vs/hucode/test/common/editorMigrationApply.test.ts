@@ -14,6 +14,7 @@ import {
 	EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION,
 	EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationApplyAuthorizationIssuer,
+	EditorMigrationOperation,
 	createEditorMigrationOperationIntegrity,
 	deriveEditorMigrationAggregateOutcome,
 	editorMigrationPublishers,
@@ -24,6 +25,7 @@ import {
 	verifiedPersistedEditorMigrationPlanFingerprint,
 	verifyEditorMigrationOperationIntegrity,
 } from '../../common/migration/editorMigrationApply.js';
+import { formatEditorMigrationReport } from '../../common/migration/editorMigrationReport.js';
 
 suite('EditorMigrationApply', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -172,6 +174,37 @@ suite('EditorMigrationApply', () => {
 			durationBucket: 'underMinute',
 		});
 		assert.doesNotMatch(JSON.stringify(telemetry), /extension|profile|path|fingerprint|operationId/i);
+	});
+
+	test('formats a useful report without private values, keybinding arguments, paths, or fingerprints', async () => {
+		const base = await reviewedPlan([]);
+		const secret = 'private-token-value';
+		const keybindingId = `keybindings:{"args":{"token":"${secret}"},"command":"example.run","key":"ctrl+k","when":""}`;
+		const plan = {
+			...base,
+			choices: { selectedCategories: ['settings', 'keybindings'] as const, decisions: [{ id: 'settings:editor.wordWrap', choice: 'preserveTarget' as const }] },
+			operations: [{ id: keybindingId, category: 'keybindings' as const, kind: 'addKeybinding' as const, item: keybindingId.slice('keybindings:'.length), source: { key: 'ctrl+k', command: 'example.run', args: { token: secret } }, relatedTargetIds: [] }],
+		} as EditorMigrationReviewedPlan;
+		const operation: EditorMigrationOperation = {
+			schemaVersion: EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION,
+			id: 'report-operation', revision: 7, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_100_000,
+			plan,
+			integrity: { schemaVersion: EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION, algorithm: 'sha256', planDigest: 'private-fingerprint' },
+			authorization: { planningSchemaVersion: 2, planFingerprint: 'private-plan-fingerprint', publishers: [], publisherSetFingerprint: 'private-publisher-fingerprint', issuedAt: 1, consumedAt: 2 },
+			stage: 'settled', cancellationRequested: false,
+			target: { state: 'attached', profileId: 'default', profileName: 'Default' },
+			snapshots: [{ category: 'settings', state: 'present', ownership: 'target', resource: '/Users/private/settings.json', snapshotPath: '/private/snapshot', byteHash: 'private-byte-fingerprint' }],
+			snapshotCompletedCategories: ['settings'], extensionInstallIntents: [], retryItemIds: [], rollbackDriftSnapshots: [],
+			results: [{ id: keybindingId, category: 'keybindings', outcome: 'completed', attempts: 1, diagnostic: { code: 'safeCode', message: '/Users/private/error' } }],
+			aggregateOutcome: 'completed', acknowledged: false,
+		};
+
+		const report = formatEditorMigrationReport(operation);
+		assert.match(report, /Visual Studio Code \/ Default/);
+		assert.match(report, /Target: Default/);
+		assert.match(report, /Keybinding change 1: completed \[safeCode\]/);
+		assert.match(report, /Setting editor\.wordWrap/);
+		assert.doesNotMatch(report, /private-token-value|Users\/private|private-fingerprint|private-plan-fingerprint|private-byte-fingerprint/);
 	});
 });
 

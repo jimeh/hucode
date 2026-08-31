@@ -113,6 +113,10 @@ const addedByOmniDesktop = new Map([
 		'Omni Projects sidebar actions.',
 	],
 	[
+		'src/vs/hucode/electron-browser/migration/editorMigrationCommand.contribution.js',
+		'Omni-only editor setup import command and modal editor host.',
+	],
+	[
 		'src/vs/platform/agentHost/common/agentService.js',
 		'IAgentHostService wiring for OmniAgentHostService.',
 	],

@@ -101,7 +101,7 @@ export class EditorMigrationOperationStore {
 					createdAt: operation.createdAt,
 					updatedAt: operation.updatedAt,
 					targetName: operation.target.profileName,
-					recoverable: !operation.acknowledged && operation.stage !== 'rolledBack',
+					recoverable: !operation.acknowledged,
 				});
 			} catch {
 				result.push({ id: child.name, stage: 'admitted', createdAt: 0, updatedAt: 0, recoverable: false, unsupportedSchemaVersion: -1 });
@@ -169,7 +169,8 @@ async function validateOperation(value: EditorMigrationOperation, operationId: s
 		|| !Array.isArray(value.authorization.publishers)
 		|| !Number.isFinite(value.authorization.issuedAt)
 		|| !Number.isFinite(value.authorization.consumedAt)
-		|| value.authorization.consumedAt < value.authorization.issuedAt) {
+		|| value.authorization.consumedAt < value.authorization.issuedAt
+		|| (value.rollbackIntent !== undefined && typeof value.rollbackIntent.mutationStarted !== 'boolean')) {
 		throw new Error(`Migration operation '${operationId}' has an unsupported or corrupt schema`);
 	}
 	try {
