@@ -24,7 +24,7 @@
 	--hucode-migration-gutter: 24px;
 
 	container-type: inline-size;
-	container-name: hucodeMigration;
+	container-name: hucode-migration;
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
@@ -491,7 +491,7 @@
 	gap: 4px;
 	margin: 0;
 	padding-left: 18px;
-	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 
 /* #endregion */
@@ -755,7 +755,7 @@
 	padding: 0;
 	margin: -1px;
 	overflow: hidden;
-	clip: rect(0, 0, 0, 0);
+	clip-path: inset(50%);
 	white-space: nowrap;
 	border: 0;
 }
@@ -768,7 +768,7 @@
  * At a narrow pane width, or at 200% zoom in a normal pane, the index moves above the detail as a
  * horizontally scrollable strip. The page itself never overflows horizontally.
  */
-@container hucodeMigration (max-width: 720px) {
+@container hucode-migration (max-width: 720px) {
 	.hucode-editor-migration-flow {
 		--hucode-migration-gutter: 14px;
 	}

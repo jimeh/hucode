@@ -1264,6 +1264,44 @@ suite('EditorMigrationApplyService', () => {
 		assert.ok(operation.results.every(item => item.diagnostic?.code !== 'rollbackDrift'), 'pre-mutation rejection must not record a partial rollback result');
 	});
 
+	test('keeps a recoverable forward outcome when rollback is rejected before its first mutation', async () => {
+		const plan = await proposedSettingsPlan(['settings', 'keybindings'], 'Recoverable Rollback');
+		const cancellation = disposables.add(new CancellationTokenSource());
+		provider.onDidWriteFile = resource => {
+			if (resource.path.endsWith('/settings.json') && !resource.path.includes('/hucode/migration/')) {
+				cancellation.cancel();
+			}
+		};
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, cancellation.token);
+		provider.onDidWriteFile = undefined;
+		assert.deepStrictEqual(result.results.map(item => [item.id, item.outcome]), [['settings', 'completed'], ['keybindings', 'canceled']]);
+		assert.strictEqual(result.aggregateOutcome, 'recoverable');
+		const profile = profilesService.profiles.find(candidate => candidate.name === 'Recoverable Rollback');
+		assert.ok(profile);
+
+		const rollbackCancellation = new CancellationTokenSource();
+		rollbackCancellation.cancel();
+		await service.rollback(result.operationId, { categories: ['settings'] }, rollbackCancellation.token);
+		assert.strictEqual((await service.getOperation(result.operationId)).rollbackIntent?.mutationStarted, false);
+
+		let rollbackReads = 0;
+		provider.onDidReadFile = async resource => {
+			if (resource.toString() === profile.settingsResource.toString() && ++rollbackReads === 2) {
+				await provider.writeFile(resource, VSBuffer.fromString('{ "changed": true }\n').buffer, { create: false, overwrite: true, unlock: false, atomic: false });
+			}
+		};
+		await assert.rejects(
+			() => service.resume(result.operationId, CancellationToken.None),
+			(error: unknown) => error instanceof EditorMigrationApplyError && error.code === 'rollbackDrift',
+		);
+		provider.onDidReadFile = undefined;
+
+		const operation = await service.getOperation(result.operationId);
+		assert.deepStrictEqual([operation.stage, operation.aggregateOutcome], ['settled', 'recoverable'], 'the rejected rollback restores the recoverable forward outcome');
+		assert.strictEqual(operation.rollbackIntent, undefined);
+	});
+
 	test('rolls back only proven mutations, preserves drift before force, and never rolls back extensions', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);

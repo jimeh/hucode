@@ -406,6 +406,26 @@ suite('EditorMigrationFlow', () => {
 		assert.deepStrictEqual(scenario.planningCalls, { targets: 2, drafts: 2 });
 	});
 
+	test('rebuilds stale review evidence when returning through Target after plan drift', async () => {
+		const scenario = await createReadyFlowScenario(async () => { throw new EditorMigrationApplyError('planDrift', 'Target changed'); });
+		const session = disposables.add(scenario.session);
+		const staleDraft = session.state.draft;
+
+		await session.acceptReview();
+		assert.strictEqual(session.state.reviewNeedsRebuild, true);
+		assert.deepStrictEqual(scenario.planningCalls, { targets: 1, drafts: 1 });
+
+		session.back();
+		assert.strictEqual(session.state.phase, 'target');
+		assert.strictEqual(session.state.reviewNeedsRebuild, true, 'Back must not silently clear the stale-evidence flag');
+		await session.continueFromTarget();
+
+		assert.strictEqual(session.state.phase, 'review');
+		assert.strictEqual(session.state.reviewNeedsRebuild, false);
+		assert.notStrictEqual(session.state.draft, staleDraft, 'continuing through Target must not reuse the stale draft');
+		assert.deepStrictEqual(scenario.planningCalls, { targets: 2, drafts: 2 });
+	});
+
 	test('turns clipboard and acknowledgement failures into flow errors', async () => {
 		const clipboard = { writeText: async () => { throw new Error('Clipboard unavailable'); } } as unknown as IClipboardService;
 		const scenario = await createReadyFlowScenario(async (_plan, _authorization, _token, reporter) => {

@@ -578,7 +578,9 @@ export class EditorMigrationFlowSession extends Disposable {
 			this.update({ error: localize('editorMigration.flow.chooseTarget', "Choose a target profile to continue.") });
 			return;
 		}
-		if (!force && this.stateValue.draft && sameTargetSelection(this.stateValue.draft.target.selection, selection)) {
+		// A pending rebuild means the reviewed evidence is known stale, so returning through Target
+		// and continuing must rebuild the draft rather than reuse it.
+		if (!force && !this.stateValue.reviewNeedsRebuild && this.stateValue.draft && sameTargetSelection(this.stateValue.draft.target.selection, selection)) {
 			this.update({ phase: 'review', busy: false, error: undefined });
 			return;
 		}

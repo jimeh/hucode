@@ -12,6 +12,7 @@ import {
 	EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationOperation,
 	EditorMigrationOperationSummary,
+	EditorMigrationRollbackIntent,
 	editorMigrationPublishers,
 	verifyEditorMigrationOperationIntegrity,
 	verifiedPersistedEditorMigrationPlanFingerprint,
@@ -59,7 +60,7 @@ export class EditorMigrationOperationStore {
 	/** Reads and validates one supported journal. */
 	async read(operationId: string): Promise<EditorMigrationOperation> {
 		const contents = (await this.fileService.readFile(this.operationResource(operationId), { atomic: true })).value.toString();
-		const value = JSON.parse(contents) as EditorMigrationOperation;
+		const value = normalizeParsedOperation(JSON.parse(contents) as Partial<EditorMigrationOperation>) as EditorMigrationOperation;
 		await validateOperation(value, operationId);
 		return value;
 	}
@@ -87,7 +88,7 @@ export class EditorMigrationOperationStore {
 				throw error;
 			}
 			try {
-				const raw = JSON.parse(contents) as Partial<EditorMigrationOperation>;
+				const raw = normalizeParsedOperation(JSON.parse(contents) as Partial<EditorMigrationOperation>);
 				if (raw.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION) {
 					result.push({ id: child.name, stage: 'admitted', createdAt: 0, updatedAt: 0, recoverable: false, unsupportedSchemaVersion: typeof raw.schemaVersion === 'number' ? raw.schemaVersion : -1 });
 					continue;
@@ -157,6 +158,59 @@ export class EditorMigrationOperationStore {
 	private async writeRecord(operation: EditorMigrationOperation): Promise<void> {
 		await this.fileService.writeFile(this.operationResource(operation.id), VSBuffer.fromString(`${JSON.stringify(operation, undefined, '\t')}\n`), { atomic: { postfix: '.hucode-tmp' } });
 	}
+}
+
+/**
+ * Some schema version 2 journals predate `rollbackIntent.mutationStarted` and omit it. Treat only
+ * that known legacy shape as `false`, in memory. Corrupt shapes and unknown versions stay untouched
+ * for validation, and reading or listing never rewrites the journal.
+ */
+function normalizeParsedOperation(value: Partial<EditorMigrationOperation>): Partial<EditorMigrationOperation> {
+	const intent: Partial<EditorMigrationRollbackIntent> | undefined = value?.rollbackIntent;
+	// JSON cannot encode an explicit `undefined`, so an undefined field here is exactly the omitted
+	// key. Any present value, corrupt included, is left untouched for validation to judge.
+	if (value?.schemaVersion !== EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION
+		|| !intent
+		|| typeof intent !== 'object'
+		|| Array.isArray(intent)
+		|| intent.mutationStarted !== undefined
+		|| !isRollbackCategories(intent.categories)
+		|| !isRollbackCategories(intent.forceCategories)
+		|| !isProfileFlags(intent.beforeFlags)
+		|| !isProfileFlags(intent.afterFlags)
+		|| !['pending', 'restored'].includes(intent.ownershipState ?? '')
+		|| !Array.isArray(intent.resources)
+		|| !intent.resources.every(isRollbackResource)) {
+		return value;
+	}
+	const normalized = { ...value, rollbackIntent: { ...intent, mutationStarted: false } };
+	return normalized as Partial<EditorMigrationOperation>;
+}
+
+function isRollbackCategories(value: unknown): value is EditorMigrationRollbackIntent['categories'] {
+	return Array.isArray(value) && value.every(category => category === 'settings' || category === 'keybindings' || category === 'snippets');
+}
+
+function isProfileFlags(value: unknown): value is EditorMigrationRollbackIntent['beforeFlags'] {
+	return isJsonObject(value) && Object.values(value).every(flag => typeof flag === 'boolean');
+}
+
+function isRollbackResource(value: unknown): value is EditorMigrationRollbackIntent['resources'][number] {
+	if (!isJsonObject(value)) {
+		return false;
+	}
+	return isRollbackCategories([value.category])
+		&& (value.item === undefined || typeof value.item === 'string')
+		&& typeof value.resource === 'string'
+		&& typeof value.expectedPostApplyHash === 'string'
+		&& typeof value.expectedRestoredHash === 'string'
+		&& (value.state === 'pending' || value.state === 'restored')
+		&& (value.forceSnapshotPath === undefined || typeof value.forceSnapshotPath === 'string')
+		&& (value.forceObservedHash === undefined || typeof value.forceObservedHash === 'string');
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function validateOperation(value: EditorMigrationOperation, operationId: string): Promise<void> {

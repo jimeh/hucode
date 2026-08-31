@@ -1676,8 +1676,16 @@ function deriveExtensionCategoryOutcome(outcomes: readonly EditorMigrationItemOu
 	return 'completed';
 }
 
+/**
+ * The forward outcome a rejected pre-mutation rollback must restore. It uses the same expected-result
+ * rule as `execute()`, so an operation that was recoverable before the rollback request stays
+ * recoverable afterwards instead of being downgraded to a settled non-recoverable outcome.
+ */
 function aggregateForwardResults(operation: EditorMigrationOperation): EditorMigrationOperationResult['aggregateOutcome'] {
-	return deriveEditorMigrationAggregateOutcome(operation.results.map(result => result.outcome));
+	const expectedResults = expectedResultIds(operation.plan).map(id => operation.results.find(result => result.id === id));
+	const outcomes = expectedResults.flatMap(result => result ? [result.outcome] : []);
+	const recoverable = expectedResults.some(result => !result || result.outcome === 'failed' || result.outcome === 'canceled');
+	return deriveEditorMigrationAggregateOutcome(outcomes, recoverable);
 }
 
 async function sha256(contents: VSBuffer): Promise<string> {
