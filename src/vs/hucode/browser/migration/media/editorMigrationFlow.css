@@ -3,96 +3,699 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/*
+ * Scoped migration tokens. Everything structural is derived from the editor foreground and
+ * background so an arbitrary theme cannot erase the separation between the section index and
+ * the detail pane. Only focus, warning, error and button colors come from shared tokens.
+ */
 .hucode-editor-migration-flow {
+	--hucode-migration-fg: var(--vscode-editor-foreground, var(--vscode-foreground));
+	--hucode-migration-bg: var(--vscode-editor-background);
+	--hucode-migration-muted: color-mix(in srgb, var(--hucode-migration-fg) 68%, var(--hucode-migration-bg));
+	--hucode-migration-faint: color-mix(in srgb, var(--hucode-migration-fg) 46%, var(--hucode-migration-bg));
+	--hucode-migration-rule: color-mix(in srgb, var(--hucode-migration-fg) 24%, var(--hucode-migration-bg));
+	--hucode-migration-rule-soft: color-mix(in srgb, var(--hucode-migration-fg) 13%, var(--hucode-migration-bg));
+	--hucode-migration-raised: color-mix(in srgb, var(--hucode-migration-fg) 5%, var(--hucode-migration-bg));
+	--hucode-migration-hover: color-mix(in srgb, var(--hucode-migration-fg) 9%, var(--hucode-migration-bg));
+	--hucode-migration-accent: var(--vscode-focusBorder);
+	--hucode-migration-warn: var(--vscode-editorWarning-foreground, var(--vscode-notificationsWarningIcon-foreground));
+	--hucode-migration-error: var(--vscode-editorError-foreground, var(--vscode-errorForeground));
+	--hucode-migration-ok: var(--vscode-charts-green, var(--hucode-migration-muted));
+	--hucode-migration-gutter: 24px;
+
+	container-type: inline-size;
+	container-name: hucodeMigration;
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
 	height: 100%;
-	color: var(--vscode-foreground);
-	background: var(--vscode-editor-background);
 	overflow: hidden;
+	color: var(--hucode-migration-fg);
+	background: var(--hucode-migration-bg);
 }
 
-.hucode-editor-migration-header,
-.hucode-editor-migration-content {
-	width: min(980px, calc(100% - 48px));
-	margin: 0 auto;
+/* Light themes need a slightly firmer rule to stay visible on a white canvas. */
+.vs .hucode-editor-migration-flow,
+.hc-light .hucode-editor-migration-flow {
+	--hucode-migration-rule: color-mix(in srgb, var(--hucode-migration-fg) 30%, var(--hucode-migration-bg));
+	--hucode-migration-rule-soft: color-mix(in srgb, var(--hucode-migration-fg) 17%, var(--hucode-migration-bg));
+	--hucode-migration-raised: color-mix(in srgb, var(--hucode-migration-fg) 4%, var(--hucode-migration-bg));
 }
+
+.vs-dark .hucode-editor-migration-flow {
+	--hucode-migration-raised: color-mix(in srgb, var(--hucode-migration-fg) 6%, var(--hucode-migration-bg));
+}
+
+/* High contrast themes supply their own separation; keep surfaces flat and rules literal. */
+.hc-black .hucode-editor-migration-flow,
+.hc-light .hucode-editor-migration-flow {
+	--hucode-migration-raised: var(--hucode-migration-bg);
+	--hucode-migration-hover: var(--hucode-migration-bg);
+	--hucode-migration-rule: var(--vscode-contrastBorder, var(--hucode-migration-fg));
+	--hucode-migration-rule-soft: var(--vscode-contrastBorder, var(--hucode-migration-fg));
+	--hucode-migration-muted: var(--hucode-migration-fg);
+	--hucode-migration-faint: var(--hucode-migration-fg);
+}
+
+/* #region framing */
 
 .hucode-editor-migration-header {
-	padding: 28px 0 14px;
-	border-bottom: 1px solid var(--vscode-panel-border);
+	flex: 0 0 auto;
+	box-sizing: border-box;
+	padding: 22px var(--hucode-migration-gutter) 0;
+	border-bottom: 1px solid var(--hucode-migration-rule);
 }
 
 .hucode-editor-migration-header h1 {
-	margin: 0 0 18px;
-	font-size: 22px;
+	margin: 0;
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -.01em;
+}
+
+.vs .hucode-editor-migration-header h1:focus,
+.vs-dark .hucode-editor-migration-header h1:focus {
+	outline: none;
 }
 
 .hucode-editor-migration-steps {
 	display: flex;
-	gap: 22px;
-	margin: 0;
+	gap: 20px;
+	margin: 14px 0 0;
 	padding: 0;
 	list-style: none;
-	color: var(--vscode-descriptionForeground);
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-steps li {
+	position: relative;
+	padding-bottom: 8px;
 }
 
 .hucode-editor-migration-steps .active {
-	color: var(--vscode-foreground);
+	color: var(--hucode-migration-fg);
 	font-weight: 600;
 }
 
-.hucode-editor-migration-content {
+.hucode-editor-migration-steps .active::after {
+	position: absolute;
+	right: 0;
+	bottom: -1px;
+	left: 0;
+	height: 2px;
+	content: "";
+	background: var(--hucode-migration-accent);
+}
+
+.hucode-editor-migration-error {
+	flex: 0 0 auto;
 	box-sizing: border-box;
-	padding: 24px 0 40px;
-	overflow: auto;
+	padding: 10px var(--hucode-migration-gutter);
+	border-bottom: 1px solid var(--hucode-migration-error);
+	color: var(--hucode-migration-error);
 }
 
-.hucode-editor-migration-content h2 {
-	margin-top: 0;
-	font-size: 20px;
+.hucode-editor-migration-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	min-width: 0;
+	display: flex;
 }
 
-.hucode-editor-migration-error,
-.hucode-editor-migration-warnings,
-.hucode-editor-migration-rollback {
-	box-sizing: border-box;
-	width: min(980px, calc(100% - 48px));
-	margin: 16px auto 0;
-	padding: 12px 14px;
-	border: 1px solid var(--vscode-inputValidation-warningBorder);
-	background: var(--vscode-inputValidation-warningBackground);
-	color: var(--vscode-inputValidation-warningForeground);
-}
-
-.hucode-editor-migration-card-list,
-.hucode-editor-migration-categories {
+.hucode-editor-migration-body.indexed {
 	display: grid;
+	grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
+}
+
+.hucode-editor-migration-footer {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
 	gap: 10px;
-	margin: 18px 0;
+	box-sizing: border-box;
+	padding: 10px var(--hucode-migration-gutter);
+	border-top: 1px solid var(--hucode-migration-rule);
+	background: var(--hucode-migration-raised);
+}
+
+.hucode-editor-migration-footer-state {
+	flex: 1 1 220px;
+	min-width: 0;
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-footer-state p {
+	margin: 0;
+}
+
+/* #endregion */
+
+/* #region section index */
+
+/*
+ * The index is navigation and status only. It never scrolls on its own; the detail pane is the
+ * single vertical scroll region on an indexed screen.
+ */
+.hucode-editor-migration-index {
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+	padding: 16px 10px;
+	border-right: 1px solid var(--hucode-migration-rule);
+	background: var(--hucode-migration-raised);
+}
+
+.hucode-editor-migration-index-label {
+	padding: 0 8px 8px;
+	color: var(--hucode-migration-faint);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: .1em;
+	text-transform: uppercase;
+}
+
+.hucode-editor-migration-index-break {
+	height: 1px;
+	margin: 9px 8px;
+	background: var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-section {
+	position: relative;
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 34px;
+	padding: 5px 8px;
+	border: 0;
+	color: var(--hucode-migration-muted);
+	background: transparent;
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.hucode-editor-migration-section:hover {
+	background: var(--hucode-migration-hover);
+}
+
+.hucode-editor-migration-section.active {
+	color: var(--hucode-migration-fg);
+	font-weight: 600;
+}
+
+/* One active leading rule is the signature of this layout. */
+.hucode-editor-migration-section.active::before {
+	position: absolute;
+	top: 6px;
+	bottom: 6px;
+	left: 0;
+	width: 2px;
+	content: "";
+	background: var(--hucode-migration-accent);
+}
+
+.hucode-editor-migration-section:focus-visible {
+	outline: 1px solid var(--hucode-migration-accent);
+	outline-offset: -1px;
+}
+
+.hucode-editor-migration-section-mark {
+	text-align: center;
+	font-weight: 700;
+}
+
+.hucode-editor-migration-section.attention .hucode-editor-migration-section-mark {
+	color: var(--hucode-migration-warn);
+}
+
+.hucode-editor-migration-section.ok .hucode-editor-migration-section-mark {
+	color: var(--hucode-migration-ok);
+}
+
+.hucode-editor-migration-section.neutral .hucode-editor-migration-section-mark {
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-section-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hucode-editor-migration-section-count {
+	color: var(--hucode-migration-faint);
+	font-variant-numeric: tabular-nums;
+	font-weight: 400;
+}
+
+/* #endregion */
+
+/* #region detail pane */
+
+.hucode-editor-migration-detail {
+	min-width: 0;
+	min-height: 0;
+	flex: 1 1 auto;
+	box-sizing: border-box;
+	padding: 20px var(--hucode-migration-gutter) 28px;
+	overflow-x: hidden;
+	overflow-y: auto;
+}
+
+.hucode-editor-migration-body:not(.indexed) .hucode-editor-migration-detail > * {
+	max-width: 880px;
+}
+
+.hucode-editor-migration-detail:focus-visible {
+	outline: 1px solid var(--hucode-migration-accent);
+	outline-offset: -2px;
+}
+
+.hucode-editor-migration-detail h2 {
+	margin: 0 0 4px;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.hucode-editor-migration-detail h3 {
+	margin: 22px 0 8px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	text-transform: uppercase;
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-detail h3.hucode-editor-migration-problem-heading {
+	color: var(--hucode-migration-error);
+}
+
+.hucode-editor-migration-lead {
+	margin: 0 0 16px;
+	color: var(--hucode-migration-muted);
+}
+
+.hucode-editor-migration-note {
+	margin: 8px 0 0;
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-placeholder {
+	margin-top: 18px;
+	padding-top: 18px;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-outcome {
+	margin: 0 0 6px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.hucode-editor-migration-include {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 2px;
+}
+
+.hucode-editor-migration-bulk {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0 0 12px;
+}
+
+/* #endregion */
+
+/* #region comparison rows */
+
+.hucode-editor-migration-conflicts {
+	display: grid;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-conflict {
+	display: grid;
+	grid-template-columns: minmax(140px, .9fr) minmax(0, 1.4fr) auto;
+	align-items: center;
+	gap: 14px;
+	min-height: 46px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-conflict-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-family: var(--monaco-monospace-font);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-conflict-values {
+	min-width: 0;
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-conflict-shown {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-width: 0;
+}
+
+.hucode-editor-migration-value {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--monaco-monospace-font);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-value.imported {
+	color: var(--hucode-migration-fg);
+}
+
+.hucode-editor-migration-conflict-chosen {
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-conflict-choices {
+	display: flex;
+	gap: 4px;
+}
+
+.hucode-editor-migration-choice {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	border: 1px solid var(--hucode-migration-rule);
+	color: var(--hucode-migration-muted);
+	font-size: 12px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.hucode-editor-migration-choice.chosen {
+	color: var(--hucode-migration-fg);
+	border-color: var(--hucode-migration-fg);
+}
+
+.hucode-editor-migration-choice:hover {
+	background: var(--hucode-migration-hover);
+}
+
+/* Focus stays on the control itself; a row is never outlined through :focus-within. */
+.hucode-editor-migration-choice input:focus-visible,
+.hucode-editor-migration-include input:focus-visible,
+.hucode-editor-migration-rollback-selection input:focus-visible,
+.hucode-editor-migration-radio-row input:focus-visible {
+	outline: 2px solid var(--hucode-migration-accent);
+	outline-offset: 1px;
+}
+
+/* #endregion */
+
+/* #region aggregated groups and disclosures */
+
+.hucode-editor-migration-groups {
+	display: grid;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-group {
+	display: grid;
+	grid-template-columns: 42px minmax(0, 1fr);
+	align-items: baseline;
+	gap: 10px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-group-count {
+	color: var(--hucode-migration-warn);
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	text-align: right;
+}
+
+.hucode-editor-migration-group-title {
+	min-width: 0;
+}
+
+.hucode-editor-migration-group .hucode-editor-migration-disclosure {
+	grid-column: 2;
+	border-top: 0;
+}
+
+.hucode-editor-migration-disclosure {
+	margin-top: 14px;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-disclosure > summary {
+	padding: 10px 0;
+	color: var(--hucode-migration-muted);
+	cursor: pointer;
+}
+
+.hucode-editor-migration-disclosure > summary:focus-visible {
+	outline: 1px solid var(--hucode-migration-accent);
+	outline-offset: 1px;
+}
+
+.hucode-editor-migration-disclosure-body {
+	padding: 0 0 12px 18px;
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-disclosure-body p {
+	margin: 0 0 8px;
+}
+
+/* Names are truncated in the view model, so this never becomes a nested scroll region. */
+.hucode-editor-migration-item-names {
+	display: grid;
+	gap: 4px;
+	margin: 0;
+	padding-left: 18px;
+	word-break: break-word;
+}
+
+/* #endregion */
+
+/* #region progress and results */
+
+.hucode-editor-migration-progress {
+	padding: 12px 14px;
+	border-left: 2px solid var(--hucode-migration-accent);
+	background: var(--hucode-migration-raised);
+}
+
+.hucode-editor-migration-progress-rows {
+	display: grid;
+	margin-top: 18px;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-progress-row {
+	display: grid;
+	grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+	align-items: center;
+	gap: 14px;
+	min-height: 42px;
+	margin: 0;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-progress-state {
+	color: var(--hucode-migration-muted);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-current-item {
+	margin: 14px 0 0;
+	color: var(--hucode-migration-muted);
+}
+
+.hucode-editor-migration-problems {
+	display: grid;
+	border-top: 1px solid color-mix(in srgb, var(--hucode-migration-error) 55%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--hucode-migration-error) 55%, transparent);
+}
+
+.hucode-editor-migration-result-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 2px;
+	padding: 9px 0;
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
+}
+
+.hucode-editor-migration-result-row:last-child {
+	border-bottom: 0;
+}
+
+.hucode-editor-migration-result-detail {
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-rollback-selection {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	margin: 16px 0 0;
+	padding: 12px;
+	border: 1px solid var(--hucode-migration-rule);
+}
+
+.hucode-editor-migration-rollback-selection legend {
+	padding: 0 4px;
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
+}
+
+.hucode-editor-migration-rollback-selection label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.hucode-editor-migration-rollback {
+	margin-top: 18px;
+	padding-top: 14px;
+	border-top: 1px solid var(--hucode-migration-error);
+}
+
+/* #endregion */
+
+/* #region controls and pickers */
+
+.hucode-editor-migration-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.hucode-editor-migration-button {
+	min-height: 30px;
+	padding: 5px 12px;
+	border: 1px solid var(--hucode-migration-rule);
+	color: var(--hucode-migration-fg);
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.hucode-editor-migration-button:hover {
+	background: var(--hucode-migration-hover);
+}
+
+.hucode-editor-migration-button:focus-visible {
+	outline: 2px solid var(--hucode-migration-accent);
+	outline-offset: 1px;
+}
+
+.hucode-editor-migration-button.primary {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	border-color: var(--vscode-button-border, var(--vscode-button-background));
+	font-weight: 600;
+}
+
+.hucode-editor-migration-button.primary:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.hucode-editor-migration-button.danger {
+	color: var(--hucode-migration-error);
+	border-color: color-mix(in srgb, var(--hucode-migration-error) 60%, transparent);
+}
+
+.hucode-editor-migration-button:disabled {
+	opacity: .5;
+	cursor: default;
+}
+
+.hucode-editor-migration-filter {
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 420px;
+	margin: 0 0 12px;
+	padding: 6px 9px;
+	border: 1px solid var(--hucode-migration-rule);
+	color: var(--hucode-migration-fg);
+	background: var(--hucode-migration-bg);
+	font: inherit;
+	font-size: 12px;
+}
+
+.hucode-editor-migration-filter:focus-visible {
+	outline: 2px solid var(--hucode-migration-accent);
+	outline-offset: -1px;
+}
+
+.hucode-editor-migration-card-list {
+	display: grid;
+	margin: 14px 0;
+	border-top: 1px solid var(--hucode-migration-rule-soft);
 }
 
 .hucode-editor-migration-card,
 .hucode-editor-migration-choice-card,
-.hucode-editor-migration-radio-row,
-.hucode-editor-migration-category,
-.hucode-editor-migration-decision {
+.hucode-editor-migration-radio-row {
 	box-sizing: border-box;
 	width: 100%;
-	padding: 14px;
-	border: 1px solid var(--vscode-widget-border);
-	background: var(--vscode-list-inactiveSelectionBackground);
-	color: var(--vscode-foreground);
+	padding: 12px 8px;
+	border: 0;
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
+	color: var(--hucode-migration-fg);
+	background: transparent;
+	font: inherit;
 	text-align: left;
 }
 
 .hucode-editor-migration-choice-card,
-.hucode-editor-migration-radio-row,
-.hucode-editor-migration-category {
+.hucode-editor-migration-radio-row {
 	display: flex;
 	align-items: center;
 	gap: 12px;
+}
+
+.hucode-editor-migration-choice-card {
+	justify-content: space-between;
+	cursor: pointer;
+}
+
+.hucode-editor-migration-choice-card:hover,
+.hucode-editor-migration-radio-row:hover {
+	background: var(--hucode-migration-hover);
+}
+
+.hucode-editor-migration-choice-card span,
+.hucode-editor-migration-card p {
+	color: var(--hucode-migration-faint);
+}
+
+.hucode-editor-migration-choice-card:focus-visible {
+	outline: 2px solid var(--hucode-migration-accent);
+	outline-offset: -2px;
 }
 
 .hucode-editor-migration-profile-choice {
@@ -103,94 +706,39 @@
 	flex: 1;
 }
 
-.hucode-editor-migration-details {
-	margin: 12px 0;
-}
-
-.hucode-editor-migration-details summary {
-	cursor: pointer;
-}
-
-.hucode-editor-migration-choice-card {
-	justify-content: space-between;
-	cursor: pointer;
-}
-
-.hucode-editor-migration-choice-card:hover,
-.hucode-editor-migration-radio-row:hover {
-	background: var(--vscode-list-hoverBackground);
-}
-
-.hucode-editor-migration-filter,
-.hucode-editor-migration-new-target input {
-	box-sizing: border-box;
-	width: 100%;
-	padding: 7px 9px;
-	border: 1px solid var(--vscode-input-border, transparent);
-	outline: none;
-	color: var(--vscode-input-foreground);
-	background: var(--vscode-input-background);
-}
-
-.hucode-editor-migration-filter:focus,
-.hucode-editor-migration-new-target input:focus,
-.hucode-editor-migration-button:focus-visible,
-.hucode-editor-migration-radio-row:focus-within,
-.hucode-editor-migration-category:focus-within,
-.hucode-editor-migration-decision:focus-within {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: 1px;
-}
-
-.hucode-editor-migration-actions,
 .hucode-editor-migration-new-target {
 	display: flex;
 	flex-wrap: wrap;
+	align-items: center;
 	gap: 10px;
-	margin: 18px 0;
+	margin: 14px 0;
 }
 
 .hucode-editor-migration-new-target input {
-	flex: 1 1 240px;
+	box-sizing: border-box;
+	flex: 1 1 220px;
+	padding: 6px 9px;
+	border: 1px solid var(--hucode-migration-rule);
+	color: var(--hucode-migration-fg);
+	background: var(--hucode-migration-bg);
+	font: inherit;
 }
 
-.hucode-editor-migration-button {
-	min-height: 32px;
-	padding: 6px 12px;
-	border: 1px solid var(--vscode-button-border, transparent);
-	color: var(--vscode-button-secondaryForeground);
-	background: var(--vscode-button-secondaryBackground);
-	cursor: pointer;
+.hucode-editor-migration-new-target input:focus-visible {
+	outline: 2px solid var(--hucode-migration-accent);
+	outline-offset: -1px;
 }
 
-.hucode-editor-migration-button:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
-}
-
-.hucode-editor-migration-button.primary {
-	color: var(--vscode-button-foreground);
-	background: var(--vscode-button-background);
-}
-
-.hucode-editor-migration-button.primary:hover {
-	background: var(--vscode-button-hoverBackground);
-}
-
-.hucode-editor-migration-button.danger {
-	color: var(--vscode-errorForeground);
-	border-color: var(--vscode-inputValidation-errorBorder);
-}
-
-.hucode-editor-migration-button:disabled {
-	opacity: .55;
-	cursor: default;
+.hucode-editor-migration-target-selected {
+	color: var(--hucode-migration-faint);
+	font-size: 12px;
 }
 
 .hucode-editor-migration-virtual-list {
-	height: min(480px, 48vh);
-	margin: 14px 0;
+	margin: 6px 0 14px;
 	overflow: auto;
-	border: 1px solid var(--vscode-widget-border);
+	border-top: 1px solid var(--hucode-migration-rule-soft);
+	border-bottom: 1px solid var(--hucode-migration-rule-soft);
 }
 
 .hucode-editor-migration-virtual-list .monaco-list-row > * {
@@ -198,94 +746,6 @@
 	width: 100%;
 	height: 100%;
 	margin: 0;
-	border-width: 0 0 1px;
-}
-
-.hucode-editor-migration-decision {
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	align-items: center;
-	gap: 12px;
-}
-
-.hucode-editor-migration-decision legend,
-.hucode-editor-migration-values {
-	grid-column: 1 / -1;
-}
-
-.hucode-editor-migration-values,
-.hucode-editor-migration-extension-row span {
-	color: var(--vscode-descriptionForeground);
-}
-
-.hucode-editor-migration-resource-decision,
-.hucode-editor-migration-extension-row {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	box-sizing: border-box;
-	width: 100%;
-	height: 100%;
-	padding: 12px 14px;
-	border-bottom: 1px solid var(--vscode-widget-border);
-}
-
-.hucode-editor-migration-resource-decision strong,
-.hucode-editor-migration-extension-row strong {
-	flex: 1;
-}
-
-.hucode-editor-migration-review-list,
-.hucode-editor-migration-ownership {
-	display: grid;
-	gap: 6px;
-	padding-left: 22px;
-}
-
-.hucode-editor-migration-decision-choice {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.hucode-editor-migration-progress {
-	padding: 14px;
-	border-left: 3px solid var(--vscode-progressBar-background);
-	background: var(--vscode-editorWidget-background);
-}
-
-.hucode-editor-migration-results,
-.hucode-editor-migration-publishers {
-	display: grid;
-	gap: 6px;
-	padding-left: 22px;
-}
-
-.hucode-editor-migration-result-row {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 12px;
-	box-sizing: border-box;
-	height: 100%;
-	padding: 10px 12px;
-	border-bottom: 1px solid var(--vscode-widget-border);
-}
-
-.hucode-editor-migration-result-detail {
-	color: var(--vscode-descriptionForeground);
-}
-
-.hucode-editor-migration-rollback-selection {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 12px;
-	margin: 16px 0;
-}
-
-.hucode-editor-migration-outcome {
-	font-size: 16px;
-	font-weight: 600;
 }
 
 .hucode-editor-migration-sr-only {
@@ -300,26 +760,98 @@
 	border: 0;
 }
 
-@media (max-width: 680px) {
-	.hucode-editor-migration-header,
-	.hucode-editor-migration-content,
-	.hucode-editor-migration-error,
-	.hucode-editor-migration-warnings,
-	.hucode-editor-migration-rollback {
-		width: calc(100% - 24px);
+/* #endregion */
+
+/* #region narrow pane and zoom */
+
+/*
+ * At a narrow pane width, or at 200% zoom in a normal pane, the index moves above the detail as a
+ * horizontally scrollable strip. The page itself never overflows horizontally.
+ */
+@container hucodeMigration (max-width: 720px) {
+	.hucode-editor-migration-flow {
+		--hucode-migration-gutter: 14px;
+	}
+
+	.hucode-editor-migration-body.indexed {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.hucode-editor-migration-index {
+		display: flex;
+		align-items: stretch;
+		gap: 2px;
+		padding: 6px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		border-right: 0;
+		border-bottom: 1px solid var(--hucode-migration-rule);
+	}
+
+	.hucode-editor-migration-index-label,
+	.hucode-editor-migration-index-break {
+		display: none;
+	}
+
+	.hucode-editor-migration-section {
+		width: auto;
+		min-width: max-content;
+		grid-template-columns: 14px auto auto;
+	}
+
+	.hucode-editor-migration-section.active::before {
+		top: auto;
+		right: 6px;
+		bottom: 0;
+		left: 6px;
+		width: auto;
+		height: 2px;
+	}
+
+	.hucode-editor-migration-conflict,
+	.hucode-editor-migration-progress-row {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 6px;
 	}
 
 	.hucode-editor-migration-steps {
-		gap: 10px;
+		gap: 12px;
 		font-size: 11px;
-	}
-
-	.hucode-editor-migration-decision {
-		grid-template-columns: 1fr;
 	}
 }
 
+/* Viewport fallback for hosts that do not establish the container. */
+@media (max-width: 720px) {
+	.hucode-editor-migration-body.indexed {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.hucode-editor-migration-index {
+		display: flex;
+		gap: 2px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		border-right: 0;
+		border-bottom: 1px solid var(--hucode-migration-rule);
+	}
+
+	.hucode-editor-migration-index-label,
+	.hucode-editor-migration-index-break {
+		display: none;
+	}
+
+	.hucode-editor-migration-section {
+		width: auto;
+		min-width: max-content;
+	}
+}
+
+/* #endregion */
+
 @media (prefers-reduced-motion: reduce) {
+	.hucode-editor-migration-flow,
 	.hucode-editor-migration-flow * {
 		scroll-behavior: auto !important;
 		transition: none !important;
@@ -328,22 +860,44 @@
 }
 
 @media (forced-colors: active) {
-	.hucode-editor-migration-button:focus-visible,
-	.hucode-editor-migration-filter:focus,
-	.hucode-editor-migration-radio-row:focus-within,
-	.hucode-editor-migration-category:focus-within,
-	.hucode-editor-migration-decision:focus-within,
-	.hucode-editor-migration-virtual-list:focus-within {
-		outline: 2px solid Highlight;
-		outline-offset: 2px;
+	.hucode-editor-migration-flow {
+		--hucode-migration-fg: CanvasText;
+		--hucode-migration-bg: Canvas;
+		--hucode-migration-muted: CanvasText;
+		--hucode-migration-faint: CanvasText;
+		--hucode-migration-rule: CanvasText;
+		--hucode-migration-rule-soft: CanvasText;
+		--hucode-migration-raised: Canvas;
+		--hucode-migration-hover: Canvas;
+		--hucode-migration-accent: Highlight;
+		--hucode-migration-warn: CanvasText;
+		--hucode-migration-error: CanvasText;
+		--hucode-migration-ok: CanvasText;
 	}
 
-	.hucode-editor-migration-card,
-	.hucode-editor-migration-choice-card,
-	.hucode-editor-migration-radio-row,
-	.hucode-editor-migration-category,
-	.hucode-editor-migration-decision,
-	.hucode-editor-migration-virtual-list {
+	.hucode-editor-migration-section.active {
+		outline: 1px solid Highlight;
+		outline-offset: -1px;
+	}
+
+	.hucode-editor-migration-section:focus-visible,
+	.hucode-editor-migration-button:focus-visible,
+	.hucode-editor-migration-filter:focus-visible,
+	.hucode-editor-migration-detail:focus-visible,
+	.hucode-editor-migration-disclosure > summary:focus-visible,
+	.hucode-editor-migration-choice input:focus-visible,
+	.hucode-editor-migration-include input:focus-visible,
+	.hucode-editor-migration-radio-row input:focus-visible,
+	.hucode-editor-migration-rollback-selection input:focus-visible {
+		outline: 2px solid Highlight;
+		outline-offset: 1px;
+	}
+
+	.hucode-editor-migration-problems,
+	.hucode-editor-migration-rollback,
+	.hucode-editor-migration-rollback-selection,
+	.hucode-editor-migration-choice,
+	.hucode-editor-migration-button {
 		border-color: CanvasText;
 	}
 }

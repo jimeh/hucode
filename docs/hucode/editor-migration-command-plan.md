@@ -5,9 +5,11 @@ Status: approved for implementation
 Tracks: [#203](https://github.com/jimeh/hucode/issues/203), under the
 [settings import and onboarding epic](https://github.com/jimeh/hucode/issues/192)
 
-Loose UX reference: [interactive migration-flow mockup](https://plans.jimeh.dev/tzafxckzrg5mko7pmkmoripamm/hucode-editor-migration-flow.html).
-The mockup illustrates the intended sequence and language; the contracts in this
-plan and the existing workbench conventions remain authoritative.
+Loose UX reference: [index-and-detail prototype, variant B](https://plans.jimeh.dev/45vwijp5itxmrvuli6stxlk6py/index.html?variant=b&phase=review).
+Variant B is the selected direction. The prototype remains a loose visual and
+interaction reference rather than production code: it illustrates the intended
+hierarchy and language, while the contracts in this plan and the existing
+workbench conventions remain authoritative.
 
 This document plans the first complete user-facing consumer of Hucode's editor
 migration services. It starts from the source discovery, selective planning,
@@ -116,10 +118,10 @@ That gives the standalone command an established host without adding a new
 window or a second shell layout mode.
 
 A Quick Input wizard is rejected. It provides useful pickers, but a long-lived
-review with category summaries, filters, side-by-side conflicts, publisher
-confirmation, progress, recovery, and hundreds of extension rows would be hard
-to inspect. Quick Input widgets also cannot become the shared embedded UI that
-issue #204 requires.
+review with a persistent section index, category summaries, side-by-side
+conflicts, publisher confirmation, progress, recovery, and a large extension
+plan would be hard to inspect. Quick Input widgets also cannot become the shared
+embedded UI that issue #204 requires.
 
 A separate `BrowserWindow` is also rejected. It would need another trusted
 profile, command, gallery, extension-management, and writer-lease composition
@@ -169,8 +171,10 @@ preselects its Default profile when discovery found one; if it did not, the user
 must choose a profile. Each profile row shows the profile name, category
 availability and counts, and accurate modification evidence. Paths and detailed
 diagnostics stay behind a details disclosure rather than dominating the picker.
-Both lists have filters and virtualized rows. Refresh explicitly cancels the
-current generation and reruns discovery without changing the grouping rules.
+Both lists use virtualized rows with stable identity and size themselves to
+their item count; a filter appears only when a list is long enough to need one.
+Refresh explicitly cancels the current generation and reruns discovery without
+changing the grouping rules.
 
 After source selection, read all present supported categories once. This keeps
 category toggles and Back local to the flow instead of repeating filesystem
@@ -189,26 +193,48 @@ results cannot replace a newer selection. Inspection never creates the profile.
 ## Review
 
 Build the draft from current source, target, registry, keybinding, and gallery
-evidence. The review view contains:
+evidence. Review uses the persistent section index and detail pane described
+under [Presentation shell](#presentation-shell). Its topics are the four import
+categories plus a dedicated **Not imported** topic. Review opens on the first
+topic needing attention, and otherwise on Settings.
 
-- independent category choices with available, excluded, conflict, and planned
-  counts;
-- target ownership for every category, including materialization from Default;
-- preserve-by-default settings, keybinding, and snippet differences;
-- filtered settings with stable exclusion reasons;
-- named compatible, incompatible, unavailable, built-in, already installed,
-  and source-integration extensions;
-- exact extension version, channel fallback, and target-platform decisions;
-- every actionable planner warning except the internal
-  `defaultProfileBacksOmni` notice; and
-- filters that can search hundreds of settings or extensions without changing
-  the accepted choices.
+Each category topic carries, in its own detail header and body:
+
+- that category's inclusion checkbox, planned count, available count, and
+  differing count;
+- its target ownership, including materialization from Default;
+- its preserve-by-default differences as compact comparison rows, presented
+  before anything routine, naming both the current and the imported value;
+- its actionable planner warnings aggregated by warning code with a count, so a
+  cause such as a pre-release fallback is stated once instead of once per
+  extension; and
+- its routine additions collapsed into a summary disclosure instead of rendered
+  as rows.
+
+The **Not imported** topic groups held-back items by reason and states each
+reason once with its count. A deselected category contributes one whole-category
+group holding its full source item count, and its per-reason exclusion groups
+are then not shown as well, because that whole-category count already contains
+them. Still-selected categories contribute only their per-reason exclusion
+groups. The same rule drives the held-back count shown in the index and footer.
+
+Review never renders hundreds of new settings, shortcut additions, planned
+extension installs, or raw plan values by default. Item names appear inside
+collapsed disclosures, truncated with an explicit remainder count so a
+disclosure never becomes a second scroll region. Exact extension version,
+channel fallback, target-platform decisions, and every individual exclusion stay
+available through the reviewed plan and the copied report. A filter appears
+above a category's comparison rows only when there are enough of them to need
+one, and filtering never changes the accepted choices. The internal
+`defaultProfileBacksOmni` notice is never rendered.
 
 Additions follow the planner's import default. Present setting conflicts to the
-user as **Different settings**. Each row offers **Keep current value** and **Use
-imported value**. Add **Keep all current values** and **Use imported values for
-all** actions that fill the choice for every differing setting in the selected
-Settings category, including rows hidden by the current filter. Excluded
+user as differences from their current values. Each row offers a keep-current
+and a use-imported choice; the visible labels stay compact while each control's
+accessible name states the choice, the value, and the setting. Add **Keep all
+current values** and **Use imported values for all** actions that fill the
+choice for every differing setting in the selected Settings category, including
+rows hidden by the current filter. Excluded
 settings remain excluded. The user may change an individual row after either
 bulk action. Keybinding and snippet differences continue to use their
 resource-specific review. Every selected difference needs a choice before
@@ -252,6 +278,12 @@ journal create or update succeeds. The first admitted report gives the flow its
 operation ID. Reporter failures are logged and ignored; presentation code must
 never change Apply outcome or journal ordering.
 
+Apply presents one progress state per selected category plus at most one current
+item line. It must not stream every completed operation as a list. Its section
+index carries a Progress topic and one topic per selected category, and a
+category topic shows that category's state and any problem recorded so far
+rather than its successful operations.
+
 The flow derives the active category from the fixed category order and durable
 results. During extension work, show coarse **Resolving extensions...** progress
 until an install intent becomes durable. Gallery lookup happens before that
@@ -286,13 +318,33 @@ other operation settles.
 
 ## Results and recovery actions
 
-Render the durable operation, not a second interpretation of the source. Show
-aggregate status followed by every selected category and extension item. Keep
-`completed`, `alreadyPresent`, `unavailable`, `incompatible`, `canceled`, and
-`failed` distinct. The Apply result type reserves `skipped`, but the merged
-service never produces it. Show persisted planner exclusions and
-`preserveTarget` choices as skipped review items without manufacturing Apply
-results, and do not require a runtime Apply test to observe a `skipped` outcome.
+Render the durable operation, not a second interpretation of the source. Results
+use the same section index and detail pane: a Summary topic, one topic per
+imported category, a **Not imported** topic, and a separated **Undo file
+changes** topic when restoration is available. Results open the first category
+with a problem, and otherwise on Summary.
+
+**Not imported** must preserve the complete accounting Review showed, not only
+the planner's exclusions. The reviewed plan retains the source snapshot, the
+target's requested categories, the exclusions, and the selected categories, so
+Results derives its held-back count and groups from those durable fields using
+the same rule as Review: exclusions from still-selected categories, plus each
+requested-but-deselected category's full source item count, without counting
+that deselected category's own exclusions a second time. The topic appears
+whenever that count is nonzero, including a plan that carries no exclusions at
+all but did deselect a category. Do not change the reviewed-plan schema or the
+report format to carry this; the existing fields already record it.
+
+Results are failure first. A category topic names its failed, unavailable,
+incompatible, and canceled items with their stable diagnostics, then collapses
+its routine successes into a summary disclosure. Keep `completed`,
+`alreadyPresent`, `unavailable`, `incompatible`, `canceled`, and `failed`
+distinct. The Apply result type reserves `skipped`, but the merged service never
+produces it. Show persisted planner exclusions and `preserveTarget` choices as
+skipped review items without manufacturing Apply results, and do not require a
+runtime Apply test to observe a `skipped` outcome. Extension placement guidance
+is aggregated into one statement per placement outcome with a count rather than
+repeated for every extension.
 
 Offer actions only when the operation permits them:
 
@@ -343,24 +395,57 @@ data, and fingerprints.
 ## Shared UI components
 
 Keep rendering under `src/vs/hucode/browser/migration/` and make the host supply
-only framing, close, and completion callbacks. Suggested components are:
+only framing, close, and completion callbacks. Components are:
 
 - flow header and step navigation;
+- persistent action footer;
+- section index and detail pane;
 - recovery operation list;
 - source and target pickers;
-- category summary and ownership warning;
-- filterable decision and extension lists;
+- category detail with its inclusion control, ownership note, and comparison
+  rows;
+- aggregated group list and collapsed disclosures;
 - publisher confirmation;
-- durable progress list; and
+- category-level progress; and
 - result, rollback, and report actions.
 
-Use workbench list or tree primitives for virtualized collections and stable row
-identity. Do not render hundreds of rows as an unbounded DOM list. Keep filters
-as presentation state so typing does not rebuild the reviewed plan.
+### Presentation shell
 
-The view uses workbench theme colors and standard button, checkbox, input, list,
-scrollbar, hover, and focus behavior. It does not hard-code light or dark
-values. A narrow window switches review detail to one column without hiding
+Every phase renders the same three-part shell: the flow header and step
+navigation, a body, and a persistent action footer. The header, any error alert,
+and the footer sit outside the scrolling region, so Back, Continue, Import,
+publisher confirmation, cancellation, Results, retry, resume, report,
+import-another, and rollback actions stay reachable in every phase and at every
+scroll position.
+
+Review, publisher confirmation, Apply, and Results additionally render a
+persistent section index beside a single detail pane. The index is navigation
+and status only: one row per topic carrying a status mark, a count, and one
+active leading rule. Category inclusion controls belong in the detail header,
+not in index rows. The index has an accessible navigation label and marks the
+active row without claiming tab semantics it does not implement. Publisher
+confirmation keeps the review topic map and adds a Publishers topic; its
+category topics render read-only so confirmation cannot reopen a review choice
+and invalidate the reviewed plan.
+
+On indexed screens the detail pane is the only vertical scroll region. The index
+never gains its own vertical scrollbar, and a disclosure never nests a scrolling
+list inside the detail pane. At a narrow pane width, or at 200 percent zoom, the
+index moves above the detail pane as a horizontally scrollable section strip,
+and there is no horizontal page overflow.
+
+Use workbench list primitives for the remaining virtualized collections —
+applications, profiles, and recovery records — with stable row identity. Those
+lists size themselves to their item count, and a filter appears only when a list
+is long enough to need one. Keep filters as presentation state so typing does
+not rebuild the reviewed plan.
+
+Derive the structural surfaces from scoped migration tokens based on the editor
+foreground and background plus the shared focus, warning, error, and button
+tokens, so an arbitrary theme cannot erase the separation between the index and
+the detail pane. Do not hard-code light or dark values, and carry calibrated
+`.vs`, `.vs-dark`, `.hc-black`, `.hc-light`, and `forced-colors` behavior. A
+narrow window switches comparison and progress rows to one column without hiding
 labels or actions. Reduced motion removes decorative transitions rather than
 slowing functional progress feedback.
 
@@ -368,6 +453,9 @@ slowing functional progress feedback.
 
 - Give each phase one page heading and a stable initial focus target.
 - Preserve focus by stable item ID when filters, progress, or results update.
+- Keep the section index operable by keyboard, leave focus on a useful visible
+  target after a section change, and keep visible focus on the interactive
+  control itself rather than outlining a whole row.
 - Expose categories and conflicts with native checkbox or radio semantics and
   visible focus.
 - Announce discovery completion, stale-plan return, Apply stage changes,
@@ -432,11 +520,14 @@ active hosted workbench even though palette invocation happens to stay local.
    drift, writer contention, publisher reconfirmation, reattachment, retry,
    rollback, acknowledgement, and rerun.
 
-4. **Build the reusable view.** Add separate virtualized application and profile
-   pickers, target and difference review, bulk setting decisions, extension,
-   progress, and recovery lists; filters; responsive layout; keyboard behavior;
-   ARIA announcements; and theme/high-contrast styling. Keep the view unaware
-   of service policy and test its observable state and intents.
+4. **Build the reusable view.** Add the header, persistent footer, and section
+   index and detail shell; virtualized application, profile, and recovery
+   pickers; target selection; the category detail with inclusion, ownership,
+   comparison rows, and bulk setting decisions; aggregated groups and collapsed
+   disclosures; category-level progress; failure-first results; conditional
+   filters; responsive layout; keyboard behavior; ARIA announcements; and
+   theme/high-contrast styling. Keep the view unaware of service policy and test
+   its observable state and intents.
 
 5. **Add the standalone editor and command host.** Register a non-serializable
    singleton-matching editor input and pane, open it in `MODAL_GROUP`, wire close
@@ -489,7 +580,12 @@ output must confirm that each new suite and case ran.
   invocation reveals it, `omni.desktop.main.ts` owns the import, the standard
   workbench bundle does not register the command, and Projects-focus keybindings
   route it to the shell.
-- DOM tests for filtering hundreds of rows, stable focus, keyboard-only
+- DOM tests for section defaulting and selection, summary-first rendering,
+  aggregation of repeated warnings, exclusions, successes, and extension
+  placement, held-back accounting with a deselected category in both Review and
+  durable Results, the preserved
+  footer actions in every phase, exactly one detail scroll region with no nested
+  list, filtering the remaining large pickers, stable focus, keyboard-only
   operation, accessible names and states, announcements, narrow layout, and
   high-contrast classes.
 
@@ -508,7 +604,10 @@ Drive the real command through normal and narrow windows with keyboard-only
 input, a high-contrast theme, and reduced motion. Verify the shortest path asks
 for an application, preselects that application's Default source profile, and
 preselects Hucode Default as the target. Exercise both bulk setting actions with
-a filtered list and confirm excluded settings stay excluded. Close before
+enough differing settings for the filter to appear, and confirm excluded
+settings stay excluded. Check the section index and detail pane at 1280x800 and
+in a 480 pixel wide pane, including 200 percent zoom, and confirm the detail
+pane is the only vertical scroll region. Close before
 admission and during Apply, restart for recovery, retry partial work, copy the
 report, and acknowledge the final operation. Confirm that the Omni shell remains
 on Default and that a named target does not become the shell profile.
@@ -534,7 +633,8 @@ checks for this plan document.
 | A stale async result overwrites newer user intent | Tag each async branch with a generation and ignore results after cancellation or invalidation |
 | Closing the editor loses an admitted operation | Retain the active session until a durable result and recover from the installation-scoped journal after renderer loss |
 | Progress claims work that a crash can still erase | Report only journaled revisions and derive completion only from durable results |
-| Long review lists freeze or lose focus | Use virtualized workbench lists, stable item IDs, and presentation-only filtering |
+| Long review lists freeze or lose focus | Summarize routine additions and successes, aggregate repeated causes, keep virtualized workbench lists with stable item IDs for the remaining large pickers, and preserve focus by stable ID |
+| Held-back counts double-count a deselected category, or Results silently drops one | Count a deselected category once as its full source item count and take exclusions only from still-selected categories; drive the Not imported count, groups, and topic presence from that one rule in both Review and durable Results |
 | A bulk setting choice appears to affect only filtered rows | Apply it to every selected differing setting, show the affected count, and keep excluded settings outside its scope |
 | Publisher confirmation becomes global trust | Bind one confirmation to the exact reviewed plan and keep the global trust store untouched |
 | Normal rollback discovers drift after committing the wrong request | Inspect and fingerprint drift before intent persistence; distinguish pre-mutation intent so a changed inspection has a legal supersession path |
@@ -544,7 +644,8 @@ checks for this plan document.
 
 ## Unresolved questions
 
-No product decision blocks implementation. The mockup is a loose reference, so
-the exact visual hierarchy may adapt to modal-editor and workbench primitives.
+No product decision blocks implementation. The variant B prototype is a loose
+reference, so the exact visual hierarchy may adapt to modal-editor and workbench
+primitives.
 Keep the settled sequence, defaults, decision wording, accessibility, publisher,
 target, and recovery contracts unchanged.
