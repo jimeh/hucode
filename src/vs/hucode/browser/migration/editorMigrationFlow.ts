@@ -25,6 +25,7 @@ import {
 import { formatEditorMigrationReport } from '../../common/migration/editorMigrationReport.js';
 import {
 	EditorMigrationCategory,
+	EditorMigrationDiagnostic,
 	EditorMigrationSourceDescriptor,
 	EditorMigrationSourceProfileRef,
 	EditorMigrationSourceSnapshot,
@@ -65,6 +66,7 @@ export interface EditorMigrationFlowState {
 	readonly announcement?: string;
 	readonly recoveries: readonly EditorMigrationOperationSummary[];
 	readonly applications: readonly EditorMigrationSourceApplication[];
+	readonly discoveryDiagnostics: readonly EditorMigrationDiagnostic[];
 	readonly selectedApplicationId?: string;
 	readonly selectedSourceRef?: EditorMigrationSourceProfileRef;
 	readonly source?: EditorMigrationSourceSnapshot;
@@ -295,21 +297,34 @@ export class EditorMigrationFlowSession extends Disposable {
 
 	toggleCategory(category: EditorMigrationCategory, selected: boolean): void {
 		const selectedCategories = ALL_CATEGORIES.filter(candidate => candidate === category ? selected : this.stateValue.selectedCategories.includes(candidate));
-		this.update({ selectedCategories, reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
+		if (selectedCategories.length === this.stateValue.selectedCategories.length && selectedCategories.every((candidate, index) => candidate === this.stateValue.selectedCategories[index])) {
+			return;
+		}
+		this.nextGeneration();
+		this.update({ selectedCategories, busy: false, reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
 	}
 
 	chooseDecision(id: string, choice: 'import' | 'preserveTarget'): void {
 		if (!this.stateValue.draft?.decisions.some(decision => decision.id === id && decision.kind === 'conflict')) {
 			return;
 		}
-		this.update({ decisions: Object.freeze({ ...this.stateValue.decisions, [id]: choice }), reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
+		if (this.stateValue.decisions[id] === choice) {
+			return;
+		}
+		this.nextGeneration();
+		this.update({ decisions: Object.freeze({ ...this.stateValue.decisions, [id]: choice }), busy: false, reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
 	}
 
 	chooseAllSettingDifferences(choice: 'import' | 'preserveTarget'): void {
 		if (!this.stateValue.draft) {
 			return;
 		}
-		this.update({ decisions: chooseAllEditorMigrationSettingDifferences(this.stateValue.draft, this.stateValue.decisions, choice), reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
+		const decisions = chooseAllEditorMigrationSettingDifferences(this.stateValue.draft, this.stateValue.decisions, choice);
+		if (Object.keys(decisions).every(id => decisions[id] === this.stateValue.decisions[id])) {
+			return;
+		}
+		this.nextGeneration();
+		this.update({ decisions, busy: false, reviewedPlan: undefined, publishers: [], reviewNeedsRebuild: false, error: undefined });
 	}
 
 	async acceptReview(): Promise<void> {
@@ -398,6 +413,12 @@ export class EditorMigrationFlowSession extends Disposable {
 		}
 	}
 
+	clearRollbackInspection(): void {
+		if (this.stateValue.rollbackInspection) {
+			this.update({ rollbackInspection: undefined, error: undefined });
+		}
+	}
+
 	async rollback(categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[], forceCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[] = []): Promise<void> {
 		const operation = this.stateValue.operation;
 		if (!operation) {
@@ -435,12 +456,11 @@ export class EditorMigrationFlowSession extends Disposable {
 	}
 
 	back(): void {
-		this.nextGeneration();
 		switch (this.stateValue.phase) {
-			case 'profile': this.update({ phase: 'application', busy: false, error: undefined }); break;
-			case 'target': this.update({ phase: 'profile', busy: false, error: undefined }); break;
-			case 'review': this.update({ phase: 'target', busy: false, error: undefined }); break;
-			case 'publishers': this.update({ phase: 'review', busy: false, reviewedPlan: undefined, publishers: [], error: undefined }); break;
+			case 'profile': this.nextGeneration(); this.update({ phase: 'application', busy: false, error: undefined }); break;
+			case 'target': this.nextGeneration(); this.update({ phase: 'profile', busy: false, error: undefined }); break;
+			case 'review': this.nextGeneration(); this.update({ phase: 'target', busy: false, error: undefined }); break;
+			case 'publishers': this.nextGeneration(); this.update({ phase: 'review', busy: false, reviewedPlan: undefined, publishers: [], error: undefined }); break;
 		}
 	}
 
@@ -450,7 +470,7 @@ export class EditorMigrationFlowSession extends Disposable {
 			if (!this.isCurrent(generation)) {
 				return;
 			}
-			this.update({ phase: 'application', busy: false, applications: groupEditorMigrationSources(result.sources), announcement: localize('editorMigration.flow.sourcesFound', "{0} source profiles found.", result.sources.length) });
+			this.update({ phase: 'application', busy: false, applications: groupEditorMigrationSources(result.sources), discoveryDiagnostics: result.diagnostics, announcement: localize('editorMigration.flow.sourcesFound', "{0} source profiles found.", result.sources.length) });
 		} catch (error) {
 			this.fail(generation, error);
 		}
@@ -463,7 +483,7 @@ export class EditorMigrationFlowSession extends Disposable {
 		try {
 			const authorization = await this.applyService.createApplyAuthorization(plan, publishers);
 			const result = await this.applyService.apply(plan, authorization, token, progress => {
-				if (this.isCurrent(generation)) {
+				if (this.isCurrent(generation, true)) {
 					this.update({ progress, announcement: progressAnnouncement(progress) });
 				}
 			});
@@ -483,7 +503,7 @@ export class EditorMigrationFlowSession extends Disposable {
 		this.update({ phase: 'apply', busy: true, canceling: false, progress: undefined, error: undefined });
 		try {
 			await run(token, progress => {
-				if (this.isCurrent(generation)) {
+				if (this.isCurrent(generation, true)) {
 					this.update({ progress, announcement: progressAnnouncement(progress) });
 				}
 			});
@@ -664,6 +684,7 @@ function emptyState(): EditorMigrationFlowState {
 		announcement: undefined,
 		recoveries: [],
 		applications: [],
+		discoveryDiagnostics: [],
 		selectedApplicationId: undefined,
 		selectedSourceRef: undefined,
 		source: undefined,
@@ -703,7 +724,20 @@ function selectedSourceCategories(source: EditorMigrationSourceSnapshot | undefi
 }
 
 function progressAnnouncement(progress: EditorMigrationApplyProgress): string {
-	return localize('editorMigration.flow.progress', "{0}. {1} of {2} items recorded.", progress.stage, progress.results.length, progress.selectedItemCount);
+	return localize('editorMigration.flow.progress', "{0}. {1} of {2} items recorded.", progressStageLabel(progress.stage), progress.results.length, progress.selectedItemCount);
+}
+
+function progressStageLabel(stage: EditorMigrationApplyProgress['stage']): string {
+	switch (stage) {
+		case 'admitted': return localize('editorMigration.flow.stage.admitted', "Preparing the import");
+		case 'attachingTarget': return localize('editorMigration.flow.stage.attachingTarget', "Preparing the target profile");
+		case 'snapshotting': return localize('editorMigration.flow.stage.snapshotting', "Saving recovery copies");
+		case 'materializing': return localize('editorMigration.flow.stage.materializing', "Preparing inherited profile files");
+		case 'applying': return localize('editorMigration.flow.stage.applying', "Importing selected items");
+		case 'settled': return localize('editorMigration.flow.stage.settled', "Import finished");
+		case 'rollbackPending': return localize('editorMigration.flow.stage.rollbackPending', "Restoring file changes");
+		case 'rolledBack': return localize('editorMigration.flow.stage.rolledBack', "File changes restored");
+	}
 }
 
 function errorMessage(error: unknown): string {

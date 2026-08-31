@@ -3,13 +3,13 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { addDisposableListener, clearNode, EventType, isHTMLElement } from '../../../base/browser/dom.js';
+import { addDisposableListener, clearNode, EventType, isHTMLElement, isHTMLInputElement } from '../../../base/browser/dom.js';
 import { IListRenderer, IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List } from '../../../base/browser/ui/list/listWidget.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { localize } from '../../../nls.js';
-import { EditorMigrationItemResult } from '../../common/migration/editorMigrationApply.js';
-import { EditorMigrationCategory, EditorMigrationJsonValue } from '../../common/migration/editorMigrationSource.js';
+import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationCategory, EditorMigrationDiagnostic, EditorMigrationJsonValue, EditorMigrationSourceDescriptor } from '../../common/migration/editorMigrationSource.js';
 import { EditorMigrationDraftDecision, EditorMigrationDraftExclusion, EditorMigrationExclusionReason, EditorMigrationPlanDraft, EditorMigrationPlanWarning, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from './editorMigrationFlow.js';
 
@@ -22,12 +22,20 @@ const CATEGORY_LABELS: Readonly<Record<EditorMigrationCategory, string>> = {
 
 type EditorMigrationFilterId = 'applications' | 'profiles' | 'settings' | 'extensions';
 
+interface EditorMigrationVirtualListState {
+	scrollTop: number;
+	focusedIdentity?: string;
+}
+
 /** Shared migration flow view. Hosts supply only framing and completion behavior. */
 export class EditorMigrationFlowView extends Disposable {
 	private readonly renderDisposables = this._register(new DisposableStore());
 	private readonly root: HTMLElement;
 	private readonly status: HTMLElement;
 	private readonly filters: Record<EditorMigrationFilterId, string> = { applications: '', profiles: '', settings: '', extensions: '' };
+	private readonly composingFilters = new Set<EditorMigrationFilterId>();
+	private readonly virtualListStates = new Map<string, EditorMigrationVirtualListState>();
+	private readonly rollbackSelections = new Map<string, Set<Exclude<EditorMigrationCategory, 'extensions'>>>();
 	private rowDisposables: DisposableStore | undefined;
 	private initialFocus: HTMLElement | undefined;
 
@@ -52,7 +60,11 @@ export class EditorMigrationFlowView extends Disposable {
 	}
 
 	private render(state: EditorMigrationFlowState): void {
-		const focusedId = (this.root.ownerDocument.activeElement as HTMLElement | null)?.dataset.migrationFocusId;
+		const activeElement = this.root.ownerDocument.activeElement as HTMLInputElement | null;
+		const focusedId = activeElement?.dataset.migrationFocusId;
+		const selection = activeElement && typeof activeElement.selectionStart === 'number'
+			? { start: activeElement.selectionStart, end: activeElement.selectionEnd ?? activeElement.selectionStart, direction: activeElement.selectionDirection ?? undefined }
+			: undefined;
 		this.renderDisposables.clear();
 		clearNode(this.root);
 		this.root.appendChild(this.header(state));
@@ -74,7 +86,11 @@ export class EditorMigrationFlowView extends Disposable {
 		}
 		this.status.textContent = state.announcement ?? '';
 		if (focusedId) {
-			findElementByFocusId(this.root, focusedId)?.focus();
+			const restored = findElementByFocusId(this.root, focusedId);
+			restored?.focus();
+			if (selection && isHTMLInputElement(restored)) {
+				restored.setSelectionRange(selection.start, selection.end, selection.direction);
+			}
 		} else {
 			this.initialFocus?.focus();
 		}
@@ -109,8 +125,7 @@ export class EditorMigrationFlowView extends Disposable {
 	private renderRecovery(parent: HTMLElement, state: EditorMigrationFlowState): void {
 		parent.appendChild(element('h2', undefined, localize('editorMigration.recovery.title', "Continue an Earlier Import"), { tabIndex: '-1' }));
 		parent.appendChild(element('p', undefined, localize('editorMigration.recovery.description', "Hucode found import data that still has results or recovery actions available.")));
-		const list = element('div', 'hucode-editor-migration-card-list');
-		for (const recovery of state.recoveries) {
+		this.virtualList(parent, 'recoveries', state.recoveries, 112, recovery => recovery.id, recovery => recovery.targetName ?? localize('editorMigration.recovery.unknownTarget', "Unknown Target"), recovery => {
 			const card = element('article', 'hucode-editor-migration-card');
 			card.append(
 				element('h3', undefined, recovery.targetName ?? localize('editorMigration.recovery.unknownTarget', "Unknown Target")),
@@ -119,9 +134,9 @@ export class EditorMigrationFlowView extends Disposable {
 			if (recovery.unsupportedSchemaVersion === undefined) {
 				card.appendChild(this.button(localize('editorMigration.recovery.open', "View or Continue"), () => void this.session.showRecovery(recovery.id), `recovery-${recovery.id}`));
 			}
-			list.appendChild(card);
-		}
-		parent.append(list, this.button(localize('editorMigration.recovery.new', "Start Another Import"), () => void this.session.startImport(), 'start-import'));
+			return card;
+		}, recovery => recovery.unsupportedSchemaVersion === undefined && void this.session.showRecovery(recovery.id));
+		parent.appendChild(this.button(localize('editorMigration.recovery.new', "Start Another Import"), () => void this.session.startImport(), 'start-import'));
 	}
 
 	private renderApplications(parent: HTMLElement, state: EditorMigrationFlowState): void {
@@ -131,18 +146,21 @@ export class EditorMigrationFlowView extends Disposable {
 		parent.appendChild(filter);
 		const applications = state.applications.filter(application => application.productName.toLowerCase().includes(this.filters.applications.toLowerCase()));
 		if (applications.length) {
-			this.virtualList(parent, applications, 76, application => application.id, application => application.productName, application => {
+			this.virtualList(parent, 'applications', applications, 76, application => application.id, application => application.productName, application => {
 				const button = this.button('', () => this.session.selectApplication(application.id), `application-${application.id}`, 'hucode-editor-migration-choice-card');
 				button.append(
 					element('strong', undefined, application.productName),
 					element('span', undefined, localize('editorMigration.application.profiles', "{0} profiles", application.profiles.length)),
 				);
 				return button;
-			});
+			}, application => this.session.selectApplication(application.id));
 		} else {
 			parent.appendChild(element('p', undefined, localize('editorMigration.application.empty', "No supported editor profiles were found.")));
 		}
 		parent.appendChild(this.button(localize('editorMigration.refresh', "Refresh"), () => void this.session.refreshDiscovery(), 'refresh'));
+		if (state.discoveryDiagnostics.length) {
+			parent.appendChild(this.discoveryDetails(state.discoveryDiagnostics));
+		}
 	}
 
 	private renderProfiles(parent: HTMLElement, state: EditorMigrationFlowState): void {
@@ -154,18 +172,24 @@ export class EditorMigrationFlowView extends Disposable {
 		const filter = this.filterInput('profiles', localize('editorMigration.profile.filter', "Filter profiles"));
 		parent.appendChild(filter);
 		const profiles = application.profiles.filter(profile => profile.profile.name.toLowerCase().includes(this.filters.profiles.toLowerCase()));
-		this.virtualList(parent, profiles, 68, source => source.ref.value, source => source.profile.name, source => {
-			const row = element('label', 'hucode-editor-migration-radio-row');
+		this.virtualList(parent, 'profiles', profiles, 84, source => source.ref.value, source => source.profile.name, source => {
+			const row = element('div', 'hucode-editor-migration-radio-row');
+			const choice = element('label', 'hucode-editor-migration-profile-choice');
 			const radio = document.createElement('input');
 			radio.type = 'radio';
 			radio.name = 'migration-source-profile';
 			radio.checked = state.selectedSourceRef?.value === source.ref.value;
 			radio.dataset.migrationFocusId = `profile-${source.ref.value}`;
 			this.addListener(radio, EventType.CHANGE, () => this.session.selectSourceProfile(source.ref));
-			const available = source.categories.filter(category => category.state === 'present');
-			row.append(radio, element('span', undefined, `${source.profile.name} · ${available.map(category => `${CATEGORY_LABELS[category.category]} ${category.itemCount}`).join(', ')}`));
+			const summary = source.categories.map(category => `${CATEGORY_LABELS[category.category]}: ${resourceStateLabel(category.state, category.itemCount)}`).join(' · ');
+			choice.append(radio, element('span', undefined, `${source.profile.name} · ${summary}`));
+			row.append(choice);
 			return row;
-		});
+		}, source => this.session.selectSourceProfile(source.ref));
+		const selectedSource = application.profiles.find(source => source.ref.value === state.selectedSourceRef?.value);
+		if (selectedSource) {
+			parent.appendChild(this.sourceDetails(selectedSource));
+		}
 		parent.appendChild(this.actions(
 			this.button(localize('editorMigration.back', "Back"), () => this.session.back(), 'profile-back'),
 			this.button(localize('editorMigration.continue', "Continue"), () => void this.session.continueFromProfile(), 'profile-continue', 'primary', !state.selectedSourceRef || state.busy),
@@ -286,7 +310,7 @@ export class EditorMigrationFlowView extends Disposable {
 	}
 
 	private renderDecisions(parent: HTMLElement, decisions: readonly EditorMigrationDraftDecision[], state: EditorMigrationFlowState): void {
-		this.virtualList(parent, decisions, 132, decision => decision.id, decision => decision.item, decision => {
+		this.virtualList(parent, 'settings-differences', decisions, 132, decision => decision.id, decision => decision.item, decision => {
 			const row = element('fieldset', 'hucode-editor-migration-decision');
 			row.appendChild(element('legend', undefined, decision.item));
 			row.appendChild(element('div', 'hucode-editor-migration-values', localize('editorMigration.review.settingValues', "Current: {0} · Imported: {1}", displayValue(decision.target), displayValue(decision.source))));
@@ -324,7 +348,7 @@ export class EditorMigrationFlowView extends Disposable {
 		parent.appendChild(element('h3', undefined, category === 'keybindings'
 			? localize('editorMigration.review.keybindings', "Keyboard Shortcut Changes")
 			: localize('editorMigration.review.snippets', "Snippet File Changes")));
-		this.virtualList(parent, decisions, 112, decision => decision.id, decision => decision.item, decision => {
+		this.virtualList(parent, `${category}-differences`, decisions, 112, decision => decision.id, decision => decision.item, decision => {
 			const row = element('div', 'hucode-editor-migration-resource-decision');
 			row.appendChild(element('strong', undefined, resourceDecisionLabel(decision)));
 			if (decision.kind === 'conflict') {
@@ -343,7 +367,7 @@ export class EditorMigrationFlowView extends Disposable {
 		parent.appendChild(this.filterInput('extensions', localize('editorMigration.review.filterExtensions', "Filter extensions")));
 		const filter = this.filters.extensions.toLowerCase();
 		const filtered = items.filter(item => `${item.id} ${item.detail}`.toLowerCase().includes(filter));
-		this.virtualList(parent, filtered, 72, item => item.identity, item => item.id, item => {
+		this.virtualList(parent, 'extensions-review', filtered, 72, item => item.identity, item => item.id, item => {
 			const row = element('div', 'hucode-editor-migration-extension-row');
 			row.append(element('strong', undefined, item.id), element('span', undefined, item.detail));
 			return row;
@@ -367,17 +391,15 @@ export class EditorMigrationFlowView extends Disposable {
 	private renderApply(parent: HTMLElement, state: EditorMigrationFlowState): void {
 		parent.appendChild(element('h2', undefined, state.canceling ? localize('editorMigration.apply.canceling', "Canceling...") : localize('editorMigration.apply.title', "Importing Setup..."), { tabIndex: '-1' }));
 		const progress = state.progress;
-		parent.appendChild(element('div', 'hucode-editor-migration-progress', progress ? `${progress.stage} · ${progress.results.length} of ${progress.selectedItemCount} items recorded` : localize('editorMigration.apply.admitting', "Verifying and admitting the reviewed import..."), {
+		parent.appendChild(element('div', 'hucode-editor-migration-progress', progress ? progressStatusLabel(progress, state.reviewedPlan ?? state.operation?.plan) : localize('editorMigration.apply.admitting', "Verifying and admitting the reviewed import..."), {
 			role: 'progressbar',
-			ariaValueMin: '0',
-			ariaValueMax: String(progress?.selectedItemCount ?? 1),
-			ariaValueNow: String(progress?.results.length ?? 0),
+			'aria-valuemin': '0',
+			'aria-valuemax': String(progress?.selectedItemCount ?? 1),
+			'aria-valuenow': String(progress?.results.length ?? 0),
 		}));
 		if (progress?.results.length) {
-			const list = element('ul', 'hucode-editor-migration-results');
 			const plan = state.reviewedPlan ?? state.operation?.plan;
-			progress.results.forEach(result => list.appendChild(element('li', undefined, editorMigrationResultLabel(result, plan))));
-			parent.appendChild(list);
+			this.virtualList(parent, 'apply-results', progress.results, 52, result => result.id, result => editorMigrationResultLabel(result, plan), result => resultRow(result, plan));
 		}
 		parent.appendChild(this.button(state.canceling ? localize('editorMigration.apply.canceling', "Canceling...") : localize('editorMigration.apply.cancel', "Cancel Import"), () => this.session.requestCancellation(), 'apply-cancel', undefined, state.canceling));
 	}
@@ -388,13 +410,35 @@ export class EditorMigrationFlowView extends Disposable {
 		if (!operation) {
 			return;
 		}
-		parent.appendChild(element('p', 'hucode-editor-migration-outcome', operation.aggregateOutcome ?? operation.stage));
-		const list = element('ul', 'hucode-editor-migration-results');
-		for (const result of operation.results) {
-			const label = editorMigrationResultLabel(result, operation.plan);
-			list.appendChild(element('li', result.outcome, `${label}${result.diagnostic ? ` · ${result.diagnostic.code}` : ''}`));
+		parent.appendChild(element('p', 'hucode-editor-migration-outcome', operation.aggregateOutcome ? aggregateOutcomeLabel(operation.aggregateOutcome) : stageLabel(operation.stage)));
+		if (operation.results.length) {
+			this.virtualList(parent, 'operation-results', operation.results, 58, result => result.id, result => editorMigrationResultLabel(result, operation.plan), result => resultRow(result, operation.plan, true));
 		}
-		parent.appendChild(list);
+		const extensionPlacements = (operation.extensionInstallIntents ?? []).flatMap(intent => {
+			const planned = operation.plan.operations.find(candidate => candidate.id === intent.operationId && candidate.kind === 'installExtension');
+			const outcome = operation.results.find(result => result.id === intent.operationId)?.outcome;
+			return planned ? [{ id: planned.item, applicationScoped: intent.applicationScoped, installed: outcome === 'completed' || outcome === 'alreadyPresent' }] : [];
+		});
+		if (extensionPlacements.length) {
+			const placementList = element('ul', 'hucode-editor-migration-review-list');
+			for (const placement of extensionPlacements) {
+				placementList.appendChild(element('li', undefined, extensionPlacementLabel(placement.id, placement.applicationScoped, placement.installed)));
+			}
+			parent.append(element('h3', undefined, localize('editorMigration.results.extensionPlacement', "Extension Placement")), placementList);
+		}
+		if (operation.rollbackIntent?.mutationStarted) {
+			const rollbackStatus = element('ul', 'hucode-editor-migration-review-list');
+			for (const category of operation.rollbackIntent.categories) {
+				const resources = operation.rollbackIntent.resources.filter(resource => resource.category === category);
+				const restored = resources.filter(resource => resource.state === 'restored').length;
+				rollbackStatus.appendChild(element('li', undefined, localize('editorMigration.results.rollbackStatus', "{0}: {1} restored; {2} remaining or refused.", CATEGORY_LABELS[category], restored, resources.length - restored)));
+			}
+			parent.append(
+				element('h3', undefined, localize('editorMigration.results.rollbackOutcome', "File Rollback Outcome")),
+				rollbackStatus,
+				element('p', undefined, localize('editorMigration.results.rollbackForwardRetryUnavailable', "Forward import retry is unavailable because file restoration already began.")),
+			);
+		}
 		const preserved = operation.plan.choices.decisions.filter(decision => decision.choice === 'preserveTarget');
 		if (preserved.length) {
 			const preservedList = element('ul', 'hucode-editor-migration-results');
@@ -403,7 +447,7 @@ export class EditorMigrationFlowView extends Disposable {
 		}
 		if (operation.plan.exclusions.length) {
 			const exclusionList = element('ul', 'hucode-editor-migration-results');
-			operation.plan.exclusions.forEach(exclusion => exclusionList.appendChild(element('li', undefined, `${CATEGORY_LABELS[exclusion.category]} · ${exclusion.item} · ${exclusion.reason}`)));
+			operation.plan.exclusions.forEach(exclusion => exclusionList.appendChild(element('li', undefined, `${CATEGORY_LABELS[exclusion.category]} · ${exclusion.item} · ${exclusionReasonLabel(exclusion.reason)}`)));
 			parent.append(element('h3', undefined, localize('editorMigration.results.excluded', "Excluded During Review")), exclusionList);
 		}
 		const actions = this.actions(
@@ -416,24 +460,44 @@ export class EditorMigrationFlowView extends Disposable {
 		if (operation.stage !== 'settled' && operation.stage !== 'rolledBack') {
 			actions.appendChild(this.button(localize('editorMigration.results.resume', "Resume"), () => void this.session.resume(operation.id), 'results-resume'));
 		}
-		const rollbackCategories = rollbackEligibleCategories(operation.plan.choices.selectedCategories);
-		if (operation.stage === 'settled' && rollbackCategories.length) {
-			actions.appendChild(this.button(localize('editorMigration.results.inspectRollback', "Check File Rollback"), () => void this.session.inspectRollback(rollbackCategories), 'results-rollback-inspect'));
+		const rollbackCategories = rollbackEligibleCategories(operation);
+		if (operation.stage === 'settled' && rollbackCategories.length && !operation.rollbackIntent?.mutationStarted) {
+			const selection = this.rollbackSelections.get(operation.id) ?? new Set(rollbackCategories);
+			this.rollbackSelections.set(operation.id, selection);
+			const fieldset = element('fieldset', 'hucode-editor-migration-rollback-selection');
+			fieldset.appendChild(element('legend', undefined, localize('editorMigration.results.rollbackCategories', "File categories to restore")));
+			for (const category of rollbackCategories) {
+				const label = element('label');
+				const checkbox = document.createElement('input');
+				checkbox.type = 'checkbox';
+				checkbox.checked = selection.has(category);
+				checkbox.dataset.migrationFocusId = `rollback-category-${category}`;
+				this.addListener(checkbox, EventType.CHANGE, () => {
+					checkbox.checked ? selection.add(category) : selection.delete(category);
+					this.session.clearRollbackInspection();
+					this.render(this.session.state);
+				});
+				label.append(checkbox, element('span', undefined, CATEGORY_LABELS[category]));
+				fieldset.appendChild(label);
+			}
+			parent.appendChild(fieldset);
+			actions.appendChild(this.button(localize('editorMigration.results.inspectRollback', "Check File Rollback"), () => void this.session.inspectRollback([...selection]), 'results-rollback-inspect', undefined, selection.size === 0));
 		}
 		parent.appendChild(actions);
 		if (state.rollbackInspection) {
+			const selectedRollbackCategories = [...(this.rollbackSelections.get(operation.id) ?? new Set(rollbackCategories))];
 			const rollback = element('section', 'hucode-editor-migration-rollback');
 			if (state.rollbackInspection.driftedCategories.length) {
 				const changedCategories = state.rollbackInspection.driftedCategories.map(category => CATEGORY_LABELS[category]).join(', ');
 				rollback.append(
 					element('h3', undefined, localize('editorMigration.rollback.changed', "Files Changed After Import")),
 					element('p', undefined, localize('editorMigration.rollback.changed.description', "{0} changed after import. Force rollback will save copies of the current files before restoring those categories. Extension changes stay installed.", changedCategories)),
-					this.button(localize('editorMigration.rollback.force', "Force Rollback and Save Current Copies"), () => void this.session.rollback(rollbackCategories, state.rollbackInspection!.driftedCategories), 'results-rollback-force', 'danger'),
+					this.button(localize('editorMigration.rollback.force', "Force Rollback and Save Current Copies"), () => void this.session.rollback(selectedRollbackCategories, state.rollbackInspection!.driftedCategories), 'results-rollback-force', 'danger'),
 				);
 			} else {
 				rollback.append(
 					element('p', undefined, localize('editorMigration.rollback.ready', "Settings, keyboard shortcuts, and snippets can be restored. Extension changes stay installed.")),
-					this.button(localize('editorMigration.rollback.run', "Roll Back File Changes"), () => void this.session.rollback(rollbackCategories), 'results-rollback', 'danger'),
+					this.button(localize('editorMigration.rollback.run', "Roll Back File Changes"), () => void this.session.rollback(selectedRollbackCategories), 'results-rollback', 'danger'),
 				);
 			}
 			parent.appendChild(rollback);
@@ -467,15 +531,24 @@ export class EditorMigrationFlowView extends Disposable {
 		input.setAttribute('aria-label', label);
 		input.value = this.filters[id];
 		input.dataset.migrationFocusId = `filter-${id}`;
-		this.addListener(input, EventType.INPUT, () => {
+		this.addListener(input, 'compositionstart', () => this.composingFilters.add(id));
+		this.addListener(input, 'compositionend', () => {
+			this.composingFilters.delete(id);
 			this.filters[id] = input.value;
 			this.render(this.session.state);
+		});
+		this.addListener(input, EventType.INPUT, () => {
+			this.filters[id] = input.value;
+			if (!this.composingFilters.has(id)) {
+				this.render(this.session.state);
+			}
 		});
 		return input;
 	}
 
-	private virtualList<T>(parent: HTMLElement, items: readonly T[], rowHeight: number, identity: (item: T) => string, label: (item: T) => string, renderRow: (item: T) => HTMLElement): void {
+	private virtualList<T>(parent: HTMLElement, listId: string, items: readonly T[], rowHeight: number, identity: (item: T) => string, label: (item: T) => string, renderRow: (item: T) => HTMLElement, activate?: (item: T) => void): void {
 		const container = element('div', 'hucode-editor-migration-virtual-list');
+		container.dataset.migrationListId = listId;
 		parent.appendChild(container);
 		const delegate: IListVirtualDelegate<T> = {
 			getHeight: () => rowHeight,
@@ -511,6 +584,55 @@ export class EditorMigrationFlowView extends Disposable {
 		this.renderDisposables.add(list);
 		list.splice(0, 0, items);
 		list.layout(Math.min(480, Math.max(rowHeight, items.length * rowHeight)));
+		const saved = this.virtualListStates.get(listId);
+		if (saved) {
+			list.scrollTop = saved.scrollTop;
+			const focusedIndex = saved.focusedIdentity ? items.findIndex(item => identity(item) === saved.focusedIdentity) : -1;
+			if (focusedIndex >= 0) {
+				list.setFocus([focusedIndex]);
+			}
+		}
+		const remember = () => {
+			const focusedIndex = list.getFocus()[0];
+			this.virtualListStates.set(listId, { scrollTop: list.scrollTop, focusedIdentity: focusedIndex === undefined ? saved?.focusedIdentity : identity(list.element(focusedIndex)) });
+		};
+		this.renderDisposables.add(list.onDidScroll(remember));
+		this.renderDisposables.add(list.onDidChangeFocus(remember));
+		this.addListener(container, EventType.KEY_DOWN, event => {
+			let focusedIndex = list.getFocus()[0];
+			if (focusedIndex === undefined && items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter'].includes(event.key)) {
+				focusedIndex = event.key === 'ArrowUp' || event.key === 'End' ? items.length - 1 : 0;
+				list.setFocus([focusedIndex], event);
+				list.reveal(focusedIndex);
+			}
+			if (event.key === 'Enter' && activate && focusedIndex !== undefined) {
+				event.preventDefault();
+				activate(list.element(focusedIndex));
+			}
+		});
+	}
+
+	private discoveryDetails(diagnostics: readonly EditorMigrationDiagnostic[]): HTMLElement {
+		const details = element('details', 'hucode-editor-migration-details');
+		details.appendChild(element('summary', undefined, localize('editorMigration.discovery.details', "Discovery Details")));
+		const list = element('ul');
+		diagnostics.forEach(diagnostic => list.appendChild(element('li', undefined, diagnosticLabel(diagnostic))));
+		details.appendChild(list);
+		return details;
+	}
+
+	private sourceDetails(source: EditorMigrationSourceDescriptor): HTMLElement {
+		const details = element('details', 'hucode-editor-migration-details');
+		details.appendChild(element('summary', undefined, localize('editorMigration.profile.details', "Profile Details")));
+		const list = element('ul');
+		list.append(
+			element('li', undefined, sourceModificationLabel(source.ranking.newestModificationTime)),
+			element('li', undefined, localize('editorMigration.profile.userDataPath', "User data path: {0}", source.localPaths.userData)),
+			element('li', undefined, localize('editorMigration.profile.extensionsPath', "Extensions path: {0}", source.localPaths.extensions)),
+		);
+		source.diagnostics.forEach(diagnostic => list.appendChild(element('li', undefined, diagnosticLabel(diagnostic))));
+		details.appendChild(list);
+		return details;
 	}
 
 	private button(label: string, listener: () => void, focusId: string, kind?: 'primary' | 'danger' | string, disabled = false): HTMLButtonElement {
@@ -563,8 +685,145 @@ function phaseGroup(phase: EditorMigrationFlowState['phase']): 'discover' | 'rev
 	}
 }
 
-function rollbackEligibleCategories(categories: readonly EditorMigrationCategory[]): Exclude<EditorMigrationCategory, 'extensions'>[] {
-	return categories.filter((category): category is Exclude<EditorMigrationCategory, 'extensions'> => category !== 'extensions');
+function rollbackEligibleCategories(operation: EditorMigrationOperation): Exclude<EditorMigrationCategory, 'extensions'>[] {
+	return ['settings', 'keybindings', 'snippets'].filter((category): category is Exclude<EditorMigrationCategory, 'extensions'> =>
+		(operation.snapshots ?? []).some(snapshot => snapshot.category === category && snapshot.postApplyHash !== undefined));
+}
+
+function resourceStateLabel(state: 'present' | 'absent' | 'unreadable', itemCount: number): string {
+	switch (state) {
+		case 'present': return localize('editorMigration.discovery.present', "{0} items", itemCount);
+		case 'absent': return localize('editorMigration.discovery.absent', "not found");
+		case 'unreadable': return localize('editorMigration.discovery.unreadable', "could not be read");
+	}
+}
+
+function diagnosticLabel(diagnostic: EditorMigrationDiagnostic): string {
+	const category = diagnostic.category ? `${CATEGORY_LABELS[diagnostic.category]}: ` : '';
+	const message = (() => {
+		switch (diagnostic.code) {
+			case 'candidateAbsent': return localize('editorMigration.diagnostic.candidateAbsent', "No installation data was found at this candidate location.");
+			case 'permissionDeniedOrLocked': return localize('editorMigration.diagnostic.permissionDenied', "The source is locked or Hucode does not have permission to read it.");
+			case 'malformedKnownResource': return localize('editorMigration.diagnostic.malformed', "The source resource is malformed and cannot be imported.");
+			case 'unsupportedNamedProfileCatalogSchema': return localize('editorMigration.diagnostic.catalogSchema', "The editor's profile catalog uses an unsupported format.");
+			case 'sourceChangedDuringRead': return localize('editorMigration.diagnostic.changed', "The source changed while Hucode was reading it; refresh before importing.");
+			case 'oversizedResource': return localize('editorMigration.diagnostic.oversized', "The source resource is too large to import safely.");
+			case 'duplicateAlias': return localize('editorMigration.diagnostic.duplicateAlias', "This location refers to a source that is already listed.");
+			case 'canceledOperation': return localize('editorMigration.diagnostic.canceled', "Reading this source was canceled.");
+		}
+	})();
+	const path = diagnostic.details?.path ? localize('editorMigration.diagnostic.path', " Path: {0}", diagnostic.details.path) : '';
+	return `${category}${message}${path}`;
+}
+
+function stageLabel(stage: EditorMigrationApplyProgress['stage']): string {
+	switch (stage) {
+		case 'admitted': return localize('editorMigration.stage.admitted', "Preparing the import");
+		case 'attachingTarget': return localize('editorMigration.stage.attachingTarget', "Preparing the target profile");
+		case 'snapshotting': return localize('editorMigration.stage.snapshotting', "Saving recovery copies");
+		case 'materializing': return localize('editorMigration.stage.materializing', "Preparing inherited profile files");
+		case 'applying': return localize('editorMigration.stage.applying', "Importing selected items");
+		case 'settled': return localize('editorMigration.stage.settled', "Import finished");
+		case 'rollbackPending': return localize('editorMigration.stage.rollbackPending', "Restoring file changes");
+		case 'rolledBack': return localize('editorMigration.stage.rolledBack', "File changes restored");
+	}
+}
+
+function outcomeLabel(outcome: EditorMigrationItemResult['outcome']): string {
+	switch (outcome) {
+		case 'completed': return localize('editorMigration.outcome.completed', "completed");
+		case 'alreadyPresent': return localize('editorMigration.outcome.alreadyPresent', "already present");
+		case 'skipped': return localize('editorMigration.outcome.skipped', "skipped");
+		case 'unavailable': return localize('editorMigration.outcome.unavailable', "unavailable");
+		case 'incompatible': return localize('editorMigration.outcome.incompatible', "incompatible");
+		case 'canceled': return localize('editorMigration.outcome.canceled', "canceled");
+		case 'failed': return localize('editorMigration.outcome.failed', "failed");
+	}
+}
+
+function aggregateOutcomeLabel(outcome: NonNullable<EditorMigrationOperation['aggregateOutcome']>): string {
+	switch (outcome) {
+		case 'completed': return localize('editorMigration.aggregate.completed', "Import completed");
+		case 'completedWithIssues': return localize('editorMigration.aggregate.completedWithIssues', "Import completed with issues");
+		case 'recoverable': return localize('editorMigration.aggregate.recoverable', "Import can be resumed");
+		case 'rolledBack': return localize('editorMigration.aggregate.rolledBack', "File changes were restored");
+	}
+}
+
+function resultRow(result: EditorMigrationItemResult, plan: EditorMigrationReviewedPlan | undefined, includeDiagnostic = false): HTMLElement {
+	const row = element('div', `hucode-editor-migration-result-row ${result.outcome}`);
+	const label = editorMigrationResultLabel(result, plan);
+	row.appendChild(element('span', undefined, label));
+	if (includeDiagnostic && result.diagnostic) {
+		row.appendChild(element('span', 'hucode-editor-migration-result-detail', resultDiagnosticLabel(result.diagnostic.code)));
+	}
+	return row;
+}
+
+function sourceModificationLabel(newestModificationTime: number): string {
+	return newestModificationTime > 0
+		? localize('editorMigration.profile.modified', "Newest source change: {0}", new Date(newestModificationTime).toLocaleString())
+		: localize('editorMigration.profile.modifiedUnknown', "No readable source modification time was found.");
+}
+
+function extensionPlacementLabel(id: string, applicationScoped: boolean | undefined, installed: boolean): string {
+	if (applicationScoped === undefined) {
+		return installed
+			? localize('editorMigration.results.extensionPlacementUnknown', "{0} is installed, but this older recovery record does not identify its profile placement. Reload this window; reload all Hucode windows if the extension is application-wide.", id)
+			: localize('editorMigration.results.extensionIntentUnknown', "{0} has no completed installation, and this older recovery record does not identify its intended profile placement.", id);
+	}
+	if (installed) {
+		return applicationScoped
+			? localize('editorMigration.results.extensionApplicationScoped', "{0} is installed application-wide in Default. Reload Hucode windows to use it everywhere.", id)
+			: localize('editorMigration.results.extensionProfileScoped', "{0} is installed in this profile. Restart the extension host or reload this window to use it.", id);
+	}
+	return applicationScoped
+		? localize('editorMigration.results.extensionApplicationIntent', "{0} was intended for application-wide placement in Default, but no completed installation was recorded.", id)
+		: localize('editorMigration.results.extensionProfileIntent', "{0} was intended for this profile, but no completed installation was recorded.", id);
+}
+
+function resultDiagnosticLabel(code: string): string {
+	switch (code) {
+		case 'rollbackDrift': return localize('editorMigration.result.rollbackDrift', "Not restored because the file changed after rollback began.");
+		case 'targetDrift': return localize('editorMigration.result.targetDrift', "Not imported because the target changed after review.");
+		case 'categoryWriteFailed': return localize('editorMigration.result.categoryWriteFailed', "Hucode could not write this category. Check permissions and try again.");
+		case 'extensionServiceUnavailable': return localize('editorMigration.result.extensionServiceUnavailable', "The extension service is unavailable. Reload Hucode and retry.");
+		case 'extensionInstallDrift': return localize('editorMigration.result.extensionInstallDrift', "The extension changed after review and was not installed.");
+		case 'extensionInstallFailed': return localize('editorMigration.result.extensionInstallFailed', "The extension installation failed. Retry from these results.");
+		case 'exactReleaseUnavailable':
+		case 'exactManifestUnavailable': return localize('editorMigration.result.releaseUnavailable', "The reviewed extension release is no longer available.");
+		case 'exactReleaseChanged':
+		case 'exactReleaseIncompatible': return localize('editorMigration.result.releaseChanged', "The reviewed extension release is no longer compatible.");
+		default: return localize('editorMigration.result.failedSafely', "Hucode stopped this item safely. Copy the report for diagnostic details.");
+	}
+}
+
+function progressStatusLabel(progress: EditorMigrationApplyProgress, plan: EditorMigrationReviewedPlan | undefined): string {
+	const active = activeProgressItem(progress, plan);
+	return active
+		? localize('editorMigration.apply.progressWithItem', "{0}: {1}. {2} of {3} items recorded.", stageLabel(progress.stage), active, progress.results.length, progress.selectedItemCount)
+		: localize('editorMigration.apply.progress', "{0}. {1} of {2} items recorded.", stageLabel(progress.stage), progress.results.length, progress.selectedItemCount);
+}
+
+function activeProgressItem(progress: EditorMigrationApplyProgress, plan: EditorMigrationReviewedPlan | undefined): string | undefined {
+	if (progress.stage !== 'applying' || !plan) {
+		return undefined;
+	}
+	const completed = new Set(progress.results.map(result => result.id));
+	for (const category of ['settings', 'keybindings', 'snippets', 'extensions'] as const) {
+		if (!plan.choices.selectedCategories.includes(category) || completed.has(category)) {
+			continue;
+		}
+		if (category !== 'extensions') {
+			return CATEGORY_LABELS[category];
+		}
+		const durableIntent = progress.extensionInstallIntents?.find(intent => !completed.has(intent.operationId));
+		if (!durableIntent) {
+			return localize('editorMigration.apply.resolvingExtensions', "Resolving extensions");
+		}
+		return plan.operations.find(operation => operation.id === durableIntent.operationId)?.item ?? localize('editorMigration.apply.installingExtension', "Installing an extension");
+	}
+	return undefined;
 }
 
 function sourceCategoryItemCount(draft: EditorMigrationPlanDraft, category: EditorMigrationCategory): number {
@@ -578,8 +837,8 @@ function sourceCategoryItemCount(draft: EditorMigrationPlanDraft, category: Edit
 function editorMigrationResultLabel(result: EditorMigrationItemResult, plan: EditorMigrationReviewedPlan | undefined): string {
 	const operation = plan?.operations.find(candidate => candidate.id === result.id);
 	return operation
-		? `${CATEGORY_LABELS[result.category]} · ${operation.item} · ${result.outcome}`
-		: `${CATEGORY_LABELS[result.category]} · ${result.outcome}`;
+		? `${CATEGORY_LABELS[result.category]} · ${operation.item} · ${outcomeLabel(result.outcome)}`
+		: `${CATEGORY_LABELS[result.category]} · ${outcomeLabel(result.outcome)}`;
 }
 
 interface EditorMigrationExtensionReviewItem {

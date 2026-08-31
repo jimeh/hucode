@@ -228,6 +228,9 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 		return await this.withProgressReporter(reporter, async () => await this.withLease(async () => {
 			let operation = await this.store.read(operationId);
 			operation = await this.reproveTarget(operation);
+			if (operation.rollbackIntent?.mutationStarted && operation.stage !== 'rollbackPending') {
+				throw new Error('A migration with a partially completed rollback cannot start another rollback');
+			}
 			if ((options.categories as readonly string[]).includes('extensions')) {
 				throw new Error('Extension rollback is not supported');
 			}
@@ -457,9 +460,18 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 	}
 
 	private async settleRollbackRefusal(operation: EditorMigrationOperation, message: string): Promise<EditorMigrationOperationResult> {
-		const pendingCategories = uniqueFileCategories(operation.rollbackIntent?.resources.filter(resource => resource.state === 'pending').map(resource => resource.category) ?? []);
-		for (const category of pendingCategories) {
-			operation = await this.recordResult(operation, category, category, 'failed', 'rollbackDrift', message);
+		const intent = operation.rollbackIntent;
+		if (!intent?.mutationStarted) {
+			throw new Error('A rollback refusal can settle only after a durable mutation has started');
+		}
+		for (const category of intent.categories) {
+			const resources = intent.resources.filter(resource => resource.category === category);
+			const restoredCount = resources.filter(resource => resource.state === 'restored').length;
+			if (restoredCount === resources.length) {
+				operation = await this.recordResult(operation, category, category, 'completed');
+			} else {
+				operation = await this.recordResult(operation, category, category, 'failed', 'rollbackDrift', `${message}; restored ${restoredCount} of ${resources.length} resources`);
+			}
 		}
 		operation = await this.save(operation, { ...operation, stage: 'settled', aggregateOutcome: 'completedWithIssues', cancellationRequested: false });
 		return resultOf(operation);
@@ -1275,7 +1287,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			}
 			const expectedActualProfile = isApplicationScopedExtension(manifest) ? this.profilesService.defaultProfile : profile;
 			if (!installIntent) {
-				operation = await this.save(operation, { ...operation, extensionInstallIntents: [...operation.extensionInstallIntents, { operationId: item.id, actualProfileLocation: expectedActualProfile.extensionsResource.toString() }] });
+				operation = await this.save(operation, { ...operation, extensionInstallIntents: [...operation.extensionInstallIntents, { operationId: item.id, actualProfileLocation: expectedActualProfile.extensionsResource.toString(), applicationScoped: isApplicationScopedExtension(manifest) }] });
 			} else if (installIntent.actualProfileLocation !== expectedActualProfile.extensionsResource.toString()) {
 				return await this.recordResult(operation, item.id, 'extensions', 'failed', 'extensionInstallDrift', 'The reviewed extension scope changed after its install intent was recorded');
 			}

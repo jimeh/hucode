@@ -29,6 +29,28 @@ export function formatEditorMigrationReport(operation: EditorMigrationOperation)
 		}
 	}
 
+	const extensionPlacements = operation.extensionInstallIntents.flatMap(intent => {
+		const item = operation.plan.operations.find(candidate => candidate.id === intent.operationId && candidate.kind === 'installExtension');
+		const outcome = operation.results.find(result => result.id === intent.operationId)?.outcome;
+		return item ? [{ id: item.item, applicationScoped: intent.applicationScoped, installed: outcome === 'completed' || outcome === 'alreadyPresent' }] : [];
+	});
+	if (extensionPlacements.length) {
+		lines.push('', 'Extension placement:');
+		for (const placement of extensionPlacements) {
+			lines.push(`- Extension ${placement.id}: ${extensionPlacementReport(placement.applicationScoped, placement.installed)}`);
+		}
+	}
+
+	if (operation.rollbackIntent?.mutationStarted) {
+		lines.push('', 'File rollback:');
+		for (const category of operation.rollbackIntent.categories) {
+			const resources = operation.rollbackIntent.resources.filter(resource => resource.category === category);
+			const restored = resources.filter(resource => resource.state === 'restored').length;
+			lines.push(`- ${categoryLabel(category)}: ${restored} restored, ${resources.length - restored} remaining or refused`);
+		}
+		lines.push('- Forward retry: unavailable after file restoration began');
+	}
+
 	const preserved = operation.plan.choices.decisions.filter(decision => decision.choice === 'preserveTarget');
 	if (preserved.length) {
 		lines.push('', 'Kept current values:');
@@ -46,6 +68,17 @@ export function formatEditorMigrationReport(operation: EditorMigrationOperation)
 	}
 
 	return `${lines.join('\n')}\n`;
+}
+
+function extensionPlacementReport(applicationScoped: boolean | undefined, installed: boolean): string {
+	if (applicationScoped === undefined) {
+		return installed
+			? 'installed, but this older recovery record does not identify its profile placement; reload the target window, and reload all windows if it is application-wide'
+			: 'no completed installation was recorded, and this older recovery record does not identify the intended profile placement';
+	}
+	const destination = applicationScoped ? 'application-wide in Default' : 'target profile';
+	const activation = applicationScoped ? 'reload windows to use it everywhere' : 'restart the extension host or reload the target window';
+	return installed ? `${destination}; ${activation}` : `intended for the ${destination}; no completed installation was recorded`;
 }
 
 function proposedTargetName(operation: EditorMigrationOperation): string {

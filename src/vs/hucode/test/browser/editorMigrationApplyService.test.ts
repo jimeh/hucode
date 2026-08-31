@@ -25,6 +25,7 @@ import { IExtensionManagementServerService, IProfileAwareExtensionManagementServ
 import { EditorMigrationApplyService } from '../../browser/migration/editorMigrationApplyService.js';
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
 import { EditorMigrationApplyAuthorization, EditorMigrationApplyError } from '../../common/migration/editorMigrationApply.js';
+import { formatEditorMigrationReport } from '../../common/migration/editorMigrationReport.js';
 import { IEditorMigrationPlanningService, EditorMigrationPlanOperation, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
@@ -1211,6 +1212,31 @@ suite('EditorMigrationApplyService', () => {
 		assert.strictEqual(await fileService.exists(joinPath(profile.location, 'snippets', 'two.code-snippets')), false);
 	});
 
+	test('settles a post-mutation rollback refusal with restored and remaining resources', async () => {
+		const plan = await proposedSnippetsPlan('Partial Rollback', ['one.code-snippets', 'two.code-snippets']);
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const profile = profilesService.profiles.find(candidate => candidate.name === 'Partial Rollback');
+		assert.ok(profile);
+		const second = joinPath(profile.location, 'snippets', 'two.code-snippets');
+		provider.onDidDelete = async resource => {
+			if (resource.path.endsWith('/one.code-snippets')) {
+				await fileService.writeFile(second, VSBuffer.fromString('{ "changed": true }\n'));
+			}
+		};
+
+		const rollback = await service.rollback(result.operationId, { categories: ['snippets'] }, CancellationToken.None);
+		assert.deepStrictEqual([rollback.stage, rollback.aggregateOutcome], ['settled', 'completedWithIssues']);
+		const operation = await service.getOperation(result.operationId);
+		assert.strictEqual(operation.rollbackIntent?.mutationStarted, true);
+		assert.deepStrictEqual(operation.rollbackIntent?.resources.map(resource => resource.state), ['restored', 'pending']);
+		assert.deepStrictEqual(operation.results.find(item => item.id === 'snippets')?.outcome, 'failed');
+		await assert.rejects(() => service.retry(result.operationId, CancellationToken.None), /partially completed rollback/);
+		await assert.rejects(() => service.rollback(result.operationId, { categories: ['snippets'] }, CancellationToken.None), /partially completed rollback/);
+		assert.match(formatEditorMigrationReport(operation), /Snippets: 1 restored, 1 remaining or refused/);
+		assert.match(formatEditorMigrationReport(operation), /Forward retry: unavailable/);
+	});
+
 	test('rolls back only proven mutations, preserves drift before force, and never rolls back extensions', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
@@ -1280,7 +1306,7 @@ suite('EditorMigrationApplyService', () => {
 class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
 	onDidReadFile: ((resource: URI) => void) | undefined;
 	onDidWriteFile: ((resource: URI) => void) | undefined;
-	onDidDelete: ((resource: URI) => void) | undefined;
+	onDidDelete: ((resource: URI) => void | Promise<void>) | undefined;
 
 	override get capabilities(): FileSystemProviderCapabilities {
 		return super.capabilities | FileSystemProviderCapabilities.FileAtomicRead | FileSystemProviderCapabilities.FileAtomicWrite;
@@ -1298,7 +1324,7 @@ class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
 
 	override async delete(resource: URI, opts: IFileDeleteOptions): Promise<void> {
 		await super.delete(resource, opts);
-		this.onDidDelete?.(resource);
+		await this.onDidDelete?.(resource);
 	}
 }
 

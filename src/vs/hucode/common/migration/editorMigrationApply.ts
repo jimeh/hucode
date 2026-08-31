@@ -296,6 +296,8 @@ export interface EditorMigrationOperationTarget {
 export interface EditorMigrationExtensionInstallIntent {
 	readonly operationId: string;
 	readonly actualProfileLocation: string;
+	/** Privacy-safe durable placement metadata; absent only on records written before this field existed. */
+	readonly applicationScoped?: boolean;
 }
 
 /** Secondary snapshot retained before a force rollback overwrites drift. */
@@ -409,6 +411,7 @@ export interface EditorMigrationApplyProgress {
 	readonly target: EditorMigrationOperationTarget;
 	readonly selectedItemCount: number;
 	readonly results: readonly EditorMigrationItemResult[];
+	readonly extensionInstallIntents?: readonly Pick<EditorMigrationExtensionInstallIntent, 'operationId' | 'applicationScoped'>[];
 	readonly cancellationRequested: boolean;
 	readonly rollback?: {
 		readonly categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
@@ -456,6 +459,7 @@ export function toEditorMigrationApplyProgress(operation: EditorMigrationOperati
 			...operation.plan.operations.filter(item => item.category === 'snippets' || item.category === 'extensions').map(item => item.id),
 		]).size,
 		results: Object.freeze(operation.results.map(result => Object.freeze({ ...result }))),
+		extensionInstallIntents: Object.freeze(operation.extensionInstallIntents.map(intent => Object.freeze({ operationId: intent.operationId, applicationScoped: intent.applicationScoped }))),
 		cancellationRequested: operation.cancellationRequested,
 		...(rollback ? { rollback: Object.freeze(rollback) } : {}),
 	});

@@ -46,21 +46,41 @@ suite('EditorMigrationFlowView', () => {
 		assert.ok(radios.length < sources.length, 'only the visible profile window should be in the DOM');
 		assert.strictEqual(radios[0].checked, true);
 		assert.match(radios[0].labels?.[0]?.textContent ?? '', /Default/);
+		const fullList = parent.querySelector('[data-migration-list-id="profiles"] .monaco-list') as HTMLElement;
+		assert.ok(fullList);
+		fullList.focus();
+		(parent.querySelector('[data-migration-list-id="profiles"]') as HTMLElement).dispatchEvent(keyboardEvent('End'));
+		assert.match(parent.textContent ?? '', /Profile 299/, 'End should focus an off-screen profile and scroll it into view');
+		session.selectSourceProfile(sources[1].ref);
+		assert.match(parent.textContent ?? '', /Profile 299/, 'the off-screen focused window remains rendered after the update');
 
 		const filter = [...parent.getElementsByTagName('input')].find(input => input.type === 'search');
 		assert.ok(filter);
 		filter.focus();
 		filter.value = 'Profile 299';
+		filter.setSelectionRange(7, 7);
 		filter.dispatchEvent(domEvent('input'));
 
 		const filteredInput = [...parent.getElementsByTagName('input')].find(input => input.type === 'search');
 		const filteredRadios = [...parent.getElementsByTagName('input')].filter(input => input.type === 'radio');
 		assert.strictEqual(mainWindow.document.activeElement, filteredInput);
+		assert.deepStrictEqual([filteredInput?.selectionStart, filteredInput?.selectionEnd], [7, 7]);
 		assert.strictEqual(filteredRadios.length, 1);
 		assert.match(filteredRadios[0].labels?.[0]?.textContent ?? '', /Profile 299/);
-		filteredRadios[0].checked = true;
-		filteredRadios[0].dispatchEvent(domEvent('change'));
+		const profileList = parent.querySelector('[data-migration-list-id="profiles"] .monaco-list') as HTMLElement;
+		assert.ok(profileList);
+		profileList.focus();
+		profileList.dispatchEvent(keyboardEvent('ArrowDown'));
+		profileList.dispatchEvent(keyboardEvent('Enter'));
 		assert.strictEqual(session.state.selectedSourceRef?.value, 'profile-299');
+
+		const composing = inputWithLabel(parent, 'Filter profiles');
+		composing.dispatchEvent(domEvent('compositionstart'));
+		composing.value = 'Profile 2';
+		composing.dispatchEvent(domEvent('input'));
+		assert.strictEqual(inputWithLabel(parent, 'Filter profiles'), composing, 'IME input must not rebuild the active control');
+		composing.dispatchEvent(domEvent('compositionend'));
+		assert.notStrictEqual(inputWithLabel(parent, 'Filter profiles'), composing, 'composition completion applies the filter once');
 		assert.strictEqual(parent.firstElementChild?.getAttribute('role'), 'region');
 		assert.strictEqual(parent.firstElementChild?.getAttribute('aria-label'), 'Editor Setup Import');
 	});
@@ -91,7 +111,11 @@ suite('EditorMigrationFlowView', () => {
 		const filteredButtons = [...parent.getElementsByClassName('hucode-editor-migration-choice-card')];
 		assert.strictEqual(filteredButtons.length, 1);
 		assert.strictEqual(mainWindow.document.activeElement, inputWithLabel(parent, 'Filter applications'));
-		filteredButtons[0].dispatchEvent(domEvent('click'));
+		const list = parent.querySelector('[data-migration-list-id="applications"] .monaco-list') as HTMLElement;
+		assert.ok(list);
+		list.focus();
+		list.dispatchEvent(keyboardEvent('ArrowDown'));
+		list.dispatchEvent(keyboardEvent('Enter'));
 		assert.strictEqual(session.state.selectedApplicationId, 'application-299');
 	});
 
@@ -128,6 +152,27 @@ suite('EditorMigrationFlowView', () => {
 		assert.ok(back);
 		back.dispatchEvent(domEvent('click'));
 		assert.strictEqual(inputWithLabel(parent, 'Filter applications').value, 'Cursor');
+	});
+
+	test('opens a virtualized recovery choice with Enter', () => {
+		let opened: string | undefined;
+		const state = presentationState({
+			phase: 'recovery',
+			recoveries: [{ id: 'recovery-1', stage: 'settled', aggregateOutcome: 'completedWithIssues', createdAt: 1, updatedAt: 2, targetName: 'Default', recoverable: true }],
+		});
+		const session = {
+			state,
+			onDidChangeState: Event.None,
+			showRecovery: async (id: string) => { opened = id; },
+		} as unknown as EditorMigrationFlowSession;
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+		const list = parent.querySelector('[data-migration-list-id="recoveries"] .monaco-list') as HTMLElement;
+		assert.ok(list);
+		list.focus();
+		list.dispatchEvent(keyboardEvent('ArrowDown'));
+		list.dispatchEvent(keyboardEvent('Enter'));
+		assert.strictEqual(opened, 'recovery-1');
 	});
 
 	test('renders the complete review and virtualizes independently filtered extensions', async () => {
@@ -211,6 +256,104 @@ suite('EditorMigrationFlowView', () => {
 		assert.strictEqual(inputWithLabel(parent, 'Filter extensions').value, 'publisher.extension-299');
 	});
 
+	test('shows unreadable discovery evidence only in labeled details', async () => {
+		const descriptor = {
+			...source('Default', 'default', 'cursor-default'),
+			ranking: { ...source('Default', 'default', 'cursor-default').ranking, newestModificationTime: 0 },
+			categories: [
+				{ category: 'settings' as const, state: 'unreadable' as const, itemCount: 0 },
+				{ category: 'extensions' as const, state: 'absent' as const, itemCount: 0 },
+			],
+			diagnostics: [{ code: 'permissionDeniedOrLocked' as const, severity: 'error' as const, scope: 'resource' as const, adapterId: 'cursor' as const, profileId: 'cursor-default', category: 'settings' as const, details: { path: '/private/cursor/settings.json' } }],
+		};
+		const session = disposables.add(new EditorMigrationFlowSession(
+			{ discoverSources: async () => ({ schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [descriptor], diagnostics: [{ code: 'candidateAbsent', severity: 'info', scope: 'candidate', adapterId: 'vscode', details: { path: '/private/vscode' } }] }) } as unknown as IEditorMigrationSourceService,
+			{} as IEditorMigrationPlanningService,
+			{ listRecoverableOperations: async () => [] } as unknown as IEditorMigrationApplyService,
+			{ defaultProfile: { id: 'default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+		await session.initialize();
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+		assert.match(parent.textContent ?? '', /Discovery Details/);
+		assert.match(parent.textContent ?? '', /No installation data was found/);
+		assert.match(parent.textContent ?? '', /\/private\/vscode/);
+
+		session.selectApplication('cursor');
+		const text = parent.textContent ?? '';
+		assert.match(text, /Settings: could not be read/);
+		assert.match(text, /Extensions: not found/);
+		assert.match(text, /Profile Details/);
+		assert.match(text, /No readable source modification time was found/);
+		assert.doesNotMatch(text, /1970/);
+		assert.match(text, /locked or Hucode does not have permission/);
+		assert.match(text, /\/private\/cursor\/settings\.json/);
+		assert.doesNotMatch(text, /source value|private contents/);
+	});
+
+	test('offers rollback only for proven mutations and lets the user choose categories', () => {
+		const draft = richDraft(richSnapshot(richSource()));
+		const plan = {
+			...draft,
+			choices: { selectedCategories: ['settings', 'keybindings', 'extensions'] as const, decisions: [] },
+			operations: [],
+			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+		} satisfies EditorMigrationReviewedPlan;
+		const operation = {
+			id: 'rollback-operation', stage: 'settled', aggregateOutcome: 'completed', plan, results: [], extensionInstallIntents: [],
+			snapshots: [
+				{ category: 'settings', state: 'present', ownership: 'target', resource: 'settings', byteHash: 'before', postApplyHash: 'after' },
+				{ category: 'keybindings', state: 'present', ownership: 'target', resource: 'keybindings', byteHash: 'same' },
+			],
+		} as unknown as EditorMigrationOperation;
+		let requested: readonly string[] | undefined;
+		const session = {
+			state: presentationState({ phase: 'results', operation }),
+			onDidChangeState: Event.None,
+			inspectRollback: async (categories: readonly string[]) => { requested = categories; },
+		} as unknown as EditorMigrationFlowSession;
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+		const rollbackLabels = [...parent.querySelectorAll('.hucode-editor-migration-rollback-selection label')].map(label => label.textContent);
+		assert.deepStrictEqual(rollbackLabels, ['Settings']);
+		const inspect = [...parent.getElementsByTagName('button')].find(button => button.textContent === 'Check File Rollback');
+		assert.ok(inspect);
+		inspect.dispatchEvent(domEvent('click'));
+		assert.deepStrictEqual(requested, ['settings']);
+	});
+
+	test('virtualizes Apply and Results and names only durable extension intent', () => {
+		const draft = richDraft(richSnapshot(richSource()));
+		const operations = draft.decisions.filter(decision => decision.category === 'extensions').map(decision => ({
+			id: decision.id,
+			category: 'extensions' as const,
+			kind: 'installExtension' as const,
+			item: decision.item,
+			source: decision.source as Extract<EditorMigrationReviewedPlan['operations'][number], { readonly kind: 'installExtension' }>['source'],
+		}));
+		const plan = { ...draft, choices: { selectedCategories: ['extensions'] as const, decisions: [] }, operations, fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' } } satisfies EditorMigrationReviewedPlan;
+		const unresolved: EditorMigrationApplyProgress = { operationId: 'operation', revision: 1, stage: 'applying', target: { state: 'attached', profileId: 'work', profileName: 'Work' }, selectedItemCount: operations.length + 1, results: [], cancellationRequested: false, extensionInstallIntents: [] };
+		const unresolvedParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(unresolvedParent, presentationSession(presentationState({ phase: 'apply', busy: true, reviewedPlan: plan, progress: unresolved })), () => { }));
+		assert.match(unresolvedParent.textContent ?? '', /Resolving extensions/);
+
+		const results = operations.map(operation => ({ id: operation.id, category: 'extensions' as const, outcome: 'completed' as const, attempts: 1 }));
+		const durable: EditorMigrationApplyProgress = { ...unresolved, revision: 2, results: results.slice(0, 1), extensionInstallIntents: [{ operationId: operations[1].id, applicationScoped: true }] };
+		const applyParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(applyParent, presentationSession(presentationState({ phase: 'apply', busy: true, reviewedPlan: plan, progress: durable })), () => { }));
+		assert.match(applyParent.textContent ?? '', new RegExp(operations[1].item));
+		const progressbar = applyParent.querySelector('[role="progressbar"]');
+		assert.strictEqual(progressbar?.getAttribute('aria-valuemin'), '0');
+		assert.strictEqual(progressbar?.getAttribute('ariaValueMin'), null);
+
+		const operation = { id: 'operation', stage: 'settled', aggregateOutcome: 'completed', plan, results, extensionInstallIntents: [] } as unknown as EditorMigrationOperation;
+		const resultsParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(resultsParent, presentationSession(presentationState({ phase: 'results', operation })), () => { }));
+		assert.ok(resultsParent.getElementsByClassName('hucode-editor-migration-result-row').length < results.length, 'Results must remain virtualized');
+	});
+
 	test('labels item results from reviewed operations while keeping category aggregates concise', () => {
 		const draft = richDraft(richSnapshot(richSource()));
 		const plan: EditorMigrationReviewedPlan = {
@@ -259,7 +402,9 @@ suite('EditorMigrationFlowView', () => {
 
 		const applyParent = testParent(disposables);
 		disposables.add(new EditorMigrationFlowView(applyParent, presentationSession(presentationState({ phase: 'apply', busy: true, reviewedPlan: plan, progress })), () => { }));
-		assert.deepStrictEqual(renderedResultTexts(applyParent), expected);
+		const applyTexts = renderedResultTexts(applyParent);
+		assert.deepStrictEqual(applyTexts, expected);
+		expected.forEach((label, index) => assert.strictEqual(occurrences(applyTexts[index], label), 1, `Apply result label must render once: ${label}`));
 
 		const operation = {
 			id: 'operation',
@@ -267,10 +412,23 @@ suite('EditorMigrationFlowView', () => {
 			aggregateOutcome: 'completed',
 			plan,
 			results,
-		} as EditorMigrationOperation;
+			extensionInstallIntents: [{ operationId: 'opaque-extension-operation', actualProfileLocation: '/private/default/extensions.json', applicationScoped: true }],
+		} as unknown as EditorMigrationOperation;
 		const resultsParent = testParent(disposables);
 		disposables.add(new EditorMigrationFlowView(resultsParent, presentationSession(presentationState({ phase: 'results', operation })), () => { }));
-		assert.deepStrictEqual(renderedResultTexts(resultsParent), expected);
+		const resultTexts = renderedResultTexts(resultsParent);
+		assert.deepStrictEqual(resultTexts, expected);
+		expected.forEach((label, index) => assert.strictEqual(occurrences(resultTexts[index], label), 1, `Results label must render once: ${label}`));
+		assert.match(resultsParent.textContent ?? '', /publisher\.extension is installed application-wide in Default/);
+		assert.match(resultsParent.textContent ?? '', /Reload Hucode windows/);
+		assert.doesNotMatch(resultsParent.textContent ?? '', /\/private\/default/);
+
+		const legacyOperation = { ...operation, extensionInstallIntents: [{ operationId: 'opaque-extension-operation', actualProfileLocation: '/private/legacy/extensions.json' }] } as EditorMigrationOperation;
+		const legacyParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(legacyParent, presentationSession(presentationState({ phase: 'results', operation: legacyOperation })), () => { }));
+		assert.match(legacyParent.textContent ?? '', /older recovery record does not identify its profile placement/);
+		assert.doesNotMatch(legacyParent.textContent ?? '', /installed application-wide in Default|installed in this profile/);
+		assert.doesNotMatch(legacyParent.textContent ?? '', /\/private\/legacy/);
 	});
 });
 
@@ -287,6 +445,7 @@ function presentationState(overrides: Pick<EditorMigrationFlowState, 'phase'> & 
 		canceling: false,
 		recoveries: [],
 		applications: [],
+		discoveryDiagnostics: [],
 		targets: [],
 		selectedCategories: [],
 		decisions: {},
@@ -297,9 +456,11 @@ function presentationState(overrides: Pick<EditorMigrationFlowState, 'phase'> & 
 }
 
 function renderedResultTexts(parent: HTMLElement): readonly string[] {
-	const list = parent.getElementsByClassName('hucode-editor-migration-results')[0];
-	assert.ok(list);
-	return [...list.getElementsByTagName('li')].map(item => item.textContent ?? '');
+	return [...parent.getElementsByClassName('hucode-editor-migration-result-row')].map(item => item.textContent ?? '');
+}
+
+function occurrences(value: string, needle: string): number {
+	return value.split(needle).length - 1;
 }
 
 function source(name: string, kind: 'default' | 'named', ref: string): EditorMigrationSourceDescriptor {
@@ -416,4 +577,8 @@ function domEvent(type: string): globalThis.Event {
 	const event = mainWindow.document.createEvent('Event');
 	event.initEvent(type, true, true);
 	return event;
+}
+
+function keyboardEvent(key: string): KeyboardEvent {
+	return new mainWindow.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
 }

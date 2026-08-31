@@ -16,7 +16,7 @@ import {
 	defaultEditorMigrationSourceProfile,
 	groupEditorMigrationSources,
 } from '../../browser/migration/editorMigrationFlow.js';
-import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationApplyError, EditorMigrationOperation, IEditorMigrationApplyService } from '../../common/migration/editorMigrationApply.js';
+import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationApplyError, EditorMigrationApplyProgress, EditorMigrationOperation, IEditorMigrationApplyService } from '../../common/migration/editorMigrationApply.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanDraft, EditorMigrationReviewedPlan, EditorMigrationTargetSelection, EditorMigrationTargetSnapshot, IEditorMigrationPlanningService } from '../../common/migration/editorMigrationPlanning.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceDescriptor, EditorMigrationSourceProfileRef, EditorMigrationSourceSnapshot, IEditorMigrationSourceService } from '../../common/migration/editorMigrationSource.js';
 
@@ -228,6 +228,51 @@ suite('EditorMigrationFlow', () => {
 		assert.strictEqual(session.state.error, 'Another import is running');
 	});
 
+	test('an edit during plan verification invalidates the stale acceptance before Apply', async () => {
+		const verification = new DeferredPromise<Awaited<ReturnType<IEditorMigrationPlanningService['verifyPlan']>>>();
+		let applyCalls = 0;
+		const scenario = await createReadyFlowScenario(async () => {
+			applyCalls++;
+			throw new Error('stale plan must not Apply');
+		}, { verifyPlan: () => verification.p });
+		const session = disposables.add(scenario.session);
+
+		const acceptance = session.acceptReview();
+		await Promise.resolve();
+		await Promise.resolve();
+		session.chooseDecision('settings:editor.fontSize', 'import');
+		verification.complete({ status: 'unchanged', reasons: [] });
+		await acceptance;
+
+		assert.strictEqual(applyCalls, 0);
+		assert.strictEqual(session.state.phase, 'review');
+		assert.strictEqual(session.state.busy, false);
+		assert.strictEqual(session.state.decisions['settings:editor.fontSize'], 'import');
+		assert.strictEqual(session.state.reviewedPlan, undefined);
+	});
+
+	test('Back is inert in Apply and does not cancel an admitted operation', async () => {
+		const completion = new DeferredPromise<ReturnType<typeof applyResult>>();
+		const applyStarted = new DeferredPromise<void>();
+		let token: { readonly isCancellationRequested: boolean } | undefined;
+		const scenario = await createReadyFlowScenario(async (_plan, _authorization, applyToken, reporter) => {
+			token = applyToken;
+			applyStarted.complete();
+			reporter?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: false });
+			return await completion.p;
+		});
+		const session = disposables.add(scenario.session);
+		const acceptance = session.acceptReview();
+		await applyStarted.p;
+		assert.strictEqual(session.state.phase, 'apply');
+		session.back();
+		assert.strictEqual(session.state.phase, 'apply');
+		assert.strictEqual(token?.isCancellationRequested, false);
+		completion.complete(applyResult());
+		await acceptance;
+		assert.strictEqual(session.state.phase, 'results');
+	});
+
 	test('moves a thrown post-admission Apply to durable Results and clears stale progress for another import', async () => {
 		const scenario = await createReadyFlowScenario(async (_plan, _authorization, _token, reporter) => {
 			reporter?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: false });
@@ -244,6 +289,26 @@ suite('EditorMigrationFlow', () => {
 		await session.startImport();
 		assert.strictEqual(session.state.phase, 'application');
 		assert.strictEqual(session.state.progress, undefined);
+	});
+
+	test('retains a durable operation report that arrives after cancellation is requested', async () => {
+		const completion = new DeferredPromise<ReturnType<typeof applyResult>>();
+		const applyStarted = new DeferredPromise<void>();
+		let report: ((progress: EditorMigrationApplyProgress) => void) | undefined;
+		const scenario = await createReadyFlowScenario(async (_plan, _authorization, _token, reporter) => {
+			report = reporter;
+			applyStarted.complete();
+			return await completion.p;
+		});
+		const session = disposables.add(scenario.session);
+		const acceptance = session.acceptReview();
+		await applyStarted.p;
+		session.requestCancellation();
+		report?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: true });
+		completion.error(new CancellationError());
+		await acceptance;
+		assert.strictEqual(session.state.phase, 'results');
+		assert.strictEqual(session.state.operation?.id, 'operation-1');
 	});
 
 	test('falls back to Recovery when a reported durable operation cannot be reopened', async () => {
@@ -354,7 +419,7 @@ function reviewDraft(source: EditorMigrationSourceSnapshot): EditorMigrationPlan
 
 async function createReadyFlowScenario(
 	apply: IEditorMigrationApplyService['apply'],
-	options: { readonly publishers?: boolean; readonly clipboard?: IClipboardService; readonly acknowledgeError?: Error; readonly getOperationError?: Error } = {},
+	options: { readonly publishers?: boolean; readonly clipboard?: IClipboardService; readonly acknowledgeError?: Error; readonly getOperationError?: Error; readonly verifyPlan?: IEditorMigrationPlanningService['verifyPlan'] } = {},
 ): Promise<{ readonly session: EditorMigrationFlowSession; readonly draft: EditorMigrationPlanDraft; readonly plan: EditorMigrationReviewedPlan; readonly planningCalls: { targets: number; drafts: number } }> {
 	const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
 	const sourceSnapshot = snapshot(sourceDescriptor);
@@ -389,7 +454,7 @@ async function createReadyFlowScenario(
 		inspectTarget: async () => { planningCalls.targets++; return draft.target; },
 		createDraftFromCurrentEvidence: async () => { planningCalls.drafts++; return { ...draft, draftFingerprintSeed: `draft-${planningCalls.drafts}` }; },
 		acceptDraft: async (acceptedDraft: EditorMigrationPlanDraft) => ({ ...plan, source: acceptedDraft.source, target: acceptedDraft.target }),
-		verifyPlan: async () => ({ status: 'unchanged', reasons: [] }),
+		verifyPlan: options.verifyPlan ?? (async () => ({ status: 'unchanged', reasons: [] })),
 	} as unknown as IEditorMigrationPlanningService;
 	const applyService = {
 		listRecoverableOperations: async () => [],
@@ -411,6 +476,10 @@ async function createReadyFlowScenario(
 	await session.continueFromProfile();
 	await session.continueFromTarget();
 	return { session, draft, plan, planningCalls };
+}
+
+function applyResult() {
+	return { operationId: 'operation-1', aggregateOutcome: 'completed' as const, stage: 'settled' as const, results: [] };
 }
 
 function operation(plan: EditorMigrationReviewedPlan): EditorMigrationOperation {

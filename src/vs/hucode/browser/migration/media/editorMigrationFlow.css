@@ -95,6 +95,22 @@
 	gap: 12px;
 }
 
+.hucode-editor-migration-profile-choice {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	flex: 1;
+}
+
+.hucode-editor-migration-details {
+	margin: 12px 0;
+}
+
+.hucode-editor-migration-details summary {
+	cursor: pointer;
+}
+
 .hucode-editor-migration-choice-card {
 	justify-content: space-between;
 	cursor: pointer;
@@ -245,6 +261,28 @@
 	padding-left: 22px;
 }
 
+.hucode-editor-migration-result-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 12px;
+	box-sizing: border-box;
+	height: 100%;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.hucode-editor-migration-result-detail {
+	color: var(--vscode-descriptionForeground);
+}
+
+.hucode-editor-migration-rollback-selection {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin: 16px 0;
+}
+
 .hucode-editor-migration-outcome {
 	font-size: 16px;
 	font-weight: 600;
@@ -286,5 +324,26 @@
 		scroll-behavior: auto !important;
 		transition: none !important;
 		animation: none !important;
+	}
+}
+
+@media (forced-colors: active) {
+	.hucode-editor-migration-button:focus-visible,
+	.hucode-editor-migration-filter:focus,
+	.hucode-editor-migration-radio-row:focus-within,
+	.hucode-editor-migration-category:focus-within,
+	.hucode-editor-migration-decision:focus-within,
+	.hucode-editor-migration-virtual-list:focus-within {
+		outline: 2px solid Highlight;
+		outline-offset: 2px;
+	}
+
+	.hucode-editor-migration-card,
+	.hucode-editor-migration-choice-card,
+	.hucode-editor-migration-radio-row,
+	.hucode-editor-migration-category,
+	.hucode-editor-migration-decision,
+	.hucode-editor-migration-virtual-list {
+		border-color: CanvasText;
 	}
 }
