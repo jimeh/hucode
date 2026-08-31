@@ -3,9 +3,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { addDisposableListener, clearNode, EventType, isHTMLElement, isHTMLInputElement } from '../../../base/browser/dom.js';
+import { addDisposableListener, clearNode, EventType, isHTMLElement, isHTMLInputElement, isKeyboardEvent } from '../../../base/browser/dom.js';
+import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import { IListRenderer, IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List } from '../../../base/browser/ui/list/listWidget.js';
+import { KeyCode } from '../../../base/common/keyCodes.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { localize } from '../../../nls.js';
 import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
@@ -129,7 +131,7 @@ export class EditorMigrationFlowView extends Disposable {
 			const card = element('article', 'hucode-editor-migration-card');
 			card.append(
 				element('h3', undefined, recovery.targetName ?? localize('editorMigration.recovery.unknownTarget', "Unknown Target")),
-				element('p', undefined, recovery.unsupportedSchemaVersion === undefined ? `${recovery.stage} · ${new Date(recovery.updatedAt).toLocaleString()}` : localize('editorMigration.recovery.unsupported', "This record was created by another Hucode version and will be kept untouched.")),
+				element('p', undefined, recovery.unsupportedSchemaVersion === undefined ? `${stageLabel(recovery.stage)} · ${new Date(recovery.updatedAt).toLocaleString()}` : localize('editorMigration.recovery.unsupported', "This record was created by another Hucode version and will be kept untouched.")),
 			);
 			if (recovery.unsupportedSchemaVersion === undefined) {
 				card.appendChild(this.button(localize('editorMigration.recovery.open', "View or Continue"), () => void this.session.showRecovery(recovery.id), `recovery-${recovery.id}`));
@@ -391,13 +393,14 @@ export class EditorMigrationFlowView extends Disposable {
 	private renderApply(parent: HTMLElement, state: EditorMigrationFlowState): void {
 		parent.appendChild(element('h2', undefined, state.canceling ? localize('editorMigration.apply.canceling', "Canceling...") : localize('editorMigration.apply.title', "Importing Setup..."), { tabIndex: '-1' }));
 		const progress = state.progress;
+		const rollback = progress?.stage === 'rollbackPending' ? progress.rollback : undefined;
 		parent.appendChild(element('div', 'hucode-editor-migration-progress', progress ? progressStatusLabel(progress, state.reviewedPlan ?? state.operation?.plan) : localize('editorMigration.apply.admitting', "Verifying and admitting the reviewed import..."), {
 			role: 'progressbar',
 			'aria-valuemin': '0',
-			'aria-valuemax': String(progress?.selectedItemCount ?? 1),
-			'aria-valuenow': String(progress?.results.length ?? 0),
+			'aria-valuemax': String(rollback?.resourceCount ?? progress?.selectedItemCount ?? 1),
+			'aria-valuenow': String(rollback?.restoredResourceCount ?? progress?.results.length ?? 0),
 		}));
-		if (progress?.results.length) {
+		if (!rollback && progress?.results.length) {
 			const plan = state.reviewedPlan ?? state.operation?.plan;
 			this.virtualList(parent, 'apply-results', progress.results, 52, result => result.id, result => editorMigrationResultLabel(result, plan), result => resultRow(result, plan));
 		}
@@ -454,7 +457,7 @@ export class EditorMigrationFlowView extends Disposable {
 			this.button(localize('editorMigration.results.copy', "Copy Report"), () => void this.session.copyReport(), 'results-copy'),
 			this.button(localize('editorMigration.results.another', "Import Another Setup"), () => void this.session.startImport(), 'results-another'),
 		);
-		if (operation.stage !== 'rolledBack' && operation.results.some(result => ['failed', 'unavailable', 'canceled'].includes(result.outcome))) {
+		if (operation.stage !== 'rolledBack' && !operation.rollbackIntent?.mutationStarted && operation.results.some(result => ['failed', 'unavailable', 'canceled'].includes(result.outcome))) {
 			actions.appendChild(this.button(localize('editorMigration.results.retry', "Retry Failed Items"), () => void this.session.retry(operation.id), 'results-retry'));
 		}
 		if (operation.stage !== 'settled' && operation.stage !== 'rolledBack') {
@@ -598,18 +601,11 @@ export class EditorMigrationFlowView extends Disposable {
 		};
 		this.renderDisposables.add(list.onDidScroll(remember));
 		this.renderDisposables.add(list.onDidChangeFocus(remember));
-		this.addListener(container, EventType.KEY_DOWN, event => {
-			let focusedIndex = list.getFocus()[0];
-			if (focusedIndex === undefined && items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter'].includes(event.key)) {
-				focusedIndex = event.key === 'ArrowUp' || event.key === 'End' ? items.length - 1 : 0;
-				list.setFocus([focusedIndex], event);
-				list.reveal(focusedIndex);
+		this.renderDisposables.add(list.onDidChangeSelection(event => {
+			if (activate && event.elements.length === 1 && isKeyboardEvent(event.browserEvent) && new StandardKeyboardEvent(event.browserEvent).keyCode === KeyCode.Enter) {
+				activate(event.elements[0]);
 			}
-			if (event.key === 'Enter' && activate && focusedIndex !== undefined) {
-				event.preventDefault();
-				activate(list.element(focusedIndex));
-			}
-		});
+		}));
 	}
 
 	private discoveryDetails(diagnostics: readonly EditorMigrationDiagnostic[]): HTMLElement {
@@ -799,6 +795,10 @@ function resultDiagnosticLabel(code: string): string {
 }
 
 function progressStatusLabel(progress: EditorMigrationApplyProgress, plan: EditorMigrationReviewedPlan | undefined): string {
+	if (progress.stage === 'rollbackPending' && progress.rollback) {
+		const categories = progress.rollback.categories.map(category => CATEGORY_LABELS[category]).join(', ');
+		return localize('editorMigration.apply.rollbackProgress', "Restoring {0}. {1} of {2} file resources restored.", categories, progress.rollback.restoredResourceCount, progress.rollback.resourceCount);
+	}
 	const active = activeProgressItem(progress, plan);
 	return active
 		? localize('editorMigration.apply.progressWithItem', "{0}: {1}. {2} of {3} items recorded.", stageLabel(progress.stage), active, progress.results.length, progress.selectedItemCount)

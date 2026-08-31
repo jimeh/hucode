@@ -1237,6 +1237,33 @@ suite('EditorMigrationApplyService', () => {
 		assert.match(formatEditorMigrationReport(operation), /Forward retry: unavailable/);
 	});
 
+	test('rejects drift before the first durable rollback mutation without partial-settlement semantics', async () => {
+		const plan = await proposedSettingsPlan();
+		const authorization = await service.createApplyAuthorization(plan, []);
+		const result = await service.apply(plan, authorization, CancellationToken.None);
+		const profile = profilesService.profiles.find(candidate => candidate.name === 'Imported');
+		assert.ok(profile);
+		const cancellation = new CancellationTokenSource();
+		cancellation.cancel();
+		await service.rollback(result.operationId, { categories: ['settings'] }, cancellation.token);
+
+		let rollbackReads = 0;
+		provider.onDidReadFile = async resource => {
+			if (resource.toString() === profile.settingsResource.toString() && ++rollbackReads === 2) {
+				await provider.writeFile(resource, VSBuffer.fromString('{ "changed": true }\n').buffer, { create: false, overwrite: true, unlock: false, atomic: false });
+			}
+		};
+		await assert.rejects(
+			() => service.resume(result.operationId, CancellationToken.None),
+			(error: unknown) => error instanceof EditorMigrationApplyError && error.code === 'rollbackDrift' && /changed after preflight/.test(error.message),
+		);
+		provider.onDidReadFile = undefined;
+		const operation = await service.getOperation(result.operationId);
+		assert.deepStrictEqual([operation.stage, operation.aggregateOutcome], ['settled', 'completed']);
+		assert.strictEqual(operation.rollbackIntent, undefined);
+		assert.ok(operation.results.every(item => item.diagnostic?.code !== 'rollbackDrift'), 'pre-mutation rejection must not record a partial rollback result');
+	});
+
 	test('rolls back only proven mutations, preserves drift before force, and never rolls back extensions', async () => {
 		const plan = await proposedSettingsPlan();
 		const authorization = await service.createApplyAuthorization(plan, []);
@@ -1304,7 +1331,7 @@ suite('EditorMigrationApplyService', () => {
 });
 
 class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
-	onDidReadFile: ((resource: URI) => void) | undefined;
+	onDidReadFile: ((resource: URI) => void | Promise<void>) | undefined;
 	onDidWriteFile: ((resource: URI) => void) | undefined;
 	onDidDelete: ((resource: URI) => void | Promise<void>) | undefined;
 
@@ -1313,7 +1340,7 @@ class AtomicInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
 	}
 
 	override async readFile(resource: URI): Promise<Uint8Array> {
-		this.onDidReadFile?.(resource);
+		await this.onDidReadFile?.(resource);
 		return await super.readFile(resource);
 	}
 

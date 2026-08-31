@@ -381,14 +381,7 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			if (intent.mutationStarted) {
 				return await this.settleRollbackRefusal(operation, message);
 			}
-			operation = await this.save(operation, {
-				...operation,
-				stage: 'settled',
-				aggregateOutcome: aggregateForwardResults(operation),
-				cancellationRequested: false,
-				rollbackIntent: undefined,
-			});
-			throw new EditorMigrationApplyError('rollbackDrift', message);
+			return await this.rejectRollbackBeforeMutation(operation, message);
 		}
 
 		if (token.isCancellationRequested) {
@@ -423,10 +416,12 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			const currentHash = current ? await sha256(current.value) : await absentHash(progress.category);
 			if (currentHash !== progress.expectedRestoredHash) {
 				if (currentHash !== progress.expectedPostApplyHash && !progress.forceSnapshotPath) {
-					return await this.settleRollbackRefusal(operation, `Migration rollback refused because ${progress.category} changed after preflight`);
+					const message = `Migration rollback refused because ${progress.category} changed after preflight`;
+					return intent.mutationStarted ? await this.settleRollbackRefusal(operation, message) : await this.rejectRollbackBeforeMutation(operation, message);
 				}
 				if (progress.forceObservedHash && currentHash !== progress.forceObservedHash) {
-					return await this.settleRollbackRefusal(operation, `Migration rollback refused because ${progress.category} changed after its force snapshot`);
+					const message = `Migration rollback refused because ${progress.category} changed after its force snapshot`;
+					return intent.mutationStarted ? await this.settleRollbackRefusal(operation, message) : await this.rejectRollbackBeforeMutation(operation, message);
 				}
 				operation = await this.markRollbackMutationStarted(operation);
 				intent = operation.rollbackIntent!;
@@ -457,6 +452,17 @@ export class EditorMigrationApplyService implements IEditorMigrationApplyService
 			return operation;
 		}
 		return await this.save(operation, { ...operation, rollbackIntent: { ...operation.rollbackIntent, mutationStarted: true } });
+	}
+
+	private async rejectRollbackBeforeMutation(operation: EditorMigrationOperation, message: string): Promise<never> {
+		await this.save(operation, {
+			...operation,
+			stage: 'settled',
+			aggregateOutcome: aggregateForwardResults(operation),
+			cancellationRequested: false,
+			rollbackIntent: undefined,
+		});
+		throw new EditorMigrationApplyError('rollbackDrift', message);
 	}
 
 	private async settleRollbackRefusal(operation: EditorMigrationOperation, message: string): Promise<EditorMigrationOperationResult> {

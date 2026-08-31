@@ -49,8 +49,10 @@ suite('EditorMigrationFlowView', () => {
 		const fullList = parent.querySelector('[data-migration-list-id="profiles"] .monaco-list') as HTMLElement;
 		assert.ok(fullList);
 		fullList.focus();
-		(parent.querySelector('[data-migration-list-id="profiles"]') as HTMLElement).dispatchEvent(keyboardEvent('End'));
-		assert.match(parent.textContent ?? '', /Profile 299/, 'End should focus an off-screen profile and scroll it into view');
+		for (let index = 0; index < sources.length; index++) {
+			fullList.dispatchEvent(keyboardEvent('ArrowDown'));
+		}
+		assert.match(parent.textContent ?? '', /Profile 299/, 'keyboard navigation should focus an off-screen profile and scroll it into view');
 		session.selectSourceProfile(sources[1].ref);
 		assert.match(parent.textContent ?? '', /Profile 299/, 'the off-screen focused window remains rendered after the update');
 
@@ -167,6 +169,8 @@ suite('EditorMigrationFlowView', () => {
 		} as unknown as EditorMigrationFlowSession;
 		const parent = testParent(disposables);
 		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+		assert.match(parent.textContent ?? '', /Import finished/);
+		assert.doesNotMatch(parent.textContent ?? '', /\bsettled\b/);
 		const list = parent.querySelector('[data-migration-list-id="recoveries"] .monaco-list') as HTMLElement;
 		assert.ok(list);
 		list.focus();
@@ -352,6 +356,47 @@ suite('EditorMigrationFlowView', () => {
 		const resultsParent = testParent(disposables);
 		disposables.add(new EditorMigrationFlowView(resultsParent, presentationSession(presentationState({ phase: 'results', operation })), () => { }));
 		assert.ok(resultsParent.getElementsByClassName('hucode-editor-migration-result-row').length < results.length, 'Results must remain virtualized');
+	});
+
+	test('shows durable rollback resource progress instead of forward Apply counts', () => {
+		const draft = richDraft(richSnapshot(richSource()));
+		const plan = { ...draft, choices: { selectedCategories: ['settings', 'snippets'] as const, decisions: [] }, operations: [], fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' } } satisfies EditorMigrationReviewedPlan;
+		const progress: EditorMigrationApplyProgress = {
+			operationId: 'rollback-operation', revision: 8, stage: 'rollbackPending',
+			target: { state: 'attached', profileId: 'work', profileName: 'Work' },
+			selectedItemCount: 99,
+			results: Array.from({ length: 20 }, (_, index) => ({ id: `forward-${index}`, category: 'settings' as const, outcome: 'completed' as const, attempts: 1 })),
+			cancellationRequested: false,
+			rollback: { categories: ['settings', 'snippets'], restoredResourceCount: 1, resourceCount: 3, mutationStarted: true },
+		};
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, presentationSession(presentationState({ phase: 'apply', busy: true, reviewedPlan: plan, progress })), () => { }));
+		const progressbar = parent.querySelector('[role="progressbar"]');
+		assert.match(progressbar?.textContent ?? '', /Restoring Settings, Snippets\. 1 of 3 file resources restored\./);
+		assert.doesNotMatch(progressbar?.textContent ?? '', /20 of 99/);
+		assert.strictEqual(progressbar?.getAttribute('aria-valuenow'), '1');
+		assert.strictEqual(progressbar?.getAttribute('aria-valuemax'), '3');
+		assert.strictEqual(parent.getElementsByClassName('hucode-editor-migration-result-row').length, 0, 'rollback progress must not present forward Apply results as restoration evidence');
+	});
+
+	test('does not offer forward retry after rollback restoration started', () => {
+		const draft = richDraft(richSnapshot(richSource()));
+		const plan = { ...draft, choices: { selectedCategories: ['snippets'] as const, decisions: [] }, operations: [], fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' } } satisfies EditorMigrationReviewedPlan;
+		const operation = {
+			id: 'partial-rollback', stage: 'settled', aggregateOutcome: 'completedWithIssues', plan,
+			results: [{ id: 'snippets', category: 'snippets', outcome: 'failed', attempts: 2 }], extensionInstallIntents: [], snapshots: [],
+			rollbackIntent: {
+				categories: ['snippets'], forceCategories: [], ownershipState: 'restored', mutationStarted: true,
+				beforeFlags: {}, afterFlags: {}, resources: [
+					{ category: 'snippets', item: 'one.code-snippets', resource: 'private-resource-one', expectedPostApplyHash: 'after-one', expectedRestoredHash: 'before-one', state: 'restored' },
+					{ category: 'snippets', item: 'two.code-snippets', resource: 'private-resource-two', expectedPostApplyHash: 'after-two', expectedRestoredHash: 'before-two', state: 'pending' },
+				],
+			},
+		} as unknown as EditorMigrationOperation;
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, presentationSession(presentationState({ phase: 'results', operation })), () => { }));
+		assert.match(parent.textContent ?? '', /Forward import retry is unavailable because file restoration already began\./);
+		assert.doesNotMatch(parent.textContent ?? '', /Retry Failed Items/);
 	});
 
 	test('labels item results from reviewed operations while keeping category aggregates concise', () => {
@@ -580,5 +625,12 @@ function domEvent(type: string): globalThis.Event {
 }
 
 function keyboardEvent(key: string): KeyboardEvent {
-	return new mainWindow.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+	const keyCode = new Map<string, number>([
+		['ArrowDown', 40],
+		['Enter', 13],
+	]).get(key);
+	assert.notStrictEqual(keyCode, undefined, `missing key code for ${key}`);
+	const event = new mainWindow.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+	Object.defineProperty(event, 'keyCode', { configurable: true, get: () => keyCode });
+	return event;
 }

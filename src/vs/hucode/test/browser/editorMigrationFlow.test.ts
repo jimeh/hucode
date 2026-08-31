@@ -16,7 +16,7 @@ import {
 	defaultEditorMigrationSourceProfile,
 	groupEditorMigrationSources,
 } from '../../browser/migration/editorMigrationFlow.js';
-import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationApplyError, EditorMigrationApplyProgress, EditorMigrationOperation, IEditorMigrationApplyService } from '../../common/migration/editorMigrationApply.js';
+import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationApplyError, EditorMigrationApplyProgress, EditorMigrationOperation, EditorMigrationRollbackInspection, IEditorMigrationApplyService } from '../../common/migration/editorMigrationApply.js';
 import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanDraft, EditorMigrationReviewedPlan, EditorMigrationTargetSelection, EditorMigrationTargetSnapshot, IEditorMigrationPlanningService } from '../../common/migration/editorMigrationPlanning.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceDescriptor, EditorMigrationSourceProfileRef, EditorMigrationSourceSnapshot, IEditorMigrationSourceService } from '../../common/migration/editorMigrationSource.js';
 
@@ -35,6 +35,54 @@ suite('EditorMigrationFlow', () => {
 		]);
 		assert.strictEqual(defaultEditorMigrationSourceProfile(groups[1])?.ref.value, 'cursor-default');
 		assert.strictEqual(defaultEditorMigrationSourceProfile({ ...groups[1], profiles: [cursorNamed] }), undefined);
+	});
+
+	test('binds rollback inspection completion to the latest requested category set', async () => {
+		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
+		const draft = reviewDraft(snapshot(sourceDescriptor));
+		const plan: EditorMigrationReviewedPlan = {
+			...draft,
+			choices: { selectedCategories: ['settings', 'snippets'], decisions: [] },
+			operations: [],
+			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+		};
+		const recoveredOperation = { ...operation(plan), stage: 'settled' as const, aggregateOutcome: 'completed' as const };
+		const inspections = [new DeferredPromise<EditorMigrationRollbackInspection>(), new DeferredPromise<EditorMigrationRollbackInspection>(), new DeferredPromise<EditorMigrationRollbackInspection>()];
+		const requested: string[][] = [];
+		const applyService = {
+			listRecoverableOperations: async () => [{ id: recoveredOperation.id, stage: 'settled', aggregateOutcome: 'completed', createdAt: 1, updatedAt: 2, targetName: 'Default', recoverable: true }],
+			getOperation: async () => recoveredOperation,
+			inspectRollback: async (_operationId: string, categories: readonly string[]) => {
+				requested.push([...categories]);
+				return await inspections[requested.length - 1].p;
+			},
+		} as unknown as IEditorMigrationApplyService;
+		const session = disposables.add(new EditorMigrationFlowSession(
+			{} as IEditorMigrationSourceService,
+			{} as IEditorMigrationPlanningService,
+			applyService,
+			{ defaultProfile: { id: 'hucode-default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+		await session.initialize();
+		await session.showRecovery(recoveredOperation.id);
+
+		const settingsRequest = session.inspectRollback(['settings']);
+		const snippetsRequest = session.inspectRollback(['snippets']);
+		inspections[0].complete({ operationId: recoveredOperation.id, operationRevision: 1, eligibleCategories: ['settings', 'snippets'], driftedCategories: ['settings'], fingerprint: 'settings' });
+		await settingsRequest;
+		assert.strictEqual(session.state.rollbackInspection, undefined, 'an older category request must not overwrite the current request');
+		inspections[1].complete({ operationId: recoveredOperation.id, operationRevision: 1, eligibleCategories: ['settings', 'snippets'], driftedCategories: ['snippets'], fingerprint: 'snippets' });
+		await snippetsRequest;
+		assert.strictEqual((session.state.rollbackInspection as EditorMigrationRollbackInspection | undefined)?.fingerprint, 'snippets');
+
+		const changedSelectionRequest = session.inspectRollback(['settings', 'snippets']);
+		session.clearRollbackInspection();
+		inspections[2].complete({ operationId: recoveredOperation.id, operationRevision: 1, eligibleCategories: ['settings', 'snippets'], driftedCategories: [], fingerprint: 'both' });
+		await changedSelectionRequest;
+		assert.strictEqual(session.state.rollbackInspection, undefined, 'changing the category selection must invalidate pending evidence');
+		assert.deepStrictEqual(requested, [['settings'], ['snippets'], ['settings', 'snippets']]);
 	});
 
 	test('moves through application, profile, Default target, and review without writing', async () => {

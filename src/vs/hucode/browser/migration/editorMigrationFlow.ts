@@ -123,6 +123,8 @@ export class EditorMigrationFlowSession extends Disposable {
 
 	private stateValue: EditorMigrationFlowState = emptyState();
 	private generation = 0;
+	private rollbackInspectionGeneration = 0;
+	private rollbackInspectionCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[] | undefined;
 	private readonly operationToken = this._register(new MutableDisposable<CancellationTokenSource>());
 
 	constructor(
@@ -379,9 +381,11 @@ export class EditorMigrationFlowSession extends Disposable {
 	}
 
 	async showRecovery(operationId: string): Promise<void> {
+		this.rollbackInspectionGeneration++;
+		this.rollbackInspectionCategories = undefined;
 		try {
 			const operation = await this.applyService.getOperation(operationId);
-			this.update({ phase: 'results', operation, busy: false, error: undefined, announcement: localize('editorMigration.flow.resultsLoaded', "Migration results loaded.") });
+			this.update({ phase: 'results', operation, rollbackInspection: undefined, busy: false, error: undefined, announcement: localize('editorMigration.flow.resultsLoaded', "Migration results loaded.") });
 		} catch (error) {
 			this.update({ error: errorMessage(error) });
 		}
@@ -396,11 +400,18 @@ export class EditorMigrationFlowSession extends Disposable {
 	}
 
 	async inspectRollback(categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): Promise<void> {
-		if (!this.stateValue.operation) {
+		const operationId = this.stateValue.operation?.id;
+		if (!operationId) {
 			return;
 		}
+		const requestedCategories = fileCategories(categories);
+		const generation = ++this.rollbackInspectionGeneration;
 		try {
-			const rollbackInspection = await this.applyService.inspectRollback(this.stateValue.operation.id, categories);
+			const rollbackInspection = await this.applyService.inspectRollback(operationId, requestedCategories);
+			if (generation !== this.rollbackInspectionGeneration || this.stateValue.operation?.id !== operationId) {
+				return;
+			}
+			this.rollbackInspectionCategories = requestedCategories;
 			this.update({
 				rollbackInspection,
 				error: undefined,
@@ -409,11 +420,15 @@ export class EditorMigrationFlowSession extends Disposable {
 					: localize('editorMigration.flow.rollbackReady', "File changes can be rolled back safely."),
 			});
 		} catch (error) {
-			this.update({ error: errorMessage(error) });
+			if (generation === this.rollbackInspectionGeneration && this.stateValue.operation?.id === operationId) {
+				this.update({ error: errorMessage(error) });
+			}
 		}
 	}
 
 	clearRollbackInspection(): void {
+		this.rollbackInspectionGeneration++;
+		this.rollbackInspectionCategories = undefined;
 		if (this.stateValue.rollbackInspection) {
 			this.update({ rollbackInspection: undefined, error: undefined });
 		}
@@ -425,7 +440,10 @@ export class EditorMigrationFlowSession extends Disposable {
 			return;
 		}
 		try {
-			const inspection = this.stateValue.rollbackInspection ?? await this.applyService.inspectRollback(operation.id, categories);
+			const requestedCategories = fileCategories(categories);
+			const inspection = this.stateValue.rollbackInspection && sameFileCategories(requestedCategories, this.rollbackInspectionCategories ?? [])
+				? this.stateValue.rollbackInspection
+				: await this.applyService.inspectRollback(operation.id, requestedCategories);
 			await this.runRecovery(operation.id, (token, reporter) => this.applyService.rollback(operation.id, { categories, forceCategories, inspectionFingerprint: inspection.fingerprint }, token, reporter));
 		} catch (error) {
 			this.update({ error: errorMessage(error), announcement: errorMessage(error) });
@@ -638,6 +656,14 @@ export class EditorMigrationFlowSession extends Disposable {
 		this.stateValue = Object.freeze({ ...this.stateValue, ...update });
 		this.stateEmitter.fire(this.stateValue);
 	}
+}
+
+function fileCategories(categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): readonly Exclude<EditorMigrationCategory, 'extensions'>[] {
+	return ALL_CATEGORIES.filter((category): category is Exclude<EditorMigrationCategory, 'extensions'> => category !== 'extensions' && categories.includes(category));
+}
+
+function sameFileCategories(left: readonly Exclude<EditorMigrationCategory, 'extensions'>[], right: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): boolean {
+	return left.length === right.length && left.every(category => right.includes(category));
 }
 
 /** Factory and owner for the command's reattachable session. */
