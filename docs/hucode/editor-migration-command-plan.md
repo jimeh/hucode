@@ -217,6 +217,9 @@ group holding its full source item count, and its per-reason exclusion groups
 are then not shown as well, because that whole-category count already contains
 them. Still-selected categories contribute only their per-reason exclusion
 groups. The same rule drives the held-back count shown in the index and footer.
+The footer separately reports items ready to import, current values kept by the
+review choices, and items held back, so changing an individual or bulk conflict
+choice immediately produces reconcilable counts.
 
 Review never renders hundreds of new settings, shortcut additions, planned
 extension installs, or raw plan values by default. Item names appear inside

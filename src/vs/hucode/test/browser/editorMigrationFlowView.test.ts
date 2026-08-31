@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
-import { Event } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { IClipboardService } from '../../../platform/clipboard/common/clipboardService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
@@ -224,7 +224,7 @@ suite('EditorMigrationFlowView', () => {
 		disposables.add(new EditorMigrationFlowView(parent, presentationSession(volumeReviewState(draft)), () => { }));
 
 		assert.deepStrictEqual(sectionLabels(parent), ['Settings', 'Keyboard Shortcuts', 'Snippets', 'Extensions', 'Not Imported']);
-		assert.deepStrictEqual(sectionCounts(parent), ['214', '170', '2', '77', '62']);
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62'], 'the three conflicts default to keep-current and are not counted as imports');
 		assert.strictEqual(activeSection(parent), 'settings', 'review opens on the first section needing attention');
 		assert.deepStrictEqual(sectionsWithStatus(parent, 'attention'), ['settings', 'extensions']);
 
@@ -234,7 +234,8 @@ suite('EditorMigrationFlowView', () => {
 		assert.strictEqual(activeSection(settledParent), 'extensions', 'attention outranks the Settings fallback');
 
 		const detail = detailPane(parent);
-		assert.match(detail.textContent ?? '', /214 of 237 will be imported\. 3 differ from your current values\./);
+		assert.match(detail.textContent ?? '', /211 of 237 will be imported\. 3 differ from your current values\./);
+		assert.match(footer(parent).textContent ?? '', /460 items ready to import\. 3 current values kept\. 62 held back\./);
 		assert.strictEqual(detail.getElementsByClassName('hucode-editor-migration-conflict').length, 3, 'only the differing settings render as comparison rows');
 		assert.match(detail.textContent ?? '', /211 new settings/);
 		assert.strictEqual(occurrences(detail.textContent ?? '', 'settings.new-'), 25, 'routine additions stay capped inside the disclosure');
@@ -289,7 +290,7 @@ suite('EditorMigrationFlowView', () => {
 		const parent = testParent(disposables);
 		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
 		assert.deepStrictEqual([...session.state.selectedCategories], ['settings', 'keybindings', 'snippets', 'extensions']);
-		assert.deepStrictEqual(sectionCounts(parent), ['214', '170', '2', '77', '62']);
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62']);
 
 		selectSection(parent, 'extensions');
 		const include = includeCheckbox(parent, 'Include Extensions in this import');
@@ -297,15 +298,15 @@ suite('EditorMigrationFlowView', () => {
 		include.dispatchEvent(domEvent('change'));
 
 		assert.deepStrictEqual([...session.state.selectedCategories], ['settings', 'keybindings', 'snippets'], 'the inclusion control drives the state the view renders from');
-		assert.deepStrictEqual(sectionCounts(parent), ['214', '170', '2', '0', '139'], '116 Extensions source items plus the 23 remaining Settings exclusions');
-		assert.match(footer(parent).textContent ?? '', /386 items ready to import\. 139 held back\./);
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '0', '139'], '116 Extensions source items plus the 23 remaining Settings exclusions');
+		assert.match(footer(parent).textContent ?? '', /383 items ready to import\. 3 current values kept\. 139 held back\./);
 
 		selectSection(parent, 'notImported');
 		const detail = detailPane(parent);
 		assert.match(detail.textContent ?? '', /139 items are held back, grouped by reason\./);
 		const groups = [...detail.getElementsByClassName('hucode-editor-migration-group')].map(group => group.textContent ?? '');
 		assert.strictEqual(groups.length, 2);
-		assert.match(groups[0], /^116Extensions is not included in this import, so none of its source items are imported\.$/);
+		assert.match(groups[0], /^116116 items\.Extensions is not included in this import, so none of its source items are imported\.$/, 'a group with no item disclosure still states its count for assistive technology');
 		assert.match(groups[1], /^23Settings — Kept out because these settings are specific to the source machine\./);
 		assert.doesNotMatch(detail.textContent ?? '', /Unavailable from Hucode's extension gallery/, 'a deselected category must not also list its exclusion reasons');
 		assert.doesNotMatch(detail.textContent ?? '', /Already installed in the target profile/);
@@ -315,7 +316,143 @@ suite('EditorMigrationFlowView', () => {
 		assert.strictEqual(restored.checked, false, 'the rerendered control reflects the deselected state');
 		restored.checked = true;
 		restored.dispatchEvent(domEvent('change'));
-		assert.deepStrictEqual(sectionCounts(parent), ['214', '170', '2', '77', '62'], 're-including the category restores the exclusion-only accounting');
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62'], 're-including the category restores the exclusion-only accounting');
+	});
+
+	test('applies both bulk setting actions to differences hidden by the filter', async () => {
+		const draft = manyConflictsDraft();
+		const session = disposables.add(await reviewSession(draft));
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62']);
+		assert.match(footer(parent).textContent ?? '', /460 items ready to import\. 12 current values kept\. 62 held back\./);
+
+		const filter = inputWithLabel(parent, 'Filter Settings differences');
+		filter.value = 'conflict-1';
+		filter.dispatchEvent(domEvent('input'));
+		assert.strictEqual(detailPane(parent).getElementsByClassName('hucode-editor-migration-conflict').length, 3, 'the filter hides nine of the twelve differences');
+
+		buttonWithText(parent, 'Use Imported Values for All').dispatchEvent(domEvent('click'));
+		assert.strictEqual(Object.values(session.state.decisions).filter(choice => choice === 'import').length, 12, 'the bulk action reaches filtered-out differences');
+		assert.deepStrictEqual(sectionCounts(parent), ['223', '170', '2', '77', '62'], 'the counts update immediately');
+		assert.match(footer(parent).textContent ?? '', /472 items ready to import\. 0 current values kept\. 62 held back\./);
+		assert.strictEqual(detailPane(parent).getElementsByClassName('hucode-editor-migration-conflict').length, 3, 'the filter survives the bulk action');
+
+		buttonWithText(parent, 'Keep All Current Values').dispatchEvent(domEvent('click'));
+		assert.deepStrictEqual(sectionCounts(parent), ['211', '170', '2', '77', '62']);
+		assert.match(footer(parent).textContent ?? '', /460 items ready to import\. 12 current values kept\. 62 held back\./);
+
+		const single = [...detailPane(parent).getElementsByTagName('input')].find(input => input.getAttribute('aria-label')?.startsWith('Use imported value'));
+		assert.ok(single);
+		single.checked = true;
+		single.dispatchEvent(domEvent('change'));
+		assert.deepStrictEqual(sectionCounts(parent), ['212', '170', '2', '77', '62'], 'an individual choice also updates the counts');
+		assert.match(footer(parent).textContent ?? '', /461 items ready to import\. 11 current values kept\. 62 held back\./);
+	});
+
+	test('never applies a stored filter to a list that renders no filter control', async () => {
+		const sources = [
+			...Array.from({ length: 12 }, (_, index) => source(`Profile ${index}`, 'named', `cursor-${index}`)),
+			...Array.from({ length: 2 }, (_, index) => withAdapter(source(`Other ${index}`, 'named', `vscode-${index}`), 'vscode', 'Visual Studio Code', 0)),
+		];
+		const session = disposables.add(discoverySession(sources));
+		await session.initialize();
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+
+		buttonWithText(parent, 'Cursor').dispatchEvent(domEvent('click'));
+		const filter = inputWithLabel(parent, 'Filter profiles');
+		filter.value = 'Profile 1';
+		filter.dispatchEvent(domEvent('input'));
+		assert.strictEqual(profileRadios(parent).length, 3, 'Profile 1, 10 and 11 match');
+
+		buttonWithText(parent, 'Back').dispatchEvent(domEvent('click'));
+		buttonWithText(parent, 'Visual Studio Code').dispatchEvent(domEvent('click'));
+		assert.strictEqual(searchInputs(parent).length, 0, 'two profiles need no filter control');
+		assert.strictEqual(profileRadios(parent).length, 2, 'a stale filter must not hide a short list that cannot clear it');
+
+		buttonWithText(parent, 'Back').dispatchEvent(domEvent('click'));
+		buttonWithText(parent, 'Cursor').dispatchEvent(domEvent('click'));
+		assert.strictEqual(inputWithLabel(parent, 'Filter profiles').value, 'Profile 1', 'returning to the same application restores its filter');
+		assert.strictEqual(profileRadios(parent).length, 3);
+	});
+
+	test('resets section, filter and disclosure state for a fresh import and a different operation', () => {
+		const draft = volumeDraft();
+		const review = mutableSession(disposables, volumeReviewState(draft));
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, review.session, () => { }));
+
+		selectSection(parent, 'notImported');
+		assert.strictEqual(activeSection(parent), 'notImported');
+		review.set(presentationState({ phase: 'loading', busy: true }));
+		review.set(volumeReviewState(draft));
+		assert.strictEqual(activeSection(parent), 'settings', 'a fresh import returns to the default section');
+
+		const results = mutableSession(disposables, presentationState({ phase: 'results', operation: volumeOperation() }));
+		const resultsParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(resultsParent, results.session, () => { }));
+		assert.strictEqual(activeSection(resultsParent), 'extensions');
+		selectSection(resultsParent, 'overview');
+		assert.strictEqual(activeSection(resultsParent), 'overview');
+
+		results.set(presentationState({ phase: 'results', operation: { ...volumeOperation(), id: 'a-different-operation' } as EditorMigrationOperation }));
+		assert.strictEqual(activeSection(resultsParent), 'extensions', 'a different durable operation re-derives its default section');
+	});
+
+	test('falls back to the new phase heading when a focused control ends its own phase', () => {
+		const draft = volumeDraft();
+		const plan = reviewedPlanFrom(draft, ['settings', 'keybindings', 'snippets', 'extensions']);
+		const review = mutableSession(disposables, volumeReviewState(draft));
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, review.session, () => { }));
+
+		const continueButton = buttonWithText(parent, 'Continue');
+		continueButton.focus();
+		review.set({ ...volumeReviewState(draft), announcement: 'Import review is ready.' });
+		assert.strictEqual((mainWindow.document.activeElement as HTMLElement)?.dataset.migrationFocusId, 'review-continue', 'an existing focus ID keeps its control focused');
+
+		review.set(presentationState({
+			phase: 'apply', busy: true, reviewedPlan: plan,
+			progress: {
+				operationId: 'operation', revision: 1, stage: 'applying',
+				target: { state: 'attached', profileId: 'work', profileName: 'Work' },
+				selectedItemCount: 460, results: [], cancellationRequested: false, extensionInstallIntents: [],
+			},
+		}));
+		const focused = mainWindow.document.activeElement as HTMLElement;
+		assert.notStrictEqual(focused, mainWindow.document.body, 'focus must not fall to the document body');
+		assert.strictEqual(focused.tagName, 'H2');
+		assert.match(focused.textContent ?? '', /Importing Setup/);
+	});
+
+	test('preserves open disclosures across state-driven rerenders', async () => {
+		const draft = volumeDraft();
+		const session = disposables.add(await reviewSession(draft));
+		const parent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(parent, session, () => { }));
+
+		openDisclosure(parent, 'additions');
+		const single = [...detailPane(parent).getElementsByTagName('input')].find(input => input.getAttribute('aria-label')?.startsWith('Use imported value'));
+		assert.ok(single);
+		single.checked = true;
+		single.dispatchEvent(domEvent('change'));
+		assert.strictEqual(disclosure(parent, 'additions').open, true, 'a conflict choice must not collapse an opened disclosure');
+
+		selectSection(parent, 'extensions');
+		const include = includeCheckbox(parent, 'Include Extensions in this import');
+		include.checked = false;
+		include.dispatchEvent(domEvent('change'));
+		selectSection(parent, 'settings');
+		assert.strictEqual(disclosure(parent, 'additions').open, true, 'a category toggle must not collapse it either');
+
+		const results = mutableSession(disposables, presentationState({ phase: 'results', operation: volumeOperation() }));
+		const resultsParent = testParent(disposables);
+		disposables.add(new EditorMigrationFlowView(resultsParent, results.session, () => { }));
+		openDisclosure(resultsParent, 'completed');
+		results.set(presentationState({ phase: 'results', operation: volumeOperation(), announcement: 'Report copied.' }));
+		assert.strictEqual(disclosure(resultsParent, 'completed').open, true, 'Copy Report must not collapse the success disclosure');
 	});
 
 	test('keeps the review target, ownership and category inclusion controls in the detail header', () => {
@@ -330,7 +467,7 @@ suite('EditorMigrationFlowView', () => {
 		assert.match(include.parentElement?.textContent ?? '', /Include Settings in this import/);
 		assert.match(detailPane(parent).textContent ?? '', /Currently inherited from Default; Hucode will copy it into Work before importing\./);
 		assert.match(footer(parent).textContent ?? '', /Default into Work\./);
-		assert.match(footer(parent).textContent ?? '', /463 items ready to import\. 62 held back\./);
+		assert.match(footer(parent).textContent ?? '', /460 items ready to import\. 3 current values kept\. 62 held back\./);
 		assert.strictEqual([...parent.getElementsByClassName('hucode-editor-migration-section')].filter(node => node.closest('.hucode-editor-migration-index')).length, 5);
 	});
 
@@ -497,7 +634,7 @@ suite('EditorMigrationFlowView', () => {
 		assert.match(detail.textContent ?? '', /139 items were held back during review, grouped by reason\./);
 		const groups = [...detail.getElementsByClassName('hucode-editor-migration-group')].map(group => group.textContent ?? '');
 		assert.strictEqual(groups.length, 2);
-		assert.match(groups[0], /^116Extensions is not included in this import, so none of its source items are imported\.$/);
+		assert.match(groups[0], /^116116 items\.Extensions is not included in this import, so none of its source items are imported\.$/);
 		assert.match(groups[1], /^23Settings — Kept out because these settings are specific to the source machine\./);
 		assert.doesNotMatch(detail.textContent ?? '', /Unavailable from Hucode's extension gallery/);
 	});
@@ -592,6 +729,26 @@ function discoverySession(sources: readonly EditorMigrationSourceDescriptor[]): 
 		{ writeText: async () => { } } as unknown as IClipboardService,
 		new NullLogService(),
 	);
+}
+
+/** A session whose state the test drives directly, to exercise phase and operation transitions. */
+function mutableSession(
+	disposables: ReturnType<typeof ensureNoDisposablesAreLeakedInTestSuite>,
+	initial: EditorMigrationFlowState,
+): { readonly session: EditorMigrationFlowSession; set(next: EditorMigrationFlowState): void } {
+	const emitter = disposables.add(new Emitter<EditorMigrationFlowState>());
+	let current = initial;
+	const session = {
+		get state() { return current; },
+		onDidChangeState: emitter.event,
+	} as unknown as EditorMigrationFlowSession;
+	return {
+		session,
+		set: (next: EditorMigrationFlowState) => {
+			current = next;
+			emitter.fire(next);
+		},
+	};
 }
 
 /** A real session driven through discovery to Review, so control events exercise real state. */
@@ -736,6 +893,30 @@ function volumeDraft(): EditorMigrationPlanDraft {
 	};
 }
 
+/** The volume fixture with twelve Settings differences, enough to render a filter control. */
+function manyConflictsDraft(): EditorMigrationPlanDraft {
+	const base = volumeDraft();
+	const conflicts = Array.from({ length: 12 }, (_, index): EditorMigrationDraftDecision => ({
+		id: `settings:editor.conflict-${index}`,
+		category: 'settings',
+		item: `editor.conflict-${index}`,
+		kind: 'conflict',
+		defaultChoice: 'preserveTarget',
+		source: index + 100,
+		target: index,
+	}));
+	return {
+		...base,
+		source: {
+			...base.source,
+			categories: base.source.categories.map(category => category.category === 'settings'
+				? { ...category, value: Object.fromEntries(Array.from({ length: 246 }, (_, index) => [`setting-${index}`, index])) }
+				: category),
+		},
+		decisions: [...base.decisions.filter(decision => !(decision.category === 'settings' && decision.kind === 'conflict')), ...conflicts],
+	};
+}
+
 function reviewedPlanFrom(draft: EditorMigrationPlanDraft, selectedCategories: readonly ('settings' | 'keybindings' | 'snippets' | 'extensions')[]): EditorMigrationReviewedPlan {
 	return {
 		...draft,
@@ -856,6 +1037,22 @@ function buttonWithText(parent: HTMLElement, text: string): HTMLButtonElement {
 	const button = [...parent.getElementsByTagName('button')].find(candidate => candidate.textContent === text || candidate.textContent?.includes(text));
 	assert.ok(button, `expected a button labeled ${text}`);
 	return button;
+}
+
+function profileRadios(parent: HTMLElement): readonly HTMLInputElement[] {
+	return [...parent.getElementsByTagName('input')].filter(input => input.type === 'radio' && input.name === 'migration-source-profile');
+}
+
+function disclosure(parent: HTMLElement, scopeId: string): HTMLDetailsElement {
+	const details = detailPane(parent).querySelector(`[data-migration-disclosure="${scopeId}"]`);
+	assert.ok(details instanceof HTMLDetailsElement, `expected a ${scopeId} disclosure`);
+	return details;
+}
+
+function openDisclosure(parent: HTMLElement, scopeId: string): void {
+	const details = disclosure(parent, scopeId);
+	details.open = true;
+	details.dispatchEvent(domEvent('toggle'));
 }
 
 function includeCheckbox(parent: HTMLElement, label: string): HTMLInputElement {

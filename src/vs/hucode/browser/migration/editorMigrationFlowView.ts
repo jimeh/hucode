@@ -24,8 +24,10 @@ import {
 	PUBLISHERS_SECTION,
 	RESTORE_SECTION,
 	editorMigrationApplySections,
+	editorMigrationCategoryCounts,
 	editorMigrationDefaultSection,
 	editorMigrationExclusionGroups,
+	editorMigrationImportCounts,
 	editorMigrationNotImportedCount,
 	editorMigrationNotImportedGroups,
 	editorMigrationPlacementGroups,
@@ -63,10 +65,18 @@ export class EditorMigrationFlowView extends Disposable {
 	private readonly rollbackSelections = new Map<string, Set<Exclude<EditorMigrationCategory, 'extensions'>>>();
 	private readonly activeSections = new Map<string, string>();
 	private readonly detailScrollTops = new Map<string, number>();
+	private readonly openDisclosures = new Set<string>();
 	private detail: HTMLElement | undefined;
 	private detailScrollKey: string | undefined;
+	private disclosureScope = '';
+	private indexNav: HTMLElement | undefined;
+	private activeSectionButton: HTMLElement | undefined;
+	private lastPhase: EditorMigrationFlowState['phase'] | undefined;
+	private draftScope: string | undefined;
+	private operationScope: string | undefined;
 	private rowDisposables: DisposableStore | undefined;
 	private initialFocus: HTMLElement | undefined;
+	private phaseHeading: HTMLElement | undefined;
 	private sectionAnnouncement: string | undefined;
 
 	constructor(
@@ -96,7 +106,11 @@ export class EditorMigrationFlowView extends Disposable {
 			? { start: activeElement.selectionStart, end: activeElement.selectionEnd ?? activeElement.selectionStart, direction: activeElement.selectionDirection ?? undefined }
 			: undefined;
 		this.rememberDetailScroll();
+		this.reconcileScopes(state);
 		this.renderDisposables.clear();
+		this.indexNav = undefined;
+		this.activeSectionButton = undefined;
+		this.phaseHeading = undefined;
 		clearNode(this.root);
 		this.root.appendChild(this.header(state));
 		if (state.error) {
@@ -116,17 +130,26 @@ export class EditorMigrationFlowView extends Disposable {
 		body.appendChild(detail);
 		this.root.appendChild(body);
 
+		this.disclosureScope = `${state.phase}:${activeId ?? ''}`;
 		const footer = this.renderPhase(detail, state, activeId);
+		this.phaseHeading = [...detail.children].find((child): child is HTMLElement => isHTMLElement(child) && child.tagName === 'H2');
 		this.root.appendChild(footer);
 		this.restoreDetailScroll(state, activeId, detail);
+		this.revealActiveSection();
 
 		this.status.textContent = [state.announcement, this.sectionAnnouncement].filter(Boolean).join(' ');
 		this.sectionAnnouncement = undefined;
 		if (focusedId) {
 			const restored = findElementByFocusId(this.root, focusedId);
-			restored?.focus();
-			if (selection && isHTMLInputElement(restored)) {
-				restored.setSelectionRange(selection.start, selection.end, selection.direction);
+			if (restored) {
+				restored.focus();
+				if (selection && isHTMLInputElement(restored)) {
+					restored.setSelectionRange(selection.start, selection.end, selection.direction);
+				}
+			} else {
+				// The focused control triggered a transition that removed it. Land on the new
+				// phase's heading rather than dropping keyboard users onto the document body.
+				(this.phaseHeading ?? this.initialFocus)?.focus();
 			}
 		} else {
 			this.initialFocus?.focus();
@@ -202,6 +225,7 @@ export class EditorMigrationFlowView extends Disposable {
 
 	private index(state: EditorMigrationFlowState, sections: readonly EditorMigrationSection[], activeId: string | undefined): HTMLElement {
 		const nav = element('nav', 'hucode-editor-migration-index');
+		this.indexNav = nav;
 		nav.setAttribute('aria-label', localize('editorMigration.index.label', "Import sections"));
 		nav.appendChild(element('div', 'hucode-editor-migration-index-label', phaseLabel(state.phase)));
 		for (const section of sections) {
@@ -215,6 +239,7 @@ export class EditorMigrationFlowView extends Disposable {
 			button.dataset.migrationFocusId = `section-${section.id}`;
 			if (section.id === activeId) {
 				button.setAttribute('aria-current', 'true');
+				this.activeSectionButton = button;
 			}
 			button.append(
 				element('span', 'hucode-editor-migration-section-mark', statusMark(section.status), { 'aria-hidden': 'true' }),
@@ -235,6 +260,72 @@ export class EditorMigrationFlowView extends Disposable {
 		this.activeSections.set(state.phase, section.id);
 		this.sectionAnnouncement = localize('editorMigration.index.showing', "Showing {0}.", section.label);
 		this.render(this.session.state);
+	}
+
+	/**
+	 * View state is scoped to the thing it describes. A fresh import discards all of it; a
+	 * materially different draft or a different durable operation discards only that phase's.
+	 */
+	private reconcileScopes(state: EditorMigrationFlowState): void {
+		if (state.phase === 'loading' && this.lastPhase !== 'loading') {
+			this.resetImportState();
+		}
+		this.lastPhase = state.phase;
+
+		const draftScope = draftScopeKey(state.draft);
+		if (draftScope !== this.draftScope) {
+			this.draftScope = draftScope;
+			this.resetPhaseState('review', 'publishers');
+			for (const id of [...this.filters.keys()]) {
+				if (id.startsWith('conflicts:')) {
+					this.filters.delete(id);
+				}
+			}
+		}
+
+		const operationScope = state.operation?.id ?? state.progress?.operationId;
+		if (operationScope !== this.operationScope) {
+			this.operationScope = operationScope;
+			this.resetPhaseState('apply', 'results');
+		}
+	}
+
+	private resetImportState(): void {
+		this.filters.clear();
+		this.composingFilters.clear();
+		this.virtualListStates.clear();
+		this.activeSections.clear();
+		this.detailScrollTops.clear();
+		this.openDisclosures.clear();
+		this.rollbackSelections.clear();
+		this.draftScope = undefined;
+		this.operationScope = undefined;
+	}
+
+	private resetPhaseState(...phases: readonly string[]): void {
+		for (const phase of phases) {
+			this.activeSections.delete(phase);
+			for (const key of [...this.detailScrollTops.keys()]) {
+				if (key.startsWith(`${phase}:`)) {
+					this.detailScrollTops.delete(key);
+				}
+			}
+			for (const key of [...this.openDisclosures]) {
+				if (key.startsWith(`${phase}:`)) {
+					this.openDisclosures.delete(key);
+				}
+			}
+		}
+	}
+
+	/** Keeps the active topic visible when the narrow layout turns the index into a strip. */
+	private revealActiveSection(): void {
+		const nav = this.indexNav;
+		const button = this.activeSectionButton;
+		if (!nav || !button || nav.scrollWidth <= nav.clientWidth) {
+			return;
+		}
+		button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}
 
 	/** Keeps the detail pane's scroll position across the view's full rerender model. */
@@ -285,10 +376,7 @@ export class EditorMigrationFlowView extends Disposable {
 	private renderApplications(parent: HTMLElement, state: EditorMigrationFlowState): HTMLElement {
 		parent.appendChild(element('h2', undefined, localize('editorMigration.application.title', "Which Application Should Hucode Import From?"), { tabIndex: '-1' }));
 		parent.appendChild(element('p', 'hucode-editor-migration-lead', localize('editorMigration.application.description', "Choose an editor first. You will choose one of its profiles next.")));
-		const filterText = this.filter('applications');
-		if (state.applications.length > FILTER_THRESHOLD) {
-			parent.appendChild(this.filterInput('applications', localize('editorMigration.application.filter', "Filter applications")));
-		}
+		const filterText = this.renderFilter(parent, 'applications', localize('editorMigration.application.filter', "Filter applications"), state.applications.length);
 		const applications = state.applications.filter(application => application.productName.toLowerCase().includes(filterText.toLowerCase()));
 		if (applications.length) {
 			this.virtualList(parent, 'applications', applications, 76, application => application.id, application => application.productName, application => {
@@ -321,10 +409,9 @@ export class EditorMigrationFlowView extends Disposable {
 		if (!application) {
 			return this.footer([], this.button(localize('editorMigration.back', "Back"), () => this.session.back(), 'profile-back'));
 		}
-		const filterText = this.filter('profiles');
-		if (application.profiles.length > FILTER_THRESHOLD) {
-			parent.appendChild(this.filterInput('profiles', localize('editorMigration.profile.filter', "Filter profiles")));
-		}
+		// Scoped per application so a filter cannot leak into a different editor's profile list,
+		// while returning to the same application still restores what the user typed.
+		const filterText = this.renderFilter(parent, `profiles:${application.id}`, localize('editorMigration.profile.filter', "Filter profiles"), application.profiles.length);
 		const profiles = application.profiles.filter(profile => profile.profile.name.toLowerCase().includes(filterText.toLowerCase()));
 		this.virtualList(parent, 'profiles', profiles, 84, source => source.ref.value, source => source.profile.name, source => {
 			const row = element('div', 'hucode-editor-migration-radio-row');
@@ -401,11 +488,11 @@ export class EditorMigrationFlowView extends Disposable {
 			return this.footer([], this.button(localize('editorMigration.back', "Back"), () => this.session.back(), 'review-back'));
 		}
 		this.renderReviewSection(parent, state, draft, activeId, false);
-		const plannedCount = draft.decisions.filter(decision => state.selectedCategories.includes(decision.category)).length;
+		const counts = editorMigrationImportCounts(draft, state.decisions, state.selectedCategories);
 		return this.footer(
 			[
 				localize('editorMigration.review.footerRoute', "{0} into {1}.", draft.source.profile.name, targetDisplayName(draft)),
-				localize('editorMigration.review.footerState', "{0} items ready to import. {1} held back.", plannedCount, editorMigrationNotImportedCount(draft, state.selectedCategories)),
+				localize('editorMigration.review.footerState', "{0} items ready to import. {1} current values kept. {2} held back.", counts.ready, counts.kept, editorMigrationNotImportedCount(draft, state.selectedCategories)),
 			],
 			this.button(localize('editorMigration.back', "Back"), () => this.session.back(), 'review-back'),
 			state.reviewNeedsRebuild
@@ -429,11 +516,12 @@ export class EditorMigrationFlowView extends Disposable {
 		const conflicts = decisions.filter(decision => decision.kind === 'conflict');
 		const additions = decisions.filter(decision => decision.kind === 'add');
 		const available = editorMigrationSourceItemCount(draft, category);
+		const counts = editorMigrationCategoryCounts(draft, state.decisions, category);
 
 		parent.appendChild(element('h2', undefined, CATEGORY_LABELS[category], { tabIndex: '-1' }));
 		parent.appendChild(element('p', 'hucode-editor-migration-lead', conflicts.length
-			? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", decisions.length, available, conflicts.length)
-			: localize('editorMigration.review.lead', "{0} of {1} will be imported.", decisions.length, available)));
+			? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", counts.ready, available, conflicts.length)
+			: localize('editorMigration.review.lead', "{0} of {1} will be imported.", counts.ready, available)));
 
 		if (!readOnly) {
 			const include = element('label', 'hucode-editor-migration-include');
@@ -462,11 +550,7 @@ export class EditorMigrationFlowView extends Disposable {
 				);
 				parent.appendChild(bulk);
 			}
-			const filterId = `conflicts-${category}`;
-			const filterText = this.filter(filterId);
-			if (conflicts.length > FILTER_THRESHOLD) {
-				parent.appendChild(this.filterInput(filterId, localize('editorMigration.review.filterDifferences', "Filter {0} differences", CATEGORY_LABELS[category])));
-			}
+			const filterText = this.renderFilter(parent, `conflicts:${category}`, localize('editorMigration.review.filterDifferences', "Filter {0} differences", CATEGORY_LABELS[category]), conflicts.length);
 			const visible = conflicts.filter(decision => conflictSearchText(decision).toLowerCase().includes(filterText.toLowerCase()));
 			const rows = element('div', 'hucode-editor-migration-conflicts');
 			for (const decision of visible.slice(0, CONFLICT_ROW_LIMIT)) {
@@ -485,7 +569,7 @@ export class EditorMigrationFlowView extends Disposable {
 		}
 
 		if (additions.length) {
-			parent.appendChild(this.disclosure(additionsSummary(category, additions.length), additions.map(decision => decision.item), additionsExplanation(category)));
+			parent.appendChild(this.disclosure('additions', additionsSummary(category, additions.length), additions.map(decision => decision.item), additionsExplanation(category)));
 		}
 
 		const exclusions = editorMigrationExclusionGroups(draft.exclusions, category);
@@ -695,6 +779,7 @@ export class EditorMigrationFlowView extends Disposable {
 		const preserved = operation.plan.choices.decisions.filter(decision => decision.choice === 'preserveTarget');
 		if (preserved.length) {
 			parent.appendChild(this.disclosure(
+				'preserved',
 				localize('editorMigration.results.preserved', "{0} current values were kept during review", preserved.length),
 				preserved.map(decision => preservedDecisionLabel(decision.id)),
 			));
@@ -725,6 +810,7 @@ export class EditorMigrationFlowView extends Disposable {
 		const succeeded = results.filter(result => !isEditorMigrationProblemOutcome(result.outcome));
 		if (succeeded.length) {
 			parent.appendChild(this.disclosure(
+				'completed',
 				localize('editorMigration.results.completed', "{0} completed successfully", succeeded.length),
 				succeeded.map(result => editorMigrationResultLabel(result, operation.plan)),
 				localize('editorMigration.results.completedNote', "Routine successes stay collapsed. Copy the report for the complete record."),
@@ -804,22 +890,28 @@ export class EditorMigrationFlowView extends Disposable {
 		const list = element('div', 'hucode-editor-migration-groups');
 		for (const group of groups) {
 			const row = element('div', 'hucode-editor-migration-group');
-			row.append(
-				element('span', 'hucode-editor-migration-group-count', String(group.count), { 'aria-hidden': 'true' }),
-				element('span', 'hucode-editor-migration-group-title', group.title),
-			);
+			row.appendChild(element('span', 'hucode-editor-migration-group-count', String(group.count), { 'aria-hidden': 'true' }));
 			if (group.items.length) {
-				row.appendChild(this.disclosure(localize('editorMigration.group.show', "Show {0} items", group.items.length), group.items));
+				row.appendChild(element('span', 'hucode-editor-migration-group-title', group.title));
+				row.appendChild(this.disclosure(`group:${group.id}`, localize('editorMigration.group.show', "Show {0} items", group.items.length), group.items));
+			} else {
+				// A group without an item disclosure has no other spoken count, so state it here.
+				row.append(
+					element('span', 'hucode-editor-migration-sr-only', localize('editorMigration.group.count', "{0} items.", group.count)),
+					element('span', 'hucode-editor-migration-group-title', group.title),
+				);
 			}
 			list.appendChild(row);
 		}
 		return list;
 	}
 
-	/** Names stay inside a collapsed disclosure and are truncated instead of nesting a scroll region. */
-	private disclosure(summaryText: string, items: readonly string[], note?: string): HTMLElement {
-		const details = element('details', 'hucode-editor-migration-disclosure');
-		details.appendChild(element('summary', undefined, summaryText));
+	/**
+	 * Names stay inside a collapsed disclosure and are truncated instead of nesting a scroll region.
+	 * `scopeId` gives it a stable identity so a state-driven rerender cannot collapse it again.
+	 */
+	private disclosure(scopeId: string, summaryText: string, items: readonly string[], note?: string): HTMLElement {
+		const details = this.scopedDetails(scopeId, summaryText);
 		const body = element('div', 'hucode-editor-migration-disclosure-body');
 		if (note) {
 			body.appendChild(element('p', undefined, note));
@@ -834,6 +926,19 @@ export class EditorMigrationFlowView extends Disposable {
 			body.appendChild(element('p', undefined, localize('editorMigration.group.more', "and {0} more.", remaining)));
 		}
 		details.appendChild(body);
+		return details;
+	}
+
+	/** A `<details>` whose open state survives the view's full rerender model. */
+	private scopedDetails(scopeId: string, summaryText: string): HTMLDetailsElement {
+		const details = element('details', 'hucode-editor-migration-disclosure');
+		const key = `${this.disclosureScope}:${scopeId}`;
+		details.dataset.migrationDisclosure = scopeId;
+		details.open = this.openDisclosures.has(key);
+		this.addListener(details, 'toggle', () => {
+			details.open ? this.openDisclosures.add(key) : this.openDisclosures.delete(key);
+		});
+		details.appendChild(element('summary', undefined, summaryText));
 		return details;
 	}
 
@@ -856,7 +961,15 @@ export class EditorMigrationFlowView extends Disposable {
 		return list;
 	}
 
-	private filter(id: string): string {
+	/**
+	 * Stored filter text only applies while its control is rendered. Otherwise a filter typed into
+	 * a long list would silently hide a later short list that offers no way to clear it.
+	 */
+	private renderFilter(parent: HTMLElement, id: string, label: string, itemCount: number): string {
+		if (itemCount <= FILTER_THRESHOLD) {
+			return '';
+		}
+		parent.appendChild(this.filterInput(id, label));
 		return this.filters.get(id) ?? '';
 	}
 
@@ -866,7 +979,7 @@ export class EditorMigrationFlowView extends Disposable {
 		input.className = 'hucode-editor-migration-filter';
 		input.placeholder = label;
 		input.setAttribute('aria-label', label);
-		input.value = this.filter(id);
+		input.value = this.filters.get(id) ?? '';
 		input.dataset.migrationFocusId = `filter-${id}`;
 		this.addListener(input, 'compositionstart', () => this.composingFilters.add(id));
 		this.addListener(input, 'compositionend', () => {
@@ -956,8 +1069,7 @@ export class EditorMigrationFlowView extends Disposable {
 	}
 
 	private discoveryDetails(diagnostics: readonly EditorMigrationDiagnostic[]): HTMLElement {
-		const details = element('details', 'hucode-editor-migration-disclosure');
-		details.appendChild(element('summary', undefined, localize('editorMigration.discovery.details', "Discovery Details")));
+		const details = this.scopedDetails('discovery', localize('editorMigration.discovery.details', "Discovery Details"));
 		const list = element('ul', 'hucode-editor-migration-item-names');
 		diagnostics.forEach(diagnostic => list.appendChild(element('li', undefined, diagnosticLabel(diagnostic))));
 		details.appendChild(list);
@@ -965,8 +1077,7 @@ export class EditorMigrationFlowView extends Disposable {
 	}
 
 	private sourceDetails(source: EditorMigrationSourceDescriptor): HTMLElement {
-		const details = element('details', 'hucode-editor-migration-disclosure');
-		details.appendChild(element('summary', undefined, localize('editorMigration.profile.details', "Profile Details")));
+		const details = this.scopedDetails('source-details', localize('editorMigration.profile.details', "Profile Details"));
 		const list = element('ul', 'hucode-editor-migration-item-names');
 		list.append(
 			element('li', undefined, sourceModificationLabel(source.ranking.newestModificationTime)),
@@ -1062,6 +1173,11 @@ function sectionStatusDescription(section: EditorMigrationSection): string {
 		case 'ok': return `${localize('editorMigration.index.ok', "Ready.")} ${count}`.trim();
 		case 'neutral': return count;
 	}
+}
+
+/** Identity of the draft under review. A change here means a materially different review. */
+function draftScopeKey(draft: EditorMigrationPlanDraft | undefined): string | undefined {
+	return draft && `${draft.source.ref.value}|${draft.target.fingerprint}|${draft.draftFingerprintSeed}`;
 }
 
 function targetDisplayName(draft: EditorMigrationPlanDraft): string {

@@ -6,7 +6,7 @@
 import { localize } from '../../../nls.js';
 import { EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 import { EditorMigrationCategory, EditorMigrationJsonValue } from '../../common/migration/editorMigrationSource.js';
-import { EditorMigrationDraftExclusion, EditorMigrationExclusionReason, EditorMigrationPlanDraft, EditorMigrationPlanWarning } from '../../common/migration/editorMigrationPlanning.js';
+import { EditorMigrationDraftDecision, EditorMigrationDraftExclusion, EditorMigrationExclusionReason, EditorMigrationPlanDraft, EditorMigrationPlanWarning } from '../../common/migration/editorMigrationPlanning.js';
 import { EditorMigrationFlowState } from './editorMigrationFlow.js';
 
 export const CATEGORY_LABELS: Readonly<Record<EditorMigrationCategory, string>> = {
@@ -62,6 +62,56 @@ export function editorMigrationWarningCategory(warning: EditorMigrationPlanWarni
 		case 'unavailableThemeExtension': return 'extensions';
 		case 'defaultProfileBacksOmni': return undefined;
 	}
+}
+
+/** The review choices a user has made so far, keyed by stable draft decision ID. */
+export type EditorMigrationDecisionChoices = Readonly<Record<string, 'import' | 'preserveTarget' | undefined>>;
+
+/** What a category or the whole import will actually write, split so the accounting reconciles. */
+export interface EditorMigrationImportCounts {
+	readonly ready: number;
+	readonly kept: number;
+}
+
+/** An unanswered difference still counts as the choice the planner seeded for it. */
+function resolvedChoice(decisions: EditorMigrationDecisionChoices, decision: EditorMigrationDraftDecision): 'import' | 'preserveTarget' {
+	return decisions[decision.id] ?? decision.defaultChoice;
+}
+
+/**
+ * Items one category will import: every addition, plus each difference resolved to the imported
+ * value. Differences kept at their current value are counted separately, never as imports.
+ */
+export function editorMigrationCategoryCounts(
+	draft: EditorMigrationPlanDraft,
+	decisions: EditorMigrationDecisionChoices,
+	category: EditorMigrationCategory,
+): EditorMigrationImportCounts {
+	let ready = 0;
+	let kept = 0;
+	for (const decision of draft.decisions) {
+		if (decision.category !== category) {
+			continue;
+		}
+		if (decision.kind === 'add' || resolvedChoice(decisions, decision) === 'import') {
+			ready += 1;
+		} else {
+			kept += 1;
+		}
+	}
+	return { ready, kept };
+}
+
+/** The same accounting across every selected category. */
+export function editorMigrationImportCounts(
+	draft: EditorMigrationPlanDraft,
+	decisions: EditorMigrationDecisionChoices,
+	selectedCategories: readonly EditorMigrationCategory[],
+): EditorMigrationImportCounts {
+	return selectedCategories.reduce<EditorMigrationImportCounts>((total, category) => {
+		const counts = editorMigrationCategoryCounts(draft, decisions, category);
+		return { ready: total.ready + counts.ready, kept: total.kept + counts.kept };
+	}, { ready: 0, kept: 0 });
 }
 
 /**
@@ -124,7 +174,11 @@ function categorizedExclusionGroups(
 	categories: readonly EditorMigrationCategory[],
 ): readonly EditorMigrationAggregateGroup[] {
 	return sortAggregateGroups(categories.flatMap(category => editorMigrationExclusionGroups(exclusions, category)
-		.map(group => ({ ...group, id: `${category}:${group.id}`, title: `${CATEGORY_LABELS[category]} — ${group.title}` }))));
+		.map(group => ({
+			...group,
+			id: `${category}:${group.id}`,
+			title: localize('editorMigration.notImported.categoryReason', "{0} — {1}", CATEGORY_LABELS[category], group.title),
+		}))));
 }
 
 /** Largest cause first, with a stable tie-break so the order does not drift between renders. */
@@ -150,7 +204,7 @@ export function editorMigrationReviewSections(state: EditorMigrationFlowState): 
 		sections.push({
 			id: category,
 			label: CATEGORY_LABELS[category],
-			count: included ? decisions.length : 0,
+			count: included ? editorMigrationCategoryCounts(draft, state.decisions, category).ready : 0,
 			status: !included ? 'neutral' : conflicts.length || warnings.length ? 'attention' : decisions.length ? 'ok' : 'neutral',
 		});
 	}
