@@ -90,6 +90,27 @@ function rows(count: number): Row[] {
 	return Array.from({ length: count }, (_, index) => ({ id: `row-${index}`, label: `Row ${index}` }));
 }
 
+/** The same harness, with rows that only sometimes carry a control. */
+function ActionableHarness({ items, isActionable }: { readonly items: readonly Row[]; readonly isActionable: (row: Row) => boolean }) {
+	const scrollRef = useRef<HTMLDivElement | null>(null);
+	return (
+		<div ref={scrollRef} data-testid="scroller" style={{ height: `${VIEWPORT_HEIGHT}px`, overflowY: 'auto' }}>
+			<VirtualCollection
+				items={items}
+				itemKey={row => row.id}
+				estimateSize={ROW_HEIGHT}
+				scrollRef={scrollRef}
+				label="Rows"
+				isActionable={isActionable}
+			>
+				{row => isActionable(row)
+					? <button type="button" data-focus-id={row.id}>{row.label}</button>
+					: <span>{row.label}</span>}
+			</VirtualCollection>
+		</div>
+	);
+}
+
 /** Hosts the collection inside one scroller, the way the setup shell does. */
 function Harness({ items, filterable = false }: { readonly items: readonly Row[]; readonly filterable?: boolean }) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -186,6 +207,49 @@ describe('VirtualCollection', () => {
 		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 399'));
 		await user.keyboard('{Home}');
 		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 0'));
+	});
+
+	test('steps over rows that offer nothing to focus, forwards and back', async () => {
+		const user = userEvent.setup();
+		// 60 rows, so the collection virtualizes; only every seventh carries a control, which puts
+		// long runs of evidence-only rows between the actionable ones.
+		const items = rows(60);
+		const actionable = (row: Row) => Number(/\d+/.exec(row.label)![0]) % 7 === 0;
+		render(<ActionableHarness items={items} isActionable={actionable} />);
+		const list = screen.getByRole('list', { name: 'Rows' });
+		const mountedIndexes = () => within(list).getAllByRole('listitem')
+			.map(row => Number(row.getAttribute('data-virtual-index')));
+
+		screen.getByRole('button', { name: 'Row 0' }).focus();
+		await user.keyboard('{ArrowDown}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 7'));
+
+		// Reach an actionable row well past the initial virtual window.
+		await user.keyboard('{End}');
+		await vi.waitFor(() => {
+			expect(document.activeElement).toHaveTextContent('Row 56');
+			expect(mountedIndexes()).toContain(56);
+		});
+
+		await user.keyboard('{ArrowUp}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 49'));
+		await user.keyboard('{Home}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 0'));
+	});
+
+	test('lets Tab leave a list whose remaining rows are all actionless', () => {
+		// Rows 0 and 1 are actionable, nothing after them is. Tab from row 1 must return undefined
+		// so the browser moves focus past the list instead of stalling on an unfocusable row.
+		const actionable = (index: number) => index < 2;
+		expect(nextRowIndex('Tab', false, 0, 60, actionable)).toBe(1);
+		expect(nextRowIndex('Tab', false, 1, 60, actionable)).toBeUndefined();
+		expect(nextRowIndex('ArrowDown', false, 1, 60, actionable)).toBeUndefined();
+		expect(nextRowIndex('Tab', true, 1, 60, actionable)).toBe(0);
+		expect(nextRowIndex('End', false, 0, 60, actionable)).toBe(1);
+		expect(nextRowIndex('Home', false, 1, 60, actionable)).toBe(0);
+		// A collection with no actionable row at all never claims a key.
+		expect(nextRowIndex('ArrowDown', false, 0, 60, () => false)).toBeUndefined();
+		expect(nextRowIndex('End', false, 0, 60, () => false)).toBeUndefined();
 	});
 
 	test('lets focus leave the list at either end rather than trapping it', () => {

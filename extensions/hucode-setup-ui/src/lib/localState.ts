@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type {
 	EditorMigrationSetupFileCategory,
 	EditorMigrationSetupPresentation,
@@ -13,8 +13,10 @@ import type {
  * Presentation state React owns: the active section, filter text, open disclosures, the new-profile
  * draft name, and the rollback category selection. Everything else is authoritative host state.
  *
- * `scopeKey` identifies what the snapshot describes. When it changes the local state is discarded,
- * which is what keeps a filter typed during one review out of a different review.
+ * Every piece is tagged with the snapshot identity it belongs to and resolved during render, not in
+ * a passive effect. An effect would let one frame paint the previous phase's rail and filters
+ * against the new phase's panels, which is how a focused control could vanish after the commit that
+ * was supposed to notice it leaving.
  */
 export interface LocalSetupState {
 	readonly activeSectionId: string | undefined;
@@ -32,108 +34,104 @@ export interface LocalSetupState {
 	toggleRollbackCategory(category: EditorMigrationSetupFileCategory, selected: boolean): void;
 }
 
+/** Local state belonging to one draft or operation, discarded when the snapshot describes another. */
+interface ScopedState {
+	readonly scopeKey: string | undefined;
+	readonly filters: Readonly<Record<string, string>>;
+	readonly openDisclosures: ReadonlySet<string>;
+	readonly newTargetName: string | undefined;
+	/** The rollback option set this selection was made against, so a new set reseeds exactly once. */
+	readonly rollbackOptionsKey: string | undefined;
+	readonly rollbackSelection: ReadonlySet<EditorMigrationSetupFileCategory> | undefined;
+}
+
+const EMPTY_SCOPE: ScopedState = {
+	scopeKey: undefined,
+	filters: {},
+	openDisclosures: new Set(),
+	newTargetName: undefined,
+	rollbackOptionsKey: undefined,
+	rollbackSelection: undefined,
+};
+
 export function useLocalSetupState(presentation: EditorMigrationSetupPresentation | undefined): LocalSetupState {
-	const [activeSectionId, setActiveSectionId] = useState<string | undefined>(undefined);
-	const [filters, setFilters] = useState<Record<string, string>>({});
-	const [openDisclosures, setOpenDisclosures] = useState<ReadonlySet<string>>(() => new Set());
-	const [newTargetName, setNewTargetName] = useState<string | undefined>(undefined);
-	const [rollbackSelection, setRollbackSelection] = useState<ReadonlySet<EditorMigrationSetupFileCategory>>(() => new Set());
+	const [stored, setStored] = useState<ScopedState>(EMPTY_SCOPE);
+	const [section, setSection] = useState<{ readonly phase: string; readonly id: string } | undefined>(undefined);
 	const [announcement, setAnnouncement] = useState<{ readonly revision: number; readonly text: string } | undefined>(undefined);
-	const scopeRef = useRef<string | undefined>(undefined);
-	const phaseRef = useRef<string | undefined>(undefined);
-	const seededRestoreRef = useRef<string | undefined>(undefined);
 
 	const scopeKey = presentation?.scopeKey;
-	useEffect(() => {
-		if (scopeKey === undefined || scopeRef.current === scopeKey) {
-			return;
-		}
-		scopeRef.current = scopeKey;
-		setFilters({});
-		setOpenDisclosures(new Set());
-		setNewTargetName(undefined);
-		setRollbackSelection(new Set());
-		seededRestoreRef.current = undefined;
-	}, [scopeKey]);
+	// Resolved, not reset: a stale tag simply stops contributing, so the very first render of a new
+	// scope already shows empty filters rather than the previous draft's.
+	const scoped = stored.scopeKey === scopeKey ? stored : EMPTY_SCOPE;
+
+	const restoreOptions = useMemo(() => {
+		const panel = presentation?.panels.find(candidate => candidate.kind === 'restore');
+		return panel?.kind === 'restore' ? panel.selection?.options.map(option => option.category) ?? [] : [];
+	}, [presentation]);
+	const restoreKey = restoreOptions.join(',');
 
 	/*
-	 * The active section is scoped to the phase, not to the scope key.
+	 * Rollback defaults to every eligible category and is seeded once per option set. Reseeding
+	 * whenever a snapshot arrives would undo the user's own clearing on the next progress update.
+	 */
+	const rollbackSelection = scoped.rollbackOptionsKey === restoreKey && scoped.rollbackSelection
+		? scoped.rollbackSelection
+		: new Set(restoreOptions);
+
+	/*
+	 * The active section is tagged with the phase, not the scope.
 	 *
 	 * Review and publisher confirmation describe the same draft and deliberately share a scope so
 	 * filters and disclosures survive the transition. They do not share a rail: a category the user
 	 * selected during review would otherwise stay active in publisher confirmation and hide the
 	 * publisher list the footer is asking them to confirm.
 	 */
-	const phase = presentation?.phase;
-	useEffect(() => {
-		if (phase === undefined || phaseRef.current === phase) {
-			return;
-		}
-		phaseRef.current = phase;
-		setActiveSectionId(undefined);
-	}, [phase]);
-
-	/*
-	 * Rollback defaults to every eligible category, seeded once per option set. Reseeding on every
-	 * snapshot would undo the user's own clearing the moment any unrelated progress arrived.
-	 */
-	const restoreOptions = useMemo(() => {
-		const panel = presentation?.panels.find(candidate => candidate.kind === 'restore');
-		return panel?.kind === 'restore' ? panel.selection?.options.map(option => option.category) : undefined;
-	}, [presentation]);
-	const restoreKey = restoreOptions?.join(',');
-	useEffect(() => {
-		if (!restoreOptions?.length || restoreKey === undefined) {
-			return;
-		}
-		if (seededRestoreRef.current === restoreKey) {
-			// The option set is unchanged, so only drop categories the host has stopped offering.
-			setRollbackSelection(previous => {
-				const kept = [...previous].filter(category => restoreOptions.includes(category));
-				return kept.length === previous.size ? previous : new Set(kept);
-			});
-			return;
-		}
-		seededRestoreRef.current = restoreKey;
-		setRollbackSelection(new Set(restoreOptions));
-	}, [restoreKey, restoreOptions]);
-
-	const resolvedSectionId = activeSectionId && presentation?.sections.some(section => section.id === activeSectionId)
-		? activeSectionId
+	const carriedSectionId = presentation && section?.phase === presentation.phase ? section.id : undefined;
+	const activeSectionId = carriedSectionId && presentation?.sections.some(candidate => candidate.id === carriedSectionId)
+		? carriedSectionId
 		: presentation?.defaultSectionId;
 
+	const update = useCallback((change: Partial<ScopedState>) => {
+		setStored(previous => ({
+			...(previous.scopeKey === scopeKey ? previous : EMPTY_SCOPE),
+			scopeKey,
+			...change,
+		}));
+	}, [scopeKey]);
+
 	// Announcing from the click keeps the live region out of render-time side effects. Binding it
-	// to a revision keeps a rail move from riding along with a later host announcement.
+	// to a revision keeps a rail move from outliving the screen it described.
 	const setActiveSection = useCallback((id: string) => {
-		if (id === resolvedSectionId || !presentation) {
+		if (id === activeSectionId || !presentation) {
 			return;
 		}
-		setActiveSectionId(id);
-		const label = presentation.sections.find(section => section.id === id)?.label;
+		setSection({ phase: presentation.phase, id });
+		const label = presentation.sections.find(candidate => candidate.id === id)?.label;
 		setAnnouncement(label
 			? { revision: presentation.revision, text: presentation.sectionAnnouncementTemplate.replace('{0}', label) }
 			: undefined);
-	}, [presentation, resolvedSectionId]);
+	}, [presentation, activeSectionId]);
 
 	return {
-		activeSectionId: resolvedSectionId,
-		filters,
-		openDisclosures,
-		newTargetName,
+		activeSectionId,
+		filters: scoped.filters,
+		openDisclosures: scoped.openDisclosures,
+		newTargetName: scoped.newTargetName,
 		rollbackSelection,
 		sectionAnnouncement: announcement && announcement.revision === presentation?.revision ? announcement.text : undefined,
 		setActiveSection,
-		setFilter: useCallback((id, value) => setFilters(previous => ({ ...previous, [id]: value })), []),
-		toggleDisclosure: useCallback((id, open) => setOpenDisclosures(previous => {
-			const next = new Set(previous);
+		setFilter: useCallback((id, value) => update({ filters: { ...(stored.scopeKey === scopeKey ? stored.filters : {}), [id]: value } }), [update, stored, scopeKey]),
+		toggleDisclosure: useCallback((id, open) => {
+			const current = stored.scopeKey === scopeKey ? stored.openDisclosures : EMPTY_SCOPE.openDisclosures;
+			const next = new Set(current);
 			open ? next.add(id) : next.delete(id);
-			return next;
-		}), []),
-		setNewTargetName,
-		toggleRollbackCategory: useCallback((category, selected) => setRollbackSelection(previous => {
-			const next = new Set(previous);
+			update({ openDisclosures: next });
+		}, [update, stored, scopeKey]),
+		setNewTargetName: useCallback(value => update({ newTargetName: value }), [update]),
+		toggleRollbackCategory: useCallback((category, selected) => {
+			const next = new Set(rollbackSelection);
 			selected ? next.add(category) : next.delete(category);
-			return next;
-		}), []),
+			update({ rollbackOptionsKey: restoreKey, rollbackSelection: next });
+		}, [update, rollbackSelection, restoreKey]),
 	};
 }

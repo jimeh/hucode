@@ -29,6 +29,7 @@ describe('setup stylesheet', () => {
 
 	test('reintroduces focus only for keyboard interaction', () => {
 		expect(entry).toMatch(/:focus-visible \{\s*\n\toutline: 2px solid var\(--hucode-ring\)/);
+		expect(entry).toMatch(/\[data-panel-heading\]:focus,\s*\n\[data-panel-heading\]:focus-visible \{\s*\n\toutline: none;/);
 		// Every plain `:focus` rule must clear the platform outline; only `:focus-visible` draws one.
 		const focusRules = [...entry.matchAll(/((?:^[^@\n{]*:focus,\s*\n)*^[^@\n{]*:focus) \{([^}]*)\}/gm)];
 		expect(focusRules.length).toBeGreaterThan(0);

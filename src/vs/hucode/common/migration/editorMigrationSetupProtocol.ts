@@ -102,12 +102,50 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	'selectTarget',
 	'toggleCategory',
 	'chooseDecision',
+	// The phase-advancing and bulk actions name no identifier, but they still describe one exact
+	// snapshot. A second click landing after the first has already advanced the phase would
+	// otherwise start a second import or re-answer decisions the reviewed plan already froze.
+	'chooseAllSettingDifferences',
+	'acceptReview',
+	'confirmPublishers',
+	'rebuildReview',
 	'showRecovery',
 	'resume',
 	'retry',
 	'inspectRollback',
 	'rollback',
 ];
+
+/**
+ * Phase each intent may act in, for the intents whose effect depends on it.
+ *
+ * Every listed intent also requires an idle session: `busy` means the previous one is still
+ * running, and admitting a duplicate would either start a second operation or cancel the first.
+ * Intents absent from this table are legal in any phase.
+ */
+export const EDITOR_MIGRATION_SETUP_INTENT_PHASES: Readonly<Partial<Record<EditorMigrationSetupIntentType, EditorMigrationSetupPhase>>> = {
+	toggleCategory: 'review',
+	chooseDecision: 'review',
+	chooseAllSettingDifferences: 'review',
+	rebuildReview: 'review',
+	acceptReview: 'review',
+	confirmPublishers: 'publishers',
+};
+
+/**
+ * Whether the authoritative state admits the intent.
+ *
+ * A refusal here means the user is looking at a screen the session has already left behind, which
+ * is a different thing from naming something that never existed.
+ */
+export function editorMigrationSetupPhaseAdmits(
+	type: EditorMigrationSetupIntentType,
+	phase: EditorMigrationSetupPhase,
+	busy: boolean,
+): boolean {
+	const required = EDITOR_MIGRATION_SETUP_INTENT_PHASES[type];
+	return required === undefined || (required === phase && !busy);
+}
 
 /** Envelope the renderer posts. `revision` is the snapshot the user was looking at. */
 export interface EditorMigrationSetupIntentMessage {
@@ -453,6 +491,44 @@ export function isEditorMigrationSetupRevisionBound(type: EditorMigrationSetupIn
 	return EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS.includes(type);
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.every(entry => typeof entry === 'string');
+}
+
+/** Every array member is an object carrying the named string keys. */
+function isRecordArrayWith(value: unknown, keys: readonly string[]): boolean {
+	return Array.isArray(value) && value.every(entry => isRecord(entry) && keys.every(key => typeof entry[key] === 'string'));
+}
+
+/**
+ * Structural check of a presentation snapshot at the trust boundary.
+ *
+ * The renderer reads these fields without guarding each one, so a payload that merely looks like an
+ * object would crash it on the first access. This checks the shape the renderer actually depends
+ * on rather than re-describing the whole DTO: a wrong `count` is a bug, an absent `panels` array is
+ * a crash.
+ */
+export function isEditorMigrationSetupPresentation(value: unknown): value is EditorMigrationSetupPresentation {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return typeof value.revision === 'number'
+		&& isNonEmptyString(value.phase)
+		&& typeof value.regionLabel === 'string'
+		&& typeof value.title === 'string'
+		&& typeof value.scopeKey === 'string'
+		&& typeof value.sectionAnnouncementTemplate === 'string'
+		&& typeof value.busy === 'boolean'
+		&& typeof value.canceling === 'boolean'
+		&& isRecordArrayWith(value.steps, ['id', 'label'])
+		&& isRecordArrayWith(value.sections, ['id', 'label', 'status', 'statusDescription'])
+		&& isRecordArrayWith(value.panels, ['kind', 'id'])
+		&& isRecord(value.footer)
+		&& isStringArray(value.footer.lines)
+		&& isRecordArrayWith(value.footer.actions, ['id', 'label', 'kind'])
+		&& (value.footer.actions as readonly Record<string, unknown>[]).every(action => isRecord(action.intent) && isNonEmptyString(action.intent.type));
+}
+
 /** Parses one host message. The renderer refuses anything else, including a foreign version. */
 export function parseEditorMigrationSetupHostMessage(value: unknown): EditorMigrationSetupHostMessage | undefined {
 	if (!isRecord(value) || value.protocolVersion !== EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION) {
@@ -460,7 +536,7 @@ export function parseEditorMigrationSetupHostMessage(value: unknown): EditorMigr
 	}
 	switch (value.type) {
 		case 'state':
-			return typeof value.revision === 'number' && isRecord(value.presentation)
+			return typeof value.revision === 'number' && isEditorMigrationSetupPresentation(value.presentation)
 				? value as unknown as EditorMigrationSetupHostMessage
 				: undefined;
 		case 'accepted':

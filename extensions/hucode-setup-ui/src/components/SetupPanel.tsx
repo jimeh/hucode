@@ -103,6 +103,9 @@ function RecoveryPanel({ panel, local, scrollRef, send }: SetupPanelProps & { re
 				label={panel.listLabel}
 				className="gap-2"
 				itemClassName="pb-2"
+				// A record from an unsupported schema version is evidence only; it offers no action
+				// for keyboard travel to land on.
+				isActionable={record => record.action !== undefined}
 			>
 				{record => (
 					<div className="border-border bg-card flex items-start justify-between gap-3 rounded-md border px-3 py-2.5">

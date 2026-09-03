@@ -26,34 +26,47 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 	const presentation = state.presentation;
 	const local = useLocalSetupState(presentation);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
-	const headingRef = useRef<HTMLElement | null>(null);
-	const focusedIdRef = useRef<string | undefined>(undefined);
-	const announcement = [presentation?.announcement, local.sectionAnnouncement].filter(Boolean).join(' ');
+	const focusedElementRef = useRef<HTMLElement | undefined>(undefined);
 
 	const send = (intent: EditorMigrationSetupIntent) => host.send(intent);
 
-	// Track the focused control by its stable ID so a snapshot can restore it, or fall back to the
-	// phase heading when a transition removes it.
+	// Remember the node itself, not just its identifier. Two panels can offer the same stable id —
+	// every panel has a heading — so the presence of a matching element proves nothing about
+	// whether the element that actually held focus survived.
 	useEffect(() => {
 		const onFocusIn = (event: FocusEvent) => {
-			const target = (event.target as HTMLElement | null)?.closest('[data-focus-id]');
-			focusedIdRef.current = target?.getAttribute('data-focus-id') ?? undefined;
+			const target = event.target as HTMLElement | null;
+			focusedElementRef.current = target?.closest<HTMLElement>('[data-focus-id]') ?? undefined;
 		};
 		document.addEventListener('focusin', onFocusIn);
 		return () => document.removeEventListener('focusin', onFocusIn);
 	}, []);
 
 	const revision = presentation?.revision;
+	// Keyed on the resolved panel as well as the revision: a rail move or a phase-driven section
+	// change swaps the detail pane without a new snapshot, and that is exactly when the control
+	// holding focus disappears.
+	const resolvedPanelId = presentation ? local.activeSectionId ?? '' : undefined;
 	useLayoutEffect(() => {
 		if (revision === undefined) {
 			return;
 		}
-		const focusId = focusedIdRef.current;
-		if (!focusId || document.querySelector(`[data-focus-id="${CSS.escape(focusId)}"]`)) {
+		const previous = focusedElementRef.current;
+		if (!previous || previous.isConnected) {
+			// Either focus never entered the view, or the element that had it is still here. A user
+			// who deliberately clicked away must not have focus dragged back.
 			return;
 		}
-		headingRef.current?.focus();
-	}, [revision]);
+		const active = document.activeElement;
+		if (active && active !== document.body && active !== document.documentElement) {
+			return;
+		}
+		// The transition removed the focused control and left focus on the document body. Land on
+		// the current panel heading so keyboard and screen-reader users stay inside the flow.
+		const heading = scrollRef.current?.querySelector<HTMLElement>('[data-panel-heading]');
+		heading?.focus();
+		focusedElementRef.current = heading ?? undefined;
+	}, [revision, resolvedPanelId]);
 
 	/*
 	 * The host asks for a landing point once the renderer has its first snapshot.
@@ -66,11 +79,12 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 		if (!focusRequest) {
 			return;
 		}
-		if (focusRequest.focusId === EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID) {
-			headingRef.current?.focus();
-			return;
-		}
-		document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusRequest.focusId)}"]`)?.focus();
+		const target = focusRequest.focusId === EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID
+			? scrollRef.current?.querySelector<HTMLElement>('[data-panel-heading]')
+			: document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusRequest.focusId)}"]`);
+		target?.focus();
+		// Record it, so a later transition that removes this landing point is recognised as a loss.
+		focusedElementRef.current = target ?? undefined;
 	}, [focusRequest]);
 
 	// The scroll position belongs to the section being read, not to the phase.
@@ -167,20 +181,14 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 				</div>
 			</footer>
 
-			<div className="hucode-sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
-			<HeadingBinder containerRef={scrollRef} headingRef={headingRef} revision={presentation.revision} />
+			{/* Two regions: sharing one made a rail move rewrite the whole string, which had a screen
+			reader repeat the host's unchanged migration announcement alongside it. */}
+			<div data-live-region="migration" className="hucode-sr-only" role="status" aria-live="polite" aria-atomic="true">
+				{presentation.announcement ?? ''}
+			</div>
+			<div data-live-region="navigation" className="hucode-sr-only" role="status" aria-live="polite" aria-atomic="true">
+				{local.sectionAnnouncement ?? ''}
+			</div>
 		</div>
 	);
-}
-
-/** Keeps a handle on the current panel heading so focus can land there after a transition. */
-function HeadingBinder({ containerRef, headingRef, revision }: {
-	readonly containerRef: React.RefObject<HTMLElement | null>;
-	readonly headingRef: React.MutableRefObject<HTMLElement | null>;
-	readonly revision: number;
-}) {
-	useLayoutEffect(() => {
-		headingRef.current = containerRef.current?.querySelector('[data-panel-heading]') ?? null;
-	}, [containerRef, headingRef, revision]);
-	return null;
 }

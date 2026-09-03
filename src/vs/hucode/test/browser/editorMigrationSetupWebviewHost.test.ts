@@ -379,6 +379,90 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.deepStrictEqual(session.calls, [], 'host disposal alone is not a close of the import');
 	});
 
+	test('starts one import for a rapid duplicate publisher confirmation and cancels nothing', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'publishers', publishers: ['acme'] });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const shownRevision = webview.posted.find(message => message.type === 'state').revision;
+
+		// The first click is admitted, and the session immediately reports the phase it moved to.
+		send(webview, shownRevision, { type: 'confirmPublishers' });
+		assert.deepStrictEqual(session.calls, [['confirmPublishers']]);
+		session.publish({ phase: 'apply', busy: true, progress: progress('applying', 0) });
+
+		// The second click was formed against the screen the user was still looking at.
+		webview.posted.length = 0;
+		send(webview, shownRevision, { type: 'confirmPublishers' });
+
+		assert.deepStrictEqual(session.calls, [['confirmPublishers']], 'only one import may start');
+		assert.ok(!session.calls.some(call => call[0] === 'requestCancellation'), 'the duplicate must not cancel the first generation');
+		// A superseded duplicate is answered with the current screen and no error: the phase change
+		// is the whole explanation, and an alert would only be noise.
+		assert.deepStrictEqual(webview.posted.map(message => message.type), ['state']);
+		assert.strictEqual(webview.posted[0].presentation.phase, 'apply');
+	});
+
+	test('refuses phase-advancing and bulk actions the session has already moved past', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'publishers' });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const currentRevision = () => webview.posted.filter(message => message.type === 'state').at(-1)!.revision;
+
+		// Review is behind us: neither accepting it again nor rewriting its decisions is legal.
+		send(webview, currentRevision(), { type: 'acceptReview' });
+		send(webview, currentRevision(), { type: 'chooseAllSettingDifferences', choice: 'import' });
+		send(webview, currentRevision(), { type: 'rebuildReview' });
+		assert.deepStrictEqual(session.calls, []);
+
+		// Confirming publishers is the one phase-advancing action this screen offers.
+		send(webview, currentRevision(), { type: 'confirmPublishers' });
+		assert.deepStrictEqual(session.calls, [['confirmPublishers']]);
+	});
+
+	test('refuses an accepted review while the session is still working', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'review', busy: true });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = webview.posted.find(message => message.type === 'state').revision;
+
+		send(webview, revision, { type: 'acceptReview' });
+		assert.deepStrictEqual(session.calls, [], 'a busy session admits no second review acceptance');
+
+		session.publish({ busy: false });
+		send(webview, webview.posted.filter(message => message.type === 'state').at(-1)!.revision, { type: 'acceptReview' });
+		assert.deepStrictEqual(session.calls, [['acceptReview']]);
+	});
+
 	test('classifies only Apply progress and its announcement as coalescable', () => {
 		const base = flowState({ phase: 'apply', progress: progress('applying', 1) });
 		assert.strictEqual(isProgressOnlyChange(base, { ...base, progress: progress('applying', 2), announcement: '2 of 10' }), true);

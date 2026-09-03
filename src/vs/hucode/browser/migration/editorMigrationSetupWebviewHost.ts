@@ -18,6 +18,7 @@ import {
 	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
 	EditorMigrationSetupHostMessage,
 	EditorMigrationSetupIntent,
+	editorMigrationSetupPhaseAdmits,
 	isEditorMigrationSetupRevisionBound,
 	parseEditorMigrationSetupIntentMessage,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
@@ -276,6 +277,20 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		}
 		if (intent.type === 'close') {
 			this.options.onDone();
+			return;
+		}
+		/*
+		 * A gesture the session has already moved past is a duplicate, not a mistake.
+		 *
+		 * Rapidly confirming publishers twice is the case that matters: the first click starts the
+		 * import, and the second must neither start a second one nor cancel the first. Answering it
+		 * with the current snapshot and no error keeps the user on the screen they are already
+		 * looking at, because the phase change is the explanation.
+		 */
+		const state = this.session.state;
+		if (!editorMigrationSetupPhaseAdmits(intent.type, state.phase, state.busy)) {
+			this.logService.trace(`[hucode] setup webview intent superseded: ${intent.type} in phase ${state.phase}.`);
+			this.deliver(state, true);
 			return;
 		}
 		if (isEditorMigrationSetupRevisionBound(intent.type) && message.revision !== this.revision) {

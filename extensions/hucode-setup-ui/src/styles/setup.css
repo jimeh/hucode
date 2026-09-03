@@ -163,6 +163,16 @@ textarea:focus {
 	border-radius: 3px;
 }
 
+/*
+ * Phase changes move accessibility focus to the detail heading so a screen reader announces the
+ * new context. The heading is not interactive, and drawing a full-width ring around it reads as a
+ * stray divider rather than a focus cue. Interactive controls retain the rule above.
+ */
+[data-panel-heading]:focus,
+[data-panel-heading]:focus-visible {
+	outline: none;
+}
+
 code {
 	font-family: var(--hucode-font-mono);
 	background-color: transparent;

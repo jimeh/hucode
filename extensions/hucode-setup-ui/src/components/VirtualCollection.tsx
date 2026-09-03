@@ -26,6 +26,14 @@ export interface VirtualCollectionProps<T> {
 	readonly label?: string;
 	readonly className?: string;
 	readonly itemClassName?: string;
+	/**
+	 * Whether a row offers anything to focus.
+	 *
+	 * Some rows are pure evidence — a recovery record from an unsupported schema version has text
+	 * and no control. Keyboard traversal has to step over those rather than stall on them, and only
+	 * the caller knows which rows they are without mounting every one to look.
+	 */
+	readonly isActionable?: (item: T) => boolean;
 }
 
 /**
@@ -43,21 +51,40 @@ function rowIndexOf(target: EventTarget | null): number | undefined {
 }
 
 /**
- * The row a key press should move to, or `undefined` when the key is not ours.
+ * The row a key press should move to, or `undefined` when the key is not ours or nothing lies
+ * that way.
  *
- * Tab at either end is deliberately left alone so focus can leave the list, which is what makes
- * the list traversable rather than a trap.
+ * Rows without a control are stepped over, so a run of evidence-only records cannot swallow the
+ * caret. Returning `undefined` at either end is what lets Tab leave the list naturally instead of
+ * trapping focus inside it.
  */
-export function nextRowIndex(key: string, shiftKey: boolean, current: number, count: number): number | undefined {
-	switch (key) {
-		case 'ArrowDown': return current + 1 < count ? current + 1 : undefined;
-		case 'ArrowUp': return current > 0 ? current - 1 : undefined;
-		case 'Home': return current === 0 ? undefined : 0;
-		case 'End': return current === count - 1 ? undefined : count - 1;
-		case 'Tab': {
-			const target = shiftKey ? current - 1 : current + 1;
-			return target >= 0 && target < count ? target : undefined;
+export function nextRowIndex(
+	key: string,
+	shiftKey: boolean,
+	current: number,
+	count: number,
+	isActionable: (index: number) => boolean = () => true,
+): number | undefined {
+	const scan = (from: number, step: number): number | undefined => {
+		for (let index = from; index >= 0 && index < count; index += step) {
+			if (isActionable(index)) {
+				return index;
+			}
 		}
+		return undefined;
+	};
+	switch (key) {
+		case 'ArrowDown': return scan(current + 1, 1);
+		case 'ArrowUp': return scan(current - 1, -1);
+		case 'Home': {
+			const target = scan(0, 1);
+			return target === undefined || target === current ? undefined : target;
+		}
+		case 'End': {
+			const target = scan(count - 1, -1);
+			return target === undefined || target === current ? undefined : target;
+		}
+		case 'Tab': return scan(shiftKey ? current - 1 : current + 1, shiftKey ? -1 : 1);
 		default: return undefined;
 	}
 }
@@ -76,7 +103,7 @@ function firstFocusable(row: Element | null | undefined): HTMLElement | undefine
 }
 
 export function VirtualCollection<T>({
-	items, itemKey, estimateSize, children, scrollRef, label, className, itemClassName,
+	items, itemKey, estimateSize, children, scrollRef, label, className, itemClassName, isActionable,
 }: VirtualCollectionProps<T>) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const [offset, setOffset] = useState(0);
@@ -160,6 +187,8 @@ export function VirtualCollection<T>({
 		}
 	}, [pendingFocus, mountedRows]);
 
+	const actionableAt = useCallback((index: number) => !isActionable || isActionable(items[index]), [isActionable, items]);
+
 	const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
 		// A composite child such as a radio group handles its own arrow keys first.
 		if (event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey) {
@@ -169,7 +198,7 @@ export function VirtualCollection<T>({
 		if (current === undefined) {
 			return;
 		}
-		const target = nextRowIndex(event.key, event.shiftKey, current, items.length);
+		const target = nextRowIndex(event.key, event.shiftKey, current, items.length, actionableAt);
 		if (target === undefined) {
 			return;
 		}
@@ -183,7 +212,7 @@ export function VirtualCollection<T>({
 		event.preventDefault();
 		event.stopPropagation();
 		requestRowFocus(target);
-	}, [items.length, requestRowFocus]);
+	}, [items.length, actionableAt, requestRowFocus]);
 
 	if (!virtualize) {
 		return (

@@ -16,6 +16,13 @@ import {
 
 afterEach(cleanup);
 
+/** The two polite regions are distinguished by what makes them change, not by an accessible name. */
+function liveRegion(kind: 'migration' | 'navigation'): HTMLElement {
+	const region = document.querySelector<HTMLElement>(`[data-live-region="${kind}"]`);
+	expect(region, `expected a ${kind} live region`).not.toBeNull();
+	return region!;
+}
+
 function intents(sent: readonly unknown[]): EditorMigrationSetupIntent[] {
 	return sent.map(message => (message as { intent: EditorMigrationSetupIntent }).intent);
 }
@@ -118,7 +125,8 @@ describe('SetupShell', () => {
 
 		await user.click(within(rail).getByRole('button', { name: /Not Imported/ }));
 		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Not Imported');
-		expect(screen.getByRole('status')).toHaveTextContent('Showing Not Imported.');
+		expect(liveRegion('navigation')).toHaveTextContent('Showing Not Imported.');
+		expect(liveRegion('migration')).toHaveTextContent('');
 	});
 
 	test('freezes conflict choices when the host withholds them', async () => {
@@ -170,7 +178,7 @@ describe('SetupShell', () => {
 		await act(async () => publish(presentation({ revision: 2, error: 'The source changed while Hucode was reading it.' })));
 
 		expect(screen.getByRole('alert')).toHaveTextContent('The source changed while Hucode was reading it.');
-		expect(screen.getByRole('status')).toHaveTextContent('');
+		expect(liveRegion('migration')).toHaveTextContent('');
 	});
 
 	test('lands focus on the new phase heading when a snapshot removes the focused control', async () => {
@@ -329,12 +337,15 @@ describe('SetupShell', () => {
 		const { publish, user } = await mount(review);
 
 		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Not Imported/ }));
-		expect(screen.getByRole('status')).toHaveTextContent('Showing Not Imported.');
+		expect(liveRegion('navigation')).toHaveTextContent('Showing Not Imported.');
+		// The rail move must not have written anything into the migration region.
+		expect(liveRegion('migration')).toHaveTextContent('');
 
 		await act(async () => publish({ ...review, revision: 2, announcement: 'Importing selected items. 4 of 10 items recorded.' }));
 
-		expect(screen.getByRole('status')).toHaveTextContent('Importing selected items. 4 of 10 items recorded.');
-		expect(screen.getByRole('status').textContent).not.toMatch(/Showing/);
+		expect(liveRegion('migration')).toHaveTextContent('Importing selected items. 4 of 10 items recorded.');
+		expect(liveRegion('navigation')).toHaveTextContent('');
+		expect(liveRegion('migration').textContent).not.toMatch(/Showing/);
 	});
 
 	test('surfaces a refused gesture as an alert alongside the refreshed state', async () => {
@@ -351,6 +362,142 @@ describe('SetupShell', () => {
 		});
 
 		expect(screen.getByRole('alert')).toHaveTextContent('That choice is no longer available.');
+	});
+
+	test('lands on the Publishers heading when the transition removes the focused Review control', async () => {
+		const scopeKey = 'review|draft-1|';
+		const review = presentation({
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel(), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(review);
+
+		// A control that exists only while review is editable.
+		const include = screen.getByRole('checkbox', { name: 'Include Settings in this import' });
+		await user.click(include);
+		expect(document.activeElement).toBe(include);
+
+		await act(async () => publish(presentation({
+			revision: 2,
+			phase: 'publishers',
+			scopeKey,
+			sections: [...REVIEW_SECTIONS, { id: 'publishers', label: 'Publishers', status: 'attention', count: 1, separated: true, statusDescription: 'Needs attention. 1 items.' }],
+			defaultSectionId: 'publishers',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [
+				reviewCategoryPanel({ include: undefined, bulkActions: undefined, conflicts: [] }),
+				NOT_IMPORTED_PANEL,
+				{ kind: 'groups', id: 'publishers', heading: 'Confirm Extension Publishers', lead: 'These publishers provide extensions in the reviewed import.', groups: [] },
+			],
+		})));
+
+		expect(include.isConnected).toBe(false);
+		const heading = screen.getByRole('heading', { level: 2 });
+		expect(heading).toHaveTextContent('Confirm Extension Publishers');
+		expect(document.activeElement).toBe(heading);
+	});
+
+	test('recovers focus when a phase change unmounts the heading that a focus request had landed on', async () => {
+		const { publish, deliverHostMessage } = await mount(presentation({
+			phase: 'loading',
+			panels: [{ kind: 'loading', id: '', heading: 'Looking for editor profiles...', progress: { text: 'Reading supported local editor installations.', min: 0, max: 1, now: 0 } }],
+			footer: { lines: [], actions: [] },
+		}));
+
+		await act(async () => deliverHostMessage({
+			protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+			type: 'focus',
+			revision: 1,
+			focusId: EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+		}));
+		const loadingHeading = screen.getByRole('heading', { level: 2 });
+		expect(document.activeElement).toBe(loadingHeading);
+
+		// Both panels expose the same `panel-heading` id, so element presence alone would wrongly
+		// read as retained focus even though the node that had it has gone.
+		await act(async () => publish(presentation({ revision: 2, phase: 'application' })));
+
+		expect(loadingHeading.isConnected).toBe(false);
+		const applicationsHeading = screen.getByRole('heading', { level: 2 });
+		expect(applicationsHeading).toHaveTextContent('Which Application Should Hucode Import From?');
+		expect(document.activeElement).toBe(applicationsHeading);
+	});
+
+	test('leaves a deliberate blur alone instead of dragging focus back', async () => {
+		const { publish, user } = await mount();
+		const refresh = screen.getByRole('button', { name: 'Refresh' });
+		await user.click(refresh);
+		refresh.blur();
+		expect(document.activeElement).toBe(document.body);
+
+		await act(async () => publish(presentation({ revision: 2 })));
+
+		// The control the user left is still on screen, so nothing was lost and nothing is restored.
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	test('does not repeat an unchanged migration announcement when the rail moves', async () => {
+		const review = presentation({
+			phase: 'review',
+			announcement: 'Review rebuilt against the current target.',
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel(), NOT_IMPORTED_PANEL],
+		});
+		const { user } = await mount(review);
+		expect(liveRegion('migration')).toHaveTextContent('Review rebuilt against the current target.');
+
+		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Not Imported/ }));
+
+		// The migration region's text is untouched, so no assistive technology re-reads it; only the
+		// navigation region changed.
+		expect(liveRegion('migration')).toHaveTextContent('Review rebuilt against the current target.');
+		expect(liveRegion('navigation')).toHaveTextContent('Showing Not Imported.');
+	});
+
+	test('shows the new phase rail and panel in the first committed frame', async () => {
+		const scopeKey = 'review|draft-1|';
+		const review = presentation({
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel({ conflicts: manyConflicts() }), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(review);
+		await user.type(screen.getByLabelText('Filter Settings differences'), 'conflict-3');
+		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Not Imported/ }));
+
+		// A synchronous render, with no effects flushed, must already show the publishers panel.
+		const publishers = presentation({
+			revision: 2,
+			phase: 'publishers',
+			scopeKey,
+			sections: [...REVIEW_SECTIONS, { id: 'publishers', label: 'Publishers', status: 'attention', count: 1, separated: true, statusDescription: 'Needs attention. 1 items.' }],
+			defaultSectionId: 'publishers',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [
+				reviewCategoryPanel({ include: undefined, bulkActions: undefined, conflicts: manyConflicts() }),
+				NOT_IMPORTED_PANEL,
+				{ kind: 'groups', id: 'publishers', heading: 'Confirm Extension Publishers', lead: 'These publishers provide extensions in the reviewed import.', groups: [] },
+			],
+		});
+		act(() => publish(publishers));
+
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Confirm Extension Publishers');
+		const rail = screen.getByRole('navigation', { name: 'Import sections' });
+		expect(within(rail).getByRole('button', { name: /Publishers/ })).toHaveAttribute('aria-current', 'true');
 	});
 
 	test('discards local filter state when the presentation scope changes', async () => {
