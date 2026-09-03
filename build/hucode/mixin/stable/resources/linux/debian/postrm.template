@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) Hucode contributors. All rights reserved.
+# Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+
+set -e
+
+command_path='/usr/bin/@@NAME@@'
+command_target='/usr/share/@@NAME@@/bin/@@NAME@@'
+
+if [ -L "$command_path" ]; then
+	existing_target=$(readlink "$command_path")
+	if [ "$existing_target" = "$command_target" ]; then
+		rm -f "$command_path"
+	fi
+fi
+
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database || true
+fi
+
+if hash update-mime-database 2>/dev/null; then
+	update-mime-database /usr/share/mime || true
+fi
