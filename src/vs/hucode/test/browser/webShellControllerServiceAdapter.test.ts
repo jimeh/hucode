@@ -89,7 +89,7 @@ suite('WebShellControllerServiceAdapter', () => {
 				await adapter.prepareWorkspaceForStandaloneOpen({
 					folderUri: URI.parse('https://example.test/repo').toJSON(),
 				}),
-				false
+				'failed'
 			);
 			assert.deepStrictEqual(calls, []);
 		}

@@ -71,6 +71,54 @@ suite('ProjectSwitcherTreeModel', () => {
 		);
 	});
 
+	test('maps external desktop ownership to restrained row indicators', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [createProject({
+				id: 'project',
+				worktrees: [
+					createWorktree('/repos/other-omni'),
+					createWorktree('/repos/regular'),
+				],
+			})],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				desktopOwnerships: [{
+					worktreePath: '/repos/other-omni',
+					location: 'another-omni',
+					windowId: 2,
+					instanceId: 'other-instance',
+					phase: 'live',
+				}, {
+					worktreePath: '/repos/regular',
+					location: 'regular',
+					windowId: 3,
+					phase: 'live',
+				}],
+			},
+		});
+
+		const otherOmni = getWorktree(model.roots, '/repos/other-omni');
+		const regular = getWorktree(model.roots, '/repos/regular');
+		assert.deepStrictEqual({
+			otherLocation: otherOmni.desktopOwnershipLocation,
+			otherIcon: otherOmni.themeIcon?.id,
+			otherTooltip: otherOmni.tooltip,
+			regularLocation: regular.desktopOwnershipLocation,
+			regularIcon: regular.themeIcon?.id,
+			regularTooltip: regular.tooltip,
+		}, {
+			otherLocation: 'another-omni',
+			otherIcon: 'window',
+			otherTooltip: '/repos/other-omni\nOpen in another Omni window',
+			regularLocation: 'regular',
+			regularIcon: 'window',
+			regularTooltip: '/repos/regular\nOpen in a regular window',
+		});
+	});
+
 	test('ignores transient section collapse changes during tree sync', () => {
 		const collapsedSections = new Set(['section:workbenches']);
 
@@ -174,6 +222,12 @@ suite('ProjectSwitcherTreeModel', () => {
 				folderStatus: 'missing',
 				order: 3,
 			}],
+			desktopOwnerships: [{
+				worktreePath: '/scratch/missing',
+				location: 'regular',
+				windowId: 2,
+				phase: 'live',
+			}],
 		};
 		const model = buildProjectSwitcherTreeModel({
 			projects: [createProject({
@@ -194,24 +248,28 @@ suite('ProjectSwitcherTreeModel', () => {
 			hasCustomLabel: item.hasCustomLabel,
 			state: item.hostedWorkbenchState,
 			isActive: item.isActive,
+			icon: item.themeIcon?.id,
 		})), [{
 			label: 'Scratch One',
 			description: 'label:/scratch/first',
 			hasCustomLabel: true,
 			state: 'dormant',
 			isActive: false,
+			icon: 'debug-pause',
 		}, {
 			label: 'second',
 			description: 'label:/scratch/second',
 			hasCustomLabel: false,
 			state: 'unloaded',
 			isActive: false,
+			icon: 'circle-outline',
 		}, {
 			label: 'missing',
 			description: 'label:/scratch/missing',
 			hasCustomLabel: false,
 			state: 'missing',
 			isActive: false,
+			icon: 'warning',
 		}]);
 	});
 

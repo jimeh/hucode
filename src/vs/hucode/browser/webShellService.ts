@@ -50,6 +50,7 @@ import {
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HucodeHostedShellCapability,
 	HucodeHostedShellOperationOutcome,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedShellAuthorityState,
 	IHucodeHostedShellBinding,
@@ -114,8 +115,6 @@ import {
 	IHucodeRetainedWorkbench,
 	RetainedWorkbenchCatalog,
 } from '../common/retainedWorkbench.js';
-import { IStorageService, StorageScope, StorageTarget } from
-	'../../platform/storage/common/storage.js';
 import { ProjectSwitcherOmniSection } from
 	'../common/projectSwitcher/projectSwitcherViewState.js';
 import { IProjectManagerService, ProjectRecord } from
@@ -144,6 +143,7 @@ interface IHostedIframeInstance {
 	visible: boolean;
 	focused: boolean;
 	lastActiveAt?: number;
+	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connection?: IHostedIframeConnection;
 	protocolVersion?: number;
@@ -273,20 +273,29 @@ const silentWebShellLog: IWebHucodeShellLogService = {
 const WEB_OMNI_WORKBENCHES_STORAGE_KEY =
 	'hucode.omni.webRetainedWorkbenches';
 
-class StorageServiceWebHucodeShellPersistence
+export class SessionStorageWebHucodeShellPersistence
 	implements IWebHucodeShellPersistenceAdapter {
+	private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | undefined;
 
-	constructor(private readonly storageService: IStorageService) { }
+	constructor(
+		storage?: Pick<Storage, 'getItem' | 'setItem'>,
+		getDefaultStorage: () => Pick<Storage, 'getItem' | 'setItem'> =
+			() => mainWindow.sessionStorage
+	) {
+		try {
+			this.storage = storage ?? getDefaultStorage();
+		} catch {
+			// Browser policy may reject sessionStorage access itself.
+			this.storage = undefined;
+		}
+	}
 
 	load(): IWebHucodeShellPersistedState | undefined {
-		const raw = this.storageService.get(
-			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
-			StorageScope.PROFILE
-		);
-		if (!raw) {
-			return undefined;
-		}
 		try {
+			const raw = this.storage?.getItem(WEB_OMNI_WORKBENCHES_STORAGE_KEY);
+			if (!raw) {
+				return undefined;
+			}
 			return sanitizeWebHucodeShellPersistedState(JSON.parse(raw));
 		} catch {
 			return undefined;
@@ -294,12 +303,14 @@ class StorageServiceWebHucodeShellPersistence
 	}
 
 	save(state: IWebHucodeShellPersistedState): void {
-		this.storageService.store(
-			WEB_OMNI_WORKBENCHES_STORAGE_KEY,
-			JSON.stringify(state),
-			StorageScope.PROFILE,
-			StorageTarget.MACHINE
-		);
+		try {
+			this.storage?.setItem(
+				WEB_OMNI_WORKBENCHES_STORAGE_KEY,
+				JSON.stringify(state)
+			);
+		} catch {
+			// A blocked or exhausted session store disables restoration only.
+		}
 	}
 }
 
@@ -1885,6 +1896,14 @@ export class WebHucodeShellController extends Disposable
 				}
 				this.emitState();
 			},
+			publishAppearance: async (current, appearance) => {
+				if (!this.isCurrentHostedBinding(instance, current)) {
+					return false;
+				}
+				instance.appearance = appearance;
+				this.emitState();
+				return true;
+			},
 			closeSelf: async current => {
 				await this.initialization;
 				if (!this.isCurrentHostedBinding(instance, current)) {
@@ -2426,10 +2445,9 @@ export class WebHucodeShellController extends Disposable
 		// live workbench from the model while leaving its iframe running.
 		const ownsPath =
 			this.getInstanceByPath(instance.worktreePath) === instance;
-		// Release the claim before removing rather than in the `finally` that
-		// follows the handshake: a request arriving from here on gets its own
-		// handshake. Once a current-protocol workbench commits, removal is
-		// unconditional; the workbench has already shut down irreversibly.
+		// Clear the shared handshake before removal so a request arriving from
+		// here on starts its own lifecycle operation. Once a current-protocol
+		// workbench commits, removal is unconditional; it has already shut down.
 		instance.pendingUnload = undefined;
 		this.removeInstance(instance);
 		if (ownsPath) {
@@ -2948,7 +2966,6 @@ export class WebHucodeShellService extends WebHucodeShellController {
 		@IHucodeWebOmniHostSurfaceService
 		hostSurfaceService: IHucodeWebOmniHostSurfaceService,
 		@IConfigurationService configurationService: IConfigurationService,
-		@IStorageService storageService: IStorageService,
 		@IFileService fileService: IFileService,
 		@ILogService logService: ILogService,
 		@IProjectManagerService projectManagerService: IProjectManagerService,
@@ -2965,7 +2982,7 @@ export class WebHucodeShellService extends WebHucodeShellController {
 			),
 			remoteAuthority: environmentService.remoteAuthority,
 		}, commandService, hostSurfaceService, undefined,
-			new StorageServiceWebHucodeShellPersistence(storageService),
+			new SessionStorageWebHucodeShellPersistence(),
 			configurationService.getValue<HucodeHostedWorkbenchRestorePolicy>(
 				HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING
 			) ?? 'active', createWebHucodeShellFolderAccess(
