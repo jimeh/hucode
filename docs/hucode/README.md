@@ -43,6 +43,9 @@ separate application window for each one.
   Plan](editor-migration-apply-plan.md) is the focused implementation plan for
   issue #202's admission, durable progress, inherited-resource materialization,
   additive extension installation, restart recovery, rollback, and results.
+- [Setup UI Webview Plan](setup-ui-webview-plan.md) defines the isolated React,
+  Tailwind, shadcn, and TanStack Virtual renderer for issue #203 and the shared
+  presentation boundary that issue #204 will reuse.
 
 ## Developing Hucode
 

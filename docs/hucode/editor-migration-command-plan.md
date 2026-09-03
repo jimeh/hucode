@@ -11,6 +11,11 @@ interaction reference rather than production code: it illustrates the intended
 hierarchy and language, while the contracts in this plan and the existing
 workbench conventions remain authoritative.
 
+Presentation revision: the
+[setup UI webview plan](setup-ui-webview-plan.md) replaces this document's DOM
+renderer, visual styling, component location, and renderer testing decisions.
+The migration behavior and safety contracts below remain authoritative.
+
 This document plans the first complete user-facing consumer of Hucode's editor
 migration services. It starts from the source discovery, selective planning,
 and journaled Apply contracts delivered by issues
@@ -30,8 +35,8 @@ The implementation is ready when it provides:
 
 1. a complete Discover, Review, Apply, and Results path for Visual Studio Code,
    Visual Studio Code Insiders, and Cursor profiles;
-2. a shared flow session and shared UI components that full-window onboarding
-   can embed without executing the command;
+2. a shared flow session and isolated renderer components that full-window
+   onboarding can embed without executing the command;
 3. observable progress tied only to durable Apply checkpoints;
 4. usable resume, retry, rollback, rerun, acknowledgement, and report-copy
    actions; and
