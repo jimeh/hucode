@@ -465,6 +465,21 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		return this.withShell(shell =>
 			shell.setWorkspaceOverlayOcclusion(occluded));
 	}
+	/** Acquires the migration writer lease through the privileged Omni shell. */
+	acquireEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.acquireEditorMigrationWriterLease(operationId));
+	}
+	/** Validates the current migration writer lease through the privileged Omni shell. */
+	validateEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.validateEditorMigrationWriterLease(operationId));
+	}
+	/** Releases the migration writer lease through the privileged Omni shell. */
+	releaseEditorMigrationWriterLease(operationId: string) {
+		return this.withShell(shell =>
+			shell.releaseEditorMigrationWriterLease(operationId));
+	}
 	async shutdownWindowWorkspaces(reason: Parameters<
 		IHucodeShellControllerService['shutdownWindowWorkspaces']
 	>[0]): Promise<void> {

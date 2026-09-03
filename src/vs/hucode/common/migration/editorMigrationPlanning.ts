@@ -8,7 +8,7 @@ import { createDecorator } from '../../../platform/instantiation/common/instanti
 import { EditorMigrationCategory, EditorMigrationExtension, EditorMigrationJsonValue, EditorMigrationResourceState, EditorMigrationSnippet, EditorMigrationSourceSnapshot } from './editorMigrationSource.js';
 
 /** Version of reviewed editor migration plans. */
-export const EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION = 1;
+export const EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION = 2;
 
 /** Version of Hucode's planning and exclusion policy. */
 export const EDITOR_MIGRATION_POLICY_VERSION = 1;
@@ -201,14 +201,48 @@ export interface EditorMigrationPlanChoices {
 	}[];
 }
 
-/** One accepted additive operation. */
-export interface EditorMigrationPlanOperation {
+/** One accepted, kind-specific operation handed to Apply. */
+export type EditorMigrationPlanOperation =
+	| EditorMigrationSetSettingOperation
+	| EditorMigrationKeybindingOperation
+	| EditorMigrationSnippetOperation
+	| EditorMigrationInstallExtensionOperation;
+
+/** A reviewed setting assignment. */
+export interface EditorMigrationSetSettingOperation {
 	readonly id: string;
-	readonly category: EditorMigrationCategory;
-	readonly kind: 'setSetting' | 'addKeybinding' | 'replaceKeybinding' | 'addSnippet' | 'replaceSnippet' | 'installExtension';
+	readonly category: 'settings';
+	readonly kind: 'setSetting';
 	readonly item: string;
 	readonly source: EditorMigrationJsonValue;
-	readonly relatedTargetIds?: readonly string[];
+}
+
+/** A reviewed keybinding addition or exact indexed replacement. */
+export interface EditorMigrationKeybindingOperation {
+	readonly id: string;
+	readonly category: 'keybindings';
+	readonly kind: 'addKeybinding' | 'replaceKeybinding';
+	readonly item: string;
+	readonly source: Readonly<Record<string, EditorMigrationJsonValue>>;
+	readonly relatedTargetIds: readonly string[];
+}
+
+/** A reviewed snippet addition or replacement. */
+export interface EditorMigrationSnippetOperation {
+	readonly id: string;
+	readonly category: 'snippets';
+	readonly kind: 'addSnippet' | 'replaceSnippet';
+	readonly item: string;
+	readonly source: EditorMigrationSnippet;
+}
+
+/** A reviewed exact extension gallery coordinate. */
+export interface EditorMigrationInstallExtensionOperation {
+	readonly id: string;
+	readonly category: 'extensions';
+	readonly kind: 'installExtension';
+	readonly item: string;
+	readonly source: Extract<EditorMigrationGalleryResult, { readonly status: 'available' }>;
 }
 
 /** Deeply immutable reviewed plan handed to Apply admission. */
