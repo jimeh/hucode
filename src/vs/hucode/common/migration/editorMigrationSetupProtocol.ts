@@ -182,8 +182,15 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	rollback: { phases: ['results'], whileBusy: false },
 	acknowledge: { phases: ['results'], whileBusy: false },
 
-	// Navigation. The session moves exactly one phase per press, so a duplicate would skip one.
-	back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: false },
+	/*
+	 * Navigation.
+	 *
+	 * Back is legal while the session is working, because leaving a screen is how the user abandons
+	 * the work that screen started: `back()` supersedes the in-flight generation so its result is
+	 * discarded on arrival. The presenter leaves the control enabled for exactly that reason.
+	 * Revision binding, not the busy flag, is what stops a double press skipping two phases.
+	 */
+	back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: true },
 };
 
 /**

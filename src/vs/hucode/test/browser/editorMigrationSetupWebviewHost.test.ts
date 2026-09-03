@@ -519,6 +519,30 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.deepStrictEqual(session.calls, [['back']], 'a double press must not skip two phases');
 	});
 
+	test('admits Back while the session is working, because it supersedes that work', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'target', busy: true });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const shown = webview.posted.find(message => message.type === 'state').revision;
+
+		// The presenter leaves Back enabled during a review build on purpose: `back()` cancels the
+		// generation it supersedes, so refusing it here would strand the user on a working screen.
+		send(webview, shown, { type: 'back' });
+
+		assert.deepStrictEqual(session.calls, [['back']]);
+		assert.strictEqual(webview.posted.at(-1)?.type, 'accepted');
+	});
+
 	test('restarts discovery once for a rapid duplicate Start Another Import', async () => {
 		const webviews = new StubWebviewService();
 		const session = sessionStub({ phase: 'recovery' });

@@ -74,7 +74,7 @@ function useScopeEpoch(scopeKey: string | undefined): number {
 
 export function useLocalSetupState(presentation: EditorMigrationSetupPresentation | undefined): LocalSetupState {
 	const [stored, setStored] = useState<ScopedState>(EMPTY_SCOPE);
-	const [section, setSection] = useState<{ readonly phase: string; readonly id: string } | undefined>(undefined);
+	const [section, setSection] = useState<{ readonly epoch: number; readonly phase: string; readonly id: string } | undefined>(undefined);
 	const [announcement, setAnnouncement] = useState<{ readonly revision: number; readonly text: string } | undefined>(undefined);
 
 	const epoch = useScopeEpoch(presentation?.scopeKey);
@@ -97,14 +97,18 @@ export function useLocalSetupState(presentation: EditorMigrationSetupPresentatio
 		: new Set(restoreOptions);
 
 	/*
-	 * The active section is tagged with the phase, not the scope.
+	 * The active section is tagged with the phase *and* the scope visit.
 	 *
-	 * Review and publisher confirmation describe the same draft and deliberately share a scope so
-	 * filters and disclosures survive the transition. They do not share a rail: a category the user
-	 * selected during review would otherwise stay active in publisher confirmation and hide the
-	 * publisher list the footer is asking them to confirm.
+	 * Review and publisher confirmation describe the same draft and deliberately share a scope, so
+	 * the phase tag is what stops a category selected during review from staying active in
+	 * publisher confirmation and hiding the publisher list the footer is asking about. The epoch is
+	 * what stops the opposite mistake: a materially different draft arriving in the same phase has
+	 * to open on its own authoritative default rather than wherever the user parked the previous
+	 * draft's rail, and returning to the first draft must not revive it either.
 	 */
-	const carriedSectionId = presentation && section?.phase === presentation.phase ? section.id : undefined;
+	const carriedSectionId = presentation && section?.epoch === epoch && section.phase === presentation.phase
+		? section.id
+		: undefined;
 	const activeSectionId = carriedSectionId && presentation?.sections.some(candidate => candidate.id === carriedSectionId)
 		? carriedSectionId
 		: presentation?.defaultSectionId;
@@ -123,12 +127,12 @@ export function useLocalSetupState(presentation: EditorMigrationSetupPresentatio
 		if (id === activeSectionId || !presentation) {
 			return;
 		}
-		setSection({ phase: presentation.phase, id });
+		setSection({ epoch, phase: presentation.phase, id });
 		const label = presentation.sections.find(candidate => candidate.id === id)?.label;
 		setAnnouncement(label
 			? { revision: presentation.revision, text: presentation.sectionAnnouncementTemplate.replace('{0}', label) }
 			: undefined);
-	}, [presentation, activeSectionId]);
+	}, [presentation, activeSectionId, epoch]);
 
 	return {
 		activeSectionId,

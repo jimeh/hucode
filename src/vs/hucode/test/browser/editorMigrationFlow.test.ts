@@ -281,6 +281,110 @@ suite('EditorMigrationFlow', () => {
 		assert.strictEqual(session.state.source, undefined);
 	});
 
+	test('Back during an in-flight review build cancels it and leaves Review unentered', async () => {
+		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
+		const sourceSnapshot = snapshot(sourceDescriptor);
+		const draftBuild = new DeferredPromise<void>();
+		let buildCanceled: boolean | undefined;
+		const sourceService = {
+			discoverSources: async () => ({ schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [sourceDescriptor], diagnostics: [] }),
+			readSourceProfile: async () => sourceSnapshot,
+		} as unknown as IEditorMigrationSourceService;
+		const planningService = {
+			inspectTarget: async () => reviewDraft(sourceSnapshot).target,
+			createDraftFromCurrentEvidence: async (_source: unknown, _target: unknown, token: { readonly isCancellationRequested: boolean }) => {
+				await draftBuild.p;
+				buildCanceled = token.isCancellationRequested;
+				return reviewDraft(sourceSnapshot);
+			},
+		} as unknown as IEditorMigrationPlanningService;
+		const session = disposables.add(new EditorMigrationFlowSession(
+			sourceService,
+			planningService,
+			{ listRecoverableOperations: async () => [] } as unknown as IEditorMigrationApplyService,
+			// The target list comes from `profiles`, not `defaultProfile`, so an empty list leaves
+			// nothing for Target to preselect and Continue never reaches the review build.
+			{ defaultProfile: { id: 'hucode-default', name: 'Default', isDefault: true }, profiles: [{ id: 'hucode-default', name: 'Default', isDefault: true }] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+
+		await session.initialize();
+		session.selectApplication('cursor');
+		await session.continueFromProfile();
+		assert.strictEqual(session.state.phase, 'target');
+		assert.ok(session.state.selectedTarget, 'Target must preselect Default before Continue can build a review');
+
+		const reviewPromise = session.continueFromTarget();
+		assert.strictEqual(session.state.busy, true, 'the build publishes busy before its first await');
+
+		// The presenter leaves Back enabled here on purpose: leaving the screen is how the user
+		// abandons the build it started.
+		session.back();
+		assert.strictEqual(session.state.phase, 'profile');
+		assert.strictEqual(session.state.busy, false);
+
+		draftBuild.complete();
+		await reviewPromise;
+
+		assert.strictEqual(buildCanceled, true, 'Back must cancel the work it supersedes');
+		assert.strictEqual(session.state.phase, 'profile', 'a superseded build must not drag the user into Review');
+		assert.strictEqual(session.state.draft, undefined);
+	});
+
+	test('acknowledgement cannot delete a recovery record while rollback holds it', async () => {
+		const acknowledged: string[] = [];
+		const inspection = new DeferredPromise<EditorMigrationRollbackInspection>();
+		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
+		const draft = reviewDraft(snapshot(sourceDescriptor));
+		const plan: EditorMigrationReviewedPlan = {
+			...draft,
+			choices: { selectedCategories: ['settings'], decisions: [] },
+			operations: [],
+			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+		};
+		const settled = {
+			...operation(plan),
+			stage: 'settled' as const,
+			aggregateOutcome: 'completed' as const,
+			snapshots: [{ category: 'settings', postApplyHash: 'hash' }],
+		} as unknown as EditorMigrationOperation;
+		const applyService = {
+			listRecoverableOperations: async () => [],
+			getOperation: async () => settled,
+			inspectRollback: async () => await inspection.p,
+			rollback: async () => { },
+			acknowledge: async (operationId: string) => { acknowledged.push(operationId); },
+		} as unknown as IEditorMigrationApplyService;
+		const session = disposables.add(new EditorMigrationFlowSession(
+			{ discoverSources: async () => ({ schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [], diagnostics: [] }) } as unknown as IEditorMigrationSourceService,
+			{} as IEditorMigrationPlanningService,
+			applyService,
+			{ defaultProfile: { id: 'default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+		await session.showRecovery(settled.id);
+
+		// Rollback inspects the record before `runRecovery` publishes anything, so nothing about the
+		// session's phase or busy flag reveals that it already owns this record.
+		const rollbackPromise = session.rollback(['settings']);
+		assert.strictEqual(session.state.phase, 'results');
+		assert.strictEqual(session.state.busy, false);
+
+		await session.acknowledge();
+		assert.deepStrictEqual(acknowledged, [], 'the journal must not be deleted beneath an in-flight rollback');
+
+		inspection.complete({ operationId: settled.id, operationRevision: 1, eligibleCategories: ['settings'], driftedCategories: [], fingerprint: 'fingerprint' });
+		await rollbackPromise;
+
+		// The lock is per recovery record and releases with the work, so acknowledgement is
+		// available again once rollback has finished.
+		await session.showRecovery(settled.id);
+		await session.acknowledge();
+		assert.deepStrictEqual(acknowledged, [settled.id]);
+	});
+
 	test('writer contention before admission returns to a review action', async () => {
 		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
 		const sourceSnapshot = snapshot(sourceDescriptor);

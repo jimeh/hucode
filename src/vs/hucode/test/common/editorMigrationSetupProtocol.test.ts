@@ -157,7 +157,7 @@ suite('EditorMigrationSetupProtocol', () => {
 			copyReport: { phases: ['results'], whileBusy: true },
 			rollback: { phases: ['results'], whileBusy: false },
 			acknowledge: { phases: ['results'], whileBusy: false },
-			back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: false },
+			back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: true },
 		};
 		for (const [type, policy] of Object.entries(expected)) {
 			for (const phase of ALL_PHASES) {
@@ -184,6 +184,13 @@ suite('EditorMigrationSetupProtocol', () => {
 		// revision binding stops a double press skipping two.
 		assert.strictEqual(editorMigrationSetupPhaseAdmits('back', 'target', false), true);
 		assert.strictEqual(isEditorMigrationSetupRevisionBound('back'), true);
+		// Leaving a screen is how the user abandons the work that screen started, so Back stays
+		// admissible while that work is still in flight; the session supersedes it on arrival.
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('back', 'review', true), true);
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('back', 'profile', true), true);
+		// It remains inert where the session offers no destination.
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('back', 'apply', true), false);
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('back', 'results', false), false);
 		// Acknowledgement deletes durable recovery data and is never legal outside Results.
 		assert.strictEqual(editorMigrationSetupPhaseAdmits('acknowledge', 'apply', false), false);
 		assert.strictEqual(editorMigrationSetupPhaseAdmits('acknowledge', 'results', true), false);

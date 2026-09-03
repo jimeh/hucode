@@ -528,6 +528,37 @@ describe('SetupShell', () => {
 		expect(within(rail).getByRole('button', { name: /Publishers/ })).toHaveAttribute('aria-current', 'true');
 	});
 
+	test('opens a replacement draft on its own default rail section, and does not revive the old one', async () => {
+		// Every snapshot is in Review, so the phase tag matches throughout and cannot be what
+		// discards the rail. Only the scope identity distinguishes these drafts.
+		const scoped = (scopeKey: string, revision: number) => presentation({
+			revision,
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel(), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(scoped('review|draft-a|', 1));
+		const rail = () => screen.getByRole('navigation', { name: 'Import sections' });
+
+		await user.click(within(rail()).getByRole('button', { name: /Not Imported/ }));
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Not Imported');
+
+		// Core replaces the draft with a materially different one. It has its own authoritative
+		// default, which must win over wherever the user had parked the previous draft's rail.
+		await act(async () => publish(scoped('review|draft-b|', 2)));
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Settings');
+		expect(within(rail()).getByRole('button', { name: /Settings/ })).toHaveAttribute('aria-current', 'true');
+
+		// Returning to the first draft is a fresh visit, so the parked section is gone for good.
+		await act(async () => publish(scoped('review|draft-a|', 3)));
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Settings');
+		expect(within(rail()).getByRole('button', { name: /Not Imported/ })).not.toHaveAttribute('aria-current');
+	});
+
 	test('does not revive an earlier scope\'s local state when the flow returns to it', async () => {
 		const scoped = (scopeKey: string, revision: number) => presentation({
 			revision,

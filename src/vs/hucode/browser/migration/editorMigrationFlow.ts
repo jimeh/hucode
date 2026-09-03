@@ -450,7 +450,7 @@ export class EditorMigrationFlowSession extends Disposable {
 		}
 		// The inspection below runs before `runRecovery` publishes the Apply phase, so a second
 		// press inside that window would start a second restore of the same files.
-		await this.runExclusive(`rollback:${operation.id}`, () => this.runRollback(operation.id, categories, forceCategories));
+		await this.runExclusive(recoveryRecordKey(operation.id), () => this.runRollback(operation.id, categories, forceCategories));
 	}
 
 	private async runRollback(
@@ -485,7 +485,7 @@ export class EditorMigrationFlowSession extends Disposable {
 		if (!operation) {
 			return;
 		}
-		await this.runExclusive(`acknowledge:${operation.id}`, async () => {
+		await this.runExclusive(recoveryRecordKey(operation.id), async () => {
 			try {
 				await this.applyService.acknowledge(operation.id);
 				await this.startImport();
@@ -699,6 +699,17 @@ export class EditorMigrationFlowSession extends Disposable {
 		this.stateValue = Object.freeze({ ...this.stateValue, ...update });
 		this.stateEmitter.fire(this.stateValue);
 	}
+}
+
+/**
+ * Exclusion key for everything that reaches one durable recovery record.
+ *
+ * Rollback and acknowledgement both act on the same journal entry, and both reach the apply service
+ * before publishing anything. Keying them apart let acknowledgement delete the record during
+ * rollback's inspect window, so they share one key and take turns instead.
+ */
+function recoveryRecordKey(operationId: string): string {
+	return `recoveryRecord:${operationId}`;
 }
 
 function fileCategories(categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): readonly Exclude<EditorMigrationCategory, 'extensions'>[] {
