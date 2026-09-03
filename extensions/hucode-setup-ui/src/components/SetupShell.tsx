@@ -5,7 +5,7 @@
 
 import { AlertCircleIcon } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
-import type { EditorMigrationSetupIntent } from '@/generated/editorMigrationSetupProtocol';
+import { EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID, type EditorMigrationSetupIntent } from '@/generated/editorMigrationSetupProtocol';
 import { SectionRail } from '@/components/SectionRail';
 import { SetupPanelView } from '@/components/SetupPanel';
 import { ActionButton } from '@/components/primitives';
@@ -54,6 +54,24 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 		}
 		headingRef.current?.focus();
 	}, [revision]);
+
+	/*
+	 * The host asks for a landing point once the renderer has its first snapshot.
+	 *
+	 * Opening the modal otherwise leaves focus on the document body, where Escape and the workbench
+	 * keybindings never reach the webview at all.
+	 */
+	const focusRequest = state.focusRequest;
+	useLayoutEffect(() => {
+		if (!focusRequest) {
+			return;
+		}
+		if (focusRequest.focusId === EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID) {
+			headingRef.current?.focus();
+			return;
+		}
+		document.querySelector<HTMLElement>(`[data-focus-id="${CSS.escape(focusRequest.focusId)}"]`)?.focus();
+	}, [focusRequest]);
 
 	// The scroll position belongs to the section being read, not to the phase.
 	useLayoutEffect(() => {

@@ -7,7 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
-import { EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 import {
 	EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
 	EditorMigrationDraftDecision,
@@ -170,6 +170,134 @@ suite('EditorMigrationSetupPresentation', () => {
 		assert.strictEqual(withoutMutation.sections.some(section => section.id === 'restore'), false);
 	});
 
+	test('states what each profile offers so profiles can be compared without selecting them', () => {
+		const rich = descriptor('Default', 'default', 'cursor-default', [
+			{ category: 'settings', state: 'present', itemCount: 42 },
+			{ category: 'keybindings', state: 'present', itemCount: 7 },
+			{ category: 'extensions', state: 'present', itemCount: 18 },
+		]);
+		const sparse = descriptor('Work', 'named', 'cursor-work', [
+			{ category: 'settings', state: 'present', itemCount: 3 },
+			{ category: 'keybindings', state: 'absent', itemCount: 0 },
+			{ category: 'extensions', state: 'unreadable', itemCount: 0 },
+		]);
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'profile',
+			selectedApplicationId: 'cursor',
+			applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [rich, sparse] }],
+		}), 1);
+
+		const panel = panelOf(presentation, 'profiles');
+		assert.strictEqual(panel.profiles[0].description, 'Settings: 42 items · Keyboard Shortcuts: 7 items · Extensions: 18 items');
+		assert.strictEqual(panel.profiles[1].description, 'Settings: 3 items · Keyboard Shortcuts: not found · Extensions: could not be read');
+	});
+
+	test('shows every selected category progress state and at most one current item', () => {
+		const draft = reviewDraft();
+		const plan = reviewedPlan(draft);
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'apply',
+			reviewedPlan: plan,
+			progress: applyProgress({
+				stage: 'applying',
+				results: [
+					{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 },
+					{ id: 'keybindings:add-0', category: 'keybindings', outcome: 'failed', attempts: 1, diagnostic: { code: 'categoryWriteFailed', message: 'denied' } },
+				],
+			}),
+		}), 1);
+
+		const overview = panelWithId(presentation, 'overview');
+		assert.strictEqual(overview.kind, 'applyOverview');
+		if (overview.kind !== 'applyOverview') {
+			return;
+		}
+		assert.deepStrictEqual(overview.rows.map(row => row.id), ['settings', 'keybindings', 'extensions']);
+		assert.match(overview.rows[0].state, /Complete\. 1 recorded\./);
+		assert.match(overview.rows[1].state, /1 recorded, 1 need attention\./);
+		assert.match(overview.rows[2].state, /Waiting\./);
+		// Settings is complete and keybindings has not reported its own category result yet, so the
+		// one named item is the first still-outstanding category.
+		assert.strictEqual(overview.currentItem, 'Working on Keyboard Shortcuts.');
+	});
+
+	test('names only a durable extension intent while extensions are still resolving', () => {
+		const draft = reviewDraft();
+		const plan = reviewedPlan(draft);
+		const resolving = editorMigrationSetupPresentation(state({
+			phase: 'apply',
+			reviewedPlan: plan,
+			progress: applyProgress({
+				stage: 'applying',
+				results: [
+					{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 },
+					{ id: 'keybindings', category: 'keybindings', outcome: 'completed', attempts: 1 },
+				],
+			}),
+		}), 1);
+		const resolvingOverview = panelWithId(resolving, 'overview');
+		assert.strictEqual(resolvingOverview.kind === 'applyOverview' && resolvingOverview.currentItem, 'Working on Resolving extensions.');
+
+		const installing = editorMigrationSetupPresentation(state({
+			phase: 'apply',
+			reviewedPlan: plan,
+			progress: applyProgress({
+				stage: 'applying',
+				results: [
+					{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 },
+					{ id: 'keybindings', category: 'keybindings', outcome: 'completed', attempts: 1 },
+				],
+				extensionInstallIntents: [{ operationId: 'extensions:publisher.extension-0', applicationScoped: false }],
+			}),
+		}), 1);
+		const installingOverview = panelWithId(installing, 'overview');
+		assert.strictEqual(installingOverview.kind === 'applyOverview' && installingOverview.currentItem, 'Working on publisher.extension-0.');
+	});
+
+	test('reports durable rollback resource progress instead of forward Apply counts', () => {
+		const plan = reviewedPlan(reviewDraft());
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'apply',
+			reviewedPlan: plan,
+			progress: applyProgress({
+				stage: 'rollbackPending',
+				results: [{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 }],
+				rollback: { categories: ['settings', 'snippets'], restoredResourceCount: 2, resourceCount: 5, mutationStarted: true },
+			}),
+		}), 1);
+
+		const overview = panelWithId(presentation, 'overview');
+		assert.strictEqual(overview.kind, 'applyOverview');
+		if (overview.kind !== 'applyOverview') {
+			return;
+		}
+		assert.match(overview.progress.text, /Restoring Settings, Snippets\. 2 of 5 file resources restored\./);
+		assert.strictEqual(overview.progress.now, 2);
+		assert.strictEqual(overview.progress.max, 5);
+		assert.deepStrictEqual(overview.rows, [], 'a rollback replaces the forward per-category rows');
+		assert.strictEqual(overview.currentItem, undefined);
+	});
+
+	test('summarizes a category that is still in progress against its planned operations', () => {
+		const draft = reviewDraft();
+		const plan = reviewedPlan(draft);
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'apply',
+			reviewedPlan: plan,
+			progress: applyProgress({
+				stage: 'applying',
+				results: [{ id: 'extensions:publisher.extension-0', category: 'extensions', outcome: 'completed', attempts: 1 }],
+			}),
+		}), 1);
+
+		const category = panelWithId(presentation, 'extensions');
+		assert.strictEqual(category.kind, 'applyCategory');
+		if (category.kind === 'applyCategory') {
+			assert.match(category.lead, /In progress\. 1 of 1 recorded\./);
+			assert.match(category.recordedNote ?? '', /1 items recorded so far\./);
+		}
+	});
+
 	test('changes the scope key only when the import, draft, or operation changes', () => {
 		const draft = reviewDraft();
 		const first = editorMigrationSetupPresentation(reviewState(draft), 1).scopeKey;
@@ -314,14 +442,32 @@ function settledOperation(): EditorMigrationOperation {
 	} as unknown as EditorMigrationOperation;
 }
 
-function descriptor(name: string, kind: 'default' | 'named', ref: string): EditorMigrationSourceDescriptor {
+function applyProgress(overrides: Partial<EditorMigrationApplyProgress>): EditorMigrationApplyProgress {
+	return {
+		operationId: 'operation',
+		revision: 1,
+		stage: 'applying',
+		target: { profileId: 'work', name: 'Work' },
+		selectedItemCount: 10,
+		results: [],
+		cancellationRequested: false,
+		...overrides,
+	} as unknown as EditorMigrationApplyProgress;
+}
+
+function descriptor(
+	name: string,
+	kind: 'default' | 'named',
+	ref: string,
+	categories: EditorMigrationSourceDescriptor['categories'] = [{ category: 'settings', state: 'present', itemCount: 1 }],
+): EditorMigrationSourceDescriptor {
 	return {
 		schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
 		ref: { value: ref },
 		adapter: { id: 'cursor', productName: 'Cursor', channel: 'stable', order: 2 },
 		profile: { id: ref, name, kind },
 		localPaths: { userData: `/private/${ref}`, extensions: `/private/${ref}/extensions` },
-		categories: [{ category: 'settings', state: 'present', itemCount: 1 }],
+		categories,
 		diagnostics: [],
 		ranking: { completeness: 1, newestModificationTime: 1, stableChannelPreference: 1, adapterOrder: 2, normalizedProfileName: name.toLowerCase(), canonicalReference: ref },
 		discoveryFingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'sha256', categories: ['settings'], entries: [], value: `fingerprint-${ref}` },

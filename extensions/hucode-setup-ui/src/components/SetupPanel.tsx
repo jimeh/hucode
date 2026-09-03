@@ -235,7 +235,9 @@ function ProfilesPanel({ panel, local, send }: SetupPanelProps & { readonly pane
 }
 
 function TargetPanel({ panel, local, send }: SetupPanelProps & { readonly panel: PanelOf<'target'> }) {
-	const draft = local.newTargetName || panel.newTarget.value;
+	// An untouched field shows whatever the host preselected; once the user edits it, including
+	// clearing it, their own text is the truth and an empty field must stay empty.
+	const draft = local.newTargetName ?? panel.newTarget.value;
 	return (
 		<PanelBody>
 			<PanelHeading>{panel.heading}</PanelHeading>

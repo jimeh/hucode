@@ -91,6 +91,12 @@ export function reviewCategoryPanel(overrides: Partial<Extract<EditorMigrationSe
 	} as EditorMigrationSetupPanel;
 }
 
+/** Enough differences that the panel renders a filter control. */
+export function manyConflicts(count = 12) {
+	return Array.from({ length: count }, (_, index) =>
+		conflictRow(`settings:editor.conflict-${index}`, `editor.conflict-${index}`, String(index), String(index + 100)));
+}
+
 export function conflictRow(id: string, name: string, current: string, imported: string, readOnly = false) {
 	return {
 		id,
@@ -107,8 +113,50 @@ export function conflictRow(id: string, name: string, current: string, imported:
 	};
 }
 
+export function targetPanel(value = ''): EditorMigrationSetupPanel {
+	return {
+		kind: 'target',
+		id: '',
+		heading: 'Where Should Hucode Import This Setup?',
+		lead: 'Default is selected. You can choose another existing profile or name a new one.',
+		groupLabel: 'Target profile',
+		targets: [
+			{ id: 'default', label: 'Default (Recommended)', checked: true, intent: { type: 'selectTarget', target: { kind: 'existing', profileId: 'default' } } },
+		],
+		newTarget: {
+			label: 'New profile name',
+			placeholder: 'New profile name',
+			actionLabel: 'Use New Profile',
+			value,
+			selectedText: value ? `Selected new profile: ${value}` : undefined,
+		},
+	};
+}
+
+export function restorePanel(): EditorMigrationSetupPanel {
+	return {
+		kind: 'restore',
+		id: 'restore',
+		heading: 'Undo File Changes',
+		lead: 'Settings, keyboard shortcuts, and snippets can be restored. Extension changes stay installed.',
+		selection: {
+			legend: 'File categories to restore',
+			options: [
+				{ category: 'settings', label: 'Settings' },
+				{ category: 'snippets', label: 'Snippets' },
+			],
+			inspectLabel: 'Check File Rollback',
+		},
+	};
+}
+
 /** A host bound to in-memory transport, so a test can drive both directions. */
-export function testHost(): { readonly host: SetupHost; readonly sent: unknown[]; publish(presentation: EditorMigrationSetupPresentation): void } {
+export function testHost(): {
+	readonly host: SetupHost;
+	readonly sent: unknown[];
+	publish(presentation: EditorMigrationSetupPresentation): void;
+	deliverHostMessage(message: unknown): void;
+} {
 	const sent: unknown[] = [];
 	let deliver: ((message: unknown) => void) | undefined;
 	const host = new SetupHost(
@@ -123,6 +171,9 @@ export function testHost(): { readonly host: SetupHost; readonly sent: unknown[]
 		sent,
 		publish(next) {
 			deliver?.({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'state', revision: next.revision, presentation: next });
+		},
+		deliverHostMessage(message: unknown) {
+			deliver?.(message);
 		},
 	};
 }

@@ -14,6 +14,7 @@ import { IStorageService } from '../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../platform/theme/common/themeService.js';
 import { IEditorMigrationFlowService } from '../../browser/migration/editorMigrationFlow.js';
+import { bindEditorMigrationCloseCancellation } from '../../browser/migration/editorMigrationSetupClose.js';
 import { EditorMigrationSetupWebviewHost } from '../../browser/migration/editorMigrationSetupWebviewHost.js';
 import { EditorPane } from '../../../workbench/browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../workbench/common/editor.js';
@@ -39,6 +40,7 @@ export class EditorMigrationEditorPane extends EditorPane {
 	static readonly ID = 'workbench.editor.hucodeEditorMigration';
 
 	private container: HTMLElement | undefined;
+	private host: EditorMigrationSetupWebviewHost | undefined;
 	private readonly inputDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -66,25 +68,31 @@ export class EditorMigrationEditorPane extends EditorPane {
 		}
 		this.inputDisposables.clear();
 		clearNode(this.container);
+		const session = this.flowService.getStandaloneSession();
 		// The webview element lives for exactly one `setInput` to `clearInput` cycle. Hiding the
 		// singleton modal input disposes it; showing it again creates a fresh element whose state
 		// is reconstructed from the session.
-		this.inputDisposables.add(this.instantiationService.createInstance(
+		this.host = this.inputDisposables.add(this.instantiationService.createInstance(
 			EditorMigrationSetupWebviewHost,
 			this.container,
-			this.flowService.getStandaloneSession(),
+			session,
 			{
 				mediaRoot: editorMigrationSetupMediaRoot(this.environmentService),
 				onDone: () => void this.group.closeEditor(input),
 			},
 		));
+		// Escape and outside-click close the modal at the editor-part level, so the cancel request
+		// has to hang off the input's own disposal rather than anything the renderer sends.
+		this.inputDisposables.add(bindEditorMigrationCloseCancellation(session, input.onWillDispose));
+	}
+
+	override focus(): void {
+		super.focus();
+		this.host?.focus();
 	}
 
 	override clearInput(): void {
-		const session = this.flowService.getStandaloneSession();
-		if (session.state.phase === 'apply') {
-			session.requestCancellation();
-		}
+		this.host = undefined;
 		this.inputDisposables.clear();
 		if (this.container) {
 			clearNode(this.container);

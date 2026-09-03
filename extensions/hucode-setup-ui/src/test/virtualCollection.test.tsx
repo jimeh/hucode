@@ -7,7 +7,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { useRef, useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
-import { VIRTUALIZATION_THRESHOLD, VirtualCollection } from '@/components/VirtualCollection';
+import { VIRTUALIZATION_THRESHOLD, VirtualCollection, nextRowIndex } from '@/components/VirtualCollection';
 
 afterEach(cleanup);
 
@@ -24,6 +24,40 @@ beforeAll(() => {
 		get(this: HTMLElement) { return this.hasAttribute('data-virtual-index') ? ROW_HEIGHT : VIEWPORT_HEIGHT; },
 	});
 	Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 600 });
+	// jsdom neither implements `scrollTo` nor fires `scroll`, so the virtualizer would never learn
+	// that a programmatic reveal moved the viewport and would never mount the revealed row.
+	originalMetrics.scrollTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+	const offsets = new WeakMap<Element, number>();
+	Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+		configurable: true,
+		get(this: HTMLElement) { return offsets.get(this) ?? 0; },
+		set(this: HTMLElement, value: number) {
+			offsets.set(this, Math.max(0, value));
+			// Real browsers deliver `scroll` after the current task; dispatching it synchronously
+			// here would re-enter React from inside its own effects.
+			queueMicrotask(() => this.dispatchEvent(new Event('scroll')));
+		},
+	});
+	HTMLElement.prototype.scrollTo = function (this: HTMLElement, options?: ScrollToOptions | number) {
+		this.scrollTop = typeof options === 'number' ? options : options?.top ?? this.scrollTop;
+	} as HTMLElement['scrollTo'];
+	// The virtualizer clamps every scroll to `scrollHeight - clientHeight`, so without these the
+	// viewport can never move off zero and no row beyond the first window is ever revealed.
+	originalMetrics.clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+	originalMetrics.scrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+	Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+		configurable: true,
+		get(this: HTMLElement) { return this.hasAttribute('data-virtual-index') ? ROW_HEIGHT : VIEWPORT_HEIGHT; },
+	});
+	Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+		configurable: true,
+		get(this: HTMLElement) {
+			const declared = [this, ...this.querySelectorAll<HTMLElement>('*')]
+				.map(element => Number.parseFloat(element.style.height))
+				.filter(value => Number.isFinite(value));
+			return declared.length ? Math.max(...declared) : VIEWPORT_HEIGHT;
+		},
+	});
 	vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
 		const height = this.hasAttribute('data-virtual-index') ? ROW_HEIGHT : VIEWPORT_HEIGHT;
 		return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: height, width: 600, height, toJSON: () => ({}) } as DOMRect;
@@ -32,6 +66,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	vi.restoreAllMocks();
+	Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo');
 	for (const [name, descriptor] of Object.entries(originalMetrics)) {
 		if (descriptor) {
 			Object.defineProperty(HTMLElement.prototype, name, descriptor);
@@ -102,6 +137,66 @@ describe('VirtualCollection', () => {
 		expect(mounted).toHaveLength(1);
 		expect(within(mounted[0]).getByRole('button')).toHaveAttribute('data-focus-id', 'row-399');
 		expect(mounted[0]).toHaveAttribute('aria-setsize', '1');
+	});
+
+	test('traverses beyond the mounted window with Tab and back with Shift+Tab', async () => {
+		const user = userEvent.setup();
+		const items = rows(400);
+		render(<Harness items={items} />);
+		const list = screen.getByRole('list', { name: 'Rows' });
+
+		const mountedIndexes = () => within(list).getAllByRole('listitem')
+			.map(row => Number(row.getAttribute('data-virtual-index')));
+
+		// Park focus on the last mounted row and let the reveal that follows settle, so the window
+		// below is the one Tab actually has to cross.
+		screen.getByRole('button', { name: `Row ${mountedIndexes().at(-1)}` }).focus();
+		await vi.waitFor(() => expect(document.activeElement?.textContent).toMatch(/^Row \d+$/));
+		const last = Number(/\d+/.exec(document.activeElement!.textContent!)![0]);
+		screen.getByRole('button', { name: `Row ${mountedIndexes().at(-1)}` }).focus();
+		const settled = mountedIndexes();
+		const from = settled.at(-1)!;
+		const beyond = from + 1;
+		expect(settled).not.toContain(beyond);
+		expect(from).toBeGreaterThanOrEqual(last);
+
+		await user.tab();
+
+		// Revealing the row is a scroll, a remount, and then a focus, so it settles asynchronously.
+		await vi.waitFor(() => {
+			expect(mountedIndexes()).toContain(beyond);
+			expect(document.activeElement).toHaveTextContent(`Row ${beyond}`);
+		});
+
+		await user.tab({ shift: true });
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent(`Row ${from}`));
+	});
+
+	test('moves by row with the arrow keys and jumps to either end', async () => {
+		const user = userEvent.setup();
+		render(<Harness items={rows(400)} />);
+
+		screen.getByRole('button', { name: 'Row 0' }).focus();
+		await user.keyboard('{ArrowDown}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 1'));
+		await user.keyboard('{ArrowUp}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 0'));
+
+		await user.keyboard('{End}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 399'));
+		await user.keyboard('{Home}');
+		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 0'));
+	});
+
+	test('lets focus leave the list at either end rather than trapping it', () => {
+		// Tab at the ends returns `undefined`, so the browser's own traversal takes over.
+		expect(nextRowIndex('Tab', false, 399, 400)).toBeUndefined();
+		expect(nextRowIndex('Tab', true, 0, 400)).toBeUndefined();
+		expect(nextRowIndex('ArrowDown', false, 399, 400)).toBeUndefined();
+		expect(nextRowIndex('ArrowUp', false, 0, 400)).toBeUndefined();
+		expect(nextRowIndex('Tab', false, 12, 400)).toBe(13);
+		expect(nextRowIndex('Tab', true, 12, 400)).toBe(11);
+		expect(nextRowIndex('Enter', false, 12, 400)).toBeUndefined();
 	});
 
 	test('does not introduce a second scroll region', () => {

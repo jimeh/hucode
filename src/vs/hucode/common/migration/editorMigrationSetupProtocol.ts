@@ -38,6 +38,14 @@ export type EditorMigrationSetupPhase =
 
 export type EditorMigrationSetupSectionStatus = 'attention' | 'ok' | 'neutral';
 
+/**
+ * Focus target meaning "the current detail panel's heading".
+ *
+ * The host asks for it once the renderer has its first snapshot, so opening the modal lands a
+ * keyboard user inside the webview rather than on the document body.
+ */
+export const EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID = 'panel-heading';
+
 export type EditorMigrationSetupDecisionChoice = 'import' | 'preserveTarget';
 
 // #region renderer to host

@@ -398,6 +398,16 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   mirrored byte-for-byte into `src/generated/` by
   `build/hucode/setup-ui-protocol.ts`; edit the canonical file and run
   `npm run hucode:sync-setup-protocol`, never the mirror.
+- A built-in extension that is not recognized as bundled goes through
+  `vsce.listFiles({ packageManager: Npm })`, which resolves every production
+  dependency into the package no matter what `.vscodeignore` says.
+  `build/lib/extensions.ts` only recognizes `esbuild.mts`/`esbuild.browser.mts`
+  (or a dotted `.esbuild.mts`) at the extension root, so a differently named
+  build script such as `esbuild.setup.mts` leaves the extension on the normal
+  path. `hucode-setup-ui` therefore declares no `dependencies` at all — the
+  renderer libraries are bundled into `media/index.js` and belong in
+  `devDependencies` — and `build/lib/test/hucodeSetupUiExtension.test.ts`
+  asserts the real `listFiles` result rather than the ignore file.
 - Tailwind v4's PostCSS plugin resolves automatic source detection from the
   working directory, not from the CSS file. Because the package script and the
   gulp media build run from different directories, the setup stylesheet must

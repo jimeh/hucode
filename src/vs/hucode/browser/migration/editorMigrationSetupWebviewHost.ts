@@ -14,6 +14,7 @@ import { ILogService } from '../../../platform/log/common/log.js';
 import { IWebviewElement, IWebviewService } from '../../../workbench/contrib/webview/browser/webview.js';
 import { asWebviewUri, webviewGenericCspSource } from '../../../workbench/contrib/webview/common/webview.js';
 import {
+	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
 	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
 	EditorMigrationSetupHostMessage,
 	EditorMigrationSetupIntent,
@@ -30,11 +31,21 @@ export const EDITOR_MIGRATION_SETUP_ASSETS = ['index.js', 'style.css'] as const;
 /** Stable view type of the setup webview. */
 export const EDITOR_MIGRATION_SETUP_VIEW_TYPE = 'hucode.setupUi';
 
+/**
+ * How long the host waits for the renderer's `ready` before treating the bootstrap as failed.
+ *
+ * Present-but-broken assets are the case this exists for: probing succeeds, the document loads,
+ * and nothing ever runs. Without a deadline that leaves an empty modal with no way out.
+ */
+export const EDITOR_MIGRATION_SETUP_READY_TIMEOUT = 10_000;
+
 export interface EditorMigrationSetupWebviewHostOptions {
 	/** Directory holding the built renderer assets, resolved by the native host. */
 	readonly mediaRoot: URI;
 	/** Closes the surface framing this host. */
 	readonly onDone: () => void;
+	/** Overridable only so tests do not have to wait out the real deadline. */
+	readonly readyTimeout?: number;
 }
 
 /**
@@ -48,11 +59,13 @@ export interface EditorMigrationSetupWebviewHostOptions {
 export class EditorMigrationSetupWebviewHost extends Disposable {
 	private readonly mountDisposables = this._register(new DisposableStore());
 	private readonly pendingDelivery = this._register(new MutableDisposable<IDisposable>());
+	private readonly readyDeadline = this._register(new MutableDisposable<IDisposable>());
 	private readonly container: HTMLElement;
 	private webview: IWebviewElement | undefined;
 	private ready = false;
 	private revision = 0;
 	private delivered: EditorMigrationFlowState | undefined;
+	private statusFocusTarget: HTMLElement | undefined;
 	private disposedHost = false;
 
 	constructor(
@@ -71,9 +84,20 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		void this.mount();
 	}
 
+	/** Moves keyboard focus into the webview, or onto the failure surface that replaced it. */
+	focus(): void {
+		if (this.webview) {
+			this.webview.focus();
+			return;
+		}
+		this.statusFocusTarget?.focus();
+	}
+
 	/** Probes the renderer assets, then mounts the webview. Failure stays recoverable. */
 	private async mount(): Promise<void> {
 		this.mountDisposables.clear();
+		this.readyDeadline.clear();
+		this.ready = false;
 		this.container.textContent = '';
 		this.renderStatus(localize('editorMigration.setup.loading', "Preparing the import view..."), false);
 		const missing = await this.probeAssets();
@@ -106,14 +130,45 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		this.mountDisposables.add(webview.onMessage(event => this.handleMessage(event.message)));
 		this.mountDisposables.add(webview.onFatalError(error => {
 			this.logService.error(`[hucode] setup webview failed: ${error.message}`);
-			this.mountDisposables.clear();
-			this.webview = undefined;
-			this.ready = false;
-			this.renderStatus(localize('editorMigration.setup.rendererFailed', "The import view stopped responding. Your import is still recorded."), true);
+			this.failBootstrap(localize('editorMigration.setup.rendererFailed', "The import view stopped responding. Your import is still recorded."));
 		}));
 		webview.setHtml(this.html());
 		webview.mountTo(this.container, getWindow(this.container) as CodeWindow);
 		this.mountDisposables.add(this.session.onDidChangeState(state => this.scheduleDelivery(state)));
+		this.startReadyDeadline();
+		webview.focus();
+	}
+
+	/**
+	 * Bounds the wait for `ready`.
+	 *
+	 * Assets can exist and still never run — a truncated bundle, a CSP rejection, or a module-level
+	 * throw all look identical from here. The deadline turns that into the same recoverable failure
+	 * surface as a missing file instead of an empty modal.
+	 */
+	private startReadyDeadline(): void {
+		const timeout = this.options.readyTimeout ?? EDITOR_MIGRATION_SETUP_READY_TIMEOUT;
+		const window = getWindow(this.container);
+		const handle = window.setTimeout(() => {
+			this.readyDeadline.clear();
+			if (this.ready || this.disposedHost) {
+				return;
+			}
+			this.logService.error('[hucode] setup renderer did not report ready before the deadline.');
+			this.failBootstrap(localize('editorMigration.setup.rendererUnresponsive', "Hucode loaded the import view's files, but the view never started."));
+		}, timeout);
+		this.readyDeadline.value = { dispose: () => window.clearTimeout(handle) };
+	}
+
+	/** Tears the webview down and offers the core-owned retry and close. */
+	private failBootstrap(message: string): void {
+		this.readyDeadline.clear();
+		this.pendingDelivery.clear();
+		this.mountDisposables.clear();
+		this.webview = undefined;
+		this.ready = false;
+		this.delivered = undefined;
+		this.renderStatus(message, true);
 	}
 
 	private async probeAssets(): Promise<readonly string[]> {
@@ -135,6 +190,7 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 	 */
 	private renderStatus(message: string, retryable: boolean): void {
 		this.container.textContent = '';
+		this.statusFocusTarget = undefined;
 		const panel = document.createElement('div');
 		panel.className = 'hucode-setup-webview-status';
 		panel.setAttribute('role', retryable ? 'alert' : 'status');
@@ -153,12 +209,19 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 			close.addEventListener('click', () => this.options.onDone());
 			actions.append(retry, close);
 			panel.appendChild(actions);
+			this.statusFocusTarget = retry;
 			this.mountDisposables.add({ dispose: () => panel.remove() });
 		}
 		this.container.appendChild(panel);
 	}
 
-	/** Strict-CSP document. Only the two local assets load, and only the module script runs. */
+	/**
+	 * Strict-CSP document. Only the two local assets load, and only the module script runs.
+	 *
+	 * The body carries a localized fallback that React replaces on mount. It is the only
+	 * user-visible copy the renderer document owns, and it exists so a bundle that never runs still
+	 * says something while the ready deadline is counting down.
+	 */
 	private html(): string {
 		const nonce = generateUuid();
 		const script = asWebviewUri(URI.joinPath(this.options.mediaRoot, 'index.js')).toString(true);
@@ -170,16 +233,19 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 			`script-src 'nonce-${nonce}'`,
 			`font-src ${webviewGenericCspSource}`,
 		].join('; ');
+		const fallback = escapeHtml(localize('editorMigration.setup.bootstrap', "Starting the editor setup import..."));
+		const title = escapeHtml(localize('editorMigration.editorName', "Import Editor Setup"));
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
 <link rel="stylesheet" href="${style}">
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><p class="hucode-setup-bootstrap" role="status">${fallback}</p></div>
 <script type="module" nonce="${nonce}" src="${script}"></script>
 </body>
 </html>`;
@@ -196,7 +262,16 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		const { intent } = message;
 		if (intent.type === 'ready') {
 			this.ready = true;
+			this.readyDeadline.clear();
 			this.deliver(this.session.state, true);
+			// The modal has just opened, so the first thing a keyboard user needs is a landing
+			// point inside the webview rather than the document body.
+			this.post({
+				protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+				type: 'focus',
+				revision: this.revision,
+				focusId: EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+			});
 			return;
 		}
 		if (intent.type === 'close') {
@@ -205,13 +280,27 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		}
 		if (isEditorMigrationSetupRevisionBound(intent.type) && message.revision !== this.revision) {
 			this.logService.trace('[hucode] setup webview intent refused: stale revision.');
+			this.refuse(localize('editorMigration.setup.staleGesture', "That choice was made against an earlier version of this screen and was not applied. The screen has been refreshed; try again."));
 			return;
 		}
 		if (!this.dispatch(intent)) {
 			this.logService.warn(`[hucode] setup webview intent refused: ${intent.type} does not resolve against current state.`);
+			this.refuse(localize('editorMigration.setup.unavailableChoice', "That choice is no longer available. The screen has been refreshed with the current options."));
 			return;
 		}
 		this.post({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'accepted', revision: this.revision, intentType: intent.type });
+	}
+
+	/**
+	 * Answers a refused gesture with a localized reason and the authoritative state behind it.
+	 *
+	 * Silently dropping the gesture leaves the user looking at a control that appears to have done
+	 * nothing. Resending the snapshot advances the revision, which also retires whatever stale
+	 * revision the renderer was still holding.
+	 */
+	private refuse(message: string): void {
+		this.deliver(this.session.state, true);
+		this.post({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'error', revision: this.revision, message });
 	}
 
 	/**
@@ -407,11 +496,23 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 
 	override dispose(): void {
 		this.disposedHost = true;
+		this.readyDeadline.clear();
 		this.post({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'disposed' });
 		this.webview = undefined;
 		this.ready = false;
 		super.dispose();
 	}
+}
+
+/** Minimal escaping for the two localized strings the bootstrap document embeds. */
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, character => ({
+		'&': '&amp;',
+		'<': '&lt;',
+		'>': '&gt;',
+		'"': '&quot;',
+		'\'': '&#39;',
+	}[character] ?? character));
 }
 
 /** True when nothing but Apply progress and its announcement changed. */

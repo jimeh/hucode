@@ -5,11 +5,12 @@
 
 import { ChevronRightIcon, SearchIcon } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
-import type {
-	EditorMigrationSetupAction,
-	EditorMigrationSetupDisclosure,
-	EditorMigrationSetupGroup,
-	EditorMigrationSetupProblemRow,
+import {
+	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+	type EditorMigrationSetupAction,
+	type EditorMigrationSetupDisclosure,
+	type EditorMigrationSetupGroup,
+	type EditorMigrationSetupProblemRow,
 } from '@/generated/editorMigrationSetupProtocol';
 import { Badge } from '@/vendor/shadcn/badge';
 import { Button } from '@/vendor/shadcn/button';
@@ -170,7 +171,13 @@ export function ProblemList({ problems, overflowText }: {
 export function PanelHeading({ children, id }: { readonly children: ReactNode; readonly id?: string }) {
 	const generated = useId();
 	return (
-		<h2 id={id ?? generated} tabIndex={-1} data-panel-heading className="text-foreground text-base font-semibold outline-none">
+		<h2
+			id={id ?? generated}
+			tabIndex={-1}
+			data-panel-heading
+			data-focus-id={EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID}
+			className="text-foreground text-base font-semibold outline-none"
+		>
 			{children}
 		</h2>
 	);

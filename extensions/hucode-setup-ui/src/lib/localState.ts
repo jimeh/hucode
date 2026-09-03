@@ -20,9 +20,10 @@ export interface LocalSetupState {
 	readonly activeSectionId: string | undefined;
 	readonly filters: Readonly<Record<string, string>>;
 	readonly openDisclosures: ReadonlySet<string>;
-	readonly newTargetName: string;
+	/** The typed profile name, or `undefined` while the user has not edited the field. */
+	readonly newTargetName: string | undefined;
 	readonly rollbackSelection: ReadonlySet<EditorMigrationSetupFileCategory>;
-	/** Announcement for the last rail move, or `undefined` while the user has not moved it. */
+	/** Announcement for the last rail move, valid only for the revision it was made against. */
 	readonly sectionAnnouncement: string | undefined;
 	setActiveSection(id: string): void;
 	setFilter(id: string, value: string): void;
@@ -35,10 +36,12 @@ export function useLocalSetupState(presentation: EditorMigrationSetupPresentatio
 	const [activeSectionId, setActiveSectionId] = useState<string | undefined>(undefined);
 	const [filters, setFilters] = useState<Record<string, string>>({});
 	const [openDisclosures, setOpenDisclosures] = useState<ReadonlySet<string>>(() => new Set());
-	const [newTargetName, setNewTargetName] = useState('');
+	const [newTargetName, setNewTargetName] = useState<string | undefined>(undefined);
 	const [rollbackSelection, setRollbackSelection] = useState<ReadonlySet<EditorMigrationSetupFileCategory>>(() => new Set());
-	const [sectionAnnouncement, setSectionAnnouncement] = useState<string | undefined>(undefined);
+	const [announcement, setAnnouncement] = useState<{ readonly revision: number; readonly text: string } | undefined>(undefined);
 	const scopeRef = useRef<string | undefined>(undefined);
+	const phaseRef = useRef<string | undefined>(undefined);
+	const seededRestoreRef = useRef<string | undefined>(undefined);
 
 	const scopeKey = presentation?.scopeKey;
 	useEffect(() => {
@@ -46,44 +49,70 @@ export function useLocalSetupState(presentation: EditorMigrationSetupPresentatio
 			return;
 		}
 		scopeRef.current = scopeKey;
-		setActiveSectionId(undefined);
 		setFilters({});
 		setOpenDisclosures(new Set());
-		setNewTargetName('');
+		setNewTargetName(undefined);
 		setRollbackSelection(new Set());
-		setSectionAnnouncement(undefined);
+		seededRestoreRef.current = undefined;
 	}, [scopeKey]);
 
-	// Rollback defaults to every eligible category, and a category the host stops offering must not
-	// linger in a selection the user can no longer see.
+	/*
+	 * The active section is scoped to the phase, not to the scope key.
+	 *
+	 * Review and publisher confirmation describe the same draft and deliberately share a scope so
+	 * filters and disclosures survive the transition. They do not share a rail: a category the user
+	 * selected during review would otherwise stay active in publisher confirmation and hide the
+	 * publisher list the footer is asking them to confirm.
+	 */
+	const phase = presentation?.phase;
+	useEffect(() => {
+		if (phase === undefined || phaseRef.current === phase) {
+			return;
+		}
+		phaseRef.current = phase;
+		setActiveSectionId(undefined);
+	}, [phase]);
+
+	/*
+	 * Rollback defaults to every eligible category, seeded once per option set. Reseeding on every
+	 * snapshot would undo the user's own clearing the moment any unrelated progress arrived.
+	 */
 	const restoreOptions = useMemo(() => {
 		const panel = presentation?.panels.find(candidate => candidate.kind === 'restore');
 		return panel?.kind === 'restore' ? panel.selection?.options.map(option => option.category) : undefined;
 	}, [presentation]);
 	const restoreKey = restoreOptions?.join(',');
 	useEffect(() => {
-		if (!restoreOptions?.length) {
+		if (!restoreOptions?.length || restoreKey === undefined) {
 			return;
 		}
-		setRollbackSelection(previous => {
-			const kept = [...previous].filter(category => restoreOptions.includes(category));
-			return kept.length === previous.size && previous.size > 0 ? previous : new Set(kept.length ? kept : restoreOptions);
-		});
+		if (seededRestoreRef.current === restoreKey) {
+			// The option set is unchanged, so only drop categories the host has stopped offering.
+			setRollbackSelection(previous => {
+				const kept = [...previous].filter(category => restoreOptions.includes(category));
+				return kept.length === previous.size ? previous : new Set(kept);
+			});
+			return;
+		}
+		seededRestoreRef.current = restoreKey;
+		setRollbackSelection(new Set(restoreOptions));
 	}, [restoreKey, restoreOptions]);
 
 	const resolvedSectionId = activeSectionId && presentation?.sections.some(section => section.id === activeSectionId)
 		? activeSectionId
 		: presentation?.defaultSectionId;
 
-	// Announcing from the click keeps the live region out of render-time side effects, and a
-	// lingering announcement is harmless: a polite region only speaks when its text changes.
+	// Announcing from the click keeps the live region out of render-time side effects. Binding it
+	// to a revision keeps a rail move from riding along with a later host announcement.
 	const setActiveSection = useCallback((id: string) => {
-		if (id === resolvedSectionId) {
+		if (id === resolvedSectionId || !presentation) {
 			return;
 		}
 		setActiveSectionId(id);
-		const label = presentation?.sections.find(section => section.id === id)?.label;
-		setSectionAnnouncement(label ? presentation?.sectionAnnouncementTemplate.replace('{0}', label) : undefined);
+		const label = presentation.sections.find(section => section.id === id)?.label;
+		setAnnouncement(label
+			? { revision: presentation.revision, text: presentation.sectionAnnouncementTemplate.replace('{0}', label) }
+			: undefined);
 	}, [presentation, resolvedSectionId]);
 
 	return {
@@ -92,7 +121,7 @@ export function useLocalSetupState(presentation: EditorMigrationSetupPresentatio
 		openDisclosures,
 		newTargetName,
 		rollbackSelection,
-		sectionAnnouncement,
+		sectionAnnouncement: announcement && announcement.revision === presentation?.revision ? announcement.text : undefined,
 		setActiveSection,
 		setFilter: useCallback((id, value) => setFilters(previous => ({ ...previous, [id]: value })), []),
 		toggleDisclosure: useCallback((id, open) => setOpenDisclosures(previous => {

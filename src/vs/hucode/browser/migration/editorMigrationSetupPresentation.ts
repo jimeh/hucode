@@ -237,11 +237,29 @@ function profilesPanel(state: EditorMigrationFlowState): EditorMigrationSetupPan
 		profiles: application.profiles.map(source => ({
 			id: source.ref.value,
 			label: source.profile.name,
+			// Each row states what that profile actually offers, so the list can be compared without
+			// selecting every profile in turn.
+			description: sourceCategorySummary(source),
 			checked: state.selectedSourceRef?.value === source.ref.value,
 			intent: { type: 'selectSourceProfile', sourceRef: source.ref.value },
 		})),
 		details: selected ? sourceDetails(selected) : undefined,
 	};
+}
+
+/** What one source profile offers, category by category, stated once per row. */
+function sourceCategorySummary(source: EditorMigrationSourceDescriptor): string {
+	return source.categories
+		.map(category => `${CATEGORY_LABELS[category.category]}: ${resourceStateLabel(category.state, category.itemCount)}`)
+		.join(' · ');
+}
+
+function resourceStateLabel(state: 'present' | 'absent' | 'unreadable', itemCount: number): string {
+	switch (state) {
+		case 'present': return localize('editorMigration.discovery.present', "{0} items", itemCount);
+		case 'absent': return localize('editorMigration.discovery.absent', "not found");
+		case 'unreadable': return localize('editorMigration.discovery.unreadable', "could not be read");
+	}
 }
 
 function sourceDetails(source: EditorMigrationSourceDescriptor): EditorMigrationSetupDisclosure {

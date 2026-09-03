@@ -7,8 +7,12 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test } from 'vitest';
 import { SetupShell } from '@/components/SetupShell';
-import { presentation, profilesPanel, reviewCategoryPanel, conflictRow, testHost } from '@/test/fixtures';
-import type { EditorMigrationSetupIntent } from '@/generated/editorMigrationSetupProtocol';
+import { presentation, profilesPanel, reviewCategoryPanel, restorePanel, targetPanel, conflictRow, manyConflicts, testHost } from '@/test/fixtures';
+import {
+	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+	type EditorMigrationSetupIntent,
+} from '@/generated/editorMigrationSetupProtocol';
 
 afterEach(cleanup);
 
@@ -17,11 +21,25 @@ function intents(sent: readonly unknown[]): EditorMigrationSetupIntent[] {
 }
 
 async function mount(initial = presentation()) {
-	const { host, sent, publish } = testHost();
+	const { host, sent, publish, deliverHostMessage } = testHost();
 	render(<SetupShell host={host} />);
 	await act(async () => publish(initial));
-	return { sent, publish, user: userEvent.setup() };
+	return { sent, publish, deliverHostMessage, user: userEvent.setup() };
 }
+
+/** The review sections and panels both phases share, so only the phase differs between them. */
+const REVIEW_SECTIONS = [
+	{ id: 'settings', label: 'Settings', status: 'attention' as const, count: 3, statusDescription: 'Needs attention. 3 items.' },
+	{ id: 'notImported', label: 'Not Imported', status: 'neutral' as const, count: 1, statusDescription: '1 items.' },
+];
+
+const NOT_IMPORTED_PANEL = {
+	kind: 'groups' as const,
+	id: 'notImported',
+	heading: 'Not Imported',
+	lead: '1 items are held back, grouped by reason.',
+	groups: [],
+};
 
 describe('SetupShell', () => {
 	test('shows a loading placeholder until the host answers with a snapshot', () => {
@@ -172,6 +190,167 @@ describe('SetupShell', () => {
 
 		await act(async () => publish(presentation({ revision: 2 })));
 		expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh' }));
+	});
+
+	test('moves off a review category when publisher confirmation arrives on the same scope', async () => {
+		const scopeKey = 'review|draft-1|';
+		const review = presentation({
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel({ conflicts: manyConflicts() }), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(review);
+
+		// The user parks the rail on a category that publisher confirmation also offers.
+		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Not Imported/ }));
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Not Imported');
+
+		await act(async () => publish(presentation({
+			revision: 2,
+			phase: 'publishers',
+			// Deliberately the same scope: review and publisher confirmation describe one draft.
+			scopeKey,
+			sections: [...REVIEW_SECTIONS, { id: 'publishers', label: 'Publishers', status: 'attention', count: 1, separated: true, statusDescription: 'Needs attention. 1 items.' }],
+			defaultSectionId: 'publishers',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [
+				reviewCategoryPanel({ include: undefined, bulkActions: undefined, conflicts: [conflictRow('settings:editor.fontSize', 'editor.fontSize', '13', '14', true), ...manyConflicts()] }),
+				NOT_IMPORTED_PANEL,
+				{ kind: 'groups', id: 'publishers', heading: 'Confirm Extension Publishers', lead: 'These publishers provide extensions in the reviewed import.', groups: [{ id: 'publisher:acme', title: 'acme provides 2 extensions in this import.', count: 2, countDescription: '2 items.' }] },
+			],
+			footer: { lines: [], actions: [{ id: 'publishers-confirm', label: 'Confirm Publishers and Import', kind: 'primary', disabled: false, intent: { type: 'confirmPublishers' } }] },
+		})));
+
+		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Confirm Extension Publishers');
+		expect(screen.getByText('acme provides 2 extensions in this import.')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Confirm Publishers and Import' })).toBeInTheDocument();
+	});
+
+	test('keeps filters and disclosures across the review to publishers transition', async () => {
+		const scopeKey = 'review|draft-1|';
+		const review = presentation({
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel({ conflicts: manyConflicts() }), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(review);
+		await user.type(screen.getByLabelText('Filter Settings differences'), 'conflict-3');
+
+		await act(async () => publish({ ...review, revision: 2, phase: 'publishers' }));
+
+		// The rail moved to the phase default, but the typed filter belongs to the draft, not the phase.
+		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Settings/ }));
+		expect(screen.getByLabelText('Filter Settings differences')).toHaveValue('conflict-3');
+	});
+
+	test('takes the host focus request into the panel heading', async () => {
+		const { deliverHostMessage } = await mount();
+		expect(document.activeElement).toBe(document.body);
+
+		await act(async () => deliverHostMessage({
+			protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+			type: 'focus',
+			revision: 1,
+			focusId: EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+		}));
+
+		expect(document.activeElement).toBe(screen.getByRole('heading', { level: 2 }));
+	});
+
+	test('compares profiles by what each one actually offers', async () => {
+		await mount(presentation({
+			phase: 'profile',
+			panels: [{
+				...(profilesPanel() as Extract<ReturnType<typeof profilesPanel>, { kind: 'profiles' }>),
+				profiles: [
+					{ id: 'cursor-default', label: 'Default', description: 'Settings: 42 items · Keyboard Shortcuts: 7 items · Extensions: 18 items', checked: true, intent: { type: 'selectSourceProfile', sourceRef: 'cursor-default' } },
+					{ id: 'cursor-work', label: 'Work', description: 'Settings: 3 items · Keyboard Shortcuts: not found · Extensions: could not be read', checked: false, intent: { type: 'selectSourceProfile', sourceRef: 'cursor-work' } },
+				],
+			}],
+		}));
+
+		expect(screen.getByText('Settings: 42 items · Keyboard Shortcuts: 7 items · Extensions: 18 items')).toBeInTheDocument();
+		expect(screen.getByText('Settings: 3 items · Keyboard Shortcuts: not found · Extensions: could not be read')).toBeInTheDocument();
+	});
+
+	test('lets an explicitly emptied new-profile name stay empty', async () => {
+		const { user } = await mount(presentation({ phase: 'target', panels: [targetPanel('Imported')] }));
+		const input = screen.getByLabelText('New profile name');
+		expect(input).toHaveValue('Imported');
+
+		await user.clear(input);
+
+		expect(input).toHaveValue('');
+		expect(screen.getByRole('button', { name: 'Use New Profile' })).toBeDisabled();
+	});
+
+	test('keeps the last rollback category unchecked across a later snapshot', async () => {
+		const results = presentation({
+			phase: 'results',
+			scopeKey: 'results||operation-1',
+			sections: [{ id: 'restore', label: 'Undo File Changes', status: 'neutral', statusDescription: '' }],
+			defaultSectionId: 'restore',
+			railLabel: 'Import sections',
+			railTitle: 'Results',
+			panels: [restorePanel()],
+		});
+		const { publish, user } = await mount(results);
+
+		await user.click(screen.getByRole('checkbox', { name: 'Settings' }));
+		await user.click(screen.getByRole('checkbox', { name: 'Snippets' }));
+		expect(screen.getByRole('checkbox', { name: 'Settings' })).not.toBeChecked();
+		expect(screen.getByRole('checkbox', { name: 'Snippets' })).not.toBeChecked();
+		expect(screen.getByRole('button', { name: 'Check File Rollback' })).toBeDisabled();
+
+		await act(async () => publish({ ...results, revision: 2 }));
+
+		expect(screen.getByRole('checkbox', { name: 'Settings' })).not.toBeChecked();
+		expect(screen.getByRole('checkbox', { name: 'Snippets' })).not.toBeChecked();
+	});
+
+	test('does not carry a rail announcement into a later host announcement', async () => {
+		const review = presentation({
+			phase: 'review',
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel(), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(review);
+
+		await user.click(within(screen.getByRole('navigation', { name: 'Import sections' })).getByRole('button', { name: /Not Imported/ }));
+		expect(screen.getByRole('status')).toHaveTextContent('Showing Not Imported.');
+
+		await act(async () => publish({ ...review, revision: 2, announcement: 'Importing selected items. 4 of 10 items recorded.' }));
+
+		expect(screen.getByRole('status')).toHaveTextContent('Importing selected items. 4 of 10 items recorded.');
+		expect(screen.getByRole('status').textContent).not.toMatch(/Showing/);
+	});
+
+	test('surfaces a refused gesture as an alert alongside the refreshed state', async () => {
+		const { publish, deliverHostMessage } = await mount();
+
+		await act(async () => {
+			publish(presentation({ revision: 2 }));
+			deliverHostMessage({
+				protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+				type: 'error',
+				revision: 2,
+				message: 'That choice is no longer available. The screen has been refreshed with the current options.',
+			});
+		});
+
+		expect(screen.getByRole('alert')).toHaveTextContent('That choice is no longer available.');
 	});
 
 	test('discards local filter state when the presentation scope changes', async () => {

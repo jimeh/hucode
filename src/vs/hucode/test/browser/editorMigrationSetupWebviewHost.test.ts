@@ -18,7 +18,12 @@ import {
 	EditorMigrationSetupWebviewHost,
 	isProgressOnlyChange,
 } from '../../browser/migration/editorMigrationSetupWebviewHost.js';
-import { EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, EditorMigrationSetupIntent } from '../../common/migration/editorMigrationSetupProtocol.js';
+import { bindEditorMigrationCloseCancellation, shouldCancelEditorMigrationOnClose } from '../../browser/migration/editorMigrationSetupClose.js';
+import {
+	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+	EditorMigrationSetupIntent,
+} from '../../common/migration/editorMigrationSetupProtocol.js';
 import { EditorMigrationApplyProgress } from '../../common/migration/editorMigrationApply.js';
 
 const MEDIA_ROOT = URI.file('/builtin/hucode-setup-ui/media');
@@ -106,8 +111,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		webview.receive({ protocolVersion: 999, revision: 0, intent: { type: 'ready' } });
 		assert.strictEqual(webview.posted.length, 0, 'a foreign protocol version never reaches the session');
 		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
-		assert.strictEqual(webview.posted.length, 1);
-		assert.strictEqual(webview.posted[0].type, 'state');
+		assert.deepStrictEqual(webview.posted.map(message => message.type), ['state', 'focus']);
 		assert.strictEqual(webview.posted[0].presentation.phase, 'application');
 
 		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 1, intent: { type: 'runCommand', id: 'workbench.action.quit' } });
@@ -129,15 +133,16 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		await settle();
 		const [webview] = webviews.created;
 		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
-		const revision = webview.posted[0].revision;
+		// Each refusal answers with a fresh snapshot, so the current revision has to be re-read.
+		const currentRevision = () => webview.posted.filter(message => message.type === 'state').at(-1)!.revision;
 
-		send(webview, revision, { type: 'selectApplication', applicationId: 'unknown-editor' });
+		send(webview, currentRevision(), { type: 'selectApplication', applicationId: 'unknown-editor' });
 		assert.deepStrictEqual(session.calls, [], 'an identifier the state does not offer is refused');
 
-		send(webview, revision - 1, { type: 'selectApplication', applicationId: 'cursor' });
+		send(webview, currentRevision() - 1, { type: 'selectApplication', applicationId: 'cursor' });
 		assert.deepStrictEqual(session.calls, [], 'a revision-bound action from a superseded snapshot is refused');
 
-		send(webview, revision, { type: 'selectApplication', applicationId: 'cursor' });
+		send(webview, currentRevision(), { type: 'selectApplication', applicationId: 'cursor' });
 		assert.deepStrictEqual(session.calls, [['selectApplication', 'cursor']]);
 		assert.strictEqual(webview.posted.at(-1)?.type, 'accepted');
 
@@ -196,6 +201,182 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.deepStrictEqual(session.calls, [], 'a refused post must not cancel or alter the admitted operation');
 		host.dispose();
 		assert.deepStrictEqual(session.calls, []);
+	});
+
+	test('gives up on a bundle that never reports ready and offers the same retry path', async () => {
+		const webviews = new StubWebviewService();
+		const parent = testParent();
+		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
+		const host = disposables.add(new EditorMigrationSetupWebviewHost(
+			parent,
+			session,
+			// A short deadline keeps this a behaviour test rather than a ten-second wait.
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		assert.strictEqual(webviews.created.length, 1, 'present assets still mount');
+		assert.strictEqual(parent.querySelector('.hucode-setup-webview-status'), null);
+
+		await timeout(40);
+
+		const status = parent.querySelector('.hucode-setup-webview-status');
+		assert.ok(status, 'an existing but silent bundle must not leave an empty modal');
+		assert.strictEqual(status!.getAttribute('role'), 'alert');
+		assert.deepStrictEqual([...parent.getElementsByTagName('button')].length, 2, 'retry and close');
+		assert.deepStrictEqual(session.calls, [], 'a dead renderer must not disturb the migration');
+
+		[...parent.getElementsByTagName('button')][0].click();
+		await settle();
+		assert.strictEqual(webviews.created.length, 2, 'the retry remounts');
+		host.dispose();
+	});
+
+	test('clears the ready deadline once the renderer answers', async () => {
+		const webviews = new StubWebviewService();
+		const parent = testParent();
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			parent,
+			sessionStub({ phase: 'application' }),
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+
+		await timeout(40);
+
+		assert.strictEqual(parent.querySelector('.hucode-setup-webview-status'), null, 'a ready renderer must not be torn down');
+		assert.ok(webview.posted.some(message => message.type === 'state'));
+	});
+
+	test('ships a localized bootstrap fallback and asks for the first heading after ready', async () => {
+		const webviews = new StubWebviewService();
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			sessionStub({ phase: 'application', applications: [application('cursor')] }),
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+
+		assert.match(webview.html ?? '', /<div id="root"><p class="hucode-setup-bootstrap" role="status">[^<]+<\/p><\/div>/);
+		assert.doesNotMatch(webview.html ?? '', /<div id="root"><\/div>/);
+		assert.strictEqual(webview.focused, true, 'mounting moves focus into the webview');
+
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+
+		const focusMessage = webview.posted.find(message => message.type === 'focus');
+		assert.ok(focusMessage, 'the renderer needs a landing point once it has a snapshot');
+		assert.strictEqual(focusMessage.focusId, EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID);
+		assert.strictEqual(focusMessage.revision, webview.posted.find(message => message.type === 'state').revision);
+	});
+
+	test('answers a refused gesture with the current state and a localized reason', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = webview.posted[0].revision;
+		webview.posted.length = 0;
+
+		send(webview, revision - 1, { type: 'selectApplication', applicationId: 'cursor' });
+
+		assert.deepStrictEqual(session.calls, [], 'a stale gesture still runs no session method');
+		const answer = webview.posted.map(message => message.type);
+		assert.deepStrictEqual(answer, ['state', 'error'], 'the user gets the authoritative state and a reason');
+		assert.ok(webview.posted[1].message.length > 0);
+		assert.strictEqual(webview.posted[1].revision, webview.posted[0].revision, 'the reason describes the state alongside it');
+
+		// The refreshed revision is the one the renderer must now use.
+		send(webview, webview.posted[0].revision, { type: 'selectApplication', applicationId: 'cursor' });
+		assert.deepStrictEqual(session.calls, [['selectApplication', 'cursor']]);
+	});
+
+	test('refuses an unresolvable identifier with the same recoverable answer', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = webview.posted[0].revision;
+		webview.posted.length = 0;
+
+		send(webview, revision, { type: 'selectApplication', applicationId: 'unknown-editor' });
+
+		assert.deepStrictEqual(session.calls, []);
+		assert.deepStrictEqual(webview.posted.map(message => message.type), ['state', 'error']);
+	});
+
+	test('cancels an in-flight Apply when the input closes, and only then', () => {
+		const applying = sessionStub({ phase: 'apply', progress: progress('applying', 1) });
+		const closing = new Emitter<void>();
+		disposables.add(bindEditorMigrationCloseCancellation(applying, closing.event));
+		closing.fire();
+		assert.deepStrictEqual(applying.calls, [['requestCancellation']], 'Escape and outside-click reach this path, not the renderer');
+		closing.dispose();
+
+		const reviewing = sessionStub({ phase: 'review' });
+		const reviewClosing = new Emitter<void>();
+		disposables.add(bindEditorMigrationCloseCancellation(reviewing, reviewClosing.event));
+		reviewClosing.fire();
+		assert.deepStrictEqual(reviewing.calls, [], 'a choice screen has nothing to cancel');
+		reviewClosing.dispose();
+
+		assert.strictEqual(shouldCancelEditorMigrationOnClose(flowState({ phase: 'apply' })), true);
+		for (const phase of ['loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'results'] as const) {
+			assert.strictEqual(shouldCancelEditorMigrationOnClose(flowState({ phase })), false, `${phase} must not cancel`);
+		}
+	});
+
+	test('does not treat renderer loss or a remount as a close', async () => {
+		const webviews = new StubWebviewService();
+		const parent = testParent();
+		const session = sessionStub({ phase: 'apply', progress: progress('applying', 1) });
+		const host = disposables.add(new EditorMigrationSetupWebviewHost(
+			parent,
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		webviews.created[0].fail('renderer crashed');
+		await timeout(40);
+
+		assert.deepStrictEqual(session.calls, [], 'a dead webview during Apply is presentation loss, not cancellation');
+		[...parent.getElementsByTagName('button')][0].click();
+		await settle();
+		assert.strictEqual(webviews.created.length, 2);
+		assert.deepStrictEqual(session.calls, [], 'remounting the view must not cancel either');
+		host.dispose();
+		assert.deepStrictEqual(session.calls, [], 'host disposal alone is not a close of the import');
 	});
 
 	test('classifies only Apply progress and its announcement as coalescable', () => {
@@ -320,6 +501,7 @@ function sessionStub(initial: Partial<EditorMigrationFlowState>): SessionStub {
 class StubWebview {
 	html: string | undefined;
 	failPosts = false;
+	focused = false;
 	readonly posted: any[] = [];
 	private readonly messageEmitter = new Emitter<WebviewMessageReceivedEvent>();
 	private readonly fatalEmitter = new Emitter<{ readonly message: string }>();
@@ -334,6 +516,14 @@ class StubWebview {
 	}
 
 	mountTo(): void { }
+
+	focus(): void {
+		this.focused = true;
+	}
+
+	fail(message: string): void {
+		this.fatalEmitter.fire({ message });
+	}
 
 	postMessage(message: any): Promise<boolean> {
 		if (this.failPosts) {
