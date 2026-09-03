@@ -73,3 +73,7 @@ runs:
         done
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Prepare Electron types
+      shell: bash
+      run: node build/npm/electronTypes.ts

@@ -11,6 +11,7 @@ import path from 'path';
 
 interface IWorkflowStep {
 	readonly name?: string;
+	readonly if?: string;
 	readonly shell?: string;
 	readonly run?: string;
 	readonly env?: Readonly<Record<string, unknown>>;
@@ -198,6 +199,20 @@ suite('Hucode release workflow contract', () => {
 			steps[build].env?.['HUCODE_ELECTRON_PREFETCHED'],
 			'1'
 		);
+	});
+
+	test('prepares Electron types before release builds on cache hits', () => {
+		const steps = parsedWorkflow.jobs?.['app-build']?.steps;
+		assert.ok(steps, 'app-build steps must exist');
+
+		const install = requiredStepIndex(steps, 'Install dependencies');
+		const prepare = requiredStepIndex(steps, 'Prepare Electron types');
+		const build = requiredStepIndex(steps, 'Build release app');
+
+		assert.ok(prepare > install, 'Electron types must follow dependency restoration');
+		assert.ok(build > prepare, 'Electron types must precede the release build');
+		assert.strictEqual(steps[prepare].if, undefined);
+		assert.strictEqual(steps[prepare].run, 'node build/npm/electronTypes.ts');
 	});
 
 	test('removes the downloaded app archive before packaging', () => {

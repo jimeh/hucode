@@ -600,6 +600,9 @@ jobs:
         if: matrix.platform != 'win32'
         run: rm -rf .build/node_modules_cache .build/node_modules_list.txt
 
+      - name: Prepare Electron types
+        run: node build/npm/electronTypes.ts
+
       - name: Prepare Hucode mixin
         run: npm run hucode:prepare
 
