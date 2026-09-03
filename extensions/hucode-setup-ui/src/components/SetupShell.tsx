@@ -61,6 +61,11 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 		if (active && active !== document.body && active !== document.documentElement) {
 			return;
 		}
+		// The webview is one frame among many. When the workbench owns focus — a quick-input, the
+		// terminal, another window — pulling it back here would fight the user for the caret.
+		if (!document.hasFocus()) {
+			return;
+		}
 		// The transition removed the focused control and left focus on the document body. Land on
 		// the current panel heading so keyboard and screen-reader users stay inside the flow.
 		const heading = scrollRef.current?.querySelector<HTMLElement>('[data-panel-heading]');

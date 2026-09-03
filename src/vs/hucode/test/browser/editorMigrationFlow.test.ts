@@ -37,6 +37,53 @@ suite('EditorMigrationFlow', () => {
 		assert.strictEqual(defaultEditorMigrationSourceProfile({ ...groups[1], profiles: [cursorNamed] }), undefined);
 	});
 
+	test('deletes recovery data once for a rapid double acknowledgement', async () => {
+		const acknowledged: string[] = [];
+		const acknowledgement = new DeferredPromise<void>();
+		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
+		const draft = reviewDraft(snapshot(sourceDescriptor));
+		const plan: EditorMigrationReviewedPlan = {
+			...draft,
+			choices: { selectedCategories: ['settings'], decisions: [] },
+			operations: [],
+			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+		};
+		const settled = { ...operation(plan), stage: 'settled' as const, aggregateOutcome: 'completed' as const };
+		const applyService = {
+			listRecoverableOperations: async () => [],
+			getOperation: async () => settled,
+			acknowledge: async (operationId: string) => {
+				acknowledged.push(operationId);
+				await acknowledgement.p;
+			},
+		} as unknown as IEditorMigrationApplyService;
+		const session = disposables.add(new EditorMigrationFlowSession(
+			{ discoverSources: async () => ({ schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [], diagnostics: [] }) } as unknown as IEditorMigrationSourceService,
+			{} as IEditorMigrationPlanningService,
+			applyService,
+			{ defaultProfile: { id: 'default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+		await session.showRecovery(settled.id);
+		assert.strictEqual(session.state.phase, 'results');
+
+		// Acknowledgement reaches the journal before it publishes anything, so a second press
+		// inside that window is invisible to the webview host's phase and busy guard.
+		const first = session.acknowledge();
+		const second = session.acknowledge();
+		assert.deepStrictEqual(acknowledged, [settled.id], 'recovery data must be deleted exactly once');
+
+		acknowledgement.complete();
+		await Promise.all([first, second]);
+		assert.deepStrictEqual(acknowledged, [settled.id]);
+
+		// The guard releases, so a later deliberate acknowledgement still works.
+		await session.showRecovery(settled.id);
+		await session.acknowledge();
+		assert.deepStrictEqual(acknowledged, [settled.id, settled.id]);
+	});
+
 	test('binds rollback inspection completion to the latest requested category set', async () => {
 		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
 		const draft = reviewDraft(snapshot(sourceDescriptor));

@@ -17,7 +17,7 @@ import {
 	EditorMigrationReviewedPlan,
 } from '../../common/migration/editorMigrationPlanning.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceDescriptor, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
-import type { EditorMigrationSetupPanel, EditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
+import { isEditorMigrationSetupPresentation, type EditorMigrationSetupPanel, type EditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
 
 suite('EditorMigrationSetupPresentation', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -296,6 +296,38 @@ suite('EditorMigrationSetupPresentation', () => {
 			assert.match(category.lead, /In progress\. 1 of 1 recorded\./);
 			assert.match(category.recordedNote ?? '', /1 items recorded so far\./);
 		}
+	});
+
+	test('emits snapshots the wire validator accepts, for every phase and panel kind', () => {
+		const draft = reviewDraft();
+		const operation = settledOperation();
+		const withSnapshots = { ...operation, snapshots: [{ category: 'settings', postApplyHash: 'hash' }] } as unknown as EditorMigrationOperation;
+		const cursor = descriptor('Default', 'default', 'cursor-default');
+		const states: readonly [string, EditorMigrationFlowState][] = [
+			['loading', state({ phase: 'loading' })],
+			['recovery', state({ phase: 'recovery', recoveries: [{ id: 'r', stage: 'settled', createdAt: 1, updatedAt: 2, targetName: 'Default', recoverable: true }, { id: 'r2', stage: 'settled', createdAt: 1, updatedAt: 2, recoverable: false, unsupportedSchemaVersion: 99 }] })],
+			['application', state({ phase: 'application', applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [cursor] }], discoveryDiagnostics: [{ code: 'permissionDeniedOrLocked', severity: 'warning', scope: 'candidate', adapterId: 'vscode', details: { path: '/p' } }] })],
+			['profile', state({ phase: 'profile', selectedApplicationId: 'cursor', selectedSourceRef: { value: 'cursor-default' }, applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [cursor] }] })],
+			['target', state({ phase: 'target', targets: [{ selection: { kind: 'existing', profileId: 'default' }, name: 'Default', kind: 'default' }], selectedTarget: { kind: 'proposed', name: 'Imported' } })],
+			['review', reviewState(draft)],
+			['publishers', state({ ...reviewState(draft), phase: 'publishers', publishers: ['publisher'], reviewedPlan: reviewedPlan(draft) })],
+			['apply', state({ phase: 'apply', reviewedPlan: reviewedPlan(draft), progress: applyProgress({ stage: 'applying', results: [{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 }] }) })],
+			['results', state({ phase: 'results', operation })],
+			['restore', state({ phase: 'results', operation: withSnapshots, rollbackInspection: { operationId: withSnapshots.id, operationRevision: 1, eligibleCategories: ['settings'], driftedCategories: ['settings'], fingerprint: 'x' } })],
+		];
+
+		const kinds = new Set<string>();
+		for (const [name, value] of states) {
+			const presentation = editorMigrationSetupPresentation(value, 1);
+			assert.strictEqual(isEditorMigrationSetupPresentation(presentation), true, `${name} must survive its own wire validation`);
+			// The snapshot has to survive the JSON round trip the webview boundary performs.
+			assert.strictEqual(isEditorMigrationSetupPresentation(JSON.parse(JSON.stringify(presentation))), true, `${name} after serialization`);
+			presentation.panels.forEach(panel => kinds.add(panel.kind));
+		}
+		assert.deepStrictEqual([...kinds].sort(), [
+			'applications', 'applyCategory', 'applyOverview', 'groups', 'loading', 'profiles',
+			'recovery', 'restore', 'resultsCategory', 'resultsOverview', 'reviewCategory', 'target',
+		], 'every panel kind the presenter can emit is covered');
 	});
 
 	test('changes the scope key only when the import, draft, or operation changes', () => {

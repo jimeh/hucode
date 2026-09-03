@@ -23,6 +23,11 @@ if (!globalThis.ResizeObserver) {
 		disconnect(): void { }
 	} as unknown as typeof ResizeObserver;
 }
+// jsdom never reports the document as focused, so every focus-recovery path would look like the
+// workbench had taken the caret. The mounted webview normally does own focus; the test that cares
+// about the opposite overrides this.
+Object.defineProperty(document, 'hasFocus', { configurable: true, writable: true, value: () => true });
+
 if (!Element.prototype.hasPointerCapture) {
 	Element.prototype.hasPointerCapture = () => false;
 	Element.prototype.setPointerCapture = () => { };

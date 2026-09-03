@@ -463,6 +463,138 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.deepStrictEqual(session.calls, [['acceptReview']]);
 	});
 
+	test('starts one source read for a rapid duplicate profile Continue', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'profile', selectedSourceRef: { value: 'cursor-default' } });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const shown = webview.posted.find(message => message.type === 'state').revision;
+
+		send(webview, shown, { type: 'continueFromProfile' });
+		assert.deepStrictEqual(session.calls, [['continueFromProfile']]);
+		// The session publishes `busy` before its first await, which is what the guard reads.
+		session.publish({ busy: true });
+
+		send(webview, shown, { type: 'continueFromProfile' });
+		assert.deepStrictEqual(session.calls, [['continueFromProfile']], 'a working session reads the source once');
+
+		// And once it has landed on Target, Continue no longer belongs to this screen at all.
+		session.publish({ phase: 'target', busy: false });
+		send(webview, shown, { type: 'continueFromProfile' });
+		assert.deepStrictEqual(session.calls, [['continueFromProfile']]);
+	});
+
+	test('moves exactly one phase for a rapid duplicate Back', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'review' });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const shown = webview.posted.find(message => message.type === 'state').revision;
+
+		send(webview, shown, { type: 'back' });
+		assert.deepStrictEqual(session.calls, [['back']]);
+		// Back is still legal in the phase it lands on, so only the revision binding stops the
+		// second press from skipping Target entirely.
+		session.publish({ phase: 'target' });
+
+		send(webview, shown, { type: 'back' });
+		assert.deepStrictEqual(session.calls, [['back']], 'a double press must not skip two phases');
+	});
+
+	test('restarts discovery once for a rapid duplicate Start Another Import', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'recovery' });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = () => webview.posted.filter(message => message.type === 'state').at(-1)!.revision;
+
+		send(webview, revision(), { type: 'startImport' });
+		assert.deepStrictEqual(session.calls, [['startImport']]);
+		session.publish({ phase: 'loading', busy: true });
+
+		send(webview, revision(), { type: 'startImport' });
+		assert.deepStrictEqual(session.calls, [['startImport']], 'the second press would discard the first discovery');
+	});
+
+	test('deletes recovery data once and never outside Results', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'results', operation: settledOperation() });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = () => webview.posted.filter(message => message.type === 'state').at(-1)!.revision;
+
+		send(webview, revision(), { type: 'acknowledge' });
+		assert.deepStrictEqual(session.calls, [['acknowledge']]);
+
+		// Acknowledgement reaches the durable journal before publishing anything, so the host guard
+		// cannot see a duplicate inside that window; the session's own one-shot closes it. Once the
+		// deletion has restarted discovery, the phase guard takes over.
+		session.publish({ phase: 'loading', busy: true });
+		send(webview, revision(), { type: 'acknowledge' });
+		assert.deepStrictEqual(session.calls, [['acknowledge']]);
+	});
+
+	test('keeps read-only Results gestures usable while the session is working', async () => {
+		const webviews = new StubWebviewService();
+		const session = sessionStub({ phase: 'results', busy: true, operation: settledOperation() });
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			session,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		const revision = webview.posted.find(message => message.type === 'state').revision;
+
+		send(webview, revision, { type: 'copyReport' });
+		send(webview, revision, { type: 'clearRollbackInspection' });
+		assert.deepStrictEqual(session.calls, [['copyReport'], ['clearRollbackInspection']], 'changing nothing must not become a dead control');
+
+		// Anything that starts work still waits.
+		send(webview, revision, { type: 'rollback', categories: ['settings'], forceCategories: [] });
+		assert.deepStrictEqual(session.calls, [['copyReport'], ['clearRollbackInspection']]);
+	});
+
 	test('classifies only Apply progress and its announcement as coalescable', () => {
 		const base = flowState({ phase: 'apply', progress: progress('applying', 1) });
 		assert.strictEqual(isProgressOnlyChange(base, { ...base, progress: progress('applying', 2), announcement: '2 of 10' }), true);
@@ -527,6 +659,28 @@ function progress(stage: EditorMigrationApplyProgress['stage'], recorded: number
 
 function application(id: string) {
 	return { id, productName: 'Cursor', channel: 'stable' as const, profiles: [] };
+}
+
+/** The smallest settled operation the Results presenter can describe. */
+function settledOperation(): NonNullable<EditorMigrationFlowState['operation']> {
+	return {
+		id: 'operation',
+		stage: 'settled',
+		aggregateOutcome: 'completed',
+		results: [{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 }],
+		snapshots: [],
+		extensionInstallIntents: [],
+		plan: {
+			choices: { selectedCategories: ['settings'], decisions: [] },
+			operations: [],
+			exclusions: [],
+			source: { categories: [{ category: 'settings', state: 'present', value: { 'editor.fontSize': 13 } }] },
+			target: { requestedCategories: ['settings'], categories: [], selection: { kind: 'existing', profileId: 'default' }, profile: { id: 'default', name: 'Default', kind: 'default' } },
+			prerequisites: [],
+			warnings: [],
+			decisions: [],
+		},
+	} as unknown as NonNullable<EditorMigrationFlowState['operation']>;
 }
 
 interface SessionStub extends EditorMigrationFlowSession {

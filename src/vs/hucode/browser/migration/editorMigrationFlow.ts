@@ -125,6 +125,15 @@ export class EditorMigrationFlowSession extends Disposable {
 	private generation = 0;
 	private rollbackInspectionGeneration = 0;
 	private rollbackInspectionCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[] | undefined;
+	/**
+	 * Actions already running that publish nothing before their first await.
+	 *
+	 * The webview host refuses a duplicate gesture by comparing phase and busy state, which works
+	 * for every method that publishes one synchronously. These two do not: acknowledgement deletes
+	 * durable recovery data and rollback inspects it, both before any state change is visible, so a
+	 * second press inside that window would race the first.
+	 */
+	private readonly inFlightExclusive = new Set<string>();
 	private readonly operationToken = this._register(new MutableDisposable<CancellationTokenSource>());
 
 	constructor(
@@ -439,12 +448,22 @@ export class EditorMigrationFlowSession extends Disposable {
 		if (!operation) {
 			return;
 		}
+		// The inspection below runs before `runRecovery` publishes the Apply phase, so a second
+		// press inside that window would start a second restore of the same files.
+		await this.runExclusive(`rollback:${operation.id}`, () => this.runRollback(operation.id, categories, forceCategories));
+	}
+
+	private async runRollback(
+		operationId: string,
+		categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[],
+		forceCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[],
+	): Promise<void> {
 		try {
 			const requestedCategories = fileCategories(categories);
 			const inspection = this.stateValue.rollbackInspection && sameFileCategories(requestedCategories, this.rollbackInspectionCategories ?? [])
 				? this.stateValue.rollbackInspection
-				: await this.applyService.inspectRollback(operation.id, requestedCategories);
-			await this.runRecovery(operation.id, (token, reporter) => this.applyService.rollback(operation.id, { categories, forceCategories, inspectionFingerprint: inspection.fingerprint }, token, reporter));
+				: await this.applyService.inspectRollback(operationId, requestedCategories);
+			await this.runRecovery(operationId, (token, reporter) => this.applyService.rollback(operationId, { categories, forceCategories, inspectionFingerprint: inspection.fingerprint }, token, reporter));
 		} catch (error) {
 			this.update({ error: errorMessage(error), announcement: errorMessage(error) });
 		}
@@ -462,14 +481,36 @@ export class EditorMigrationFlowSession extends Disposable {
 	}
 
 	async acknowledge(): Promise<void> {
-		if (!this.stateValue.operation) {
+		const operation = this.stateValue.operation;
+		if (!operation) {
 			return;
 		}
+		await this.runExclusive(`acknowledge:${operation.id}`, async () => {
+			try {
+				await this.applyService.acknowledge(operation.id);
+				await this.startImport();
+			} catch (error) {
+				this.update({ error: errorMessage(error), announcement: errorMessage(error) });
+			}
+		});
+	}
+
+	/**
+	 * Runs `body` at most once at a time for `key`.
+	 *
+	 * Only for the operations that reach a durable service before publishing anything: everything
+	 * else makes its own duplicate visible through `busy` or `phase`, which the caller already
+	 * checks.
+	 */
+	private async runExclusive(key: string, body: () => Promise<void>): Promise<void> {
+		if (this.inFlightExclusive.has(key)) {
+			return;
+		}
+		this.inFlightExclusive.add(key);
 		try {
-			await this.applyService.acknowledge(this.stateValue.operation.id);
-			await this.startImport();
-		} catch (error) {
-			this.update({ error: errorMessage(error), announcement: errorMessage(error) });
+			await body();
+		} finally {
+			this.inFlightExclusive.delete(key);
 		}
 	}
 

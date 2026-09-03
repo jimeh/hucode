@@ -102,13 +102,23 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	'selectTarget',
 	'toggleCategory',
 	'chooseDecision',
-	// The phase-advancing and bulk actions name no identifier, but they still describe one exact
-	// snapshot. A second click landing after the first has already advanced the phase would
-	// otherwise start a second import or re-answer decisions the reviewed plan already froze.
-	'chooseAllSettingDifferences',
+	/*
+	 * Two identifier-less actions are bound as well, because the phase guard alone cannot protect
+	 * what they decide.
+	 *
+	 * `acceptReview` is the gate into an irreversible apply, and `confirmPublishers` authorizes an
+	 * exact publisher list; honouring either against a screen the user is no longer looking at
+	 * would approve something they did not see. `back` is bound because the session moves exactly
+	 * one phase per press and remains legal in the phase it lands on, so nothing else stops a
+	 * double press from skipping two.
+	 *
+	 * Deliberately not bound: `chooseAllSettingDifferences` and `rebuildReview` read only
+	 * authoritative state, are idempotent within a phase, and are already confined to Review — so
+	 * binding them would cost the user a refusal without protecting anything.
+	 */
 	'acceptReview',
 	'confirmPublishers',
-	'rebuildReview',
+	'back',
 	'showRecovery',
 	'resume',
 	'retry',
@@ -116,20 +126,64 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	'rollback',
 ];
 
+/** Where one intent may act, and whether a session already working admits it. */
+export interface EditorMigrationSetupIntentPolicy {
+	readonly phases: readonly EditorMigrationSetupPhase[];
+	/** True only for gestures that neither start work nor change what the session is doing. */
+	readonly whileBusy: boolean;
+}
+
+const ALL_PHASES: readonly EditorMigrationSetupPhase[] = [
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+];
+
 /**
- * Phase each intent may act in, for the intents whose effect depends on it.
+ * Closed admission policy: every renderer intent names the phases it may act in.
  *
- * Every listed intent also requires an idle session: `busy` means the previous one is still
- * running, and admitting a duplicate would either start a second operation or cancel the first.
- * Intents absent from this table are legal in any phase.
+ * The table is exhaustive by type, so a new intent cannot default to allowed — adding one without
+ * a policy fails to compile. Each entry mirrors the screen that actually offers the control, which
+ * is what stops a duplicate click starting a second operation, skipping two phases at once, or
+ * racing a recovery deletion.
  */
-export const EDITOR_MIGRATION_SETUP_INTENT_PHASES: Readonly<Partial<Record<EditorMigrationSetupIntentType, EditorMigrationSetupPhase>>> = {
-	toggleCategory: 'review',
-	chooseDecision: 'review',
-	chooseAllSettingDifferences: 'review',
-	rebuildReview: 'review',
-	acceptReview: 'review',
-	confirmPublishers: 'publishers',
+export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrationSetupIntentType, EditorMigrationSetupIntentPolicy>> = {
+	// Lifecycle, handled by the host before dispatch. Closing must never be gated.
+	ready: { phases: ALL_PHASES, whileBusy: true },
+	close: { phases: ALL_PHASES, whileBusy: true },
+
+	// Discovery. Both restart discovery from scratch, so a duplicate would discard the first run.
+	startImport: { phases: ['recovery', 'results'], whileBusy: false },
+	refreshDiscovery: { phases: ['application'], whileBusy: false },
+	selectApplication: { phases: ['application'], whileBusy: false },
+	selectSourceProfile: { phases: ['profile'], whileBusy: false },
+	continueFromProfile: { phases: ['profile'], whileBusy: false },
+	selectTarget: { phases: ['target'], whileBusy: false },
+	continueFromTarget: { phases: ['target'], whileBusy: false },
+
+	// Review. The reviewed plan is frozen once publisher confirmation begins.
+	rebuildReview: { phases: ['review'], whileBusy: false },
+	toggleCategory: { phases: ['review'], whileBusy: false },
+	chooseDecision: { phases: ['review'], whileBusy: false },
+	chooseAllSettingDifferences: { phases: ['review'], whileBusy: false },
+	acceptReview: { phases: ['review'], whileBusy: false },
+	confirmPublishers: { phases: ['publishers'], whileBusy: false },
+
+	// Apply. Cancellation is the one thing a working session must always accept.
+	requestCancellation: { phases: ['apply'], whileBusy: true },
+
+	// Recovery and results.
+	showRecovery: { phases: ['recovery'], whileBusy: false },
+	resume: { phases: ['results'], whileBusy: false },
+	retry: { phases: ['results'], whileBusy: false },
+	inspectRollback: { phases: ['results'], whileBusy: false },
+	// Clearing an inspection and copying the report change nothing the session is doing, so they
+	// stay usable rather than becoming dead controls whenever anything else is in flight.
+	clearRollbackInspection: { phases: ['results'], whileBusy: true },
+	copyReport: { phases: ['results'], whileBusy: true },
+	rollback: { phases: ['results'], whileBusy: false },
+	acknowledge: { phases: ['results'], whileBusy: false },
+
+	// Navigation. The session moves exactly one phase per press, so a duplicate would skip one.
+	back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: false },
 };
 
 /**
@@ -143,8 +197,8 @@ export function editorMigrationSetupPhaseAdmits(
 	phase: EditorMigrationSetupPhase,
 	busy: boolean,
 ): boolean {
-	const required = EDITOR_MIGRATION_SETUP_INTENT_PHASES[type];
-	return required === undefined || (required === phase && !busy);
+	const policy = EDITOR_MIGRATION_SETUP_INTENT_POLICY[type];
+	return policy.phases.includes(phase) && (policy.whileBusy || !busy);
 }
 
 /** Envelope the renderer posts. `revision` is the snapshot the user was looking at. */
@@ -495,38 +549,216 @@ function isStringArray(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.every(entry => typeof entry === 'string');
 }
 
-/** Every array member is an object carrying the named string keys. */
-function isRecordArrayWith(value: unknown, keys: readonly string[]): boolean {
-	return Array.isArray(value) && value.every(entry => isRecord(entry) && keys.every(key => typeof entry[key] === 'string'));
+function isOptionalString(value: unknown): boolean {
+	return value === undefined || typeof value === 'string';
+}
+
+/** A count or revision the renderer arithmetic and ARIA attributes depend on. */
+function isCount(value: unknown): value is number {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isOptionalCount(value: unknown): boolean {
+	return value === undefined || isCount(value);
+}
+
+/** Every named key holds a string, and the value is an object at all. */
+function hasStrings(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+	return isRecord(value) && keys.every(key => typeof value[key] === 'string');
+}
+
+function isArrayOf(value: unknown, check: (entry: unknown) => boolean): boolean {
+	return Array.isArray(value) && value.every(check);
+}
+
+function isOptionalArrayOf(value: unknown, check: (entry: unknown) => boolean): boolean {
+	return value === undefined || isArrayOf(value, check);
+}
+
+const PHASES: readonly string[] = [
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+];
+
+const SECTION_STATUSES: readonly string[] = ['attention', 'ok', 'neutral'];
+
+const ACTION_KINDS: readonly string[] = ['default', 'primary', 'danger'];
+
+/** An action the renderer will post straight back, so its intent has to be one we accept. */
+function isAction(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label', 'kind'])
+		&& ACTION_KINDS.includes(value.kind as string)
+		&& typeof value.disabled === 'boolean'
+		&& parseEditorMigrationSetupIntent(value.intent) !== undefined;
+}
+
+function isDisclosure(value: unknown): boolean {
+	return hasStrings(value, ['id', 'summary'])
+		&& isStringArray((value as Record<string, unknown>).items)
+		&& isOptionalString((value as Record<string, unknown>).note)
+		&& isOptionalString((value as Record<string, unknown>).remainingText);
+}
+
+function isOptionalDisclosure(value: unknown): boolean {
+	return value === undefined || isDisclosure(value);
+}
+
+function isGroup(value: unknown): boolean {
+	return hasStrings(value, ['id', 'title', 'countDescription'])
+		&& isCount(value.count)
+		&& isOptionalDisclosure(value.disclosure);
+}
+
+function isRadioOption(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label'])
+		&& typeof value.checked === 'boolean'
+		&& isOptionalString(value.description)
+		&& parseEditorMigrationSetupIntent(value.intent) !== undefined;
+}
+
+function isChoiceCard(value: unknown): boolean {
+	return hasStrings(value, ['id', 'title', 'detail'])
+		&& parseEditorMigrationSetupIntent(value.intent) !== undefined;
+}
+
+function isRecoveryRecord(value: unknown): boolean {
+	return hasStrings(value, ['id', 'title', 'detail'])
+		&& (value.action === undefined || isAction(value.action));
+}
+
+function isConflictRow(value: unknown): boolean {
+	return hasStrings(value, ['id', 'name', 'searchText', 'currentValue', 'importedValue', 'valuesDescription'])
+		&& isOptionalArrayOf(value.choices, isRadioOption)
+		&& isOptionalString(value.chosenText);
+}
+
+function isProblemRow(value: unknown): boolean {
+	return hasStrings(value, ['id', 'text', 'outcome']) && isOptionalString(value.detail);
+}
+
+function isProgressBar(value: unknown): boolean {
+	return hasStrings(value, ['text']) && isCount(value.min) && isCount(value.max) && isCount(value.now);
+}
+
+function isProgressRow(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label', 'state']);
+}
+
+function isFileCategoryArray(value: unknown): boolean {
+	return isArrayOf(value, entry => typeof entry === 'string' && (EDITOR_MIGRATION_SETUP_FILE_CATEGORIES as readonly string[]).includes(entry));
+}
+
+/**
+ * One validator per panel kind, discriminated the same way the renderer switches on it.
+ *
+ * The renderer reads these fields without guarding each one — it maps over `applications`, reads
+ * `progress.now`, spreads `newTarget` — so a panel that carries only a `kind` and an `id` is a
+ * crash, not a cosmetic defect. Each entry lists exactly what its component dereferences.
+ */
+const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>) => boolean>> = {
+	loading: panel => isProgressBar(panel.progress),
+	recovery: panel => hasStrings(panel, ['lead', 'filterLabel', 'listLabel', 'emptyText'])
+		&& isArrayOf(panel.records, isRecoveryRecord),
+	applications: panel => hasStrings(panel, ['lead', 'filterLabel', 'listLabel', 'emptyText', 'noMatchText'])
+		&& isArrayOf(panel.applications, isChoiceCard)
+		&& isOptionalDisclosure(panel.diagnostics),
+	profiles: panel => hasStrings(panel, ['filterLabel', 'groupLabel', 'noMatchText'])
+		&& isArrayOf(panel.profiles, isRadioOption)
+		&& isOptionalDisclosure(panel.details),
+	target: panel => hasStrings(panel, ['lead', 'groupLabel'])
+		&& isArrayOf(panel.targets, isRadioOption)
+		&& hasStrings(panel.newTarget, ['label', 'placeholder', 'actionLabel', 'value'])
+		&& isOptionalString((panel.newTarget as Record<string, unknown>).selectedText),
+	reviewCategory: panel => hasStrings(panel, ['lead', 'ownership'])
+		&& (panel.include === undefined || (hasStrings(panel.include, ['label', 'category'])
+			&& typeof (panel.include as Record<string, unknown>).checked === 'boolean'
+			&& (EDITOR_MIGRATION_SETUP_CATEGORIES as readonly string[]).includes((panel.include as Record<string, unknown>).category as string)))
+		&& isArrayOf(panel.conflicts, isConflictRow)
+		&& isArrayOf(panel.warnings, isGroup)
+		&& isOptionalArrayOf(panel.bulkActions, isAction)
+		&& isOptionalDisclosure(panel.additions)
+		&& [panel.excludedText, panel.differencesHeading, panel.conflictFilterLabel, panel.conflictOverflowTemplate, panel.notesHeading, panel.exclusionNote, panel.emptyText].every(isOptionalString),
+	groups: panel => hasStrings(panel, ['lead'])
+		&& isArrayOf(panel.groups, isGroup)
+		&& isOptionalString(panel.emptyText),
+	applyOverview: panel => hasStrings(panel, ['note'])
+		&& isProgressBar(panel.progress)
+		&& isArrayOf(panel.rows, isProgressRow)
+		&& isOptionalString(panel.currentItem),
+	applyCategory: panel => hasStrings(panel, ['lead'])
+		&& isArrayOf(panel.problems, isProblemRow)
+		&& isOptionalString(panel.problemOverflowText)
+		&& isOptionalString(panel.recordedNote),
+	resultsOverview: panel => hasStrings(panel, ['outcome', 'lead'])
+		&& isArrayOf(panel.placements, isGroup)
+		&& isOptionalString(panel.placementsHeading)
+		&& isOptionalDisclosure(panel.preserved)
+		&& (panel.rollbackOutcome === undefined || (hasStrings(panel.rollbackOutcome, ['heading', 'note'])
+			&& isStringArray((panel.rollbackOutcome as Record<string, unknown>).rows))),
+	resultsCategory: panel => hasStrings(panel, ['lead'])
+		&& isArrayOf(panel.problems, isProblemRow)
+		&& isOptionalDisclosure(panel.completed)
+		&& [panel.problemsHeading, panel.problemOverflowText, panel.emptyText].every(isOptionalString),
+	restore: panel => [panel.lead, panel.placeholder].every(isOptionalString)
+		&& (panel.selection === undefined || (hasStrings(panel.selection, ['legend', 'inspectLabel'])
+			&& isArrayOf((panel.selection as Record<string, unknown>).options, option => hasStrings(option, ['category', 'label'])
+				&& (EDITOR_MIGRATION_SETUP_FILE_CATEGORIES as readonly string[]).includes((option as Record<string, unknown>).category as string))))
+		&& (panel.inspection === undefined || (hasStrings(panel.inspection, ['description', 'actionLabel'])
+			&& typeof (panel.inspection as Record<string, unknown>).forced === 'boolean'
+			&& isOptionalString((panel.inspection as Record<string, unknown>).heading)
+			&& isFileCategoryArray((panel.inspection as Record<string, unknown>).driftedCategories))),
+	message: panel => isOptionalString(panel.lead),
+};
+
+/** Every panel kind is known, and its own required fields are present. */
+export function isEditorMigrationSetupPanel(value: unknown): value is EditorMigrationSetupPanel {
+	if (!hasStrings(value, ['kind', 'id', 'heading'])) {
+		return false;
+	}
+	const validator = PANEL_VALIDATORS[value.kind as string];
+	return validator !== undefined && validator(value);
+}
+
+function isSection(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label', 'status', 'statusDescription'])
+		&& SECTION_STATUSES.includes(value.status as string)
+		&& isOptionalCount(value.count)
+		&& (value.separated === undefined || typeof value.separated === 'boolean');
+}
+
+function isStep(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label']) && typeof value.current === 'boolean';
 }
 
 /**
  * Structural check of a presentation snapshot at the trust boundary.
  *
  * The renderer reads these fields without guarding each one, so a payload that merely looks like an
- * object would crash it on the first access. This checks the shape the renderer actually depends
- * on rather than re-describing the whole DTO: a wrong `count` is a bug, an absent `panels` array is
- * a crash.
+ * object would crash it on the first access. This validates the whole shape the renderer
+ * dereferences, discriminated per panel kind, rather than trusting a `kind` string on its own.
  */
 export function isEditorMigrationSetupPresentation(value: unknown): value is EditorMigrationSetupPresentation {
 	if (!isRecord(value)) {
 		return false;
 	}
-	return typeof value.revision === 'number'
-		&& isNonEmptyString(value.phase)
+	return isCount(value.revision)
+		&& typeof value.phase === 'string' && PHASES.includes(value.phase)
 		&& typeof value.regionLabel === 'string'
 		&& typeof value.title === 'string'
 		&& typeof value.scopeKey === 'string'
 		&& typeof value.sectionAnnouncementTemplate === 'string'
 		&& typeof value.busy === 'boolean'
 		&& typeof value.canceling === 'boolean'
-		&& isRecordArrayWith(value.steps, ['id', 'label'])
-		&& isRecordArrayWith(value.sections, ['id', 'label', 'status', 'statusDescription'])
-		&& isRecordArrayWith(value.panels, ['kind', 'id'])
+		&& isOptionalString(value.error)
+		&& isOptionalString(value.announcement)
+		&& isOptionalString(value.railLabel)
+		&& isOptionalString(value.railTitle)
+		&& isOptionalString(value.defaultSectionId)
+		&& isArrayOf(value.steps, isStep)
+		&& isArrayOf(value.sections, isSection)
+		&& isArrayOf(value.panels, isEditorMigrationSetupPanel)
 		&& isRecord(value.footer)
 		&& isStringArray(value.footer.lines)
-		&& isRecordArrayWith(value.footer.actions, ['id', 'label', 'kind'])
-		&& (value.footer.actions as readonly Record<string, unknown>[]).every(action => isRecord(action.intent) && isNonEmptyString(action.intent.type));
+		&& isArrayOf(value.footer.actions, isAction);
 }
 
 /** Parses one host message. The renderer refuses anything else, including a foreign version. */

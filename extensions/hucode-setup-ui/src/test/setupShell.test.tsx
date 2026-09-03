@@ -5,7 +5,7 @@
 
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SetupShell } from '@/components/SetupShell';
 import { presentation, profilesPanel, reviewCategoryPanel, restorePanel, targetPanel, conflictRow, manyConflicts, testHost } from '@/test/fixtures';
 import {
@@ -429,6 +429,34 @@ describe('SetupShell', () => {
 		expect(document.activeElement).toBe(applicationsHeading);
 	});
 
+	test('leaves focus alone while the workbench owns it', async () => {
+		const { publish, user } = await mount(presentation({
+			phase: 'loading',
+			panels: [{ kind: 'loading', id: '', heading: 'Looking for editor profiles...', progress: { text: 'Reading supported local editor installations.', min: 0, max: 1, now: 0 } }],
+			footer: { lines: [], actions: [] },
+		}));
+		const loadingHeading = screen.getByRole('heading', { level: 2 });
+		loadingHeading.focus();
+		expect(document.activeElement).toBe(loadingHeading);
+		await user.tab();
+
+		// The user moved to a quick input, the terminal, or another window: this document no longer
+		// owns the caret, and a phase change here must not drag it back.
+		const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+		try {
+			await act(async () => publish(presentation({ revision: 2, phase: 'application' })));
+
+			expect(loadingHeading.isConnected).toBe(false);
+			expect(document.activeElement).toBe(document.body);
+		} finally {
+			hasFocus.mockRestore();
+		}
+
+		// Once the document owns focus again, the same transition recovers normally.
+		await act(async () => publish(presentation({ revision: 3, phase: 'profile', panels: [profilesPanel()] })));
+		expect(document.activeElement).toBe(screen.getByRole('heading', { level: 2 }));
+	});
+
 	test('leaves a deliberate blur alone instead of dragging focus back', async () => {
 		const { publish, user } = await mount();
 		const refresh = screen.getByRole('button', { name: 'Refresh' });
@@ -498,6 +526,70 @@ describe('SetupShell', () => {
 		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Confirm Extension Publishers');
 		const rail = screen.getByRole('navigation', { name: 'Import sections' });
 		expect(within(rail).getByRole('button', { name: /Publishers/ })).toHaveAttribute('aria-current', 'true');
+	});
+
+	test('does not revive an earlier scope\'s local state when the flow returns to it', async () => {
+		const scoped = (scopeKey: string, revision: number) => presentation({
+			revision,
+			phase: 'review',
+			scopeKey,
+			sections: REVIEW_SECTIONS,
+			defaultSectionId: 'settings',
+			railLabel: 'Import sections',
+			railTitle: 'Review',
+			panels: [reviewCategoryPanel({ conflicts: manyConflicts(), additions: { id: 'additions', summary: '2 new settings', items: ['a', 'b'] } }), NOT_IMPORTED_PANEL],
+		});
+		const { publish, user } = await mount(scoped('review|draft-a|', 1));
+
+		await user.type(screen.getByLabelText('Filter Settings differences'), 'conflict-3');
+		await user.click(screen.getByRole('button', { name: /2 new settings/ }));
+		expect(screen.getByLabelText('Filter Settings differences')).toHaveValue('conflict-3');
+		expect(screen.getByText('a')).toBeInTheDocument();
+
+		// Rebuilding against a different target is a different draft.
+		await act(async () => publish(scoped('review|draft-b|', 2)));
+		expect(screen.getByLabelText('Filter Settings differences')).toHaveValue('');
+		expect(screen.queryByText('a')).toBeNull();
+
+		// Going back and continuing again returns to the first draft. Nothing the user typed there
+		// may come back with it: masking the old state would have revived it here.
+		await act(async () => publish(scoped('review|draft-a|', 3)));
+		expect(screen.getByLabelText('Filter Settings differences')).toHaveValue('');
+		expect(screen.queryByText('a')).toBeNull();
+	});
+
+	test('does not revive an earlier scope\'s target draft or rollback selection', async () => {
+		const target = (scopeKey: string, revision: number) => presentation({
+			revision, phase: 'target', scopeKey, panels: [targetPanel()],
+		});
+		const { publish, user } = await mount(target('discover|a|', 1));
+		await user.type(screen.getByLabelText('New profile name'), 'Imported');
+		expect(screen.getByLabelText('New profile name')).toHaveValue('Imported');
+
+		await act(async () => publish(target('discover|b|', 2)));
+		expect(screen.getByLabelText('New profile name')).toHaveValue('');
+
+		await act(async () => publish(target('discover|a|', 3)));
+		expect(screen.getByLabelText('New profile name')).toHaveValue('');
+
+		const restore = (scopeKey: string, revision: number) => presentation({
+			revision,
+			phase: 'results',
+			scopeKey,
+			sections: [{ id: 'restore', label: 'Undo File Changes', status: 'neutral', statusDescription: '' }],
+			defaultSectionId: 'restore',
+			railLabel: 'Import sections',
+			railTitle: 'Results',
+			panels: [restorePanel()],
+		});
+		await act(async () => publish(restore('results||operation-1', 4)));
+		await user.click(screen.getByRole('checkbox', { name: 'Settings' }));
+		expect(screen.getByRole('checkbox', { name: 'Settings' })).not.toBeChecked();
+
+		await act(async () => publish(restore('results||operation-2', 5)));
+		await act(async () => publish(restore('results||operation-1', 6)));
+		// Returning to the first operation reseeds every eligible category, as a fresh visit does.
+		expect(screen.getByRole('checkbox', { name: 'Settings' })).toBeChecked();
 	});
 
 	test('discards local filter state when the presentation scope changes', async () => {
