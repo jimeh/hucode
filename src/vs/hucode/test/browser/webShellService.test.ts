@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
+import { getServerProductSegment } from '../../../base/common/network.js';
 import { basename } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
 import {
@@ -40,6 +41,7 @@ import {
 	HucodeOmniWebChildMessageType,
 	IHucodeOmniWebWorkbenchClient,
 } from '../../../platform/window/common/hucodeOmniWebMessages.js';
+import product from '../../../platform/product/common/product.js';
 import {
 	FOCUS_PROJECT_PANE_COMMAND_ID,
 	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
@@ -82,6 +84,7 @@ import {
 suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let bootstrapDocumentSequence = 0;
+	const buildIdentity = getServerProductSegment(product);
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -225,6 +228,7 @@ suite('WebHucodeShellService', () => {
 				attempt: 1,
 			},
 			...(protocolVersion === 'none' ? {} : { protocolVersion }),
+			buildIdentity,
 			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
 		});
@@ -239,7 +243,8 @@ suite('WebHucodeShellService', () => {
 		connectionBootstrap?: {
 			readonly id: string;
 			readonly attempt: number;
-		}
+		},
+		readyBuildIdentity: string | 'none' = buildIdentity
 	): void {
 		const bootstrap = connectionBootstrap ?? {
 			id: `test-document-${++bootstrapDocumentSequence}`,
@@ -248,6 +253,9 @@ suite('WebHucodeShellService', () => {
 		postMessage(browser, surface, instanceId, {
 			type: HucodeOmniWebChildMessageType.Ready,
 			connectionBootstrap: bootstrap,
+			...(readyBuildIdentity === 'none'
+				? {}
+				: { buildIdentity: readyBuildIdentity }),
 			protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 			hostedShellProtocolVersion: protocolVersion,
 			hostedShellCapabilities: capabilities,
@@ -308,6 +316,7 @@ suite('WebHucodeShellService', () => {
 			posted.hostedShellProtocolVersion,
 			HUCODE_HOSTED_SHELL_PROTOCOL_VERSION
 		);
+		assert.strictEqual(posted.buildIdentity, buildIdentity);
 		const client = disposables.add(new MessagePortClient(
 			posted.port,
 			`test-current-child-${instanceId}`
@@ -2346,6 +2355,67 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual(browser.portMessages, []);
 	});
 
+	test('blocks hosted workbenches with missing or mismatched build identity',
+		async () => {
+			for (const readyBuildIdentity of ['none', 'stable-different'] as const) {
+				const browser = new FakeBrowserAdapter();
+				const { service, surface } = createService(browser);
+				const opened = await service.openWorkspace(
+					browser.windowId,
+					`/tmp/${readyBuildIdentity}-build-child`
+				);
+				assert.ok(opened.activeInstanceId);
+				markHostedCapabilityReady(
+					browser,
+					surface,
+					opened.activeInstanceId,
+					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+					HUCODE_HOSTED_SHELL_CAPABILITIES,
+					undefined,
+					readyBuildIdentity
+				);
+				markHostedCapabilityReady(
+					browser,
+					surface,
+					opened.activeInstanceId,
+					HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+					HUCODE_HOSTED_SHELL_CAPABILITIES,
+					undefined,
+					readyBuildIdentity
+				);
+				assert.deepStrictEqual(browser.portMessages, []);
+				assert.strictEqual(browser.versionMismatchCount, 1);
+				service.dispose();
+			}
+		});
+
+	test('does not block malformed or unauthenticated Ready traffic', async () => {
+		const { service, surface, browser } = createService();
+		const opened = await service.openWorkspace(
+			browser.windowId,
+			'/tmp/untrusted-build-child'
+		);
+		assert.ok(opened.activeInstanceId);
+		const iframe = getIframe(surface, opened.activeInstanceId);
+		const mismatch = {
+			type: HucodeOmniWebChildMessageType.Ready,
+			instanceId: opened.activeInstanceId,
+			connectionBootstrap: { id: 'document-a', attempt: 1 },
+			buildIdentity: 'stable-different',
+			hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
+			hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
+		};
+		browser.emitMessage(mismatch, null);
+		browser.emitMessage({ ...mismatch, instanceId: 'other-instance' },
+			iframe.contentWindow);
+		browser.emitMessage({ ...mismatch, buildIdentity: 42 },
+			iframe.contentWindow);
+		assert.strictEqual(browser.versionMismatchCount, 0);
+
+		markReady(browser, surface, opened.activeInstanceId);
+		assert.strictEqual(browser.portMessages.length, 1);
+	});
+
 	test('deduplicates attempts per bootstrap document and accepts a new one',
 		async () => {
 			const { service, surface, browser } = createService();
@@ -3998,6 +4068,7 @@ suite('WebHucodeShellService', () => {
 			const portCount = browser.portMessages.length;
 			for (const message of [{
 				type: HucodeOmniWebChildMessageType.Ready,
+				buildIdentity,
 				protocolVersion: HUCODE_OMNI_WEB_UNLOAD_PROTOCOL_VERSION,
 				hostedShellProtocolVersion: HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 				hostedShellCapabilities: HUCODE_HOSTED_SHELL_CAPABILITIES,
@@ -6383,6 +6454,7 @@ interface IPostedPortMessage {
 		readonly attempt: number;
 	};
 	readonly hostedShellProtocolVersion: number;
+	readonly buildIdentity: string;
 	readonly hostedShellCapabilities: readonly string[];
 	readonly port: MessagePort;
 }
@@ -6396,6 +6468,7 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 	readonly focusedIframes: HTMLIFrameElement[] = [];
 	readonly contentFocusedIframes: HTMLIFrameElement[] = [];
 	contentFocusCalls = 0;
+	versionMismatchCount = 0;
 
 	private readonly listeners = new Set<(event: MessageEvent) => void>();
 
@@ -6417,6 +6490,10 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void {
 		clearTimeout(handle);
+	}
+
+	showVersionMismatch(): void {
+		this.versionMismatchCount++;
 	}
 
 	open(url: string): void {
@@ -6448,12 +6525,14 @@ class FakeBrowserAdapter implements IWebHucodeShellBrowserAdapter {
 				readonly id: string;
 				readonly attempt: number;
 			};
+			readonly buildIdentity: string;
 			readonly hostedShellProtocolVersion: number;
 			readonly hostedShellCapabilities: readonly string[];
 		};
 		this.portMessages.push({
 			instanceId: portMessage.instanceId,
 			connectionBootstrap: portMessage.connectionBootstrap,
+			buildIdentity: portMessage.buildIdentity,
 			hostedShellProtocolVersion:
 				portMessage.hostedShellProtocolVersion,
 			hostedShellCapabilities: portMessage.hostedShellCapabilities,
