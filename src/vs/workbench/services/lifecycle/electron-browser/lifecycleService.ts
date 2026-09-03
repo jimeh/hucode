@@ -19,6 +19,7 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 
 	private static readonly BEFORE_SHUTDOWN_WARNING_DELAY = 5000;
 	private static readonly WILL_SHUTDOWN_WARNING_DELAY = 800;
+	private shutdownPreparationId: string | undefined;
 
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
@@ -35,7 +36,14 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 
 		// Main side indicates that window is about to unload, check for vetos
 		ipcRenderer.on('vscode:onBeforeUnload', async (event: unknown, ...args: unknown[]) => {
-			const reply = args[0] as { okChannel: string; cancelChannel: string; reason: ShutdownReason };
+			const reply = args[0] as {
+				okChannel: string;
+				cancelChannel: string;
+				preparationId?: string;
+				reason: ShutdownReason;
+			};
+			const preparationId = reply.preparationId ?? reply.okChannel;
+			this.beginShutdownPreparation(preparationId);
 			this.logService.trace(`[lifecycle] onBeforeUnload (reason: ${reply.reason})`);
 
 			// trigger onBeforeShutdown events and veto collecting
@@ -45,8 +53,10 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 			if (veto) {
 				this.logService.trace('[lifecycle] onBeforeUnload prevented via veto');
 
-				// Indicate as event
-				this._onShutdownVeto.fire();
+				if (this.shutdownPreparationId === preparationId) {
+					this.shutdownPreparationId = undefined;
+					this._onShutdownVeto.fire();
+				}
 
 				ipcRenderer.send(reply.cancelChannel, windowId);
 			}
@@ -55,15 +65,37 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 			else {
 				this.logService.trace('[lifecycle] onBeforeUnload continues without veto');
 
-				this.shutdownReason = reply.reason;
+				if (this.shutdownPreparationId === preparationId) {
+					this.shutdownReason = reply.reason;
+				}
 				ipcRenderer.send(reply.okChannel, windowId);
+			}
+		});
+
+		ipcRenderer.on('vscode:onShutdownPreparationAbandoned', (_event, ...args: unknown[]) => {
+			const reply = args[0] as {
+				preparationId: string;
+				replyChannel?: string;
+			};
+			const applied =
+				this.handleShutdownPreparationAbandoned(reply.preparationId);
+			if (reply.replyChannel) {
+				ipcRenderer.send(reply.replyChannel, {
+					preparationId: reply.preparationId,
+					disposition: applied ? 'applied' : 'stale',
+				});
 			}
 		});
 
 		// Main side indicates that we will indeed shutdown
 		ipcRenderer.on('vscode:onWillUnload', async (event: unknown, ...args: unknown[]) => {
-			const reply = args[0] as { replyChannel: string; reason: ShutdownReason };
+			const reply = args[0] as {
+				replyChannel: string;
+				preparationId?: string;
+				reason: ShutdownReason;
+			};
 			this.logService.trace(`[lifecycle] onWillUnload (reason: ${reply.reason})`);
+			this.commitShutdownPreparation();
 
 			// trigger onWillShutdown events and joining
 			await this.handleWillShutdown(reply.reason);
@@ -74,6 +106,28 @@ export class NativeLifecycleService extends AbstractLifecycleService {
 			// acknowledge to main side
 			ipcRenderer.send(reply.replyChannel, windowId);
 		});
+	}
+
+	protected beginShutdownPreparation(preparationId: string): void {
+		this.shutdownPreparationId = preparationId;
+	}
+
+	protected commitShutdownPreparation(): void {
+		this.shutdownPreparationId = undefined;
+	}
+
+	protected handleShutdownPreparationAbandoned(
+		preparationId: string
+	): boolean {
+		if (this.shutdownPreparationId !== preparationId) {
+			return false;
+		}
+
+		this.logService.trace('[lifecycle] shutdown preparation abandoned');
+		this.shutdownPreparationId = undefined;
+		this.shutdownReason = undefined;
+		this._onShutdownVeto.fire();
+		return true;
 	}
 
 	protected async handleBeforeShutdown(reason: ShutdownReason): Promise<boolean> {

@@ -68,7 +68,16 @@ export class CustomEditorInputSerializer extends WebviewEditorInputSerializer {
 		super(webviewWorkbenchService);
 	}
 
+	public override canSerialize(input: CustomEditorInput): boolean {
+		return input.resource.scheme !== Schemas.vscodeDebugMemory &&
+			super.canSerialize(input);
+	}
+
 	public override serialize(input: CustomEditorInput): string | undefined {
+		if (!this.canSerialize(input)) {
+			return undefined;
+		}
+
 		const dirty = input.isDirty();
 		const data: SerializedCustomEditor = {
 			...this.toJson(input),

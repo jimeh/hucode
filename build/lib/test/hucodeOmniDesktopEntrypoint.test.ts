@@ -165,14 +165,6 @@ const omittedFromOmniBootstrap = new Map([
 		'src/vs/workbench/services/configuration/common/configurationCache.js',
 		'Only needed by WorkspaceService, which Omni does not use.',
 	],
-	[
-		'src/vs/platform/policy/common/nativeManagedSettingsIpc.js',
-		'Omni builds its account policy service without the managed-settings channels.',
-	],
-	[
-		'src/vs/platform/policy/common/fileManagedSettingsIpc.js',
-		'Omni builds its account policy service without the managed-settings channels.',
-	],
 ]);
 
 /**
@@ -237,7 +229,7 @@ suite('Hucode Omni desktop entrypoints', () => {
 		);
 	});
 
-	test('omni.main exposes its account policy as managed settings', async () => {
+	test('omni.main wires desktop managed-settings services into account policy', async () => {
 		const source = await fs.readFile(
 			path.join(repoRoot, omniDesktopBootstrap),
 			'utf8'
@@ -245,7 +237,19 @@ suite('Hucode Omni desktop entrypoints', () => {
 
 		assert.match(
 			source,
+			/serviceCollection\.set\(\s*INativeManagedSettingsService,\s*nativeManagedSettings\s*\);/
+		);
+		assert.match(
+			source,
+			/serviceCollection\.set\(IFileManagedSettingsService, fileManagedSettings\);/
+		);
+		assert.match(
+			source,
 			/serviceCollection\.set\(IManagedSettingsService, accountPolicy\);/
+		);
+		assert.match(
+			source,
+			/serviceCollection\.set\(IAccountPolicyGateService, accountPolicy\);/
 		);
 	});
 });
