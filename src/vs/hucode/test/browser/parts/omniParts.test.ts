@@ -83,14 +83,18 @@ suite('Omni Parts', () => {
 		assert.strictEqual(focusCount, 1);
 	});
 
-	test('ProjectsPart keeps navigation outside the floating body card', () => {
+	test('ProjectsPart matches the Modern UI perimeter gutter in both densities', () => {
 		const element = mainWindow.document.createElement('div');
 		const layouts: Array<{ width: number; height: number }> = [];
 		const widgetLayouts: Array<{ width: number; height: number }> = [];
 		let floating = true;
+		let compact = false;
 		const host = prototypeHost(ProjectsPart.prototype, {
 			element,
-			layoutService: { isFloatingPanelsEnabled: () => floating },
+			layoutService: {
+				isFloatingPanelsEnabled: () => floating,
+				isModernUICompact: () => compact,
+			},
 			layoutContents: (width: number, height: number) => {
 				layouts.push({ width, height });
 				return { contentSize: { width, height } };
@@ -102,6 +106,8 @@ suite('Omni Parts', () => {
 		});
 
 		ProjectsPart.prototype.layout.call(host, 300, 900, 0, 0);
+		compact = true;
+		ProjectsPart.prototype.relayoutForModernUI.call(host);
 		floating = false;
 		ProjectsPart.prototype.relayoutForModernUI.call(host);
 
@@ -112,9 +118,11 @@ suite('Omni Parts', () => {
 			layouts: [
 				{ width: 300, height: 900 },
 				{ width: 300, height: 900 },
+				{ width: 300, height: 900 },
 			],
 			widgetLayouts: [
-				{ width: 290, height: 889 },
+				{ width: 294, height: 893 },
+				{ width: 294, height: 893 },
 				{ width: 300, height: 900 },
 			],
 		});

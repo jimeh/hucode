@@ -191,7 +191,7 @@
 .monaco-workbench.hucode-omni-workbench.hucode-omni-window.floating-panels
 	.monaco-sash.vertical:not(.part .monaco-sash)::before {
 	top: calc(32px + var(--vscode-spacing-size20) + 1px);
-	bottom: calc(var(--vscode-spacing-size40) * 2);
+	bottom: var(--modern-ui-floating-card-outer-margin);
 	height: auto;
 }
 
@@ -212,11 +212,11 @@
 	 * the extra pixel preserves the Projects card's baseline alignment. Keep the
 	 * inset arithmetic in sync with ProjectsPart.layout. */
 	box-sizing: border-box;
-	width: calc(100% - (var(--vscode-spacing-size40) * 2)) !important;
-	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - (var(--vscode-spacing-size40) * 2)) !important;
+	width: calc(100% - var(--modern-ui-floating-card-outer-margin)) !important;
+	height: calc(100% - 32px - var(--vscode-spacing-size20) - 1px - var(--modern-ui-floating-card-outer-margin)) !important;
 	margin: calc(var(--vscode-spacing-size20) + 1px) 0
-		calc(var(--vscode-spacing-size40) * 2)
-		calc(var(--vscode-spacing-size40) * 2);
+		var(--modern-ui-floating-card-outer-margin)
+		var(--modern-ui-floating-card-outer-margin);
 	border: 1px solid var(--vscode-surface-border, var(--vscode-widget-border, transparent)) !important;
 	border-radius: var(--vscode-cornerRadius-large);
 	background: var(--vscode-surface-background);

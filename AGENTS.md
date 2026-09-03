@@ -233,6 +233,11 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   dynamic import never executes. Scope Omni-only selectors under
   `.hucode-omni-workbench` and validate the bundled CSS rather than relying on
   `npm run hucode:web` alone.
+- VS Code 1.136 Modern UI uses a 4px
+  `--modern-ui-floating-card-outer-margin` against window edges in both default
+  and compact density. Keep the Omni Projects cell's left and bottom CSS
+  margins, sash inset, and `ProjectsPart.layout()` widget dimensions tied to
+  that outer-gutter contract instead of duplicating or doubling spacing tokens.
 - Extension *enablement* state is per-browser (localStorage), so
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves
