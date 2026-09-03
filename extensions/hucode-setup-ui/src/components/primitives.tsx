@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ChevronRightIcon, SearchIcon } from 'lucide-react';
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
 	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
 	type EditorMigrationSetupAction,
@@ -55,7 +55,8 @@ export function FilterInput({ id, label, value, itemCount, onChange }: {
 	readonly itemCount: number;
 	readonly onChange: (value: string) => void;
 }) {
-	if (itemCount <= FILTER_THRESHOLD) {
+	const [focused, setFocused] = useState(false);
+	if (itemCount <= FILTER_THRESHOLD && !value && !focused) {
 		return null;
 	}
 	return (
@@ -68,6 +69,8 @@ export function FilterInput({ id, label, value, itemCount, onChange }: {
 				aria-label={label}
 				value={value}
 				data-focus-id={`filter-${id}`}
+				onFocus={() => setFocused(true)}
+				onBlur={() => setFocused(false)}
 				onChange={event => onChange(event.target.value)}
 			/>
 		</div>
@@ -187,8 +190,8 @@ export function Lead({ children }: { readonly children: ReactNode }) {
 	return <p className="text-muted-foreground text-sm">{children}</p>;
 }
 
-export function Note({ children, className }: { readonly children: ReactNode; readonly className?: string }) {
-	return <p className={cn('text-muted-foreground text-xs', className)}>{children}</p>;
+export function Note({ children, className, role }: { readonly children: ReactNode; readonly className?: string; readonly role?: 'status' }) {
+	return <p role={role} className={cn('text-muted-foreground text-xs', className)}>{children}</p>;
 }
 
 export function SubHeading({ children }: { readonly children: ReactNode }) {

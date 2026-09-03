@@ -180,6 +180,7 @@ function recoveryPanel(state: EditorMigrationFlowState): EditorMigrationSetupPan
 		filterLabel: localize('editorMigration.recovery.filter', "Filter earlier imports"),
 		listLabel: localize('editorMigration.recovery.list', "Earlier imports"),
 		emptyText: localize('editorMigration.recovery.empty', "No earlier import data is available."),
+		noMatchText: localize('editorMigration.filter.noMatch', "Nothing matches the current filter."),
 		records: state.recoveries.map(recovery => {
 			const title = recovery.targetName ?? localize('editorMigration.recovery.unknownTarget', "Unknown Target");
 			const supported = recovery.unsupportedSchemaVersion === undefined;

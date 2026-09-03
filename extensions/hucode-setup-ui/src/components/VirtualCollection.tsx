@@ -171,9 +171,13 @@ export function VirtualCollection<T>({
 	 */
 	const requestRowFocus = useCallback((index: number) => {
 		const clamped = Math.max(0, Math.min(items.length - 1, index));
+		if (!virtualize) {
+			firstFocusable(containerRef.current?.querySelector(`[data-virtual-index="${clamped}"]`))?.focus();
+			return;
+		}
 		virtualizer.scrollToIndex(clamped, { align: 'auto' });
 		setPendingFocus(clamped);
-	}, [items.length, virtualizer]);
+	}, [items.length, virtualize, virtualizer]);
 
 	const mountedRows = virtualizer.getVirtualItems();
 	useEffect(() => {
@@ -216,7 +220,7 @@ export function VirtualCollection<T>({
 
 	if (!virtualize) {
 		return (
-			<div ref={containerRef} role="list" aria-label={label} className={cn('flex flex-col', className)}>
+			<div ref={containerRef} role="list" aria-label={label} className={cn('flex flex-col', className)} onKeyDown={onKeyDown}>
 				{items.map((item, index) => (
 					<div
 						key={itemKey(item)}

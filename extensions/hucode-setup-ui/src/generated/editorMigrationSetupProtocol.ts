@@ -328,7 +328,7 @@ export type EditorMigrationSetupPanel =
 	| { readonly kind: 'loading'; readonly id: string; readonly heading: string; readonly progress: EditorMigrationSetupProgressBar }
 	| {
 		readonly kind: 'recovery'; readonly id: string; readonly heading: string; readonly lead: string;
-		readonly filterLabel: string; readonly listLabel: string; readonly emptyText: string;
+		readonly filterLabel: string; readonly listLabel: string; readonly emptyText: string; readonly noMatchText: string;
 		readonly records: readonly EditorMigrationSetupRecoveryRecord[];
 	}
 	| {
@@ -663,7 +663,7 @@ function isFileCategoryArray(value: unknown): boolean {
  */
 const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>) => boolean>> = {
 	loading: panel => isProgressBar(panel.progress),
-	recovery: panel => hasStrings(panel, ['lead', 'filterLabel', 'listLabel', 'emptyText'])
+	recovery: panel => hasStrings(panel, ['lead', 'filterLabel', 'listLabel', 'emptyText', 'noMatchText'])
 		&& isArrayOf(panel.records, isRecoveryRecord),
 	applications: panel => hasStrings(panel, ['lead', 'filterLabel', 'listLabel', 'emptyText', 'noMatchText'])
 		&& isArrayOf(panel.applications, isChoiceCard)

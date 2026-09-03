@@ -8,6 +8,7 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 const entry = readFileSync(path.join(import.meta.dirname, '..', 'styles', 'setup.css'), 'utf8');
+const compiled = readFileSync(path.join(import.meta.dirname, '..', '..', 'media', 'style.css'), 'utf8');
 
 describe('setup stylesheet', () => {
 	test('defines all four mode palettes from the body class the webview already sets', () => {
@@ -15,6 +16,22 @@ describe('setup stylesheet', () => {
 			expect(entry).toContain(`${selector} {`);
 		}
 		expect(entry).toMatch(/:root \{[\s\S]*--hucode-background:/);
+	});
+
+	test('binds Tailwind dark utilities to the webview mode instead of the operating system', () => {
+		expect(entry).toContain('@custom-variant dark');
+		expect(entry).toMatch(/@custom-variant dark \([^\n]*body\.vscode-dark/);
+		expect(entry).toMatch(/@custom-variant dark \([^\n]*body\.vscode-high-contrast:not\(\.vscode-high-contrast-light\)/);
+		expect(compiled).toContain('body.vscode-dark');
+		expect(compiled).toContain('body.vscode-high-contrast:not(.vscode-high-contrast-light)');
+		expect(compiled).not.toContain('prefers-color-scheme:dark');
+	});
+
+	test('bridges generated selection controls to the Radix checked-state attribute', () => {
+		expect(entry).toMatch(/\[data-slot="checkbox"\]\[data-state="checked"\] \{/);
+		expect(entry).toMatch(/\[data-slot="radio-group-item"\]\[data-state="checked"\] \{/);
+		expect(compiled).toContain('[data-slot=checkbox][data-state=checked]');
+		expect(compiled).toContain('[data-slot=radio-group-item][data-state=checked]');
 	});
 
 	test('never reads a workbench theme variable', () => {

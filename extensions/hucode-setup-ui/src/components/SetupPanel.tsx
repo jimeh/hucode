@@ -95,6 +95,7 @@ function RecoveryPanel({ panel, local, scrollRef, send }: SetupPanelProps & { re
 				onChange={value => local.setFilter('recoveries', value)}
 			/>
 			{panel.records.length === 0 ? <Note>{panel.emptyText}</Note> : null}
+			<Note role="status" className="empty:-mt-4">{panel.records.length > 0 && records.length === 0 ? panel.noMatchText : ''}</Note>
 			<VirtualCollection
 				items={records}
 				itemKey={record => record.id}
@@ -136,7 +137,7 @@ function ApplicationsPanel({ panel, local, scrollRef, send }: SetupPanelProps & 
 				onChange={value => local.setFilter('applications', value)}
 			/>
 			{panel.applications.length === 0 ? <Note>{panel.emptyText}</Note> : null}
-			{panel.applications.length > 0 && applications.length === 0 ? <Note>{panel.noMatchText}</Note> : null}
+			<Note role="status" className="empty:-mt-4">{panel.applications.length > 0 && applications.length === 0 ? panel.noMatchText : ''}</Note>
 			<VirtualCollection
 				items={applications}
 				itemKey={application => application.id}
@@ -222,9 +223,10 @@ function ProfilesPanel({ panel, local, send }: SetupPanelProps & { readonly pane
 				itemCount={panel.profiles.length}
 				onChange={value => local.setFilter(filterId, value)}
 			/>
-			{profiles.length === 0 ? <Note>{panel.noMatchText}</Note> : (
-				<OptionList options={profiles} name="migration-source-profile" label={panel.groupLabel} send={send} focusPrefix="profile" />
-			)}
+			<Note role="status" className="empty:-mt-4">{profiles.length === 0 ? panel.noMatchText : ''}</Note>
+			{profiles.length > 0
+				? <OptionList options={profiles} name="migration-source-profile" label={panel.groupLabel} send={send} focusPrefix="profile" />
+				: null}
 			{panel.details ? (
 				<Disclosure
 					disclosure={panel.details}

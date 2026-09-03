@@ -209,6 +209,37 @@ describe('VirtualCollection', () => {
 		await vi.waitFor(() => expect(document.activeElement).toHaveTextContent('Row 0'));
 	});
 
+	test('keeps row keyboard traversal when filtering drops below the virtualization threshold', async () => {
+		const user = userEvent.setup();
+		render(<Harness items={rows(60)} filterable />);
+		const list = screen.getByRole('list', { name: 'Rows' });
+		expect(list).toHaveAttribute('style', expect.stringContaining('height'));
+
+		await user.type(screen.getByLabelText('Filter'), 'Row 5');
+		expect(within(list).getAllByRole('listitem')).toHaveLength(11);
+		expect(list).not.toHaveAttribute('style', expect.stringContaining('height'));
+
+		screen.getByRole('button', { name: 'Row 50' }).focus();
+		await user.keyboard('{ArrowDown}');
+		expect(document.activeElement).toHaveTextContent('Row 51');
+		await user.keyboard('{End}');
+		expect(document.activeElement).toHaveTextContent('Row 59');
+		await user.keyboard('{Home}');
+		expect(document.activeElement).toHaveTextContent('Row 5');
+	});
+
+	test('steps over actionless rows without virtualization', async () => {
+		const user = userEvent.setup();
+		const actionable = (row: Row) => Number(/\d+/.exec(row.label)![0]) % 2 === 0;
+		render(<ActionableHarness items={rows(6)} isActionable={actionable} />);
+
+		screen.getByRole('button', { name: 'Row 0' }).focus();
+		await user.keyboard('{ArrowDown}');
+		expect(document.activeElement).toHaveTextContent('Row 2');
+		await user.keyboard('{End}');
+		expect(document.activeElement).toHaveTextContent('Row 4');
+	});
+
 	test('steps over rows that offer nothing to focus, forwards and back', async () => {
 		const user = userEvent.setup();
 		// 60 rows, so the collection virtualizes; only every seventh carries a control, which puts

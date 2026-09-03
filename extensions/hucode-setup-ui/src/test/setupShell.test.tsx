@@ -651,4 +651,124 @@ describe('SetupShell', () => {
 		await act(async () => publish({ ...many, revision: 2, scopeKey: 'review|draft|' }));
 		expect(screen.getByLabelText('Filter applications')).toHaveValue('');
 	});
+
+	test('keeps an active filter visible when a same-scope refresh shortens the collection', async () => {
+		const many = presentation({
+			panels: [{
+				kind: 'applications',
+				id: '',
+				heading: 'Which Application Should Hucode Import From?',
+				lead: 'Choose an editor first. You will choose one of its profiles next.',
+				filterLabel: 'Filter applications',
+				listLabel: 'Source applications',
+				emptyText: 'No supported editor profiles were found.',
+				noMatchText: 'Nothing matches the current filter.',
+				applications: Array.from({ length: 12 }, (_, index) => ({
+					id: `editor-${index}`,
+					title: `Editor ${index}`,
+					detail: '1 profile',
+					intent: { type: 'selectApplication' as const, applicationId: `editor-${index}` },
+				})),
+			}],
+		});
+		const { publish, user } = await mount(many);
+
+		await user.type(screen.getByLabelText('Filter applications'), 'Editor 11');
+		await act(async () => publish({
+			...many,
+			revision: 2,
+			panels: [{
+				...(many.panels[0] as Extract<typeof many.panels[number], { kind: 'applications' }>),
+				applications: [{
+					id: 'editor-11',
+					title: 'Editor 11',
+					detail: '1 profile',
+					intent: { type: 'selectApplication', applicationId: 'editor-11' },
+				}],
+			}],
+		}));
+
+		const filter = screen.getByLabelText('Filter applications');
+		expect(filter).toHaveValue('Editor 11');
+		expect(screen.getByRole('button', { name: /Editor 11/ })).toBeInTheDocument();
+
+		await user.clear(filter);
+		expect(screen.getByLabelText('Filter applications')).toHaveFocus();
+		await user.tab();
+		expect(screen.queryByLabelText('Filter applications')).toBeNull();
+	});
+
+	test('distinguishes an empty recovery list from a recovery filter with no matches', async () => {
+		const { user } = await mount(presentation({
+			phase: 'recovery',
+			panels: [{
+				kind: 'recovery',
+				id: '',
+				heading: 'Continue an Earlier Import',
+				lead: 'Hucode found earlier import data.',
+				filterLabel: 'Filter earlier imports',
+				listLabel: 'Earlier imports',
+				emptyText: 'No earlier import data is available.',
+				noMatchText: 'Nothing matches the current filter.',
+				records: Array.from({ length: 9 }, (_, index) => ({
+					id: `recovery-${index}`,
+					title: `Profile ${index}`,
+					detail: 'Import completed',
+				})),
+			}],
+		}));
+
+		const detail = screen.getByLabelText('Continue an Earlier Import');
+		const noMatchStatus = within(detail).getByRole('status');
+		expect(noMatchStatus).toBeEmptyDOMElement();
+		expect(noMatchStatus).toHaveClass('empty:-mt-4');
+
+		await user.type(screen.getByLabelText('Filter earlier imports'), 'missing');
+
+		expect(noMatchStatus).toHaveTextContent('Nothing matches the current filter.');
+		expect(screen.queryByText('No earlier import data is available.')).toBeNull();
+	});
+
+	test('updates persistent no-match regions for application and profile filters', async () => {
+		const applications = Array.from({ length: 9 }, (_, index) => ({
+			id: `editor-${index}`,
+			title: `Editor ${index}`,
+			detail: '1 profile',
+			intent: { type: 'selectApplication' as const, applicationId: `editor-${index}` },
+		}));
+		const initial = presentation({
+			panels: [{
+				kind: 'applications', id: '', heading: 'Applications', lead: 'Choose one.',
+				filterLabel: 'Filter applications', listLabel: 'Source applications', emptyText: 'None.',
+				noMatchText: 'No applications match.', applications,
+			}],
+		});
+		const { publish, user } = await mount(initial);
+		const applicationStatus = within(screen.getByLabelText('Applications')).getByRole('status');
+		expect(applicationStatus).toBeEmptyDOMElement();
+
+		await user.type(screen.getByLabelText('Filter applications'), 'missing');
+		expect(applicationStatus).toHaveTextContent('No applications match.');
+
+		await act(async () => publish(presentation({
+			revision: 2,
+			phase: 'profile',
+			scopeKey: 'discover|editor-0|',
+			panels: [{
+				kind: 'profiles', id: '', heading: 'Profiles', filterLabel: 'Filter profiles',
+				groupLabel: 'Source profile', noMatchText: 'No profiles match.',
+				profiles: applications.map(application => ({
+					id: application.id,
+					label: application.title,
+					checked: false,
+					intent: { type: 'selectSourceProfile', sourceRef: application.id },
+				})),
+			}],
+		})));
+		const profileStatus = within(screen.getByLabelText('Profiles')).getByRole('status');
+		expect(profileStatus).toBeEmptyDOMElement();
+
+		await user.type(screen.getByLabelText('Filter profiles'), 'missing');
+		expect(profileStatus).toHaveTextContent('No profiles match.');
+	});
 });

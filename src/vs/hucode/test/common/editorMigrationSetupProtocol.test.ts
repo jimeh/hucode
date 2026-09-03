@@ -265,6 +265,7 @@ suite('EditorMigrationSetupProtocol', () => {
 		assert.strictEqual(withPanel({ kind: 'applications', id: 'x' }), false, 'every panel needs a heading');
 		assert.strictEqual(withPanel({ kind: 'onboarding', id: 'x', heading: 'h' }), false, 'an unknown kind has no component');
 		assert.strictEqual(withPanel({ kind: 'loading', id: '', heading: 'h' }), false, 'a loading panel without a progress bar');
+		assert.strictEqual(withPanel({ kind: 'recovery', id: '', heading: 'h', lead: 'l', filterLabel: 'f', listLabel: 'li', emptyText: 'e', records: [] }), false, 'a recovery filter needs no-match copy');
 		assert.strictEqual(withPanel({ kind: 'groups', id: 'g', heading: 'h', lead: 'l', groups: [{ id: 'x', title: 't', countDescription: 'd' }] }), false, 'a group without a count');
 		assert.strictEqual(withPanel({ kind: 'target', id: '', heading: 'h', lead: 'l', groupLabel: 'g', targets: [], newTarget: { label: 'l', placeholder: 'p', actionLabel: 'a' } }), false, 'the new-target draft value is read directly');
 		assert.strictEqual(withPanel({ kind: 'restore', id: 'restore', heading: 'h', inspection: { description: 'd', actionLabel: 'a', forced: true, driftedCategories: ['extensions'] } }), false, 'extensions are never a rollback category');
@@ -299,7 +300,7 @@ suite('EditorMigrationSetupProtocol', () => {
 		const panels: readonly Record<string, unknown>[] = [
 			{ kind: 'loading', id: '', heading: 'Looking...', progress: { text: 'Reading...', min: 0, max: 1, now: 0 } },
 			{
-				kind: 'recovery', id: '', heading: 'Continue', lead: 'l', filterLabel: 'f', listLabel: 'li', emptyText: 'e',
+				kind: 'recovery', id: '', heading: 'Continue', lead: 'l', filterLabel: 'f', listLabel: 'li', emptyText: 'e', noMatchText: 'n',
 				records: [
 					{ id: 'r', title: 't', detail: 'd', action: { id: 'a', label: 'Open', kind: 'default', disabled: false, intent: { type: 'showRecovery', operationId: 'r' } } },
 					{ id: 'r2', title: 't2', detail: 'unsupported' },

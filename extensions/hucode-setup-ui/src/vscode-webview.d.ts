@@ -8,4 +8,8 @@ interface HucodeWebviewApi {
 	postMessage(message: unknown): void;
 }
 
-declare function acquireVsCodeApi(): HucodeWebviewApi;
+declare global {
+	function acquireVsCodeApi(): HucodeWebviewApi;
+}
+
+export { };

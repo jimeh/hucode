@@ -24,6 +24,7 @@
 @custom-variant hucode-light (&:where(body.vscode-light, body.vscode-light *));
 @custom-variant hucode-hc-dark (&:where(body.vscode-high-contrast, body.vscode-high-contrast *));
 @custom-variant hucode-hc-light (&:where(body.vscode-high-contrast-light, body.vscode-high-contrast-light *));
+@custom-variant dark (&:where(body.vscode-dark, body.vscode-dark *, body.vscode-high-contrast:not(.vscode-high-contrast-light), body.vscode-high-contrast:not(.vscode-high-contrast-light) *));
 
 @theme inline {
 	--color-background: var(--hucode-background);
@@ -124,6 +125,22 @@ body.vscode-high-contrast-light {
 	--hucode-danger: #b5200d;
 	--hucode-attention: #6c4a00;
 	--hucode-ok: #0b5c33;
+}
+
+/*
+ * The pinned Radix Nova selection controls emit `data-checked` utilities, while Radix exposes
+ * `data-state="checked"`. Keep generated source untouched and bridge that mismatch in owned CSS.
+ */
+[data-slot="checkbox"][data-state="checked"] {
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
+}
+
+[data-slot="radio-group-item"][data-state="checked"] {
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
 }
 
 /*
