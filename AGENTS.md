@@ -238,6 +238,10 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   and compact density. Keep the Omni Projects cell's left and bottom CSS
   margins, sash inset, and `ProjectsPart.layout()` widget dimensions tied to
   that outer-gutter contract instead of duplicating or doubling spacing tokens.
+- VS Code 1.136 generates Electron declarations at
+  `.build/typings/electron.d.ts`, outside Hucode's `node_modules` archives.
+  Every CI path that skips `npm ci` on a cache hit must run
+  `node build/npm/electronTypes.ts` before TypeScript compilation.
 - Extension *enablement* state is per-browser (localStorage), so
   enablement-dependent behaviour can only be measured in a browser holding the
   real profile state. A control run from a different browser profile proves

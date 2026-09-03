@@ -289,6 +289,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare Electron types
+        run: node build/npm/electronTypes.ts
+
       - name: Compile Hucode
         run: npm run hucode:compile
 
