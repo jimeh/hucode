@@ -2,6 +2,14 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.79 - 2026-09-03
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.136.0
+- **migration:** apply profile imports with recovery and result reporting (#216)
+- **migration:** plan selective profile imports and extension compatibility (#215)
+
 ## 0.0.78 - 2026-08-27
 
 ### Features
