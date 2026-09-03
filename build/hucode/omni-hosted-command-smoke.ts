@@ -23,6 +23,13 @@ export const hostedWorkbenchSmokeCommands = Object.freeze({
 /** Renderer surface that can own workbench Quick Input. */
 export type HostedWorkbenchCommandSurface = Page | Frame;
 
+/** Optional behavior for dispatching a hosted workbench smoke command. */
+export interface IHostedWorkbenchSmokeCommandOptions {
+	readonly selectionLabel?: string;
+	readonly focusSurface?: boolean;
+	readonly surfaceMayClose?: boolean;
+}
+
 /** Transport-neutral Projects row shape used by both runtime smokes. */
 export interface IOmniWorkbenchSmokeRow {
 	readonly label: string;
@@ -80,10 +87,9 @@ export async function runHostedWorkbenchSmokeCommand(
 	surface: HostedWorkbenchCommandSurface,
 	commandTitle: string,
 	timeoutMs: number,
-	selectionLabel?: string,
-	focusSurface = true
+	options: IHostedWorkbenchSmokeCommandOptions = {}
 ): Promise<void> {
-	if (focusSurface) {
+	if (options.focusSurface !== false) {
 		await focusCommandSurface(surface, timeoutMs);
 	}
 	await keyboardPage.keyboard.press('Control+Shift+P');
@@ -95,15 +101,54 @@ export async function runHostedWorkbenchSmokeCommand(
 	await command.waitFor({ state: 'visible', timeout: timeoutMs });
 	await command.click({ timeout: timeoutMs });
 
-	if (selectionLabel) {
+	if (options.selectionLabel) {
 		const selectionWidget = surface.locator('.quick-input-widget').last();
 		await selectionWidget.waitFor({ state: 'visible', timeout: timeoutMs });
-		const selection = getQuickInputRow(selectionWidget, selectionLabel);
+		const selection = getQuickInputRow(
+			selectionWidget,
+			options.selectionLabel
+		);
 		await selection.waitFor({ state: 'visible', timeout: timeoutMs });
 		await selection.click({ timeout: timeoutMs });
 	} else {
-		await widget.waitFor({ state: 'hidden', timeout: timeoutMs });
+		await waitForHostedWorkbenchSmokeCommandCompletion(
+			widget,
+			surface,
+			timeoutMs,
+			options.surfaceMayClose === true
+		);
 	}
+}
+
+/**
+ * Waits for Quick Input to hide, accepting page closure or frame detachment
+ * only when the command is expected to replace its hosted surface.
+ */
+export async function waitForHostedWorkbenchSmokeCommandCompletion(
+	widget: Locator,
+	surface: HostedWorkbenchCommandSurface,
+	timeoutMs: number,
+	surfaceMayClose: boolean
+): Promise<void> {
+	try {
+		await widget.waitFor({ state: 'hidden', timeout: timeoutMs });
+	} catch (error) {
+		if (
+			!surfaceMayClose ||
+			!isHostedWorkbenchCommandSurfaceUnavailable(surface)
+		) {
+			throw error;
+		}
+	}
+}
+
+function isHostedWorkbenchCommandSurfaceUnavailable(
+	surface: HostedWorkbenchCommandSurface
+): boolean {
+	const page = surface as Partial<Page>;
+	return typeof page.isClosed === 'function'
+		? page.isClosed()
+		: (surface as Frame).isDetached();
 }
 
 /** Opens a fixture file through workbench Quick Open and returns its editor. */

@@ -81,11 +81,16 @@ import { observeHucodeHostedShellState } from
 	'./hostedShellStateObserver.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
 import './hostedWorkbenchAppearance.contribution.js';
+import './omniItemLayoutConfigurationMigration.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
+	HUCODE_OMNI_SECTION_INDENT_DEFAULT,
+	HUCODE_OMNI_SECTION_INDENT_MAXIMUM,
+	HUCODE_OMNI_SECTION_INDENT_MINIMUM,
+	HUCODE_OMNI_SECTION_INDENT_SETTING,
 	HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING,
 	HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING,
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
@@ -106,6 +111,7 @@ Registry.as<IConfigurationRegistry>(
 	properties: {
 		[HUCODE_OMNI_TREE_INDENT_SETTING]: {
 			type: 'number',
+			order: 70,
 			default: HUCODE_OMNI_TREE_INDENT_DEFAULT,
 			minimum: HUCODE_OMNI_TREE_INDENT_MINIMUM,
 			maximum: HUCODE_OMNI_TREE_INDENT_MAXIMUM,
@@ -115,8 +121,21 @@ Registry.as<IConfigurationRegistry>(
 				"Controls tree indentation in the Omni Projects sidebar."
 			),
 		},
+		[HUCODE_OMNI_SECTION_INDENT_SETTING]: {
+			type: 'number',
+			order: 80,
+			default: HUCODE_OMNI_SECTION_INDENT_DEFAULT,
+			minimum: HUCODE_OMNI_SECTION_INDENT_MINIMUM,
+			maximum: HUCODE_OMNI_SECTION_INDENT_MAXIMUM,
+			scope: ConfigurationScope.WINDOW,
+			markdownDescription: localize(
+				'hucode.omniSectionIndent',
+				"Adds indentation between top-level section headers and their contents in the Omni Projects sidebar. A value of `0` uses the alignment for the current UI style."
+			),
+		},
 		[HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING]: {
 			type: 'string',
+			order: 10,
 			enum: ['active', 'all', 'none'],
 			default: 'active',
 			scope: ConfigurationScope.WINDOW,
@@ -127,7 +146,8 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[HUCODE_OMNI_WORKBENCH_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
-			enum: ['twoLine', 'compact'],
+			order: 30,
+			enum: ['default', 'compact'],
 			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
@@ -137,7 +157,8 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[HUCODE_OMNI_WORKTREE_ITEM_LAYOUT_SETTING]: {
 			type: 'string',
-			enum: ['twoLine', 'compact'],
+			order: 20,
+			enum: ['default', 'compact'],
 			default: HUCODE_OMNI_ITEM_LAYOUT_DEFAULT,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
@@ -147,6 +168,7 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[HUCODE_OMNI_SHOW_WORKTREE_PATHS_SETTING]: {
 			type: 'boolean',
+			order: 50,
 			default: true,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
@@ -156,6 +178,7 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[HUCODE_OMNI_SHOW_INLINE_ICONS_SETTING]: {
 			type: 'boolean',
+			order: 40,
 			default: true,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
@@ -165,6 +188,7 @@ Registry.as<IConfigurationRegistry>(
 		},
 		[PROJECTS_TITLEBAR_CONTROLS_ENABLED_SETTING]: {
 			type: 'boolean',
+			order: 60,
 			default: true,
 			scope: ConfigurationScope.WINDOW,
 			markdownDescription: localize(
