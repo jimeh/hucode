@@ -35,6 +35,10 @@ separate application window for each one.
   Plan](editor-migration-architecture-plan.md) defines the read-only source
   adapters, normalized contracts, pure planning, recoverable Apply, and the
   implementation sequence beginning with issue #200.
+- [Selective Editor Migration Planning
+  Plan](editor-migration-planning-plan.md) is the focused implementation plan
+  for issue #201's explicit-target snapshots, deterministic category planning,
+  extension compatibility, fingerprints, and drift verification.
 
 ## Developing Hucode
 

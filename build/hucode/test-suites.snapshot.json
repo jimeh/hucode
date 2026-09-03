@@ -2,6 +2,7 @@
 	"electron": [
 		"src/vs/base/test/browser/ui/dialog/hucodeDialogButtonOrder.test.ts",
 		"src/vs/code/test/browser/hucodeWebWorkbenchEntrypoint.test.ts",
+		"src/vs/hucode/test/browser/editorMigrationTargetReader.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebConnection.test.ts",
 		"src/vs/hucode/test/browser/hostedOmniWebUnload.test.ts",
 		"src/vs/hucode/test/browser/hostedShellStateObserver.test.ts",
@@ -75,6 +76,7 @@
 	],
 	"automatic": [
 		"src/vs/base/parts/ipc/test/common/hucodeLazyEventService.test.ts",
+		"src/vs/hucode/test/common/editorMigrationPlanner.test.ts",
 		"src/vs/hucode/test/common/editorMigrationSourceRanking.test.ts",
 		"src/vs/hucode/test/common/hostedWorkspaceState.test.ts",
 		"src/vs/hucode/test/common/projectSwitcher/projectSwitcherTreeModel.test.ts",

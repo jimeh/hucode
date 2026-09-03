@@ -68,7 +68,8 @@ It imports these categories:
 - snippets.
 
 It can target Default, an existing named ordinary profile, or one newly created
-ordinary profile. It never targets the Omni shell's internal profile.
+ordinary profile. Omni continues using Default for its shell services, but no
+migration target is ever inferred from the current Omni window.
 
 The following work remains outside this plan:
 
@@ -90,10 +91,11 @@ the shared flow. It does not weaken the automatic desktop discovery contract.
 
 ### Profile ownership
 
-The Omni shell runs with a stable internal profile. Hosted workbenches use
-ordinary workspace-profile associations and can switch independently. Every
-migration must therefore name its target profile. No service may infer the
-target from the current window or active shell profile.
+The Omni shell runs with the application Default profile for its shell services.
+Hosted workbenches resolve ordinary workspace-profile associations and can
+switch independently. Default is an eligible migration target, but every
+migration must name its target explicitly. No service may infer the target from
+the current window or active shell profile.
 
 Onboarding state and migration state also have different owners:
 
@@ -475,6 +477,9 @@ it does not add that picker.
 
 ## Issue #201: pure selective planning
 
+The focused [selective editor migration planning
+plan](editor-migration-planning-plan.md) is the executable plan for this issue.
+
 The planner consumes one source snapshot, one explicit target profile snapshot,
 selected categories, conflict choices, Hucode product configuration, and gallery
 responses. It returns an immutable plan and performs no target write or
@@ -482,8 +487,10 @@ extension installation.
 
 The planner owns:
 
-- target-profile eligibility, including rejection of internal and transient
-  profiles;
+- explicit existing or proposed targets, including rejection of internal and
+  transient existing profiles and no proposed-profile creation;
+- target resource ownership and copy-then-merge prerequisites when a selected
+  category currently inherits from Default;
 - source-specific and Hucode-specific settings filters with a named reason for
   every exclusion;
 - preserve-by-default settings decisions;
@@ -520,15 +527,21 @@ explicit ordinary target profile and follows this order:
 2. verify source, target, choice, policy, and exact gallery selections;
 3. persist the admitted operation, full versioned reviewed plan, and plan
    fingerprint;
-4. snapshot every selected file-backed target resource;
-5. revalidate a category's target input immediately before its write;
-6. atomically write settings, keybindings, and snippets where the provider
+4. for a proposed target, validate name availability again, create the ordinary
+   profile with the reviewed options, and persist its real ID before category
+   writes;
+5. snapshot every selected effective file-backed resource and its ownership;
+6. materialize each selected inherited category by seeding profile-owned
+   storage from the exact reviewed effective baseline before clearing
+   inheritance;
+7. revalidate a category's target input immediately before its write;
+8. atomically write settings, keybindings, and snippets where the provider
    supports replacement through a temporary sibling;
-7. persist each category result before moving to the next category;
-8. resolve and install only the persisted exact extension coordinates,
+9. persist each category result before moving to the next category;
+10. resolve and install only the persisted exact extension coordinates,
    additively;
-9. persist every extension outcome and the final operation result;
-10. release the writer lease after durable final or recoverable state exists.
+11. persist every extension outcome and the final operation result;
+12. release the writer lease after durable final or recoverable state exists.
 
 File-backed categories are idempotent and eligible for rollback to their
 pre-operation snapshots. Successfully installed extensions remain installed.
@@ -544,6 +557,12 @@ pre-operation snapshot.
 Cancellation before admission leaves no operation. Cancellation after admission
 stops at a recorded safe boundary. A crash or restart reconstructs the next
 valid action from durable state rather than guessing from target contents.
+
+A profile created after admission remains attached to its durable operation; it
+is not automatically deleted on cancellation or rollback. Recovery snapshots
+include ownership metadata. Rollback of a materialized category restores its
+prior inheritance state only when the normal post-apply drift guard allows the
+corresponding content restore.
 
 Version the operation record from its first release. An unsupported newer
 record must stay untouched and produce a recovery diagnostic instead of being
