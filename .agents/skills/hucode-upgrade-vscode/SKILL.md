@@ -52,6 +52,11 @@ behalf.
 Note that `upstream-<version>` branch names are unrelated to any remote named
 `upstream`; the prefix stays the same regardless of remote naming.
 
+If a Git operation fails because the host lacks `git-lfs`, read
+[Host Environment Recovery](references/host-environment.md) for the bounded
+pointer-only fallback. Do not bypass LFS until the final upgrade diff proves it
+contains no LFS-managed change.
+
 ## Preflight
 
 1. Confirm target versions and current branch names:
@@ -291,6 +296,18 @@ comm -12 \
 git diff --name-status upstream-<old-version>..upstream-<new-version> -- .github/workflows
 ```
 
+Direct path overlap is only the visible conflict surface. Also inspect upstream
+changes to contracts that Hucode duplicates or consumes indirectly, using the
+relevant Hucode gotchas in `AGENTS.md` as the checklist. In particular:
+
+- If upstream changes a desktop/workbench service bootstrap, compare the
+  service construction and registration semantics with Hucode's Omni bootstrap.
+- If upstream moves a generated build input outside a cached directory, verify
+  every cache-hit CI and release path recreates it before compilation.
+- If upstream changes layout tokens or CSS contracts used by a Hucode-owned
+  shell part, collect targeted rendered or layout evidence; a clean cherry-pick
+  and green compile cannot prove the visual contract.
+
 ## Replay Onto The New Series
 
 Cherry-pick the compact old replay stack:
@@ -368,13 +385,27 @@ git log --oneline upstream-<old-version>..series-<old-version>-replay | wc -l
 diff \
   <(git diff --name-only upstream-<old-version>..series-<old-version>-replay | sort) \
   <(git diff --name-only upstream-<new-version>..series-<new-version> | sort)
+
+# Compare each replay topic's patch across the baseline change.
+git range-diff \
+  upstream-<old-version>..series-<old-version>-replay \
+  upstream-<new-version>..series-<new-version>
 ```
 
-After the replay lands, run `npm install` again before build-package tests:
-the replayed build-tooling commit adds Hucode-only dependencies (for example
-`@commitlint/*`) that the baseline install did not know about, and the tests
-fail with `ERR_MODULE_NOT_FOUND` on a stale install. Discard any lockfile
-churn this second install produces as well.
+In the range-diff, `=` entries are unchanged topics. Explain every `!`, `<`,
+and `>` entry. A topic adapted to a changed upstream API is expected; if the
+baseline metadata commit already exists, it is also an expected new entry. An
+unexplained entry means the replay is not yet proven complete.
+
+After the replay lands, refresh dependencies again before build-package tests.
+The replayed build-tooling commit adds Hucode-only dependencies that the
+baseline install did not know about. Use `npm install` in the primary checkout.
+In a fresh linked worktree, or when nested dependency trees are absent, use
+`mise run treeboot`; it seeds all repository dependency trees before running
+the setup checks. Wait for a successful process exit before retrying hooks.
+Missing packages from `build/node_modules` after a root-only install indicate
+incomplete worktree setup, not a reason to bypass hooks. Discard lockfile churn
+from either refresh before continuing.
 
 ## Validate The Upgraded Series
 
@@ -385,7 +416,9 @@ git log --oneline upstream-<new-version>..series-<new-version>
 git diff --stat upstream-<new-version>..series-<new-version>
 npm run hucode:check-upstream-provenance -- \
   --upstream-ref upstream-<new-version>
-npm run precommit
+git diff --name-only --diff-filter=ACMRT -z \
+  upstream-<new-version>..series-<new-version> | \
+  xargs -0 npm run -s precommit --
 npm run hucode:compile
 ```
 
@@ -394,10 +427,14 @@ tooling and entrypoint-drift contracts that normal TypeScript compilation can
 miss:
 
 ```sh
-cd build && node --test "{lib,next}/**/*.test.ts"
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0=commit.gpgSign \
+GIT_CONFIG_VALUE_0=false \
+  bash -lc 'cd build && node --test "{lib,next}/**/*.test.ts"'
 ```
 
-This `node --test` glob form requires Node v21 or later.
+This `node --test` glob form requires Node v21 or later. The temporary Git
+commits created by the changelog tests must not inherit interactive GPG signing.
 
 Run a full `npm run test-node` pass on upgrade branches; it takes under a
 minute and runs against the same esbuild-transpiled `out/` that Hucode CI
@@ -502,12 +539,19 @@ mirrored into the Omni counterpart at the same relative position or added to
 the test's documented-omissions map with a reason. Bootstrap imports usually
 mean new service wiring (for example the 1.126.0 remote file-system proxy
 registrations), so prefer mirroring over omitting; omitting is for
-contributions Omni deliberately does not ship. Drift the tests cannot see —
-changed constructor arguments or reordered wiring inside `DesktopMain` — is
-caught by the compiler when signatures change, so also skim
-`git diff upstream-<old-version>..upstream-<new-version> -- \
-src/vs/workbench/electron-browser/desktop.main.ts` for wiring changes worth
-mirroring by hand.
+contributions Omni deliberately does not ship. Import-contract tests do not
+prove service construction, aliases, lifecycle registration, or ordering.
+Compilation can also pass when upstream adds optional constructor arguments or
+a later contribution resolves a missing service through dependency injection.
+Treat this diff as a semantic checklist rather than a skim:
+
+```sh
+git diff upstream-<old-version>..upstream-<new-version> -- \
+  src/vs/workbench/electron-browser/desktop.main.ts
+```
+
+For every upstream wiring change, decide whether Omni must mirror it and verify
+the result with runtime evidence.
 
 After `npm run hucode:compile`, run a short Omni startup smoke with inherited
 extension-host environment cleared:
@@ -531,6 +575,20 @@ service errors, `Cannot instantiate named customer`, and `Missing proxy
 instance`. Extension deprecation warnings and managed-account fallback messages
 are not upgrade blockers by themselves, but do not ignore new `ERR` lines
 without tracing them.
+
+On a headless Linux host, read
+[Host Environment Recovery](references/host-environment.md) for the bounded
+launch command and its acceptance criteria.
+
+Run the full Linux Omni lifecycle smoke when desktop bootstrap or service wiring
+changed, or when the short smoke found a runtime error that required a fix:
+
+```sh
+dbus-run-session -- xvfb-run -a \
+  npm run hucode:smoke:linux-omni -- \
+  --executable ./scripts/hucode.sh \
+  --timeout-ms 300000
+```
 
 ## Version And Release Metadata
 
@@ -564,13 +622,16 @@ feat(deps): upgrade VS Code baseline to 1.122.0
 If a PR number already exists, the numbered fragment form is also valid:
 `.changes/<pr-number>-upgrade-vscode-1-122-0.md`.
 
-After the replayed Hucode patch stack, compatibility fixes, validation updates,
-and baseline `.changes` fragment are all committed, push the completed series
-branch:
+When the user has authorized publication, push the completed series only after
+the replayed Hucode patch stack, compatibility fixes, validation updates, and
+baseline `.changes` fragment are all committed:
 
 ```sh
 git push -u origin series-<new-version>
 ```
+
+Do not move the GitHub default branch yet. CI must validate the exact pushed
+head first.
 
 ## Final Checks
 
@@ -582,10 +643,41 @@ git log --oneline upstream-<new-version>..series-<new-version>
 node -e "const p=require('./package.json'); const h=require('./build/hucode/mixin/stable/product.json'); console.log({ vscode:p.version, hucode:h.hucodeVersion })"
 ```
 
-After pushing, watch the first `Hucode CI` run on the series branch to
-completion (`gh run watch`). CI is not redundant with local validation:
-upstream can move CI-relevant behavior between baselines, and a green local
-run does not prove the workflow-level assumptions still hold.
+After pushing, find the `Hucode CI` run whose `headSha` equals
+`git rev-parse HEAD`; do not assume the newest run is the right one. Watch that
+run with `gh run watch <run-id> -R jimeh/hucode --exit-status`, then read it
+back and verify both the head SHA and successful conclusion. CI is not
+redundant with local validation: upstream can move CI-relevant behavior between
+baselines, and a green local run does not prove the workflow-level assumptions
+still hold.
+
+```sh
+SERIES_HEAD=$(git rev-parse HEAD)
+gh run list -R jimeh/hucode \
+  --workflow 'Hucode CI' \
+  --branch series-<new-version> \
+  --event push \
+  --json databaseId,headSha,status,conclusion
+gh run watch <matching-run-id> -R jimeh/hucode --exit-status
+gh run view <matching-run-id> -R jimeh/hucode \
+  --json headSha,conclusion
+```
+
+The selected run's `headSha` must equal `$SERIES_HEAD`.
+
+For a published upgrade intended to become the active development line, move
+the GitHub default branch only after exact-head CI passes, then refresh the
+local remote HEAD:
+
+```sh
+gh api --method PATCH repos/jimeh/hucode \
+  -f default_branch=series-<new-version>
+git remote set-head origin -a
+git symbolic-ref --short refs/remotes/origin/HEAD
+```
+
+Stop before changing the default branch if the matching run is absent, still
+running, or unsuccessful.
 
 Report:
 
@@ -595,6 +687,8 @@ Report:
   local unless the user explicitly asks to publish it.
 - Conflict areas and important decisions.
 - Validation commands and outcomes.
+- Exact-head Hucode CI run and whether the GitHub default branch and
+  `origin/HEAD` moved to the new series.
 - Any remaining dirty generated mixin state that was deliberately left alone.
   `hucode:prepare`, `hucode:compile`, and launch workflows can dirty root
   `product.json` and `resources/darwin/*`; distinguish that generated runtime
