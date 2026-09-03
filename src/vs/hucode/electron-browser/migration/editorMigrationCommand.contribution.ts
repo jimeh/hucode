@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import '../../browser/migration/media/editorMigrationFlow.css';
+import '../../browser/migration/media/editorMigrationSetupHost.css';
 import { localize, localize2 } from '../../../nls.js';
 import { Action2, registerAction2 } from '../../../platform/actions/common/actions.js';
 import { SyncDescriptor } from '../../../platform/instantiation/common/descriptors.js';

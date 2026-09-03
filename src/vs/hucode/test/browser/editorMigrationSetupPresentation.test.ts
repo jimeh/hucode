@@ -1,0 +1,331 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
+import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
+import { EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import {
+	EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+	EditorMigrationDraftDecision,
+	EditorMigrationDraftExclusion,
+	EditorMigrationPlanDraft,
+	EditorMigrationPlanWarning,
+	EditorMigrationReviewedPlan,
+} from '../../common/migration/editorMigrationPlanning.js';
+import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceDescriptor, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
+import type { EditorMigrationSetupPanel, EditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
+
+suite('EditorMigrationSetupPresentation', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('offers the application list before profiles and keeps discovery evidence in one disclosure', () => {
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'application',
+			applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [descriptor('Default', 'default', 'cursor-default')] }],
+			discoveryDiagnostics: [{ code: 'permissionDeniedOrLocked', severity: 'warning', scope: 'candidate', adapterId: 'vscode', details: { path: '/private/vscode' } }],
+		}), 3);
+
+		const panel = panelOf(presentation, 'applications');
+		assert.strictEqual(panel.applications.length, 1);
+		assert.deepStrictEqual(panel.applications[0].intent, { type: 'selectApplication', applicationId: 'cursor' });
+		assert.match(panel.applications[0].detail, /1 profile/);
+		assert.ok(panel.diagnostics, 'discovery evidence belongs behind a labeled disclosure');
+		assert.match(panel.diagnostics!.items[0], /permission/i);
+		assert.strictEqual(presentation.sections.length, 0, 'discovery phases have no section rail');
+		assert.strictEqual(presentation.revision, 3);
+	});
+
+	test('preselects the Default source profile and the Default target', () => {
+		const cursorDefault = descriptor('Default', 'default', 'cursor-default');
+		const profiles = editorMigrationSetupPresentation(state({
+			phase: 'profile',
+			selectedApplicationId: 'cursor',
+			selectedSourceRef: { value: 'cursor-default' },
+			applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [cursorDefault, descriptor('Work', 'named', 'cursor-work')] }],
+		}), 1);
+		const profilePanel = panelOf(profiles, 'profiles');
+		assert.deepStrictEqual(profilePanel.profiles.map(profile => [profile.label, profile.checked]), [['Default', true], ['Work', false]]);
+		assert.ok(profilePanel.details, 'the selected profile contributes its own details disclosure');
+
+		const targets = editorMigrationSetupPresentation(state({
+			phase: 'target',
+			targets: [
+				{ selection: { kind: 'existing', profileId: 'default' }, name: 'Default', kind: 'default' },
+				{ selection: { kind: 'existing', profileId: 'work' }, name: 'Work', kind: 'named' },
+			],
+			selectedTarget: { kind: 'existing', profileId: 'default' },
+		}), 1);
+		const targetPanel = panelOf(targets, 'target');
+		assert.deepStrictEqual(targetPanel.targets.map(target => target.checked), [true, false]);
+		assert.match(targetPanel.targets[0].label, /Recommended/);
+	});
+
+	test('opens review on the first section needing attention and summarizes routine additions', () => {
+		const draft = reviewDraft();
+		const presentation = editorMigrationSetupPresentation(reviewState(draft), 1);
+
+		assert.deepStrictEqual(presentation.sections.map(section => section.id), ['settings', 'keybindings', 'extensions', 'notImported']);
+		assert.strictEqual(presentation.defaultSectionId, 'settings');
+		assert.strictEqual(presentation.sections[0].status, 'attention');
+		assert.match(presentation.sections[0].statusDescription, /Needs attention/);
+
+		const settings = reviewPanel(presentation, 'settings');
+		assert.strictEqual(settings.conflicts.length, 1);
+		assert.strictEqual(settings.conflicts[0].currentValue, '13');
+		assert.strictEqual(settings.conflicts[0].importedValue, '14');
+		assert.match(settings.conflicts[0].valuesDescription, /Current value 13\. Imported value 14\./);
+		assert.strictEqual(settings.bulkActions?.length, 2, 'both bulk setting actions sit beside the conflict summary');
+		assert.ok(settings.additions, 'routine additions stay behind a disclosure');
+		assert.match(settings.additions!.summary, /2 new settings/);
+		assert.match(settings.ownership, /inherited from Default/);
+	});
+
+	test('states a deselected category as whole-category source items rather than its exclusions again', () => {
+		const draft = reviewDraft();
+		const presentation = editorMigrationSetupPresentation(reviewState(draft, ['settings', 'keybindings']), 1);
+
+		const extensions = reviewPanel(presentation, 'extensions');
+		assert.strictEqual(extensions.include?.checked, false);
+		assert.match(extensions.lead, /Not included in this import/);
+		assert.strictEqual(extensions.conflicts.length, 0);
+		assert.ok(extensions.excludedText);
+
+		const notImported = panelWithId(presentation, 'notImported');
+		assert.strictEqual(notImported.kind, 'groups');
+		const titles = notImported.kind === 'groups' ? notImported.groups.map(group => group.title) : [];
+		assert.strictEqual(titles.filter(title => /Extensions is not included/.test(title)).length, 1);
+		assert.strictEqual(titles.filter(title => /gallery/i.test(title)).length, 0, 'a deselected category must not also list its policy exclusions');
+	});
+
+	test('freezes review choices behind publisher confirmation while keeping the review rail', () => {
+		const draft = reviewDraft();
+		const presentation = editorMigrationSetupPresentation(state({
+			...reviewState(draft),
+			phase: 'publishers',
+			publishers: ['publisher'],
+			reviewedPlan: reviewedPlan(draft),
+		}), 1);
+
+		assert.deepStrictEqual(presentation.sections.map(section => section.id), ['settings', 'keybindings', 'extensions', 'notImported', 'publishers']);
+		assert.strictEqual(presentation.sections.at(-1)?.separated, true);
+		assert.strictEqual(presentation.defaultSectionId, 'publishers');
+
+		const settings = reviewPanel(presentation, 'settings');
+		assert.strictEqual(settings.include, undefined, 'publisher confirmation must not re-open category inclusion');
+		assert.strictEqual(settings.bulkActions, undefined);
+		assert.strictEqual(settings.conflicts[0].choices, undefined);
+		assert.ok(settings.conflicts[0].chosenText);
+
+		const publishers = panelWithId(presentation, 'publishers');
+		assert.strictEqual(publishers.kind, 'groups');
+		assert.match(presentation.footer.lines[0], /confirmation applies to this import only/);
+	});
+
+	test('leads Results with the aggregate outcome and collapses routine successes', () => {
+		const presentation = editorMigrationSetupPresentation(state({ phase: 'results', operation: settledOperation() }), 1);
+
+		assert.strictEqual(presentation.defaultSectionId, 'extensions', 'Results opens on the first category with a problem');
+		const overview = panelWithId(presentation, 'overview');
+		assert.strictEqual(overview.kind, 'resultsOverview');
+		if (overview.kind === 'resultsOverview') {
+			assert.match(overview.outcome, /completed with issues/i);
+			assert.match(overview.lead, /need attention/);
+		}
+		const extensions = panelWithId(presentation, 'extensions');
+		assert.strictEqual(extensions.kind, 'resultsCategory');
+		if (extensions.kind === 'resultsCategory') {
+			assert.strictEqual(extensions.problems.length, 1);
+			assert.match(extensions.problems[0].detail ?? '', /installation failed/i);
+			assert.ok(extensions.completed, 'routine successes stay collapsed');
+		}
+		const actionIds = presentation.footer.actions.map(action => action.id);
+		assert.ok(actionIds.includes('results-retry'));
+		assert.ok(actionIds.includes('results-copy'));
+		assert.ok(actionIds.includes('results-acknowledge'));
+		assert.deepStrictEqual(presentation.footer.actions.find(action => action.id === 'results-done')?.intent, { type: 'close' });
+	});
+
+	test('offers rollback only for proven file mutations and only forces the drifted categories', () => {
+		const operation = settledOperation();
+		const withSnapshots = { ...operation, snapshots: [{ category: 'settings', postApplyHash: 'hash' }] } as unknown as EditorMigrationOperation;
+		const presentation = editorMigrationSetupPresentation(state({
+			phase: 'results',
+			operation: withSnapshots,
+			rollbackInspection: { operationId: withSnapshots.id, operationRevision: 1, eligibleCategories: ['settings'], driftedCategories: ['settings'], fingerprint: 'x' },
+		}), 1);
+
+		const restore = panelWithId(presentation, 'restore');
+		assert.strictEqual(restore.kind, 'restore');
+		if (restore.kind === 'restore') {
+			assert.deepStrictEqual(restore.selection?.options.map(option => option.category), ['settings']);
+			assert.strictEqual(restore.inspection?.forced, true);
+			assert.deepStrictEqual(restore.inspection?.driftedCategories, ['settings']);
+		}
+
+		const withoutMutation = editorMigrationSetupPresentation(state({ phase: 'results', operation }), 1);
+		assert.strictEqual(withoutMutation.sections.some(section => section.id === 'restore'), false);
+	});
+
+	test('changes the scope key only when the import, draft, or operation changes', () => {
+		const draft = reviewDraft();
+		const first = editorMigrationSetupPresentation(reviewState(draft), 1).scopeKey;
+		assert.strictEqual(editorMigrationSetupPresentation(reviewState(draft, ['settings']), 2).scopeKey, first, 'a category choice keeps local filters');
+		const otherDraft = { ...draft, draftFingerprintSeed: 'other' };
+		assert.notStrictEqual(editorMigrationSetupPresentation(reviewState(otherDraft), 3).scopeKey, first);
+		assert.notStrictEqual(editorMigrationSetupPresentation(state({ phase: 'application' }), 4).scopeKey, first);
+	});
+});
+
+// #region fixtures
+
+function panelOf<K extends EditorMigrationSetupPanel['kind']>(presentation: EditorMigrationSetupPresentation, kind: K): Extract<EditorMigrationSetupPanel, { kind: K }> {
+	const panel = presentation.panels.find(candidate => candidate.kind === kind);
+	assert.ok(panel, `expected a ${kind} panel`);
+	return panel as Extract<EditorMigrationSetupPanel, { kind: K }>;
+}
+
+function panelWithId(presentation: EditorMigrationSetupPresentation, id: string): EditorMigrationSetupPanel {
+	const panel = presentation.panels.find(candidate => candidate.id === id);
+	assert.ok(panel, `expected a panel for section ${id}`);
+	return panel;
+}
+
+function reviewPanel(presentation: EditorMigrationSetupPresentation, id: string): Extract<EditorMigrationSetupPanel, { kind: 'reviewCategory' }> {
+	const panel = panelWithId(presentation, id);
+	assert.strictEqual(panel.kind, 'reviewCategory');
+	return panel as Extract<EditorMigrationSetupPanel, { kind: 'reviewCategory' }>;
+}
+
+function state(overrides: Partial<EditorMigrationFlowState>): EditorMigrationFlowState {
+	return {
+		phase: 'loading',
+		busy: false,
+		canceling: false,
+		recoveries: [],
+		applications: [],
+		discoveryDiagnostics: [],
+		targets: [],
+		selectedCategories: [],
+		decisions: {},
+		publishers: [],
+		reviewNeedsRebuild: false,
+		...overrides,
+	};
+}
+
+function reviewState(draft: EditorMigrationPlanDraft, selectedCategories: readonly ('settings' | 'keybindings' | 'snippets' | 'extensions')[] = ['settings', 'keybindings', 'extensions']): EditorMigrationFlowState {
+	return state({ phase: 'review', draft, selectedCategories, decisions: {} });
+}
+
+function reviewDraft(): EditorMigrationPlanDraft {
+	const decisions: EditorMigrationDraftDecision[] = [
+		{ id: 'settings:editor.fontSize', category: 'settings', item: 'editor.fontSize', kind: 'conflict', defaultChoice: 'preserveTarget', source: 14, target: 13 },
+		{ id: 'settings:add-0', category: 'settings', item: 'editor.wordWrap', kind: 'add', defaultChoice: 'import', source: 'on' },
+		{ id: 'settings:add-1', category: 'settings', item: 'editor.minimap.enabled', kind: 'add', defaultChoice: 'import', source: false },
+		{ id: 'keybindings:add-0', category: 'keybindings', item: 'ctrl+k 0', kind: 'add', defaultChoice: 'import', source: { key: 'ctrl+k 0', command: 'command.0' } },
+		{ id: 'extensions:publisher.extension-0', category: 'extensions', item: 'publisher.extension-0', kind: 'add', defaultChoice: 'import', source: { id: 'publisher.extension-0', requestedChannel: 'stable', status: 'available', version: '1.0.0', targetPlatform: 'linux-x64', selectedChannel: 'stable', engine: '*', galleryIdentity: 'open-vsx' } },
+	];
+	const exclusions: EditorMigrationDraftExclusion[] = [
+		{ category: 'settings', item: 'machine.secret', reason: 'machineSpecific' },
+		{ category: 'extensions', item: 'publisher.missing', reason: 'galleryUnavailable' },
+	];
+	const warnings: EditorMigrationPlanWarning[] = [{ code: 'defaultProfileBacksOmni' }, { code: 'unknownSettingSchema', item: 'editor.custom' }];
+	const source: EditorMigrationSourceSnapshot = {
+		schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
+		ref: { value: 'cursor-default' },
+		adapter: { id: 'cursor', productName: 'Cursor', channel: 'stable', order: 2 },
+		profile: { id: 'cursor-default', name: 'Default', kind: 'default' },
+		categories: [
+			{ category: 'settings', state: 'present', value: { 'editor.fontSize': 14, 'editor.wordWrap': 'on', 'editor.minimap.enabled': false, 'machine.secret': 1 } },
+			{ category: 'keybindings', state: 'present', value: [{ key: 'ctrl+k 0', command: 'command.0' }] },
+			{ category: 'extensions', state: 'present', value: [{ id: 'publisher.extension-0', version: '1.0.0' }, { id: 'publisher.missing', version: '1.0.0' }] },
+		],
+		diagnostics: [],
+		fingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'sha256', categories: ['settings'], entries: [], value: 'fingerprint' },
+	};
+	return {
+		schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+		source,
+		target: {
+			schemaVersion: EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+			selection: { kind: 'existing', profileId: 'work' },
+			profile: { id: 'work', name: 'Work', kind: 'named' },
+			eligible: true,
+			catalogFingerprint: 'catalog',
+			requestedCategories: ['settings', 'keybindings', 'extensions'],
+			categories: [
+				{ category: 'settings', ownership: 'default', ownerProfileId: 'default', state: 'present', value: { 'editor.fontSize': 13 } },
+				{ category: 'keybindings', ownership: 'target', ownerProfileId: 'work', state: 'present', value: [] },
+				{ category: 'extensions', ownership: 'target', ownerProfileId: 'work', state: 'present', value: [] },
+			],
+			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.78', galleryIdentity: 'open-vsx', policyVersion: 1 },
+			builtIns: [],
+			fingerprint: 'target',
+		},
+		evidence: { registryIgnoredSettings: [], normalizedKeys: {}, keybindingPlatform: 'linux', gallery: [] },
+		decisions,
+		exclusions,
+		prerequisites: [{ kind: 'materializeInheritedResource', category: 'settings', ownerProfileId: 'default', baselineFingerprint: 'baseline' }],
+		warnings,
+		draftFingerprintSeed: 'draft',
+	};
+}
+
+function reviewedPlan(draft: EditorMigrationPlanDraft): EditorMigrationReviewedPlan {
+	return {
+		...draft,
+		choices: {
+			selectedCategories: ['settings', 'keybindings', 'extensions'],
+			decisions: draft.decisions.filter(decision => decision.kind === 'conflict').map(decision => ({ id: decision.id, choice: 'preserveTarget' as const })),
+		},
+		operations: draft.decisions
+			.filter(decision => decision.category === 'extensions')
+			.map(decision => ({
+				id: decision.id,
+				category: 'extensions' as const,
+				kind: 'installExtension' as const,
+				item: decision.item,
+				source: decision.source as Extract<EditorMigrationReviewedPlan['operations'][number], { readonly kind: 'installExtension' }>['source'],
+			})),
+		fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+	};
+}
+
+function settledOperation(): EditorMigrationOperation {
+	const plan = reviewedPlan(reviewDraft());
+	const results: EditorMigrationItemResult[] = [
+		{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 },
+		{ id: 'keybindings', category: 'keybindings', outcome: 'completed', attempts: 1 },
+		{ id: 'extensions:publisher.extension-0', category: 'extensions', outcome: 'failed', attempts: 2, diagnostic: { code: 'extensionInstallFailed', message: 'install failed' } },
+		{ id: 'extensions', category: 'extensions', outcome: 'completed', attempts: 1 },
+	];
+	return {
+		id: 'operation',
+		stage: 'settled',
+		aggregateOutcome: 'completedWithIssues',
+		plan,
+		results,
+		snapshots: [],
+		extensionInstallIntents: plan.operations.map(operation => ({ operationId: operation.id, applicationScoped: false })),
+	} as unknown as EditorMigrationOperation;
+}
+
+function descriptor(name: string, kind: 'default' | 'named', ref: string): EditorMigrationSourceDescriptor {
+	return {
+		schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION,
+		ref: { value: ref },
+		adapter: { id: 'cursor', productName: 'Cursor', channel: 'stable', order: 2 },
+		profile: { id: ref, name, kind },
+		localPaths: { userData: `/private/${ref}`, extensions: `/private/${ref}/extensions` },
+		categories: [{ category: 'settings', state: 'present', itemCount: 1 }],
+		diagnostics: [],
+		ranking: { completeness: 1, newestModificationTime: 1, stableChannelPreference: 1, adapterOrder: 2, normalizedProfileName: name.toLowerCase(), canonicalReference: ref },
+		discoveryFingerprint: { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, algorithm: 'sha256', categories: ['settings'], entries: [], value: `fingerprint-${ref}` },
+	};
+}
+
+// #endregion

@@ -1,0 +1,10 @@
+src/**
+scripts/**
+test/**
+components.json
+esbuild.setup.mts
+tsconfig.json
+vitest.config.ts
+package-lock.json
+.gitignore
+**/*.tsbuildinfo

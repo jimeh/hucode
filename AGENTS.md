@@ -389,3 +389,30 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   instead of wrapping it in `FileOperationError`. Read-only migration readers
   that distinguish absent resources must classify both through
   `toFileOperationResult()`.
+- The setup UI renderer under `extensions/hucode-setup-ui/` is an asset-only
+  built-in extension with no `main`, `browser`, activation events, or
+  contributions. Core creates the webview and resolves
+  `<builtinExtensionsPath>/hucode-setup-ui/media`, so the import UI still loads
+  with `--disable-extensions`. Its wire protocol lives in
+  `src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts` and is
+  mirrored byte-for-byte into `src/generated/` by
+  `build/hucode/setup-ui-protocol.ts`; edit the canonical file and run
+  `npm run hucode:sync-setup-protocol`, never the mirror.
+- Tailwind v4's PostCSS plugin resolves automatic source detection from the
+  working directory, not from the CSS file. Because the package script and the
+  gulp media build run from different directories, the setup stylesheet must
+  use `@import "tailwindcss" source(none)` with explicit `@source` globs, or the
+  bundled CSS silently picks up unrelated repository files and changes size with
+  the caller.
+- React attaches an ancestor's ref *after* a descendant's layout effects, so a
+  child that virtualizes against a parent-owned scroll container must read that
+  ref from a passive effect and store it in state. Reading it during layout
+  leaves TanStack Virtual with no viewport and renders zero rows on first mount.
+- `local/code-no-unexternalized-strings` and
+  `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
+  packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`
+  relaxation does not match `.test.tsx`.
+- `npx shadcn` cannot `init` a package it detects as a "Manual" framework: it
+  skips dependency installation, the `utils` helper, and the theme CSS. Keep
+  `components.json` checked in by hand, verify it with `npx shadcn info`, and
+  add the peer dependencies yourself. `shadcn add` still works from there.
