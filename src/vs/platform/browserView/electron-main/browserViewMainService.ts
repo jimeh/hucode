@@ -25,6 +25,7 @@ import { BrowserViewInspectElementId } from './browserViewInspector.js';
 import { equals } from '../../../base/common/objects.js';
 import { URI } from '../../../base/common/uri.js';
 import { ILogService } from '../../log/common/log.js';
+import { BrowserViewHostedWebContents } from './browserViewHostedWebContents.js';
 
 export const IBrowserViewMainService = createDecorator<IBrowserViewMainService>('browserViewMainService');
 
@@ -35,6 +36,15 @@ export interface IBrowserViewMainService extends IBrowserViewService {
 
 	/** Create a new target and return it. */
 	createTarget(url: string, context: IBrowserViewCreationContext): Promise<BrowserView>;
+
+	setHostedWebContentsVisible(hostedWebContentsId: number, visible: boolean): void;
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void;
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void;
 }
 
 export class BrowserViewMainService extends Disposable implements IBrowserViewMainService {
@@ -56,6 +66,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	 */
 	private readonly _windowConfigurations = new Map<number, IBrowserViewWindowConfiguration>();
 	private readonly _windowCloseSubscriptions = this._register(new DisposableMap<number>());
+	private readonly hostedWebContents = new BrowserViewHostedWebContents();
 
 	private readonly _onDidCreateBrowserView = this._register(new Emitter<IBrowserViewCreatedEvent>());
 	readonly onDidCreateBrowserView: Event<IBrowserViewCreatedEvent> = this._onDidCreateBrowserView.event;
@@ -128,6 +139,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 		return {
 			id: view.id,
 			hostWindowId: view.hostWindowId,
+			hostedWebContentsId: view.hostedWebContentsId,
 			owner: view.owner,
 			associatedResource: view.associatedResource,
 			state: view.getState()
@@ -238,11 +250,46 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	async layout(id: string, bounds: IBrowserViewBounds): Promise<void> {
-		return this._getBrowserView(id).layout(bounds);
+		return this._getBrowserView(id).layout(
+			bounds,
+			this.hostedWebContents.isVisible(bounds.hostedWebContentsId)
+		);
 	}
 
 	async setVisible(id: string, visible: boolean): Promise<void> {
 		return this._getBrowserView(id).setVisible(visible);
+	}
+
+	setHostedWebContentsVisible(
+		hostedWebContentsId: number,
+		visible: boolean
+	): void {
+		this.hostedWebContents.setVisible(
+			hostedWebContentsId,
+			visible,
+			this.browserViews.values()
+		);
+	}
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
+		this.hostedWebContents.bringToFront(
+			hostedWebContentsId,
+			this.browserViews.values()
+		);
+	}
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void {
+		this.hostedWebContents.delete(hostedWebContentsId);
+		const viewIds = this.hostedWebContents.getOwnedViewIds(
+			hostedWebContentsId,
+			this.browserViews
+		);
+		for (const id of viewIds) {
+			this.browserViews.deleteAndDispose(id);
+		}
 	}
 
 	async loadURL(id: string, url: string): Promise<void> {
@@ -418,7 +465,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	/**
 	 * Create a browser view backed by the given {@link BrowserSession}.
 	 */
-	private _createNativeBrowserView(id: string, hostWindowId: number, owner: IBrowserViewOwner, browserSession: BrowserSession, associatedResource?: URI, options?: Electron.WebContentsViewConstructorOptions): BrowserView {
+	private _createNativeBrowserView(id: string, hostWindowId: number, hostedWebContentsId: number | undefined, owner: IBrowserViewOwner, browserSession: BrowserSession, associatedResource?: URI, options?: Electron.WebContentsViewConstructorOptions): BrowserView {
 		if (this.browserViews.has(id)) {
 			throw new Error(`Browser view with id ${id} already exists`);
 		}
@@ -436,6 +483,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			BrowserView,
 			id,
 			hostWindowId,
+			hostedWebContentsId,
 			owner,
 			associatedResource,
 			browserSession,
@@ -443,6 +491,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			(url, electronOptions, editorOptions) => {
 				return this._createBrowserView(generateUuid(), {
 					hostWindowId,
+					hostedWebContentsId,
 					owner,
 					session: browserSession.id,
 					initialUrl: url || undefined
@@ -466,7 +515,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 
 	private _createBrowserView(id: string, options: IBrowserViewCreateOptions, editorOpenRequest?: IBrowserViewEditorOpenOptions, electronOptions?: Electron.WebContentsViewConstructorOptions): BrowserView {
 		const browserSession = this._resolveBrowserSession(id, options.hostWindowId, options.session);
-		const view = this._createNativeBrowserView(id, options.hostWindowId, options.owner, browserSession, URI.revive(options.associatedResource), electronOptions);
+		const view = this._createNativeBrowserView(id, options.hostWindowId, options.hostedWebContentsId, options.owner, browserSession, URI.revive(options.associatedResource), electronOptions);
 		if (options.initialAudiences) {
 			view.setAudiences(options.initialAudiences);
 		}
@@ -519,6 +568,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 				click: () => {
 					void this.openNew(params.linkURL, {
 						hostWindowId: view.hostWindowId,
+						hostedWebContentsId: view.hostedWebContentsId,
 						owner: view.owner,
 						session: view.session.id,
 					}, { preserveFocus: true, background: true }, 'browserLinkBackground');
@@ -549,6 +599,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 				click: () => {
 					void this.openNew(params.srcURL!, {
 						hostWindowId: view.hostWindowId,
+						hostedWebContentsId: view.hostedWebContentsId,
 						owner: view.owner,
 						session: view.session.id,
 					}, { preserveFocus: true, background: true }, 'browserLinkBackground');
@@ -641,7 +692,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			click: () => webContents.inspectElement(params.x, params.y)
 		}));
 
-		const viewBounds = view.getWebContentsView().getBounds();
+		const viewBounds = view.getWindowRelativeBounds();
 		menu.popup({
 			window: win,
 			x: viewBounds.x + params.x,
