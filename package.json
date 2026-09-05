@@ -18,6 +18,7 @@
     "hucode:sync-setup-protocol": "node build/hucode/setup-ui-protocol.ts",
     "hucode:check-setup-protocol": "node build/hucode/setup-ui-protocol.ts --check",
     "hucode:test-setup-ui": "npm run --prefix extensions/hucode-setup-ui test",
+    "hucode:smoke:setup-ui-layout": "npm run --prefix extensions/hucode-setup-ui compile && node --test build/hucode/setup-ui-layout-smoke.ts",
     "hucode:verify-setup-ui-vendor": "node extensions/hucode-setup-ui/scripts/verify-vendor.mts",
     "hucode:check-test-suites": "node build/hucode/test-suites.ts --check",
     "hucode:check-upstream-provenance": "node build/hucode/upstream-provenance.ts",

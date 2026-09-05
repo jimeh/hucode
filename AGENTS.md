@@ -418,6 +418,10 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   child that virtualizes against a parent-owned scroll container must read that
   ref from a passive effect and store it in state. Reading it during layout
   leaves TanStack Virtual with no viewport and renders zero rows on first mount.
+- Keep the setup webview's `html`, `body`, and React `#root` height chain bounded.
+  An auto-height mount lets expanded details push the footer beyond the clipped
+  body instead of scrolling. Run `mise run test:setup-ui-layout` for real Chromium
+  coverage; the renderer's jsdom tests do not calculate layout.
 - `local/code-no-unexternalized-strings` and
   `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
   packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`

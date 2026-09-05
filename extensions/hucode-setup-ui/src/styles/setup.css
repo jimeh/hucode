@@ -156,6 +156,11 @@ body {
 	overflow: hidden;
 }
 
+/* Keep the shell bounded so expanded details scroll without pushing its footer out of view. */
+#root {
+	height: 100%;
+}
+
 body {
 	background-color: var(--hucode-background);
 	color: var(--hucode-foreground);

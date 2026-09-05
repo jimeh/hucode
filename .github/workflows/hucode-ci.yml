@@ -372,6 +372,9 @@ jobs:
       - name: Install Chromium
         run: node node_modules/@playwright/test/cli.js install --with-deps chromium
 
+      - name: Check setup UI scrolling and navigation
+        run: npm run hucode:smoke:setup-ui-layout
+
       - name: Run serve-web Omni hosted-command smoke test
         run: npm run hucode:smoke:web-server-user-data
 
