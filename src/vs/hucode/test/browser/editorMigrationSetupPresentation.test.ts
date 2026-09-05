@@ -72,6 +72,8 @@ suite('EditorMigrationSetupPresentation', () => {
 		assert.strictEqual(presentation.defaultSectionId, 'settings');
 		assert.strictEqual(presentation.sections[0].status, 'attention');
 		assert.match(presentation.sections[0].statusDescription, /Needs attention/);
+		const importAction = presentation.footer.actions.find(action => action.intent.type === 'acceptReview');
+		assert.strictEqual(importAction?.label, 'Import', 'review acceptance may immediately start the import');
 
 		const settings = reviewPanel(presentation, 'settings');
 		assert.strictEqual(settings.conflicts.length, 1);
@@ -209,6 +211,8 @@ suite('EditorMigrationSetupPresentation', () => {
 
 		const overview = panelWithId(presentation, 'overview');
 		assert.strictEqual(overview.kind, 'applyOverview');
+		assert.deepStrictEqual(presentation.steps.find(step => step.current), { id: 'apply', label: 'Import', current: true });
+		assert.strictEqual(presentation.railTitle, 'Import');
 		if (overview.kind !== 'applyOverview') {
 			return;
 		}

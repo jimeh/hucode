@@ -48,8 +48,8 @@ export function SectionRail({ sections, activeId, label, title, onSelect }: {
 						onClick={() => onSelect(section.id)}
 						className={cn(
 							'flex shrink-0 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs whitespace-nowrap',
-							'hover:bg-muted md:w-full',
-							section.id === activeId && 'bg-muted text-foreground font-medium md:border-primary md:rounded-l-none md:border-l-2',
+							'hover:bg-accent hover:text-accent-foreground md:w-full',
+							section.id === activeId && 'bg-selection text-selection-foreground font-medium md:border-primary md:rounded-l-none md:border-l-2',
 						)}
 					>
 						<span

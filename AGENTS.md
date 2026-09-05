@@ -422,6 +422,13 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   An auto-height mount lets expanded details push the footer beyond the clipped
   body instead of scrolling. Run `mise run test:setup-ui-layout` for real Chromium
   coverage; the renderer's jsdom tests do not calculate layout.
+- The setup webview consumes standard `--vscode-*` colors while owning its
+  layout and focus styling. Do not strip the theme variable map: the pre-page's
+  native scrollbar CSS needs it. Keep visible thumb fallbacks and include the
+  actual pre-page CSS in renderer smoke tests; standalone CSS misses that layer.
+  For scrollbar screenshots and drag tests, launch Playwright Chromium with
+  `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
+  even when its computed colors are correct.
 - `local/code-no-unexternalized-strings` and
   `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
   packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`

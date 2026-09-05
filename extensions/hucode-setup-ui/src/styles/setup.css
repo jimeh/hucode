@@ -17,9 +17,8 @@
 @source "../vendor/**/*.tsx";
 
 /*
- * Hucode owns four explicit palettes. The webview infrastructure puts one of its mode classes on
- * the document body, and that class is the renderer's only workbench theme input: `transformCssVariables`
- * removes the `--vscode-*` map, so nothing here may reference it.
+ * Adopt the workbench's live color tokens without inheriting its layout or control styling.
+ * The four Hucode palettes remain fallbacks for missing tokens and standalone renderer previews.
  */
 @custom-variant hucode-light (&:where(body.vscode-light, body.vscode-light *));
 @custom-variant hucode-hc-dark (&:where(body.vscode-high-contrast, body.vscode-high-contrast *));
@@ -27,28 +26,30 @@
 @custom-variant dark (&:where(body.vscode-dark, body.vscode-dark *, body.vscode-high-contrast:not(.vscode-high-contrast-light), body.vscode-high-contrast:not(.vscode-high-contrast-light) *));
 
 @theme inline {
-	--color-background: var(--hucode-background);
-	--color-foreground: var(--hucode-foreground);
-	--color-card: var(--hucode-card);
-	--color-card-foreground: var(--hucode-foreground);
-	--color-popover: var(--hucode-card);
-	--color-popover-foreground: var(--hucode-foreground);
-	--color-primary: var(--hucode-accent);
-	--color-primary-foreground: var(--hucode-accent-foreground);
-	--color-secondary: var(--hucode-subtle);
-	--color-secondary-foreground: var(--hucode-foreground);
-	--color-muted: var(--hucode-subtle);
-	--color-muted-foreground: var(--hucode-muted-foreground);
-	--color-accent: var(--hucode-subtle);
-	--color-accent-foreground: var(--hucode-foreground);
-	--color-destructive: var(--hucode-danger);
+	--color-background: var(--vscode-editor-background, var(--hucode-background));
+	--color-foreground: var(--vscode-foreground, var(--hucode-foreground));
+	--color-card: var(--vscode-editorWidget-background, var(--hucode-card));
+	--color-card-foreground: var(--vscode-editorWidget-foreground, var(--hucode-foreground));
+	--color-popover: var(--vscode-editorWidget-background, var(--hucode-card));
+	--color-popover-foreground: var(--vscode-editorWidget-foreground, var(--hucode-foreground));
+	--color-primary: var(--vscode-button-background, var(--hucode-accent));
+	--color-primary-foreground: var(--vscode-button-foreground, var(--hucode-accent-foreground));
+	--color-secondary: var(--vscode-button-secondaryBackground, var(--hucode-subtle));
+	--color-secondary-foreground: var(--vscode-button-secondaryForeground, var(--hucode-foreground));
+	--color-muted: var(--vscode-editorWidget-background, var(--hucode-subtle));
+	--color-muted-foreground: var(--vscode-descriptionForeground, var(--hucode-muted-foreground));
+	--color-accent: var(--vscode-list-hoverBackground, var(--hucode-subtle));
+	--color-accent-foreground: var(--vscode-list-hoverForeground, var(--hucode-foreground));
+	--color-selection: var(--vscode-list-inactiveSelectionBackground, var(--hucode-subtle));
+	--color-selection-foreground: var(--vscode-list-inactiveSelectionForeground, var(--hucode-foreground));
+	--color-destructive: var(--vscode-errorForeground, var(--hucode-danger));
 	--color-destructive-foreground: var(--hucode-accent-foreground);
-	--color-border: var(--hucode-border);
-	--color-input: var(--hucode-border);
-	--color-ring: var(--hucode-ring);
+	--color-border: var(--vscode-contrastBorder, var(--vscode-widget-border, var(--hucode-border)));
+	--color-input: var(--vscode-input-border, var(--hucode-border));
+	--color-ring: var(--vscode-focusBorder, var(--hucode-ring));
 
-	--color-attention: var(--hucode-attention);
-	--color-ok: var(--hucode-ok);
+	--color-attention: var(--vscode-list-warningForeground, var(--hucode-attention));
+	--color-ok: var(--vscode-testing-iconPassed, var(--hucode-ok));
 
 	--radius-sm: 3px;
 	--radius-md: 5px;
@@ -132,21 +133,34 @@ body.vscode-high-contrast-light {
  * `data-state="checked"`. Keep generated source untouched and bridge that mismatch in owned CSS.
  */
 [data-slot="checkbox"][data-state="checked"] {
-	border-color: var(--hucode-accent);
-	background-color: var(--hucode-accent);
-	color: var(--hucode-accent-foreground);
+	border-color: var(--vscode-button-background, var(--hucode-accent));
+	background-color: var(--vscode-button-background, var(--hucode-accent));
+	color: var(--vscode-button-foreground, var(--hucode-accent-foreground));
 }
 
 [data-slot="radio-group-item"][data-state="checked"] {
-	border-color: var(--hucode-accent);
-	background-color: var(--hucode-accent);
-	color: var(--hucode-accent-foreground);
+	border-color: var(--vscode-button-background, var(--hucode-accent));
+	background-color: var(--vscode-button-background, var(--hucode-accent));
+	color: var(--vscode-button-foreground, var(--hucode-accent-foreground));
+}
+
+[data-slot="input"] {
+	background-color: var(--vscode-input-background, var(--hucode-card));
+	color: var(--vscode-input-foreground, var(--hucode-foreground));
+}
+
+[data-slot="input"]::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--hucode-muted-foreground));
+}
+
+[data-slot="button"][data-variant="default"]:hover {
+	background-color: var(--vscode-button-hoverBackground, var(--hucode-accent));
 }
 
 /*
  * The webview pre-page ships its defaults inside `@layer vscode-default`, so these unlayered rules
- * win without `!important`. They exist to undo the platform's body padding, its `--vscode-*` font
- * fallbacks that `transformCssVariables` has already emptied, and its bright pointer focus outline.
+ * win without `!important`. Keep our spacing, typography, and keyboard-only focus treatment even
+ * when workbench colors change.
  */
 html,
 body {
@@ -156,14 +170,45 @@ body {
 	overflow: hidden;
 }
 
+/* Chromium's non-auto scrollbar-color overrides the pseudo-element hover/active styles below. */
+html {
+	scrollbar-color: auto;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+::-webkit-scrollbar-corner {
+	background-color: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, var(--hucode-muted-foreground));
+	border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, var(--hucode-muted-foreground));
+}
+
+::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground, var(--hucode-foreground));
+}
+
+.overflow-y-auto {
+	scrollbar-gutter: stable;
+}
+
 /* Keep the shell bounded so expanded details scroll without pushing its footer out of view. */
 #root {
 	height: 100%;
 }
 
 body {
-	background-color: var(--hucode-background);
-	color: var(--hucode-foreground);
+	background-color: var(--vscode-editor-background, var(--hucode-background));
+	color: var(--vscode-foreground, var(--hucode-foreground));
 	font-family: var(--hucode-font-sans);
 	font-size: 13px;
 	font-weight: 400;
@@ -180,7 +225,7 @@ textarea:focus {
 
 /* Keyboard focus is reintroduced here, and only here, so pointer interaction stays quiet. */
 :focus-visible {
-	outline: 2px solid var(--hucode-ring);
+	outline: 2px solid var(--vscode-focusBorder, var(--hucode-ring));
 	outline-offset: 2px;
 	border-radius: 3px;
 }

@@ -114,11 +114,8 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		const webview = this.mountDisposables.add(this.webviewService.createWebviewElement({
 			providedViewType: EDITOR_MIGRATION_SETUP_VIEW_TYPE,
 			title: localize('editorMigration.editorName', "Import Editor Setup"),
-			options: {
-				// The renderer owns its palette; the injected workbench variable map is removed so a
-				// component cannot reach a `--vscode-*` token by accident.
-				transformCssVariables: () => ({}),
-			},
+			// Forward live theme tokens; the renderer owns layout and focus styling independently.
+			options: {},
 			contentOptions: {
 				allowScripts: true,
 				allowForms: false,

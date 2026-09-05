@@ -68,7 +68,7 @@ export function editorMigrationSetupPresentation(state: EditorMigrationFlowState
 		steps: [
 			{ id: 'discover', label: localize('editorMigration.step.discover', "Discover"), current: phaseGroup(state.phase) === 'discover' },
 			{ id: 'review', label: localize('editorMigration.step.review', "Review"), current: phaseGroup(state.phase) === 'review' },
-			{ id: 'apply', label: localize('editorMigration.step.apply', "Apply"), current: phaseGroup(state.phase) === 'apply' },
+			{ id: 'apply', label: localize('editorMigration.step.import', "Import"), current: phaseGroup(state.phase) === 'apply' },
 			{ id: 'results', label: localize('editorMigration.step.results', "Results"), current: phaseGroup(state.phase) === 'results' },
 		],
 		busy: state.busy,
@@ -654,7 +654,7 @@ function footerFor(state: EditorMigrationFlowState): EditorMigrationSetupPresent
 					back,
 					state.reviewNeedsRebuild
 						? action('review-rebuild', localize('editorMigration.review.rebuild', "Rebuild Review"), { type: 'rebuildReview' }, 'primary', state.busy)
-						: action('review-continue', localize('editorMigration.review.continue', "Continue"), { type: 'acceptReview' }, 'primary', state.busy || !state.selectedCategories.length),
+						: action('review-continue', localize('editorMigration.review.import', "Import"), { type: 'acceptReview' }, 'primary', state.busy || !state.selectedCategories.length),
 				],
 			};
 		}
@@ -791,7 +791,7 @@ function phaseLabel(phase: EditorMigrationFlowState['phase']): string {
 	switch (phaseGroup(phase)) {
 		case 'discover': return localize('editorMigration.step.discover', "Discover");
 		case 'review': return localize('editorMigration.step.review', "Review");
-		case 'apply': return localize('editorMigration.step.apply', "Apply");
+		case 'apply': return localize('editorMigration.step.import', "Import");
 		case 'results': return localize('editorMigration.step.results', "Results");
 	}
 }

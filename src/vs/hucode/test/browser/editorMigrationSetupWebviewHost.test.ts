@@ -64,7 +64,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		host.dispose();
 	});
 
-	test('locks the webview to a strict CSP, one local root, and an empty theme variable map', async () => {
+	test('keeps a strict CSP and one local root while allowing standard theme propagation', async () => {
 		const webviews = new StubWebviewService();
 		const parent = testParent();
 		disposables.add(new EditorMigrationSetupWebviewHost(
@@ -83,7 +83,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.strictEqual(webview.init.contentOptions.allowForms, false);
 		assert.strictEqual(webview.init.contentOptions.enableCommandUris, false);
 		assert.deepStrictEqual(webview.init.contentOptions.localResourceRoots?.map(root => root.toString()), [MEDIA_ROOT.toString()]);
-		assert.deepStrictEqual(webview.init.options.transformCssVariables?.({ '--vscode-foreground': '#fff' }), {});
+		assert.strictEqual(webview.init.options.transformCssVariables, undefined, 'do not strip the live theme variable map');
 
 		const html = webview.html ?? '';
 		assert.match(html, /default-src 'none'/);

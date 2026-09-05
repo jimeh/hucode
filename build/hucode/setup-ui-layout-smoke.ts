@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { chromium, expect } from '@playwright/test';
-import { EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type EditorMigrationSetupPresentation } from '../../extensions/hucode-setup-ui/src/generated/editorMigrationSetupProtocol.ts';
+import { parse } from 'jsonc-parser';
+import { EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type EditorMigrationSetupPresentation } from '../../src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts';
 
 const mediaRoot = new URL('../../extensions/hucode-setup-ui/media/', import.meta.url);
 const artifacts = new URL('../../.build/hucode-smoke-artifacts/', import.meta.url);
@@ -37,7 +38,7 @@ const presentation: EditorMigrationSetupPresentation = {
 		lines: ['Default into Default.', '212 items ready to import.'],
 		actions: [
 			{ id: 'back', label: 'Back', kind: 'default', disabled: false, intent: { type: 'back' } },
-			{ id: 'continue', label: 'Continue', kind: 'primary', disabled: false, intent: { type: 'acceptReview' } },
+			{ id: 'continue', label: 'Import', kind: 'primary', disabled: false, intent: { type: 'acceptReview' } },
 		],
 	},
 	sectionAnnouncementTemplate: 'Showing {0}.',
@@ -46,7 +47,7 @@ const presentation: EditorMigrationSetupPresentation = {
 // Load the shipped assets into the same unstyled mounting element as the webview host. jsdom
 // tests cannot detect a broken height chain because they do not calculate layout or scrolling.
 test('expanded setup review keeps navigation visible and its last item reachable', { timeout: 30_000 }, async t => {
-	const browser = await chromium.launch();
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	const script = await readFile(new URL('index.js', mediaRoot), 'utf8');
 	const style = await readFile(new URL('style.css', mediaRoot), 'utf8');
@@ -73,7 +74,7 @@ test('expanded setup review keeps navigation visible and its last item reachable
 				const beforeScroll = await footer.boundingBox();
 				assert.ok(beforeScroll && beforeScroll.y >= 0 && beforeScroll.y + beforeScroll.height <= viewport.height,
 					`footer must stay within the viewport after expansion: ${JSON.stringify(beforeScroll)}`);
-				for (const name of ['Back', 'Continue']) {
+				for (const name of ['Back', 'Import']) {
 					await expect(page.getByRole('button', { name, exact: true })).toBeInViewport({ ratio: 1 });
 				}
 
@@ -92,4 +93,101 @@ test('expanded setup review keeps navigation visible and its last item reachable
 			}
 		});
 	}
+});
+
+async function themeColors(file: URL): Promise<Record<string, string>> {
+	const theme: { include?: string; colors?: Record<string, string> } = parse(await readFile(file, 'utf8'));
+	return { ...(theme.include ? await themeColors(new URL(theme.include, file)) : {}), ...theme.colors };
+}
+
+test('setup follows live theme colors with visible scrollbars and keyboard-only focus', { timeout: 30_000 }, async t => {
+	// Playwright's headless defaults hide native scrollbars even when their computed CSS is valid.
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
+	const prePage = await readFile(new URL('../../src/vs/workbench/contrib/webview/browser/pre/index.html', import.meta.url), 'utf8');
+	const defaults = /defaultStyles\.textContent = `([\s\S]*?)`;/.exec(prePage)?.[1];
+	assert.ok(defaults, 'load the actual webview default CSS, including its scrollbar and focus rules');
+	await page.setContent('<!doctype html><html><head></head><body class="vscode-dark"><div id="root"></div></body></html>');
+	await page.addStyleTag({ content: defaults });
+	await page.addStyleTag({ content: await readFile(new URL('style.css', mediaRoot), 'utf8') });
+	const message = JSON.stringify({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'state', revision: 1, presentation });
+	await page.addScriptTag({ content: `window.acquireVsCodeApi = () => ({ postMessage: message => {
+		if (message.intent.type === 'ready') {
+			setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: ${message} })), 0);
+		}
+	} });` });
+	await page.addScriptTag({ type: 'module', content: await readFile(new URL('index.js', mediaRoot), 'utf8') });
+	const disclosure = page.getByRole('button', { name: 'Show 127 items', exact: true });
+	await disclosure.click();
+	await expect(disclosure).toHaveCSS('outline-style', 'none');
+	await page.mouse.move(1, 1);
+	const detail = page.locator('[data-focus-id="detail"]');
+	assert.ok(await detail.evaluate(element => element.scrollHeight > element.clientHeight));
+	assert.equal(await detail.evaluate(element => element.offsetWidth - element.clientWidth), 10, 'reserve a visible native scrollbar gutter');
+	await mkdir(artifacts, { recursive: true });
+	for (const [name, mode] of [
+		['2026-dark', 'vscode-dark'], ['2026-light', 'vscode-light'],
+		['hc_black', 'vscode-high-contrast'], ['hc_light', 'vscode-high-contrast vscode-high-contrast-light'],
+		['fallback', 'vscode-dark'],
+	]) {
+		const colors = name === 'fallback' ? {} : await themeColors(new URL(`../../extensions/theme-defaults/themes/${name}.json`, import.meta.url));
+		await page.locator('html').evaluate((element, { colors, mode }) => {
+			element.removeAttribute('style');
+			for (const [key, value] of Object.entries(colors)) {
+				element.style.setProperty(`--vscode-${key.replaceAll('.', '-')}`, value);
+			}
+			element.ownerDocument.body.className = mode;
+		}, { colors, mode });
+		await expect(async () => {
+			const actual = await detail.evaluate(element => {
+				const document = element.ownerDocument;
+				const view = document.defaultView!;
+				const probe = document.createElement('span');
+				probe.style.setProperty('transition', 'none', 'important');
+				document.body.append(probe);
+				const resolve = (value: string) => {
+					probe.style.color = value;
+					return view.getComputedStyle(probe).color;
+				};
+				const result = {
+					background: view.getComputedStyle(document.body).backgroundColor,
+					expectedBackground: resolve('var(--vscode-editor-background, var(--hucode-background))'),
+					thumb: view.getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor,
+					expectedThumb: resolve('var(--vscode-scrollbarSlider-background, var(--hucode-muted-foreground))'),
+				};
+				probe.remove();
+				return result;
+			});
+			assert.equal(actual.background, actual.expectedBackground, `${name}: page background follows theme`);
+			assert.equal(actual.thumb, actual.expectedThumb, `${name}: scrollbar follows theme or fallback`);
+			assert.notEqual(actual.thumb, 'rgba(0, 0, 0, 0)', `${name}: scrollbar must not be transparent`);
+		}).toPass({ timeout: 2_000 });
+		await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeInViewport({ ratio: 1 });
+		await page.screenshot({ path: new URL(`setup-ui-theme-${name}.png`, artifacts).pathname });
+	}
+	const bounds = await detail.boundingBox();
+	assert.ok(bounds);
+	const thumbHeight = await detail.evaluate(element => element.clientHeight ** 2 / element.scrollHeight);
+	await page.mouse.move(bounds.x + bounds.width - 5, bounds.y + thumbHeight / 2);
+	await page.mouse.down();
+	await page.mouse.move(bounds.x + bounds.width - 5, bounds.y + thumbHeight / 2 + 80, { steps: 5 });
+	await page.mouse.up();
+	assert.ok(await detail.evaluate(element => element.scrollTop > 0), 'the native thumb must be draggable');
+	await detail.press('Control+Home');
+	await page.mouse.move(1, 1);
+	// Same-mode changes must update without remounting React or losing expanded details.
+	await page.locator('html').evaluate(element => {
+		element.style.setProperty('--vscode-button-background', '#123456');
+		element.style.setProperty('--vscode-button-foreground', '#fedcba');
+		element.style.setProperty('--vscode-focusBorder', '#abcdef');
+	});
+	const importButton = page.getByRole('button', { name: 'Import', exact: true });
+	await expect(importButton).toHaveCSS('background-color', 'rgb(18, 52, 86)');
+	await expect(importButton).toHaveCSS('color', 'rgb(254, 220, 186)');
+	await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+	await page.keyboard.press('Tab');
+	await importButton.focus();
+	await expect(importButton).toHaveCSS('outline-style', 'solid');
+	await expect(importButton).toHaveCSS('outline-color', 'rgb(171, 205, 239)');
 });

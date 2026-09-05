@@ -48,10 +48,10 @@ The rewrite is complete when:
 - The renderer uses React, Tailwind CSS, selected official shadcn components,
   and `@tanstack/react-virtual`. It does not use TanStack Router, Query, Form,
   Table, or Store in this change.
-- Hucode owns a small light, dark, high-contrast-light, and
-  high-contrast-dark token set. The renderer uses the mode class that the
-  webview infrastructure already places on its body, but it does not consume
-  arbitrary workbench theme variables or colors.
+- The renderer maps workbench colors to semantic tokens while retaining its
+  own layout and controls. Hucode's light, dark, high-contrast-light, and
+  high-contrast-dark palettes supply fallbacks selected by the webview's body
+  class. Standard webview theme propagation handles live changes.
 - Variant B remains the interaction model: a compact section index and one
   detail view. Conflict review shows the useful set together rather than asking
   the user to resolve one setting at a time.
@@ -205,10 +205,13 @@ and scroll positions while preserving migration choices and durable progress.
   only the local script and stylesheet converted through the webview resource
   URI helper. Allow `webviewGenericCspSource` for those local assets and require
   the nonce on the module script.
-- Set `transformCssVariables` to remove the injected `--vscode-*` variable map.
-  Keep the infrastructure-provided light, dark, and high-contrast body classes
-  as the renderer's only workbench theme input. Add a static check that the
-  frontend never references `var(--vscode-...)`.
+- Forward the standard `--vscode-*` color map and map it to the renderer's
+  semantic tokens. Keep the four mode palettes as fallbacks for missing tokens
+  and standalone previews. Theme updates must not remount the renderer or reset
+  expanded sections. Preserve owned layout, typography, and focus rules.
+- Style native scrollbar thumbs with the workbench's normal, hover, and active
+  colors, with visible fallbacks. Verify the compiled renderer together with
+  the webview pre-page CSS; omitting it misses injected-style regressions.
 - Override the webview pre-page's layered default body padding, font fallback,
   and `a`, `input`, `select`, and `textarea` focus outlines from the renderer's
   later unlayered stylesheet. Reintroduce accessible focus solely through the
@@ -308,8 +311,8 @@ the one frontend CSS entry point and map shadcn semantic variables to them. Add
 a small local esbuild plugin through `additionalOptions.plugins` that runs
 PostCSS with `@tailwindcss/postcss`; the shared webview esbuild path does not
 compile Tailwind directives itself. Define `process.env.NODE_ENV` as
-`"production"` in the browser bundle. Do not add arbitrary workbench theme
-variables, raw status colors in components, manual dark overrides, or
+`"production"` in the browser bundle. Keep workbench color mappings in that CSS
+entry point. Do not add raw status colors in components, manual dark overrides, or
 per-component style patches to generated files.
 
 Use `@tanstack/react-virtual` behind a Hucode `VirtualCollection` wrapper for
@@ -377,7 +380,7 @@ tests cover browser interaction and rendering that the core runner cannot.
   input, stale revision, unknown ID, denied privileged input, session-method
   coverage, and generated-copy drift.
 - Add host tests for missing assets, bounded retry, strict CSP, local resource
-  roots, empty transformed theme variables, state delivery after `ready`,
+  roots, standard theme-variable propagation, state delivery after `ready`,
   progress coalescing, immediate boundary states, message disposal, explicit
   close, Escape and keybinding pass-through, hide-then-reshow reconstruction,
   and renderer loss during Apply.
@@ -438,7 +441,7 @@ as the clean-environment and packaged-build gate for the exact pushed head.
 | Durable progress floods the iframe or live region | Coalesce presentation-only progress snapshots while delivering phase, error, cancellation, and terminal boundaries immediately |
 | A long virtual list loses focus or scroll position | Centralize measurement and focus behavior in `VirtualCollection` and verify width changes and dynamic rows in a browser |
 | Vendored shadcn files drift and become hard to upgrade | Pin the generator and preset, isolate generated files, record the component set, and verify through CLI diffs rather than formatter churn |
-| A fixed brand palette becomes inaccessible | Maintain four explicit mode palettes and verify forced colors, contrast, text scaling, and keyboard focus independently |
+| Theme colors or missing tokens make controls unreadable | Pair background and foreground tokens, retain four fallback palettes, and verify forced colors, contrast, text scaling, and keyboard focus independently |
 | The rewrite weakens recovery while improving appearance | Retain the current session and journal, test renderer loss during Apply, and inspect durable state in end-to-end QA |
 | #204 cannot reuse the renderer | Keep host framing outside the import route and reserve a separate onboarding entry point over shared setup components |
 
@@ -449,8 +452,7 @@ as the clean-environment and packaged-build gate for the exact pushed head.
 - Moving migration policy, file access, gallery access, or extension
   installation into the webview or extension host.
 - Supporting serve-web migration in #203.
-- Mirroring every VS Code theme or exposing arbitrary theme tokens to the
-  renderer.
+- Reimplementing VS Code's theme resolution or importing its control/layout CSS.
 - Adding a general Hucode frontend framework, component registry, router, query
   cache, form framework, table framework, or global client store.
 
