@@ -34,10 +34,11 @@ describe('setup stylesheet', () => {
 		expect(compiled).toContain('[data-slot=radio-group-item][data-state=checked]');
 	});
 
-	test('maps workbench colors through semantic tokens with standalone palette fallbacks', () => {
-		expect(entry).toContain('--color-background: var(--vscode-editor-background, var(--hucode-background))');
-		expect(entry).toContain('--color-primary: var(--vscode-button-background, var(--hucode-accent))');
-		expect(entry).toContain('--color-primary-foreground: var(--vscode-button-foreground, var(--hucode-accent-foreground))');
+	test('keeps control and scrollbar colors independent of workbench theme tokens', () => {
+		expect(entry).not.toContain('var(--vscode-');
+		expect(entry).toContain('--color-background: var(--hucode-background)');
+		expect(entry).toContain('--color-primary: var(--hucode-accent)');
+		expect(entry).toContain('--color-input: var(--hucode-input)');
 	});
 
 	test('overrides the pre-page body padding, font fallback, and default focus outline', () => {
@@ -47,7 +48,7 @@ describe('setup stylesheet', () => {
 	});
 
 	test('reintroduces focus only for keyboard interaction', () => {
-		expect(entry).toMatch(/:focus-visible \{\s*\n\toutline: 2px solid var\(--vscode-focusBorder, var\(--hucode-ring\)\)/);
+		expect(entry).toMatch(/:focus-visible \{\s*\n\toutline: 2px solid var\(--hucode-ring\)/);
 		expect(entry).toMatch(/\[data-panel-heading\]:focus,\s*\n\[data-panel-heading\]:focus-visible \{\s*\n\toutline: none;/);
 		// Every plain `:focus` rule must clear the platform outline; only `:focus-visible` draws one.
 		const focusRules = [...entry.matchAll(/((?:^[^@\n{]*:focus,\s*\n)*^[^@\n{]*:focus) \{([^}]*)\}/gm)];

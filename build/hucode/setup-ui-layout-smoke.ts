@@ -116,12 +116,25 @@ async function themeColors(file: URL): Promise<Record<string, string>> {
 	return { ...(theme.include ? await themeColors(new URL(theme.include, file)) : {}), ...theme.colors };
 }
 
-test('setup follows live theme colors with visible scrollbars and keyboard-only focus', { timeout: 30_000 }, async t => {
+test('setup owns its palette with visible controls, scrollbars, and keyboard-only focus', { timeout: 30_000 }, async t => {
 	// Playwright's headless defaults hide native scrollbars even when their computed CSS is valid.
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
-	await mountPresentation(page);
+	await mountPresentation(page, {
+		...presentation,
+		panels: presentation.panels.map(panel => panel.kind !== 'reviewCategory' ? panel : {
+			...panel,
+			include: { label: 'Include Settings', category: 'settings', checked: false },
+			conflicts: [{
+				id: 'fontSize', name: 'editor.fontSize', searchText: 'editor.fontSize', currentValue: '13', importedValue: '14', valuesDescription: 'Current 13, incoming 14',
+				choices: [
+					{ id: 'keep', label: 'Keep Current', checked: true, intent: { type: 'chooseDecision', decisionId: 'fontSize', choice: 'preserveTarget' } },
+					{ id: 'import', label: 'Use Imported', checked: false, intent: { type: 'chooseDecision', decisionId: 'fontSize', choice: 'import' } },
+				],
+			}],
+		}),
+	});
 	const disclosure = page.getByRole('button', { name: 'Show 127 items', exact: true });
 	await disclosure.click();
 	await expect(disclosure).toHaveCSS('outline-style', 'none');
@@ -156,17 +169,18 @@ test('setup follows live theme colors with visible scrollbars and keyboard-only 
 				};
 				const result = {
 					background: view.getComputedStyle(document.body).backgroundColor,
-					expectedBackground: resolve('var(--vscode-editor-background, var(--hucode-background))'),
+					expectedBackground: resolve('var(--hucode-background)'),
 					thumb: view.getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor,
-					expectedThumb: resolve('var(--vscode-scrollbarSlider-background, var(--hucode-muted-foreground))'),
+					expectedThumb: resolve('var(--hucode-muted-foreground)'),
 				};
 				probe.remove();
 				return result;
 			});
-			assert.equal(actual.background, actual.expectedBackground, `${name}: page background follows theme`);
-			assert.equal(actual.thumb, actual.expectedThumb, `${name}: scrollbar follows theme or fallback`);
+			assert.equal(actual.background, actual.expectedBackground, `${name}: page uses the built-in palette`);
+			assert.equal(actual.thumb, actual.expectedThumb, `${name}: scrollbar uses the built-in palette`);
 			assert.notEqual(actual.thumb, 'rgba(0, 0, 0, 0)', `${name}: scrollbar must not be transparent`);
 		}).toPass({ timeout: 2_000 });
+		await assertControlContrast(page);
 		await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeInViewport({ ratio: 1 });
 		await page.screenshot({ path: new URL(`setup-ui-theme-${name}.png`, artifacts).pathname });
 	}
@@ -180,21 +194,70 @@ test('setup follows live theme colors with visible scrollbars and keyboard-only 
 	assert.ok(await detail.evaluate(element => element.scrollTop > 0), 'the native thumb must be draggable');
 	await detail.press('Control+Home');
 	await page.mouse.move(1, 1);
-	// Same-mode changes must update without remounting React or losing expanded details.
+	// A theme with invisible controls must not leak into the renderer, even on a live update.
 	await page.locator('html').evaluate(element => {
 		element.style.setProperty('--vscode-button-background', '#123456');
 		element.style.setProperty('--vscode-button-foreground', '#fedcba');
 		element.style.setProperty('--vscode-focusBorder', '#abcdef');
+		element.style.setProperty('--vscode-input-border', 'transparent');
+		element.style.setProperty('--vscode-widget-border', 'transparent');
+		element.style.setProperty('--vscode-scrollbarSlider-background', 'transparent');
+		element.style.setProperty('--vscode-scrollbarSlider-hoverBackground', 'transparent');
+		element.style.setProperty('--vscode-scrollbarSlider-activeBackground', 'transparent');
 	});
 	const importButton = page.getByRole('button', { name: 'Import', exact: true });
-	await expect(importButton).toHaveCSS('background-color', 'rgb(18, 52, 86)');
-	await expect(importButton).toHaveCSS('color', 'rgb(254, 220, 186)');
+	await expect(importButton).toHaveCSS('background-color', 'rgb(91, 141, 239)');
+	await expect(importButton).toHaveCSS('color', 'rgb(13, 16, 20)');
+	await assertControlContrast(page);
+	assert.equal(await detail.evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor), 'rgb(147, 155, 165)');
 	await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
 	await page.keyboard.press('Tab');
 	await importButton.focus();
 	await expect(importButton).toHaveCSS('outline-style', 'solid');
-	await expect(importButton).toHaveCSS('outline-color', 'rgb(171, 205, 239)');
+	await expect(importButton).toHaveCSS('outline-color', 'rgb(122, 165, 245)');
 });
+
+async function assertControlContrast(page: Page): Promise<void> {
+	const ratios = await page.locator('body').evaluate(body => {
+		const document = body.ownerDocument;
+		const view = document.defaultView!;
+		const canvas = document.createElement('canvas');
+		canvas.width = canvas.height = 1;
+		const context = canvas.getContext('2d')!;
+		const background = view.getComputedStyle(body).backgroundColor;
+		const luminance = (...layers: string[]) => {
+			context.clearRect(0, 0, 1, 1);
+			for (const color of [background, ...layers]) {
+				context.fillStyle = color;
+				context.fillRect(0, 0, 1, 1);
+			}
+			const rgb = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map(value => {
+				const channel = value / 255;
+				return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+			});
+			return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+		};
+		const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+		return [...document.querySelectorAll('[data-slot="checkbox"], [data-slot="radio-group-item"], footer button')].map(element => {
+			const style = view.getComputedStyle(element);
+			const textButton = element.getAttribute('data-slot') === 'button';
+			const checked = element.getAttribute('data-state') === 'checked';
+			return {
+				label: element.getAttribute('data-slot'),
+				minimum: textButton ? 4.5 : 3,
+				ratio: textButton
+					? contrast(luminance(style.backgroundColor, style.color), luminance(style.backgroundColor))
+					: Math.min(contrast(luminance(style.borderColor), luminance()), checked
+						? contrast(luminance(style.backgroundColor, style.color), luminance(style.backgroundColor))
+						: contrast(luminance(style.borderColor), luminance(style.backgroundColor))),
+			};
+		});
+	});
+	assert.equal(ratios.length, 5, 'check both radio states, the unchecked checkbox, and both footer buttons');
+	for (const { label, minimum, ratio } of ratios) {
+		assert.ok(ratio >= minimum, `${label}: contrast ${ratio.toFixed(2)} must be at least ${minimum}`);
+	}
+}
 
 test('snippet comparisons expand in the main pane with horizontal choices and fixed navigation', { timeout: 30_000 }, async t => {
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });

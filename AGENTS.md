@@ -422,10 +422,11 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   An auto-height mount lets expanded details push the footer beyond the clipped
   body instead of scrolling. Run `mise run test:setup-ui-layout` for real Chromium
   coverage; the renderer's jsdom tests do not calculate layout.
-- The setup webview consumes standard `--vscode-*` colors while owning its
-  layout and focus styling. Do not strip the theme variable map: the pre-page's
-  native scrollbar CSS needs it. Keep visible thumb fallbacks and include the
-  actual pre-page CSS in renderer smoke tests; standalone CSS misses that layer.
+- The setup webview owns its color palettes; only the workbench's light/dark/
+  high-contrast mode selects one. Do not map `--vscode-*` colors to controls.
+  Keep explicit native scrollbar thumb colors and `scrollbar-color: auto` to
+  override the pre-page's theme-dependent scrollbar rules. Include the actual
+  pre-page CSS in renderer smoke tests; standalone CSS misses that layer.
   For scrollbar screenshots and drag tests, launch Playwright Chromium with
   `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
   even when its computed colors are correct.

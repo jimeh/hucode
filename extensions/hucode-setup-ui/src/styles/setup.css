@@ -17,8 +17,8 @@
 @source "../vendor/**/*.tsx";
 
 /*
- * Adopt the workbench's live color tokens without inheriting its layout or control styling.
- * The four Hucode palettes remain fallbacks for missing tokens and standalone renderer previews.
+ * Hucode owns its palettes and controls. Only the workbench's light/dark/high-contrast mode
+ * selects a palette; arbitrary theme colors must not weaken control or scrollbar contrast.
  */
 @custom-variant hucode-light (&:where(body.vscode-light, body.vscode-light *));
 @custom-variant hucode-hc-dark (&:where(body.vscode-high-contrast, body.vscode-high-contrast *));
@@ -26,30 +26,30 @@
 @custom-variant dark (&:where(body.vscode-dark, body.vscode-dark *, body.vscode-high-contrast:not(.vscode-high-contrast-light), body.vscode-high-contrast:not(.vscode-high-contrast-light) *));
 
 @theme inline {
-	--color-background: var(--vscode-editor-background, var(--hucode-background));
-	--color-foreground: var(--vscode-foreground, var(--hucode-foreground));
-	--color-card: var(--vscode-editorWidget-background, var(--hucode-card));
-	--color-card-foreground: var(--vscode-editorWidget-foreground, var(--hucode-foreground));
-	--color-popover: var(--vscode-editorWidget-background, var(--hucode-card));
-	--color-popover-foreground: var(--vscode-editorWidget-foreground, var(--hucode-foreground));
-	--color-primary: var(--vscode-button-background, var(--hucode-accent));
-	--color-primary-foreground: var(--vscode-button-foreground, var(--hucode-accent-foreground));
-	--color-secondary: var(--vscode-button-secondaryBackground, var(--hucode-subtle));
-	--color-secondary-foreground: var(--vscode-button-secondaryForeground, var(--hucode-foreground));
-	--color-muted: var(--vscode-editorWidget-background, var(--hucode-subtle));
-	--color-muted-foreground: var(--vscode-descriptionForeground, var(--hucode-muted-foreground));
-	--color-accent: var(--vscode-list-hoverBackground, var(--hucode-subtle));
-	--color-accent-foreground: var(--vscode-list-hoverForeground, var(--hucode-foreground));
-	--color-selection: var(--vscode-list-inactiveSelectionBackground, var(--hucode-subtle));
-	--color-selection-foreground: var(--vscode-list-inactiveSelectionForeground, var(--hucode-foreground));
-	--color-destructive: var(--vscode-errorForeground, var(--hucode-danger));
+	--color-background: var(--hucode-background);
+	--color-foreground: var(--hucode-foreground);
+	--color-card: var(--hucode-card);
+	--color-card-foreground: var(--hucode-foreground);
+	--color-popover: var(--hucode-card);
+	--color-popover-foreground: var(--hucode-foreground);
+	--color-primary: var(--hucode-accent);
+	--color-primary-foreground: var(--hucode-accent-foreground);
+	--color-secondary: var(--hucode-subtle);
+	--color-secondary-foreground: var(--hucode-foreground);
+	--color-muted: var(--hucode-subtle);
+	--color-muted-foreground: var(--hucode-muted-foreground);
+	--color-accent: var(--hucode-subtle);
+	--color-accent-foreground: var(--hucode-foreground);
+	--color-selection: var(--hucode-subtle);
+	--color-selection-foreground: var(--hucode-foreground);
+	--color-destructive: var(--hucode-danger);
 	--color-destructive-foreground: var(--hucode-accent-foreground);
-	--color-border: var(--vscode-contrastBorder, var(--vscode-widget-border, var(--hucode-border)));
-	--color-input: var(--vscode-input-border, var(--hucode-border));
-	--color-ring: var(--vscode-focusBorder, var(--hucode-ring));
+	--color-border: var(--hucode-border);
+	--color-input: var(--hucode-input);
+	--color-ring: var(--hucode-ring);
 
-	--color-attention: var(--vscode-list-warningForeground, var(--hucode-attention));
-	--color-ok: var(--vscode-testing-iconPassed, var(--hucode-ok));
+	--color-attention: var(--hucode-attention);
+	--color-ok: var(--hucode-ok);
 
 	--radius-sm: 3px;
 	--radius-md: 5px;
@@ -71,6 +71,7 @@
 	--hucode-foreground: #dfe3e8;
 	--hucode-muted-foreground: #939ba5;
 	--hucode-border: #2f343a;
+	--hucode-input: #7c8796;
 	--hucode-rule: #24282d;
 	--hucode-accent: #5b8def;
 	--hucode-accent-foreground: #0d1014;
@@ -87,6 +88,7 @@ body.vscode-light {
 	--hucode-foreground: #1d2126;
 	--hucode-muted-foreground: #5c646e;
 	--hucode-border: #d6dae0;
+	--hucode-input: #737d8a;
 	--hucode-rule: #e4e7eb;
 	--hucode-accent: #2f6bd8;
 	--hucode-accent-foreground: #ffffff;
@@ -103,9 +105,10 @@ body.vscode-high-contrast {
 	--hucode-foreground: #ffffff;
 	--hucode-muted-foreground: #ffffff;
 	--hucode-border: #ffffff;
+	--hucode-input: #ffffff;
 	--hucode-rule: #ffffff;
-	--hucode-accent: #0f7fff;
-	--hucode-accent-foreground: #ffffff;
+	--hucode-accent: #63aaff;
+	--hucode-accent-foreground: #000000;
 	--hucode-ring: #f38518;
 	--hucode-danger: #ff8a80;
 	--hucode-attention: #ffd000;
@@ -119,6 +122,7 @@ body.vscode-high-contrast-light {
 	--hucode-foreground: #000000;
 	--hucode-muted-foreground: #000000;
 	--hucode-border: #000000;
+	--hucode-input: #000000;
 	--hucode-rule: #000000;
 	--hucode-accent: #0f4a85;
 	--hucode-accent-foreground: #ffffff;
@@ -133,28 +137,28 @@ body.vscode-high-contrast-light {
  * `data-state="checked"`. Keep generated source untouched and bridge that mismatch in owned CSS.
  */
 [data-slot="checkbox"][data-state="checked"] {
-	border-color: var(--vscode-button-background, var(--hucode-accent));
-	background-color: var(--vscode-button-background, var(--hucode-accent));
-	color: var(--vscode-button-foreground, var(--hucode-accent-foreground));
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
 }
 
 [data-slot="radio-group-item"][data-state="checked"] {
-	border-color: var(--vscode-button-background, var(--hucode-accent));
-	background-color: var(--vscode-button-background, var(--hucode-accent));
-	color: var(--vscode-button-foreground, var(--hucode-accent-foreground));
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
 }
 
 [data-slot="input"] {
-	background-color: var(--vscode-input-background, var(--hucode-card));
-	color: var(--vscode-input-foreground, var(--hucode-foreground));
+	background-color: var(--hucode-card);
+	color: var(--hucode-foreground);
 }
 
 [data-slot="input"]::placeholder {
-	color: var(--vscode-input-placeholderForeground, var(--hucode-muted-foreground));
+	color: var(--hucode-muted-foreground);
 }
 
-[data-slot="button"][data-variant="default"]:hover {
-	background-color: var(--vscode-button-hoverBackground, var(--hucode-accent));
+[data-slot="button"][data-variant="outline"] {
+	border-color: var(--hucode-input);
 }
 
 /*
@@ -185,16 +189,16 @@ html {
 }
 
 ::-webkit-scrollbar-thumb {
-	background-color: var(--vscode-scrollbarSlider-background, var(--hucode-muted-foreground));
+	background-color: var(--hucode-muted-foreground);
 	border-radius: 5px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background-color: var(--vscode-scrollbarSlider-hoverBackground, var(--hucode-muted-foreground));
+	background-color: var(--hucode-foreground);
 }
 
 ::-webkit-scrollbar-thumb:active {
-	background-color: var(--vscode-scrollbarSlider-activeBackground, var(--hucode-foreground));
+	background-color: var(--hucode-accent);
 }
 
 .overflow-y-auto {
@@ -207,8 +211,8 @@ html {
 }
 
 body {
-	background-color: var(--vscode-editor-background, var(--hucode-background));
-	color: var(--vscode-foreground, var(--hucode-foreground));
+	background-color: var(--hucode-background);
+	color: var(--hucode-foreground);
 	font-family: var(--hucode-font-sans);
 	font-size: 13px;
 	font-weight: 400;
@@ -225,7 +229,7 @@ textarea:focus {
 
 /* Keyboard focus is reintroduced here, and only here, so pointer interaction stays quiet. */
 :focus-visible {
-	outline: 2px solid var(--vscode-focusBorder, var(--hucode-ring));
+	outline: 2px solid var(--hucode-ring);
 	outline-offset: 2px;
 	border-radius: 3px;
 }
