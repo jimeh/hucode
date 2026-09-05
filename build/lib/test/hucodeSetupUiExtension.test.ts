@@ -69,7 +69,8 @@ suite('Hucode setup UI extension', () => {
 
 	test('never references a workbench theme variable from the renderer', async () => {
 		const sources = await listFiles(path.join(repoRoot, extensionDir, 'src'));
-		for (const file of sources.filter(candidate => /\.(tsx?|css)$/.test(candidate))) {
+		// Tests may name forbidden variables when asserting that runtime styles do not use them.
+		for (const file of sources.filter(candidate => /\.(tsx?|css)$/.test(candidate) && !/\.test\.tsx?$/.test(candidate))) {
 			assert.doesNotMatch(await fs.readFile(file, 'utf8'), /var\(--vscode-/, `${file} must not consume workbench theme variables`);
 		}
 	});
