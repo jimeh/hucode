@@ -31,7 +31,7 @@ const STATIC_SETTING_EXCLUSIONS: readonly [RegExp, EditorMigrationExclusionReaso
 	[/^(?:update\.|extensions\.autoUpdate|extensions\.autoCheckUpdates)/, 'updateChannel'],
 	[/^(?:remote\.|security\.workspace\.trust\.untrustedFiles)/, 'remoteAuthority'],
 	[/^(?:application\.|http\.proxy|terminal\.integrated\.cwd)/, 'applicationPath'],
-	[/^(?:hucode\.|cursor\.|workbench\.welcomePage\.experimentalOnboarding)/, 'sourceProductIntegration'],
+	[/^(?:cursor\.|workbench\.welcomePage\.experimentalOnboarding)/, 'sourceProductIntegration'],
 ];
 
 const SOURCE_EXTENSION_PREFIXES = ['vscode.', 'cursor.', 'anysphere.'];

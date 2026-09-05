@@ -1239,9 +1239,22 @@
 		"--vg-ring-width",
 		"--vg-ring-opacity",
 		"--vg-corner-alpha",
-		"--vg-inner-fade"
+		"--vg-inner-fade",
+		"--hucode-migration-accent",
+		"--hucode-migration-bg",
+		"--hucode-migration-error",
+		"--hucode-migration-faint",
+		"--hucode-migration-fg",
+		"--hucode-migration-hover",
+		"--hucode-migration-muted",
+		"--hucode-migration-ok",
+		"--hucode-migration-raised",
+		"--hucode-migration-rule",
+		"--hucode-migration-rule-soft",
+		"--hucode-migration-warn"
 	],
 	"sizes": [
+		"--hucode-migration-gutter",
 		"--hucode-omni-section-indent-adjustment",
 		"--segmented-icon-toggle-cell-radius",
 		"--segmented-icon-toggle-cell-width",

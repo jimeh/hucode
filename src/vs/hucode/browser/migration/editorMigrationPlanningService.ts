@@ -7,7 +7,7 @@ import { platform, Platform } from '../../../base/common/platform.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CancellationError } from '../../../base/common/errors.js';
 import { TargetPlatform } from '../../../platform/extensions/common/extensions.js';
-import { getTargetPlatform, IExtensionGalleryService, IProductVersion } from '../../../platform/extensionManagement/common/extensionManagement.js';
+import { IExtensionGalleryService, IExtensionManagementService, IProductVersion } from '../../../platform/extensionManagement/common/extensionManagement.js';
 import { IExtensionsScannerService } from '../../../platform/extensionManagement/common/extensionsScannerService.js';
 import { IFileService } from '../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
@@ -56,6 +56,7 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 		@IUserDataSyncUtilService private readonly userDataSyncUtilService: IUserDataSyncUtilService,
 		@IProductService private readonly productService: IProductService,
 		@IEditorMigrationSourceService private readonly sourceService: IEditorMigrationSourceService,
+		@IExtensionManagementService private readonly extensionManagementService: IExtensionManagementService,
 	) {
 		this.targetReader = new EditorMigrationTargetReader(fileService, profilesService);
 	}
@@ -72,7 +73,7 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 				version: extension.manifest.version,
 			}));
 		}
-		return await this.targetReader.inspect(selection, categories, this.environment(), builtIns, token);
+		return await this.targetReader.inspect(selection, categories, await this.environment(token), builtIns, token);
 	}
 
 	createDraft(source: EditorMigrationSourceSnapshot, target: EditorMigrationTargetSnapshot, evidence: EditorMigrationPlanningEvidence): EditorMigrationPlanDraft {
@@ -304,8 +305,9 @@ export class EditorMigrationPlanningService implements IEditorMigrationPlanningS
 		return true;
 	}
 
-	private environment(): EditorMigrationTargetEnvironment {
-		const targetPlatform = getTargetPlatform(platform, process.arch) ?? TargetPlatform.UNKNOWN;
+	private async environment(token: CancellationToken): Promise<EditorMigrationTargetEnvironment> {
+		const targetPlatform = await this.extensionManagementService.getTargetPlatform();
+		throwIfCancelled(token);
 		return {
 			targetPlatform,
 			productVersion: this.productService.version,

@@ -61,6 +61,19 @@ jobs:
       - name: Check Hucode test suite inventory
         run: npm run hucode:check-test-suites
 
+      - name: Check setup UI protocol mirror
+        run: npm run hucode:check-setup-protocol
+
+      - name: Verify vendored setup UI components
+        run: npm run hucode:verify-setup-ui-vendor
+
+      - name: Type check setup UI renderer
+        run: npm run typecheck
+        working-directory: extensions/hucode-setup-ui
+
+      - name: Run setup UI renderer tests
+        run: npm run hucode:test-setup-ui
+
       - name: Test build scripts
         run: npm run test-build-scripts
 
@@ -358,6 +371,9 @@ jobs:
 
       - name: Install Chromium
         run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+
+      - name: Check setup UI scrolling and navigation
+        run: npm run hucode:smoke:setup-ui-layout
 
       - name: Run serve-web Omni hosted-command smoke test
         run: npm run hucode:smoke:web-server-user-data

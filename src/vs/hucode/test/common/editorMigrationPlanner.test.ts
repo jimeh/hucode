@@ -72,9 +72,31 @@ suite('EditorMigrationPlanner', () => {
 		assert.strictEqual(getEditorMigrationSettingExclusion('update.mode', []), 'updateChannel');
 		assert.strictEqual(getEditorMigrationSettingExclusion('remote.SSH.remotePlatform', []), 'remoteAuthority');
 		assert.strictEqual(getEditorMigrationSettingExclusion('http.proxy', []), 'applicationPath');
-		assert.strictEqual(getEditorMigrationSettingExclusion('hucode.omni.enabled', []), 'sourceProductIntegration');
+		assert.strictEqual(getEditorMigrationSettingExclusion('cursor.secret', []), 'sourceProductIntegration');
+		assert.strictEqual(getEditorMigrationSettingExclusion('hucode.omni.enabled', []), undefined);
 		assert.strictEqual(getEditorMigrationSettingExclusion('custom.secret', ['custom.secret']), 'registryIgnored');
 		assert.strictEqual(getEditorMigrationSettingExclusion('editor.fontSize', []), undefined);
+	});
+
+	test('imports Hucode settings while preserving conflicts and respecting registry exclusions', async () => {
+		const workbench = 'hucode.omni.workbenchItemLayout';
+		const worktree = 'hucode.omni.worktreeItemLayout';
+		const ignored = 'hucode.privateSetting';
+		const draft = createEditorMigrationPlanDraft(
+			source({ settings: { [workbench]: 'compact', [worktree]: 'compact', [ignored]: true, 'cursor.secret': true } }),
+			target({ requestedCategories: ['settings'], settings: { [worktree]: 'comfortable' } }),
+			{ ...evidence(), registryIgnoredSettings: [ignored] },
+		);
+		assert.deepStrictEqual(draft.decisions.map(item => [item.item, item.kind, item.defaultChoice]), [
+			[workbench, 'add', 'import'], [worktree, 'conflict', 'preserveTarget'],
+		]);
+		assert.deepStrictEqual(draft.exclusions.map(item => [item.item, item.reason]), [
+			['cursor.secret', 'sourceProductIntegration'], [ignored, 'registryIgnored'],
+		]);
+		const plan = await acceptEditorMigrationPlanDraft(draft, choose(draft, {}, ['settings']));
+		assert.deepStrictEqual(plan.operations.map(item => item.item), [workbench]);
+		const replaced = await acceptEditorMigrationPlanDraft(draft, choose(draft, { [`settings:${worktree}`]: 'import' }, ['settings']));
+		assert.deepStrictEqual(replaced.operations.map(item => item.item), [workbench, worktree]);
 	});
 
 	test('plans independent preserve-by-default settings, keybindings, snippets, and extensions', async () => {

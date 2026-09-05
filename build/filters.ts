@@ -169,6 +169,9 @@ export const indentationFilter = Object.freeze<string[]>([
 	'!extensions/ipynb/notebook-out/**',
 	'!extensions/notebook-renderers/renderer-out/*.js',
 	'!extensions/simple-browser/media/*.js',
+	'!extensions/hucode-setup-ui/media/**',
+	'!extensions/hucode-setup-ui/src/vendor/shadcn/**',
+	'!extensions/hucode-setup-ui/src/generated/**',
 ]);
 
 export const copyrightFilter = Object.freeze<string[]>([
@@ -215,6 +218,8 @@ export const copyrightFilter = Object.freeze<string[]>([
 	'!extensions/markdown-math/notebook-out/**',
 	'!extensions/ipynb/notebook-out/**',
 	'!extensions/simple-browser/media/codicon.css',
+	'!extensions/hucode-setup-ui/media/**',
+	'!extensions/hucode-setup-ui/src/vendor/shadcn/**',
 	'!extensions/terminal-suggest/src/completions/upstream/**',
 	'!extensions/typescript-language-features/node-maintainer/**',
 	'!extensions/html-language-features/server/src/modes/typescript/*',
@@ -251,6 +256,8 @@ export const tsFormattingFilter = Object.freeze<string[]>([
 	'!extensions/terminal-suggest/src/shell/zshBuiltinsCache.ts',
 	'!extensions/terminal-suggest/src/shell/fishBuiltinsCache.ts',
 	'!src/vs/platform/agentHost/node/codex/protocol/generated/**',
+	'!extensions/hucode-setup-ui/src/vendor/shadcn/**',
+	'!extensions/hucode-setup-ui/src/generated/**',
 
 	// extensions/copilot has its own code style
 	'!extensions/copilot/**',

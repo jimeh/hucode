@@ -12,7 +12,7 @@ import { URI } from '../../../base/common/uri.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { AbstractNativeEnvironmentService, INativeEnvironmentPaths } from '../../../platform/environment/common/environmentService.js';
-import { IExtensionGalleryService, IExtensionInfo, IExtensionQueryOptions, IGalleryExtension } from '../../../platform/extensionManagement/common/extensionManagement.js';
+import { IExtensionGalleryService, IExtensionInfo, IExtensionManagementService, IExtensionQueryOptions, IGalleryExtension } from '../../../platform/extensionManagement/common/extensionManagement.js';
 import { TargetPlatform } from '../../../platform/extensions/common/extensions.js';
 import { IExtensionsScannerService } from '../../../platform/extensionManagement/common/extensionsScannerService.js';
 import { FileService } from '../../../platform/files/common/fileService.js';
@@ -309,7 +309,7 @@ suite('EditorMigrationTargetReader', () => {
 		duringReadCancellation.dispose();
 	});
 
-	test('uses only the system scanner and controlled two-phase gallery evidence', async () => {
+	test('uses the renderer-safe extension target platform with controlled gallery evidence', async () => {
 		const calls: string[] = [];
 		const galleryQueries: IExtensionQueryOptions[] = [];
 		const galleryExtension = {
@@ -357,6 +357,7 @@ suite('EditorMigrationTargetReader', () => {
 			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
 			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
 			{ readSourceProfile: async () => sourceSnapshot() } as unknown as IEditorMigrationSourceService,
+			rendererExtensionManagement(TargetPlatform.LINUX_ARM64),
 		);
 
 		const target = await service.inspectTarget({ kind: 'existing', profileId: profilesService.defaultProfile.id }, ['extensions'], CancellationToken.None);
@@ -366,6 +367,7 @@ suite('EditorMigrationTargetReader', () => {
 		assert.strictEqual(galleryQueries.length, 1);
 		assert.strictEqual(galleryQueries[0].compatible, false);
 		assert.strictEqual(galleryQueries[0].targetPlatform, target.environment.targetPlatform);
+		assert.strictEqual(target.environment.targetPlatform, TargetPlatform.LINUX_ARM64);
 		assert.deepStrictEqual(draft.evidence.gallery, [{
 			id: 'pub.available',
 			requestedChannel: 'preRelease',
@@ -431,6 +433,7 @@ suite('EditorMigrationTargetReader', () => {
 					return current.source;
 				},
 			} as unknown as IEditorMigrationSourceService,
+			rendererExtensionManagement(),
 		);
 		service.inspectTarget = async () => current.target;
 		const draft = await service.createDraftFromCurrentEvidence(current.source, current.target, CancellationToken.None);
@@ -486,6 +489,7 @@ suite('EditorMigrationTargetReader', () => {
 			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
 			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
 			{ readSourceProfile: async () => source } as unknown as IEditorMigrationSourceService,
+			rendererExtensionManagement(),
 		);
 		service.inspectTarget = async () => target;
 		const draft = await service.createDraftFromCurrentEvidence(source, target, CancellationToken.None);
@@ -532,6 +536,7 @@ suite('EditorMigrationTargetReader', () => {
 			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
 			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
 			{ readSourceProfile: async () => source } as unknown as IEditorMigrationSourceService,
+			rendererExtensionManagement(),
 		);
 		service.inspectTarget = async () => target;
 		const draft = await service.createDraftFromCurrentEvidence(source, target, CancellationToken.None);
@@ -568,6 +573,7 @@ suite('EditorMigrationTargetReader', () => {
 			{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
 			{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
 			{ readSourceProfile: async () => source } as unknown as IEditorMigrationSourceService,
+			rendererExtensionManagement(),
 		);
 		service.inspectTarget = async () => target;
 		const draft = await service.createDraftFromCurrentEvidence(source, target, CancellationToken.None);
@@ -592,7 +598,14 @@ function planningServiceWithGallery(
 		{ resolveUserBindings: async () => ({}) } as unknown as IUserDataSyncUtilService,
 		{ ...product, version: '1.100.0', hucodeVersion: '0.0.1', extensionsGallery: { serviceUrl: 'open-vsx' } } as IProductService,
 		{ readSourceProfile: async () => sourceSnapshot() } as unknown as IEditorMigrationSourceService,
+		rendererExtensionManagement(),
 	);
+}
+
+function rendererExtensionManagement(targetPlatform = TargetPlatform.LINUX_X64): IExtensionManagementService {
+	return {
+		getTargetPlatform: async () => targetPlatform,
+	} as unknown as IExtensionManagementService;
 }
 
 function sourceSnapshot(): EditorMigrationSourceSnapshot {
