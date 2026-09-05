@@ -115,7 +115,7 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 	return (
 		<div role="region" aria-label={presentation.regionLabel} className="bg-background text-foreground flex h-full flex-col">
 			<header className="border-border/70 shrink-0 border-b px-5 pt-4 pb-3">
-				<div className="mx-auto flex w-full max-w-4xl flex-col gap-2">
+				<div className="flex w-full flex-col gap-2">
 					<h1 tabIndex={-1} className="text-base font-semibold outline-none">{presentation.title}</h1>
 					<ol className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
 						{presentation.steps.map(step => (
@@ -134,15 +134,15 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 
 			{error ? (
 				<div className="shrink-0 px-5 pt-3">
-					<Alert variant="destructive" role="alert" className="mx-auto max-w-4xl">
+					<Alert variant="destructive" role="alert">
 						<AlertCircleIcon />
 						<AlertDescription>{error}</AlertDescription>
 					</Alert>
 				</div>
 			) : null}
 
-			<div className="flex min-h-0 flex-1 justify-center px-5 pt-3">
-				<div className="flex min-h-0 w-full max-w-4xl flex-col gap-3 md:flex-row md:gap-4">
+			<div className="flex min-h-0 flex-1 px-5 pt-3">
+				<div className="flex min-h-0 w-full flex-col gap-3 md:flex-row md:gap-4">
 					{presentation.sections.length ? (
 						<SectionRail
 							sections={presentation.sections}
@@ -174,7 +174,7 @@ export function SetupShell({ host }: { readonly host: SetupHost }) {
 			</div>
 
 			<footer className="border-border/70 shrink-0 border-t px-5 py-3">
-				<div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-3">
+				<div className="flex w-full flex-wrap items-center justify-between gap-3">
 					<div className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-xs">
 						{presentation.footer.lines.map(line => <p key={line}>{line}</p>)}
 					</div>

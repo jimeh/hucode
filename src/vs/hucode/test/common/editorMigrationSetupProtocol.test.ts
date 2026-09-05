@@ -352,6 +352,16 @@ suite('EditorMigrationSetupProtocol', () => {
 		}
 	});
 
+	test('validates comparison labels before exposing snippet contents to the renderer', () => {
+		const row = { id: 'snippet', name: 'go.json', searchText: 'go.json', currentValue: '{}', importedValue: '{"Log":{}}', valuesDescription: 'Contents' };
+		const labels = { currentLabel: 'Current', importedLabel: 'Incoming', expandLabel: 'Show Full Comparison', collapseLabel: 'Show Less', note: 'Replaces the file.' };
+		const panel = { kind: 'reviewCategory', id: 'snippets', heading: 'Snippets', lead: '', ownership: '', warnings: [] };
+		assert.ok(isEditorMigrationSetupPanel({ ...panel, conflicts: [{ ...row, comparison: labels }] }));
+		for (const comparison of [null, {}, { ...labels, currentLabel: 12 }, { ...labels, note: [] }]) {
+			assert.strictEqual(isEditorMigrationSetupPanel({ ...panel, conflicts: [{ ...row, comparison }] }), false);
+		}
+	});
+
 	test('refuses a malformed state message at the trust boundary', () => {
 		const version = EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION;
 		for (const presentation of [{ revision: 1 }, { ...validPresentation(), phase: 'onboarding' }, { ...validPresentation(), panels: [{ kind: 'applications', id: 'x', heading: 'h' }] }]) {

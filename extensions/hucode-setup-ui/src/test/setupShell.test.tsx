@@ -129,6 +129,29 @@ describe('SetupShell', () => {
 		expect(liveRegion('migration')).toHaveTextContent('');
 	});
 
+	test('expands complete snippet contents and preserves the comparison when choices freeze', async () => {
+		const current = Array.from({ length: 24 }, (_, index) => `current line ${index}`).join('\n');
+		const imported = `${current}\n<script>snippet text, not markup</script>`;
+		const row = {
+			...conflictRow('snippets:go.json:hash', 'go.json', current, imported),
+			comparison: { currentLabel: 'Current', importedLabel: 'Incoming', expandLabel: 'Show Full Comparison', collapseLabel: 'Show Less', note: 'Use Imported replaces the entire file.' },
+		};
+		const initial = presentation({ phase: 'review', defaultSectionId: 'settings', sections: REVIEW_SECTIONS, panels: [reviewCategoryPanel({ conflicts: [row] })] });
+		const { user, publish, sent } = await mount(initial);
+		expect(screen.queryByText('<script>snippet text, not markup</script>', { exact: false })).toBeNull();
+		await user.click(screen.getByRole('button', { name: 'Show Full Comparison' }));
+		expect(screen.getByLabelText('Current')).toHaveTextContent('current line 23');
+		expect(screen.getByLabelText('Incoming').textContent).toBe(imported);
+		expect(screen.getByLabelText('Incoming').querySelector('script')).toBeNull();
+		await user.click(screen.getByRole('radio', { name: `Use imported value ${imported} for go.json` }));
+		expect(intents(sent)).toContainEqual({ type: 'chooseDecision', decisionId: row.id, choice: 'import' });
+		await act(async () => publish({ ...initial, revision: 2, phase: 'publishers', panels: [reviewCategoryPanel({ conflicts: [{ ...row, choices: undefined, chosenText: 'Using imported value' }] })] }));
+		expect(screen.queryByRole('radio')).toBeNull();
+		expect(screen.getByLabelText('Incoming').textContent).toBe(imported);
+		await user.click(screen.getByRole('button', { name: 'Show Less' }));
+		expect(screen.getByLabelText('Incoming')).not.toHaveTextContent('current line 23');
+	});
+
 	test('freezes conflict choices when the host withholds them', async () => {
 		const publishers = presentation({
 			phase: 'publishers',

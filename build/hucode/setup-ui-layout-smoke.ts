@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { chromium, expect } from '@playwright/test';
+import { chromium, expect, type Page } from '@playwright/test';
 import { parse } from 'jsonc-parser';
 import { EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type EditorMigrationSetupPresentation } from '../../src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts';
 
@@ -44,29 +44,40 @@ const presentation: EditorMigrationSetupPresentation = {
 	sectionAnnouncementTemplate: 'Showing {0}.',
 };
 
+async function mountPresentation(page: Page, state = presentation): Promise<void> {
+	const [script, style, prePage] = await Promise.all([
+		readFile(new URL('index.js', mediaRoot), 'utf8'),
+		readFile(new URL('style.css', mediaRoot), 'utf8'),
+		readFile(new URL('../../src/vs/workbench/contrib/webview/browser/pre/index.html', import.meta.url), 'utf8'),
+	]);
+	const defaults = /defaultStyles\.textContent = `([\s\S]*?)`;/.exec(prePage)?.[1];
+	assert.ok(defaults, 'load the actual webview default CSS, including its scrollbar and focus rules');
+	await page.setContent('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="vscode-dark"><div id="root"></div></body></html>');
+	await page.addStyleTag({ content: defaults });
+	await page.addStyleTag({ content: style });
+	const message = JSON.stringify({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'state', revision: state.revision, presentation: state });
+	await page.addScriptTag({ content: `window.acquireVsCodeApi = () => ({ postMessage: message => {
+		document.body.dataset.lastIntent = JSON.stringify(message.intent);
+		if (message.intent.type === 'ready') {
+			setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: ${message} })), 0);
+		}
+	} });` });
+	await page.addScriptTag({ type: 'module', content: script });
+}
+
 // Load the shipped assets into the same unstyled mounting element as the webview host. jsdom
 // tests cannot detect a broken height chain because they do not calculate layout or scrolling.
 test('expanded setup review keeps navigation visible and its last item reachable', { timeout: 30_000 }, async t => {
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
-	const script = await readFile(new URL('index.js', mediaRoot), 'utf8');
-	const style = await readFile(new URL('style.css', mediaRoot), 'utf8');
 	await mkdir(artifacts, { recursive: true });
-	for (const viewport of [{ width: 1000, height: 600 }, { width: 600, height: 400 }, { width: 500, height: 300 }]) {
+	for (const viewport of [{ width: 1400, height: 600 }, { width: 600, height: 400 }, { width: 500, height: 300 }]) {
 		await t.test(`${viewport.width}x${viewport.height}`, async () => {
 			const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
 			const errors: string[] = [];
 			page.on('pageerror', error => errors.push(error.message));
 			try {
-				await page.setContent('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="vscode-dark"><div id="root"></div></body></html>');
-				await page.addStyleTag({ content: style });
-				const message = JSON.stringify({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'state', revision: 1, presentation });
-				await page.addScriptTag({ content: `window.acquireVsCodeApi = () => ({ postMessage: message => {
-					if (message.intent.type === 'ready') {
-						setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: ${message} })), 0);
-					}
-				} });` });
-				await page.addScriptTag({ type: 'module', content: script });
+				await mountPresentation(page);
 				await page.getByRole('button', { name: 'Show 127 items', exact: true }).click();
 				await page.getByRole('button', { name: '212 new settings', exact: true }).click();
 
@@ -79,6 +90,11 @@ test('expanded setup review keeps navigation visible and its last item reachable
 				}
 
 				const detail = page.locator('[data-focus-id="detail"]');
+				for (const content of [page.locator('header > div'), detail.locator('..'), footer.locator(':scope > div')]) {
+					const bounds = await content.boundingBox();
+					assert.ok(bounds && bounds.x <= 24 && bounds.x + bounds.width >= viewport.width - 24,
+						`content must fill the modal with only edge padding: ${JSON.stringify(bounds)}`);
+				}
 				// Exercise keyboard scrolling, not a programmatic scroll that can bypass overflow rules.
 				await detail.press('Control+End');
 				await expect(page.getByText('and 187 more.', { exact: true })).toBeInViewport({ ratio: 1 });
@@ -105,19 +121,7 @@ test('setup follows live theme colors with visible scrollbars and keyboard-only 
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
-	const prePage = await readFile(new URL('../../src/vs/workbench/contrib/webview/browser/pre/index.html', import.meta.url), 'utf8');
-	const defaults = /defaultStyles\.textContent = `([\s\S]*?)`;/.exec(prePage)?.[1];
-	assert.ok(defaults, 'load the actual webview default CSS, including its scrollbar and focus rules');
-	await page.setContent('<!doctype html><html><head></head><body class="vscode-dark"><div id="root"></div></body></html>');
-	await page.addStyleTag({ content: defaults });
-	await page.addStyleTag({ content: await readFile(new URL('style.css', mediaRoot), 'utf8') });
-	const message = JSON.stringify({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'state', revision: 1, presentation });
-	await page.addScriptTag({ content: `window.acquireVsCodeApi = () => ({ postMessage: message => {
-		if (message.intent.type === 'ready') {
-			setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: ${message} })), 0);
-		}
-	} });` });
-	await page.addScriptTag({ type: 'module', content: await readFile(new URL('index.js', mediaRoot), 'utf8') });
+	await mountPresentation(page);
 	const disclosure = page.getByRole('button', { name: 'Show 127 items', exact: true });
 	await disclosure.click();
 	await expect(disclosure).toHaveCSS('outline-style', 'none');
@@ -190,4 +194,56 @@ test('setup follows live theme colors with visible scrollbars and keyboard-only 
 	await importButton.focus();
 	await expect(importButton).toHaveCSS('outline-style', 'solid');
 	await expect(importButton).toHaveCSS('outline-color', 'rgb(171, 205, 239)');
+});
+
+test('snippet comparisons expand in the main pane with horizontal choices and fixed navigation', { timeout: 30_000 }, async t => {
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	const current = JSON.stringify({ Benchmark: { prefix: 'bench', body: ['func Benchmark(b *testing.B) {', ...Array.from({ length: 20 }, (_, i) => `\t// current line ${i}`), '}'] }, CurrentOnly: { body: ['kept only with current file'] } }, null, 2);
+	const imported = JSON.stringify({ Benchmark: { prefix: 'benchmark', description: 'Measure allocations', body: ['func Benchmark(b *testing.B) {', '\tb.ReportAllocs()', '\tfor b.Loop() {', `\t\t${'longFunctionName'.repeat(40)}()`, '\t}', '}'] } }, null, 2);
+	const state: EditorMigrationSetupPresentation = {
+		...presentation, defaultSectionId: 'snippets',
+		footer: { ...presentation.footer, lines: ['Default into Default.', 'Current snippet file will be kept.'] },
+		sections: [{ id: 'snippets', label: 'Snippets', status: 'attention', statusDescription: 'One file differs', count: 0 }],
+		panels: [{
+			kind: 'reviewCategory', id: 'snippets', heading: 'Snippets', lead: 'One snippet file differs.', ownership: 'Stored directly in Default.', warnings: [],
+			conflicts: [{
+				id: 'snippet', name: 'go.json', searchText: 'go.json', currentValue: current, importedValue: imported, valuesDescription: 'Snippet contents',
+				comparison: { currentLabel: 'Current', importedLabel: 'Incoming', expandLabel: 'Show Full Comparison', collapseLabel: 'Show Less', note: 'Use Imported replaces this entire file. Snippets found only in Current will be removed.' },
+				choices: [
+					{ id: 'keep', label: 'Keep Current', checked: true, intent: { type: 'chooseDecision', decisionId: 'snippet', choice: 'preserveTarget' } },
+					{ id: 'replace', label: 'Use Imported', checked: false, intent: { type: 'chooseDecision', decisionId: 'snippet', choice: 'import' } },
+				],
+			}],
+		}],
+	};
+	await mkdir(artifacts, { recursive: true });
+	for (const viewport of [{ width: 1100, height: 780 }, { width: 500, height: 400 }]) {
+		await t.test(`${viewport.width}x${viewport.height}`, async () => {
+			const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+			t.after(() => page.close());
+			await mountPresentation(page, state);
+			const footer = page.locator('footer');
+			await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeInViewport({ ratio: 1 });
+			const footerBounds = await footer.boundingBox();
+			const keep = page.getByRole('radio', { name: 'Keep Current' });
+			const replace = page.getByRole('radio', { name: 'Use Imported' });
+			await keep.scrollIntoViewIfNeeded();
+			const keepBounds = await keep.boundingBox();
+			const replaceBounds = await replace.boundingBox();
+			assert.ok(keepBounds && replaceBounds && Math.abs(keepBounds.y - replaceBounds.y) < 2 && replaceBounds.x > keepBounds.x, 'choices share one horizontal row');
+			await replace.click();
+			assert.deepStrictEqual(JSON.parse((await page.locator('body').getAttribute('data-last-intent'))!), { type: 'chooseDecision', decisionId: 'snippet', choice: 'import' });
+			await page.getByRole('button', { name: 'Show Full Comparison' }).click();
+			assert.equal(await page.getByLabel('Current', { exact: true }).textContent(), current);
+			assert.equal(await page.getByLabel('Incoming', { exact: true }).textContent(), imported);
+			await page.locator('[data-focus-id="detail"]').press('Control+End');
+			await expect(replace).toBeInViewport({ ratio: 1 });
+			assert.deepStrictEqual(await footer.boundingBox(), footerBounds);
+			assert.ok(await page.locator('[data-focus-id="detail"]').evaluate(element => element.scrollWidth <= element.clientWidth), 'long code wraps instead of widening the page');
+			await page.getByRole('button', { name: 'Show Less' }).click();
+			await page.locator('[data-focus-id="detail"]').press('Control+Home');
+			await page.screenshot({ path: new URL(`setup-ui-snippets-${viewport.width}.png`, artifacts).pathname });
+		});
+	}
 });

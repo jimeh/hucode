@@ -26,7 +26,7 @@ import { EditorMigrationApplyService } from '../../browser/migration/editorMigra
 import { EditorMigrationOperationStore } from '../../browser/migration/editorMigrationOperationStore.js';
 import { EditorMigrationApplyAuthorization, EditorMigrationApplyError } from '../../common/migration/editorMigrationApply.js';
 import { formatEditorMigrationReport } from '../../common/migration/editorMigrationReport.js';
-import { IEditorMigrationPlanningService, EditorMigrationPlanOperation, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
+import { EDITOR_MIGRATION_POLICY_VERSION, IEditorMigrationPlanningService, EditorMigrationPlanOperation, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
 import { fingerprintEditorMigrationValue } from '../../common/migration/editorMigrationPlanningCanonical.js';
 import { acceptEditorMigrationPlanDraft, createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationCategorySnapshot, EditorMigrationSnippet, EditorMigrationSourceSnapshot } from '../../common/migration/editorMigrationSource.js';
@@ -1420,7 +1420,7 @@ async function proposedSettingsPlan(categories: readonly ('settings' | 'keybindi
 				...(categories.includes('settings') ? [{ category: 'settings' as const, ownership: 'target' as const, state: 'absent' as const, contentHash: absent, value: {} }] : []),
 				...(categories.includes('keybindings') ? [{ category: 'keybindings' as const, ownership: 'target' as const, state: 'absent' as const, contentHash: absentKeybindings, value: [] }] : []),
 			],
-			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: 1 },
+			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
 			builtIns: [],
 			fingerprint: 'target',
 		},
@@ -1522,7 +1522,7 @@ async function extensionPlan(profileId: string): Promise<EditorMigrationReviewed
 			catalogFingerprint: 'catalog',
 			requestedCategories: ['extensions'],
 			categories: [{ category: 'extensions', ownership: 'target', ownerProfileId: profileId, state: 'absent', contentHash: absent, semanticHash, value: [] }],
-			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: 1 },
+			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.1', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
 			builtIns: [],
 			fingerprint: 'target',
 		},

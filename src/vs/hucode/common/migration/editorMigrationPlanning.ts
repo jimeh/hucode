@@ -11,7 +11,7 @@ import { EditorMigrationCategory, EditorMigrationExtension, EditorMigrationJsonV
 export const EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION = 2;
 
 /** Version of Hucode's planning and exclusion policy. */
-export const EDITOR_MIGRATION_POLICY_VERSION = 1;
+export const EDITOR_MIGRATION_POLICY_VERSION = 2;
 
 /** Explicit target selected by a migration caller. */
 export type EditorMigrationTargetSelection =

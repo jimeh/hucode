@@ -17,10 +17,12 @@ import { VirtualCollection } from '@/components/VirtualCollection';
 import { ActionButton, Disclosure, FilterInput, GroupList, Lead, Note, PanelHeading, ProblemList, SubHeading } from '@/components/primitives';
 import { Button } from '@/vendor/shadcn/button';
 import { Checkbox } from '@/vendor/shadcn/checkbox';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/vendor/shadcn/collapsible';
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from '@/vendor/shadcn/field';
 import { Input } from '@/vendor/shadcn/input';
 import { Progress } from '@/vendor/shadcn/progress';
 import { RadioGroup, RadioGroupItem } from '@/vendor/shadcn/radio-group';
+import { cn } from '@/vendor/shadcn/lib/utils';
 
 /** Beyond this many comparison rows the user needs the filter rather than more scrolling. */
 const CONFLICT_ROW_LIMIT = 60;
@@ -275,25 +277,30 @@ function TargetPanel({ panel, local, send }: SetupPanelProps & { readonly panel:
 	);
 }
 
-function ConflictRowView({ row, send }: {
+function ConflictRowView({ row, local, send }: {
 	readonly row: EditorMigrationSetupConflictRow;
+	readonly local: LocalSetupState;
 	readonly send: (intent: EditorMigrationSetupIntent) => void;
 }) {
 	const checked = row.choices?.find(choice => choice.checked)?.id;
 	return (
-		<div role="group" aria-label={row.name} className="border-border/60 flex flex-col gap-1.5 border-b py-2.5 last:border-b-0">
-			<span className="font-mono text-xs break-all">{row.name}</span>
-			<span aria-hidden className="text-muted-foreground flex flex-wrap items-center gap-1.5 font-mono text-xs">
-				<code className="bg-muted rounded-sm px-1 py-0.5">{row.currentValue}</code>
-				<ArrowRightIcon className="size-3" />
-				<code className="bg-muted text-foreground rounded-sm px-1 py-0.5">{row.importedValue}</code>
-			</span>
-			<span className="hucode-sr-only">{row.valuesDescription}</span>
+		<FieldSet aria-label={row.name} className="min-w-0 border-b py-3 last:border-b-0">
+			<FieldLegend variant="label">{row.name}</FieldLegend>
+			{row.comparison ? <ConflictComparison row={row} local={local} /> : (
+				<>
+					<span aria-hidden className="text-muted-foreground flex flex-wrap items-center gap-1.5 font-mono text-xs">
+						<code>{row.currentValue}</code><ArrowRightIcon className="size-3" /><code>{row.importedValue}</code>
+					</span>
+					<span className="hucode-sr-only">{row.valuesDescription}</span>
+				</>
+			)}
 			{row.choices ? (
 				<RadioGroup
 					name={`decision-${row.id}`}
+					aria-label={row.name}
+					orientation="horizontal"
 					value={checked ?? ''}
-					className="flex-row gap-4"
+					className="flex flex-wrap gap-x-5 gap-y-2"
 					onValueChange={id => {
 						const choice = row.choices!.find(candidate => candidate.id === id);
 						if (choice) {
@@ -311,6 +318,50 @@ function ConflictRowView({ row, send }: {
 			) : (
 				<span className="text-muted-foreground text-xs">{row.chosenText}</span>
 			)}
+		</FieldSet>
+	);
+}
+
+function ConflictComparison({ row, local }: { readonly row: EditorMigrationSetupConflictRow; readonly local: LocalSetupState }) {
+	const labels = row.comparison!;
+	const disclosureId = `comparison:${row.id}`;
+	const open = local.openDisclosures.has(disclosureId);
+	const currentPreview = row.currentValue.split('\n').slice(0, 12).join('\n').slice(0, 600);
+	const importedPreview = row.importedValue.split('\n').slice(0, 12).join('\n').slice(0, 600);
+	const expandable = currentPreview !== row.currentValue || importedPreview !== row.importedValue;
+	return (
+		<Collapsible open={open} onOpenChange={value => local.toggleDisclosure(disclosureId, value)} className="flex min-w-0 flex-col gap-2">
+			{labels.note ? <Note>{labels.note}</Note> : null}
+			{expandable ? (
+				<CollapsibleTrigger asChild>
+					<Button variant="ghost" size="sm" className="self-start" data-focus-id={disclosureId}>
+						{open ? labels.collapseLabel : labels.expandLabel}
+					</Button>
+				</CollapsibleTrigger>
+			) : null}
+			{!open ? <ComparisonColumns currentLabel={labels.currentLabel} importedLabel={labels.importedLabel} current={currentPreview} imported={importedPreview} clamp={expandable} /> : null}
+			<CollapsibleContent>
+				<ComparisonColumns currentLabel={labels.currentLabel} importedLabel={labels.importedLabel} current={row.currentValue} imported={row.importedValue} />
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+function ComparisonColumns({ currentLabel, importedLabel, current, imported, clamp = false }: {
+	readonly currentLabel: string;
+	readonly importedLabel: string;
+	readonly current: string;
+	readonly imported: string;
+	readonly clamp?: boolean;
+}) {
+	return (
+		<div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2">
+			{[{ label: currentLabel, value: current }, { label: importedLabel, value: imported }].map(({ label, value }, index) => (
+				<div key={index} className="border-border bg-card text-card-foreground min-w-0 rounded-md border p-3">
+					<p className="mb-2 text-xs font-medium">{label}</p>
+					<pre aria-label={label} className={cn('font-mono text-xs break-words whitespace-pre-wrap [overflow-wrap:anywhere]', clamp && 'line-clamp-12')}>{value}</pre>
+				</div>
+			))}
 		</div>
 	);
 }
@@ -362,7 +413,7 @@ function ReviewCategoryPanel({ panel, local, scrollRef, send }: SetupPanelProps 
 			) : null}
 			{shown.length ? (
 				<VirtualCollection items={shown} itemKey={row => row.id} estimateSize={92} scrollRef={scrollRef} label={panel.differencesHeading}>
-					{row => <ConflictRowView row={row} send={send} />}
+					{row => <ConflictRowView row={row} local={local} send={send} />}
 				</VirtualCollection>
 			) : null}
 			{overflow ? <Note>{overflow}</Note> : null}

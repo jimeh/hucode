@@ -13,7 +13,7 @@
  */
 
 /** Bumped whenever a message shape changes. Both sides reject any other value. */
-export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 1;
+export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 2;
 
 /** The four import categories, repeated here so the protocol stays dependency-free. */
 export const EDITOR_MIGRATION_SETUP_CATEGORIES = ['settings', 'keybindings', 'snippets', 'extensions'] as const;
@@ -297,6 +297,14 @@ export interface EditorMigrationSetupConflictRow {
 	readonly currentValue: string;
 	readonly importedValue: string;
 	readonly valuesDescription: string;
+	/** Labels for readable content comparisons; values contain content, not internal records. */
+	readonly comparison?: {
+		readonly currentLabel: string;
+		readonly importedLabel: string;
+		readonly expandLabel: string;
+		readonly collapseLabel: string;
+		readonly note?: string;
+	};
 	/** Present while review is editable; absent once publisher confirmation freezes the choices. */
 	readonly choices?: readonly EditorMigrationSetupRadioOption[];
 	/** Present instead of `choices` in the read-only presentation. */
@@ -634,6 +642,7 @@ function isRecoveryRecord(value: unknown): boolean {
 
 function isConflictRow(value: unknown): boolean {
 	return hasStrings(value, ['id', 'name', 'searchText', 'currentValue', 'importedValue', 'valuesDescription'])
+		&& (value.comparison === undefined || (hasStrings(value.comparison, ['currentLabel', 'importedLabel', 'expandLabel', 'collapseLabel']) && isOptionalString(value.comparison.note)))
 		&& isOptionalArrayOf(value.choices, isRadioOption)
 		&& isOptionalString(value.chosenText);
 }

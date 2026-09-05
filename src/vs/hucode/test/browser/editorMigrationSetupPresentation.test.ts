@@ -10,6 +10,7 @@ import { editorMigrationSetupPresentation } from '../../browser/migration/editor
 import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 import {
 	EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
+	EDITOR_MIGRATION_POLICY_VERSION,
 	EditorMigrationDraftDecision,
 	EditorMigrationDraftExclusion,
 	EditorMigrationPlanDraft,
@@ -84,6 +85,33 @@ suite('EditorMigrationSetupPresentation', () => {
 		assert.ok(settings.additions, 'routine additions stay behind a disclosure');
 		assert.match(settings.additions!.summary, /2 new settings/);
 		assert.match(settings.ownership, /inherited from Default/);
+	});
+
+	test('shows complete formatted snippet contents rather than truncated internal records', () => {
+		const current = { Benchmark: { prefix: 'bench', body: ['func Benchmark(b *testing.B) {', '\t// current implementation', '}'] }, CurrentOnly: { body: ['keep me'] } };
+		const incoming = { Benchmark: { prefix: 'bench', body: ['func Benchmark(b *testing.B) {', `\t${'x'.repeat(180)}`, '}'] } };
+		const base = reviewDraft();
+		const draft: EditorMigrationPlanDraft = {
+			...base,
+			target: { ...base.target, requestedCategories: ['snippets'] },
+			decisions: [{
+				id: 'snippets:go.json:hash', item: 'go.json', category: 'snippets', kind: 'conflict', defaultChoice: 'preserveTarget',
+				source: { name: 'go.json', contentHash: 'incoming-hash', contents: incoming },
+				target: { name: 'go.json', contentHash: 'current-hash', contents: current }
+			}],
+		};
+		for (const phase of ['review', 'publishers'] as const) {
+			const result = editorMigrationSetupPresentation({ ...reviewState(draft, ['snippets']), phase }, 1);
+			const [row] = reviewPanel(result, 'snippets').conflicts;
+			assert.deepStrictEqual([row.currentValue, row.importedValue], [JSON.stringify(current, null, 2), JSON.stringify(incoming, null, 2)]);
+			assert.deepStrictEqual([row.comparison?.currentLabel, row.comparison?.importedLabel], ['Current', 'Incoming']);
+			assert.match(row.comparison?.note ?? '', /entire file.*only in Current will be removed/);
+			if (phase === 'review') {
+				assert.deepStrictEqual(row.choices?.map(choice => choice.label), ['Keep Current', 'Use Imported']);
+				assert.ok(row.choices?.every(choice => !choice.description?.includes('current-hash')));
+			}
+			assert.ok(isEditorMigrationSetupPresentation(result), 'snippet comparisons must cross the validated protocol');
+		}
 	});
 
 	test('states a deselected category as whole-category source items rather than its exclusions again', () => {
@@ -426,7 +454,7 @@ function reviewDraft(): EditorMigrationPlanDraft {
 				{ category: 'keybindings', ownership: 'target', ownerProfileId: 'work', state: 'present', value: [] },
 				{ category: 'extensions', ownership: 'target', ownerProfileId: 'work', state: 'present', value: [] },
 			],
-			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.78', galleryIdentity: 'open-vsx', policyVersion: 1 },
+			environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.78', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
 			builtIns: [],
 			fingerprint: 'target',
 		},

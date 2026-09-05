@@ -17,7 +17,7 @@ import {
 	groupEditorMigrationSources,
 } from '../../browser/migration/editorMigrationFlow.js';
 import { EDITOR_MIGRATION_OPERATION_SCHEMA_VERSION, EditorMigrationApplyError, EditorMigrationApplyProgress, EditorMigrationOperation, EditorMigrationRollbackInspection, IEditorMigrationApplyService } from '../../common/migration/editorMigrationApply.js';
-import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EditorMigrationPlanDraft, EditorMigrationReviewedPlan, EditorMigrationTargetSelection, EditorMigrationTargetSnapshot, IEditorMigrationPlanningService } from '../../common/migration/editorMigrationPlanning.js';
+import { EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION, EDITOR_MIGRATION_POLICY_VERSION, EditorMigrationPlanDraft, EditorMigrationReviewedPlan, EditorMigrationTargetSelection, EditorMigrationTargetSnapshot, IEditorMigrationPlanningService } from '../../common/migration/editorMigrationPlanning.js';
 import { EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, EditorMigrationSourceDescriptor, EditorMigrationSourceProfileRef, EditorMigrationSourceSnapshot, IEditorMigrationSourceService } from '../../common/migration/editorMigrationSource.js';
 
 suite('EditorMigrationFlow', () => {
@@ -622,7 +622,7 @@ function reviewDraft(source: EditorMigrationSourceSnapshot): EditorMigrationPlan
 		profile: { id: 'hucode-default', name: 'Default', kind: 'default' }, eligible: true,
 		catalogFingerprint: 'catalog', requestedCategories: ['settings'],
 		categories: [{ category: 'settings', ownership: 'target', ownerProfileId: 'hucode-default', state: 'present', contentHash: 'target-settings', value: { 'editor.fontSize': 14, 'editor.wordWrap': 'off' } }],
-		environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.78', galleryIdentity: 'open-vsx', policyVersion: 1 },
+		environment: { targetPlatform: 'linux-x64', productVersion: '1.135.0', hucodeVersion: '0.0.78', galleryIdentity: 'open-vsx', policyVersion: EDITOR_MIGRATION_POLICY_VERSION },
 		builtIns: [], fingerprint: 'target',
 	};
 	return {
