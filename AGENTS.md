@@ -403,6 +403,11 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   minus planned imports: preserved conflicts and exclusions are not matches.
   Do not reuse that arithmetic for keybindings, whose planner also deduplicates
   source rows.
+- Lockfile validation re-resolves package records absent from the PR base. A
+  new package's valid lockfile can therefore fail after newer versions become
+  eligible. Refresh that package with the repository's Node/npm using
+  `npm update --package-lock-only --ignore-scripts`, inspect the dependency
+  changes, and rerun validation against the PR base before publishing.
 - A built-in extension that is not recognized as bundled goes through
   `vsce.listFiles({ packageManager: Npm })`, which resolves every production
   dependency into the package no matter what `.vscodeignore` says.
