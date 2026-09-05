@@ -327,17 +327,28 @@ function reviewPanel(state: EditorMigrationFlowState, sectionId: string, readOnl
 	const counts = editorMigrationCategoryCounts(draft, state.decisions, category);
 	const warnings = included ? editorMigrationWarningGroups(draft.warnings, category) : [];
 	const exclusions = included ? editorMigrationExclusionGroups(draft.exclusions, category) : [];
+	// Settings have one decision or exclusion per source key; only equal values are omitted.
+	// This does not generalize to keybindings, where duplicate source rows are also omitted.
+	const matchingSettings = category === 'settings'
+		? available - decisions.length - draft.exclusions.filter(exclusion => exclusion.category === 'settings').length
+		: 0;
+	// A deselected category imports nothing, so its lead must never open with an import count.
+	let lead = !included
+		? localize('editorMigration.review.leadExcluded', "Not included in this import. None of its {0} source items will be imported.", available)
+		: conflicts.length
+			? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", counts.ready, available, conflicts.length)
+			: localize('editorMigration.review.lead', "{0} of {1} will be imported.", counts.ready, available);
+	if (included && matchingSettings > 0) {
+		lead += ' ' + (matchingSettings === 1
+			? localize('editorMigration.review.matchingSetting', "1 setting already matches. No changes are needed for that setting.")
+			: localize('editorMigration.review.matchingSettings', "{0} settings already match. No changes are needed for those settings.", matchingSettings));
+	}
 
 	return {
 		kind: 'reviewCategory',
 		id: sectionId,
 		heading: CATEGORY_LABELS[category],
-		// A deselected category imports nothing, so its lead must never open with an import count.
-		lead: !included
-			? localize('editorMigration.review.leadExcluded', "Not included in this import. None of its {0} source items will be imported.", available)
-			: conflicts.length
-				? localize('editorMigration.review.leadWithConflicts', "{0} of {1} will be imported. {2} differ from your current values.", counts.ready, available, conflicts.length)
-				: localize('editorMigration.review.lead', "{0} of {1} will be imported.", counts.ready, available),
+		lead,
 		include: readOnly ? undefined : {
 			label: localize('editorMigration.review.include', "Include {0} in this import", CATEGORY_LABELS[category]),
 			checked: included,

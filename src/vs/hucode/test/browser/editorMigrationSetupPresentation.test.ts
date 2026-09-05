@@ -8,6 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
 import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { createEditorMigrationPlanDraft } from '../../common/migration/editorMigrationPlanner.js';
 import {
 	EDITOR_MIGRATION_PLANNING_SCHEMA_VERSION,
 	EDITOR_MIGRATION_POLICY_VERSION,
@@ -85,6 +86,52 @@ suite('EditorMigrationSetupPresentation', () => {
 		assert.ok(settings.additions, 'routine additions stay behind a disclosure');
 		assert.match(settings.additions!.summary, /2 new settings/);
 		assert.match(settings.ownership, /inherited from Default/);
+	});
+
+	test('accounts for matching settings separately from imports, conflicts, and exclusions', () => {
+		const base = reviewDraft();
+		const matching = Object.fromEntries(Array.from({ length: 214 }, (_, index) => [`editor.matching${index}`, index]));
+		const excluded = Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`cursor.setting${index}`, true]));
+		const source = { ...matching, ...excluded, 'hucode.omni.workbenchItemLayout': 'compact', 'hucode.omni.worktreeItemLayout': 'compact' };
+		const draft = createEditorMigrationPlanDraft(
+			{ ...base.source, categories: [{ category: 'settings', state: 'present', value: source }] },
+			{ ...base.target, requestedCategories: ['settings'], categories: [{ category: 'settings', ownership: 'target', state: 'present', value: { ...matching, ...excluded } }] },
+			base.evidence,
+		);
+		for (const phase of ['review', 'publishers'] as const) {
+			const result = editorMigrationSetupPresentation({ ...reviewState(draft, ['settings']), phase }, 1);
+			const panel = reviewPanel(result, 'settings');
+			assert.match(panel.lead, /^2 of 237 will be imported\./);
+			assert.match(panel.lead, /214 settings already match\. No changes are needed for those settings\./);
+			assert.match(panel.exclusionNote ?? '', /^21 Settings items are held back/);
+		}
+		assert.doesNotMatch(reviewPanel(editorMigrationSetupPresentation(reviewState(draft, []), 1), 'settings').lead, /already match/);
+
+		const conflictDraft = createEditorMigrationPlanDraft(
+			{ ...base.source, categories: [{ category: 'settings', state: 'present', value: { 'editor.fontSize': 14, 'editor.wordWrap': 'on' } }] },
+			{ ...base.target, requestedCategories: ['settings'], categories: [{ category: 'settings', ownership: 'target', state: 'present', value: { 'editor.fontSize': 13, 'editor.wordWrap': 'on' } }] },
+			base.evidence,
+		);
+		const kept = reviewPanel(editorMigrationSetupPresentation(reviewState(conflictDraft, ['settings']), 1), 'settings');
+		assert.match(kept.lead, /^0 of 2 will be imported\. 1 differ/);
+		assert.match(kept.lead, /1 setting already matches\. No changes are needed for that setting\./);
+		const replaced = reviewPanel(editorMigrationSetupPresentation({ ...reviewState(conflictDraft, ['settings']), decisions: { 'settings:editor.fontSize': 'import' } }, 2), 'settings');
+		assert.match(replaced.lead, /^1 of 2 will be imported\./);
+		assert.match(replaced.lead, /1 setting already matches/);
+	});
+
+	test('explains an entirely matching settings import without listing every setting', () => {
+		const base = reviewDraft();
+		const matching = { 'editor.fontSize': 14, '[go]': { 'editor.tabSize': 4, 'editor.insertSpaces': false } };
+		const draft = createEditorMigrationPlanDraft(
+			{ ...base.source, categories: [{ category: 'settings', state: 'present', value: matching }] },
+			{ ...base.target, requestedCategories: ['settings'], categories: [{ category: 'settings', ownership: 'target', state: 'present', value: { '[go]': { 'editor.insertSpaces': false, 'editor.tabSize': 4 }, 'editor.fontSize': 14 } }] },
+			base.evidence,
+		);
+		const panel = reviewPanel(editorMigrationSetupPresentation(reviewState(draft, ['settings']), 1), 'settings');
+		assert.strictEqual(panel.lead, '0 of 2 will be imported. 2 settings already match. No changes are needed for those settings.');
+		assert.strictEqual(panel.additions, undefined);
+		assert.deepStrictEqual(panel.conflicts, []);
 	});
 
 	test('shows complete formatted snippet contents rather than truncated internal records', () => {

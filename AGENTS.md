@@ -398,6 +398,11 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   mirrored byte-for-byte into `src/generated/` by
   `build/hucode/setup-ui-protocol.ts`; edit the canonical file and run
   `npm run hucode:sync-setup-protocol`, never the mirror.
+- Migration settings drafts omit matching values entirely. Count matches as
+  source settings minus decisions and policy exclusions, not source settings
+  minus planned imports: preserved conflicts and exclusions are not matches.
+  Do not reuse that arithmetic for keybindings, whose planner also deduplicates
+  source rows.
 - A built-in extension that is not recognized as bundled goes through
   `vsce.listFiles({ packageManager: Npm })`, which resolves every production
   dependency into the package no matter what `.vscodeignore` says.
