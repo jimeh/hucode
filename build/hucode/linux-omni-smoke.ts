@@ -9,7 +9,7 @@ import {
 	chromium,
 	type Page,
 } from '@playwright/test';
-import { spawn, type ChildProcess } from 'child_process';
+import { execFile, spawn, type ChildProcess } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import { createServer } from 'net';
 import os from 'os';
@@ -1376,7 +1376,19 @@ export async function runLinuxOmniSmoke(
 
 		const bravoPage = getTargetPage(runtime, restoredBravo);
 		reportLinuxOmniPhaseProgress('crash Bravo', 'starting', deadline);
-		await crashLinuxOmniPage(bravoPage, deadline);
+		const crashShellPage = shellPage;
+		await crashLinuxOmniPage(bravoPage, deadline, async () => {
+			const rows = await readWorkbenchRows(
+				crashShellPage,
+				deadline,
+				'crash Bravo'
+			).then(
+				value => JSON.stringify(value),
+				error => `<rows failed: ${formatError(error)}>`
+			);
+			const processes = await describeLinuxOmniProcesses(executablePath);
+			return `Projects rows: ${rows}\n${processes}`;
+		});
 		crashedPages.add(bravoPage);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1905,9 +1917,22 @@ function assertNewInstance(
 	}
 }
 
+/**
+ * Describes the state the harness could still observe after a crash request
+ * timed out, so a silent renderer can be told apart from a lost crash event.
+ */
+export type LinuxOmniCrashDiagnostics = () => Promise<string>;
+
+/**
+ * Crashes one hosted renderer through CDP and waits for Playwright's crash
+ * event. The command response is tracked only for diagnostics: a resolved
+ * `Page.crash` means the renderer stayed alive, while a pending one means the
+ * renderer died or hung before answering.
+ */
 export async function crashLinuxOmniPage(
 	page: Page,
-	deadline: number
+	deadline: number,
+	diagnostics?: LinuxOmniCrashDiagnostics
 ): Promise<void> {
 	const crashDeadline = Math.min(
 		deadline,
@@ -1918,18 +1943,21 @@ export async function crashLinuxOmniPage(
 		crashListener = resolve;
 		page.once('crash', crashListener);
 	});
-	let crashCommandError: Error | undefined;
+	let crashCommandOutcome = 'pending';
 	try {
 		const session = await runLinuxOmniBoundedProbe(
 			crashDeadline,
 			'Bravo crash CDP session creation',
 			() => getPageContext(page).newCDPSession(page)
 		);
-		void session.send('Page.crash').catch(error => {
-			crashCommandError = error instanceof Error
-				? error
-				: new Error(String(error));
-		});
+		void session.send('Page.crash').then(
+			() => {
+				crashCommandOutcome = 'resolved (renderer answered the crash request)';
+			},
+			error => {
+				crashCommandOutcome = `rejected: ${formatError(error)}`;
+			}
+		);
 		try {
 			await waitForPromise(
 				crashEvent,
@@ -1937,20 +1965,62 @@ export async function crashLinuxOmniPage(
 				'Timed out waiting for the Bravo renderer crash event'
 			);
 		} catch (error) {
-			if (!crashCommandError) {
-				throw error;
-			}
 			const detail = error instanceof Error
 				? error.message
 				: String(error);
+			const diagnosticText = diagnostics
+				? await diagnostics().catch(diagnosticsError =>
+					`<crash diagnostics failed: ${formatError(diagnosticsError)}>`
+				)
+				: undefined;
 			throw new Error(
-				`${detail}; Page.crash command failed: ` +
-					crashCommandError.message
+				[
+					`${detail}; Page.crash command ${crashCommandOutcome}`,
+					diagnosticText,
+				].filter(Boolean).join('\n')
 			);
 		}
 	} finally {
 		page.off('crash', crashListener!);
 	}
+}
+
+/**
+ * Lists the packaged application's OS processes with their scheduler states,
+ * so a renderer stuck in a signal handler shows up as alive after a crash.
+ */
+export async function describeLinuxOmniProcesses(
+	executablePath: string,
+	run: (
+		file: string,
+		args: readonly string[]
+	) => Promise<string> = runProcessListing
+): Promise<string> {
+	const listing = await run('ps', ['-eo', 'pid,ppid,stat,etimes,args']);
+	const lines = listing
+		.split('\n')
+		.filter(line => line.includes(executablePath))
+		.map(line => line.trim().replace(/--[a-z-]*=[^ ]{200,}/g, match =>
+			`${match.slice(0, 200)}…`
+		));
+	return lines.length > 0
+		? `Application processes:\n${lines.join('\n')}`
+		: 'Application processes:\n<none>';
+}
+
+function runProcessListing(
+	file: string,
+	args: readonly string[]
+): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile(file, [...args], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+			resolve(stdout);
+		});
+	});
 }
 
 async function quitLinuxOmniThroughKeyboard(
