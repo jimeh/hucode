@@ -137,7 +137,7 @@ The onboarding session is one explicit state machine with these stages:
 | `bring` | Import from another editor and Skip Import at equal prominence, plus Do This Later | Chosen route | None |
 | `migrate` | Embedded migration phases `application` through `results` | Continue on concluded results, without acknowledging | Migration Back, then to `bring` from its first phase |
 | `appearance` | Mode tiles and preferred light and dark themes | `meetOmni` | `bring` |
-| `meetOmni` | Vocabulary, shortcuts, final actions | Finish action | Previous route stage |
+| `meetOmni` | Vocabulary, shortcuts, final actions | Finish action | `appearance` on the Skip Import route; not offered on the Import route, because the import has already run |
 | `done` | Transient. Modal closes after the chosen handoff | | |
 
 Rules that keep the routes distinct:
