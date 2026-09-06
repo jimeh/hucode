@@ -4,7 +4,7 @@ Status: active
 
 ## Summary
 
-Replace the upstream Copilot-first setup with a Hucode-owned, full-window
+Replace the upstream Copilot-first setup with a Hucode-owned, modal
 onboarding experience. The first release will help desktop users bring a setup
 from Visual Studio Code, Visual Studio Code Insiders, or Cursor, review every
 planned change, and learn the small part of Omni they need before opening their
@@ -27,8 +27,11 @@ adapters without choosing a web migration contract now.
 
 ## Settled product decisions
 
-- Onboarding occupies the whole Hucode window. It is not an editor, modal, or
-  dialog. Native window controls and the draggable title area remain available.
+- Onboarding opens in the Omni modal editor, the same host the standalone
+  import command uses. Native window controls and the draggable title area
+  remain available, and Escape or a click outside the modal records the
+  current step as Do This Later. The earlier full-window requirement is
+  superseded by the [onboarding host plan](onboarding-host-plan.md).
 - GitHub sign-in, Copilot, Settings Sync, and account management stay available
   after onboarding but do not occupy a main step.
 - Full onboarding completion belongs to the Hucode user-data installation, not
@@ -45,7 +48,8 @@ adapters without choosing a web migration contract now.
 - Extension import is additive. Hucode installs reviewed compatible releases
   from its configured Open VSX gallery and never removes target extensions just
   because the source lacks them.
-- Start Fresh remains as prominent as migration.
+- Skipping the import remains as prominent as migration. The route is not
+  called Start Fresh, because onboarding can be reopened and nothing is erased.
 - Appearance mode stays separate from concrete preferred light and dark themes.
 - Onboarding offers one **Use compact worktree and workbench lists** toggle. It
   writes both underlying Omni layout settings together while those settings
@@ -134,11 +138,13 @@ The command and onboarding share migration services, flow state, and UI
 components. Onboarding calls those services directly instead of executing the
 command internally. Each host may frame the shared UI differently.
 
-### Full-window onboarding
+### Modal onboarding
 
-Onboarding replaces normal workbench content below the native window controls.
-It uses primary application semantics rather than dialog semantics. It has no
-backdrop, dialog role, or modal focus trap.
+Onboarding opens in the Omni modal editor below the native window controls.
+The modal keeps its Escape, outside-click, and maximize behaviour. Dismissing it
+records a resumable step rather than skipping. The
+[onboarding host plan](onboarding-host-plan.md) defines the host, session,
+protocol additions, and delivery sequence.
 
 The first release has three stages.
 
@@ -153,7 +159,7 @@ The first release has three stages.
   diagnostics for partial sources.
 - Rank usable sources deterministically by resource completeness, trustworthy
   modification evidence, and stable-channel preference.
-- Offer **Start Fresh** with equal prominence.
+- Offer **Skip Import** with equal prominence.
 - Offer explicit `.code-profile` selection as an escape hatch.
 - Allow **Do This Later** without starting an import.
 
@@ -169,11 +175,12 @@ For migration:
 - show named extension classifications before any write;
 - require another review if the target or gallery result changes.
 
-For Start Fresh:
+For Skip Import:
 
 - choose System, Light, or Dark mode behavior;
 - choose concrete preferred light and dark themes separately;
-- explain that migration remains available from the Command Palette.
+- explain that nothing already configured is removed and that migration
+  remains available from the Command Palette.
 
 #### 3. Import and meet Omni
 
@@ -186,8 +193,8 @@ For Start Fresh:
 - Offer **Use compact worktree and workbench lists** with an immediate preview.
 - Use resolved platform keybinding labels.
 - Offer **Add Project**, **Open Folder as Workbench**, and **Finish for Now**.
-- If a non-Default target profile was chosen, make any new workspace-profile
-  association explicit.
+- Workspace-profile association for a non-Default target is deferred; see the
+  [onboarding host plan](onboarding-host-plan.md).
 - Finish in the real Omni shell rather than opening another welcome page.
 
 ### Rerun behavior
@@ -333,8 +340,9 @@ keybindings, or source contents.
   recovery, and results.
 - Shared migration flow state and UI components serve both the command and
   onboarding hosts.
-- A Hucode full-window contribution owns onboarding presentation and startup
-  state. It does not add Hucode behavior to upstream onboarding files.
+- A Hucode onboarding contribution owns the modal editor input and pane,
+  onboarding presentation, and installation-scoped state. It does not add
+  Hucode behavior to upstream onboarding files.
 - `OmniHostPart` owns only its permanent active and empty hosted-workbench
   presentation.
 - Existing project and workbench commands remain the authority for final and
@@ -380,8 +388,8 @@ categories or uninstalls target extensions absent from the source.
   rollback, retry, and crash recovery;
 - installation-scoped onboarding state, Back, Skip, resume, completion,
   reopening, and version changes;
-- target-profile selection and explicit workspace-profile association;
-- full-window and empty-host view state transitions and command dispatch.
+- target-profile selection;
+- modal onboarding and empty-host view state transitions and command dispatch.
 
 New behavioral tests must fail at their intended assertion before they count as
 evidence. Test output must confirm that each new suite and case ran.
@@ -390,13 +398,13 @@ evidence. Test output must confirm that each new suite and case ran.
 
 - complete desktop migration from a source containing many settings,
   keybindings, snippets, and mixed-compatibility extensions;
-- Start Fresh, Skip, Back, cancel, retry, rollback, crash-resume, rerun, and
+- Skip Import, Skip, Back, cancel, retry, rollback, crash-resume, rerun, and
   non-empty target paths;
 - keyboard-only navigation;
 - normal and narrow desktop windows;
 - light, dark, high-contrast, and reduced-motion configurations;
 - `default` and `compact` fake-list previews and real Projects rows;
-- Add Project, Open Folder as Workbench, and target profile association;
+- Add Project and Open Folder as Workbench;
 - actionable empty-host behavior before the first workbench and after unloading
   the last workbench.
 
@@ -415,8 +423,8 @@ services.
 5. Add recoverable import application and result reporting.
 6. Ship the complete migration flow through **Hucode: Import Setup from Another
    Editor...**.
-7. Ship the full-window flow through **Hucode: Open Onboarding** without making
-   it automatic.
+7. Ship the modal onboarding flow through **Hucode: Open Onboarding** without
+   making it automatic.
 8. Replace upstream first-launch routing and enable the Hucode experience for
    new installations.
 
