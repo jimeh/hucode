@@ -7,13 +7,30 @@ import { fromNow } from '../../../base/common/date.js';
 import { localize } from '../../../nls.js';
 import {
 	EditorMigrationSetupAction,
+	EditorMigrationSetupListPreviewRow,
 	EditorMigrationSetupPanel,
 	EditorMigrationSetupPresentation,
 	EditorMigrationSetupRadioOption,
+	EditorMigrationSetupShortcut,
 	EditorMigrationSetupThemeGroup,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
+import {
+	MAIN_WORKTREE_CONTEXT_VALUE,
+	PROJECT_CONTEXT_VALUE,
+	ProjectSwitcherProjectItem,
+	ProjectSwitcherWorkbenchItem,
+	ProjectSwitcherWorktreeItem,
+	UNPINNED_SECTION,
+	WORKBENCH_CONTEXT_VALUE,
+	WORKTREE_CONTEXT_VALUE,
+	encodeProjectHandle,
+	encodeWorktreeHandle,
+	getProjectSwitcherPresentationFields,
+	getWorktreeItemId,
+} from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
 import { EditorMigrationFlowPhase } from '../migration/editorMigrationFlow.js';
 import { OnboardingAppearanceDraft, OnboardingAppearanceMode, OnboardingAppearanceSnapshot, OnboardingColorScheme, onboardingThemesFor } from './onboardingAppearance.js';
+import { OnboardingDensity, OnboardingOmniShortcut, onboardingDensityLabel } from './onboardingOmni.js';
 import { OnboardingPreviousOutcome, OnboardingSessionState, onboardingOwnsMigrationBack } from './onboardingSession.js';
 
 type OnboardingStep = 'bring' | 'review' | 'meetOmni';
@@ -112,13 +129,124 @@ function panelFor(state: OnboardingSessionState): EditorMigrationSetupPanel {
 		case 'appearance':
 			return appearancePanel(state);
 		case 'meetOmni':
-			return {
-				kind: 'message',
-				id: '',
-				heading: localize('onboarding.meetOmni.heading', "Meet Omni"),
-				lead: localize('onboarding.meetOmni.placeholder', "The Omni introduction arrives in a later step. Finish for Now records onboarding as complete."),
-			};
+			return meetOmniPanel(state);
 	}
+}
+
+/**
+ * The Meet Omni stage: the vocabulary, the illustrative Projects list at the staged density, the
+ * one density switch, and the shortcuts with the chords the host resolved.
+ */
+function meetOmniPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
+	const density: OnboardingDensity = state.density ?? state.omni?.density ?? 'default';
+	const compact = density === 'compact';
+	return {
+		kind: 'meetOmni',
+		id: '',
+		heading: localize('onboarding.meetOmni.heading', "Meet Omni"),
+		lead: localize('onboarding.meetOmni.lead', "Omni is Hucode's outer shell. It keeps your projects and their worktrees in one sidebar and switches between loaded workbenches without opening another window."),
+		glossary: [
+			{ term: localize('onboarding.meetOmni.term.project', "Project"), definition: localize('onboarding.meetOmni.def.project', "A saved Git repository. Hucode discovers its worktrees and nests them beneath it.") },
+			{ term: localize('onboarding.meetOmni.term.worktree', "Worktree"), definition: localize('onboarding.meetOmni.def.worktree', "One checkout belonging to a project. Selecting it opens or activates a workbench for that checkout.") },
+			{ term: localize('onboarding.meetOmni.term.workbench', "Workbench"), definition: localize('onboarding.meetOmni.def.workbench', "A VS Code window hosted inside Omni for one folder, or any saved folder that is not a project worktree.") },
+			{ term: localize('onboarding.meetOmni.term.loaded', "Loaded"), definition: localize('onboarding.meetOmni.def.loaded', "A workbench running in memory, visible or hidden, ready to switch to at once.") },
+			{ term: localize('onboarding.meetOmni.term.dormant', "Dormant"), definition: localize('onboarding.meetOmni.def.dormant', "A workbench Omni intends to keep available but has released; activating it loads it again.") },
+			{ term: localize('onboarding.meetOmni.term.suspend', "Suspend"), definition: localize('onboarding.meetOmni.def.suspend', "Release a workbench's resources while keeping it dormant and eligible to be restored.") },
+			{ term: localize('onboarding.meetOmni.term.unload', "Unload"), definition: localize('onboarding.meetOmni.def.unload', "Release a workbench and mark it as explicitly closed. Its project or catalog entry stays.") },
+		],
+		preview: {
+			label: localize('onboarding.meetOmni.preview', "Example Projects list"),
+			densityLabel: onboardingDensityLabel(density),
+			rows: previewItems().map((item): EditorMigrationSetupListPreviewRow => {
+				const fields = getProjectSwitcherPresentationFields(item, density);
+				return { id: item.id, kind: item.kind, ...fields };
+			}),
+			layout: density,
+		},
+		densityToggle: {
+			id: 'density',
+			label: localize('onboarding.meetOmni.densityToggle', "Use compact worktree and workbench lists"),
+			description: localize('onboarding.meetOmni.densityToggle.detail', "Compact lists show one line per row. Finishing writes this choice to both Omni layout settings."),
+			checked: compact,
+			intent: { type: 'setDensity', density: compact ? 'default' : 'compact' },
+		},
+		shortcuts: (state.omni?.shortcuts ?? []).map(shortcut),
+	};
+}
+
+function shortcut(entry: OnboardingOmniShortcut): EditorMigrationSetupShortcut {
+	return entry.keybinding
+		? { label: entry.label, keybinding: entry.keybinding.label, keybindingAriaLabel: entry.keybinding.ariaLabel }
+		: { label: entry.label, noShortcutText: localize('onboarding.meetOmni.noShortcut', "No keyboard shortcut is assigned. Use the Command Palette.") };
+}
+
+/**
+ * The synthetic rows behind the preview: one project with its root and one linked worktree, and
+ * one arbitrary workbench. They carry the same fields the sidebar's rows do, and the row model
+ * decides which of them each density shows, so a change there changes the preview.
+ */
+function previewItems(): readonly (ProjectSwitcherProjectItem | ProjectSwitcherWorktreeItem | ProjectSwitcherWorkbenchItem)[] {
+	const projectId = 'example';
+	const projectName = 'hucode';
+	const rootPath = '~/Projects/hucode';
+	const linkedPath = '~/Projects/hucode.worktrees/login-form';
+	const workbenchPath = '~/Documents/notes';
+	const project: ProjectSwitcherProjectItem = {
+		id: encodeProjectHandle(projectId, UNPINNED_SECTION),
+		handle: encodeProjectHandle(projectId, UNPINNED_SECTION),
+		kind: 'project',
+		projectId,
+		pinned: false,
+		section: UNPINNED_SECTION,
+		rootPath,
+		hasCustomLabel: false,
+		label: projectName,
+		description: '~/Projects',
+		contextValue: PROJECT_CONTEXT_VALUE,
+	};
+	const worktree = (path: string, isMain: boolean, name: string, branch: string): ProjectSwitcherWorktreeItem => ({
+		id: getWorktreeItemId(projectId, path),
+		handle: encodeWorktreeHandle(projectId, path),
+		kind: 'worktree',
+		projectId,
+		worktreePath: path,
+		isMain,
+		pinned: false,
+		section: UNPINNED_SECTION,
+		isActive: false,
+		hasCustomLabel: false,
+		missingGitWorktree: false,
+		name,
+		branch,
+		path,
+		label: name,
+		description: branch,
+		contextValue: isMain ? MAIN_WORKTREE_CONTEXT_VALUE : WORKTREE_CONTEXT_VALUE,
+	});
+	const workbench: ProjectSwitcherWorkbenchItem = {
+		id: 'workbench:example',
+		handle: 'workbench:example',
+		kind: 'workbench',
+		retainedWorkbenchId: 'example',
+		worktreePath: workbenchPath,
+		desiredState: 'unloaded',
+		hostedWorkbenchState: 'unloaded',
+		isActive: false,
+		order: 0,
+		hasCustomLabel: false,
+		name: 'notes',
+		branch: 'main',
+		path: workbenchPath,
+		label: 'notes',
+		description: 'main',
+		contextValue: WORKBENCH_CONTEXT_VALUE,
+	};
+	return [
+		project,
+		worktree(rootPath, true, localize('onboarding.meetOmni.preview.local', "local"), 'main'),
+		worktree(linkedPath, false, 'login-form', 'feature/login-form'),
+		workbench,
+	];
 }
 
 function bringPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
@@ -154,8 +282,7 @@ function bringPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
 		heading: localize('onboarding.bring.heading', "Bring Your Setup to Hucode"),
 		lead: localize('onboarding.bring.lead', "Import settings, keyboard shortcuts, snippets, and extensions from another editor, or continue without importing."),
 		paragraphs: [
-			// Name the Command Palette entry here once the open command is registered with `f1: true`.
-			localize('onboarding.bring.later', "Do This Later keeps your place, so onboarding reopens on this step when you come back to it."),
+			localize('onboarding.bring.later', "Do This Later keeps your place, so onboarding reopens on this step when you come back to it. You can reopen it at any time with the Hucode: Open Onboarding command in the Command Palette."),
 		],
 		choices,
 	};
@@ -273,6 +400,8 @@ function footerFor(state: OnboardingSessionState): EditorMigrationSetupPresentat
 				lines: [],
 				actions: [
 					...(state.route === 'skipImport' ? [backAction()] : []),
+					action('add-project', localize('onboarding.addProject', "Add Project"), { type: 'addProject' }, 'default', state.busy),
+					action('open-workbench', localize('onboarding.openFolderAsWorkbench', "Open Folder as Workbench"), { type: 'openFolderAsWorkbench' }, 'default', state.busy),
 					action('finish', localize('onboarding.finishForNow', "Finish for Now"), { type: 'finishForNow' }, 'primary', state.busy),
 				],
 			};

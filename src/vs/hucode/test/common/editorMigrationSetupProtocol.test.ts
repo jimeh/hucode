@@ -54,7 +54,11 @@ const EVERY_INTENT: readonly EditorMigrationSetupIntent[] = [
 	{ type: 'selectPreferredTheme', scheme: 'light', themeId: 'Light 2026' },
 	{ type: 'selectPreferredTheme', scheme: 'dark', themeId: 'Dark 2026' },
 	{ type: 'continueStage' },
+	{ type: 'setDensity', density: 'default' },
+	{ type: 'setDensity', density: 'compact' },
 	{ type: 'finishForNow' },
+	{ type: 'addProject' },
+	{ type: 'openFolderAsWorkbench' },
 	{ type: 'startImport' },
 	{ type: 'refreshDiscovery' },
 	{ type: 'selectApplication', applicationId: 'cursor' },
@@ -104,6 +108,8 @@ suite('EditorMigrationSetupProtocol', () => {
 			{ type: 'chooseRoute', route: 1 },
 			{ type: 'selectMode' },
 			{ type: 'selectMode', mode: 'auto' },
+			{ type: 'setDensity' },
+			{ type: 'setDensity', density: 'dense' },
 			{ type: 'selectPreferredTheme', scheme: 'light' },
 			{ type: 'selectPreferredTheme', scheme: 'light', themeId: '' },
 			{ type: 'selectPreferredTheme', scheme: 'hcDark', themeId: 'Dark 2026' },
@@ -159,7 +165,10 @@ suite('EditorMigrationSetupProtocol', () => {
 			selectMode: { phases: ['appearance'], whileBusy: false },
 			selectPreferredTheme: { phases: ['appearance'], whileBusy: false },
 			continueStage: { phases: ['appearance'], whileBusy: false },
+			setDensity: { phases: ['meetOmni'], whileBusy: false },
 			finishForNow: { phases: ['meetOmni'], whileBusy: false },
+			addProject: { phases: ['meetOmni'], whileBusy: false },
+			openFolderAsWorkbench: { phases: ['meetOmni'], whileBusy: false },
 			startImport: { phases: ['recovery', 'results'], whileBusy: false },
 			refreshDiscovery: { phases: ['application'], whileBusy: false },
 			selectApplication: { phases: ['application'], whileBusy: false },
@@ -232,12 +241,15 @@ suite('EditorMigrationSetupProtocol', () => {
 			'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
 		];
 		const ONBOARDING_PHASES: readonly EditorMigrationSetupPhase[] = ['bring', 'appearance', 'meetOmni'];
-		const ONBOARDING_INTENTS: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'finishForNow'];
+		const ONBOARDING_INTENTS: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'setDensity', 'finishForNow', 'addProject', 'openFolderAsWorkbench'];
 		// Each onboarding intent acts only on the one stage that offers it, and never twice: Skip
-		// and Finish for Now end the flow, and a duplicate route choice or Continue would move two stages.
+		// and the three finishes end the flow, and a duplicate route choice or Continue would move two stages.
 		assert.deepStrictEqual(
 			Object.fromEntries(ONBOARDING_INTENTS.map(type => [type, ONBOARDING_PHASES.filter(phase => editorMigrationSetupPhaseAdmits(type, phase, false))])),
-			{ skip: ['bring'], chooseRoute: ['bring'], selectMode: ['appearance'], selectPreferredTheme: ['appearance'], continueStage: ['appearance'], finishForNow: ['meetOmni'] },
+			{
+				skip: ['bring'], chooseRoute: ['bring'], selectMode: ['appearance'], selectPreferredTheme: ['appearance'], continueStage: ['appearance'],
+				setDensity: ['meetOmni'], finishForNow: ['meetOmni'], addProject: ['meetOmni'], openFolderAsWorkbench: ['meetOmni'],
+			},
 		);
 		for (const type of ONBOARDING_INTENTS) {
 			for (const phase of ONBOARDING_PHASES) {
@@ -248,11 +260,12 @@ suite('EditorMigrationSetupProtocol', () => {
 			}
 		}
 		// The route choice is the fork of the whole flow and its screen changes copy between runs,
-		// and the appearance choices name entries of the snapshot's lists; the rest name nothing.
-		for (const type of ['chooseRoute', 'selectMode', 'selectPreferredTheme'] as const) {
+		// the appearance choices name entries of the snapshot's lists, and the density switch names
+		// the value it toggles away from; the rest name nothing.
+		for (const type of ['chooseRoute', 'selectMode', 'selectPreferredTheme', 'setDensity'] as const) {
 			assert.strictEqual(isEditorMigrationSetupRevisionBound(type), true, `${type} names something from its snapshot`);
 		}
-		for (const type of ['skip', 'continueStage', 'finishForNow'] as const) {
+		for (const type of ['skip', 'continueStage', 'finishForNow', 'addProject', 'openFolderAsWorkbench'] as const) {
 			assert.strictEqual(isEditorMigrationSetupRevisionBound(type), false, `${type} names nothing from a snapshot`);
 		}
 		// Migration intents act only where the embedded migration's own phase is showing. Back is
@@ -358,6 +371,17 @@ suite('EditorMigrationSetupProtocol', () => {
 		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes, dark: { ...themes, themes: [{ id: 'Dark 2026' }] } }), false, 'a theme without its label');
 		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes, dark: { ...themes, selectedId: undefined } }), false, 'the renderer marks the selection by id');
 		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [{ ...mode, id: 'auto' }], light: themes, dark: themes }), false, 'a mode the renderer would post back as an unknown mode');
+
+		const preview = { label: 'p', densityLabel: 'Showing default lists.', layout: 'default', rows: [{ id: 'r', kind: 'worktree', name: 'local', branch: 'main', path: '~/x' }] };
+		const toggle = { id: 'density', label: 'Compact', checked: false, intent: { type: 'setDensity', density: 'compact' } };
+		const meetOmni = { kind: 'meetOmni', id: '', heading: 'h', lead: 'l', glossary: [{ term: 't', definition: 'd' }], preview, densityToggle: toggle, shortcuts: [{ label: 's' }] };
+		assert.strictEqual(withPanel(meetOmni), true);
+		assert.strictEqual(withPanel({ ...meetOmni, glossary: [{ term: 't' }] }), false, 'the glossary draws both halves of each entry');
+		assert.strictEqual(withPanel({ ...meetOmni, preview: { ...preview, layout: 'dense' } }), false, 'the renderer lays rows out by the layout');
+		assert.strictEqual(withPanel({ ...meetOmni, preview: { ...preview, rows: [{ id: 'r', kind: 'section', name: 'n' }] } }), false, 'a row kind the renderer has no drawing for');
+		assert.strictEqual(withPanel({ ...meetOmni, preview: { ...preview, densityLabel: undefined } }), false, 'the density is named in text');
+		assert.strictEqual(withPanel({ ...meetOmni, densityToggle: { ...toggle, intent: { type: 'setDensity', density: 'dense' } } }), false, 'a toggle the renderer would post back as an unknown density');
+		assert.strictEqual(withPanel({ ...meetOmni, shortcuts: [{ keybinding: 'K' }] }), false, 'a shortcut without its label');
 	});
 
 	test('refuses a nested action or option the renderer would post straight back', () => {
@@ -438,6 +462,13 @@ suite('EditorMigrationSetupProtocol', () => {
 				modes: [{ id: 'dark', label: 'Dark', description: 'd', checked: true, intent: { type: 'selectMode', mode: 'dark' } }],
 				light: { label: 'l', filterLabel: 'f', listLabel: 'li', noMatchText: 'n', selectedId: 'Light 2026', themes: [{ id: 'Light 2026', label: 'Light 2026' }] },
 				dark: { label: 'l', filterLabel: 'f', listLabel: 'li', noMatchText: 'n', selectedId: '', themes: [] },
+			},
+			{
+				kind: 'meetOmni', id: '', heading: 'Meet Omni', lead: 'l',
+				glossary: [{ term: 'Project', definition: 'A saved Git repository.' }],
+				preview: { label: 'Example', densityLabel: 'Showing compact lists.', layout: 'compact', rows: [{ id: 'p', kind: 'project', name: 'hucode', branch: '~/Projects' }, { id: 'w', kind: 'workbench', name: 'notes', path: '~/notes' }] },
+				densityToggle: { id: 'density', label: 'Compact', description: 'd', checked: true, intent: { type: 'setDensity', density: 'default' } },
+				shortcuts: [{ label: 'Switch', keybinding: '⌘O', keybindingAriaLabel: 'Command+O' }, { label: 'Next', noShortcutText: 'None.' }],
 			},
 		];
 		const kinds = new Set(panels.map(panel => panel.kind));

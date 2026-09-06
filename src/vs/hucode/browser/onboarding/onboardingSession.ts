@@ -21,7 +21,8 @@ import {
 	OnboardingColorScheme,
 	onboardingThemesFor,
 } from './onboardingAppearance.js';
-import { ONBOARDING_RECORD_VERSION, OnboardingRecordRoute, OnboardingStateStore, OnboardingStoredState } from './onboardingStateStore.js';
+import { IOnboardingOmniAuthority, OnboardingDensity, OnboardingOmniAuthority, OnboardingOmniSnapshot, onboardingDensityLabel } from './onboardingOmni.js';
+import { ONBOARDING_RECORD_VERSION, OnboardingRecord, OnboardingRecordRoute, OnboardingStateStore, OnboardingStoredState } from './onboardingStateStore.js';
 
 /**
  * Stages the session presents.
@@ -72,6 +73,13 @@ export interface OnboardingSessionState {
 	 * lifetime and are written only by Continue on the appearance stage.
 	 */
 	readonly appearanceDraft?: OnboardingAppearanceDraft;
+	/** The Omni layout in effect and the shortcuts to mention, taken whenever Meet Omni is entered. */
+	readonly omni?: OnboardingOmniSnapshot;
+	/**
+	 * The staged list density. Seeded from a resumed record or the Omni snapshot, kept across Back,
+	 * and written only by one of the three finishes, and only where it differs from the snapshot.
+	 */
+	readonly density?: OnboardingDensity;
 }
 
 const FIRST_STAGE: OnboardingStage = 'bring';
@@ -99,16 +107,16 @@ export function onboardingOwnsMigrationBack(phase: EditorMigrationFlowPhase): bo
  * phase. Anything else, including no stage at all, lands on the first stage rather than failing
  * to open.
  */
-export function onboardingResumePosition(stored: OnboardingStoredState): { readonly stage: OnboardingStage; readonly route?: OnboardingRoute } {
+export function onboardingResumePosition(stored: OnboardingStoredState): { readonly stage: OnboardingStage; readonly route?: OnboardingRoute; readonly density?: OnboardingDensity } {
 	if (stored.kind !== 'record' || stored.record.status !== 'inProgress') {
 		return { stage: FIRST_STAGE };
 	}
-	const { stage, route } = stored.record;
+	const { stage, route, density } = stored.record;
 	if (stage === 'appearance') {
-		return { stage, route: 'skipImport' };
+		return { stage, route: 'skipImport', density };
 	}
 	if (stage === 'meetOmni' && route !== undefined) {
-		return { stage, route };
+		return { stage, route, density };
 	}
 	return { stage: FIRST_STAGE };
 }
@@ -163,6 +171,7 @@ export class OnboardingSession extends Disposable {
 		private readonly store: OnboardingStateStore,
 		private readonly createMigrationSession: () => EditorMigrationFlowSession,
 		private readonly appearance: IOnboardingAppearanceAuthority,
+		private readonly omni: IOnboardingOmniAuthority,
 		private readonly logService: ILogService,
 		private readonly now: () => number = Date.now,
 	) {
@@ -182,13 +191,19 @@ export class OnboardingSession extends Disposable {
 	initialize(): void {
 		this.stored = this.store.read();
 		const position = onboardingResumePosition(this.stored);
-		this.setState({
+		const state: OnboardingSessionState = {
 			stage: position.stage,
 			route: position.route,
+			density: position.density,
 			busy: false,
 			mode: onboardingModeFor(this.stored),
 			previous: onboardingPreviousOutcome(this.stored),
-		});
+		};
+		if (position.stage === 'meetOmni') {
+			this.enterMeetOmni(state);
+			return;
+		}
+		this.setState(state);
 		if (position.stage === 'appearance') {
 			void this.loadAppearance();
 		}
@@ -356,7 +371,7 @@ export class OnboardingSession extends Disposable {
 				return;
 			}
 		}
-		this.setState({ ...this._state, stage: 'meetOmni', busy: false, error: undefined });
+		this.enterMeetOmni({ ...this._state, busy: false, error: undefined });
 	}
 
 	/**
@@ -377,24 +392,91 @@ export class OnboardingSession extends Disposable {
 			return;
 		}
 		this.disposeMigration();
-		this.setState({ ...this._state, stage: 'meetOmni' });
+		this.enterMeetOmni(this._state);
 	}
 
 	/**
-	 * Ends onboarding from Meet Omni and records the installation as completed.
+	 * Lands on Meet Omni with a fresh Omni snapshot.
 	 *
-	 * A record a newer build owns is never rewritten; the surface still finishes.
+	 * The snapshot is retaken on every entry, so a density changed in Settings between visits is
+	 * what the switch compares against. An existing draft is kept: it is what the user staged, or
+	 * what a resumed record carried; only a first visit seeds it from the snapshot.
 	 */
-	finishForNow(): void {
-		if (this.finished || this._state.stage !== 'meetOmni') {
+	private enterMeetOmni(state: OnboardingSessionState): void {
+		const omni = this.omni.snapshot();
+		this.setState({ ...state, stage: 'meetOmni', omni, density: state.density ?? omni.density });
+	}
+
+	/** Stages a list density. Returns false outside Meet Omni or while a write is in flight. */
+	setDensity(density: OnboardingDensity): boolean {
+		if (this.finished || this._state.stage !== 'meetOmni' || this._state.busy) {
+			return false;
+		}
+		this.setState({ ...this._state, density, announcement: onboardingDensityLabel(density) });
+		return true;
+	}
+
+	/** Ends onboarding from Meet Omni with no handoff. */
+	finishForNow(): Promise<void> {
+		return this.complete();
+	}
+
+	/** Ends onboarding from Meet Omni, then runs Add Project in the Omni shell. */
+	addProject(): Promise<void> {
+		return this.complete(() => this.omni.addProject());
+	}
+
+	/** Ends onboarding from Meet Omni, then runs Add Workbench in the Omni shell. */
+	openFolderAsWorkbench(): Promise<void> {
+		return this.complete(() => this.omni.openFolderAsWorkbench());
+	}
+
+	/**
+	 * The one way out of Meet Omni: writes the density where it differs from the snapshot, records
+	 * the installation as completed, finishes, and only then runs the handoff.
+	 *
+	 * The order matters. The surface must be gone before a handoff command opens its dialog, so
+	 * that dialog is not under the modal; and the command runs after onboarding is complete, so a
+	 * command that fails or is cancelled is logged rather than shown on a stage that no longer
+	 * exists. A failed density write stays on Meet Omni with its error and records nothing. A record
+	 * a newer build owns is never rewritten; the surface still finishes.
+	 */
+	private async complete(handoff?: () => Promise<void>): Promise<void> {
+		if (this.finished || this._state.stage !== 'meetOmni' || this._state.busy) {
 			return;
+		}
+		const { omni, density } = this._state;
+		if (omni && density !== undefined && density !== omni.density) {
+			const generation = ++this.generation;
+			this.setState({ ...this._state, busy: true, error: undefined });
+			try {
+				await this.omni.applyDensity(density);
+			} catch (error) {
+				if (this.isCurrent(generation)) {
+					this.logService.error(error instanceof Error ? error : String(error));
+					const message = errorMessage(error);
+					this.setState({ ...this._state, busy: false, error: message, announcement: message });
+				}
+				return;
+			}
+			if (!this.isCurrent(generation)) {
+				return;
+			}
 		}
 		this.finished = true;
 		if (this.stored?.kind === 'record') {
-			this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'completed', route: this._state.route, completedAt: this.now() });
+			const record: OnboardingRecord = { version: ONBOARDING_RECORD_VERSION, status: 'completed', route: this._state.route, density, completedAt: this.now() };
+			this.store.write(record);
 		}
 		this.disposeMigration();
 		this._onDidFinish.fire();
+		if (handoff) {
+			try {
+				await handoff();
+			} catch (error) {
+				this.logService.error(error instanceof Error ? error : String(error));
+			}
+		}
 	}
 
 	/**
@@ -433,7 +515,7 @@ export class OnboardingSession extends Disposable {
 		if (this.finished || !this.stored || this.stored.kind === 'superseded' || this._state.mode === 'rerun') {
 			return;
 		}
-		this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: this._state.stage, route: this._state.route });
+		this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: this._state.stage, route: this._state.route, density: this._state.density });
 	}
 
 	private disposeMigration(): void {
@@ -492,6 +574,7 @@ class OnboardingService implements IOnboardingService {
 			new OnboardingStateStore(this.storageService),
 			() => this.migrationFlowService.createSession(),
 			this.instantiationService.createInstance(OnboardingAppearanceAuthority),
+			this.instantiationService.createInstance(OnboardingOmniAuthority),
 			this.logService,
 		);
 	}

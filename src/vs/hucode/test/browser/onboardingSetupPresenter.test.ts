@@ -13,6 +13,7 @@ import { InMemoryStorageService } from '../../../platform/storage/common/storage
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { SetupWebviewIntentOutcome } from '../../browser/migration/editorMigrationSetupPresenter.js';
 import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
+import { IOnboardingOmniAuthority, OnboardingDensity, OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { OnboardingSetupPresenter } from '../../browser/onboarding/onboardingSetupPresenter.js';
 import { OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
@@ -25,15 +26,16 @@ suite('OnboardingSetupPresenter', () => {
 		const storage = disposables.add(new InMemoryStorageService());
 		const migrations: MigrationStub[] = [];
 		const appearance = new AppearanceStub();
+		const omni = new OmniStub();
 		const session = disposables.add(new OnboardingSession(new OnboardingStateStore(storage), () => {
 			const migration = new MigrationStub();
 			migrations.push(migration);
 			return migration as unknown as EditorMigrationFlowSession;
-		}, appearance, new NullLogService()));
+		}, appearance, omni, new NullLogService()));
 		session.initialize();
 		const presenter = new OnboardingSetupPresenter(session);
 		const migration = () => migrations[0];
-		return { session, presenter, migration, appearance };
+		return { session, presenter, migration, appearance, omni };
 	}
 
 	test('drives the onboarding stages from its own intents and refuses migration intents outside them', async () => {
@@ -102,6 +104,40 @@ suite('OnboardingSetupPresenter', () => {
 		await timeout(0);
 		assert.deepStrictEqual(appearance.calls.map(call => call[0]), ['snapshot', 'apply']);
 		assert.strictEqual(presenter.presentation(2).phase, 'meetOmni');
+	});
+
+	test('stages the density on Meet Omni and hands each finish to its own session method', async () => {
+		const finish = async (type: 'finishForNow' | 'addProject' | 'openFolderAsWorkbench') => {
+			const { session, presenter, omni } = setup();
+			const outcomes: Record<string, SetupWebviewIntentOutcome> = {};
+			outcomes.densityInBring = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, true);
+			outcomes.finishInBring = presenter.handleIntent({ type }, true);
+			presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, true);
+			await timeout(0);
+			presenter.handleIntent({ type: 'continueStage' }, true);
+			await timeout(0);
+			assert.strictEqual(session.state.stage, 'meetOmni');
+			outcomes.staleDensity = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, false);
+			outcomes.density = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, true);
+			outcomes.finish = presenter.handleIntent({ type }, true);
+			outcomes.duplicate = presenter.handleIntent({ type }, true);
+			await timeout(0);
+			return { outcomes, calls: omni.calls, density: session.state.density };
+		};
+		const expected = (command?: string) => ({
+			outcomes: { densityInBring: 'superseded', finishInBring: 'superseded', staleDensity: 'staleRevision', density: 'accepted', finish: 'accepted', duplicate: 'superseded' },
+			calls: [['snapshot'], ['applyDensity', 'compact'], ...(command ? [[command]] : [])],
+			density: 'compact',
+		});
+		assert.deepStrictEqual({
+			finishForNow: await finish('finishForNow'),
+			addProject: await finish('addProject'),
+			openFolderAsWorkbench: await finish('openFolderAsWorkbench'),
+		}, {
+			finishForNow: expected(),
+			addProject: expected('addProject'),
+			openFolderAsWorkbench: expected('openFolderAsWorkbench'),
+		});
 	});
 
 	test('answers Back on the migrate route\'s Meet Omni as unresolvable, not as a stage move', async () => {
@@ -211,6 +247,27 @@ class AppearanceStub implements IOnboardingAppearanceAuthority {
 
 	async apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
 		this.calls.push(['apply', current, draft]);
+	}
+}
+
+class OmniStub implements IOnboardingOmniAuthority {
+	readonly calls: (readonly unknown[])[] = [];
+
+	snapshot(): OnboardingOmniSnapshot {
+		this.calls.push(['snapshot']);
+		return { density: 'default', shortcuts: [] };
+	}
+
+	async applyDensity(density: OnboardingDensity): Promise<void> {
+		this.calls.push(['applyDensity', density]);
+	}
+
+	async addProject(): Promise<void> {
+		this.calls.push(['addProject']);
+	}
+
+	async openFolderAsWorkbench(): Promise<void> {
+		this.calls.push(['openFolderAsWorkbench']);
 	}
 }
 

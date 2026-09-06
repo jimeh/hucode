@@ -12,6 +12,7 @@ import { InMemoryStorageService, StorageScope } from '../../../platform/storage/
 import { EditorInputCapabilities } from '../../../workbench/common/editor.js';
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { IOnboardingAppearanceAuthority } from '../../browser/onboarding/onboardingAppearance.js';
+import { IOnboardingOmniAuthority } from '../../browser/onboarding/onboardingOmni.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 import { EditorMigrationEditorInput } from '../../electron-browser/migration/editorMigrationEditorInput.js';
@@ -53,7 +54,7 @@ suite('OnboardingEditorInput', () => {
 		// the singleton is merely hidden. The session is not added to the suite's disposables on
 		// purpose: the leak tracker proves the input disposed it.
 		const storage = disposables.add(new InMemoryStorageService());
-		const session = new OnboardingSession(new OnboardingStateStore(storage), () => { throw new Error('no migration on this path'); }, noAppearance(), new NullLogService());
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => { throw new Error('no migration on this path'); }, noAppearance(), noOmni(), new NullLogService());
 		session.initialize();
 		const input = new OnboardingEditorInput();
 		input.attachSession(session);
@@ -79,7 +80,7 @@ suite('OnboardingEditorInput', () => {
 			requestCancellation(): void { events.push('requestCancellation'); }
 			override dispose(): void { events.push('dispose'); super.dispose(); }
 		}();
-		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession, noAppearance(), new NullLogService());
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession, noAppearance(), noOmni(), new NullLogService());
 		session.initialize();
 		session.chooseRoute('migrate');
 		const input = new OnboardingEditorInput();
@@ -97,5 +98,15 @@ function noAppearance(): IOnboardingAppearanceAuthority {
 	return {
 		snapshot: () => Promise.reject(new Error('no appearance on this path')),
 		apply: () => Promise.reject(new Error('no appearance on this path')),
+	};
+}
+
+function noOmni(): IOnboardingOmniAuthority {
+	const refuse = () => Promise.reject(new Error('no Omni on this path'));
+	return {
+		snapshot: () => ({ density: 'default', shortcuts: [] }),
+		applyDensity: refuse,
+		addProject: refuse,
+		openFolderAsWorkbench: refuse,
 	};
 }

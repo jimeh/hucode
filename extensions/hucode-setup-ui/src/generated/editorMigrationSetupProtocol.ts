@@ -13,7 +13,7 @@
  */
 
 /** Bumped whenever a message shape changes. Both sides reject any other value. */
-export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 4;
+export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 5;
 
 /** The four import categories, repeated here so the protocol stays dependency-free. */
 export const EDITOR_MIGRATION_SETUP_CATEGORIES = ['settings', 'keybindings', 'snippets', 'extensions'] as const;
@@ -64,6 +64,9 @@ export type EditorMigrationSetupAppearanceMode = 'system' | 'light' | 'dark';
 /** Which preferred theme a `selectPreferredTheme` intent names. */
 export type EditorMigrationSetupColorScheme = 'light' | 'dark';
 
+/** The Projects list density Meet Omni previews and writes. */
+export type EditorMigrationSetupDensity = 'default' | 'compact';
+
 export type EditorMigrationSetupSectionStatus = 'attention' | 'ok' | 'neutral';
 
 /**
@@ -83,10 +86,10 @@ export type EditorMigrationSetupDecisionChoice = 'import' | 'preserveTarget';
  *
  * Every variant except `ready` and `close` maps one-for-one onto a public user-action method of a
  * session: the migration intents onto `EditorMigrationFlowSession`, and `skip`, `chooseRoute`,
- * `selectMode`, `selectPreferredTheme`, `continueStage`, and `finishForNow` onto
- * `OnboardingSession`. `back` is the one intent both sessions answer, because onboarding routes
- * it by stage: to its own stage machine outside the embedded migration, and to the migration
- * session inside it.
+ * `selectMode`, `selectPreferredTheme`, `continueStage`, `setDensity`, `finishForNow`,
+ * `addProject`, and `openFolderAsWorkbench` onto `OnboardingSession`. `back` is the one intent
+ * both sessions answer, because onboarding routes it by stage: to its own stage machine outside
+ * the embedded migration, and to the migration session inside it.
  * `editorMigrationSetupWebviewHost.test.ts` fails when one side gains an action without the other.
  */
 export type EditorMigrationSetupIntent =
@@ -97,7 +100,10 @@ export type EditorMigrationSetupIntent =
 	| { readonly type: 'selectMode'; readonly mode: EditorMigrationSetupAppearanceMode }
 	| { readonly type: 'selectPreferredTheme'; readonly scheme: EditorMigrationSetupColorScheme; readonly themeId: string }
 	| { readonly type: 'continueStage' }
+	| { readonly type: 'setDensity'; readonly density: EditorMigrationSetupDensity }
 	| { readonly type: 'finishForNow' }
+	| { readonly type: 'addProject' }
+	| { readonly type: 'openFolderAsWorkbench' }
 	| { readonly type: 'startImport' }
 	| { readonly type: 'refreshDiscovery' }
 	| { readonly type: 'selectApplication'; readonly applicationId: string }
@@ -147,6 +153,9 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	// meaning depends on the preferences shown beside it.
 	'selectMode',
 	'selectPreferredTheme',
+	// The density switch names the value it was toggled from; a snapshot with the other value
+	// showing would flip it back to what the user just left.
+	'setDensity',
 	/*
 	 * Two identifier-less actions are bound as well, because the phase guard alone cannot protect
 	 * what they decide.
@@ -204,7 +213,12 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	selectMode: { phases: ['appearance'], whileBusy: false },
 	selectPreferredTheme: { phases: ['appearance'], whileBusy: false },
 	continueStage: { phases: ['appearance'], whileBusy: false },
+	// The density is a draft until one of the three finishes writes it; none may start while a
+	// write is in flight, and each ends the flow, so a duplicate must not record it twice.
+	setDensity: { phases: ['meetOmni'], whileBusy: false },
 	finishForNow: { phases: ['meetOmni'], whileBusy: false },
+	addProject: { phases: ['meetOmni'], whileBusy: false },
+	openFolderAsWorkbench: { phases: ['meetOmni'], whileBusy: false },
 
 	// Discovery. Both restart discovery from scratch, so a duplicate would discard the first run.
 	startImport: { phases: ['recovery', 'results'], whileBusy: false },
@@ -494,7 +508,54 @@ export type EditorMigrationSetupPanel =
 		readonly modes: readonly EditorMigrationSetupRadioOption[];
 		readonly light: EditorMigrationSetupThemeGroup;
 		readonly dark: EditorMigrationSetupThemeGroup;
+	}
+	| {
+		readonly kind: 'meetOmni'; readonly id: string; readonly heading: string; readonly lead: string;
+		readonly glossary: readonly EditorMigrationSetupGlossaryEntry[];
+		readonly preview: EditorMigrationSetupListPreview;
+		/** The one switch of the stage; its intent carries the density it toggles to. */
+		readonly densityToggle: EditorMigrationSetupRadioOption;
+		readonly shortcuts: readonly EditorMigrationSetupShortcut[];
 	};
+
+/** One Omni term and its definition, drawn as a definition list. */
+export interface EditorMigrationSetupGlossaryEntry {
+	readonly term: string;
+	readonly definition: string;
+}
+
+/**
+ * One row of the illustrative Projects list.
+ *
+ * The host resolves the fields through the shared row model for the density on show, so the
+ * renderer draws exactly what it is given and never decides which field a density hides.
+ */
+export interface EditorMigrationSetupListPreviewRow {
+	readonly id: string;
+	readonly kind: 'project' | 'worktree' | 'workbench';
+	readonly name: string;
+	readonly branch?: string;
+	readonly path?: string;
+}
+
+/** The non-interactive Projects list preview, with its density named in text. */
+export interface EditorMigrationSetupListPreview {
+	readonly label: string;
+	readonly densityLabel: string;
+	readonly rows: readonly EditorMigrationSetupListPreviewRow[];
+	readonly layout: EditorMigrationSetupDensity;
+}
+
+/**
+ * One command Meet Omni mentions. The host resolves the chord for the running platform; when
+ * none is bound, `noShortcutText` names the fallback instead of an empty chord.
+ */
+export interface EditorMigrationSetupShortcut {
+	readonly label: string;
+	readonly keybinding?: string;
+	readonly keybindingAriaLabel?: string;
+	readonly noShortcutText?: string;
+}
 
 /** One way out of the `bring` stage. The renderer posts `chooseRoute` with the identifier. */
 export interface EditorMigrationSetupRouteChoice {
@@ -596,6 +657,10 @@ function isColorScheme(value: unknown): value is EditorMigrationSetupColorScheme
 	return value === 'light' || value === 'dark';
 }
 
+function isDensity(value: unknown): value is EditorMigrationSetupDensity {
+	return value === 'default' || value === 'compact';
+}
+
 /** Parses one renderer intent. Returns `undefined` for anything outside the closed union. */
 export function parseEditorMigrationSetupIntent(value: unknown): EditorMigrationSetupIntent | undefined {
 	if (!isRecord(value)) {
@@ -607,6 +672,8 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 		case 'skip':
 		case 'continueStage':
 		case 'finishForNow':
+		case 'addProject':
+		case 'openFolderAsWorkbench':
 		case 'startImport':
 		case 'refreshDiscovery':
 		case 'continueFromProfile':
@@ -624,6 +691,8 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 			return isOnboardingRoute(value.route) ? { type: 'chooseRoute', route: value.route } : undefined;
 		case 'selectMode':
 			return isAppearanceMode(value.mode) ? { type: 'selectMode', mode: value.mode } : undefined;
+		case 'setDensity':
+			return isDensity(value.density) ? { type: 'setDensity', density: value.density } : undefined;
 		case 'selectPreferredTheme':
 			return isColorScheme(value.scheme) && isNonEmptyString(value.themeId)
 				? { type: 'selectPreferredTheme', scheme: value.scheme, themeId: value.themeId }
@@ -802,6 +871,31 @@ function isThemeGroup(value: unknown): boolean {
 		&& isArrayOf(value.themes, isThemeOption);
 }
 
+function isGlossaryEntry(value: unknown): boolean {
+	return hasStrings(value, ['term', 'definition']);
+}
+
+const PREVIEW_ROW_KINDS: readonly string[] = ['project', 'worktree', 'workbench'];
+
+function isListPreviewRow(value: unknown): boolean {
+	return hasStrings(value, ['id', 'kind', 'name'])
+		&& PREVIEW_ROW_KINDS.includes(value.kind as string)
+		&& isOptionalString(value.branch)
+		&& isOptionalString(value.path);
+}
+
+/** The preview the renderer maps over and lays out by `layout`. */
+function isListPreview(value: unknown): boolean {
+	return hasStrings(value, ['label', 'densityLabel'])
+		&& isDensity(value.layout)
+		&& isArrayOf(value.rows, isListPreviewRow);
+}
+
+function isShortcut(value: unknown): boolean {
+	return hasStrings(value, ['label'])
+		&& [value.keybinding, value.keybindingAriaLabel, value.noShortcutText].every(isOptionalString);
+}
+
 function isFileCategoryArray(value: unknown): boolean {
 	return isArrayOf(value, entry => typeof entry === 'string' && (EDITOR_MIGRATION_SETUP_FILE_CATEGORIES as readonly string[]).includes(entry));
 }
@@ -872,6 +966,11 @@ const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>)
 		&& isArrayOf(panel.modes, option => isRadioOption(option) && isAppearanceMode((option as Record<string, unknown>).id))
 		&& isThemeGroup(panel.light)
 		&& isThemeGroup(panel.dark),
+	meetOmni: panel => hasStrings(panel, ['lead'])
+		&& isArrayOf(panel.glossary, isGlossaryEntry)
+		&& isListPreview(panel.preview)
+		&& isRadioOption(panel.densityToggle)
+		&& isArrayOf(panel.shortcuts, isShortcut),
 };
 
 /** Every panel kind is known, and its own required fields are present. */

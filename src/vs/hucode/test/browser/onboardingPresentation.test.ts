@@ -10,6 +10,7 @@ import { EditorMigrationSetupPresentation, isEditorMigrationSetupPresentation } 
 import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
 import { OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
+import { OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { onboardingPresentation } from '../../browser/onboarding/onboardingPresentation.js';
 import { OnboardingSessionState } from '../../browser/onboarding/onboardingSession.js';
 
@@ -36,8 +37,8 @@ suite('OnboardingPresentation', () => {
 			heading: panel.heading,
 			choices: panel.kind === 'bring' ? panel.choices.map(choice => [choice.id, choice.label]) : undefined,
 			paragraphs: panel.kind === 'bring' ? panel.paragraphs.length : undefined,
-			// The open command is not in the palette yet, so no copy may promise it.
-			mentionsPalette: panel.kind === 'bring' ? /Command Palette/.test(panel.paragraphs.join(' ')) : undefined,
+			// The open command is in the palette, and the Do This Later copy says so.
+			mentionsPalette: panel.kind === 'bring' ? /Hucode: Open Onboarding.*Command Palette/.test(panel.paragraphs.join(' ')) : undefined,
 			footer: presentation.footer.actions.map(action => [action.label, action.intent, action.disabled]),
 		};
 	}
@@ -55,7 +56,7 @@ suite('OnboardingPresentation', () => {
 			heading: 'Bring Your Setup to Hucode',
 			choices: [['migrate', 'Import from Another Editor'], ['skipImport', 'Skip Import']],
 			paragraphs: 1,
-			mentionsPalette: false,
+			mentionsPalette: true,
 			footer: [['Skip', { type: 'skip' }, false], ['Do This Later', { type: 'close' }, false]],
 		});
 	});
@@ -266,10 +267,11 @@ suite('OnboardingPresentation', () => {
 		});
 	});
 
-	test('presents the Meet Omni placeholder with Back only on the Skip Import route', () => {
-		const skipImport = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport' }), 5));
-		const migrate = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate' }), 5));
-		assert.deepStrictEqual({ skipImport, migrateFooter: migrate.footer }, {
+	test('presents Meet Omni with the three finishes, and Back only on the Skip Import route', () => {
+		const skipImport = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot(false) }), 5));
+		const migrate = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot(false) }), 5));
+		const busy = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot(false), busy: true }), 5));
+		assert.deepStrictEqual({ skipImport, migrateFooter: migrate.footer, busyFooter: busy.footer }, {
 			skipImport: {
 				revision: 5,
 				route: 'onboarding',
@@ -278,17 +280,93 @@ suite('OnboardingPresentation', () => {
 				steps: [['bring', false], ['review', false], ['meetOmni', true]],
 				sections: 0,
 				scopeKey: 'onboarding|meetOmni|first',
-				panelKind: 'message',
+				panelKind: 'meetOmni',
 				heading: 'Meet Omni',
 				choices: undefined,
 				paragraphs: undefined,
 				mentionsPalette: undefined,
-				footer: [['Back', { type: 'back' }, false], ['Finish for Now', { type: 'finishForNow' }, false]],
+				footer: [
+					['Back', { type: 'back' }, false],
+					['Add Project', { type: 'addProject' }, false],
+					['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, false],
+					['Finish for Now', { type: 'finishForNow' }, false],
+				],
 			},
-			migrateFooter: [['Finish for Now', { type: 'finishForNow' }, false]],
+			migrateFooter: [
+				['Add Project', { type: 'addProject' }, false],
+				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, false],
+				['Finish for Now', { type: 'finishForNow' }, false],
+			],
+			// Back stays usable during the density write; the finishes wait for it.
+			busyFooter: [
+				['Add Project', { type: 'addProject' }, true],
+				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, true],
+				['Finish for Now', { type: 'finishForNow' }, true],
+			],
+		});
+	});
+
+	test('previews the Projects list through the shared row model at the staged density', () => {
+		const panel = (density: 'default' | 'compact' | undefined) => {
+			const result = onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot(true), density }), 1).panels[0];
+			assert.strictEqual(result.kind, 'meetOmni');
+			return result;
+		};
+		const byDefault = panel('default');
+		const compact = panel('compact');
+		const rows = (result: typeof byDefault) => result.preview.rows.map(row => [row.kind, row.name, row.branch, row.path]);
+		assert.deepStrictEqual({
+			glossary: byDefault.glossary.map(entry => entry.term),
+			definitionsNonEmpty: byDefault.glossary.every(entry => entry.definition.length > 0),
+			previewLabel: byDefault.preview.label,
+			defaultRows: rows(byDefault),
+			compactRows: rows(compact),
+			defaultView: [byDefault.preview.layout, byDefault.preview.densityLabel, byDefault.densityToggle.checked, byDefault.densityToggle.intent],
+			compactView: [compact.preview.layout, compact.preview.densityLabel, compact.densityToggle.checked, compact.densityToggle.intent],
+			toggleLabel: byDefault.densityToggle.label,
+			// With no draft yet the snapshot's density is what shows.
+			unseeded: panel(undefined).preview.layout,
+			shortcuts: byDefault.shortcuts,
+		}, {
+			glossary: ['Project', 'Worktree', 'Workbench', 'Loaded', 'Dormant', 'Suspend', 'Unload'],
+			definitionsNonEmpty: true,
+			previewLabel: 'Example Projects list',
+			// Two-line rows keep every field; the project row has no path of its own.
+			defaultRows: [
+				['project', 'hucode', '~/Projects', undefined],
+				['worktree', 'local', 'main', '~/Projects/hucode'],
+				['worktree', 'login-form', 'feature/login-form', '~/Projects/hucode.worktrees/login-form'],
+				['workbench', 'notes', 'main', '~/Documents/notes'],
+			],
+			// Compact worktree rows drop the path and compact workbench rows drop the branch,
+			// exactly as `getProjectSwitcherPresentationFields` decides for the sidebar.
+			compactRows: [
+				['project', 'hucode', '~/Projects', undefined],
+				['worktree', 'local', 'main', undefined],
+				['worktree', 'login-form', 'feature/login-form', undefined],
+				['workbench', 'notes', undefined, '~/Documents/notes'],
+			],
+			defaultView: ['default', 'Showing default lists.', false, { type: 'setDensity', density: 'compact' }],
+			compactView: ['compact', 'Showing compact lists.', true, { type: 'setDensity', density: 'default' }],
+			toggleLabel: 'Use compact worktree and workbench lists',
+			unseeded: 'compact',
+			shortcuts: [
+				{ label: 'Switch Workbench', keybinding: '⌘O', keybindingAriaLabel: 'Command+O' },
+				{ label: 'Quick Switch Loaded Workbench', noShortcutText: 'No keyboard shortcut is assigned. Use the Command Palette.' },
+			],
 		});
 	});
 });
+
+function omniSnapshot(compact: boolean): OnboardingOmniSnapshot {
+	return {
+		density: compact ? 'compact' : 'default',
+		shortcuts: [
+			{ commandId: 'hucode.projectSwitcher.switchWorktree', label: 'Switch Workbench', keybinding: { label: '⌘O', ariaLabel: 'Command+O' } },
+			{ commandId: 'hucode.projectSwitcher.quickSwitchLoadedWorktree', label: 'Quick Switch Loaded Workbench' },
+		],
+	};
+}
 
 function appearanceSnapshot(): OnboardingAppearanceSnapshot {
 	return {

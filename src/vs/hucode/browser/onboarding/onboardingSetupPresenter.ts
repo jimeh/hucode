@@ -77,8 +77,16 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 			case 'continueStage':
 				void this.session.continueStage();
 				return 'accepted';
+			case 'setDensity':
+				return this.session.setDensity(intent.density) ? 'accepted' : 'unresolvable';
 			case 'finishForNow':
-				this.session.finishForNow();
+				void this.session.finishForNow();
+				return 'accepted';
+			case 'addProject':
+				void this.session.addProject();
+				return 'accepted';
+			case 'openFolderAsWorkbench':
+				void this.session.openFolderAsWorkbench();
 				return 'accepted';
 			case 'back':
 				return this.session.back() ? 'accepted' : 'unresolvable';

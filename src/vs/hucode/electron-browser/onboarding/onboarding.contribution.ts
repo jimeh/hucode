@@ -44,9 +44,7 @@ class OpenOnboardingAction extends Action2 {
 		super({
 			id: OPEN_ONBOARDING_COMMAND_ID,
 			title: localize2('onboarding.command', "Hucode: Open Onboarding"),
-			// Hidden from the Command Palette until the flow has its route content; the command
-			// itself is complete so the host can be exercised end to end.
-			f1: false,
+			f1: true,
 		});
 	}
 
