@@ -59,10 +59,13 @@ The change is complete when:
   final handoff. During the migration route it embeds a session created through
   `IEditorMigrationFlowService.createSession()` and forwards its state and
   intents unchanged. It never reaches into migration services directly.
-- **One renderer, two routes.** The onboarding route lives in the reserved
-  `extensions/hucode-setup-ui/src/onboarding/` entry point and reuses the
-  setup shell, section rail, panels, feedback, and collection components. The
-  build gains a second bundle entry; the host chooses which script to load.
+- **One renderer, one bundle, two routes.** Onboarding-only components live in
+  the reserved `extensions/hucode-setup-ui/src/onboarding/` directory and reuse
+  the setup shell, section rail, panels, feedback, and collection components.
+  There is no second bundle entry: the shared webview esbuild path has no code
+  splitting, so a second entry would duplicate React and every shared component,
+  and its hash-named chunks could not be probed by the host's fixed asset list.
+  The `route` field on every snapshot selects behaviour instead.
 - **The fake Projects list is illustrative.** It shows what the real Projects
   sidebar looks like in each density using the renderer's own React components
   and palette. It does not share DOM, CSS, or the native row renderer with the
@@ -106,9 +109,9 @@ flowchart LR
     O --> K[Configuration, theme, and command services]
 ```
 
-The webview host stays a deep boundary. It gains the ability to serve a
-different renderer entry and a wider protocol, but asset probing, CSP, revision
-binding, coalescing, and disposal do not change.
+The webview host stays a deep boundary. It is generalized around a presenter
+that owns the session behind the snapshot and a wider protocol, but asset
+probing, CSP, revision binding, coalescing, and disposal do not change.
 
 ### Ownership
 
@@ -132,7 +135,7 @@ The onboarding session is one explicit state machine with these stages:
 
 | Stage | Content | Continue | Back |
 | --- | --- | --- | --- |
-| `bring` | Ranked sources with Skip Import and explicit `.code-profile` selection at equal prominence, plus Do This Later | Chosen route | None |
+| `bring` | Import from another editor and Skip Import at equal prominence, plus Do This Later | Chosen route | None |
 | `migrate` | Embedded migration phases `application` through `results` | After acknowledged results | Migration Back, then to `bring` from its first phase |
 | `appearance` | Mode and preferred light and dark themes | `meetOmni` | `bring` |
 | `meetOmni` | Vocabulary, fake Projects list, density toggle, final actions | Finish action | Previous route stage |
@@ -157,8 +160,9 @@ Rules that keep the routes distinct:
 ### Reopen behaviour
 
 When the record says `completed` or `skipped`, the `bring` stage opens in a
-rerun mode. It shows any completed migration operation from the durable journal
-as a summary line, keeps Skip Import and Do This Later, and labels the import
+rerun mode. It summarizes the earlier outcome from the record's `route` and
+`completedAt`, because an acknowledged migration operation is removed from the
+durable journal, keeps Skip Import and Do This Later, and labels the import
 action as starting a new import. Nothing runs automatically. When the record
 says `inProgress`, the session restores the recorded stage and drafts. A record
 with a newer schema version than the running app is treated as `superseded`
@@ -269,7 +273,8 @@ identifiers. The migration journal remains the source for operation summaries.
 
 ## Implementation sequence
 
-Each step is one reviewable pull request with its own tests.
+The whole issue ships in one pull request. Each step below is one commit with
+its own tests, so the branch history stays reviewable step by step.
 
 1. **Host and state.** Add the onboarding session with the `bring` stage and
    Do This Later, the state store, the modal input and pane, the command, the
@@ -296,8 +301,9 @@ Each step is one reviewable pull request with its own tests.
    smoke to cover the onboarding route, and record the outcome in the product
    plan.
 
-Steps 2, 3, and 4 do not depend on each other and can proceed in parallel
-after step 1.
+Step 2 also builds the complete stage skeleton, with placeholder panels for
+`appearance` and `meetOmni`, so steps 3 and 4 fill panels and writes rather
+than navigation.
 
 ## Verification strategy
 
@@ -365,7 +371,9 @@ and the desktop Omni smoke.
 - Routing a new installation into onboarding, replacing upstream welcome
   contributions, or any change to startup. That is #205.
 - Serve-web onboarding.
-- Additional source adapters or import categories.
+- Additional source adapters or import categories, including explicit
+  `.code-profile` file selection, which the migration system does not support
+  today.
 - A shared DOM or CSS between the fake list and the Projects sidebar.
 - Associating a newly added project or workbench with a non-Default target
   profile. Deferred until the per-project versus per-worktree semantics and a
