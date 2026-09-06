@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.81 - 2026-09-06
+
+### Features
+
+- **migration:** add the reusable editor setup import command (#217)
+
+### Bug Fixes
+
+- **omni:** hide unusable modal move action (#223)
+
 ## 0.0.80 - 2026-09-03
 
 ### Features
