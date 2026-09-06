@@ -4,24 +4,27 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import { InMemoryStorageService, StorageScope, StorageTarget } from '../../../platform/storage/common/storage.js';
 import { EditorMigrationFlowPhase, EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
+import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
 import { OnboardingSession, OnboardingSessionState, bindOnboardingDismissal } from '../../browser/onboarding/onboardingSession.js';
 import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 
 suite('OnboardingSession', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function setup(raw?: string, options: { readonly acknowledged?: boolean } = {}) {
+	function setup(raw?: string, options: { readonly acknowledged?: boolean; readonly manualAppearance?: boolean } = {}) {
 		const storage = disposables.add(new InMemoryStorageService());
 		if (raw !== undefined) {
 			storage.store(ONBOARDING_STATE_STORAGE_KEY, raw, StorageScope.APPLICATION, StorageTarget.MACHINE);
 		}
 		const migrations: MigrationStub[] = [];
+		const appearance = new AppearanceStub(options.manualAppearance ?? false);
 		const session = disposables.add(new OnboardingSession(
 			new OnboardingStateStore(storage),
 			() => {
@@ -29,6 +32,8 @@ suite('OnboardingSession', () => {
 				migrations.push(migration);
 				return migration as unknown as EditorMigrationFlowSession;
 			},
+			appearance,
+			new NullLogService(),
 			() => 1_700_000_000_000,
 		));
 		const finished: number[] = [];
@@ -38,7 +43,16 @@ suite('OnboardingSession', () => {
 		session.initialize();
 		const stored = () => storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION);
 		const position = () => ({ stage: session.state.stage, route: session.state.route });
-		return { session, stored, finished, changes, migrations, position };
+		/** What the appearance stage shows and has staged, in one comparable shape. */
+		const appearanceView = () => ({
+			stage: session.state.stage,
+			busy: session.state.busy,
+			loaded: session.state.appearance !== undefined,
+			draft: session.state.appearanceDraft,
+			error: session.state.error,
+			announcement: session.state.announcement,
+		});
+		return { session, stored, finished, changes, migrations, position, appearance, appearanceView };
 	}
 
 	test('opens in first mode for a fresh or resumable record and rerun mode for an ended one', () => {
@@ -99,12 +113,13 @@ suite('OnboardingSession', () => {
 		});
 	});
 
-	test('Skip Import opens the appearance stage without creating a migration session', () => {
+	test('Skip Import opens the appearance stage without creating a migration session', async () => {
 		const { session, migrations, position } = setup();
 
 		session.chooseRoute('skipImport');
 		assert.deepStrictEqual(position(), { stage: 'appearance', route: 'skipImport' });
-		session.continueStage();
+		await timeout(0);
+		await session.continueStage();
 		assert.deepStrictEqual(position(), { stage: 'meetOmni', route: 'skipImport' });
 		assert.deepStrictEqual(migrations, []);
 
@@ -190,10 +205,11 @@ suite('OnboardingSession', () => {
 		assert.strictEqual(migrations[0].disposed, false);
 	});
 
-	test('Finish for Now records completion with the route and the injected clock, once', () => {
+	test('Finish for Now records completion with the route and the injected clock, once', async () => {
 		const skipImport = setup();
 		skipImport.session.chooseRoute('skipImport');
-		skipImport.session.continueStage();
+		await timeout(0);
+		await skipImport.session.continueStage();
 		skipImport.session.finishForNow();
 		skipImport.session.finishForNow();
 		assert.deepStrictEqual({ record: JSON.parse(skipImport.stored()!), finished: skipImport.finished }, {
@@ -208,11 +224,12 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual({ stored: early.stored(), finished: early.finished }, { stored: undefined, finished: [] });
 	});
 
-	test('Finish for Now never rewrites a record a newer build owns, but still finishes', () => {
+	test('Finish for Now never rewrites a record a newer build owns, but still finishes', async () => {
 		const newer = '{"version":2,"status":"completed"}';
 		const { session, stored, finished } = setup(newer);
 		session.chooseRoute('skipImport');
-		session.continueStage();
+		await timeout(0);
+		await session.continueStage();
 
 		session.finishForNow();
 
@@ -282,7 +299,7 @@ suite('OnboardingSession', () => {
 		const migration = new MigrationStub(true);
 		// Not added to the suite's disposables on purpose: the leak tracker proves the session
 		// disposed it, and a leaked migration session would keep a cancellation token alive.
-		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession);
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession, new AppearanceStub(false), new NullLogService());
 		session.initialize();
 		session.chooseRoute('migrate');
 		migration.publish({ phase: 'apply' });
@@ -328,6 +345,145 @@ suite('OnboardingSession', () => {
 		assert.strictEqual(stored(), undefined);
 		closing.fire();
 		assert.deepStrictEqual(JSON.parse(stored()!), { version: 1, status: 'inProgress', stage: 'bring' });
+	});
+
+	test('entering appearance loads the snapshot while busy and prefills the draft from it', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+
+		session.chooseRoute('skipImport');
+		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: true, loaded: false, draft: undefined, error: undefined, announcement: undefined });
+		assert.deepStrictEqual(session.selectMode('light'), false, 'nothing is staged before the choices exist');
+		await session.continueStage();
+		assert.strictEqual(session.state.stage, 'appearance', 'Continue waits for the load');
+
+		appearance.resolveSnapshot();
+		await timeout(0);
+		assert.deepStrictEqual(appearanceView(), {
+			stage: 'appearance',
+			busy: false,
+			loaded: true,
+			draft: { mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' },
+			error: undefined,
+			announcement: 'Appearance choices loaded.',
+		});
+		assert.deepStrictEqual(appearance.calls, [['snapshot']]);
+	});
+
+	test('resuming on appearance and returning from Meet Omni both load the snapshot', async () => {
+		const resumed = setup('{"version":1,"status":"inProgress","stage":"appearance","route":"skipImport"}');
+		assert.deepStrictEqual([resumed.session.state.stage, resumed.session.state.busy], ['appearance', true]);
+		await timeout(0);
+		assert.deepStrictEqual(resumed.appearance.calls, [['snapshot']]);
+
+		const returned = setup();
+		returned.session.chooseRoute('skipImport');
+		await timeout(0);
+		await returned.session.continueStage();
+		assert.strictEqual(returned.session.back(), true);
+		assert.deepStrictEqual([returned.session.state.stage, returned.session.state.busy], ['appearance', true]);
+		await timeout(0);
+		assert.deepStrictEqual(returned.appearance.calls.map(call => call[0]), ['snapshot', 'apply', 'snapshot']);
+	});
+
+	test('a snapshot that arrives after the stage was left cannot overwrite the newer state', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		const first = appearance.pendingSnapshot!;
+		assert.strictEqual(session.back(), true);
+		assert.deepStrictEqual(appearanceView(), { stage: 'bring', busy: false, loaded: false, draft: undefined, error: undefined, announcement: undefined });
+
+		session.chooseRoute('skipImport');
+		first.complete(snapshot());
+		await timeout(0);
+		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: true, loaded: false, draft: undefined, error: undefined, announcement: undefined }, 'the first load belongs to a stage that is gone');
+
+		appearance.resolveSnapshot();
+		await timeout(0);
+		assert.deepStrictEqual([appearanceView().busy, appearanceView().loaded], [false, true]);
+	});
+
+	test('draft changes accept only offered ids and survive Back to bring', async () => {
+		const { session, appearance, appearanceView } = setup();
+		session.chooseRoute('skipImport');
+		await timeout(0);
+
+		assert.deepStrictEqual({
+			mode: session.selectMode('light'),
+			light: session.selectPreferredTheme('light', 'Quiet Light'),
+			wrongList: session.selectPreferredTheme('light', 'Monokai'),
+			unknown: session.selectPreferredTheme('dark', 'Nope'),
+			dark: session.selectPreferredTheme('dark', 'Monokai'),
+		}, { mode: true, light: true, wrongList: false, unknown: false, dark: true });
+		assert.deepStrictEqual(appearanceView().draft, { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' });
+
+		assert.strictEqual(session.back(), true);
+		session.chooseRoute('skipImport');
+		await timeout(0);
+		assert.deepStrictEqual(appearanceView().draft, { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' }, 'Back keeps the draft in memory');
+		assert.deepStrictEqual(appearance.calls.filter(call => call[0] === 'apply'), [], 'Back writes nothing');
+	});
+
+	test('Continue applies the draft against its snapshot and moves to Meet Omni', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		appearance.resolveSnapshot();
+		await timeout(0);
+		session.selectMode('system');
+
+		const continued = session.continueStage();
+		assert.deepStrictEqual([appearanceView().stage, appearanceView().busy], ['appearance', true]);
+		assert.deepStrictEqual(session.selectMode('dark'), false, 'nothing may change under a write in flight');
+		appearance.resolveApply();
+		await continued;
+
+		assert.deepStrictEqual(appearance.calls, [['snapshot'], ['apply', snapshot(), { mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }]]);
+		assert.deepStrictEqual(appearanceView(), { stage: 'meetOmni', busy: false, loaded: true, draft: { mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: undefined, announcement: 'Appearance choices loaded.' });
+	});
+
+	test('a failed write stays on appearance with its error until a retry succeeds', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		appearance.resolveSnapshot();
+		await timeout(0);
+		session.selectMode('light');
+
+		const first = session.continueStage();
+		appearance.rejectApply(new Error('settings file is read-only'));
+		await first;
+		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: false, loaded: true, draft: { mode: 'light', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: 'settings file is read-only', announcement: 'settings file is read-only' });
+
+		const second = session.continueStage();
+		assert.strictEqual(appearanceView().error, undefined, 'a retry clears the error');
+		appearance.resolveApply();
+		await second;
+		assert.deepStrictEqual([appearanceView().stage, appearanceView().error], ['meetOmni', undefined]);
+	});
+
+	test('a failed snapshot leaves the stage passable and Continue writes nothing', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		appearance.rejectSnapshot(new Error('theme registry unavailable'));
+		await timeout(0);
+		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: false, loaded: false, draft: undefined, error: 'theme registry unavailable', announcement: 'theme registry unavailable' });
+
+		await session.continueStage();
+
+		assert.deepStrictEqual([appearanceView().stage, appearanceView().error], ['meetOmni', undefined]);
+		assert.deepStrictEqual(appearance.calls, [['snapshot']]);
+	});
+
+	test('Back during a write leaves for bring and discards the write\'s result', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		appearance.resolveSnapshot();
+		await timeout(0);
+		const continued = session.continueStage();
+
+		assert.strictEqual(session.back(), true);
+		appearance.resolveApply();
+		await continued;
+
+		assert.deepStrictEqual([appearanceView().stage, appearanceView().busy], ['bring', false]);
 	});
 
 	test('a migration change after the flow finished is still harmless', async () => {
@@ -386,6 +542,65 @@ class MigrationStub extends Disposable {
 	override dispose(): void {
 		this.disposed = true;
 		super.dispose();
+	}
+}
+
+function snapshot(): OnboardingAppearanceSnapshot {
+	return {
+		mode: 'dark',
+		colorTheme: 'Dark 2026',
+		preferredLight: 'Light 2026',
+		preferredDark: 'Dark 2026',
+		lightThemes: [{ id: 'Light 2026', label: 'Light 2026' }, { id: 'Quiet Light', label: 'Quiet Light' }],
+		darkThemes: [{ id: 'Dark 2026', label: 'Dark 2026' }, { id: 'Monokai', label: 'Monokai' }],
+	};
+}
+
+/**
+ * Stands in for the appearance authority.
+ *
+ * Automatic mode answers every call at once with the fixed snapshot; manual mode leaves each call
+ * pending until the test settles it, which is how the ordering cases are driven.
+ */
+class AppearanceStub implements IOnboardingAppearanceAuthority {
+	readonly calls: (readonly unknown[])[] = [];
+	pendingSnapshot: DeferredPromise<OnboardingAppearanceSnapshot> | undefined;
+	pendingApply: DeferredPromise<void> | undefined;
+
+	constructor(private readonly manual: boolean) { }
+
+	snapshot(): Promise<OnboardingAppearanceSnapshot> {
+		this.calls.push(['snapshot']);
+		if (!this.manual) {
+			return Promise.resolve(snapshot());
+		}
+		this.pendingSnapshot = new DeferredPromise();
+		return this.pendingSnapshot.p;
+	}
+
+	apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
+		this.calls.push(['apply', current, draft]);
+		if (!this.manual) {
+			return Promise.resolve();
+		}
+		this.pendingApply = new DeferredPromise();
+		return this.pendingApply.p;
+	}
+
+	resolveSnapshot(): void {
+		void this.pendingSnapshot!.complete(snapshot());
+	}
+
+	rejectSnapshot(error: Error): void {
+		void this.pendingSnapshot!.error(error);
+	}
+
+	resolveApply(): void {
+		void this.pendingApply!.complete();
+	}
+
+	rejectApply(error: Error): void {
+		void this.pendingApply!.error(error);
 	}
 }
 

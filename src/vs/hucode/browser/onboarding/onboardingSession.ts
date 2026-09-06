@@ -5,11 +5,22 @@
 
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { localize } from '../../../nls.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
-import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService, createDecorator } from '../../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../../platform/log/common/log.js';
 import { IStorageService } from '../../../platform/storage/common/storage.js';
 import { EditorMigrationFlowPhase, EditorMigrationFlowSession, IEditorMigrationFlowService } from '../migration/editorMigrationFlow.js';
 import { shouldCancelEditorMigrationOnClose } from '../migration/editorMigrationSetupClose.js';
+import {
+	IOnboardingAppearanceAuthority,
+	OnboardingAppearanceAuthority,
+	OnboardingAppearanceDraft,
+	OnboardingAppearanceMode,
+	OnboardingAppearanceSnapshot,
+	OnboardingColorScheme,
+	onboardingThemesFor,
+} from './onboardingAppearance.js';
 import { ONBOARDING_RECORD_VERSION, OnboardingRecordRoute, OnboardingStateStore, OnboardingStoredState } from './onboardingStateStore.js';
 
 /**
@@ -49,6 +60,18 @@ export interface OnboardingSessionState {
 	readonly route?: OnboardingRoute;
 	readonly previous?: OnboardingPreviousOutcome;
 	readonly announcement?: string;
+	/** The last failed load or write, shown on the stage it belongs to until the next attempt. */
+	readonly error?: string;
+	/**
+	 * The appearance stage's themes and prefilled values, present once its load succeeded.
+	 * Absent while the stage is loading, after a failed load, and outside the Skip Import route.
+	 */
+	readonly appearance?: OnboardingAppearanceSnapshot;
+	/**
+	 * The user's staged appearance choices. They outlive Back to `bring` for the session's
+	 * lifetime and are written only by Continue on the appearance stage.
+	 */
+	readonly appearanceDraft?: OnboardingAppearanceDraft;
 }
 
 const FIRST_STAGE: OnboardingStage = 'bring';
@@ -130,10 +153,17 @@ export class OnboardingSession extends Disposable {
 	/** The embedded migration session and its state subscription, alive only on the Import route. */
 	private readonly migrationLifetime = this._register(new MutableDisposable<DisposableStore>());
 	private _migration: EditorMigrationFlowSession | undefined;
+	/**
+	 * Advanced by every stage change and every appearance load or write, so an asynchronous
+	 * result may only land on the state it was started from.
+	 */
+	private generation = 0;
 
 	constructor(
 		private readonly store: OnboardingStateStore,
 		private readonly createMigrationSession: () => EditorMigrationFlowSession,
+		private readonly appearance: IOnboardingAppearanceAuthority,
+		private readonly logService: ILogService,
 		private readonly now: () => number = Date.now,
 	) {
 		super();
@@ -159,6 +189,9 @@ export class OnboardingSession extends Disposable {
 			mode: onboardingModeFor(this.stored),
 			previous: onboardingPreviousOutcome(this.stored),
 		});
+		if (position.stage === 'appearance') {
+			void this.loadAppearance();
+		}
 	}
 
 	/**
@@ -174,6 +207,7 @@ export class OnboardingSession extends Disposable {
 		}
 		if (route === 'skipImport') {
 			this.setState({ ...this._state, stage: 'appearance', route });
+			void this.loadAppearance();
 			return;
 		}
 		const migration = this.createMigrationSession();
@@ -209,25 +243,120 @@ export class OnboardingSession extends Disposable {
 				return true;
 			}
 			case 'appearance':
-				this.setState({ ...this._state, stage: 'bring', route: undefined });
+				// The draft stays in memory; a write in flight lands or fails on its own and its
+				// result is discarded, because the stage it belongs to is gone.
+				this.setState({ ...this._state, stage: 'bring', route: undefined, busy: false, error: undefined });
 				return true;
 			case 'meetOmni':
 				if (this._state.route !== 'skipImport') {
 					return false;
 				}
 				this.setState({ ...this._state, stage: 'appearance' });
+				void this.loadAppearance();
 				return true;
 			case 'bring':
 				return false;
 		}
 	}
 
-	/** Continue from `appearance`. The stage's writes arrive with its content in a later step. */
-	continueStage(): void {
-		if (this.finished || this._state.stage !== 'appearance') {
+	/**
+	 * Loads the themes and current values for the appearance stage.
+	 *
+	 * An existing draft is kept where its ids are still offered, so Back to `bring` and forward
+	 * again shows what the user staged; anything no longer installed falls back to the current
+	 * value. A failed load leaves the stage without choices but still passable: Continue then
+	 * writes nothing.
+	 */
+	private async loadAppearance(): Promise<void> {
+		const generation = ++this.generation;
+		this.setState({ ...this._state, busy: true, error: undefined, announcement: undefined, appearance: undefined });
+		let snapshot: OnboardingAppearanceSnapshot;
+		try {
+			snapshot = await this.appearance.snapshot();
+		} catch (error) {
+			if (this.isCurrent(generation)) {
+				this.logService.error(error instanceof Error ? error : String(error));
+				const message = errorMessage(error);
+				this.setState({ ...this._state, busy: false, error: message, announcement: message });
+			}
 			return;
 		}
-		this.setState({ ...this._state, stage: 'meetOmni' });
+		if (!this.isCurrent(generation)) {
+			return;
+		}
+		const previous = this._state.appearanceDraft;
+		const offered = (scheme: OnboardingColorScheme, id: string | undefined) => id !== undefined && onboardingThemesFor(snapshot, scheme).some(theme => theme.id === id);
+		const draft: OnboardingAppearanceDraft = {
+			mode: previous?.mode ?? snapshot.mode,
+			preferredLight: offered('light', previous?.preferredLight) ? previous!.preferredLight : snapshot.preferredLight,
+			preferredDark: offered('dark', previous?.preferredDark) ? previous!.preferredDark : snapshot.preferredDark,
+		};
+		this.setState({
+			...this._state,
+			busy: false,
+			appearance: snapshot,
+			appearanceDraft: draft,
+			announcement: localize('onboarding.appearance.loaded', "Appearance choices loaded."),
+		});
+	}
+
+	/** Stages a mode. Returns false where the stage offers no choices, or a load or write is in flight. */
+	selectMode(mode: OnboardingAppearanceMode): boolean {
+		const draft = this._state.appearanceDraft;
+		if (this.finished || this._state.stage !== 'appearance' || this._state.busy || !this._state.appearance || !draft) {
+			return false;
+		}
+		this.setState({ ...this._state, appearanceDraft: { ...draft, mode } });
+		return true;
+	}
+
+	/** Stages a preferred theme. Returns false unless the id is one the snapshot offers for that scheme. */
+	selectPreferredTheme(scheme: OnboardingColorScheme, themeId: string): boolean {
+		const draft = this._state.appearanceDraft;
+		const snapshot = this._state.appearance;
+		if (this.finished || this._state.stage !== 'appearance' || this._state.busy || !snapshot || !draft) {
+			return false;
+		}
+		if (!onboardingThemesFor(snapshot, scheme).some(theme => theme.id === themeId)) {
+			return false;
+		}
+		this.setState({
+			...this._state,
+			appearanceDraft: scheme === 'light' ? { ...draft, preferredLight: themeId } : { ...draft, preferredDark: themeId },
+		});
+		return true;
+	}
+
+	/**
+	 * Continue from `appearance`: writes the changed appearance values, then moves to Meet Omni.
+	 *
+	 * A failed write stays on the stage with its error so the user can retry or go back. Without a
+	 * loaded snapshot there is nothing to compare against, so nothing is written and the stage is
+	 * simply passed; the user can still finish onboarding.
+	 */
+	async continueStage(): Promise<void> {
+		if (this.finished || this._state.stage !== 'appearance' || this._state.busy) {
+			return;
+		}
+		const { appearance: snapshot, appearanceDraft: draft } = this._state;
+		if (snapshot && draft) {
+			const generation = ++this.generation;
+			this.setState({ ...this._state, busy: true, error: undefined });
+			try {
+				await this.appearance.apply(snapshot, draft);
+			} catch (error) {
+				if (this.isCurrent(generation)) {
+					this.logService.error(error instanceof Error ? error : String(error));
+					const message = errorMessage(error);
+					this.setState({ ...this._state, busy: false, error: message, announcement: message });
+				}
+				return;
+			}
+			if (!this.isCurrent(generation)) {
+				return;
+			}
+		}
+		this.setState({ ...this._state, stage: 'meetOmni', busy: false, error: undefined });
 	}
 
 	/**
@@ -312,10 +441,21 @@ export class OnboardingSession extends Disposable {
 		this.migrationLifetime.clear();
 	}
 
+	private isCurrent(generation: number): boolean {
+		return generation === this.generation && !this.finished && !this._store.isDisposed;
+	}
+
 	private setState(next: OnboardingSessionState): void {
+		if (next.stage !== this._state.stage) {
+			this.generation++;
+		}
 		this._state = Object.freeze({ ...next });
 		this._onDidChangeState.fire(this._state);
 	}
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -343,10 +483,17 @@ class OnboardingService implements IOnboardingService {
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
 		@IEditorMigrationFlowService private readonly migrationFlowService: IEditorMigrationFlowService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@ILogService private readonly logService: ILogService,
 	) { }
 
 	createSession(): OnboardingSession {
-		return new OnboardingSession(new OnboardingStateStore(this.storageService), () => this.migrationFlowService.createSession());
+		return new OnboardingSession(
+			new OnboardingStateStore(this.storageService),
+			() => this.migrationFlowService.createSession(),
+			this.instantiationService.createInstance(OnboardingAppearanceAuthority),
+			this.logService,
+		);
 	}
 }
 

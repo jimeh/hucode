@@ -236,6 +236,8 @@ export class EditorMigrationSetupPresenter implements ISetupWebviewPresenter {
 				return true;
 			case 'skip':
 			case 'chooseRoute':
+			case 'selectMode':
+			case 'selectPreferredTheme':
 			case 'continueStage':
 			case 'finishForNow':
 				// Onboarding intents. Their policies admit them in no migration phase, so this is

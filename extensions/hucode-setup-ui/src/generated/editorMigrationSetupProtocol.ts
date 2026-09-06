@@ -13,7 +13,7 @@
  */
 
 /** Bumped whenever a message shape changes. Both sides reject any other value. */
-export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 3;
+export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 4;
 
 /** The four import categories, repeated here so the protocol stays dependency-free. */
 export const EDITOR_MIGRATION_SETUP_CATEGORIES = ['settings', 'keybindings', 'snippets', 'extensions'] as const;
@@ -58,6 +58,12 @@ export type EditorMigrationSetupPhase =
 /** The two ways out of the `bring` stage. */
 export type EditorMigrationSetupOnboardingRoute = 'migrate' | 'skipImport';
 
+/** The appearance stage's mode: follow the system, or pin the light or the dark preference. */
+export type EditorMigrationSetupAppearanceMode = 'system' | 'light' | 'dark';
+
+/** Which preferred theme a `selectPreferredTheme` intent names. */
+export type EditorMigrationSetupColorScheme = 'light' | 'dark';
+
 export type EditorMigrationSetupSectionStatus = 'attention' | 'ok' | 'neutral';
 
 /**
@@ -77,9 +83,10 @@ export type EditorMigrationSetupDecisionChoice = 'import' | 'preserveTarget';
  *
  * Every variant except `ready` and `close` maps one-for-one onto a public user-action method of a
  * session: the migration intents onto `EditorMigrationFlowSession`, and `skip`, `chooseRoute`,
- * `continueStage`, and `finishForNow` onto `OnboardingSession`. `back` is the one intent both
- * sessions answer, because onboarding routes it by stage: to its own stage machine outside the
- * embedded migration, and to the migration session inside it.
+ * `selectMode`, `selectPreferredTheme`, `continueStage`, and `finishForNow` onto
+ * `OnboardingSession`. `back` is the one intent both sessions answer, because onboarding routes
+ * it by stage: to its own stage machine outside the embedded migration, and to the migration
+ * session inside it.
  * `editorMigrationSetupWebviewHost.test.ts` fails when one side gains an action without the other.
  */
 export type EditorMigrationSetupIntent =
@@ -87,6 +94,8 @@ export type EditorMigrationSetupIntent =
 	| { readonly type: 'close' }
 	| { readonly type: 'skip' }
 	| { readonly type: 'chooseRoute'; readonly route: EditorMigrationSetupOnboardingRoute }
+	| { readonly type: 'selectMode'; readonly mode: EditorMigrationSetupAppearanceMode }
+	| { readonly type: 'selectPreferredTheme'; readonly scheme: EditorMigrationSetupColorScheme; readonly themeId: string }
 	| { readonly type: 'continueStage' }
 	| { readonly type: 'finishForNow' }
 	| { readonly type: 'startImport' }
@@ -134,6 +143,10 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	// The route choice is the fork of the whole flow, and the screen offering it changes copy
 	// between a first run and a rerun; a click must be honoured only against the screen it saw.
 	'chooseRoute',
+	// Both name a choice from the appearance snapshot: a theme id from its lists, or a mode whose
+	// meaning depends on the preferences shown beside it.
+	'selectMode',
+	'selectPreferredTheme',
 	/*
 	 * Two identifier-less actions are bound as well, because the phase guard alone cannot protect
 	 * what they decide.
@@ -186,6 +199,10 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	// twice; a duplicate route choice or Continue would move two stages.
 	skip: { phases: ['bring'], whileBusy: false },
 	chooseRoute: { phases: ['bring'], whileBusy: false },
+	// The appearance choices are a draft until Continue; neither may move while a load or write
+	// is in flight, because the snapshot they name is about to be replaced.
+	selectMode: { phases: ['appearance'], whileBusy: false },
+	selectPreferredTheme: { phases: ['appearance'], whileBusy: false },
 	continueStage: { phases: ['appearance'], whileBusy: false },
 	finishForNow: { phases: ['meetOmni'], whileBusy: false },
 
@@ -468,6 +485,15 @@ export type EditorMigrationSetupPanel =
 		readonly kind: 'bring'; readonly id: string; readonly heading: string; readonly lead: string;
 		readonly paragraphs: readonly string[];
 		readonly choices: readonly EditorMigrationSetupRouteChoice[];
+	}
+	| {
+		readonly kind: 'appearance'; readonly id: string; readonly heading: string; readonly lead: string;
+		readonly paragraphs: readonly string[];
+		readonly modeGroupLabel: string;
+		/** Exactly the three modes, identified by `EditorMigrationSetupAppearanceMode`. */
+		readonly modes: readonly EditorMigrationSetupRadioOption[];
+		readonly light: EditorMigrationSetupThemeGroup;
+		readonly dark: EditorMigrationSetupThemeGroup;
 	};
 
 /** One way out of the `bring` stage. The renderer posts `chooseRoute` with the identifier. */
@@ -475,6 +501,27 @@ export interface EditorMigrationSetupRouteChoice {
 	readonly id: EditorMigrationSetupOnboardingRoute;
 	readonly label: string;
 	readonly detail: string;
+}
+
+/** One installed color theme. The renderer posts `selectPreferredTheme` with the identifier. */
+export interface EditorMigrationSetupThemeOption {
+	readonly id: string;
+	readonly label: string;
+}
+
+/**
+ * One preferred-theme list of the appearance stage.
+ *
+ * `selectedId` is the staged preference; it names one of `themes`, or nothing when the list is
+ * empty. The renderer draws the list as a radio group and posts back only ids the host listed.
+ */
+export interface EditorMigrationSetupThemeGroup {
+	readonly label: string;
+	readonly filterLabel: string;
+	readonly listLabel: string;
+	readonly noMatchText: string;
+	readonly selectedId: string;
+	readonly themes: readonly EditorMigrationSetupThemeOption[];
 }
 
 export interface EditorMigrationSetupFooter {
@@ -541,6 +588,14 @@ function isOnboardingRoute(value: unknown): value is EditorMigrationSetupOnboard
 	return value === 'migrate' || value === 'skipImport';
 }
 
+function isAppearanceMode(value: unknown): value is EditorMigrationSetupAppearanceMode {
+	return value === 'system' || value === 'light' || value === 'dark';
+}
+
+function isColorScheme(value: unknown): value is EditorMigrationSetupColorScheme {
+	return value === 'light' || value === 'dark';
+}
+
 /** Parses one renderer intent. Returns `undefined` for anything outside the closed union. */
 export function parseEditorMigrationSetupIntent(value: unknown): EditorMigrationSetupIntent | undefined {
 	if (!isRecord(value)) {
@@ -567,6 +622,12 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 			return { type: value.type };
 		case 'chooseRoute':
 			return isOnboardingRoute(value.route) ? { type: 'chooseRoute', route: value.route } : undefined;
+		case 'selectMode':
+			return isAppearanceMode(value.mode) ? { type: 'selectMode', mode: value.mode } : undefined;
+		case 'selectPreferredTheme':
+			return isColorScheme(value.scheme) && isNonEmptyString(value.themeId)
+				? { type: 'selectPreferredTheme', scheme: value.scheme, themeId: value.themeId }
+				: undefined;
 		case 'selectApplication':
 			return isNonEmptyString(value.applicationId) ? { type: 'selectApplication', applicationId: value.applicationId } : undefined;
 		case 'selectSourceProfile':
@@ -731,6 +792,16 @@ function isRouteChoice(value: unknown): boolean {
 	return hasStrings(value, ['label', 'detail']) && isOnboardingRoute(value.id);
 }
 
+function isThemeOption(value: unknown): boolean {
+	return hasStrings(value, ['id', 'label']);
+}
+
+/** A theme list the renderer maps over, filters by label, and marks by `selectedId`. */
+function isThemeGroup(value: unknown): boolean {
+	return hasStrings(value, ['label', 'filterLabel', 'listLabel', 'noMatchText', 'selectedId'])
+		&& isArrayOf(value.themes, isThemeOption);
+}
+
 function isFileCategoryArray(value: unknown): boolean {
 	return isArrayOf(value, entry => typeof entry === 'string' && (EDITOR_MIGRATION_SETUP_FILE_CATEGORIES as readonly string[]).includes(entry));
 }
@@ -796,6 +867,11 @@ const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>)
 			&& isFileCategoryArray((panel.inspection as Record<string, unknown>).driftedCategories))),
 	message: panel => isOptionalString(panel.lead),
 	bring: panel => hasStrings(panel, ['lead']) && isStringArray(panel.paragraphs) && isArrayOf(panel.choices, isRouteChoice),
+	appearance: panel => hasStrings(panel, ['lead', 'modeGroupLabel'])
+		&& isStringArray(panel.paragraphs)
+		&& isArrayOf(panel.modes, option => isRadioOption(option) && isAppearanceMode((option as Record<string, unknown>).id))
+		&& isThemeGroup(panel.light)
+		&& isThemeGroup(panel.dark),
 };
 
 /** Every panel kind is known, and its own required fields are present. */

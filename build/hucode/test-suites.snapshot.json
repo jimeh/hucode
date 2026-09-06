@@ -19,6 +19,7 @@
 		"src/vs/hucode/test/browser/omniLayoutModel.test.ts",
 		"src/vs/hucode/test/browser/omniSelectionOpen.test.ts",
 		"src/vs/hucode/test/browser/omniSmokeTestDriver.test.ts",
+		"src/vs/hucode/test/browser/onboardingAppearance.test.ts",
 		"src/vs/hucode/test/browser/onboardingPresentation.test.ts",
 		"src/vs/hucode/test/browser/onboardingSession.test.ts",
 		"src/vs/hucode/test/browser/onboardingSetupPresenter.test.ts",

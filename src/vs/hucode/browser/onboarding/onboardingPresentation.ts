@@ -9,8 +9,11 @@ import {
 	EditorMigrationSetupAction,
 	EditorMigrationSetupPanel,
 	EditorMigrationSetupPresentation,
+	EditorMigrationSetupRadioOption,
+	EditorMigrationSetupThemeGroup,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
 import { EditorMigrationFlowPhase } from '../migration/editorMigrationFlow.js';
+import { OnboardingAppearanceDraft, OnboardingAppearanceMode, OnboardingAppearanceSnapshot, OnboardingColorScheme, onboardingThemesFor } from './onboardingAppearance.js';
 import { OnboardingPreviousOutcome, OnboardingSessionState, onboardingOwnsMigrationBack } from './onboardingSession.js';
 
 type OnboardingStep = 'bring' | 'review' | 'meetOmni';
@@ -38,7 +41,7 @@ export function onboardingPresentation(state: OnboardingSessionState, revision: 
 		steps: steps(state.stage === 'meetOmni' ? 'meetOmni' : 'bring'),
 		busy: state.busy,
 		canceling: false,
-		error: undefined,
+		error: state.error,
 		announcement: state.announcement,
 		railLabel: undefined,
 		railTitle: undefined,
@@ -107,12 +110,7 @@ function panelFor(state: OnboardingSessionState): EditorMigrationSetupPanel {
 		case 'migrate':
 			return bringPanel(state);
 		case 'appearance':
-			return {
-				kind: 'message',
-				id: '',
-				heading: localize('onboarding.appearance.heading', "Choose How Hucode Looks"),
-				lead: localize('onboarding.appearance.placeholder', "The appearance choices arrive in a later step. Continue to meet Omni, or go back to change your route."),
-			};
+			return appearancePanel(state);
 		case 'meetOmni':
 			return {
 				kind: 'message',
@@ -160,6 +158,74 @@ function bringPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
 			localize('onboarding.bring.later', "Do This Later keeps your place, so onboarding reopens on this step when you come back to it."),
 		],
 		choices,
+	};
+}
+
+/**
+ * The appearance stage: loading until its snapshot arrives, the choices once it has, and a
+ * passable explanation when the load failed.
+ */
+function appearancePanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
+	const heading = localize('onboarding.appearance.heading', "Choose How Hucode Looks");
+	const snapshot = state.appearance;
+	const draft = state.appearanceDraft;
+	if (!snapshot || !draft) {
+		if (state.busy) {
+			return {
+				kind: 'loading',
+				id: '',
+				heading: localize('onboarding.appearance.loading', "Reading Installed Themes..."),
+				progress: { text: localize('onboarding.appearance.loading.detail', "Looking up the current appearance and the installed color themes."), min: 0, max: 1, now: 0 },
+			};
+		}
+		return {
+			kind: 'message',
+			id: '',
+			heading,
+			lead: localize('onboarding.appearance.unavailable', "Hucode could not read the installed themes, so the appearance choices are unavailable. Continue keeps your current appearance unchanged."),
+		};
+	}
+	const modes: [OnboardingAppearanceMode, string, string][] = [
+		['system', localize('onboarding.appearance.mode.system', "System"), localize('onboarding.appearance.mode.system.detail', "Follow the operating system's light or dark setting, using the preferred themes below.")],
+		['light', localize('onboarding.appearance.mode.light', "Light"), localize('onboarding.appearance.mode.light.detail', "Always use the preferred light theme.")],
+		['dark', localize('onboarding.appearance.mode.dark', "Dark"), localize('onboarding.appearance.mode.dark.detail', "Always use the preferred dark theme.")],
+	];
+	return {
+		kind: 'appearance',
+		id: '',
+		heading,
+		lead: localize('onboarding.appearance.lead', "Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses."),
+		paragraphs: [
+			localize('onboarding.appearance.onlyChanges', "Nothing you have already configured is removed. Continue writes only the values you change here."),
+			localize('onboarding.appearance.importLater', "You can still bring settings, keyboard shortcuts, snippets, and extensions from another editor at any time with the Import Setup from Another Editor command in the Command Palette."),
+		],
+		modeGroupLabel: localize('onboarding.appearance.modeGroup', "Appearance mode"),
+		modes: modes.map(([id, label, description]): EditorMigrationSetupRadioOption => ({
+			id,
+			label,
+			description,
+			checked: draft.mode === id,
+			intent: { type: 'selectMode', mode: id },
+		})),
+		light: themeGroup(snapshot, draft, 'light'),
+		dark: themeGroup(snapshot, draft, 'dark'),
+	};
+}
+
+function themeGroup(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft, scheme: OnboardingColorScheme): EditorMigrationSetupThemeGroup {
+	return {
+		label: scheme === 'light'
+			? localize('onboarding.appearance.light', "Preferred light theme")
+			: localize('onboarding.appearance.dark', "Preferred dark theme"),
+		filterLabel: scheme === 'light'
+			? localize('onboarding.appearance.light.filter', "Filter light themes")
+			: localize('onboarding.appearance.dark.filter', "Filter dark themes"),
+		listLabel: scheme === 'light'
+			? localize('onboarding.appearance.light.list', "Light themes")
+			: localize('onboarding.appearance.dark.list', "Dark themes"),
+		noMatchText: localize('onboarding.appearance.noMatch', "Nothing matches the current filter."),
+		selectedId: scheme === 'light' ? draft.preferredLight : draft.preferredDark,
+		themes: onboardingThemesFor(snapshot, scheme).map(theme => ({ id: theme.id, label: theme.label })),
 	};
 }
 

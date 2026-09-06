@@ -9,6 +9,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { EditorMigrationSetupPresentation, isEditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
 import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
+import { OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
 import { onboardingPresentation } from '../../browser/onboarding/onboardingPresentation.js';
 import { OnboardingSessionState } from '../../browser/onboarding/onboardingSession.js';
 
@@ -169,8 +170,27 @@ suite('OnboardingPresentation', () => {
 		assert.strictEqual(profile.footer.actions.filter(action => action.intent.type === 'back').length, 1);
 	});
 
-	test('presents the appearance placeholder with Back and Continue', () => {
-		assert.deepStrictEqual(shape(onboardingPresentation(state({ stage: 'appearance', route: 'skipImport' }), 3)), {
+	test('presents the appearance choices prefilled from the draft, with Back and Continue', () => {
+		const presentation = onboardingPresentation(state({
+			stage: 'appearance',
+			route: 'skipImport',
+			appearance: appearanceSnapshot(),
+			appearanceDraft: { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Dark 2026' },
+		}), 3);
+		const panel = presentation.panels[0];
+		assert.strictEqual(panel.kind, 'appearance');
+		assert.deepStrictEqual({
+			...shape(presentation),
+			lead: panel.lead,
+			// The plan's copy promises: where the values go, that nothing is removed, and that the
+			// import command stays available.
+			copy: [/Default profile/.test(panel.lead), /removed/.test(panel.paragraphs.join(' ')), /Command Palette/.test(panel.paragraphs.join(' '))],
+			modeGroupLabel: panel.modeGroupLabel,
+			modes: panel.modes.map(mode => [mode.id, mode.label, mode.checked, mode.intent]),
+			light: [panel.light.label, panel.light.filterLabel, panel.light.listLabel, panel.light.selectedId, panel.light.themes.map(theme => theme.id)],
+			dark: [panel.dark.label, panel.dark.filterLabel, panel.dark.listLabel, panel.dark.selectedId, panel.dark.themes.map(theme => theme.id)],
+			noMatch: [panel.light.noMatchText, panel.dark.noMatchText],
+		}, {
 			revision: 3,
 			route: 'onboarding',
 			phase: 'appearance',
@@ -178,12 +198,71 @@ suite('OnboardingPresentation', () => {
 			steps: [['bring', true], ['review', false], ['meetOmni', false]],
 			sections: 0,
 			scopeKey: 'onboarding|appearance|first',
-			panelKind: 'message',
+			panelKind: 'appearance',
 			heading: 'Choose How Hucode Looks',
 			choices: undefined,
 			paragraphs: undefined,
 			mentionsPalette: undefined,
 			footer: [['Back', { type: 'back' }, false], ['Continue', { type: 'continueStage' }, false]],
+			lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses.',
+			copy: [true, true, true],
+			modeGroupLabel: 'Appearance mode',
+			modes: [
+				['system', 'System', false, { type: 'selectMode', mode: 'system' }],
+				['light', 'Light', true, { type: 'selectMode', mode: 'light' }],
+				['dark', 'Dark', false, { type: 'selectMode', mode: 'dark' }],
+			],
+			light: ['Preferred light theme', 'Filter light themes', 'Light themes', 'Quiet Light', ['Light 2026', 'Quiet Light']],
+			dark: ['Preferred dark theme', 'Filter dark themes', 'Dark themes', 'Dark 2026', ['Dark 2026', 'Monokai']],
+			noMatch: ['Nothing matches the current filter.', 'Nothing matches the current filter.'],
+		});
+	});
+
+	test('presents appearance as loading while its snapshot is pending and as passable after a failed load', () => {
+		const loading = onboardingPresentation(state({ stage: 'appearance', route: 'skipImport', busy: true }), 4);
+		const failed = onboardingPresentation(state({ stage: 'appearance', route: 'skipImport', error: 'theme registry unavailable', announcement: 'theme registry unavailable' }), 5);
+		const panelText = (panel: EditorMigrationSetupPresentation['panels'][number]) => panel.kind === 'loading' ? panel.progress.text : panel.kind === 'message' ? panel.lead : undefined;
+		assert.deepStrictEqual({
+			loading: { ...shape(loading), busy: loading.busy, error: loading.error, text: panelText(loading.panels[0]) },
+			failed: { ...shape(failed), busy: failed.busy, error: failed.error, announcement: failed.announcement, text: panelText(failed.panels[0]) },
+		}, {
+			loading: {
+				revision: 4,
+				route: 'onboarding',
+				phase: 'appearance',
+				title: 'Welcome to Hucode',
+				steps: [['bring', true], ['review', false], ['meetOmni', false]],
+				sections: 0,
+				scopeKey: 'onboarding|appearance|first',
+				panelKind: 'loading',
+				heading: 'Reading Installed Themes...',
+				choices: undefined,
+				paragraphs: undefined,
+				mentionsPalette: undefined,
+				footer: [['Back', { type: 'back' }, false], ['Continue', { type: 'continueStage' }, true]],
+				busy: true,
+				error: undefined,
+				text: 'Looking up the current appearance and the installed color themes.',
+			},
+			failed: {
+				revision: 5,
+				route: 'onboarding',
+				phase: 'appearance',
+				title: 'Welcome to Hucode',
+				steps: [['bring', true], ['review', false], ['meetOmni', false]],
+				sections: 0,
+				scopeKey: 'onboarding|appearance|first',
+				panelKind: 'message',
+				heading: 'Choose How Hucode Looks',
+				choices: undefined,
+				paragraphs: undefined,
+				mentionsPalette: undefined,
+				footer: [['Back', { type: 'back' }, false], ['Continue', { type: 'continueStage' }, false]],
+				busy: false,
+				error: 'theme registry unavailable',
+				announcement: 'theme registry unavailable',
+				text: 'Hucode could not read the installed themes, so the appearance choices are unavailable. Continue keeps your current appearance unchanged.',
+			},
 		});
 	});
 
@@ -210,6 +289,17 @@ suite('OnboardingPresentation', () => {
 		});
 	});
 });
+
+function appearanceSnapshot(): OnboardingAppearanceSnapshot {
+	return {
+		mode: 'dark',
+		colorTheme: 'Dark 2026',
+		preferredLight: 'Light 2026',
+		preferredDark: 'Dark 2026',
+		lightThemes: [{ id: 'Light 2026', label: 'Light 2026' }, { id: 'Quiet Light', label: 'Quiet Light' }],
+		darkThemes: [{ id: 'Dark 2026', label: 'Dark 2026' }, { id: 'Monokai', label: 'Monokai' }],
+	};
+}
 
 function flowState(overrides: Partial<EditorMigrationFlowState>): EditorMigrationFlowState {
 	return {

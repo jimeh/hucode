@@ -7,9 +7,11 @@ import assert from 'assert';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import { InMemoryStorageService, StorageScope } from '../../../platform/storage/common/storage.js';
 import { EditorInputCapabilities } from '../../../workbench/common/editor.js';
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
+import { IOnboardingAppearanceAuthority } from '../../browser/onboarding/onboardingAppearance.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 import { EditorMigrationEditorInput } from '../../electron-browser/migration/editorMigrationEditorInput.js';
@@ -51,7 +53,7 @@ suite('OnboardingEditorInput', () => {
 		// the singleton is merely hidden. The session is not added to the suite's disposables on
 		// purpose: the leak tracker proves the input disposed it.
 		const storage = disposables.add(new InMemoryStorageService());
-		const session = new OnboardingSession(new OnboardingStateStore(storage), () => { throw new Error('no migration on this path'); });
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => { throw new Error('no migration on this path'); }, noAppearance(), new NullLogService());
 		session.initialize();
 		const input = new OnboardingEditorInput();
 		input.attachSession(session);
@@ -77,7 +79,7 @@ suite('OnboardingEditorInput', () => {
 			requestCancellation(): void { events.push('requestCancellation'); }
 			override dispose(): void { events.push('dispose'); super.dispose(); }
 		}();
-		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession);
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession, noAppearance(), new NullLogService());
 		session.initialize();
 		session.chooseRoute('migrate');
 		const input = new OnboardingEditorInput();
@@ -89,3 +91,11 @@ suite('OnboardingEditorInput', () => {
 		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' });
 	});
 });
+
+/** Neither test reaches the appearance stage, so the authority must never be consulted. */
+function noAppearance(): IOnboardingAppearanceAuthority {
+	return {
+		snapshot: () => Promise.reject(new Error('no appearance on this path')),
+		apply: () => Promise.reject(new Error('no appearance on this path')),
+	};
+}

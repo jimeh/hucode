@@ -48,6 +48,11 @@ const EVERY_INTENT: readonly EditorMigrationSetupIntent[] = [
 	{ type: 'skip' },
 	{ type: 'chooseRoute', route: 'migrate' },
 	{ type: 'chooseRoute', route: 'skipImport' },
+	{ type: 'selectMode', mode: 'system' },
+	{ type: 'selectMode', mode: 'light' },
+	{ type: 'selectMode', mode: 'dark' },
+	{ type: 'selectPreferredTheme', scheme: 'light', themeId: 'Light 2026' },
+	{ type: 'selectPreferredTheme', scheme: 'dark', themeId: 'Dark 2026' },
 	{ type: 'continueStage' },
 	{ type: 'finishForNow' },
 	{ type: 'startImport' },
@@ -97,6 +102,11 @@ suite('EditorMigrationSetupProtocol', () => {
 			{ type: 'chooseRoute' },
 			{ type: 'chooseRoute', route: 'startFresh' },
 			{ type: 'chooseRoute', route: 1 },
+			{ type: 'selectMode' },
+			{ type: 'selectMode', mode: 'auto' },
+			{ type: 'selectPreferredTheme', scheme: 'light' },
+			{ type: 'selectPreferredTheme', scheme: 'light', themeId: '' },
+			{ type: 'selectPreferredTheme', scheme: 'hcDark', themeId: 'Dark 2026' },
 			{ type: 'selectApplication' },
 			{ type: 'selectApplication', applicationId: '' },
 			{ type: 'selectApplication', applicationId: 7 },
@@ -146,6 +156,8 @@ suite('EditorMigrationSetupProtocol', () => {
 			close: { phases: ALL_PHASES, whileBusy: true },
 			skip: { phases: ['bring'], whileBusy: false },
 			chooseRoute: { phases: ['bring'], whileBusy: false },
+			selectMode: { phases: ['appearance'], whileBusy: false },
+			selectPreferredTheme: { phases: ['appearance'], whileBusy: false },
 			continueStage: { phases: ['appearance'], whileBusy: false },
 			finishForNow: { phases: ['meetOmni'], whileBusy: false },
 			startImport: { phases: ['recovery', 'results'], whileBusy: false },
@@ -220,12 +232,12 @@ suite('EditorMigrationSetupProtocol', () => {
 			'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
 		];
 		const ONBOARDING_PHASES: readonly EditorMigrationSetupPhase[] = ['bring', 'appearance', 'meetOmni'];
-		const ONBOARDING_INTENTS: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'continueStage', 'finishForNow'];
+		const ONBOARDING_INTENTS: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'finishForNow'];
 		// Each onboarding intent acts only on the one stage that offers it, and never twice: Skip
 		// and Finish for Now end the flow, and a duplicate route choice or Continue would move two stages.
 		assert.deepStrictEqual(
 			Object.fromEntries(ONBOARDING_INTENTS.map(type => [type, ONBOARDING_PHASES.filter(phase => editorMigrationSetupPhaseAdmits(type, phase, false))])),
-			{ skip: ['bring'], chooseRoute: ['bring'], continueStage: ['appearance'], finishForNow: ['meetOmni'] },
+			{ skip: ['bring'], chooseRoute: ['bring'], selectMode: ['appearance'], selectPreferredTheme: ['appearance'], continueStage: ['appearance'], finishForNow: ['meetOmni'] },
 		);
 		for (const type of ONBOARDING_INTENTS) {
 			for (const phase of ONBOARDING_PHASES) {
@@ -235,9 +247,11 @@ suite('EditorMigrationSetupProtocol', () => {
 				assert.strictEqual(editorMigrationSetupPhaseAdmits(type, phase, false), false, `${type} must not act in ${phase}`);
 			}
 		}
-		// The route choice is the fork of the whole flow and its screen changes copy between runs;
-		// the rest name nothing from a snapshot.
-		assert.strictEqual(isEditorMigrationSetupRevisionBound('chooseRoute'), true);
+		// The route choice is the fork of the whole flow and its screen changes copy between runs,
+		// and the appearance choices name entries of the snapshot's lists; the rest name nothing.
+		for (const type of ['chooseRoute', 'selectMode', 'selectPreferredTheme'] as const) {
+			assert.strictEqual(isEditorMigrationSetupRevisionBound(type), true, `${type} names something from its snapshot`);
+		}
 		for (const type of ['skip', 'continueStage', 'finishForNow'] as const) {
 			assert.strictEqual(isEditorMigrationSetupRevisionBound(type), false, `${type} names nothing from a snapshot`);
 		}
@@ -337,6 +351,13 @@ suite('EditorMigrationSetupProtocol', () => {
 		assert.strictEqual(withPanel({ kind: 'bring', id: '', heading: 'h', lead: 'l', paragraphs: [] }), false, 'the bring panel maps over its route choices');
 		assert.strictEqual(withPanel({ kind: 'bring', id: '', heading: 'h', lead: 'l', paragraphs: [], choices: [{ id: 'startFresh', label: 'l', detail: 'd' }] }), false, 'a choice the renderer would post back as an unknown route');
 		assert.strictEqual(withPanel({ kind: 'bring', id: '', heading: 'h', lead: 'l', paragraphs: [], choices: [{ id: 'migrate', label: 'l' }] }), false, 'a choice without its detail');
+		const themes = { label: 'l', filterLabel: 'f', listLabel: 'li', noMatchText: 'n', selectedId: 'Light 2026', themes: [{ id: 'Light 2026', label: 'Light 2026' }] };
+		const mode = { id: 'system', label: 'System', checked: true, intent: { type: 'selectMode', mode: 'system' } };
+		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes, dark: themes }), true);
+		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes }), false, 'the appearance panel reads both theme groups');
+		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes, dark: { ...themes, themes: [{ id: 'Dark 2026' }] } }), false, 'a theme without its label');
+		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [mode], light: themes, dark: { ...themes, selectedId: undefined } }), false, 'the renderer marks the selection by id');
+		assert.strictEqual(withPanel({ kind: 'appearance', id: '', heading: 'h', lead: 'l', paragraphs: [], modeGroupLabel: 'g', modes: [{ ...mode, id: 'auto' }], light: themes, dark: themes }), false, 'a mode the renderer would post back as an unknown mode');
 	});
 
 	test('refuses a nested action or option the renderer would post straight back', () => {
@@ -412,6 +433,12 @@ suite('EditorMigrationSetupProtocol', () => {
 			},
 			{ kind: 'message', id: '', heading: 'Import Results' },
 			{ kind: 'bring', id: '', heading: 'Bring Your Setup', lead: 'l', paragraphs: ['p'], choices: [{ id: 'migrate', label: 'Import', detail: 'd' }, { id: 'skipImport', label: 'Skip Import', detail: 'd' }] },
+			{
+				kind: 'appearance', id: '', heading: 'Choose How Hucode Looks', lead: 'l', paragraphs: ['p'], modeGroupLabel: 'g',
+				modes: [{ id: 'dark', label: 'Dark', description: 'd', checked: true, intent: { type: 'selectMode', mode: 'dark' } }],
+				light: { label: 'l', filterLabel: 'f', listLabel: 'li', noMatchText: 'n', selectedId: 'Light 2026', themes: [{ id: 'Light 2026', label: 'Light 2026' }] },
+				dark: { label: 'l', filterLabel: 'f', listLabel: 'li', noMatchText: 'n', selectedId: '', themes: [] },
+			},
 		];
 		const kinds = new Set(panels.map(panel => panel.kind));
 		assert.strictEqual(kinds.size, panels.length, 'each kind appears exactly once');

@@ -70,8 +70,12 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 			case 'chooseRoute':
 				this.session.chooseRoute(intent.route);
 				return 'accepted';
+			case 'selectMode':
+				return this.session.selectMode(intent.mode) ? 'accepted' : 'unresolvable';
+			case 'selectPreferredTheme':
+				return this.session.selectPreferredTheme(intent.scheme, intent.themeId) ? 'accepted' : 'unresolvable';
 			case 'continueStage':
-				this.session.continueStage();
+				void this.session.continueStage();
 				return 'accepted';
 			case 'finishForNow':
 				this.session.finishForNow();

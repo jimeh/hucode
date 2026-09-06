@@ -8,9 +8,11 @@ import { timeout } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
 import { InMemoryStorageService } from '../../../platform/storage/common/storage.js';
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { SetupWebviewIntentOutcome } from '../../browser/migration/editorMigrationSetupPresenter.js';
+import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { OnboardingSetupPresenter } from '../../browser/onboarding/onboardingSetupPresenter.js';
 import { OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
@@ -22,18 +24,19 @@ suite('OnboardingSetupPresenter', () => {
 	function setup() {
 		const storage = disposables.add(new InMemoryStorageService());
 		const migrations: MigrationStub[] = [];
+		const appearance = new AppearanceStub();
 		const session = disposables.add(new OnboardingSession(new OnboardingStateStore(storage), () => {
 			const migration = new MigrationStub();
 			migrations.push(migration);
 			return migration as unknown as EditorMigrationFlowSession;
-		}));
+		}, appearance, new NullLogService()));
 		session.initialize();
 		const presenter = new OnboardingSetupPresenter(session);
 		const migration = () => migrations[0];
-		return { session, presenter, migration };
+		return { session, presenter, migration, appearance };
 	}
 
-	test('drives the onboarding stages from its own intents and refuses migration intents outside them', () => {
+	test('drives the onboarding stages from its own intents and refuses migration intents outside them', async () => {
 		const { session, presenter } = setup();
 		const outcomes: Record<string, SetupWebviewIntentOutcome> = {};
 
@@ -41,12 +44,17 @@ suite('OnboardingSetupPresenter', () => {
 		outcomes.backInBring = presenter.handleIntent({ type: 'back' }, true);
 		outcomes.staleRoute = presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, false);
 		outcomes.route = presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, true);
+		outcomes.continueWhileLoading = presenter.handleIntent({ type: 'continueStage' }, true);
+		await timeout(0);
 		outcomes.continue = presenter.handleIntent({ type: 'continueStage' }, true);
+		await timeout(0);
 		outcomes.migrationInMeetOmni = presenter.handleIntent({ type: 'acknowledge' }, true);
 		outcomes.back = presenter.handleIntent({ type: 'back' }, true);
 		outcomes.finishEarly = presenter.handleIntent({ type: 'finishForNow' }, true);
 		assert.strictEqual(session.state.stage, 'appearance');
+		await timeout(0);
 		presenter.handleIntent({ type: 'continueStage' }, true);
+		await timeout(0);
 		outcomes.finish = presenter.handleIntent({ type: 'finishForNow' }, true);
 
 		assert.deepStrictEqual(outcomes, {
@@ -54,6 +62,7 @@ suite('OnboardingSetupPresenter', () => {
 			backInBring: 'superseded',
 			staleRoute: 'staleRevision',
 			route: 'accepted',
+			continueWhileLoading: 'superseded',
 			continue: 'accepted',
 			migrationInMeetOmni: 'superseded',
 			back: 'accepted',
@@ -61,6 +70,38 @@ suite('OnboardingSetupPresenter', () => {
 			finish: 'accepted',
 		});
 		assert.strictEqual(presenter.presentation(1).phase, 'meetOmni');
+	});
+
+	test('stages appearance choices and refuses ids the snapshot does not offer', async () => {
+		const { session, presenter, appearance } = setup();
+		presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, true);
+		const whileLoading = presenter.handleIntent({ type: 'selectMode', mode: 'light' }, true);
+		await timeout(0);
+
+		assert.deepStrictEqual({
+			whileLoading,
+			mode: presenter.handleIntent({ type: 'selectMode', mode: 'light' }, true),
+			staleMode: presenter.handleIntent({ type: 'selectMode', mode: 'dark' }, false),
+			theme: presenter.handleIntent({ type: 'selectPreferredTheme', scheme: 'light', themeId: 'Quiet Light' }, true),
+			wrongList: presenter.handleIntent({ type: 'selectPreferredTheme', scheme: 'light', themeId: 'Monokai' }, true),
+			unknown: presenter.handleIntent({ type: 'selectPreferredTheme', scheme: 'dark', themeId: 'Nope' }, true),
+			staleTheme: presenter.handleIntent({ type: 'selectPreferredTheme', scheme: 'dark', themeId: 'Monokai' }, false),
+			draft: session.state.appearanceDraft,
+		}, {
+			whileLoading: 'superseded',
+			mode: 'accepted',
+			staleMode: 'staleRevision',
+			theme: 'accepted',
+			wrongList: 'unresolvable',
+			unknown: 'unresolvable',
+			staleTheme: 'staleRevision',
+			draft: { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Dark 2026' },
+		});
+
+		assert.strictEqual(presenter.handleIntent({ type: 'continueStage' }, true), 'accepted');
+		await timeout(0);
+		assert.deepStrictEqual(appearance.calls.map(call => call[0]), ['snapshot', 'apply']);
+		assert.strictEqual(presenter.presentation(2).phase, 'meetOmni');
 	});
 
 	test('answers Back on the migrate route\'s Meet Omni as unresolvable, not as a stage move', async () => {
@@ -152,6 +193,26 @@ suite('OnboardingSetupPresenter', () => {
 		assert.strictEqual(presenter.isPendingChangeCoalescable(), false, 'a phase boundary crosses at once');
 	});
 });
+
+class AppearanceStub implements IOnboardingAppearanceAuthority {
+	readonly calls: (readonly unknown[])[] = [];
+
+	async snapshot(): Promise<OnboardingAppearanceSnapshot> {
+		this.calls.push(['snapshot']);
+		return {
+			mode: 'dark',
+			colorTheme: 'Dark 2026',
+			preferredLight: 'Light 2026',
+			preferredDark: 'Dark 2026',
+			lightThemes: [{ id: 'Light 2026', label: 'Light 2026' }, { id: 'Quiet Light', label: 'Quiet Light' }],
+			darkThemes: [{ id: 'Dark 2026', label: 'Dark 2026' }, { id: 'Monokai', label: 'Monokai' }],
+		};
+	}
+
+	async apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
+		this.calls.push(['apply', current, draft]);
+	}
+}
 
 class MigrationStub extends Disposable {
 	readonly calls: (readonly unknown[])[] = [];
