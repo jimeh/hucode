@@ -235,8 +235,11 @@ export class EditorMigrationSetupPresenter implements ISetupWebviewPresenter {
 				this.session.back();
 				return true;
 			case 'skip':
-				// An onboarding intent. Its policy admits it in no migration phase, so this is
-				// unreachable; the migration session has nothing to skip.
+			case 'chooseRoute':
+			case 'continueStage':
+			case 'finishForNow':
+				// Onboarding intents. Their policies admit them in no migration phase, so this is
+				// unreachable; the migration session has no stages to move between.
 				return false;
 		}
 	}

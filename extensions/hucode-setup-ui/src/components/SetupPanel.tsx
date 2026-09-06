@@ -51,7 +51,7 @@ export function SetupPanelView(props: SetupPanelProps) {
 		case 'resultsOverview': return <ResultsOverviewPanel {...props} panel={panel} />;
 		case 'resultsCategory': return <ResultsCategoryPanel {...props} panel={panel} />;
 		case 'restore': return <RestorePanel {...props} panel={panel} />;
-		case 'bring': return <BringPanel panel={panel} />;
+		case 'bring': return <BringPanel panel={panel} send={props.send} />;
 		case 'message': return (
 			<PanelBody>
 				<PanelHeading>{panel.heading}</PanelHeading>

@@ -30,7 +30,11 @@ function bringPresentation(): EditorMigrationSetupPresentation {
 			id: '',
 			heading: 'Bring Your Setup to Hucode',
 			lead: 'Import from another editor, or continue without importing.',
-			paragraphs: ['The import choices are not available yet.', 'Do This Later keeps your place.'],
+			paragraphs: ['Do This Later keeps your place.'],
+			choices: [
+				{ id: 'migrate', label: 'Import from Another Editor', detail: 'Bring settings and extensions from a supported editor.' },
+				{ id: 'skipImport', label: 'Skip Import', detail: 'Nothing you have configured is removed.' },
+			],
 		}],
 		footer: {
 			lines: [],
@@ -58,7 +62,6 @@ describe('BringPanel', () => {
 		expect(heading).toHaveTextContent('Bring Your Setup to Hucode');
 		expect(heading).toHaveAttribute('data-panel-heading');
 		expect(screen.getByText('Import from another editor, or continue without importing.')).toBeInTheDocument();
-		expect(screen.getByText('The import choices are not available yet.')).toBeInTheDocument();
 		expect(screen.getByText('Do This Later keeps your place.')).toBeInTheDocument();
 		expect(screen.getByText('Bring Your Setup').closest('li')).toHaveAttribute('aria-current', 'step');
 		expect(screen.queryByRole('navigation')).toBeNull();
@@ -66,5 +69,26 @@ describe('BringPanel', () => {
 		await user.click(screen.getByRole('button', { name: 'Skip' }));
 		await user.click(screen.getByRole('button', { name: 'Do This Later' }));
 		expect(intents(sent)).toEqual([{ type: 'skip' }, { type: 'close' }]);
+	});
+
+	test('offers both routes as focusable buttons and posts the chosen route verbatim', async () => {
+		const { host, sent, publish } = testHost();
+		render(<SetupShell host={host} />);
+		await act(async () => publish(bringPresentation()));
+		const user = userEvent.setup();
+
+		const importChoice = screen.getByRole('button', { name: /Import from Another Editor/ });
+		const skipChoice = screen.getByRole('button', { name: /Skip Import/ });
+		expect(importChoice).toHaveAttribute('data-focus-id', 'route-migrate');
+		expect(skipChoice).toHaveAttribute('data-focus-id', 'route-skipImport');
+		expect(importChoice).toHaveTextContent('Bring settings and extensions from a supported editor.');
+		expect(skipChoice).toHaveTextContent('Nothing you have configured is removed.');
+
+		await user.click(importChoice);
+		await user.click(skipChoice);
+		expect(intents(sent)).toEqual([
+			{ type: 'chooseRoute', route: 'migrate' },
+			{ type: 'chooseRoute', route: 'skipImport' },
+		]);
 	});
 });

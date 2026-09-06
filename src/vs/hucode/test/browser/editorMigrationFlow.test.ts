@@ -84,6 +84,47 @@ suite('EditorMigrationFlow', () => {
 		assert.deepStrictEqual(acknowledged, [settled.id, settled.id]);
 	});
 
+	test('acknowledges without restarting discovery when asked, and reports whether it happened', async () => {
+		const acknowledged: string[] = [];
+		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
+		const draft = reviewDraft(snapshot(sourceDescriptor));
+		const plan: EditorMigrationReviewedPlan = {
+			...draft,
+			choices: { selectedCategories: ['settings'], decisions: [] },
+			operations: [],
+			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
+		};
+		const settled = { ...operation(plan), stage: 'settled' as const, aggregateOutcome: 'completed' as const };
+		let discoveries = 0;
+		let fail = false;
+		const session = disposables.add(new EditorMigrationFlowSession(
+			{ discoverSources: async () => { discoveries++; return { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [], diagnostics: [] }; } } as unknown as IEditorMigrationSourceService,
+			{} as IEditorMigrationPlanningService,
+			{
+				listRecoverableOperations: async () => [],
+				getOperation: async () => settled,
+				acknowledge: async (operationId: string) => { if (fail) { throw new Error('Journal unavailable'); } acknowledged.push(operationId); },
+			} as unknown as IEditorMigrationApplyService,
+			{ defaultProfile: { id: 'default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
+			{ writeText: async () => { } } as unknown as IClipboardService,
+			new NullLogService(),
+		));
+		await session.showRecovery(settled.id);
+
+		// A host that moves on afterwards, such as onboarding, must not be handed a fresh discovery.
+		assert.strictEqual(await session.acknowledge(false), true);
+		assert.deepStrictEqual({ acknowledged, discoveries, phase: session.state.phase }, { acknowledged: [settled.id], discoveries: 0, phase: 'results' });
+
+		fail = true;
+		assert.strictEqual(await session.acknowledge(false), false, 'a failed deletion must not read as done');
+		assert.strictEqual(session.state.error, 'Journal unavailable');
+
+		// The default keeps the standalone command's promise of another import.
+		fail = false;
+		assert.strictEqual(await session.acknowledge(), true);
+		assert.deepStrictEqual({ acknowledged, discoveries, phase: session.state.phase }, { acknowledged: [settled.id, settled.id], discoveries: 1, phase: 'application' });
+	});
+
 	test('binds rollback inspection completion to the latest requested category set', async () => {
 		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
 		const draft = reviewDraft(snapshot(sourceDescriptor));
@@ -470,6 +511,32 @@ suite('EditorMigrationFlow', () => {
 		completion.complete(applyResult());
 		await acceptance;
 		assert.strictEqual(session.state.phase, 'results');
+	});
+
+	test('disposing the session during Apply cancels the token and lets the apply service settle on its own', async () => {
+		// Onboarding disposes its embedded migration session with the modal input. The operation
+		// itself lives in the apply service: it reads the cancelled token at its next checkpoint and
+		// records the durable outcome regardless of whether the session that started it still exists.
+		const completion = new DeferredPromise<ReturnType<typeof applyResult>>();
+		const applyStarted = new DeferredPromise<void>();
+		let token: { readonly isCancellationRequested: boolean } | undefined;
+		const scenario = await createReadyFlowScenario(async (_plan, _authorization, applyToken, reporter) => {
+			token = applyToken;
+			applyStarted.complete();
+			reporter?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: false });
+			return await completion.p;
+		});
+		const session = scenario.session;
+		const acceptance = session.acceptReview();
+		await applyStarted.p;
+		assert.strictEqual(session.state.phase, 'apply');
+
+		session.dispose();
+		assert.strictEqual(token?.isCancellationRequested, true, 'disposal is how the running operation learns it should stop at a safe checkpoint');
+
+		// The service settles the operation after the session is gone, without throwing into it.
+		completion.complete(applyResult());
+		await acceptance;
 	});
 
 	test('moves a thrown post-admission Apply to durable Results and clears stale progress for another import', async () => {

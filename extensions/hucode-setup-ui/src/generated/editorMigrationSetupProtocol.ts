@@ -37,7 +37,9 @@ export type EditorMigrationSetupRoute = 'import' | 'onboarding';
  * Migration phases, followed by the onboarding stages that wrap them.
  *
  * The name predates onboarding and is kept so the mirror, the renderer, and every consumer stay on
- * one type. Onboarding stages appear after the migration phases; `bring` is the first of them.
+ * one type. Onboarding stages appear after the migration phases. Onboarding's `migrate` stage has
+ * no phase of its own: while it is active the snapshot carries the embedded migration phase, so
+ * the migration intents are admitted by the same table that governs the import route.
  */
 export type EditorMigrationSetupPhase =
 	| 'loading'
@@ -49,7 +51,12 @@ export type EditorMigrationSetupPhase =
 	| 'publishers'
 	| 'apply'
 	| 'results'
-	| 'bring';
+	| 'bring'
+	| 'appearance'
+	| 'meetOmni';
+
+/** The two ways out of the `bring` stage. */
+export type EditorMigrationSetupOnboardingRoute = 'migrate' | 'skipImport';
 
 export type EditorMigrationSetupSectionStatus = 'attention' | 'ok' | 'neutral';
 
@@ -69,14 +76,19 @@ export type EditorMigrationSetupDecisionChoice = 'import' | 'preserveTarget';
  * Closed set of renderer intents.
  *
  * Every variant except `ready` and `close` maps one-for-one onto a public user-action method of a
- * session: the migration intents onto `EditorMigrationFlowSession`, and `skip` onto
- * `OnboardingSession`. `editorMigrationSetupWebviewHost.test.ts` fails when one side gains an
- * action without the other.
+ * session: the migration intents onto `EditorMigrationFlowSession`, and `skip`, `chooseRoute`,
+ * `continueStage`, and `finishForNow` onto `OnboardingSession`. `back` is the one intent both
+ * sessions answer, because onboarding routes it by stage: to its own stage machine outside the
+ * embedded migration, and to the migration session inside it.
+ * `editorMigrationSetupWebviewHost.test.ts` fails when one side gains an action without the other.
  */
 export type EditorMigrationSetupIntent =
 	| { readonly type: 'ready' }
 	| { readonly type: 'close' }
 	| { readonly type: 'skip' }
+	| { readonly type: 'chooseRoute'; readonly route: EditorMigrationSetupOnboardingRoute }
+	| { readonly type: 'continueStage' }
+	| { readonly type: 'finishForNow' }
 	| { readonly type: 'startImport' }
 	| { readonly type: 'refreshDiscovery' }
 	| { readonly type: 'selectApplication'; readonly applicationId: string }
@@ -119,6 +131,9 @@ export const EDITOR_MIGRATION_SETUP_REVISION_BOUND_INTENTS: readonly EditorMigra
 	'selectTarget',
 	'toggleCategory',
 	'chooseDecision',
+	// The route choice is the fork of the whole flow, and the screen offering it changes copy
+	// between a first run and a rerun; a click must be honoured only against the screen it saw.
+	'chooseRoute',
 	/*
 	 * Two identifier-less actions are bound as well, because the phase guard alone cannot protect
 	 * what they decide.
@@ -151,7 +166,7 @@ export interface EditorMigrationSetupIntentPolicy {
 }
 
 const ALL_PHASES: readonly EditorMigrationSetupPhase[] = [
-	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring',
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring', 'appearance', 'meetOmni',
 ];
 
 /**
@@ -167,8 +182,12 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	ready: { phases: ALL_PHASES, whileBusy: true },
 	close: { phases: ALL_PHASES, whileBusy: true },
 
-	// Onboarding. Skip finishes the flow, so a duplicate press must not record it twice.
+	// Onboarding. Skip and Finish for Now end the flow, so a duplicate press must not record it
+	// twice; a duplicate route choice or Continue would move two stages.
 	skip: { phases: ['bring'], whileBusy: false },
+	chooseRoute: { phases: ['bring'], whileBusy: false },
+	continueStage: { phases: ['appearance'], whileBusy: false },
+	finishForNow: { phases: ['meetOmni'], whileBusy: false },
 
 	// Discovery. Both restart discovery from scratch, so a duplicate would discard the first run.
 	startImport: { phases: ['recovery', 'results'], whileBusy: false },
@@ -209,8 +228,13 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	 * the work that screen started: `back()` supersedes the in-flight generation so its result is
 	 * discarded on arrival. The presenter leaves the control enabled for exactly that reason.
 	 * Revision binding, not the busy flag, is what stops a double press skipping two phases.
+	 *
+	 * The onboarding stages that offer Back are listed here too. Onboarding also offers Back out of
+	 * the embedded migration's `loading`, `recovery`, and `application` phases, where it returns to
+	 * `bring`; that admission is onboarding's alone, so it is decided by the onboarding presenter
+	 * before this table is consulted, and the import route keeps refusing it.
 	 */
-	back: { phases: ['profile', 'target', 'review', 'publishers'], whileBusy: true },
+	back: { phases: ['profile', 'target', 'review', 'publishers', 'appearance', 'meetOmni'], whileBusy: true },
 };
 
 /**
@@ -443,7 +467,15 @@ export type EditorMigrationSetupPanel =
 	| {
 		readonly kind: 'bring'; readonly id: string; readonly heading: string; readonly lead: string;
 		readonly paragraphs: readonly string[];
+		readonly choices: readonly EditorMigrationSetupRouteChoice[];
 	};
+
+/** One way out of the `bring` stage. The renderer posts `chooseRoute` with the identifier. */
+export interface EditorMigrationSetupRouteChoice {
+	readonly id: EditorMigrationSetupOnboardingRoute;
+	readonly label: string;
+	readonly detail: string;
+}
 
 export interface EditorMigrationSetupFooter {
 	readonly lines: readonly string[];
@@ -505,6 +537,10 @@ function isNonEmptyString(value: unknown): value is string {
 	return typeof value === 'string' && value.length > 0;
 }
 
+function isOnboardingRoute(value: unknown): value is EditorMigrationSetupOnboardingRoute {
+	return value === 'migrate' || value === 'skipImport';
+}
+
 /** Parses one renderer intent. Returns `undefined` for anything outside the closed union. */
 export function parseEditorMigrationSetupIntent(value: unknown): EditorMigrationSetupIntent | undefined {
 	if (!isRecord(value)) {
@@ -514,6 +550,8 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 		case 'ready':
 		case 'close':
 		case 'skip':
+		case 'continueStage':
+		case 'finishForNow':
 		case 'startImport':
 		case 'refreshDiscovery':
 		case 'continueFromProfile':
@@ -527,6 +565,8 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 		case 'acknowledge':
 		case 'back':
 			return { type: value.type };
+		case 'chooseRoute':
+			return isOnboardingRoute(value.route) ? { type: 'chooseRoute', route: value.route } : undefined;
 		case 'selectApplication':
 			return isNonEmptyString(value.applicationId) ? { type: 'selectApplication', applicationId: value.applicationId } : undefined;
 		case 'selectSourceProfile':
@@ -617,7 +657,7 @@ function isOptionalArrayOf(value: unknown, check: (entry: unknown) => boolean): 
 }
 
 const PHASES: readonly string[] = [
-	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring',
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring', 'appearance', 'meetOmni',
 ];
 
 const ROUTES: readonly string[] = ['import', 'onboarding'];
@@ -687,6 +727,10 @@ function isProgressRow(value: unknown): boolean {
 	return hasStrings(value, ['id', 'label', 'state']);
 }
 
+function isRouteChoice(value: unknown): boolean {
+	return hasStrings(value, ['label', 'detail']) && isOnboardingRoute(value.id);
+}
+
 function isFileCategoryArray(value: unknown): boolean {
 	return isArrayOf(value, entry => typeof entry === 'string' && (EDITOR_MIGRATION_SETUP_FILE_CATEGORIES as readonly string[]).includes(entry));
 }
@@ -751,7 +795,7 @@ const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>)
 			&& isOptionalString((panel.inspection as Record<string, unknown>).heading)
 			&& isFileCategoryArray((panel.inspection as Record<string, unknown>).driftedCategories))),
 	message: panel => isOptionalString(panel.lead),
-	bring: panel => hasStrings(panel, ['lead']) && isStringArray(panel.paragraphs),
+	bring: panel => hasStrings(panel, ['lead']) && isStringArray(panel.paragraphs) && isArrayOf(panel.choices, isRouteChoice),
 };
 
 /** Every panel kind is known, and its own required fields are present. */

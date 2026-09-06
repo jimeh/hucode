@@ -21,6 +21,7 @@
 		"src/vs/hucode/test/browser/omniSmokeTestDriver.test.ts",
 		"src/vs/hucode/test/browser/onboardingPresentation.test.ts",
 		"src/vs/hucode/test/browser/onboardingSession.test.ts",
+		"src/vs/hucode/test/browser/onboardingSetupPresenter.test.ts",
 		"src/vs/hucode/test/browser/onboardingStateStore.test.ts",
 		"src/vs/hucode/test/browser/parts/omniParts.test.ts",
 		"src/vs/hucode/test/browser/projectManager/webProjectManagerService.test.ts",

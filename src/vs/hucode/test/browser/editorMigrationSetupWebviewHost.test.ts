@@ -641,12 +641,15 @@ suite('EditorMigrationSetupWebviewHost', () => {
 
 	test('maps every dispatchable intent onto exactly one session method', () => {
 		// The protocol promises a one-for-one mapping: migration intents onto the migration
-		// session, `skip` onto the onboarding session. A method on both, or on neither, is a drift.
+		// session, the onboarding intents onto the onboarding session. `back` is the one intent
+		// both answer, because onboarding routes it by stage. Anything else on both, or on neither,
+		// is a drift.
 		const migration = new Set(Object.getOwnPropertyNames(EditorMigrationFlowSession.prototype));
 		const onboarding = new Set(Object.getOwnPropertyNames(OnboardingSession.prototype));
 		const owner = (type: string) => migration.has(type) && onboarding.has(type) ? 'both' : migration.has(type) ? 'migration' : onboarding.has(type) ? 'onboarding' : 'none';
 		const types = (Object.keys(EDITOR_MIGRATION_SETUP_INTENT_POLICY) as EditorMigrationSetupIntentType[]).filter(type => type !== 'ready' && type !== 'close');
-		const expected = Object.fromEntries(types.map(type => [type, type === 'skip' ? 'onboarding' : 'migration']));
+		const onboardingOwned: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'continueStage', 'finishForNow'];
+		const expected = Object.fromEntries(types.map(type => [type, type === 'back' ? 'both' : onboardingOwned.includes(type) ? 'onboarding' : 'migration']));
 		assert.deepStrictEqual(Object.fromEntries(types.map(type => [type, owner(type)])), expected);
 	});
 
@@ -812,7 +815,7 @@ class StubPresenter implements ISetupWebviewPresenter {
 			canceling: false,
 			sections: [],
 			scopeKey: 'stub',
-			panels: [{ kind: 'bring', id: '', heading: 'Stub', lead: 'l', paragraphs: [] }],
+			panels: [{ kind: 'bring', id: '', heading: 'Stub', lead: 'l', paragraphs: [], choices: [] }],
 			footer: { lines: [], actions: [] },
 			sectionAnnouncementTemplate: '{0}',
 		};

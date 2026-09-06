@@ -4,9 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Emitter } from '../../../base/common/event.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { InMemoryStorageService, StorageScope } from '../../../platform/storage/common/storage.js';
 import { EditorInputCapabilities } from '../../../workbench/common/editor.js';
+import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 import { EditorMigrationEditorInput } from '../../electron-browser/migration/editorMigrationEditorInput.js';
@@ -48,7 +51,7 @@ suite('OnboardingEditorInput', () => {
 		// the singleton is merely hidden. The session is not added to the suite's disposables on
 		// purpose: the leak tracker proves the input disposed it.
 		const storage = disposables.add(new InMemoryStorageService());
-		const session = new OnboardingSession(new OnboardingStateStore(storage));
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => { throw new Error('no migration on this path'); });
 		session.initialize();
 		const input = new OnboardingEditorInput();
 		input.attachSession(session);
@@ -58,5 +61,31 @@ suite('OnboardingEditorInput', () => {
 		input.dispose();
 
 		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 1, status: 'inProgress', stage: 'bring' });
+	});
+
+	test('asks an admitted Apply to cancel before the embedded migration is disposed with the input', () => {
+		// Escape and outside-click reach this path. The cancellation request must precede disposal:
+		// the apply service continues to its next durable checkpoint on its own, but only a request
+		// made while the session is alive is what closing the standalone command promises too.
+		const storage = disposables.add(new InMemoryStorageService());
+		const events: string[] = [];
+		const migration = new class extends Disposable {
+			private readonly emitter = this._register(new Emitter<EditorMigrationFlowState>());
+			readonly onDidChangeState = this.emitter.event;
+			readonly state = { phase: 'apply', busy: true } as EditorMigrationFlowState;
+			async initialize(): Promise<void> { }
+			requestCancellation(): void { events.push('requestCancellation'); }
+			override dispose(): void { events.push('dispose'); super.dispose(); }
+		}();
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession);
+		session.initialize();
+		session.chooseRoute('migrate');
+		const input = new OnboardingEditorInput();
+		input.attachSession(session);
+
+		input.dispose();
+
+		assert.deepStrictEqual(events, ['requestCancellation', 'dispose']);
+		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' });
 	});
 });

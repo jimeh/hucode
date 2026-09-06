@@ -8,8 +8,12 @@ the navigation, feedback, collection, and migration components in `../components
 `route` field says which surface it belongs to; the shell renders the same way for both, and the
 panel switch in `../components/SetupPanel.tsx` picks up onboarding-only panel kinds from here.
 
-- `BringPanel.tsx`: the first onboarding stage. A placeholder that draws host-supplied copy until
-  the route choices, rerun summary, and embedded migration stages land in later steps.
+- `BringPanel.tsx`: the first onboarding stage. It draws the host-supplied heading, lead, and
+  paragraphs, and offers the two routes out of it as large buttons that post `chooseRoute`.
+
+The embedded migration stages reuse the migration panels unchanged: the host lays onboarding's
+title, step header, and scope over the migration presentation, so nothing here switches on the
+route. The appearance and Meet Omni stages are `message` panels until their content lands.
 
 There is no separate onboarding entry point. The shared webview esbuild path has no code
 splitting, so a second entry would duplicate React and every shared component, and its
