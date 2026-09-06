@@ -11,6 +11,7 @@ import {
 	classifyLinuxOmniTargets,
 	crashLinuxOmniPage,
 	createLinuxOmniLifecycleExpectations,
+	describeLinuxOmniProcesses,
 	createLinuxOmniLaunchEnvironment,
 	createLinuxOmniSmokeFixture,
 	formatLinuxOmniUnexpectedExit,
@@ -830,6 +831,110 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			assert.strictEqual(removedCrashListeners, 1);
 		}
 	);
+
+	test('reports a silently answered crash command with diagnostics',
+		{ timeout: 500 },
+		async () => {
+			let crashListener: (() => void) | undefined;
+			const page = {
+				once(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					crashListener = listener;
+				},
+				off(event: string, listener: () => void): void {
+					assert.strictEqual(event, 'crash');
+					assert.strictEqual(listener, crashListener);
+				},
+				context() {
+					return {
+						async newCDPSession() {
+							return {
+								send(): Promise<object> {
+									return Promise.resolve({});
+								},
+							};
+						},
+					};
+				},
+			};
+
+			await assert.rejects(
+				crashLinuxOmniPage(
+					page as never,
+					Date.now() + 50,
+					async () => 'Projects rows: [{"label":"Bravo","state":"loaded"}]'
+				),
+				error => {
+					const message = (error as Error).message;
+					assert.match(
+						message,
+						/crash event; Page\.crash command resolved \(renderer answered/
+					);
+					assert.match(message, /Projects rows: .*"state":"loaded"/);
+					return true;
+				}
+			);
+		}
+	);
+
+	test('reports a pending crash command and failed diagnostics', async () => {
+		let crashListener: (() => void) | undefined;
+		const page = {
+			once(_event: string, listener: () => void): void {
+				crashListener = listener;
+			},
+			off(_event: string, listener: () => void): void {
+				assert.strictEqual(listener, crashListener);
+			},
+			context() {
+				return {
+					async newCDPSession() {
+						return {
+							send(): Promise<never> {
+								return new Promise(() => undefined);
+							},
+						};
+					},
+				};
+			},
+		};
+
+		await assert.rejects(
+			crashLinuxOmniPage(page as never, Date.now() + 20, async () => {
+				throw new Error('ps unavailable');
+			}),
+			/Page\.crash command pending\n<crash diagnostics failed: .*ps unavailable/
+		);
+	});
+
+	test('lists only the packaged application processes', async () => {
+		const listing = await describeLinuxOmniProcesses(
+			'/opt/VSCode-linux-x64/hucode',
+			async (file, args) => {
+				assert.strictEqual(file, 'ps');
+				assert.deepStrictEqual(args, ['-eo', 'pid,ppid,stat,etimes,args']);
+				return [
+					'    PID    PPID STAT ELAPSED COMMAND',
+					'      1       0 Ss       900 /sbin/init',
+					'   4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+					'   4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+					'',
+				].join('\n');
+			}
+		);
+		assert.strictEqual(
+			listing,
+			[
+				'Application processes:',
+				'4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+				'4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+			].join('\n')
+		);
+		assert.strictEqual(
+			await describeLinuxOmniProcesses('/opt/other', async () => 'PID\n'),
+			'Application processes:\n<none>'
+		);
+	});
 
 	test('formats phase-specific unexpected-exit diagnostics', () => {
 		assert.strictEqual(

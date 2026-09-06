@@ -935,22 +935,31 @@ jobs:
           tar -xf .build/hucode/app/VSCode-linux-x64.tar -C ..
           rm -rf .build/hucode/app
 
-      # ELECTRON_DISABLE_SANDBOX because the app's chrome-sandbox needs to be
-      # root-owned mode 4755 and tar cannot restore that for a non-root
-      # extraction -- the setuid bit is simply gone from the artifact. The
-      # smoke script strips only ELECTRON_RUN_AS_NODE and VSCODE_* from the
-      # child environment, so this reaches the app.
-      #
+      # tar cannot restore the setuid bit for a non-root extraction, so the
+      # app's chrome-sandbox comes out of the artifact as a plain executable.
+      # Restore the root-owned 4755 helper the same way hucode-ci.yml does for
+      # the dev Electron instead of running with ELECTRON_DISABLE_SANDBOX: the
+      # packaged lifecycle smoke failed its renderer-crash phase on every
+      # release from v0.0.76 to v0.0.81 while passing locally and in the
+      # sandboxed CI smoke, and the unsandboxed renderer was the one remaining
+      # difference. Running sandboxed also matches how users run the app.
+      - name: Restore Electron sandbox helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo chown root ../VSCode-linux-x64/chrome-sandbox
+          sudo chmod 4755 ../VSCode-linux-x64/chrome-sandbox
+          test -x ../VSCode-linux-x64/hucode
+          stat ../VSCode-linux-x64/chrome-sandbox
+
       # dbus-run-session and `xvfb-run -a` match linux-package-smoke.sh: a
       # session bus keeps the app off its D-Bus error path, and -a picks a free
       # display instead of failing when :99 is taken.
       #
-      # On failure the script prints the tail of the app's own output, so the
-      # job log carries the diagnostic.
+      # On failure the script prints the tail of the app's own output plus
+      # crash-phase diagnostics, so the job log carries the evidence.
       - name: Run packaged Omni lifecycle smoke
         shell: bash
-        env:
-          ELECTRON_DISABLE_SANDBOX: 1
         run: |
           set -euo pipefail
           dbus-run-session -- xvfb-run -a npm run hucode:smoke:linux-omni -- \
