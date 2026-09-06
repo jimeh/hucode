@@ -150,6 +150,16 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
     ./scripts/test.sh --run <test-file>
   ```
+- Do not run the packaged Linux Omni lifecycle smoke with
+  `ELECTRON_DISABLE_SANDBOX=1` on GitHub-hosted runners. Under an unsandboxed
+  renderer there, `Page.crash` never produced Playwright's `crash` event, and
+  the release smoke failed its "crash Bravo" phase on every release from
+  v0.0.76 to v0.0.81 while passing locally with the same artifact and flag.
+  The release job restores the root-owned 4755 `chrome-sandbox` after
+  extracting the app tar instead, as the CI desktop smoke does for the dev
+  Electron. On a crash timeout the harness prints the `Page.crash` outcome,
+  the shell's Projects rows, and the app's process states; read those before
+  assuming the event was merely lost.
 - That `VSCODE_SKIP_PRELAUNCH=1` also skips the build, and the Electron runner
   executes compiled `out/`. Editing a `.ts` file and re-running therefore tests
   the *previous* build. This matters most when deliberately breaking code to
