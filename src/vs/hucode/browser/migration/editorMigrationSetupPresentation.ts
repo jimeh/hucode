@@ -62,6 +62,7 @@ export function editorMigrationSetupPresentation(state: EditorMigrationFlowState
 	const panels = panelsFor(state, sections);
 	return {
 		revision,
+		route: 'import',
 		phase: state.phase,
 		regionLabel: localize('editorMigration.region', "Editor Setup Import"),
 		title: localize('editorMigration.title', "Import Setup from Another Editor"),

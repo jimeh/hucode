@@ -17,14 +17,11 @@ import {
 	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
 	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
 	EditorMigrationSetupHostMessage,
-	EditorMigrationSetupIntent,
-	editorMigrationSetupPhaseAdmits,
-	isEditorMigrationSetupRevisionBound,
 	parseEditorMigrationSetupIntentMessage,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
-import { EditorMigrationFlowSession, EditorMigrationFlowState } from './editorMigrationFlow.js';
-import { editorMigrationSetupPresentation } from './editorMigrationSetupPresentation.js';
-import { editorMigrationRollbackEligibleCategories } from './editorMigrationFlowSections.js';
+import { ISetupWebviewPresenter } from './editorMigrationSetupPresenter.js';
+
+export { isProgressOnlyChange } from './editorMigrationSetupPresenter.js';
 
 /** Renderer assets the host requires before it mounts anything. */
 export const EDITOR_MIGRATION_SETUP_ASSETS = ['index.js', 'style.css'] as const;
@@ -53,9 +50,9 @@ export interface EditorMigrationSetupWebviewHostOptions {
  * Owns the setup webview end to end: asset probing, CSP, protocol validation, state delivery,
  * and disposal.
  *
- * Callers supply a migration session and host framing only. Every privileged action still runs
- * through the session, and the renderer can express nothing outside the protocol's closed intent
- * union.
+ * Callers supply a presenter and host framing only. The presenter owns the session behind the
+ * snapshot and every privileged action, and the renderer can express nothing outside the
+ * protocol's closed intent union.
  */
 export class EditorMigrationSetupWebviewHost extends Disposable {
 	private readonly mountDisposables = this._register(new DisposableStore());
@@ -65,13 +62,12 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 	private webview: IWebviewElement | undefined;
 	private ready = false;
 	private revision = 0;
-	private delivered: EditorMigrationFlowState | undefined;
 	private statusFocusTarget: HTMLElement | undefined;
 	private disposedHost = false;
 
 	constructor(
 		parent: HTMLElement,
-		private readonly session: EditorMigrationFlowSession,
+		private readonly presenter: ISetupWebviewPresenter,
 		private readonly options: EditorMigrationSetupWebviewHostOptions,
 		@IWebviewService private readonly webviewService: IWebviewService,
 		@IFileService private readonly fileService: IFileService,
@@ -82,6 +78,7 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		this.container.className = 'hucode-setup-webview-host';
 		parent.appendChild(this.container);
 		this._register({ dispose: () => this.container.remove() });
+		this._register(presenter.onDidFinish(() => this.options.onDone()));
 		void this.mount();
 	}
 
@@ -113,7 +110,7 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		this.container.textContent = '';
 		const webview = this.mountDisposables.add(this.webviewService.createWebviewElement({
 			providedViewType: EDITOR_MIGRATION_SETUP_VIEW_TYPE,
-			title: localize('editorMigration.editorName', "Import Editor Setup"),
+			title: this.presenter.title,
 			// Forward live theme tokens; the renderer owns layout and focus styling independently.
 			options: {},
 			contentOptions: {
@@ -132,7 +129,7 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		}));
 		webview.setHtml(this.html());
 		webview.mountTo(this.container, getWindow(this.container) as CodeWindow);
-		this.mountDisposables.add(this.session.onDidChangeState(state => this.scheduleDelivery(state)));
+		this.mountDisposables.add(this.presenter.onDidChangeState(() => this.scheduleDelivery()));
 		this.startReadyDeadline();
 		webview.focus();
 	}
@@ -165,7 +162,6 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		this.mountDisposables.clear();
 		this.webview = undefined;
 		this.ready = false;
-		this.delivered = undefined;
 		this.renderStatus(message, true);
 	}
 
@@ -231,8 +227,8 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 			`script-src 'nonce-${nonce}'`,
 			`font-src ${webviewGenericCspSource}`,
 		].join('; ');
-		const fallback = escapeHtml(localize('editorMigration.setup.bootstrap', "Starting the editor setup import..."));
-		const title = escapeHtml(localize('editorMigration.editorName', "Import Editor Setup"));
+		const fallback = escapeHtml(this.presenter.bootstrapText);
+		const title = escapeHtml(this.presenter.title);
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -261,7 +257,7 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		if (intent.type === 'ready') {
 			this.ready = true;
 			this.readyDeadline.clear();
-			this.deliver(this.session.state, true);
+			this.deliver();
 			// The modal has just opened, so the first thing a keyboard user needs is a landing
 			// point inside the webview rather than the document body.
 			this.post({
@@ -276,29 +272,23 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 			this.options.onDone();
 			return;
 		}
-		/*
-		 * A gesture the session has already moved past is a duplicate, not a mistake.
-		 *
-		 * Rapidly confirming publishers twice is the case that matters: the first click starts the
-		 * import, and the second must neither start a second one nor cancel the first. Answering it
-		 * with the current snapshot and no error keeps the user on the screen they are already
-		 * looking at, because the phase change is the explanation.
-		 */
-		const state = this.session.state;
-		if (!editorMigrationSetupPhaseAdmits(intent.type, state.phase, state.busy)) {
-			this.logService.trace(`[hucode] setup webview intent superseded: ${intent.type} in phase ${state.phase}.`);
-			this.deliver(state, true);
-			return;
-		}
-		if (isEditorMigrationSetupRevisionBound(intent.type) && message.revision !== this.revision) {
-			this.logService.trace('[hucode] setup webview intent refused: stale revision.');
-			this.refuse(localize('editorMigration.setup.staleGesture', "That choice was made against an earlier version of this screen and was not applied. The screen has been refreshed; try again."));
-			return;
-		}
-		if (!this.dispatch(intent)) {
-			this.logService.warn(`[hucode] setup webview intent refused: ${intent.type} does not resolve against current state.`);
-			this.refuse(localize('editorMigration.setup.unavailableChoice', "That choice is no longer available. The screen has been refreshed with the current options."));
-			return;
+		switch (this.presenter.handleIntent(intent, message.revision === this.revision)) {
+			case 'superseded':
+				// The presenter has moved past the screen the gesture came from. The current
+				// snapshot is the whole explanation, so it is answered without an error.
+				this.logService.trace(`[hucode] setup webview intent superseded: ${intent.type}.`);
+				this.deliver();
+				return;
+			case 'staleRevision':
+				this.logService.trace('[hucode] setup webview intent refused: stale revision.');
+				this.refuse(localize('editorMigration.setup.staleGesture', "That choice was made against an earlier version of this screen and was not applied. The screen has been refreshed; try again."));
+				return;
+			case 'unresolvable':
+				this.logService.warn(`[hucode] setup webview intent refused: ${intent.type} does not resolve against current state.`);
+				this.refuse(localize('editorMigration.setup.unavailableChoice', "That choice is no longer available. The screen has been refreshed with the current options."));
+				return;
+			case 'accepted':
+				break;
 		}
 		this.post({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'accepted', revision: this.revision, intentType: intent.type });
 	}
@@ -311,147 +301,8 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 	 * revision the renderer was still holding.
 	 */
 	private refuse(message: string): void {
-		this.deliver(this.session.state, true);
+		this.deliver();
 		this.post({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type: 'error', revision: this.revision, message });
-	}
-
-	/**
-	 * Resolves an intent against current state and calls the matching session method.
-	 *
-	 * Returns false when the intent names something the current state does not offer. Nothing here
-	 * accepts a command ID, path, URI, or service method from the webview.
-	 */
-	private dispatch(intent: Exclude<EditorMigrationSetupIntent, { type: 'ready' } | { type: 'close' }>): boolean {
-		const state = this.session.state;
-		switch (intent.type) {
-			case 'startImport':
-				void this.session.startImport();
-				return true;
-			case 'refreshDiscovery':
-				void this.session.refreshDiscovery();
-				return true;
-			case 'selectApplication': {
-				if (!state.applications.some(application => application.id === intent.applicationId)) {
-					return false;
-				}
-				this.session.selectApplication(intent.applicationId);
-				return true;
-			}
-			case 'selectSourceProfile': {
-				const application = state.applications.find(candidate => candidate.id === state.selectedApplicationId);
-				const source = application?.profiles.find(profile => profile.ref.value === intent.sourceRef);
-				if (!source) {
-					return false;
-				}
-				this.session.selectSourceProfile(source.ref);
-				return true;
-			}
-			case 'continueFromProfile':
-				void this.session.continueFromProfile();
-				return true;
-			case 'selectTarget': {
-				const requested = intent.target;
-				if (requested.kind === 'existing') {
-					const target = state.targets.find(candidate => candidate.selection.profileId === requested.profileId);
-					if (!target) {
-						return false;
-					}
-					this.session.selectTarget(target.selection);
-					return true;
-				}
-				const name = requested.name.trim();
-				if (!name) {
-					return false;
-				}
-				this.session.selectTarget({ kind: 'proposed', name });
-				return true;
-			}
-			case 'continueFromTarget':
-				void this.session.continueFromTarget();
-				return true;
-			case 'rebuildReview':
-				void this.session.rebuildReview();
-				return true;
-			case 'toggleCategory': {
-				if (!state.draft?.target.requestedCategories.includes(intent.category)) {
-					return false;
-				}
-				this.session.toggleCategory(intent.category, intent.selected);
-				return true;
-			}
-			case 'chooseDecision': {
-				if (!state.draft?.decisions.some(decision => decision.id === intent.decisionId && decision.kind === 'conflict')) {
-					return false;
-				}
-				this.session.chooseDecision(intent.decisionId, intent.choice);
-				return true;
-			}
-			case 'chooseAllSettingDifferences':
-				this.session.chooseAllSettingDifferences(intent.choice);
-				return true;
-			case 'acceptReview':
-				void this.session.acceptReview();
-				return true;
-			case 'confirmPublishers':
-				void this.session.confirmPublishers();
-				return true;
-			case 'requestCancellation':
-				this.session.requestCancellation();
-				return true;
-			case 'showRecovery': {
-				if (!state.recoveries.some(recovery => recovery.id === intent.operationId && recovery.unsupportedSchemaVersion === undefined)) {
-					return false;
-				}
-				void this.session.showRecovery(intent.operationId);
-				return true;
-			}
-			case 'resume':
-			case 'retry': {
-				if (state.operation?.id !== intent.operationId) {
-					return false;
-				}
-				void (intent.type === 'resume' ? this.session.resume(intent.operationId) : this.session.retry(intent.operationId));
-				return true;
-			}
-			case 'inspectRollback': {
-				const eligible = this.rollbackEligible(state);
-				if (!intent.categories.length || !intent.categories.every(category => eligible.includes(category))) {
-					return false;
-				}
-				void this.session.inspectRollback(intent.categories);
-				return true;
-			}
-			case 'clearRollbackInspection':
-				this.session.clearRollbackInspection();
-				return true;
-			case 'rollback': {
-				const eligible = this.rollbackEligible(state);
-				const drifted = state.rollbackInspection?.driftedCategories ?? [];
-				if (!intent.categories.length || !intent.categories.every(category => eligible.includes(category))) {
-					return false;
-				}
-				// Forcing past drift is only ever authorized for the categories the current
-				// inspection actually reported as drifted.
-				if (!intent.forceCategories.every(category => drifted.includes(category) && intent.categories.includes(category))) {
-					return false;
-				}
-				void this.session.rollback(intent.categories, intent.forceCategories);
-				return true;
-			}
-			case 'copyReport':
-				void this.session.copyReport();
-				return true;
-			case 'acknowledge':
-				void this.session.acknowledge();
-				return true;
-			case 'back':
-				this.session.back();
-				return true;
-		}
-	}
-
-	private rollbackEligible(state: EditorMigrationFlowState): readonly Exclude<import('../../common/migration/editorMigrationSource.js').EditorMigrationCategory, 'extensions'>[] {
-		return state.operation ? editorMigrationRollbackEligibleCategories(state.operation) : [];
 	}
 
 	// #endregion
@@ -459,18 +310,19 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 	// #region state delivery
 
 	/**
-	 * Progress-only snapshots are coalesced latest-wins to at most one delivery per animation
-	 * frame. Phase changes, admitted operation identity, errors, cancellation, and terminal states
-	 * cross immediately. Skipping an intermediate snapshot never skips a durable journal update,
-	 * because the journal is written by the session, not by this delivery.
+	 * Coalescable snapshots are delivered latest-wins at most once per animation frame. The
+	 * presenter decides what is coalescable; for migration that is Apply progress only, while
+	 * phase changes, admitted operation identity, errors, cancellation, and terminal states cross
+	 * immediately. Skipping an intermediate snapshot never skips a durable journal update, because
+	 * the journal is written by the session, not by this delivery.
 	 */
-	private scheduleDelivery(state: EditorMigrationFlowState): void {
+	private scheduleDelivery(): void {
 		if (!this.ready || !this.webview) {
 			return;
 		}
-		if (!isProgressOnlyChange(this.delivered, state)) {
+		if (!this.presenter.isPendingChangeCoalescable()) {
 			this.pendingDelivery.clear();
-			this.deliver(state, true);
+			this.deliver();
 			return;
 		}
 		if (this.pendingDelivery.value) {
@@ -478,23 +330,21 @@ export class EditorMigrationSetupWebviewHost extends Disposable {
 		}
 		this.pendingDelivery.value = scheduleAtNextAnimationFrame(getWindow(this.container), () => {
 			this.pendingDelivery.clear();
-			this.deliver(this.session.state, true);
+			this.deliver();
 		});
 	}
 
-	private deliver(state: EditorMigrationFlowState, advanceRevision: boolean): void {
+	/** Advances the revision and sends the presenter's current snapshot. */
+	private deliver(): void {
 		if (!this.webview) {
 			return;
 		}
-		if (advanceRevision) {
-			this.revision += 1;
-		}
-		this.delivered = state;
+		this.revision += 1;
 		this.post({
 			protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
 			type: 'state',
 			revision: this.revision,
-			presentation: editorMigrationSetupPresentation(state, this.revision),
+			presentation: this.presenter.presentation(this.revision),
 		});
 	}
 
@@ -525,20 +375,4 @@ function escapeHtml(value: string): string {
 		'"': '&quot;',
 		'\'': '&#39;',
 	}[character] ?? character));
-}
-
-/** True when nothing but Apply progress and its announcement changed. */
-export function isProgressOnlyChange(previous: EditorMigrationFlowState | undefined, next: EditorMigrationFlowState): boolean {
-	if (!previous || !previous.progress || !next.progress) {
-		return false;
-	}
-	return previous.phase === next.phase
-		&& previous.busy === next.busy
-		&& previous.canceling === next.canceling
-		&& previous.error === next.error
-		&& previous.operation === next.operation
-		&& previous.reviewedPlan === next.reviewedPlan
-		&& previous.rollbackInspection === next.rollbackInspection
-		&& previous.progress.operationId === next.progress.operationId
-		&& previous.progress.stage === next.progress.stage;
 }

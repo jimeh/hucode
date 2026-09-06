@@ -9,20 +9,20 @@ import { Action2, registerAction2 } from '../../../platform/actions/common/actio
 import { SyncDescriptor } from '../../../platform/instantiation/common/descriptors.js';
 import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
-import { IMPORT_EDITOR_SETUP_COMMAND_ID } from '../../../platform/window/common/hucodeOmniCommandRouting.js';
+import { OPEN_ONBOARDING_COMMAND_ID } from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../workbench/browser/editor.js';
 import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../../../workbench/common/editor.js';
 import { IEditorService } from '../../../workbench/services/editor/common/editorService.js';
 import { openSetupModalEditor } from '../setupModalEditors.js';
-import { EditorMigrationEditorInput } from './editorMigrationEditorInput.js';
-import { EditorMigrationEditorPane } from './editorMigrationEditorPane.js';
+import { OnboardingEditorInput } from './onboardingEditorInput.js';
+import { OnboardingEditorPane } from './onboardingEditorPane.js';
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
-	EditorPaneDescriptor.create(EditorMigrationEditorPane, EditorMigrationEditorPane.ID, localize('editorMigration.editor', "Import Editor Setup")),
-	[new SyncDescriptor(EditorMigrationEditorInput)],
+	EditorPaneDescriptor.create(OnboardingEditorPane, OnboardingEditorPane.ID, localize('onboarding.editor', "Hucode Onboarding")),
+	[new SyncDescriptor(OnboardingEditorInput)],
 );
 
-class EditorMigrationEditorInputSerializer implements IEditorSerializer {
+class OnboardingEditorInputSerializer implements IEditorSerializer {
 	canSerialize(): boolean {
 		return false;
 	}
@@ -37,20 +37,22 @@ class EditorMigrationEditorInputSerializer implements IEditorSerializer {
 }
 
 Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory)
-	.registerEditorSerializer(EditorMigrationEditorInput.ID, EditorMigrationEditorInputSerializer);
+	.registerEditorSerializer(OnboardingEditorInput.ID, OnboardingEditorInputSerializer);
 
-class ImportEditorSetupAction extends Action2 {
+class OpenOnboardingAction extends Action2 {
 	constructor() {
 		super({
-			id: IMPORT_EDITOR_SETUP_COMMAND_ID,
-			title: localize2('editorMigration.command', "Hucode: Import Setup from Another Editor..."),
-			f1: true,
+			id: OPEN_ONBOARDING_COMMAND_ID,
+			title: localize2('onboarding.command', "Hucode: Open Onboarding"),
+			// Hidden from the Command Palette until the flow has its route content; the command
+			// itself is complete so the host can be exercised end to end.
+			f1: false,
 		});
 	}
 
 	async run(accessor: ServicesAccessor): Promise<void> {
-		await openSetupModalEditor(accessor.get(IEditorService), () => new EditorMigrationEditorInput());
+		await openSetupModalEditor(accessor.get(IEditorService), () => new OnboardingEditorInput());
 	}
 }
 
-registerAction2(ImportEditorSetupAction);
+registerAction2(OpenOnboardingAction);

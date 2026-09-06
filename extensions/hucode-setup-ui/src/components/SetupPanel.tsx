@@ -14,6 +14,7 @@ import type {
 } from '@/generated/editorMigrationSetupProtocol';
 import type { LocalSetupState } from '@/lib/localState';
 import { VirtualCollection } from '@/components/VirtualCollection';
+import { BringPanel } from '@/onboarding/BringPanel';
 import { ActionButton, Disclosure, FilterInput, GroupList, Lead, Note, PanelHeading, ProblemList, SubHeading } from '@/components/primitives';
 import { Button } from '@/vendor/shadcn/button';
 import { Checkbox } from '@/vendor/shadcn/checkbox';
@@ -50,6 +51,7 @@ export function SetupPanelView(props: SetupPanelProps) {
 		case 'resultsOverview': return <ResultsOverviewPanel {...props} panel={panel} />;
 		case 'resultsCategory': return <ResultsCategoryPanel {...props} panel={panel} />;
 		case 'restore': return <RestorePanel {...props} panel={panel} />;
+		case 'bring': return <BringPanel panel={panel} />;
 		case 'message': return (
 			<PanelBody>
 				<PanelHeading>{panel.heading}</PanelHeading>

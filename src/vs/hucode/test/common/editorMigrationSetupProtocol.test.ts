@@ -26,6 +26,7 @@ import {
 function validPresentation(): EditorMigrationSetupPresentation {
 	return {
 		revision: 1,
+		route: 'import',
 		phase: 'application',
 		regionLabel: 'Editor Setup Import',
 		title: 'Import Setup from Another Editor',
@@ -44,6 +45,7 @@ function validPresentation(): EditorMigrationSetupPresentation {
 const EVERY_INTENT: readonly EditorMigrationSetupIntent[] = [
 	{ type: 'ready' },
 	{ type: 'close' },
+	{ type: 'skip' },
 	{ type: 'startImport' },
 	{ type: 'refreshDiscovery' },
 	{ type: 'selectApplication', applicationId: 'cursor' },
@@ -119,7 +121,7 @@ suite('EditorMigrationSetupProtocol', () => {
 
 	test('gives every intent a closed phase and busy policy', () => {
 		const ALL_PHASES: readonly EditorMigrationSetupPhase[] = [
-			'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+			'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring',
 		];
 		// Nothing may default to allowed: an intent added without a policy has no entry here, and
 		// an entry naming no phase would silently make its control dead.
@@ -135,6 +137,7 @@ suite('EditorMigrationSetupProtocol', () => {
 		const expected: Readonly<Record<EditorMigrationSetupIntentType, { readonly phases: readonly EditorMigrationSetupPhase[]; readonly whileBusy: boolean }>> = {
 			ready: { phases: ALL_PHASES, whileBusy: true },
 			close: { phases: ALL_PHASES, whileBusy: true },
+			skip: { phases: ['bring'], whileBusy: false },
 			startImport: { phases: ['recovery', 'results'], whileBusy: false },
 			refreshDiscovery: { phases: ['application'], whileBusy: false },
 			selectApplication: { phases: ['application'], whileBusy: false },
@@ -202,6 +205,32 @@ suite('EditorMigrationSetupProtocol', () => {
 		assert.strictEqual(editorMigrationSetupPhaseAdmits('clearRollbackInspection', 'results', true), true);
 	});
 
+	test('keeps onboarding and migration intents out of each other\'s stages', () => {
+		const MIGRATION_PHASES: readonly EditorMigrationSetupPhase[] = [
+			'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+		];
+		// Skip ends onboarding, so it acts only where onboarding offers it and never twice.
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('skip', 'bring', false), true);
+		assert.strictEqual(editorMigrationSetupPhaseAdmits('skip', 'bring', true), false);
+		for (const phase of MIGRATION_PHASES) {
+			assert.strictEqual(editorMigrationSetupPhaseAdmits('skip', phase, false), false, `skip must not act in ${phase}`);
+		}
+		assert.strictEqual(isEditorMigrationSetupRevisionBound('skip'), false, 'skip names nothing from a snapshot');
+		// No migration session exists behind the bring stage yet, so nothing migration-shaped may act there.
+		for (const type of Object.keys(EDITOR_MIGRATION_SETUP_INTENT_POLICY) as EditorMigrationSetupIntentType[]) {
+			if (type === 'ready' || type === 'close' || type === 'skip') {
+				continue;
+			}
+			assert.strictEqual(editorMigrationSetupPhaseAdmits(type, 'bring', false), false, `${type} must not act in bring`);
+		}
+	});
+
+	test('requires the route discriminator and refuses one the renderer does not know', () => {
+		assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), route: 'onboarding' }), true);
+		assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), route: 'welcome' }), false);
+		assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), route: undefined }), false);
+	});
+
 	test('binds the actions whose decision the phase guard cannot protect', () => {
 		for (const type of ['acceptReview', 'confirmPublishers', 'back'] as const) {
 			assert.strictEqual(isEditorMigrationSetupRevisionBound(type), true, `${type} must not outlive its snapshot`);
@@ -218,7 +247,7 @@ suite('EditorMigrationSetupProtocol', () => {
 		// The exact payload shallow validation used to admit.
 		assert.strictEqual(isEditorMigrationSetupPresentation({ revision: 1 }), false);
 		const required: readonly (keyof EditorMigrationSetupPresentation)[] = [
-			'revision', 'phase', 'regionLabel', 'title', 'scopeKey', 'sectionAnnouncementTemplate',
+			'revision', 'route', 'phase', 'regionLabel', 'title', 'scopeKey', 'sectionAnnouncementTemplate',
 			'busy', 'canceling', 'steps', 'sections', 'panels', 'footer',
 		];
 		for (const key of required) {
@@ -231,7 +260,7 @@ suite('EditorMigrationSetupProtocol', () => {
 	test('refuses a phase the renderer has no panel switch for', () => {
 		assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), phase: 'onboarding' }), false);
 		assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), phase: 7 }), false);
-		for (const phase of ['loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results']) {
+		for (const phase of ['loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring']) {
 			assert.strictEqual(isEditorMigrationSetupPresentation({ ...validPresentation(), phase }), true, `${phase} is a real phase`);
 		}
 	});
@@ -269,6 +298,8 @@ suite('EditorMigrationSetupProtocol', () => {
 		assert.strictEqual(withPanel({ kind: 'groups', id: 'g', heading: 'h', lead: 'l', groups: [{ id: 'x', title: 't', countDescription: 'd' }] }), false, 'a group without a count');
 		assert.strictEqual(withPanel({ kind: 'target', id: '', heading: 'h', lead: 'l', groupLabel: 'g', targets: [], newTarget: { label: 'l', placeholder: 'p', actionLabel: 'a' } }), false, 'the new-target draft value is read directly');
 		assert.strictEqual(withPanel({ kind: 'restore', id: 'restore', heading: 'h', inspection: { description: 'd', actionLabel: 'a', forced: true, driftedCategories: ['extensions'] } }), false, 'extensions are never a rollback category');
+		assert.strictEqual(withPanel({ kind: 'bring', id: '', heading: 'h', lead: 'l' }), false, 'the bring panel maps over its paragraphs');
+		assert.strictEqual(withPanel({ kind: 'bring', id: '', heading: 'h', lead: 'l', paragraphs: [1] }), false);
 	});
 
 	test('refuses a nested action or option the renderer would post straight back', () => {
@@ -343,6 +374,7 @@ suite('EditorMigrationSetupProtocol', () => {
 				inspection: { heading: 'h', description: 'd', actionLabel: 'a', forced: true, driftedCategories: ['settings'] },
 			},
 			{ kind: 'message', id: '', heading: 'Import Results' },
+			{ kind: 'bring', id: '', heading: 'Bring Your Setup', lead: 'l', paragraphs: ['p'] },
 		];
 		const kinds = new Set(panels.map(panel => panel.kind));
 		assert.strictEqual(kinds.size, panels.length, 'each kind appears exactly once');

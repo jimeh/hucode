@@ -110,6 +110,14 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account
   for those later restores or the app can open an extra fallback window.
+- `npm run gulp transpile-client` produces an `out/` the Electron unit runner
+  cannot load (`ReferenceError: exports is not defined` in
+  `test/unit/electron/renderer.js`). Run `npm run gulp compile-client` before
+  `./scripts/test.sh`.
+- In zsh, `npm run -s precommit -- $files` passes the whole list as one
+  argument because zsh does not word-split unquoted variables. Pipe the list
+  through `xargs` or spell the paths out; otherwise precommit silently checks a
+  single nonexistent path and reports success.
 - `npm run test-build-scripts -- --test-name-pattern <pattern>` does not work:
   the build package test script places the test glob before forwarded args, so
   Node treats the pattern as another test file. For filtered build-script tests,

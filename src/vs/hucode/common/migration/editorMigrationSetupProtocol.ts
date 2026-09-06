@@ -13,7 +13,7 @@
  */
 
 /** Bumped whenever a message shape changes. Both sides reject any other value. */
-export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 2;
+export const EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION = 3;
 
 /** The four import categories, repeated here so the protocol stays dependency-free. */
 export const EDITOR_MIGRATION_SETUP_CATEGORIES = ['settings', 'keybindings', 'snippets', 'extensions'] as const;
@@ -25,6 +25,20 @@ export const EDITOR_MIGRATION_SETUP_FILE_CATEGORIES = ['settings', 'keybindings'
 
 export type EditorMigrationSetupFileCategory = (typeof EDITOR_MIGRATION_SETUP_FILE_CATEGORIES)[number];
 
+/**
+ * Which surface a snapshot belongs to.
+ *
+ * The import command and onboarding share one renderer, one protocol, and one validator set. The
+ * discriminator lets each host and the renderer tell the two apart without a second dialect.
+ */
+export type EditorMigrationSetupRoute = 'import' | 'onboarding';
+
+/**
+ * Migration phases, followed by the onboarding stages that wrap them.
+ *
+ * The name predates onboarding and is kept so the mirror, the renderer, and every consumer stay on
+ * one type. Onboarding stages appear after the migration phases; `bring` is the first of them.
+ */
 export type EditorMigrationSetupPhase =
 	| 'loading'
 	| 'recovery'
@@ -34,7 +48,8 @@ export type EditorMigrationSetupPhase =
 	| 'review'
 	| 'publishers'
 	| 'apply'
-	| 'results';
+	| 'results'
+	| 'bring';
 
 export type EditorMigrationSetupSectionStatus = 'attention' | 'ok' | 'neutral';
 
@@ -53,13 +68,15 @@ export type EditorMigrationSetupDecisionChoice = 'import' | 'preserveTarget';
 /**
  * Closed set of renderer intents.
  *
- * Every variant except `ready` and `close` maps one-for-one onto a public user-action method of
- * `EditorMigrationFlowSession`. `editorMigrationSetupProtocol.test.ts` fails when one side gains
- * an action without the other.
+ * Every variant except `ready` and `close` maps one-for-one onto a public user-action method of a
+ * session: the migration intents onto `EditorMigrationFlowSession`, and `skip` onto
+ * `OnboardingSession`. `editorMigrationSetupWebviewHost.test.ts` fails when one side gains an
+ * action without the other.
  */
 export type EditorMigrationSetupIntent =
 	| { readonly type: 'ready' }
 	| { readonly type: 'close' }
+	| { readonly type: 'skip' }
 	| { readonly type: 'startImport' }
 	| { readonly type: 'refreshDiscovery' }
 	| { readonly type: 'selectApplication'; readonly applicationId: string }
@@ -134,7 +151,7 @@ export interface EditorMigrationSetupIntentPolicy {
 }
 
 const ALL_PHASES: readonly EditorMigrationSetupPhase[] = [
-	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring',
 ];
 
 /**
@@ -149,6 +166,9 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	// Lifecycle, handled by the host before dispatch. Closing must never be gated.
 	ready: { phases: ALL_PHASES, whileBusy: true },
 	close: { phases: ALL_PHASES, whileBusy: true },
+
+	// Onboarding. Skip finishes the flow, so a duplicate press must not record it twice.
+	skip: { phases: ['bring'], whileBusy: false },
 
 	// Discovery. Both restart discovery from scratch, so a duplicate would discard the first run.
 	startImport: { phases: ['recovery', 'results'], whileBusy: false },
@@ -419,7 +439,11 @@ export type EditorMigrationSetupPanel =
 			readonly driftedCategories: readonly EditorMigrationSetupFileCategory[];
 		};
 	}
-	| { readonly kind: 'message'; readonly id: string; readonly heading: string; readonly lead?: string };
+	| { readonly kind: 'message'; readonly id: string; readonly heading: string; readonly lead?: string }
+	| {
+		readonly kind: 'bring'; readonly id: string; readonly heading: string; readonly lead: string;
+		readonly paragraphs: readonly string[];
+	};
 
 export interface EditorMigrationSetupFooter {
 	readonly lines: readonly string[];
@@ -429,6 +453,7 @@ export interface EditorMigrationSetupFooter {
 /** Immutable, fully localized snapshot of everything the renderer draws. */
 export interface EditorMigrationSetupPresentation {
 	readonly revision: number;
+	readonly route: EditorMigrationSetupRoute;
 	readonly phase: EditorMigrationSetupPhase;
 	readonly regionLabel: string;
 	readonly title: string;
@@ -488,6 +513,7 @@ export function parseEditorMigrationSetupIntent(value: unknown): EditorMigration
 	switch (value.type) {
 		case 'ready':
 		case 'close':
+		case 'skip':
 		case 'startImport':
 		case 'refreshDiscovery':
 		case 'continueFromProfile':
@@ -591,8 +617,10 @@ function isOptionalArrayOf(value: unknown, check: (entry: unknown) => boolean): 
 }
 
 const PHASES: readonly string[] = [
-	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results',
+	'loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results', 'bring',
 ];
+
+const ROUTES: readonly string[] = ['import', 'onboarding'];
 
 const SECTION_STATUSES: readonly string[] = ['attention', 'ok', 'neutral'];
 
@@ -723,6 +751,7 @@ const PANEL_VALIDATORS: Readonly<Record<string, (panel: Record<string, unknown>)
 			&& isOptionalString((panel.inspection as Record<string, unknown>).heading)
 			&& isFileCategoryArray((panel.inspection as Record<string, unknown>).driftedCategories))),
 	message: panel => isOptionalString(panel.lead),
+	bring: panel => hasStrings(panel, ['lead']) && isStringArray(panel.paragraphs),
 };
 
 /** Every panel kind is known, and its own required fields are present. */
@@ -757,6 +786,7 @@ export function isEditorMigrationSetupPresentation(value: unknown): value is Edi
 		return false;
 	}
 	return isCount(value.revision)
+		&& typeof value.route === 'string' && ROUTES.includes(value.route)
 		&& typeof value.phase === 'string' && PHASES.includes(value.phase)
 		&& typeof value.regionLabel === 'string'
 		&& typeof value.title === 'string'
