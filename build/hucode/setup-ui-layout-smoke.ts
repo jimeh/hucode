@@ -396,9 +396,9 @@ function appearanceSnapshot(): EditorMigrationSetupPresentation {
 		({ id, label, description, checked, intent: { type: 'selectMode' as const, mode: id } });
 	return onboardingSnapshot('appearance', {
 		kind: 'appearance', id: '', heading: 'Choose How Hucode Looks',
-		lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses.',
+		lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. Each choice applies as you make it and is written to the Default profile, which the Omni shell uses.',
 		paragraphs: [
-			'Nothing you have already configured is removed, and Continue writes only the values you change here. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette.',
+			'Nothing you have already configured is removed, and only the values you change here are written. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette.',
 		],
 		modeGroupLabel: 'Appearance mode',
 		modes: [

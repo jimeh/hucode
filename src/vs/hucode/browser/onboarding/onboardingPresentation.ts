@@ -245,10 +245,10 @@ function appearancePanel(state: OnboardingSessionState): EditorMigrationSetupPan
 		kind: 'appearance',
 		id: '',
 		heading,
-		lead: localize('onboarding.appearance.lead', "Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses."),
+		lead: localize('onboarding.appearance.lead', "Choose whether Hucode follows your system, and which light and dark themes it uses. Each choice applies as you make it and is written to the Default profile, which the Omni shell uses."),
 		// One note under the lead; the renderer draws it muted.
 		paragraphs: [
-			localize('onboarding.appearance.note', "Nothing you have already configured is removed, and Continue writes only the values you change here. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette."),
+			localize('onboarding.appearance.note', "Nothing you have already configured is removed, and only the values you change here are written. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette."),
 		],
 		modeGroupLabel: localize('onboarding.appearance.modeGroup', "Appearance mode"),
 		modes: modes.map(([id, label, description]): EditorMigrationSetupRadioOption => ({

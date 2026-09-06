@@ -144,4 +144,28 @@ suite('OnboardingAppearanceAuthority', () => {
 			toDarkWithNoDarkThemes: [['window.autoDetectColorScheme', false, user]],
 		});
 	});
+
+	test('returns the snapshot the writes leave behind, with the theme in use where it is known', async () => {
+		const after = async (draft: OnboardingAppearanceDraft, snapshot = baseline()) => {
+			const next = await setup('Monokai', {}).authority.apply(snapshot, draft);
+			return [next.mode, next.preferredLight, next.preferredDark, next.colorTheme];
+		};
+		assert.deepStrictEqual({
+			unchanged: await after({ mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }),
+			toLight: await after({ mode: 'light', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }),
+			// The preference already in use is now known to be the theme, though nothing was pinned.
+			darkPreferenceUnderDark: await after({ mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Monokai' }),
+			lightPreferenceUnderDark: await after({ mode: 'dark', preferredLight: 'Quiet Light', preferredDark: 'Dark 2026' }),
+			// Under System the operating system decides, so the theme in use is unknown until the next pin.
+			toSystem: await after({ mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }),
+			toDarkWithNoDarkThemes: await after({ mode: 'dark', preferredLight: 'Light 2026', preferredDark: '' }, { ...baseline(), mode: 'light', colorTheme: 'Light 2026', preferredDark: '' }),
+		}, {
+			unchanged: ['dark', 'Light 2026', 'Dark 2026', 'Monokai'],
+			toLight: ['light', 'Light 2026', 'Dark 2026', 'Light 2026'],
+			darkPreferenceUnderDark: ['dark', 'Light 2026', 'Monokai', 'Monokai'],
+			lightPreferenceUnderDark: ['dark', 'Quiet Light', 'Dark 2026', 'Monokai'],
+			toSystem: ['system', 'Light 2026', 'Dark 2026', ''],
+			toDarkWithNoDarkThemes: ['dark', 'Light 2026', '', 'Light 2026'],
+		});
+	});
 });

@@ -201,8 +201,8 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	// twice; a duplicate route choice or Continue would move two stages.
 	skip: { phases: ['bring'], whileBusy: false },
 	chooseRoute: { phases: ['bring'], whileBusy: false },
-	// The appearance choices are a draft until Continue; neither may move while a load or write
-	// is in flight, because the snapshot they name is about to be replaced.
+	// Each appearance choice is written as it is made. Neither may move while a load or Continue
+	// is in flight, because the snapshot they name is about to be replaced or left behind.
 	selectMode: { phases: ['appearance'], whileBusy: false },
 	selectPreferredTheme: { phases: ['appearance'], whileBusy: false },
 	// Continue leaves the appearance stage, and leaves an embedded migration's Results for Meet

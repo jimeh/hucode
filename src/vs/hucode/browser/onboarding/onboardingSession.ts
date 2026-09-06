@@ -20,6 +20,7 @@ import {
 	OnboardingAppearanceMode,
 	OnboardingAppearanceSnapshot,
 	OnboardingColorScheme,
+	isOnboardingAppearanceApplied,
 	onboardingThemesFor,
 } from './onboardingAppearance.js';
 import { IOnboardingOmniAuthority, OnboardingOmniAuthority, OnboardingOmniSnapshot } from './onboardingOmni.js';
@@ -65,13 +66,15 @@ export interface OnboardingSessionState {
 	/** The last failed load or write, shown on the stage it belongs to until the next attempt. */
 	readonly error?: string;
 	/**
-	 * The appearance stage's themes and prefilled values, present once its load succeeded.
-	 * Absent while the stage is loading, after a failed load, and outside the Skip Import route.
+	 * The appearance stage's themes and the values as last read or written, present once its
+	 * load succeeded. Absent while the stage is loading, after a failed load, and outside the
+	 * Skip Import route.
 	 */
 	readonly appearance?: OnboardingAppearanceSnapshot;
 	/**
-	 * The user's staged appearance choices. They outlive Back to `bring` for the session's
-	 * lifetime and are written only by Continue on the appearance stage.
+	 * The user's appearance choices. Each is written as it is made; a choice whose write failed
+	 * stays here, ahead of the snapshot, until a later write or Continue lands it. They outlive
+	 * Back to `bring` for the session's lifetime.
 	 */
 	readonly appearanceDraft?: OnboardingAppearanceDraft;
 	/** The shortcuts Meet Omni mentions, taken whenever the stage is entered. */
@@ -170,10 +173,16 @@ export class OnboardingSession extends Disposable {
 	private readonly migrationLifetime = this._register(new MutableDisposable<DisposableStore>());
 	private _migration: EditorMigrationFlowSession | undefined;
 	/**
-	 * Advanced by every stage change and every appearance load or write, so an asynchronous
-	 * result may only land on the state it was started from.
+	 * Advanced by every stage change, appearance load, and Continue, so an asynchronous result
+	 * may only land on the state it was started from.
 	 */
 	private generation = 0;
+	/**
+	 * Appearance writes run one after another in the order the choices were made. Each diffs the
+	 * current draft against the current snapshot when its turn comes, so choices made during a
+	 * write are carried by the next one and a write that failed is retried by it.
+	 */
+	private appearanceWrites: Promise<void> = Promise.resolve();
 
 	constructor(
 		private readonly store: OnboardingStateStore,
@@ -265,8 +274,9 @@ export class OnboardingSession extends Disposable {
 				return true;
 			}
 			case 'appearance':
-				// The draft stays in memory; a write in flight lands or fails on its own and its
-				// result is discarded, because the stage it belongs to is gone.
+				// Choices already written stay written. The draft stays in memory; a write in flight
+				// lands or fails on its own and its result is discarded, because the snapshot it
+				// diffed against is replaced when the stage is entered again.
 				this.setState({ ...this._state, stage: 'bring', route: undefined, busy: false, error: undefined });
 				return true;
 			case 'meetOmni':
@@ -285,7 +295,7 @@ export class OnboardingSession extends Disposable {
 	 * Loads the themes and current values for the appearance stage.
 	 *
 	 * An existing draft is kept where its ids are still offered, so Back to `bring` and forward
-	 * again shows what the user staged; anything no longer installed falls back to the current
+	 * again shows what the user chose; anything no longer installed falls back to the current
 	 * value. A failed load leaves the stage without choices but still passable: Continue then
 	 * writes nothing.
 	 */
@@ -322,17 +332,21 @@ export class OnboardingSession extends Disposable {
 		});
 	}
 
-	/** Stages a mode. Returns false where the stage offers no choices, or a load or write is in flight. */
+	/**
+	 * Chooses a mode and writes it. Returns false where the stage offers no choices, or a load or
+	 * Continue is in flight.
+	 */
 	selectMode(mode: OnboardingAppearanceMode): boolean {
 		const draft = this._state.appearanceDraft;
 		if (this.finished || this._state.stage !== 'appearance' || this._state.busy || !this._state.appearance || !draft) {
 			return false;
 		}
 		this.setState({ ...this._state, appearanceDraft: { ...draft, mode } });
+		void this.queueAppearanceWrite();
 		return true;
 	}
 
-	/** Stages a preferred theme. Returns false unless the id is one the snapshot offers for that scheme. */
+	/** Chooses a preferred theme and writes it. Returns false unless the id is one the snapshot offers for that scheme. */
 	selectPreferredTheme(scheme: OnboardingColorScheme, themeId: string): boolean {
 		const draft = this._state.appearanceDraft;
 		const snapshot = this._state.appearance;
@@ -346,16 +360,59 @@ export class OnboardingSession extends Disposable {
 			...this._state,
 			appearanceDraft: scheme === 'light' ? { ...draft, preferredLight: themeId } : { ...draft, preferredDark: themeId },
 		});
+		void this.queueAppearanceWrite();
 		return true;
+	}
+
+	/** Appends one write to the chain and resolves once it has run, whether or not it wrote. */
+	private queueAppearanceWrite(): Promise<void> {
+		const write = this.appearanceWrites.then(() => this.writeAppearance());
+		this.appearanceWrites = write;
+		return write;
+	}
+
+	/**
+	 * Writes whatever the draft holds beyond the snapshot, and makes the result the new snapshot.
+	 *
+	 * The choices show at once in the theme service as each write lands. A failed write keeps the
+	 * old snapshot, so the next write, or Continue, carries the same difference again; its error
+	 * shows on the stage until then. Both outcomes are dropped when the snapshot they diffed
+	 * against is no longer the state's, which is what a reload after Back or a finished session
+	 * leaves behind.
+	 */
+	private async writeAppearance(): Promise<void> {
+		const { appearance: snapshot, appearanceDraft: draft } = this._state;
+		if (!snapshot || !draft || !this.appearanceWriteLands(snapshot) || isOnboardingAppearanceApplied(snapshot, draft)) {
+			return;
+		}
+		let next: OnboardingAppearanceSnapshot;
+		try {
+			next = await this.appearance.apply(snapshot, draft);
+		} catch (error) {
+			if (this.appearanceWriteLands(snapshot)) {
+				this.logService.error(error instanceof Error ? error : String(error));
+				const message = errorMessage(error);
+				this.setState({ ...this._state, error: message, announcement: message });
+			}
+			return;
+		}
+		if (this.appearanceWriteLands(snapshot)) {
+			this.setState({ ...this._state, appearance: next, error: undefined });
+		}
+	}
+
+	/** True while the stage a write started from is still shown with the snapshot it diffed against. */
+	private appearanceWriteLands(snapshot: OnboardingAppearanceSnapshot): boolean {
+		return this._state.stage === 'appearance' && this._state.appearance === snapshot && !this.finished && !this._store.isDisposed;
 	}
 
 	/**
 	 * Continue to Meet Omni from the two stages that offer it.
 	 *
-	 * From `appearance` it writes the changed appearance values first. A failed write stays on the
-	 * stage with its error so the user can retry or go back. Without a loaded snapshot there is
-	 * nothing to compare against, so nothing is written and the stage is simply passed; the user
-	 * can still finish onboarding.
+	 * From `appearance` it waits for the queued writes and lands any choice whose write failed. A
+	 * write that still fails stays on the stage with its error so the user can retry or go back.
+	 * Without a loaded snapshot there is nothing to compare against, so nothing is written and the
+	 * stage is simply passed; the user can still finish onboarding.
 	 *
 	 * From the embedded migration it is offered only on concluded Results, and it disposes the
 	 * migration session without acknowledging: the recovery data stays in the journal for the
@@ -375,21 +432,15 @@ export class OnboardingSession extends Disposable {
 		if (this._state.stage !== 'appearance') {
 			return;
 		}
-		const { appearance: snapshot, appearanceDraft: draft } = this._state;
-		if (snapshot && draft) {
+		if (this._state.appearance && this._state.appearanceDraft) {
 			const generation = ++this.generation;
 			this.setState({ ...this._state, busy: true, error: undefined });
-			try {
-				await this.appearance.apply(snapshot, draft);
-			} catch (error) {
-				if (this.isCurrent(generation)) {
-					this.logService.error(error instanceof Error ? error : String(error));
-					const message = errorMessage(error);
-					this.setState({ ...this._state, busy: false, error: message, announcement: message });
-				}
+			await this.queueAppearanceWrite();
+			if (!this.isCurrent(generation)) {
 				return;
 			}
-			if (!this.isCurrent(generation)) {
+			if (this._state.error !== undefined) {
+				this.setState({ ...this._state, busy: false });
 				return;
 			}
 		}

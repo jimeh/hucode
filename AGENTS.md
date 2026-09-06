@@ -473,6 +473,12 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   runtime consumer of hand-built presentation snapshots. A protocol shape
   change must be followed by both; `compile-client` and the unit suites stay
   green while they are red.
+- `.build/electron` holds one binary named after the active `product.json`:
+  `code-oss` after a plain `npm run electron`, `hucode` after
+  `node build/hucode/run-with-mixin.js --quality stable -- npm run electron`.
+  `./scripts/test.sh` needs the former and `./scripts/hucode.sh` the latter, so
+  alternating between unit tests and a desktop run means rebuilding Electron
+  each time; the other name fails with "No such file or directory".
 - `npm run hucode:smoke:linux-omni` inherits the environment. Locally export
   `ELECTRON_DISABLE_SANDBOX=1` alongside `VSCODE_SKIP_PRELAUNCH=1`, or the
   launch aborts on `chrome-sandbox` ownership. Under xvfb, wrap it in

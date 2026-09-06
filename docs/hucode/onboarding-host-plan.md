@@ -82,7 +82,8 @@ The change is complete when:
   service to user settings of the Default profile, which backs the Omni shell.
   This is an explicit product decision, not an inference from the current
   window, and the copy says where the values go. Controls are prefilled from
-  current values, and Continue writes only values that changed.
+  current values, each choice is written as it is made, and only values that
+  changed are written.
 - **No workspace-profile association in this change.** Hosted workbenches
   resolve their profile through VS Code's ordinary folder association, which
   Hucode has no API to write, and the per-project versus per-worktree semantics
@@ -145,8 +146,9 @@ Rules that keep the routes distinct:
 - The migration session is created when the user chooses a source and disposed
   when the user goes Back to `bring` before admission. After admission it lives
   until Continue on concluded results, which disposes it without acknowledging.
-- Appearance values stay a draft until Continue on `appearance`. Back to
-  `bring` keeps the draft in memory but writes nothing.
+- Appearance choices are written as they are made, one write after another,
+  so the theme changes while the stage is open. Continue lands any choice whose
+  write failed. Back to `bring` keeps the choices in memory and undoes nothing.
 - Meet Omni writes nothing. Finish for Now, Add Project, and Open Folder as
   Workbench record completion, close the surface, and only then run their
   command.
@@ -221,10 +223,10 @@ preferred dark themes side by side at the medium width and up, stacked below
 it. One muted note under the lead says that nothing is removed and that the
 import command remains available. The host builds the lists from installed
 color themes and preselects the current values, so a user who changes nothing
-can Continue without any write.
+causes no write.
 
-Continue writes only the changed values, in one configuration update to the
-Default profile's user settings:
+Each choice is written as it is made, so the workbench changes with it, and
+only the changed values are written, to the Default profile's user settings:
 
 - `window.autoDetectColorScheme` for System, and `workbench.colorTheme` for
   Light or Dark set to the matching preferred theme;
@@ -390,6 +392,10 @@ Three changes followed the first macOS run of the complete flow:
   illustrative Projects list, and the density switch were more than a first
   visit needed. The stage now explains Project, Worktree, and Workbench, lists
   the shortcuts, and writes nothing; list density stays in Settings.
+- **Appearance choices apply live.** Holding the mode and theme choices as a
+  draft until Continue meant choosing a theme showed nothing. Each choice is
+  now written when it is made, with the writes run in order; Continue only
+  lands a choice whose write failed.
 
 ## Unresolved questions
 

@@ -26,11 +26,13 @@ export interface OnboardingAppearanceDraft {
 }
 
 /**
- * The current appearance and the themes on offer, read once when the stage opens.
+ * The appearance as last read or written, and the themes on offer.
  *
- * The draft fields are the values the controls are prefilled with; `apply` writes only what the
- * user moved away from them. `colorTheme` is the theme in use, kept so a Light or Dark choice can
- * tell whether `workbench.colorTheme` already matches.
+ * The draft fields are the values the controls are prefilled with, and the baseline `apply`
+ * diffs a draft against; every successful write yields the next baseline. `colorTheme` is the
+ * theme in use, kept so a Light or Dark choice can tell whether `workbench.colorTheme` already
+ * matches; it is empty while System mode derives the theme from the operating system, so the
+ * next Light or Dark choice always pins.
  */
 export interface OnboardingAppearanceSnapshot extends OnboardingAppearanceDraft {
 	readonly colorTheme: string;
@@ -41,8 +43,16 @@ export interface OnboardingAppearanceSnapshot extends OnboardingAppearanceDraft 
 /** Reads and writes the appearance values on behalf of the onboarding session. */
 export interface IOnboardingAppearanceAuthority {
 	snapshot(): Promise<OnboardingAppearanceSnapshot>;
-	/** Writes the settings whose draft value differs from the snapshot; nothing when none does. */
-	apply(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void>;
+	/**
+	 * Writes the settings whose draft value differs from the snapshot, nothing when none does, and
+	 * returns the snapshot those writes leave behind.
+	 */
+	apply(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<OnboardingAppearanceSnapshot>;
+}
+
+/** True when the draft names exactly the snapshot's values, so there is nothing to write. */
+export function isOnboardingAppearanceApplied(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): boolean {
+	return draft.mode === snapshot.mode && draft.preferredLight === snapshot.preferredLight && draft.preferredDark === snapshot.preferredDark;
 }
 
 /** The theme list a draft field selects from. */
@@ -114,8 +124,9 @@ export class OnboardingAppearanceAuthority implements IOnboardingAppearanceAutho
 		};
 	}
 
-	async apply(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
+	async apply(snapshot: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<OnboardingAppearanceSnapshot> {
 		const writes: [key: string, value: unknown][] = [];
+		let colorTheme = snapshot.colorTheme;
 		if (draft.mode !== snapshot.mode) {
 			writes.push([ThemeSettings.DETECT_COLOR_SCHEME, draft.mode === 'system']);
 		}
@@ -126,20 +137,27 @@ export class OnboardingAppearanceAuthority implements IOnboardingAppearanceAutho
 			writes.push([ThemeSettings.PREFERRED_DARK_THEME, draft.preferredDark]);
 		}
 		// Under System the theme service derives the theme from the preferences; pinning it here
-		// would only be overwritten. Light and Dark mean the matching preferred theme is the theme,
-		// but only a changed mode or preference may move it: a user who touched nothing keeps a
-		// current theme that happens to differ from the preference.
-		if (draft.mode !== 'system') {
+		// would only be overwritten, and which theme it derives is not known here. Light and Dark
+		// mean the matching preferred theme is the theme, but only a changed mode or preference may
+		// move it: a user who touched nothing keeps a current theme that happens to differ from the
+		// preference.
+		if (draft.mode === 'system') {
+			colorTheme = '';
+		} else {
 			const theme = draft.mode === 'light' ? draft.preferredLight : draft.preferredDark;
 			const decided = draft.mode !== snapshot.mode
 				|| (draft.mode === 'light' ? draft.preferredLight !== snapshot.preferredLight : draft.preferredDark !== snapshot.preferredDark);
 			// An empty id means the scheme has no installed themes; there is nothing to pin.
-			if (decided && theme !== '' && theme !== snapshot.colorTheme) {
-				writes.push([ThemeSettings.COLOR_THEME, theme]);
+			if (decided && theme !== '') {
+				colorTheme = theme;
+				if (theme !== snapshot.colorTheme) {
+					writes.push([ThemeSettings.COLOR_THEME, theme]);
+				}
 			}
 		}
 		for (const [key, value] of writes) {
 			await this.configurationService.updateValue(key, value, ConfigurationTarget.USER);
 		}
+		return { ...snapshot, ...draft, colorTheme };
 	}
 }

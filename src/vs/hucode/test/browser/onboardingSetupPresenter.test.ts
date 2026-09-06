@@ -74,7 +74,7 @@ suite('OnboardingSetupPresenter', () => {
 		assert.strictEqual(presenter.presentation(1).phase, 'meetOmni');
 	});
 
-	test('stages appearance choices and refuses ids the snapshot does not offer', async () => {
+	test('writes appearance choices as they are made and refuses ids the snapshot does not offer', async () => {
 		const { session, presenter, appearance } = setup();
 		presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, true);
 		const whileLoading = presenter.handleIntent({ type: 'selectMode', mode: 'light' }, true);
@@ -102,7 +102,7 @@ suite('OnboardingSetupPresenter', () => {
 
 		assert.strictEqual(presenter.handleIntent({ type: 'continueStage' }, true), 'accepted');
 		await timeout(0);
-		assert.deepStrictEqual(appearance.calls.map(call => call[0]), ['snapshot', 'apply']);
+		assert.deepStrictEqual(appearance.calls.map(call => call[0]), ['snapshot', 'apply'], 'the choices were written once, before Continue, which found nothing left');
 		assert.strictEqual(presenter.presentation(2).phase, 'meetOmni');
 	});
 
@@ -262,8 +262,9 @@ class AppearanceStub implements IOnboardingAppearanceAuthority {
 		};
 	}
 
-	async apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
+	async apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<OnboardingAppearanceSnapshot> {
 		this.calls.push(['apply', current, draft]);
+		return { ...current, ...draft };
 	}
 }
 

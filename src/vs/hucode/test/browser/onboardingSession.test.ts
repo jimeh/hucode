@@ -474,7 +474,7 @@ suite('OnboardingSession', () => {
 		assert.strictEqual(returned.session.back(), true);
 		assert.deepStrictEqual([returned.session.state.stage, returned.session.state.busy], ['appearance', true]);
 		await timeout(0);
-		assert.deepStrictEqual(returned.appearance.calls.map(call => call[0]), ['snapshot', 'apply', 'snapshot']);
+		assert.deepStrictEqual(returned.appearance.calls.map(call => call[0]), ['snapshot', 'snapshot'], 'nothing was chosen, so nothing was written');
 	});
 
 	test('a snapshot that arrives after the stage was left cannot overwrite the newer state', async () => {
@@ -494,7 +494,7 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual([appearanceView().busy, appearanceView().loaded], [false, true]);
 	});
 
-	test('draft changes accept only offered ids and survive Back to bring', async () => {
+	test('choices accept only offered ids, are written together as they are made, and survive Back to bring', async () => {
 		const { session, appearance, appearanceView } = setup();
 		session.chooseRoute('skipImport');
 		await timeout(0);
@@ -507,48 +507,85 @@ suite('OnboardingSession', () => {
 			dark: session.selectPreferredTheme('dark', 'Monokai'),
 		}, { mode: true, light: true, wrongList: false, unknown: false, dark: true });
 		assert.deepStrictEqual(appearanceView().draft, { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' });
+		await timeout(0);
+		const chosen = { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' };
+		assert.deepStrictEqual(appearance.calls, [['snapshot'], ['apply', snapshot(), chosen]], 'choices made before the first write ran are written in one go');
+		assert.deepStrictEqual(session.state.appearance, { ...snapshot(), ...chosen }, 'the written values are the next baseline');
 
 		assert.strictEqual(session.back(), true);
 		session.chooseRoute('skipImport');
 		await timeout(0);
-		assert.deepStrictEqual(appearanceView().draft, { mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' }, 'Back keeps the draft in memory');
-		assert.deepStrictEqual(appearance.calls.filter(call => call[0] === 'apply'), [], 'Back writes nothing');
+		assert.deepStrictEqual(appearanceView().draft, chosen, 'Back keeps the choices in memory');
+		await session.continueStage();
+		// The stub reads back the same fixed snapshot, so the choices are ahead of it again.
+		assert.deepStrictEqual(appearance.calls, [['snapshot'], ['apply', snapshot(), chosen], ['snapshot'], ['apply', snapshot(), chosen]], 'Continue writes whatever the reloaded snapshot still lacks');
+		assert.strictEqual(appearanceView().stage, 'meetOmni');
 	});
 
-	test('Continue applies the draft against its snapshot and moves to Meet Omni', async () => {
+	test('writes run one after another, each carrying what was chosen since, and Continue waits for them', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
 		appearance.resolveSnapshot();
 		await timeout(0);
+
 		session.selectMode('system');
+		await timeout(0);
+		assert.deepStrictEqual(session.selectMode('dark'), true, 'a choice during a write is accepted');
+		assert.deepStrictEqual([appearanceView().busy, appearanceView().error], [false, undefined], 'a write in flight does not block the stage');
+		appearance.resolveApply();
+		await timeout(0);
+		assert.deepStrictEqual(session.state.appearance?.mode, 'system', 'the first write landed before the second started');
 
 		const continued = session.continueStage();
 		assert.deepStrictEqual([appearanceView().stage, appearanceView().busy], ['appearance', true]);
-		assert.deepStrictEqual(session.selectMode('dark'), false, 'nothing may change under a write in flight');
+		assert.deepStrictEqual(session.selectMode('light'), false, 'nothing may change once Continue is waiting');
 		appearance.resolveApply();
 		await continued;
 
-		assert.deepStrictEqual(appearance.calls, [['snapshot'], ['apply', snapshot(), { mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }]]);
-		assert.deepStrictEqual(appearanceView(), { stage: 'meetOmni', busy: false, loaded: true, draft: { mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: undefined, announcement: 'Appearance choices loaded.' });
+		assert.deepStrictEqual(appearance.calls, [
+			['snapshot'],
+			['apply', snapshot(), { mode: 'system', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }],
+			['apply', { ...snapshot(), mode: 'system' }, { mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }],
+		]);
+		assert.deepStrictEqual(appearanceView(), { stage: 'meetOmni', busy: false, loaded: true, draft: { mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: undefined, announcement: 'Appearance choices loaded.' });
 	});
 
-	test('a failed write stays on appearance with its error until a retry succeeds', async () => {
+	test('a failed write shows its error and keeps the choice, and Continue writes it again', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
 		appearance.resolveSnapshot();
 		await timeout(0);
 		session.selectMode('light');
+		await timeout(0);
 
-		const first = session.continueStage();
 		appearance.rejectApply(new Error('settings file is read-only'));
-		await first;
+		await timeout(0);
 		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: false, loaded: true, draft: { mode: 'light', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: 'settings file is read-only', announcement: 'settings file is read-only' });
 
-		const second = session.continueStage();
+		const continued = session.continueStage();
 		assert.strictEqual(appearanceView().error, undefined, 'a retry clears the error');
+		await timeout(0);
 		appearance.resolveApply();
-		await second;
+		await continued;
+		assert.deepStrictEqual(appearance.calls.map(call => call[0]), ['snapshot', 'apply', 'apply'], 'the failed write left the snapshot behind, so Continue found the same difference');
 		assert.deepStrictEqual([appearanceView().stage, appearanceView().error], ['meetOmni', undefined]);
+	});
+
+	test('a write that still fails under Continue stays on appearance with its error', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		appearance.resolveSnapshot();
+		await timeout(0);
+		session.selectMode('light');
+		await timeout(0);
+		appearance.rejectApply(new Error('settings file is read-only'));
+		await timeout(0);
+
+		const continued = session.continueStage();
+		await timeout(0);
+		appearance.rejectApply(new Error('still read-only'));
+		await continued;
+		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: false, loaded: true, draft: { mode: 'light', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: 'still read-only', announcement: 'still read-only' });
 	});
 
 	test('a failed snapshot leaves the stage passable and Continue writes nothing', async () => {
@@ -569,13 +606,15 @@ suite('OnboardingSession', () => {
 		session.chooseRoute('skipImport');
 		appearance.resolveSnapshot();
 		await timeout(0);
+		session.selectMode('light');
+		await timeout(0);
 		const continued = session.continueStage();
 
 		assert.strictEqual(session.back(), true);
-		appearance.resolveApply();
+		appearance.rejectApply(new Error('settings file is read-only'));
 		await continued;
 
-		assert.deepStrictEqual([appearanceView().stage, appearanceView().busy], ['bring', false]);
+		assert.deepStrictEqual(appearanceView(), { stage: 'bring', busy: false, loaded: true, draft: { mode: 'light', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, error: undefined, announcement: 'Appearance choices loaded.' }, 'neither the failure nor Continue reached the stage that was left');
 	});
 
 	test('a migration change after the flow finished is still harmless', async () => {
@@ -661,13 +700,14 @@ class AppearanceStub implements IOnboardingAppearanceAuthority {
 		return this.pendingSnapshot.p;
 	}
 
-	apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<void> {
+	apply(current: OnboardingAppearanceSnapshot, draft: OnboardingAppearanceDraft): Promise<OnboardingAppearanceSnapshot> {
 		this.calls.push(['apply', current, draft]);
+		const next = { ...current, ...draft };
 		if (!this.manual) {
-			return Promise.resolve();
+			return Promise.resolve(next);
 		}
 		this.pendingApply = new DeferredPromise();
-		return this.pendingApply.p;
+		return this.pendingApply.p.then(() => next);
 	}
 
 	resolveSnapshot(): void {

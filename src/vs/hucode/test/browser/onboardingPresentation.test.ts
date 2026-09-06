@@ -264,7 +264,7 @@ suite('OnboardingPresentation', () => {
 			paragraphs: undefined,
 			mentionsPalette: undefined,
 			footer: [['Back', { type: 'back' }, false], ['Continue', { type: 'continueStage' }, false]],
-			lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses.',
+			lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. Each choice applies as you make it and is written to the Default profile, which the Omni shell uses.',
 			copy: [true, true, true, 1],
 			modeGroupLabel: 'Appearance mode',
 			modes: [
