@@ -460,6 +460,30 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   For scrollbar screenshots and drag tests, launch Playwright Chromium with
   `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
   even when its computed colors are correct.
+- The setup UI stylesheet imports Tailwind with `source(none)` and explicit
+  `@source` globs. A new renderer directory under
+  `extensions/hucode-setup-ui/src/` needs its own `@source` line, or classes
+  used only there are silently absent from the bundle; jsdom tests do not
+  notice, only a real browser does.
+- `EditorMigrationSetupPresenter.dispatch()` is an exhaustive switch over every
+  protocol intent. Adding an onboarding-only intent fails `compile-client`
+  until the migration presenter lists it in its unreachable onboarding case.
+- `cd build && npm run typecheck` is the only checker covering
+  `build/hucode/*.ts`, and `npm run hucode:smoke:setup-ui-layout` is the only
+  runtime consumer of hand-built presentation snapshots. A protocol shape
+  change must be followed by both; `compile-client` and the unit suites stay
+  green while they are red.
+- `npm run hucode:smoke:linux-omni` inherits the environment. Locally export
+  `ELECTRON_DISABLE_SANDBOX=1` alongside `VSCODE_SKIP_PRELAUNCH=1`, or the
+  launch aborts on `chrome-sandbox` ownership. Under xvfb, wrap it in
+  `dbus-run-session`.
+- Radix roving focus in the setup UI moves on a `setTimeout` and selects the
+  landing radio only while the arrow key is still held. Playwright's default
+  `press` releases instantly and looks like a broken list; use
+  `press('ArrowDown', { delay: 60 })` with a polled focus expectation.
+- Electron webviews are reachable over CDP as ordinary `page.frames()`
+  entries with `vscode-webview://` URLs; no out-of-process iframe handling is
+  needed to drive the setup UI in a desktop smoke.
 - `local/code-no-unexternalized-strings` and
   `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
   packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`

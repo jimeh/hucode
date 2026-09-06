@@ -1,10 +1,18 @@
 feat(onboarding): add the onboarding modal host and state
 
-Add the Hucode onboarding session, versioned installation-scoped state, and
-modal editor host with a placeholder Bring Your Setup stage. Skip records the
-choice, and Escape, outside-click, or Do This Later record a resumable step.
-The open command exists but stays out of the Command Palette until the flow
-has its route content.
+Add Hucode: Open Onboarding, a three-stage flow in the Omni modal editor.
+Bring Your Setup embeds the existing editor setup import or skips it;
+Skip Import offers a System, Light, or Dark mode with preferred light and
+dark themes, prefilled and written to the Default profile only when
+changed; Meet Omni explains projects, worktrees, and workbenches with an
+illustrative list, one compact-lists switch that writes both Omni layout
+settings, and the switching shortcuts, then hands off to Add Project, Open
+Folder as Workbench, or Finish for Now.
 
-Generalize the setup webview host around a presenter so the import command and
-onboarding share one renderer, one protocol, and one validator set.
+Onboarding keeps a versioned installation-scoped record. Escape or Do This
+Later records a resumable step, Skip and completion are explicit, and
+reopening a completed installation changes nothing on its own. Nothing
+opens onboarding automatically yet.
+
+Generalize the setup webview host around a presenter so the import command
+and onboarding share one renderer, one protocol, and one validator set.
