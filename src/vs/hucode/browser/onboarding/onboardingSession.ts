@@ -388,7 +388,8 @@ export class OnboardingSession extends Disposable {
 			return;
 		}
 		const acknowledged = await migration.acknowledge(false);
-		if (!acknowledged || this.finished || this._migration !== migration) {
+		// The modal may have closed during the await; a disposed session must not land anywhere.
+		if (!acknowledged || this.finished || this._store.isDisposed || this._migration !== migration) {
 			return;
 		}
 		this.disposeMigration();

@@ -55,7 +55,7 @@ export function onboardingPresentation(state: OnboardingSessionState, revision: 
 		phase: state.stage === 'migrate' ? 'loading' : state.stage,
 		regionLabel: regionLabel(),
 		title: title(),
-		steps: steps(state.stage === 'meetOmni' ? 'meetOmni' : 'bring'),
+		steps: steps(state.stage === 'meetOmni' ? 'meetOmni' : state.stage === 'appearance' ? 'review' : 'bring'),
 		busy: state.busy,
 		canceling: false,
 		error: state.error,

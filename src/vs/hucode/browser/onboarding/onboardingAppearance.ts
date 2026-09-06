@@ -59,7 +59,7 @@ function schemeOf(theme: IWorkbenchColorTheme): OnboardingColorScheme {
  *
  * The configured preference wins when it names an installed theme. Otherwise the theme in use is
  * the best guess when it belongs to the list, then the product default, then whatever is first;
- * an empty list yields an empty id, which `apply` never writes because it cannot differ from itself.
+ * an empty list yields an empty id, which `apply` never pins as the theme.
  */
 function preferredThemeId(configured: unknown, current: string, productDefault: string, themes: readonly OnboardingThemeOption[]): string {
 	const offered = (id: unknown): id is string => typeof id === 'string' && themes.some(theme => theme.id === id);
@@ -133,7 +133,8 @@ export class OnboardingAppearanceAuthority implements IOnboardingAppearanceAutho
 			const theme = draft.mode === 'light' ? draft.preferredLight : draft.preferredDark;
 			const decided = draft.mode !== snapshot.mode
 				|| (draft.mode === 'light' ? draft.preferredLight !== snapshot.preferredLight : draft.preferredDark !== snapshot.preferredDark);
-			if (decided && theme !== snapshot.colorTheme) {
+			// An empty id means the scheme has no installed themes; there is nothing to pin.
+			if (decided && theme !== '' && theme !== snapshot.colorTheme) {
 				writes.push([ThemeSettings.COLOR_THEME, theme]);
 			}
 		}

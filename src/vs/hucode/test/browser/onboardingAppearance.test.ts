@@ -123,6 +123,8 @@ suite('OnboardingAppearanceAuthority', () => {
 			preferenceUnderSystem: await applied({ mode: 'system', preferredLight: 'Quiet Light', preferredDark: 'Monokai' }, { ...baseline(), mode: 'system' }),
 			fromSystemToDark: await applied({ mode: 'dark', preferredLight: 'Light 2026', preferredDark: 'Dark 2026' }, { ...baseline(), mode: 'system' }),
 			everything: await applied({ mode: 'light', preferredLight: 'Quiet Light', preferredDark: 'Monokai' }),
+			// A scheme with no installed themes has an empty preferred id; the mode still moves, but nothing is pinned.
+			toDarkWithNoDarkThemes: await applied({ mode: 'dark', preferredLight: 'Light 2026', preferredDark: '' }, { ...baseline(), mode: 'light', colorTheme: 'Light 2026', preferredDark: '' }),
 		}, {
 			unchanged: [],
 			toSystem: [['window.autoDetectColorScheme', true, user]],
@@ -139,6 +141,7 @@ suite('OnboardingAppearanceAuthority', () => {
 				['workbench.preferredDarkColorTheme', 'Monokai', user],
 				['workbench.colorTheme', 'Quiet Light', user],
 			],
+			toDarkWithNoDarkThemes: [['window.autoDetectColorScheme', false, user]],
 		});
 	});
 });

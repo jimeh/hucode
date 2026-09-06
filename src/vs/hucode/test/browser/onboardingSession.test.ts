@@ -220,6 +220,22 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual(position(), { stage: 'meetOmni', route: 'migrate' });
 	});
 
+	test('disposing the session during the acknowledge await lands nowhere', async () => {
+		const storage = disposables.add(new InMemoryStorageService());
+		const migration = new MigrationStub(true);
+		const omni = new OmniStub('default', false, false);
+		const session = new OnboardingSession(new OnboardingStateStore(storage), () => migration as unknown as EditorMigrationFlowSession, new AppearanceStub(false), omni, new NullLogService());
+		session.initialize();
+		session.chooseRoute('migrate');
+		migration.publish({ phase: 'results', operation: { id: 'operation' } as EditorMigrationFlowState['operation'] });
+
+		const acknowledging = session.acknowledgeMigration();
+		session.dispose();
+		await acknowledging;
+
+		assert.deepStrictEqual({ stage: session.state.stage, omniCalls: omni.calls, disposed: migration.disposed }, { stage: 'migrate', omniCalls: [], disposed: true });
+	});
+
 	test('a refused acknowledgement stays on the migration results', async () => {
 		const { session, migrations, position } = setup(undefined, { acknowledged: false });
 		session.chooseRoute('migrate');
