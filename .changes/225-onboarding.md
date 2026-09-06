@@ -1,4 +1,4 @@
-feat(onboarding): add the onboarding modal host and state
+feat(onboarding): add the modal Hucode onboarding experience
 
 Add Hucode: Open Onboarding, a three-stage flow in the Omni modal editor.
 Bring Your Setup embeds the existing editor setup import or skips it;
