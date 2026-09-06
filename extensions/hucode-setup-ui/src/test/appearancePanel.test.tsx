@@ -76,11 +76,13 @@ describe('AppearancePanel', () => {
 
 		expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Choose How Hucode Looks');
 		expect(screen.getByText('These values are written to the Default profile.')).toBeInTheDocument();
-		expect(screen.getByText('Nothing you have already configured is removed.')).toBeInTheDocument();
+		expect(screen.getByText('Nothing you have already configured is removed.')).toHaveClass('text-xs');
 		const modes = screen.getByRole('radiogroup', { name: 'Appearance mode' });
+		// Each tile is one radio named by its label alone, with the description as its accessible description.
+		expect(within(modes).getAllByRole('radio').map(tile => tile.getAttribute('aria-label') ?? tile.getAttribute('aria-labelledby'))).toEqual(['mode-system-label', 'mode-light-label', 'mode-dark-label']);
 		expect(within(modes).getByRole('radio', { name: 'Dark' })).toBeChecked();
 		expect(within(modes).getByRole('radio', { name: 'System' })).toHaveAttribute('data-focus-id', 'mode-system');
-		expect(screen.getByText('Follow the operating system.')).toBeInTheDocument();
+		expect(within(modes).getByRole('radio', { name: 'System' })).toHaveAccessibleDescription('Follow the operating system.');
 		const light = screen.getByRole('radiogroup', { name: 'Light themes' });
 		expect(within(light).getByRole('radio', { name: 'Light Theme 2' })).toBeChecked();
 		expect(within(light).getAllByRole('radio')).toHaveLength(12);

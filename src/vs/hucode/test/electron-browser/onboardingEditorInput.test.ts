@@ -104,8 +104,7 @@ function noAppearance(): IOnboardingAppearanceAuthority {
 function noOmni(): IOnboardingOmniAuthority {
 	const refuse = () => Promise.reject(new Error('no Omni on this path'));
 	return {
-		snapshot: () => ({ density: 'default', shortcuts: [] }),
-		applyDensity: refuse,
+		snapshot: () => ({ shortcuts: [] }),
 		addProject: refuse,
 		openFolderAsWorkbench: refuse,
 	};

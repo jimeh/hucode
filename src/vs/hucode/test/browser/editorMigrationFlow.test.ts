@@ -84,47 +84,6 @@ suite('EditorMigrationFlow', () => {
 		assert.deepStrictEqual(acknowledged, [settled.id, settled.id]);
 	});
 
-	test('acknowledges without restarting discovery when asked, and reports whether it happened', async () => {
-		const acknowledged: string[] = [];
-		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
-		const draft = reviewDraft(snapshot(sourceDescriptor));
-		const plan: EditorMigrationReviewedPlan = {
-			...draft,
-			choices: { selectedCategories: ['settings'], decisions: [] },
-			operations: [],
-			fingerprints: { source: 'source', target: 'target', choices: 'choices', policy: 'policy', gallery: 'gallery', plan: 'plan' },
-		};
-		const settled = { ...operation(plan), stage: 'settled' as const, aggregateOutcome: 'completed' as const };
-		let discoveries = 0;
-		let fail = false;
-		const session = disposables.add(new EditorMigrationFlowSession(
-			{ discoverSources: async () => { discoveries++; return { schemaVersion: EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION, generation: 1, sources: [], diagnostics: [] }; } } as unknown as IEditorMigrationSourceService,
-			{} as IEditorMigrationPlanningService,
-			{
-				listRecoverableOperations: async () => [],
-				getOperation: async () => settled,
-				acknowledge: async (operationId: string) => { if (fail) { throw new Error('Journal unavailable'); } acknowledged.push(operationId); },
-			} as unknown as IEditorMigrationApplyService,
-			{ defaultProfile: { id: 'default', name: 'Default', isDefault: true }, profiles: [] } as unknown as IUserDataProfilesService,
-			{ writeText: async () => { } } as unknown as IClipboardService,
-			new NullLogService(),
-		));
-		await session.showRecovery(settled.id);
-
-		// A host that moves on afterwards, such as onboarding, must not be handed a fresh discovery.
-		assert.strictEqual(await session.acknowledge(false), true);
-		assert.deepStrictEqual({ acknowledged, discoveries, phase: session.state.phase }, { acknowledged: [settled.id], discoveries: 0, phase: 'results' });
-
-		fail = true;
-		assert.strictEqual(await session.acknowledge(false), false, 'a failed deletion must not read as done');
-		assert.strictEqual(session.state.error, 'Journal unavailable');
-
-		// The default keeps the standalone command's promise of another import.
-		fail = false;
-		assert.strictEqual(await session.acknowledge(), true);
-		assert.deepStrictEqual({ acknowledged, discoveries, phase: session.state.phase }, { acknowledged: [settled.id, settled.id], discoveries: 1, phase: 'application' });
-	});
-
 	test('binds rollback inspection completion to the latest requested category set', async () => {
 		const sourceDescriptor = descriptor('cursor', 'Cursor', 'Default', 'default', 'cursor-default');
 		const draft = reviewDraft(snapshot(sourceDescriptor));

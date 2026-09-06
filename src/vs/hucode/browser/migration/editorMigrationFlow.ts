@@ -480,32 +480,19 @@ export class EditorMigrationFlowSession extends Disposable {
 		}
 	}
 
-	/**
-	 * Deletes the shown operation's recovery data.
-	 *
-	 * The standalone command then starts another import, which is what its Results screen
-	 * promises. A host that leaves the migration behind afterwards passes `restart: false` and
-	 * reads the result: `true` only when the journal deletion happened, so a failure, which is
-	 * published as a flow error, or a superseded duplicate press cannot move that host on.
-	 */
-	async acknowledge(restart = true): Promise<boolean> {
+	async acknowledge(): Promise<void> {
 		const operation = this.stateValue.operation;
 		if (!operation) {
-			return false;
+			return;
 		}
-		let acknowledged = false;
 		await this.runExclusive(recoveryRecordKey(operation.id), async () => {
 			try {
 				await this.applyService.acknowledge(operation.id);
-				acknowledged = true;
-				if (restart) {
-					await this.startImport();
-				}
+				await this.startImport();
 			} catch (error) {
 				this.update({ error: errorMessage(error), announcement: errorMessage(error) });
 			}
 		});
-		return acknowledged;
 	}
 
 	/**

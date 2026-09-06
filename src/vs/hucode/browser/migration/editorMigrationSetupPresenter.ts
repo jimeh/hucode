@@ -239,12 +239,13 @@ export class EditorMigrationSetupPresenter implements ISetupWebviewPresenter {
 			case 'selectMode':
 			case 'selectPreferredTheme':
 			case 'continueStage':
-			case 'setDensity':
 			case 'finishForNow':
 			case 'addProject':
 			case 'openFolderAsWorkbench':
-				// Onboarding intents. Their policies admit them in no migration phase, so this is
-				// unreachable; the migration session has no stages to move between.
+				// Onboarding intents. The import route offers none of them: the policy admits
+				// `continueStage` in Results only for onboarding's embedded migration, whose presenter
+				// answers it before this one is consulted; the migration session has no stages to
+				// move between.
 				return false;
 		}
 	}

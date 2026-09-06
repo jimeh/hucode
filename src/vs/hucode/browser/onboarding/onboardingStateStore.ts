@@ -17,21 +17,17 @@ export type OnboardingRecordStage = 'bring' | 'migrate' | 'appearance' | 'meetOm
 
 export type OnboardingRecordRoute = 'migrate' | 'skipImport';
 
-export type OnboardingRecordDensity = 'default' | 'compact';
-
 /**
  * Installation-scoped onboarding record.
  *
- * It stores navigation and staged non-sensitive choices only: no theme names, imported values,
- * extension identifiers, paths, or operation identifiers. The migration journal remains the
- * source for operation summaries.
+ * It stores navigation only: no theme names, imported values, extension identifiers, paths, or
+ * operation identifiers. The migration journal remains the source for operation summaries.
  */
 export interface OnboardingRecord {
 	readonly version: typeof ONBOARDING_RECORD_VERSION;
 	readonly status: OnboardingRecordStatus;
 	readonly stage?: OnboardingRecordStage;
 	readonly route?: OnboardingRecordRoute;
-	readonly density?: OnboardingRecordDensity;
 	readonly completedAt?: number;
 }
 
@@ -49,7 +45,6 @@ export type OnboardingStoredState =
 const STATUSES: readonly string[] = ['notStarted', 'inProgress', 'skipped', 'completed'];
 const STAGES: readonly string[] = ['bring', 'migrate', 'appearance', 'meetOmni'];
 const ROUTES: readonly string[] = ['migrate', 'skipImport'];
-const DENSITIES: readonly string[] = ['default', 'compact'];
 
 /** Reads and writes the onboarding record under application scope, machine target. */
 export class OnboardingStateStore {
@@ -106,7 +101,6 @@ function parseRecord(value: Record<string, unknown>): OnboardingRecord | undefin
 	if (!isOneOf<OnboardingRecordStatus>(value.status, STATUSES)
 		|| !isOptionalOneOf<OnboardingRecordStage>(value.stage, STAGES)
 		|| !isOptionalOneOf<OnboardingRecordRoute>(value.route, ROUTES)
-		|| !isOptionalOneOf<OnboardingRecordDensity>(value.density, DENSITIES)
 		|| (value.completedAt !== undefined && typeof value.completedAt !== 'number')) {
 		return undefined;
 	}
@@ -115,7 +109,6 @@ function parseRecord(value: Record<string, unknown>): OnboardingRecord | undefin
 		status: value.status,
 		stage: value.stage,
 		route: value.route,
-		density: value.density,
 		completedAt: value.completedAt,
 	};
 }

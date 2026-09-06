@@ -18,7 +18,7 @@ import {
 	SetupWebviewIntentOutcome,
 } from '../migration/editorMigrationSetupPresenter.js';
 import { onboardingPresentation } from './onboardingPresentation.js';
-import { OnboardingSession, onboardingOwnsMigrationBack } from './onboardingSession.js';
+import { OnboardingSession, onboardingMigrationCanContinue, onboardingOwnsMigrationBack } from './onboardingSession.js';
 
 /**
  * Presents an `OnboardingSession` through the setup webview.
@@ -26,8 +26,9 @@ import { OnboardingSession, onboardingOwnsMigrationBack } from './onboardingSess
  * Outside the `migrate` stage the admission policy is the protocol's, keyed on the onboarding
  * stage, so every migration intent is superseded before it could reach anything. Inside it, an
  * inner migration presenter built over the embedded session answers every migration intent
- * unchanged, except the two onboarding intercepts: Back while no source is chosen, which returns
- * to `bring`, and acknowledging results, which moves on to Meet Omni.
+ * unchanged, except the onboarding intercepts: Back while no source is chosen, which returns to
+ * `bring`, and Continue on concluded results, which moves on to Meet Omni. Acknowledgement is
+ * refused, because onboarding's Results footer never offers it.
  */
 export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 	readonly onDidChangeState: Event<unknown>;
@@ -43,7 +44,8 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 
 	presentation(revision: number): EditorMigrationSetupPresentation {
 		const inner = this.innerPresenter();
-		return onboardingPresentation(this.session.state, revision, inner?.presentation(revision));
+		const migration = this.session.migration;
+		return onboardingPresentation(this.session.state, revision, inner && migration ? { flow: migration.state, presentation: inner.presentation(revision) } : undefined);
 	}
 
 	isPendingChangeCoalescable(): boolean {
@@ -77,8 +79,6 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 			case 'continueStage':
 				void this.session.continueStage();
 				return 'accepted';
-			case 'setDensity':
-				return this.session.setDensity(intent.density) ? 'accepted' : 'unresolvable';
 			case 'finishForNow':
 				void this.session.finishForNow();
 				return 'accepted';
@@ -98,8 +98,8 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 	}
 
 	/**
-	 * Inside the embedded migration, the migration presenter's admission is the law, with two
-	 * intercepts decided before it is consulted.
+	 * Inside the embedded migration, the migration presenter's admission is the law, with the
+	 * onboarding intercepts decided before it is consulted.
 	 */
 	private handleMigrationIntent(intent: SetupWebviewDispatchableIntent, isCurrentRevision: boolean, inner: EditorMigrationSetupPresenter): SetupWebviewIntentOutcome {
 		const migration = this.session.migration!.state;
@@ -111,15 +111,20 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 			}
 			return this.session.back() ? 'accepted' : 'unresolvable';
 		}
-		if (intent.type === 'acknowledge') {
+		if (intent.type === 'continueStage') {
 			if (!editorMigrationSetupPhaseAdmits(intent.type, migration.phase, migration.busy)) {
 				return 'superseded';
 			}
-			if (!migration.operation) {
+			if (!onboardingMigrationCanContinue(migration)) {
 				return 'unresolvable';
 			}
-			void this.session.acknowledgeMigration();
+			void this.session.continueStage();
 			return 'accepted';
+		}
+		if (intent.type === 'acknowledge') {
+			// Onboarding keeps the recovery data for the import command, so its Results footer never
+			// offers this; the migration session would restart discovery inside the modal.
+			return 'unresolvable';
 		}
 		return inner.handleIntent(intent, isCurrentRevision);
 	}

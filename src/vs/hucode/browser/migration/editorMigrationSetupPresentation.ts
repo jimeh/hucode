@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../nls.js';
-import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationApplyProgress, EditorMigrationItemResult, EditorMigrationOperation, editorMigrationOperationConcluded } from '../../common/migration/editorMigrationApply.js';
 import { EditorMigrationCategory, EditorMigrationDiagnostic, EditorMigrationJsonValue, EditorMigrationSourceDescriptor } from '../../common/migration/editorMigrationSource.js';
 import { EditorMigrationDraftDecision, EditorMigrationPlanDraft, EditorMigrationReviewedPlan } from '../../common/migration/editorMigrationPlanning.js';
 import {
@@ -730,11 +730,8 @@ function resultsFooter(state: EditorMigrationFlowState): EditorMigrationSetupPre
 	if (operation.stage !== 'settled' && operation.stage !== 'rolledBack') {
 		actions.push(action('results-resume', localize('editorMigration.results.resume', "Resume"), { type: 'resume', operationId: operation.id }));
 	}
-	const lines = [operation.aggregateOutcome ? aggregateOutcomeLabel(operation.aggregateOutcome) : stageLabel(operation.stage)];
-	if (operation.rollbackIntent?.mutationStarted) {
-		lines.push(localize('editorMigration.results.rollbackForwardRetryUnavailable', "Forward import retry is unavailable because file restoration already began."));
-	}
-	if ((operation.stage === 'settled' || operation.stage === 'rolledBack') && operation.aggregateOutcome) {
+	const lines = [...editorMigrationResultsFooterLines(operation)];
+	if (editorMigrationOperationConcluded(operation)) {
 		lines.push(localize('editorMigration.results.acknowledge.description', "Removing recovery data deletes the retained snapshots used for file rollback."));
 		actions.push(
 			action('results-done', localize('editorMigration.results.done', "Done"), { type: 'close' }, 'primary'),
@@ -742,6 +739,18 @@ function resultsFooter(state: EditorMigrationFlowState): EditorMigrationSetupPre
 		);
 	}
 	return { lines, actions };
+}
+
+/**
+ * The Results footer's status lines: the outcome, and the retry restriction once file restoration
+ * began. Shared with hosts that replace the standalone footer's actions but keep its status.
+ */
+export function editorMigrationResultsFooterLines(operation: EditorMigrationOperation): readonly string[] {
+	const lines = [operation.aggregateOutcome ? aggregateOutcomeLabel(operation.aggregateOutcome) : stageLabel(operation.stage)];
+	if (operation.rollbackIntent?.mutationStarted) {
+		lines.push(localize('editorMigration.results.rollbackForwardRetryUnavailable', "Forward import retry is unavailable because file restoration already began."));
+	}
+	return lines;
 }
 
 // #endregion

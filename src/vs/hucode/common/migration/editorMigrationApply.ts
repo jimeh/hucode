@@ -367,6 +367,14 @@ export interface EditorMigrationOperation {
 	readonly unsupportedSchemaVersion?: number;
 }
 
+/**
+ * True once the operation has a final outcome: settled or rolled back. Only then does the Results
+ * screen offer to leave it behind, and only then may a host that embeds the flow move on.
+ */
+export function editorMigrationOperationConcluded(operation: Pick<EditorMigrationOperation, 'stage' | 'aggregateOutcome'>): boolean {
+	return (operation.stage === 'settled' || operation.stage === 'rolledBack') && operation.aggregateOutcome !== undefined;
+}
+
 /** Stable operation fields suitable for a recovery picker. */
 export interface EditorMigrationOperationSummary {
 	readonly id: string;

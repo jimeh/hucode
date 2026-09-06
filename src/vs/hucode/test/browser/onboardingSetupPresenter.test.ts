@@ -13,11 +13,11 @@ import { InMemoryStorageService } from '../../../platform/storage/common/storage
 import { EditorMigrationFlowSession, EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { SetupWebviewIntentOutcome } from '../../browser/migration/editorMigrationSetupPresenter.js';
 import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
-import { IOnboardingOmniAuthority, OnboardingDensity, OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
+import { IOnboardingOmniAuthority, OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 import { OnboardingSetupPresenter } from '../../browser/onboarding/onboardingSetupPresenter.js';
 import { OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
-import { EditorMigrationApplyProgress } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationApplyProgress, EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 
 suite('OnboardingSetupPresenter', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -106,28 +106,26 @@ suite('OnboardingSetupPresenter', () => {
 		assert.strictEqual(presenter.presentation(2).phase, 'meetOmni');
 	});
 
-	test('stages the density on Meet Omni and hands each finish to its own session method', async () => {
+	test('hands each finish on Meet Omni to its own session method, once', async () => {
 		const finish = async (type: 'finishForNow' | 'addProject' | 'openFolderAsWorkbench') => {
 			const { session, presenter, omni } = setup();
 			const outcomes: Record<string, SetupWebviewIntentOutcome> = {};
-			outcomes.densityInBring = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, true);
 			outcomes.finishInBring = presenter.handleIntent({ type }, true);
 			presenter.handleIntent({ type: 'chooseRoute', route: 'skipImport' }, true);
 			await timeout(0);
 			presenter.handleIntent({ type: 'continueStage' }, true);
 			await timeout(0);
 			assert.strictEqual(session.state.stage, 'meetOmni');
-			outcomes.staleDensity = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, false);
-			outcomes.density = presenter.handleIntent({ type: 'setDensity', density: 'compact' }, true);
 			outcomes.finish = presenter.handleIntent({ type }, true);
-			outcomes.duplicate = presenter.handleIntent({ type }, true);
+			// The stage still admits a duplicate press; the session's one-shot guard absorbs it,
+			// which the single handoff call below shows.
+			presenter.handleIntent({ type }, true);
 			await timeout(0);
-			return { outcomes, calls: omni.calls, density: session.state.density };
+			return { outcomes, calls: omni.calls };
 		};
 		const expected = (command?: string) => ({
-			outcomes: { densityInBring: 'superseded', finishInBring: 'superseded', staleDensity: 'staleRevision', density: 'accepted', finish: 'accepted', duplicate: 'superseded' },
-			calls: [['snapshot'], ['applyDensity', 'compact'], ...(command ? [[command]] : [])],
-			density: 'compact',
+			outcomes: { finishInBring: 'superseded', finish: 'accepted' },
+			calls: [['snapshot'], ...(command ? [[command]] : [])],
 		});
 		assert.deepStrictEqual({
 			finishForNow: await finish('finishForNow'),
@@ -143,8 +141,8 @@ suite('OnboardingSetupPresenter', () => {
 	test('answers Back on the migrate route\'s Meet Omni as unresolvable, not as a stage move', async () => {
 		const { session, presenter, migration } = setup();
 		presenter.handleIntent({ type: 'chooseRoute', route: 'migrate' }, true);
-		migration().publish({ phase: 'results', operation: { id: 'operation' } as EditorMigrationFlowState['operation'] });
-		presenter.handleIntent({ type: 'acknowledge' }, true);
+		migration().publish({ phase: 'results', operation: concludedOperation() });
+		presenter.handleIntent({ type: 'continueStage' }, true);
 		await timeout(0);
 
 		assert.strictEqual(session.state.stage, 'meetOmni');
@@ -197,20 +195,39 @@ suite('OnboardingSetupPresenter', () => {
 		assert.strictEqual(first.calls.filter(call => call[0] === 'back').length, 1, 'the migration session is not asked to go back to bring');
 	});
 
-	test('intercepts acknowledgement so the flow moves on instead of restarting discovery', async () => {
+	test('admits Continue on concluded results only, and never lets acknowledgement reach the migration', async () => {
 		const { session, presenter, migration } = setup();
 		presenter.handleIntent({ type: 'chooseRoute', route: 'migrate' }, true);
 		const first = migration();
+		const outcomes: Record<string, SetupWebviewIntentOutcome> = {};
+
 		first.publish({ phase: 'apply', busy: true });
-		assert.strictEqual(presenter.handleIntent({ type: 'acknowledge' }, true), 'superseded', 'acknowledgement is never legal outside Results');
-
+		outcomes.apply = presenter.handleIntent({ type: 'continueStage' }, true);
 		first.publish({ phase: 'results', busy: false });
-		assert.strictEqual(presenter.handleIntent({ type: 'acknowledge' }, true), 'unresolvable', 'Results without an operation offers nothing to acknowledge');
-
-		first.publish({ operation: { id: 'operation' } as EditorMigrationFlowState['operation'] });
-		assert.strictEqual(presenter.handleIntent({ type: 'acknowledge' }, true), 'accepted');
+		outcomes.noOperation = presenter.handleIntent({ type: 'continueStage' }, true);
+		first.publish({ operation: { ...concludedOperation(), stage: 'admitted', aggregateOutcome: undefined } });
+		outcomes.admitted = presenter.handleIntent({ type: 'continueStage' }, true);
+		first.publish({ operation: concludedOperation(), busy: true });
+		outcomes.busy = presenter.handleIntent({ type: 'continueStage' }, true);
+		first.publish({ busy: false, canceling: true });
+		outcomes.canceling = presenter.handleIntent({ type: 'continueStage' }, true);
+		first.publish({ canceling: false });
+		outcomes.acknowledge = presenter.handleIntent({ type: 'acknowledge' }, true);
+		assert.strictEqual(session.state.stage, 'migrate');
+		outcomes.continue = presenter.handleIntent({ type: 'continueStage' }, true);
 		await timeout(0);
-		assert.deepStrictEqual(first.calls.filter(call => call[0] === 'acknowledge'), [['acknowledge', false]]);
+
+		assert.deepStrictEqual(outcomes, {
+			apply: 'superseded',
+			noOperation: 'unresolvable',
+			admitted: 'unresolvable',
+			busy: 'superseded',
+			canceling: 'unresolvable',
+			acknowledge: 'unresolvable',
+			continue: 'accepted',
+		});
+		assert.deepStrictEqual(first.calls.filter(call => call[0] === 'acknowledge'), [], 'the recovery data stays in the journal');
+		assert.strictEqual(first.disposed, true);
 		assert.strictEqual(session.state.stage, 'meetOmni');
 		assert.strictEqual(presenter.presentation(9).phase, 'meetOmni');
 	});
@@ -255,11 +272,7 @@ class OmniStub implements IOnboardingOmniAuthority {
 
 	snapshot(): OnboardingOmniSnapshot {
 		this.calls.push(['snapshot']);
-		return { density: 'default', shortcuts: [] };
-	}
-
-	async applyDensity(density: OnboardingDensity): Promise<void> {
-		this.calls.push(['applyDensity', density]);
+		return { shortcuts: [] };
 	}
 
 	async addProject(): Promise<void> {
@@ -291,9 +304,8 @@ class MigrationStub extends Disposable {
 		this.calls.push(['initialize']);
 	}
 
-	async acknowledge(restart = true): Promise<boolean> {
-		this.calls.push(['acknowledge', restart]);
-		return true;
+	async acknowledge(): Promise<void> {
+		this.calls.push(['acknowledge']);
 	}
 
 	selectApplication(applicationId: string): void {
@@ -316,6 +328,11 @@ class MigrationStub extends Disposable {
 		this.disposed = true;
 		super.dispose();
 	}
+}
+
+/** The least of a settled operation the presenter and session read: its stage and outcome. */
+function concludedOperation(): EditorMigrationOperation {
+	return { id: 'operation', stage: 'settled', aggregateOutcome: 'completed' } as EditorMigrationOperation;
 }
 
 function progress(stage: EditorMigrationApplyProgress['stage'], recorded: number): EditorMigrationApplyProgress {

@@ -55,7 +55,7 @@ export function SetupPanelView(props: SetupPanelProps) {
 		case 'restore': return <RestorePanel {...props} panel={panel} />;
 		case 'bring': return <BringPanel panel={panel} send={props.send} />;
 		case 'appearance': return <AppearancePanel panel={panel} local={props.local} scrollRef={props.scrollRef} send={props.send} />;
-		case 'meetOmni': return <MeetOmniPanel panel={panel} send={props.send} />;
+		case 'meetOmni': return <MeetOmniPanel panel={panel} />;
 		case 'message': return (
 			<PanelBody>
 				<PanelHeading>{panel.heading}</PanelHeading>

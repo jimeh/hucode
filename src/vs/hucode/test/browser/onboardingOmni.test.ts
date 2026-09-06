@@ -10,8 +10,6 @@ import { ResolvedKeybinding, decodeKeybinding } from '../../../base/common/keybi
 import { OperatingSystem } from '../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
 import { ICommandEvent, ICommandService } from '../../../platform/commands/common/commands.js';
-import { ConfigurationTarget } from '../../../platform/configuration/common/configuration.js';
-import { TestConfigurationService } from '../../../platform/configuration/test/common/testConfigurationService.js';
 import { USLayoutResolvedKeybinding } from '../../../platform/keybinding/common/usLayoutResolvedKeybinding.js';
 import { MockKeybindingService } from '../../../platform/keybinding/test/common/mockKeybindingService.js';
 import { OnboardingOmniAuthority } from '../../browser/onboarding/onboardingOmni.js';
@@ -19,22 +17,12 @@ import { OnboardingOmniAuthority } from '../../browser/onboarding/onboardingOmni
 suite('OnboardingOmniAuthority', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const WORKTREE = 'hucode.omni.worktreeItemLayout';
-	const WORKBENCH = 'hucode.omni.workbenchItemLayout';
-
 	/** Real resolved chords, so the labels under test are the ones the keybinding service would produce. */
 	function chord(keybinding: number): ResolvedKeybinding {
 		return USLayoutResolvedKeybinding.resolveKeybinding(decodeKeybinding(keybinding, OperatingSystem.Macintosh)!, OperatingSystem.Macintosh)[0];
 	}
 
-	function setup(settings: Record<string, unknown>, bound: Record<string, ResolvedKeybinding> = {}) {
-		const writes: (readonly unknown[])[] = [];
-		const configurationService = new class extends TestConfigurationService {
-			override updateValue(key: string, value: unknown, target?: unknown): Promise<void> {
-				writes.push([key, value, target]);
-				return Promise.resolve();
-			}
-		}(settings);
+	function setup(bound: Record<string, ResolvedKeybinding> = {}) {
 		const keybindingService = new class extends MockKeybindingService {
 			override lookupKeybinding(commandId: string): ResolvedKeybinding | undefined {
 				return bound[commandId];
@@ -50,51 +38,12 @@ suite('OnboardingOmniAuthority', () => {
 				return Promise.resolve(undefined);
 			}
 		}();
-		return { authority: new OnboardingOmniAuthority(configurationService, keybindingService, commandService), writes, executed };
+		return { authority: new OnboardingOmniAuthority(keybindingService, commandService), executed };
 	}
 
-	test('reports compact only when both layout settings are compact', () => {
-		const density = (settings: Record<string, unknown>) => setup(settings).authority.snapshot().density;
-		assert.deepStrictEqual({
-			unset: density({}),
-			both: density({ [WORKTREE]: 'compact', [WORKBENCH]: 'compact' }),
-			worktreeOnly: density({ [WORKTREE]: 'compact' }),
-			workbenchOnly: density({ [WORKBENCH]: 'compact', [WORKTREE]: 'default' }),
-			garbage: density({ [WORKTREE]: 'dense', [WORKBENCH]: 'compact' }),
-		}, {
-			unset: 'default',
-			both: 'compact',
-			worktreeOnly: 'default',
-			workbenchOnly: 'default',
-			garbage: 'default',
-		});
-	});
-
-	test('writes each layout setting to the user target only where it differs', async () => {
-		const applied = async (settings: Record<string, unknown>, density: 'default' | 'compact') => {
-			const { authority, writes } = setup(settings);
-			await authority.applyDensity(density);
-			return writes;
-		};
-		const user = ConfigurationTarget.USER;
-		assert.deepStrictEqual({
-			toCompact: await applied({}, 'compact'),
-			alreadyCompact: await applied({ [WORKTREE]: 'compact', [WORKBENCH]: 'compact' }, 'compact'),
-			mixedToCompact: await applied({ [WORKTREE]: 'compact' }, 'compact'),
-			mixedToDefault: await applied({ [WORKTREE]: 'compact' }, 'default'),
-			alreadyDefault: await applied({}, 'default'),
-		}, {
-			toCompact: [[WORKTREE, 'compact', user], [WORKBENCH, 'compact', user]],
-			alreadyCompact: [],
-			mixedToCompact: [[WORKBENCH, 'compact', user]],
-			mixedToDefault: [[WORKTREE, 'default', user]],
-			alreadyDefault: [],
-		});
-	});
-
 	test('lists the four commands with a resolved chord where one is bound and none otherwise', () => {
-		const unbound = setup({}).authority.snapshot().shortcuts;
-		const bound = setup({}, {
+		const unbound = setup().authority.snapshot().shortcuts;
+		const bound = setup({
 			'hucode.projectSwitcher.switchWorktree': chord(KeyMod.CtrlCmd | KeyCode.KeyO),
 			'hucode.projectSwitcher.switchNextLoadedWorktree': chord(KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.DownArrow)),
 		}).authority.snapshot().shortcuts;
@@ -115,7 +64,7 @@ suite('OnboardingOmniAuthority', () => {
 	});
 
 	test('runs the handoff commands by id and opens no dialog of its own', async () => {
-		const { authority, executed } = setup({});
+		const { authority, executed } = setup();
 		await authority.addProject();
 		await authority.openFolderAsWorkbench();
 		assert.deepStrictEqual(executed, ['hucode.projectSwitcher.addProject', 'hucode.projectSwitcher.addWorkbench']);

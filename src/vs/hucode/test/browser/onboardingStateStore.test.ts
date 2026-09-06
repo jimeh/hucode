@@ -31,7 +31,7 @@ suite('OnboardingStateStore', () => {
 
 	test('round-trips a version 1 record under application scope and machine target', () => {
 		const { storage, store } = setup();
-		const record: OnboardingRecord = { version: 1, status: 'inProgress', stage: 'bring', route: 'skipImport', density: 'compact', completedAt: 1700000000000 };
+		const record: OnboardingRecord = { version: 1, status: 'inProgress', stage: 'bring', route: 'skipImport', completedAt: 1700000000000 };
 
 		store.write(record);
 

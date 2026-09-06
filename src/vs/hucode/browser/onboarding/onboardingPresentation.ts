@@ -7,33 +7,32 @@ import { fromNow } from '../../../base/common/date.js';
 import { localize } from '../../../nls.js';
 import {
 	EditorMigrationSetupAction,
-	EditorMigrationSetupListPreviewRow,
+	EditorMigrationSetupIntentType,
 	EditorMigrationSetupPanel,
 	EditorMigrationSetupPresentation,
 	EditorMigrationSetupRadioOption,
 	EditorMigrationSetupShortcut,
 	EditorMigrationSetupThemeGroup,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
-import {
-	MAIN_WORKTREE_CONTEXT_VALUE,
-	PROJECT_CONTEXT_VALUE,
-	ProjectSwitcherProjectItem,
-	ProjectSwitcherWorkbenchItem,
-	ProjectSwitcherWorktreeItem,
-	UNPINNED_SECTION,
-	WORKBENCH_CONTEXT_VALUE,
-	WORKTREE_CONTEXT_VALUE,
-	encodeProjectHandle,
-	encodeWorktreeHandle,
-	getProjectSwitcherPresentationFields,
-	getWorktreeItemId,
-} from '../../common/projectSwitcher/projectSwitcherTreeModel.js';
-import { EditorMigrationFlowPhase } from '../migration/editorMigrationFlow.js';
+import { EditorMigrationFlowPhase, EditorMigrationFlowState } from '../migration/editorMigrationFlow.js';
+import { editorMigrationResultsFooterLines } from '../migration/editorMigrationSetupPresentation.js';
 import { OnboardingAppearanceDraft, OnboardingAppearanceMode, OnboardingAppearanceSnapshot, OnboardingColorScheme, onboardingThemesFor } from './onboardingAppearance.js';
-import { OnboardingDensity, OnboardingOmniShortcut, onboardingDensityLabel } from './onboardingOmni.js';
-import { OnboardingPreviousOutcome, OnboardingSessionState, onboardingOwnsMigrationBack } from './onboardingSession.js';
+import { OnboardingOmniShortcut } from './onboardingOmni.js';
+import { OnboardingPreviousOutcome, OnboardingSessionState, onboardingMigrationCanContinue, onboardingOwnsMigrationBack } from './onboardingSession.js';
 
 type OnboardingStep = 'bring' | 'review' | 'meetOmni';
+
+/** The embedded migration as the `migrate` stage presents it: its state, and its own snapshot. */
+export interface OnboardingEmbeddedMigration {
+	readonly flow: EditorMigrationFlowState;
+	readonly presentation: EditorMigrationSetupPresentation;
+}
+
+/**
+ * The standalone Results actions onboarding keeps. Import Another Setup and both Done buttons go:
+ * onboarding continues to Meet Omni instead, and the recovery data stays for the import command.
+ */
+const RESULTS_ACTIONS_KEPT: ReadonlySet<EditorMigrationSetupIntentType> = new Set<EditorMigrationSetupIntentType>(['copyReport', 'retry', 'resume']);
 
 /**
  * Maps onboarding state into the wire-safe, fully localized snapshot the renderer draws.
@@ -41,13 +40,14 @@ type OnboardingStep = 'bring' | 'review' | 'meetOmni';
  * Every user-visible string of the onboarding route originates here. The renderer owns nothing
  * but local presentation state.
  *
- * During the `migrate` stage the caller passes the embedded migration's own presentation. It is
- * kept whole, with onboarding's identity, step header, and scope laid over it, and a Back to
- * `bring` prepended while the migration has no chosen source.
+ * During the `migrate` stage the caller passes the embedded migration. Its presentation is kept
+ * whole, with onboarding's identity, step header, and scope laid over it, a Back to `bring`
+ * prepended while the migration has no chosen source, and the Results footer replaced by one that
+ * continues onboarding.
  */
-export function onboardingPresentation(state: OnboardingSessionState, revision: number, migration?: EditorMigrationSetupPresentation): EditorMigrationSetupPresentation {
+export function onboardingPresentation(state: OnboardingSessionState, revision: number, migration?: OnboardingEmbeddedMigration): EditorMigrationSetupPresentation {
 	if (state.stage === 'migrate' && migration) {
-		return embeddedMigrationPresentation(state, migration);
+		return embeddedMigrationPresentation(migration);
 	}
 	return {
 		revision,
@@ -71,7 +71,7 @@ export function onboardingPresentation(state: OnboardingSessionState, revision: 
 	};
 }
 
-function embeddedMigrationPresentation(state: OnboardingSessionState, migration: EditorMigrationSetupPresentation): EditorMigrationSetupPresentation {
+function embeddedMigrationPresentation({ flow, presentation: migration }: OnboardingEmbeddedMigration): EditorMigrationSetupPresentation {
 	const phase = migration.phase as EditorMigrationFlowPhase;
 	return {
 		...migration,
@@ -80,10 +80,28 @@ function embeddedMigrationPresentation(state: OnboardingSessionState, migration:
 		title: title(),
 		steps: steps(migrationStep(phase)),
 		scopeKey: `onboarding|migrate|${migration.scopeKey}`,
-		footer: onboardingOwnsMigrationBack(phase)
-			? { lines: migration.footer.lines, actions: [backAction(), ...migration.footer.actions] }
-			: migration.footer,
+		footer: embeddedMigrationFooter(phase, flow, migration.footer),
 	};
+}
+
+function embeddedMigrationFooter(phase: EditorMigrationFlowPhase, flow: EditorMigrationFlowState, footer: EditorMigrationSetupPresentation['footer']): EditorMigrationSetupPresentation['footer'] {
+	if (onboardingOwnsMigrationBack(phase)) {
+		return { lines: footer.lines, actions: [backAction(), ...footer.actions] };
+	}
+	if (phase !== 'results' || !flow.operation) {
+		return footer;
+	}
+	// The migration's own status lines stay; the sentence about removing recovery data went with
+	// the button that removed it.
+	const lines = [
+		...editorMigrationResultsFooterLines(flow.operation),
+		localize('onboarding.results.recoveryKept', "Recovery data stays available from the Import Setup from Another Editor command."),
+	];
+	const actions = footer.actions.filter(action => RESULTS_ACTIONS_KEPT.has(action.intent.type));
+	if (onboardingMigrationCanContinue(flow)) {
+		actions.push(action('results-continue', localize('onboarding.continue', "Continue"), { type: 'continueStage' }, 'primary'));
+	}
+	return { lines, actions };
 }
 
 /** Which onboarding step an embedded migration phase belongs to. */
@@ -133,13 +151,8 @@ function panelFor(state: OnboardingSessionState): EditorMigrationSetupPanel {
 	}
 }
 
-/**
- * The Meet Omni stage: the vocabulary, the illustrative Projects list at the staged density, the
- * one density switch, and the shortcuts with the chords the host resolved.
- */
+/** The Meet Omni stage: the three nouns, and the shortcuts with the chords the host resolved. */
 function meetOmniPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
-	const density: OnboardingDensity = state.density ?? state.omni?.density ?? 'default';
-	const compact = density === 'compact';
 	return {
 		kind: 'meetOmni',
 		id: '',
@@ -149,27 +162,7 @@ function meetOmniPanel(state: OnboardingSessionState): EditorMigrationSetupPanel
 			{ term: localize('onboarding.meetOmni.term.project', "Project"), definition: localize('onboarding.meetOmni.def.project', "A saved Git repository. Hucode discovers its worktrees and nests them beneath it.") },
 			{ term: localize('onboarding.meetOmni.term.worktree', "Worktree"), definition: localize('onboarding.meetOmni.def.worktree', "One checkout belonging to a project. Selecting it opens or activates a workbench for that checkout.") },
 			{ term: localize('onboarding.meetOmni.term.workbench', "Workbench"), definition: localize('onboarding.meetOmni.def.workbench', "A VS Code window hosted inside Omni for one folder, or any saved folder that is not a project worktree.") },
-			{ term: localize('onboarding.meetOmni.term.loaded', "Loaded"), definition: localize('onboarding.meetOmni.def.loaded', "A workbench running in memory, visible or hidden, ready to switch to at once.") },
-			{ term: localize('onboarding.meetOmni.term.dormant', "Dormant"), definition: localize('onboarding.meetOmni.def.dormant', "A workbench Omni intends to keep available but has released; activating it loads it again.") },
-			{ term: localize('onboarding.meetOmni.term.suspend', "Suspend"), definition: localize('onboarding.meetOmni.def.suspend', "Release a workbench's resources while keeping it dormant and eligible to be restored.") },
-			{ term: localize('onboarding.meetOmni.term.unload', "Unload"), definition: localize('onboarding.meetOmni.def.unload', "Release a workbench and mark it as explicitly closed. Its project or catalog entry stays.") },
 		],
-		preview: {
-			label: localize('onboarding.meetOmni.preview', "Example Projects list"),
-			densityLabel: onboardingDensityLabel(density),
-			rows: previewItems().map((item): EditorMigrationSetupListPreviewRow => {
-				const fields = getProjectSwitcherPresentationFields(item, density);
-				return { id: item.id, kind: item.kind, ...fields };
-			}),
-			layout: density,
-		},
-		densityToggle: {
-			id: 'density',
-			label: localize('onboarding.meetOmni.densityToggle', "Use compact worktree and workbench lists"),
-			description: localize('onboarding.meetOmni.densityToggle.detail', "Compact lists show one line per row. Finishing writes this choice to both Omni layout settings."),
-			checked: compact,
-			intent: { type: 'setDensity', density: compact ? 'default' : 'compact' },
-		},
 		shortcuts: (state.omni?.shortcuts ?? []).map(shortcut),
 	};
 }
@@ -178,75 +171,6 @@ function shortcut(entry: OnboardingOmniShortcut): EditorMigrationSetupShortcut {
 	return entry.keybinding
 		? { label: entry.label, keybinding: entry.keybinding.label, keybindingAriaLabel: entry.keybinding.ariaLabel }
 		: { label: entry.label, noShortcutText: localize('onboarding.meetOmni.noShortcut', "No keyboard shortcut is assigned. Use the Command Palette.") };
-}
-
-/**
- * The synthetic rows behind the preview: one project with its root and one linked worktree, and
- * one arbitrary workbench. They carry the same fields the sidebar's rows do, and the row model
- * decides which of them each density shows, so a change there changes the preview.
- */
-function previewItems(): readonly (ProjectSwitcherProjectItem | ProjectSwitcherWorktreeItem | ProjectSwitcherWorkbenchItem)[] {
-	const projectId = 'example';
-	const projectName = 'hucode';
-	const rootPath = '~/Projects/hucode';
-	const linkedPath = '~/Projects/hucode.worktrees/login-form';
-	const workbenchPath = '~/Documents/notes';
-	const project: ProjectSwitcherProjectItem = {
-		id: encodeProjectHandle(projectId, UNPINNED_SECTION),
-		handle: encodeProjectHandle(projectId, UNPINNED_SECTION),
-		kind: 'project',
-		projectId,
-		pinned: false,
-		section: UNPINNED_SECTION,
-		rootPath,
-		hasCustomLabel: false,
-		label: projectName,
-		description: '~/Projects',
-		contextValue: PROJECT_CONTEXT_VALUE,
-	};
-	const worktree = (path: string, isMain: boolean, name: string, branch: string): ProjectSwitcherWorktreeItem => ({
-		id: getWorktreeItemId(projectId, path),
-		handle: encodeWorktreeHandle(projectId, path),
-		kind: 'worktree',
-		projectId,
-		worktreePath: path,
-		isMain,
-		pinned: false,
-		section: UNPINNED_SECTION,
-		isActive: false,
-		hasCustomLabel: false,
-		missingGitWorktree: false,
-		name,
-		branch,
-		path,
-		label: name,
-		description: branch,
-		contextValue: isMain ? MAIN_WORKTREE_CONTEXT_VALUE : WORKTREE_CONTEXT_VALUE,
-	});
-	const workbench: ProjectSwitcherWorkbenchItem = {
-		id: 'workbench:example',
-		handle: 'workbench:example',
-		kind: 'workbench',
-		retainedWorkbenchId: 'example',
-		worktreePath: workbenchPath,
-		desiredState: 'unloaded',
-		hostedWorkbenchState: 'unloaded',
-		isActive: false,
-		order: 0,
-		hasCustomLabel: false,
-		name: 'notes',
-		branch: 'main',
-		path: workbenchPath,
-		label: 'notes',
-		description: 'main',
-		contextValue: WORKBENCH_CONTEXT_VALUE,
-	};
-	return [
-		project,
-		worktree(rootPath, true, localize('onboarding.meetOmni.preview.local', "local"), 'main'),
-		worktree(linkedPath, false, 'login-form', 'feature/login-form'),
-		workbench,
-	];
 }
 
 function bringPanel(state: OnboardingSessionState): EditorMigrationSetupPanel {
@@ -322,9 +246,9 @@ function appearancePanel(state: OnboardingSessionState): EditorMigrationSetupPan
 		id: '',
 		heading,
 		lead: localize('onboarding.appearance.lead', "Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses."),
+		// One note under the lead; the renderer draws it muted.
 		paragraphs: [
-			localize('onboarding.appearance.onlyChanges', "Nothing you have already configured is removed. Continue writes only the values you change here."),
-			localize('onboarding.appearance.importLater', "You can still bring settings, keyboard shortcuts, snippets, and extensions from another editor at any time with the Import Setup from Another Editor command in the Command Palette."),
+			localize('onboarding.appearance.note', "Nothing you have already configured is removed, and Continue writes only the values you change here. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette."),
 		],
 		modeGroupLabel: localize('onboarding.appearance.modeGroup', "Appearance mode"),
 		modes: modes.map(([id, label, description]): EditorMigrationSetupRadioOption => ({

@@ -6,13 +6,14 @@
 import assert from 'assert';
 import { fromNow } from '../../../base/common/date.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
-import { EditorMigrationSetupPresentation, isEditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
+import { EditorMigrationSetupIntent, EditorMigrationSetupPresentation, isEditorMigrationSetupPresentation } from '../../common/migration/editorMigrationSetupProtocol.js';
 import { EditorMigrationFlowState } from '../../browser/migration/editorMigrationFlow.js';
 import { editorMigrationSetupPresentation } from '../../browser/migration/editorMigrationSetupPresentation.js';
 import { OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
 import { OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { onboardingPresentation } from '../../browser/onboarding/onboardingPresentation.js';
 import { OnboardingSessionState } from '../../browser/onboarding/onboardingSession.js';
+import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 
 suite('OnboardingPresentation', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -99,8 +100,9 @@ suite('OnboardingPresentation', () => {
 	});
 
 	test('lays onboarding over the embedded migration and prepends Back while no source is chosen', () => {
-		const migration = editorMigrationSetupPresentation(flowState({ phase: 'application', applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [] }] }), 7);
-		const presentation = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 7, migration);
+		const flow = flowState({ phase: 'application', applications: [{ id: 'cursor', productName: 'Cursor', channel: 'stable', profiles: [] }] });
+		const migration = editorMigrationSetupPresentation(flow, 7);
+		const presentation = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 7, embedded(flow, migration));
 
 		assert.deepStrictEqual({
 			...shape(presentation),
@@ -138,7 +140,7 @@ suite('OnboardingPresentation', () => {
 
 	test('marks Review current for the later migration phases and leaves their footer alone', () => {
 		const migration = editorMigrationSetupPresentation(flowState({ phase: 'review' }), 2);
-		const presentation = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 2, migration);
+		const presentation = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 2, embedded(flowState({ phase: 'review' }), migration));
 
 		assert.deepStrictEqual({
 			phase: presentation.phase,
@@ -152,8 +154,8 @@ suite('OnboardingPresentation', () => {
 			scopeKey: `onboarding|migrate|${migration.scopeKey}`,
 		});
 		const phaseSteps = Object.fromEntries((['loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results'] as const).map(phase => {
-			const embedded = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 1, editorMigrationSetupPresentation(flowState({ phase }), 1));
-			return [phase, [embedded.steps.find(step => step.current)?.id, embedded.footer.actions[0]?.intent.type === 'back']];
+			const wrapped = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 1, embedded(flowState({ phase })));
+			return [phase, [wrapped.steps.find(step => step.current)?.id, wrapped.footer.actions[0]?.intent.type === 'back']];
 		}));
 		assert.deepStrictEqual(phaseSteps, {
 			loading: ['bring', true],
@@ -167,8 +169,65 @@ suite('OnboardingPresentation', () => {
 			results: ['review', false],
 		});
 		// Profile through Publishers offer the migration's own Back; only the first three are onboarding's.
-		const profile = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 1, editorMigrationSetupPresentation(flowState({ phase: 'profile' }), 1));
+		const profile = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 1, embedded(flowState({ phase: 'profile' })));
 		assert.strictEqual(profile.footer.actions.filter(action => action.intent.type === 'back').length, 1);
+	});
+
+	test('replaces the embedded Results footer with Continue, keeping the report, retries, and recovery data', () => {
+		// The standalone footer, as `editorMigrationSetupPresentation` composes it for a concluded
+		// operation, a failed item, and an operation still running; its own suite covers that mapping.
+		const standalone = (...intents: EditorMigrationSetupIntent[]): EditorMigrationSetupPresentation['footer'] => ({
+			lines: ['Import completed', 'Removing recovery data deletes the retained snapshots used for file rollback.'],
+			actions: intents.map(intent => ({ id: `results-${intent.type}`, label: intent.type, kind: 'default', disabled: false, intent })),
+		});
+		const concluded = standalone({ type: 'copyReport' }, { type: 'startImport' }, { type: 'close' }, { type: 'acknowledge' });
+		const withRetry = standalone({ type: 'copyReport' }, { type: 'startImport' }, { type: 'retry', operationId: 'operation' }, { type: 'close' }, { type: 'acknowledge' });
+		const running = standalone({ type: 'copyReport' }, { type: 'startImport' }, { type: 'resume', operationId: 'operation' });
+		const footer = (flow: EditorMigrationFlowState, footer: EditorMigrationSetupPresentation['footer']) => {
+			const results: EditorMigrationSetupPresentation = { ...editorMigrationSetupPresentation(flowState({ phase: 'loading' }), 1), phase: 'results', footer };
+			const presentation = onboardingPresentation(state({ stage: 'migrate', route: 'migrate' }), 1, embedded(flow, results));
+			assert.strictEqual(isEditorMigrationSetupPresentation(presentation), true);
+			return { lines: presentation.footer.lines, actions: presentation.footer.actions.map(action => [action.id, action.label, action.kind, action.intent]) };
+		};
+		const settled = concludedOperation();
+		const restored: EditorMigrationOperation = { ...settled, stage: 'rolledBack', aggregateOutcome: 'rolledBack', rollbackIntent: { mutationStarted: true } as EditorMigrationOperation['rollbackIntent'] };
+		const admitted: EditorMigrationOperation = { ...settled, stage: 'admitted', aggregateOutcome: undefined };
+		assert.deepStrictEqual({
+			concluded: footer(flowState({ phase: 'results', operation: settled }), concluded),
+			withRetry: footer(flowState({ phase: 'results', operation: settled }), withRetry).actions.map(action => action[0]),
+			restored: footer(flowState({ phase: 'results', operation: restored }), concluded).lines,
+			// An operation still running offers Resume and no way out, as the standalone screen does.
+			admitted: footer(flowState({ phase: 'results', operation: admitted }), running),
+			busy: footer(flowState({ phase: 'results', operation: settled, busy: true }), concluded).actions.map(action => action[0]),
+			canceling: footer(flowState({ phase: 'results', operation: settled, canceling: true }), concluded).actions.map(action => action[0]),
+			noOperation: footer(flowState({ phase: 'results' }), standalone()),
+		}, {
+			concluded: {
+				// The migration's outcome line is rebuilt from the operation; the sentence about
+				// removing recovery data went with the button that removed it.
+				lines: ['Import completed', 'Recovery data stays available from the Import Setup from Another Editor command.'],
+				actions: [
+					['results-copyReport', 'copyReport', 'default', { type: 'copyReport' }],
+					['results-continue', 'Continue', 'primary', { type: 'continueStage' }],
+				],
+			},
+			withRetry: ['results-copyReport', 'results-retry', 'results-continue'],
+			restored: [
+				'File changes were restored',
+				'Forward import retry is unavailable because file restoration already began.',
+				'Recovery data stays available from the Import Setup from Another Editor command.',
+			],
+			admitted: {
+				lines: ['Preparing the import', 'Recovery data stays available from the Import Setup from Another Editor command.'],
+				actions: [
+					['results-copyReport', 'copyReport', 'default', { type: 'copyReport' }],
+					['results-resume', 'resume', 'default', { type: 'resume', operationId: 'operation' }],
+				],
+			},
+			busy: ['results-copyReport'],
+			canceling: ['results-copyReport'],
+			noOperation: { lines: standalone().lines, actions: [] },
+		});
 	});
 
 	test('presents the appearance choices prefilled from the draft, with Back and Continue', () => {
@@ -184,8 +243,8 @@ suite('OnboardingPresentation', () => {
 			...shape(presentation),
 			lead: panel.lead,
 			// The plan's copy promises: where the values go, that nothing is removed, and that the
-			// import command stays available.
-			copy: [/Default profile/.test(panel.lead), /removed/.test(panel.paragraphs.join(' ')), /Command Palette/.test(panel.paragraphs.join(' '))],
+			// import command stays available; the last two share one note under the lead.
+			copy: [/Default profile/.test(panel.lead), /removed/.test(panel.paragraphs.join(' ')), /Import Setup from Another Editor.*Command Palette/.test(panel.paragraphs.join(' ')), panel.paragraphs.length],
 			modeGroupLabel: panel.modeGroupLabel,
 			modes: panel.modes.map(mode => [mode.id, mode.label, mode.checked, mode.intent]),
 			light: [panel.light.label, panel.light.filterLabel, panel.light.listLabel, panel.light.selectedId, panel.light.themes.map(theme => theme.id)],
@@ -206,7 +265,7 @@ suite('OnboardingPresentation', () => {
 			mentionsPalette: undefined,
 			footer: [['Back', { type: 'back' }, false], ['Continue', { type: 'continueStage' }, false]],
 			lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses.',
-			copy: [true, true, true],
+			copy: [true, true, true, 1],
 			modeGroupLabel: 'Appearance mode',
 			modes: [
 				['system', 'System', false, { type: 'selectMode', mode: 'system' }],
@@ -268,9 +327,9 @@ suite('OnboardingPresentation', () => {
 	});
 
 	test('presents Meet Omni with the three finishes, and Back only on the Skip Import route', () => {
-		const skipImport = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot(false) }), 5));
-		const migrate = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot(false) }), 5));
-		const busy = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot(false), busy: true }), 5));
+		const skipImport = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot() }), 5));
+		const migrate = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot() }), 5));
+		const busy = shape(onboardingPresentation(state({ stage: 'meetOmni', route: 'migrate', omni: omniSnapshot(), busy: true }), 5));
 		assert.deepStrictEqual({ skipImport, migrateFooter: migrate.footer, busyFooter: busy.footer }, {
 			skipImport: {
 				revision: 5,
@@ -297,7 +356,7 @@ suite('OnboardingPresentation', () => {
 				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, false],
 				['Finish for Now', { type: 'finishForNow' }, false],
 			],
-			// Back stays usable during the density write; the finishes wait for it.
+			// Back stays usable while the session works; the finishes wait for it.
 			busyFooter: [
 				['Add Project', { type: 'addProject' }, true],
 				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, true],
@@ -306,61 +365,46 @@ suite('OnboardingPresentation', () => {
 		});
 	});
 
-	test('previews the Projects list through the shared row model at the staged density', () => {
-		const panel = (density: 'default' | 'compact' | undefined) => {
-			const result = onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot(true), density }), 1).panels[0];
-			assert.strictEqual(result.kind, 'meetOmni');
-			return result;
-		};
-		const byDefault = panel('default');
-		const compact = panel('compact');
-		const rows = (result: typeof byDefault) => result.preview.rows.map(row => [row.kind, row.name, row.branch, row.path]);
+	test('presents Meet Omni as the three nouns and the shortcuts the host resolved', () => {
+		const panel = onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport', omni: omniSnapshot() }), 1).panels[0];
+		assert.strictEqual(panel.kind, 'meetOmni');
 		assert.deepStrictEqual({
-			glossary: byDefault.glossary.map(entry => entry.term),
-			definitionsNonEmpty: byDefault.glossary.every(entry => entry.definition.length > 0),
-			previewLabel: byDefault.preview.label,
-			defaultRows: rows(byDefault),
-			compactRows: rows(compact),
-			defaultView: [byDefault.preview.layout, byDefault.preview.densityLabel, byDefault.densityToggle.checked, byDefault.densityToggle.intent],
-			compactView: [compact.preview.layout, compact.preview.densityLabel, compact.densityToggle.checked, compact.densityToggle.intent],
-			toggleLabel: byDefault.densityToggle.label,
-			// With no draft yet the snapshot's density is what shows.
-			unseeded: panel(undefined).preview.layout,
-			shortcuts: byDefault.shortcuts,
+			glossary: panel.glossary.map(entry => entry.term),
+			definitionsNonEmpty: panel.glossary.every(entry => entry.definition.length > 0),
+			shortcuts: panel.shortcuts,
+			noOmni: (onboardingPresentation(state({ stage: 'meetOmni', route: 'skipImport' }), 1).panels[0] as typeof panel).shortcuts,
 		}, {
-			glossary: ['Project', 'Worktree', 'Workbench', 'Loaded', 'Dormant', 'Suspend', 'Unload'],
+			glossary: ['Project', 'Worktree', 'Workbench'],
 			definitionsNonEmpty: true,
-			previewLabel: 'Example Projects list',
-			// Two-line rows keep every field; the project row has no path of its own.
-			defaultRows: [
-				['project', 'hucode', '~/Projects', undefined],
-				['worktree', 'local', 'main', '~/Projects/hucode'],
-				['worktree', 'login-form', 'feature/login-form', '~/Projects/hucode.worktrees/login-form'],
-				['workbench', 'notes', 'main', '~/Documents/notes'],
-			],
-			// Compact worktree rows drop the path and compact workbench rows drop the branch,
-			// exactly as `getProjectSwitcherPresentationFields` decides for the sidebar.
-			compactRows: [
-				['project', 'hucode', '~/Projects', undefined],
-				['worktree', 'local', 'main', undefined],
-				['worktree', 'login-form', 'feature/login-form', undefined],
-				['workbench', 'notes', undefined, '~/Documents/notes'],
-			],
-			defaultView: ['default', 'Showing default lists.', false, { type: 'setDensity', density: 'compact' }],
-			compactView: ['compact', 'Showing compact lists.', true, { type: 'setDensity', density: 'default' }],
-			toggleLabel: 'Use compact worktree and workbench lists',
-			unseeded: 'compact',
 			shortcuts: [
 				{ label: 'Switch Workbench', keybinding: '⌘O', keybindingAriaLabel: 'Command+O' },
 				{ label: 'Quick Switch Loaded Workbench', noShortcutText: 'No keyboard shortcut is assigned. Use the Command Palette.' },
 			],
+			noOmni: [],
 		});
 	});
 });
 
-function omniSnapshot(compact: boolean): OnboardingOmniSnapshot {
+/** The embedded migration as the presenter hands it over: its state beside its own snapshot. */
+function embedded(flow: EditorMigrationFlowState, presentation = editorMigrationSetupPresentation(flow, 1)) {
+	return { flow, presentation };
+}
+
+/** A settled operation with only what the Results screen reads. */
+function concludedOperation(): EditorMigrationOperation {
 	return {
-		density: compact ? 'compact' : 'default',
+		id: 'operation',
+		stage: 'settled',
+		aggregateOutcome: 'completed',
+		results: [{ id: 'settings', category: 'settings', outcome: 'completed', attempts: 1 }],
+		snapshots: [],
+		extensionInstallIntents: [],
+		plan: { operations: [], choices: { selectedCategories: ['settings'], decisions: [] } },
+	} as unknown as EditorMigrationOperation;
+}
+
+function omniSnapshot(): OnboardingOmniSnapshot {
+	return {
 		shortcuts: [
 			{ commandId: 'hucode.projectSwitcher.switchWorktree', label: 'Switch Workbench', keybinding: { label: '⌘O', ariaLabel: 'Command+O' } },
 			{ commandId: 'hucode.projectSwitcher.quickSwitchLoadedWorktree', label: 'Quick Switch Loaded Workbench' },

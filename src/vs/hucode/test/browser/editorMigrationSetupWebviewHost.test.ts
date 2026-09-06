@@ -648,7 +648,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const onboarding = new Set(Object.getOwnPropertyNames(OnboardingSession.prototype));
 		const owner = (type: string) => migration.has(type) && onboarding.has(type) ? 'both' : migration.has(type) ? 'migration' : onboarding.has(type) ? 'onboarding' : 'none';
 		const types = (Object.keys(EDITOR_MIGRATION_SETUP_INTENT_POLICY) as EditorMigrationSetupIntentType[]).filter(type => type !== 'ready' && type !== 'close');
-		const onboardingOwned: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'setDensity', 'finishForNow', 'addProject', 'openFolderAsWorkbench'];
+		const onboardingOwned: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'finishForNow', 'addProject', 'openFolderAsWorkbench'];
 		const expected = Object.fromEntries(types.map(type => [type, type === 'back' ? 'both' : onboardingOwned.includes(type) ? 'onboarding' : 'migration']));
 		assert.deepStrictEqual(Object.fromEntries(types.map(type => [type, owner(type)])), expected);
 	});

@@ -28,9 +28,8 @@ The change is complete when:
    command uses, and closing it restores the shell and its focus;
 2. the migration route drives the existing `EditorMigrationFlowSession`
    unchanged, and the Skip Import route never creates a migration session;
-3. the Meet Omni step previews `default` and `compact` list density and
-   Continue writes both Omni layout settings while Back preserves the staged
-   value without writing;
+3. the Meet Omni step explains Project, Worktree, and Workbench, lists the
+   switching commands with their resolved shortcuts, and writes nothing;
 4. Add Project and Open Folder as Workbench invoke the existing commands and
    finish in real Omni;
 5. a versioned installation-scoped record distinguishes not started, in
@@ -55,8 +54,8 @@ The change is complete when:
   explicit button. A close during an admitted Apply keeps the existing
   migration cancellation binding.
 - **Onboarding wraps an optional migration session.** A new onboarding session
-  owns stage navigation, the appearance draft, the density choice, and the
-  final handoff. During the migration route it embeds a session created through
+  owns stage navigation, the appearance draft, and the final handoff. During
+  the migration route it embeds a session created through
   `IEditorMigrationFlowService.createSession()` and forwards its state and
   intents unchanged. It never reaches into migration services directly.
 - **One renderer, one bundle, two routes.** Onboarding-only components live in
@@ -66,12 +65,13 @@ The change is complete when:
   splitting, so a second entry would duplicate React and every shared component,
   and its hash-named chunks could not be probed by the host's fixed asset list.
   The `route` field on every snapshot selects behaviour instead.
-- **The fake Projects list is illustrative.** It shows what the real Projects
-  sidebar looks like in each density using the renderer's own React components
-  and palette. It does not share DOM, CSS, or the native row renderer with the
-  Projects sidebar. A shared pure row model in Hucode common code defines which
-  fields each row kind shows per density, and both the sidebar renderer and the
-  preview are tested against it so the preview cannot drift silently.
+- **Continue from the embedded Results keeps the recovery data.** Inside
+  onboarding the migration's Results footer offers Copy Report, any Retry or
+  Resume the operation still allows, and one primary Continue. Continue
+  disposes the migration session without acknowledging, so the rollback
+  snapshots and recovery data stay in the journal exactly as the standalone
+  Done leaves them, reachable later through the import command. Import Another
+  Setup and Done and Remove Recovery Data are not offered inside onboarding.
 - **The alternative to importing is Skip Import, not Start Fresh.** Onboarding
   can be reopened at any time, so a route named Start Fresh would read as
   erasing existing configuration. The route is labelled as continuing without
@@ -119,12 +119,11 @@ probing, CSP, revision binding, coalescing, and disposal do not change.
 | --- | --- |
 | Stage navigation, staged choices, resume, completion | `src/vs/hucode/browser/onboarding/onboardingSession.ts` |
 | Versioned installation-scoped record | `src/vs/hucode/browser/onboarding/onboardingStateStore.ts` |
-| Shared row model for Projects density preview | `src/vs/hucode/common/omniProjectsRowModel.ts`, consumed by the sidebar renderer and the presentation mapper |
 | Onboarding presentation DTOs and localized copy | `src/vs/hucode/browser/onboarding/onboardingPresentation.ts`, composing the existing migration presentation for the embedded stages |
 | Protocol additions and validators | `src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts`, mirrored by the existing sync script |
 | Modal editor input, pane, and command | `src/vs/hucode/electron-browser/onboarding/` |
 | React onboarding route | `extensions/hucode-setup-ui/src/onboarding/` |
-| Theme and layout writes, final commands | Onboarding session through `IConfigurationService`, `IWorkbenchThemeService`, and `ICommandService` |
+| Theme writes, shortcut labels, final commands | Onboarding session through `IConfigurationService`, `IWorkbenchThemeService`, `IKeybindingService`, and `ICommandService` |
 
 The Hucode `Workbench`, `OmniHostPart`, upstream welcome and onboarding
 contributions, and startup routing are untouched.
@@ -136,23 +135,21 @@ The onboarding session is one explicit state machine with these stages:
 | Stage | Content | Continue | Back |
 | --- | --- | --- | --- |
 | `bring` | Import from another editor and Skip Import at equal prominence, plus Do This Later | Chosen route | None |
-| `migrate` | Embedded migration phases `application` through `results` | After acknowledged results | Migration Back, then to `bring` from its first phase |
-| `appearance` | Mode and preferred light and dark themes | `meetOmni` | `bring` |
-| `meetOmni` | Vocabulary, fake Projects list, density toggle, final actions | Finish action | Previous route stage |
+| `migrate` | Embedded migration phases `application` through `results` | Continue on concluded results, without acknowledging | Migration Back, then to `bring` from its first phase |
+| `appearance` | Mode tiles and preferred light and dark themes | `meetOmni` | `bring` |
+| `meetOmni` | Vocabulary, shortcuts, final actions | Finish action | Previous route stage |
 | `done` | Transient. Modal closes after the chosen handoff | | |
 
 Rules that keep the routes distinct:
 
 - The migration session is created when the user chooses a source and disposed
   when the user goes Back to `bring` before admission. After admission it lives
-  until acknowledged results, exactly as in the standalone command.
+  until Continue on concluded results, which disposes it without acknowledging.
 - Appearance values stay a draft until Continue on `appearance`. Back to
   `bring` keeps the draft in memory but writes nothing.
-- The density choice stays a draft until Continue on `meetOmni`. Continue
-  writes `hucode.omni.workbenchItemLayout` and
-  `hucode.omni.worktreeItemLayout` to the same value in one configuration
-  update. Finish for Now, Add Project, and Open Folder as Workbench all pass
-  through that write first.
+- Meet Omni writes nothing. Finish for Now, Add Project, and Open Folder as
+  Workbench record completion, close the surface, and only then run their
+  command.
 - The onboarding session records the resumable stage after every stage change
   and after every completed write, so a dismissed modal can reopen on the same
   stage with the same drafts.
@@ -181,9 +178,10 @@ than adding a second one:
 - new panel kinds `bring`, `appearance`, and `meetOmni`, each with wire-safe
   rows, choices, and localized copy;
 - new renderer intents `chooseRoute`, `selectMode`, `selectPreferredTheme`,
-  `setDensity`, `continueStage`, `backStage`, `skip`, `finishForNow`,
-  `addProject`, and `openFolderAsWorkbench`, each with an admission policy
-  naming the stages it may act in;
+  `continueStage`, `skip`, `finishForNow`, `addProject`, and
+  `openFolderAsWorkbench`, each with an admission policy naming the stages it
+  may act in; `continueStage` is also admitted in the migration's `results`
+  phase, where only the onboarding presenter honours it;
 - the existing migration intents, admitted only while the `migrate` stage is
   active and forwarded to the embedded session unchanged.
 
@@ -217,10 +215,13 @@ values the host already listed.
 ## Skip Import and appearance
 
 Choosing Skip Import on `bring` opens the `appearance` stage. The stage offers
-System, Light, and Dark mode as a radio group and two theme lists for the
-preferred light and preferred dark themes. The host builds the lists from
-installed color themes and preselects the current values, so a user who changes
-nothing can Continue without any write.
+System, Light, and Dark mode as one row of three radio tiles, styled like the
+Bring choices, and two filterable theme lists for the preferred light and
+preferred dark themes side by side at the medium width and up, stacked below
+it. One muted note under the lead says that nothing is removed and that the
+import command remains available. The host builds the lists from installed
+color themes and preselects the current values, so a user who changes nothing
+can Continue without any write.
 
 Continue writes only the changed values, in one configuration update to the
 Default profile's user settings:
@@ -234,25 +235,21 @@ standalone import command remains available from the Command Palette.
 
 ## Meet Omni
 
-- Explain Project, Worktree, Workbench, Loaded, Dormant, Suspend, and Unload in
-  one short definition each, using the vocabulary from [Omni](omni.md). No
-  further feature tour.
-- Render a non-interactive fake Projects list with one project root, one linked
-  worktree, and one arbitrary workbench, built from the shared row model. Rows
-  are `role="presentation"` and excluded from the tab order.
-- Offer one **Use compact worktree and workbench lists** switch. Toggling it
-  re-renders the fake list immediately and updates a text label naming the
-  density, so the change does not depend on visual comparison.
-- Mention three commands with their resolved platform keybinding labels from
-  `IKeybindingService`: Switch Worktree, Quick Switch Loaded Workbench, and the
-  next and previous loaded workbench pair. The host resolves the labels; the
-  renderer never formats key chords. Those commands currently bind keys only on
-  macOS, so the snapshot carries an explicit no-shortcut state and the copy
-  names the Command Palette as the fallback instead of showing an empty chord.
+- Explain Project, Worktree, and Workbench in one short definition each, using
+  the vocabulary from [Omni](omni.md). No further feature tour, and no
+  loaded, dormant, suspend, or unload vocabulary: a new user meets those
+  states in Omni itself.
+- Mention the switching commands with their resolved platform keybinding
+  labels from `IKeybindingService`: Switch Worktree, Quick Switch Loaded
+  Workbench, and the next and previous loaded workbench pair. The host resolves
+  the labels; the renderer never formats key chords. Those commands currently
+  bind keys only on macOS, so the snapshot carries an explicit no-shortcut
+  state and the copy names the Command Palette as the fallback instead of
+  showing an empty chord.
 - Offer Add Project, Open Folder as Workbench, and Finish for Now. The first
   two execute `ADD_PROJECT_COMMAND_ID` and `ADD_WORKBENCH_COMMAND_ID` after the
-  density write and the completion record, then close the modal. Those commands
-  own their dialogs and path handling.
+  completion record, then close the modal. Those commands own their dialogs and
+  path handling. The stage writes no settings.
 
 ## Onboarding state record
 
@@ -262,14 +259,12 @@ interface OnboardingRecord {
 	readonly status: 'notStarted' | 'inProgress' | 'skipped' | 'completed';
 	readonly stage?: 'bring' | 'migrate' | 'appearance' | 'meetOmni';
 	readonly route?: 'migrate' | 'skipImport';
-	readonly density?: 'default' | 'compact';
 	readonly completedAt?: number;
 }
 ```
 
-The record stores navigation and staged non-sensitive choices only. It holds no
-theme names, imported values, extension identifiers, paths, or operation
-identifiers. The migration journal remains the source for operation summaries.
+The record stores navigation only. It holds no theme names, imported values,
+extension identifiers, paths, or operation identifiers. The migration journal remains the source for operation summaries.
 
 ## Implementation sequence
 
@@ -291,10 +286,8 @@ its own tests, so the branch history stays reviewable step by step.
 3. **Skip Import route.** Add the mode and theme panel, the theme list snapshot,
    the draft, and the Default-profile write.
 
-4. **Meet Omni and handoff.** Extract the shared row model from the sidebar
-   renderer, add the fake list and density switch, the vocabulary copy with
-   resolved keybinding labels, the completion record, and the three final
-   actions. Retarget the sidebar renderer's layout tests to the shared model.
+4. **Meet Omni and handoff.** Add the vocabulary copy with resolved keybinding
+   labels, the completion record, and the three final actions.
 
 5. **Evidence and documentation.** Add the keyboard, live-region, narrow-size,
    palette, and reduced-motion runtime evidence, update the setup UI layout
@@ -319,11 +312,12 @@ than navigation.
   stage admission, and rejection of migration intents outside the `migrate`
   stage.
 - Presentation tests for the `bring` summary in rerun mode, theme list marking,
-  the fake list rows for both densities against the shared row model, resolved
-  keybinding labels, and the no-shortcut state.
-- Renderer component tests for route selection, the appearance controls, the
-  density switch and its text label, focus restoration across stage changes,
-  and live announcements.
+  the embedded Results footer with Continue in place of the standalone
+  finishes, the three glossary entries, resolved keybinding labels, and the
+  no-shortcut state.
+- Renderer component tests for route selection, the appearance tiles and
+  lists, the Meet Omni glossary and shortcuts, focus restoration across stage
+  changes, and live announcements.
 - Pane tests mirroring the import pane: hide-then-reshow reconstruction,
   cancellation binding during Apply, and single-open exclusion with the import
   input.
@@ -333,9 +327,9 @@ than navigation.
 ### Runtime evidence
 
 Run the real desktop command from a clean profile and from a profile with a
-completed import. Capture `bring`, appearance, Meet Omni in both densities, and
-the rerun summary at the default modal size, maximized, and at the modal's
-minimum size. Repeat Meet Omni at 200 percent zoom.
+completed import. Capture `bring`, appearance, Meet Omni, and the rerun summary
+at the default modal size, maximized, and at the modal's minimum size. Repeat
+Meet Omni at 200 percent zoom.
 
 Verify Dark 2026, Light 2026, both high-contrast palettes, and reduced motion.
 Traverse every stage by keyboard only and confirm a visible focus indicator,
@@ -344,8 +338,9 @@ announcements for stage changes and completion with a desktop screen reader on
 one platform, and record which one.
 
 Finish through each of Add Project, Open Folder as Workbench, and Finish for
-Now, then inspect user settings for the two layout values, the theme values
-after Skip Import, and the application-scope record. Confirm that reopening
+Now, then inspect user settings for the theme values after Skip Import and the
+application-scope record, and confirm that the import route's recovery data is
+still listed by the import command. Confirm that reopening
 after completion shows the rerun summary and changes no settings.
 
 Before the final push of each step, run the setup UI package tests and build,
@@ -358,7 +353,7 @@ and the desktop Omni smoke.
 | Risk | Control |
 | --- | --- |
 | A dismissed first-launch onboarding strands a new user | Record the stage on dismissal, keep the command in the palette, and let #205 decide how Omni surfaces resume |
-| The fake list misrepresents the real sidebar | Derive both from the shared row model and test each against it; accept visual differences, reject field differences |
+| Continue after an import silently discards recovery data | Continue never acknowledges; the footer says the recovery data stays available from the import command |
 | Onboarding writes the shell profile by inference | Appearance writes are an explicit decision stated in copy; migration keeps its explicit target |
 | Skip Import reads as erasing configuration | Name the route as skipping the import, say nothing is removed, prefill current values, and write only changes |
 | Modal state overrides leak into other modal editors | Do not pass size, position, or maximized options when opening |
@@ -374,11 +369,27 @@ and the desktop Omni smoke.
 - Additional source adapters or import categories, including explicit
   `.code-profile` file selection, which the migration system does not support
   today.
-- A shared DOM or CSS between the fake list and the Projects sidebar.
+- Any Omni layout or density setting. Omni's list density stays in Settings.
 - Associating a newly added project or workbench with a non-Default target
   profile. Deferred until the per-project versus per-worktree semantics and a
   write API exist.
 - Onboarding-specific telemetry beyond what the migration flow already emits.
+
+## Revisions after desktop testing
+
+Three changes followed the first macOS run of the complete flow:
+
+- **Import results continue instead of closing.** The embedded Results footer
+  offered the standalone Done, which closed the whole modal, and Done and
+  Remove Recovery Data, which deleted the rollback snapshots. It now offers
+  Continue, which moves to Meet Omni and keeps the recovery data.
+- **The appearance stage was too tall.** A three-row mode list above two long
+  single-column theme lists needed a lot of scrolling at the default modal
+  size. The mode is now one row of tiles and the two lists sit side by side.
+- **Meet Omni focuses on the three nouns.** The seven-term glossary, the
+  illustrative Projects list, and the density switch were more than a first
+  visit needed. The stage now explains Project, Worktree, and Workbench, lists
+  the shortcuts, and writes nothing; list density stays in Settings.
 
 ## Unresolved questions
 

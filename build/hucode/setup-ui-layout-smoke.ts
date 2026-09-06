@@ -10,8 +10,6 @@ import { chromium, expect, type Page } from '@playwright/test';
 import { parse } from 'jsonc-parser';
 import {
 	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
-	type EditorMigrationSetupDensity,
-	type EditorMigrationSetupListPreviewRow,
 	type EditorMigrationSetupPanel,
 	type EditorMigrationSetupPresentation,
 } from '../../src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts';
@@ -400,8 +398,7 @@ function appearanceSnapshot(): EditorMigrationSetupPresentation {
 		kind: 'appearance', id: '', heading: 'Choose How Hucode Looks',
 		lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. These values are written to the Default profile, which the Omni shell uses.',
 		paragraphs: [
-			'Nothing you have already configured is removed. Continue writes only the values you change here.',
-			'You can still bring settings, keyboard shortcuts, snippets, and extensions from another editor at any time with the Import Setup from Another Editor command in the Command Palette.',
+			'Nothing you have already configured is removed, and Continue writes only the values you change here. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette.',
 		],
 		modeGroupLabel: 'Appearance mode',
 		modes: [
@@ -414,23 +411,7 @@ function appearanceSnapshot(): EditorMigrationSetupPresentation {
 	});
 }
 
-/**
- * The preview rows exactly as `getProjectSwitcherPresentationFields()` resolves the core
- * presentation's synthetic items: `default` keeps a worktree's path and a workbench's branch, and
- * `compact` drops them.
- */
-function previewRows(density: EditorMigrationSetupDensity): EditorMigrationSetupListPreviewRow[] {
-	const compact = density === 'compact';
-	return [
-		{ id: 'project', kind: 'project', name: 'hucode', branch: '~/Projects' },
-		{ id: 'worktree-main', kind: 'worktree', name: 'local', branch: 'main', path: compact ? undefined : '~/Projects/hucode' },
-		{ id: 'worktree-linked', kind: 'worktree', name: 'login-form', branch: 'feature/login-form', path: compact ? undefined : '~/Projects/hucode.worktrees/login-form' },
-		{ id: 'workbench', kind: 'workbench', name: 'notes', branch: compact ? undefined : 'main', path: '~/Documents/notes' },
-	];
-}
-
-function meetOmniSnapshot(density: EditorMigrationSetupDensity): EditorMigrationSetupPresentation {
-	const compact = density === 'compact';
+function meetOmniSnapshot(): EditorMigrationSetupPresentation {
 	return onboardingSnapshot('meetOmni', {
 		kind: 'meetOmni', id: '', heading: 'Meet Omni',
 		lead: 'Omni is Hucode\'s outer shell. It keeps your projects and their worktrees in one sidebar and switches between loaded workbenches without opening another window.',
@@ -438,24 +419,7 @@ function meetOmniSnapshot(density: EditorMigrationSetupDensity): EditorMigration
 			{ term: 'Project', definition: 'A saved Git repository. Hucode discovers its worktrees and nests them beneath it.' },
 			{ term: 'Worktree', definition: 'One checkout belonging to a project. Selecting it opens or activates a workbench for that checkout.' },
 			{ term: 'Workbench', definition: 'A VS Code window hosted inside Omni for one folder, or any saved folder that is not a project worktree.' },
-			{ term: 'Loaded', definition: 'A workbench running in memory, visible or hidden, ready to switch to at once.' },
-			{ term: 'Dormant', definition: 'A workbench Omni intends to keep available but has released; activating it loads it again.' },
-			{ term: 'Suspend', definition: 'Release a workbench\'s resources while keeping it dormant and eligible to be restored.' },
-			{ term: 'Unload', definition: 'Release a workbench and mark it as explicitly closed. Its project or catalog entry stays.' },
 		],
-		preview: {
-			label: 'Example Projects list',
-			densityLabel: compact ? 'Showing compact lists.' : 'Showing default lists.',
-			rows: previewRows(density),
-			layout: density,
-		},
-		densityToggle: {
-			id: 'density',
-			label: 'Use compact worktree and workbench lists',
-			description: 'Compact lists show one line per row. Finishing writes this choice to both Omni layout settings.',
-			checked: compact,
-			intent: { type: 'setDensity', density: compact ? 'default' : 'compact' },
-		},
 		shortcuts: [
 			{ label: 'Switch Workbench', keybinding: 'Ctrl+Shift+Alt+P', keybindingAriaLabel: 'Control+Shift+Alt+P' },
 			{ label: 'Quick Switch Loaded Workbench', keybinding: 'Ctrl+Alt+`', keybindingAriaLabel: 'Control+Alt+`' },
@@ -538,7 +502,7 @@ test('onboarding bring stage offers both routes to the keyboard and the pointer'
 	}
 });
 
-test('onboarding appearance stage virtualizes 400 themes behind a fixed footer', { timeout: 60_000 }, async t => {
+test('onboarding appearance stage lays mode tiles over two theme lists behind a fixed footer', { timeout: 60_000 }, async t => {
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	await mkdir(artifacts, { recursive: true });
@@ -553,12 +517,28 @@ test('onboarding appearance stage virtualizes 400 themes behind a fixed footer',
 				const lightList = page.getByRole('radiogroup', { name: 'Light themes' });
 				const darkList = page.getByRole('radiogroup', { name: 'Dark themes' });
 				const footerBounds = await assertFooterFixed(page, viewport, ['Back', 'Continue']);
+				await page.screenshot({ path: new URL(`onboarding-appearance-top-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
+
+				// The three mode tiles share one row; the two lists share one row above the medium width.
+				const tiles = page.getByRole('radiogroup', { name: 'Appearance mode' }).getByRole('radio');
+				await expect(tiles).toHaveText(['SystemFollow the operating system\'s light or dark setting, using the preferred themes below.', 'LightAlways use the preferred light theme.', 'DarkAlways use the preferred dark theme.']);
+				const tileBounds = await Promise.all([0, 1, 2].map(i => tiles.nth(i).boundingBox()));
+				assert.ok(tileBounds.every(bounds => bounds && Math.abs(bounds.y - tileBounds[0]!.y) < 2), `tiles share one row: ${JSON.stringify(tileBounds)}`);
+				await expect(page.getByRole('radio', { name: 'System', exact: true })).toHaveAttribute('data-state', 'checked');
+				const listBounds = await Promise.all([lightList, darkList].map(list => list.boundingBox()));
+				assert.equal(listBounds[1]!.x > listBounds[0]!.x + listBounds[0]!.width - 1, viewport.width >= 768, `two columns only from the medium width: ${JSON.stringify(listBounds)}`);
 
 				// 200 rows each, of which only a viewport's worth is mounted.
 				const mounted = await lightList.locator('[data-virtual-index]').count();
 				assert.ok(mounted > 0 && mounted < themeCount, `light list must virtualize, mounted ${mounted}`);
 				assert.equal(await lightList.getAttribute('aria-label'), 'Light themes');
 
+				// Arrow keys travel the tiles as one radio group; a click selects directly.
+				await page.getByRole('radio', { name: 'System', exact: true }).focus();
+				await page.keyboard.press('ArrowRight', { delay: 60 });
+				await expect(page.locator(':focus')).toHaveAttribute('data-focus-id', 'mode-light');
+				assert.deepStrictEqual(await lastIntent(page), { type: 'selectMode', mode: 'light' });
+				await expect(page.locator(':focus')).toHaveCSS('outline-style', 'solid');
 				await page.getByRole('radio', { name: 'Dark', exact: true }).click();
 				assert.deepStrictEqual(await lastIntent(page), { type: 'selectMode', mode: 'dark' });
 
@@ -589,8 +569,9 @@ test('onboarding appearance stage virtualizes 400 themes behind a fixed footer',
 				assert.deepStrictEqual(await scrolledElements(page), ['detail']);
 				assert.deepStrictEqual(await page.locator('footer').boundingBox(), footerBounds, 'keyboard travel must not move the footer');
 
+				await expect(page.getByText('Import Setup from Another Editor', { exact: false })).toHaveCSS('font-size', '12px');
 				await detail.press('Control+End');
-				await expect(page.getByText('Command Palette.', { exact: false })).toBeInViewport({ ratio: 1 });
+				await expect(page.locator('[data-focus-id="theme-dark-dark-199"]')).toBeInViewport({ ratio: 1 });
 				assert.deepStrictEqual(await scrolledElements(page), ['detail']);
 				assert.deepStrictEqual(await page.locator('footer').boundingBox(), footerBounds);
 				assert.ok(await darkList.locator('[data-virtual-index]').count() < themeCount, 'dark list must virtualize');
@@ -604,85 +585,66 @@ test('onboarding appearance stage virtualizes 400 themes behind a fixed footer',
 	}
 });
 
-const focusableSelector = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
-test('onboarding meet omni previews both densities outside the tab order', { timeout: 60_000 }, async t => {
+test('onboarding meet omni keeps the glossary, shortcuts, and footer within reach', { timeout: 60_000 }, async t => {
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	await mkdir(artifacts, { recursive: true });
-	const densityLabels: Record<string, string> = {};
-	for (const density of ['default', 'compact'] as const) {
-		for (const viewport of onboardingViewports) {
-			await t.test(`${density} ${viewport.width}x${viewport.height}`, async () => {
-				const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
-				const errors: string[] = [];
-				page.on('pageerror', error => errors.push(error.message));
-				try {
-					await mountPresentation(page, meetOmniSnapshot(density));
-					const preview = page.locator('[data-preview-layout]');
-					await expect(preview).toHaveAttribute('data-preview-layout', density);
-					await expect(preview.locator('[data-preview-row]')).toHaveCount(4);
-					assert.equal(await preview.locator(focusableSelector).count(), 0, 'preview rows must not be focusable');
-					densityLabels[density] = (await page.locator('[data-density-label]').textContent())!;
+	for (const viewport of onboardingViewports) {
+		await t.test(`${viewport.width}x${viewport.height}`, async () => {
+			const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+			const errors: string[] = [];
+			page.on('pageerror', error => errors.push(error.message));
+			try {
+				await mountPresentation(page, meetOmniSnapshot());
+				await expect(page.getByRole('term')).toHaveText(['Project', 'Worktree', 'Workbench']);
+				await expect(page.getByRole('definition')).toHaveCount(3);
+				await expect(page.locator('kbd')).toHaveText(['Ctrl+Shift+Alt+P', 'Ctrl+Alt+`']);
+				await expect(page.getByText('No keyboard shortcut is assigned. Use the Command Palette.', { exact: true })).toHaveCount(2);
 
-					// The one switch is the first stop after the content region.
-					await page.locator('[data-focus-id="detail"]').focus();
-					await page.keyboard.press('Tab');
-					assert.equal(await focusedId(page), 'toggle-density');
-					const toggle = page.getByRole('checkbox', { name: 'Use compact worktree and workbench lists' });
-					await expect(toggle).toHaveAttribute('data-state', density === 'compact' ? 'checked' : 'unchecked');
-					await page.keyboard.press('Space');
-					assert.deepStrictEqual(await lastIntent(page), { type: 'setDensity', density: density === 'compact' ? 'default' : 'compact' });
-
-					await expect(page.locator('kbd')).toHaveText(['Ctrl+Shift+Alt+P', 'Ctrl+Alt+`']);
-					await expect(page.getByText('No keyboard shortcut is assigned. Use the Command Palette.', { exact: true })).toHaveCount(2);
-					await assertFooterFixed(page, viewport, ['Back', 'Add Project', 'Open Folder as Workbench', 'Finish for Now']);
-					assert.deepStrictEqual(errors, [], 'renderer errors');
-				} finally {
-					await page.screenshot({ path: new URL(`onboarding-meet-omni-${density}-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
-					await page.close();
-				}
-			});
-		}
+				// Nothing in the content is interactive: from the content region, Tab lands on the footer.
+				await page.locator('[data-focus-id="detail"]').focus();
+				await page.keyboard.press('Tab');
+				assert.equal(await focusedId(page), 'back');
+				await assertFooterFixed(page, viewport, ['Back', 'Add Project', 'Open Folder as Workbench', 'Finish for Now']);
+				assert.deepStrictEqual(errors, [], 'renderer errors');
+			} finally {
+				await page.screenshot({ path: new URL(`onboarding-meet-omni-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
+				await page.close();
+			}
+		});
 	}
-	assert.equal(densityLabels.default, 'Showing default lists.');
-	assert.equal(densityLabels.compact, 'Showing compact lists.');
 });
 
 test('onboarding meet omni keeps control contrast across palettes under reduced motion', { timeout: 60_000 }, async t => {
 	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 	t.after(() => browser.close());
 	await mkdir(artifacts, { recursive: true });
-	for (const density of ['default', 'compact'] as const) {
-		await t.test(density, async () => {
-			const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
-			const errors: string[] = [];
-			page.on('pageerror', error => errors.push(error.message));
-			try {
-				await mountPresentation(page, meetOmniSnapshot(density));
-				assert.equal(await page.locator('body').evaluate(body => body.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)').matches), true);
-				for (const [name, mode] of [
-					['2026-dark', 'vscode-dark'], ['2026-light', 'vscode-light'],
-					['hc_black', 'vscode-high-contrast'], ['hc_light', 'vscode-high-contrast vscode-high-contrast-light'],
-					['fallback', 'vscode-dark'],
-				]) {
-					const colors = name === 'fallback' ? {} : await themeColors(new URL(`../../extensions/theme-defaults/themes/${name}.json`, import.meta.url));
-					await page.locator('html').evaluate((element, { colors, mode }) => {
-						element.removeAttribute('style');
-						for (const [key, value] of Object.entries(colors)) {
-							element.style.setProperty(`--vscode-${key.replaceAll('.', '-')}`, value);
-						}
-						element.ownerDocument.body.className = mode;
-					}, { colors, mode });
-					// One checkbox in the density's state and the four footer actions.
-					await assertControlContrast(page, 5);
-					await page.screenshot({ path: new URL(`onboarding-meet-omni-theme-${name}-${density}.png`, artifacts).pathname });
+	const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
+	const errors: string[] = [];
+	page.on('pageerror', error => errors.push(error.message));
+	try {
+		await mountPresentation(page, meetOmniSnapshot());
+		assert.equal(await page.locator('body').evaluate(body => body.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)').matches), true);
+		for (const [name, mode] of [
+			['2026-dark', 'vscode-dark'], ['2026-light', 'vscode-light'],
+			['hc_black', 'vscode-high-contrast'], ['hc_light', 'vscode-high-contrast vscode-high-contrast-light'],
+			['fallback', 'vscode-dark'],
+		]) {
+			const colors = name === 'fallback' ? {} : await themeColors(new URL(`../../extensions/theme-defaults/themes/${name}.json`, import.meta.url));
+			await page.locator('html').evaluate((element, { colors, mode }) => {
+				element.removeAttribute('style');
+				for (const [key, value] of Object.entries(colors)) {
+					element.style.setProperty(`--vscode-${key.replaceAll('.', '-')}`, value);
 				}
-				assert.deepStrictEqual(errors, [], 'renderer errors');
-			} finally {
-				await page.close();
-			}
-		});
+				element.ownerDocument.body.className = mode;
+			}, { colors, mode });
+			// The four footer actions are the stage's only controls.
+			await assertControlContrast(page, 4);
+			await page.screenshot({ path: new URL(`onboarding-meet-omni-theme-${name}.png`, artifacts).pathname });
+		}
+		assert.deepStrictEqual(errors, [], 'renderer errors');
+	} finally {
+		await page.close();
 	}
 });
 

@@ -10,7 +10,8 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { IInstantiationService, createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../platform/log/common/log.js';
 import { IStorageService } from '../../../platform/storage/common/storage.js';
-import { EditorMigrationFlowPhase, EditorMigrationFlowSession, IEditorMigrationFlowService } from '../migration/editorMigrationFlow.js';
+import { editorMigrationOperationConcluded } from '../../common/migration/editorMigrationApply.js';
+import { EditorMigrationFlowPhase, EditorMigrationFlowSession, EditorMigrationFlowState, IEditorMigrationFlowService } from '../migration/editorMigrationFlow.js';
 import { shouldCancelEditorMigrationOnClose } from '../migration/editorMigrationSetupClose.js';
 import {
 	IOnboardingAppearanceAuthority,
@@ -21,7 +22,7 @@ import {
 	OnboardingColorScheme,
 	onboardingThemesFor,
 } from './onboardingAppearance.js';
-import { IOnboardingOmniAuthority, OnboardingDensity, OnboardingOmniAuthority, OnboardingOmniSnapshot, onboardingDensityLabel } from './onboardingOmni.js';
+import { IOnboardingOmniAuthority, OnboardingOmniAuthority, OnboardingOmniSnapshot } from './onboardingOmni.js';
 import { ONBOARDING_RECORD_VERSION, OnboardingRecord, OnboardingRecordRoute, OnboardingStateStore, OnboardingStoredState } from './onboardingStateStore.js';
 
 /**
@@ -73,13 +74,8 @@ export interface OnboardingSessionState {
 	 * lifetime and are written only by Continue on the appearance stage.
 	 */
 	readonly appearanceDraft?: OnboardingAppearanceDraft;
-	/** The Omni layout in effect and the shortcuts to mention, taken whenever Meet Omni is entered. */
+	/** The shortcuts Meet Omni mentions, taken whenever the stage is entered. */
 	readonly omni?: OnboardingOmniSnapshot;
-	/**
-	 * The staged list density. Seeded from a resumed record or the Omni snapshot, kept across Back,
-	 * and written only by one of the three finishes, and only where it differs from the snapshot.
-	 */
-	readonly density?: OnboardingDensity;
 }
 
 const FIRST_STAGE: OnboardingStage = 'bring';
@@ -98,6 +94,18 @@ export function onboardingOwnsMigrationBack(phase: EditorMigrationFlowPhase): bo
 }
 
 /**
+ * True when the embedded migration's Results may be left for Meet Omni.
+ *
+ * The condition is the standalone Results screen's for offering Done: the operation has a final
+ * outcome and the session is neither working nor canceling. Leaving acknowledges nothing, so the
+ * rollback snapshots and recovery data stay in the journal exactly as Done leaves them, reachable
+ * later through the import command.
+ */
+export function onboardingMigrationCanContinue(state: EditorMigrationFlowState): boolean {
+	return state.phase === 'results' && !state.busy && !state.canceling && state.operation !== undefined && editorMigrationOperationConcluded(state.operation);
+}
+
+/**
  * Maps a stored record onto the stage and route a reopened session lands on.
  *
  * Only `inProgress` resumes. `appearance` implies the Skip Import route; `meetOmni` restores the
@@ -107,16 +115,16 @@ export function onboardingOwnsMigrationBack(phase: EditorMigrationFlowPhase): bo
  * phase. Anything else, including no stage at all, lands on the first stage rather than failing
  * to open.
  */
-export function onboardingResumePosition(stored: OnboardingStoredState): { readonly stage: OnboardingStage; readonly route?: OnboardingRoute; readonly density?: OnboardingDensity } {
+export function onboardingResumePosition(stored: OnboardingStoredState): { readonly stage: OnboardingStage; readonly route?: OnboardingRoute } {
 	if (stored.kind !== 'record' || stored.record.status !== 'inProgress') {
 		return { stage: FIRST_STAGE };
 	}
-	const { stage, route, density } = stored.record;
+	const { stage, route } = stored.record;
 	if (stage === 'appearance') {
-		return { stage, route: 'skipImport', density };
+		return { stage, route: 'skipImport' };
 	}
 	if (stage === 'meetOmni' && route !== undefined) {
-		return { stage, route, density };
+		return { stage, route };
 	}
 	return { stage: FIRST_STAGE };
 }
@@ -194,7 +202,6 @@ export class OnboardingSession extends Disposable {
 		const state: OnboardingSessionState = {
 			stage: position.stage,
 			route: position.route,
-			density: position.density,
 			busy: false,
 			mode: onboardingModeFor(this.stored),
 			previous: onboardingPreviousOutcome(this.stored),
@@ -241,8 +248,8 @@ export class OnboardingSession extends Disposable {
 	 * Out of the embedded migration, Back is onboarding's only while no source has been chosen;
 	 * it disposes the migration session and clears the route, which is what makes a later Import
 	 * start over. Later migration phases hand Back to the migration session instead. From
-	 * `meetOmni` on the Import route there is nowhere to go: the results were acknowledged and the
-	 * operation is gone.
+	 * `meetOmni` on the Import route there is nowhere to go: the migration session that showed
+	 * the results is gone.
 	 */
 	back(): boolean {
 		if (this.finished) {
@@ -343,14 +350,29 @@ export class OnboardingSession extends Disposable {
 	}
 
 	/**
-	 * Continue from `appearance`: writes the changed appearance values, then moves to Meet Omni.
+	 * Continue to Meet Omni from the two stages that offer it.
 	 *
-	 * A failed write stays on the stage with its error so the user can retry or go back. Without a
-	 * loaded snapshot there is nothing to compare against, so nothing is written and the stage is
-	 * simply passed; the user can still finish onboarding.
+	 * From `appearance` it writes the changed appearance values first. A failed write stays on the
+	 * stage with its error so the user can retry or go back. Without a loaded snapshot there is
+	 * nothing to compare against, so nothing is written and the stage is simply passed; the user
+	 * can still finish onboarding.
+	 *
+	 * From the embedded migration it is offered only on concluded Results, and it disposes the
+	 * migration session without acknowledging: the recovery data stays in the journal for the
+	 * import command, as the standalone Done leaves it.
 	 */
 	async continueStage(): Promise<void> {
-		if (this.finished || this._state.stage !== 'appearance' || this._state.busy) {
+		if (this.finished || this._state.busy) {
+			return;
+		}
+		if (this._state.stage === 'migrate') {
+			if (this._migration && onboardingMigrationCanContinue(this._migration.state)) {
+				this.disposeMigration();
+				this.enterMeetOmni(this._state);
+			}
+			return;
+		}
+		if (this._state.stage !== 'appearance') {
 			return;
 		}
 		const { appearance: snapshot, appearanceDraft: draft } = this._state;
@@ -374,47 +396,9 @@ export class OnboardingSession extends Disposable {
 		this.enterMeetOmni({ ...this._state, busy: false, error: undefined });
 	}
 
-	/**
-	 * Acknowledges the embedded migration's results and moves on to Meet Omni.
-	 *
-	 * The migration session deletes the recovery data without restarting discovery, which is what
-	 * its standalone Results screen would do next. Only a confirmed deletion moves the stage: a
-	 * failure stays on Results with the migration flow's own error, and a duplicate press is
-	 * absorbed by the migration session's one-shot guard.
-	 */
-	async acknowledgeMigration(): Promise<void> {
-		const migration = this._migration;
-		if (this.finished || this._state.stage !== 'migrate' || !migration) {
-			return;
-		}
-		const acknowledged = await migration.acknowledge(false);
-		// The modal may have closed during the await; a disposed session must not land anywhere.
-		if (!acknowledged || this.finished || this._store.isDisposed || this._migration !== migration) {
-			return;
-		}
-		this.disposeMigration();
-		this.enterMeetOmni(this._state);
-	}
-
-	/**
-	 * Lands on Meet Omni with a fresh Omni snapshot.
-	 *
-	 * The snapshot is retaken on every entry, so a density changed in Settings between visits is
-	 * what the switch compares against. An existing draft is kept: it is what the user staged, or
-	 * what a resumed record carried; only a first visit seeds it from the snapshot.
-	 */
+	/** Lands on Meet Omni with a fresh Omni snapshot, so a keybinding changed between visits shows. */
 	private enterMeetOmni(state: OnboardingSessionState): void {
-		const omni = this.omni.snapshot();
-		this.setState({ ...state, stage: 'meetOmni', omni, density: state.density ?? omni.density });
-	}
-
-	/** Stages a list density. Returns false outside Meet Omni or while a write is in flight. */
-	setDensity(density: OnboardingDensity): boolean {
-		if (this.finished || this._state.stage !== 'meetOmni' || this._state.busy) {
-			return false;
-		}
-		this.setState({ ...this._state, density, announcement: onboardingDensityLabel(density) });
-		return true;
+		this.setState({ ...state, stage: 'meetOmni', omni: this.omni.snapshot() });
 	}
 
 	/** Ends onboarding from Meet Omni with no handoff. */
@@ -433,40 +417,21 @@ export class OnboardingSession extends Disposable {
 	}
 
 	/**
-	 * The one way out of Meet Omni: writes the density where it differs from the snapshot, records
-	 * the installation as completed, finishes, and only then runs the handoff.
+	 * The one way out of Meet Omni: records the installation as completed, finishes, and only then
+	 * runs the handoff.
 	 *
 	 * The order matters. The surface must be gone before a handoff command opens its dialog, so
 	 * that dialog is not under the modal; and the command runs after onboarding is complete, so a
 	 * command that fails or is cancelled is logged rather than shown on a stage that no longer
-	 * exists. A failed density write stays on Meet Omni with its error and records nothing. A record
-	 * a newer build owns is never rewritten; the surface still finishes.
+	 * exists. A record a newer build owns is never rewritten; the surface still finishes.
 	 */
 	private async complete(handoff?: () => Promise<void>): Promise<void> {
 		if (this.finished || this._state.stage !== 'meetOmni' || this._state.busy) {
 			return;
 		}
-		const { omni, density } = this._state;
-		if (omni && density !== undefined && density !== omni.density) {
-			const generation = ++this.generation;
-			this.setState({ ...this._state, busy: true, error: undefined });
-			try {
-				await this.omni.applyDensity(density);
-			} catch (error) {
-				if (this.isCurrent(generation)) {
-					this.logService.error(error instanceof Error ? error : String(error));
-					const message = errorMessage(error);
-					this.setState({ ...this._state, busy: false, error: message, announcement: message });
-				}
-				return;
-			}
-			if (!this.isCurrent(generation)) {
-				return;
-			}
-		}
 		this.finished = true;
 		if (this.stored?.kind === 'record') {
-			const record: OnboardingRecord = { version: ONBOARDING_RECORD_VERSION, status: 'completed', route: this._state.route, density, completedAt: this.now() };
+			const record: OnboardingRecord = { version: ONBOARDING_RECORD_VERSION, status: 'completed', route: this._state.route, completedAt: this.now() };
 			this.store.write(record);
 		}
 		this.disposeMigration();
@@ -516,7 +481,7 @@ export class OnboardingSession extends Disposable {
 		if (this.finished || !this.stored || this.stored.kind === 'superseded' || this._state.mode === 'rerun') {
 			return;
 		}
-		this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: this._state.stage, route: this._state.route, density: this._state.density });
+		this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: this._state.stage, route: this._state.route });
 	}
 
 	private disposeMigration(): void {
