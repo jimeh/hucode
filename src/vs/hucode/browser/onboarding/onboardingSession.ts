@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { localize } from '../../../nls.js';
@@ -82,6 +83,9 @@ export interface OnboardingSessionState {
 }
 
 const FIRST_STAGE: OnboardingStage = 'bring';
+
+/** How long a handoff waits for the surface to close before running anyway. */
+const SURFACE_CLOSE_TIMEOUT = 5_000;
 
 /**
  * Migration phases before any source is chosen.
@@ -183,6 +187,8 @@ export class OnboardingSession extends Disposable {
 	 * write are carried by the next one and a write that failed is retried by it.
 	 */
 	private appearanceWrites: Promise<void> = Promise.resolve();
+	/** Settles when the bound surface closes; absent until a surface is bound. */
+	private surfaceClosed: Promise<void> | undefined;
 
 	constructor(
 		private readonly store: OnboardingStateStore,
@@ -191,8 +197,31 @@ export class OnboardingSession extends Disposable {
 		private readonly omni: IOnboardingOmniAuthority,
 		private readonly logService: ILogService,
 		private readonly now: () => number = Date.now,
+		private readonly surfaceCloseTimeout: number = SURFACE_CLOSE_TIMEOUT,
 	) {
 		super();
+	}
+
+	/**
+	 * Binds the surface showing this session, for the session's lifetime or until disposed.
+	 *
+	 * The signal has to be the editor input's own disposal, not the pane's `clearInput`, which
+	 * also fires when the singleton input is merely hidden and later reshown. Closing records the
+	 * dismissal, and a handoff chosen on Meet Omni waits for it so the command's dialog opens
+	 * over the shell rather than under the modal.
+	 */
+	bindSurface(onWillClose: Event<void>): IDisposable {
+		const closed = new DeferredPromise<void>();
+		this.surfaceClosed = closed.p;
+		const listener = onWillClose(() => {
+			this.recordDismissal();
+			closed.complete();
+		});
+		return toDisposable(() => {
+			listener.dispose();
+			// An unbound surface can no longer close; a handoff waiting for it must not hang.
+			closed.complete();
+		});
 	}
 
 	get state(): OnboardingSessionState {
@@ -304,6 +333,9 @@ export class OnboardingSession extends Disposable {
 		this.setState({ ...this._state, busy: true, error: undefined, announcement: undefined, appearance: undefined });
 		let snapshot: OnboardingAppearanceSnapshot;
 		try {
+			// A write still in flight from before Back lands in the configuration after this
+			// point; reading first would prefill from values it is about to replace.
+			await this.appearanceWrites;
 			snapshot = await this.appearance.snapshot();
 		} catch (error) {
 			if (this.isCurrent(generation)) {
@@ -472,9 +504,11 @@ export class OnboardingSession extends Disposable {
 	 * runs the handoff.
 	 *
 	 * The order matters. The surface must be gone before a handoff command opens its dialog, so
-	 * that dialog is not under the modal; and the command runs after onboarding is complete, so a
-	 * command that fails or is cancelled is logged rather than shown on a stage that no longer
-	 * exists. A record a newer build owns is never rewritten; the surface still finishes.
+	 * that dialog is not under the modal: finishing asks the surface to close, and the handoff
+	 * waits for the bound surface's close signal, within a bound so a surface that will not close
+	 * cannot swallow the command. The command runs after onboarding is complete, so a command that
+	 * fails or is cancelled is logged rather than shown on a stage that no longer exists. A record
+	 * a newer build owns is never rewritten; the surface still finishes.
 	 */
 	private async complete(handoff?: () => Promise<void>): Promise<void> {
 		if (this.finished || this._state.stage !== 'meetOmni' || this._state.busy) {
@@ -488,6 +522,9 @@ export class OnboardingSession extends Disposable {
 		this.disposeMigration();
 		this._onDidFinish.fire();
 		if (handoff) {
+			if (this.surfaceClosed) {
+				await raceTimeout(this.surfaceClosed, this.surfaceCloseTimeout, () => this.logService.warn('Onboarding surface did not close in time; running the handoff anyway.'));
+			}
 			try {
 				await handoff();
 			} catch (error) {
@@ -521,14 +558,23 @@ export class OnboardingSession extends Disposable {
 	 * Escape, an outside click, the close button, and Do This Later all end here. An admitted
 	 * Apply is asked to cancel first, exactly as closing the standalone import command does; the
 	 * operation continues to its next durable checkpoint on its own, so the migration session can
-	 * be disposed with the input afterwards. Nothing is written once the flow has finished, when a
-	 * newer build owns the record, or in rerun mode, where a completed or skipped record must
-	 * survive being looked at again.
+	 * be disposed with the input afterwards. The stage was already recorded when it was entered;
+	 * writing it again here keeps the dismissal path independent of that.
 	 */
 	recordDismissal(): void {
 		if (this._migration && shouldCancelEditorMigrationOnClose(this._migration.state)) {
 			this._migration.requestCancellation();
 		}
+		this.recordProgress();
+	}
+
+	/**
+	 * Writes the current stage and route as resumable, so a window that exits without a dismissal
+	 * still reopens where the user was. Nothing is written once the flow has finished, when a
+	 * newer build owns the record, or in rerun mode, where a completed or skipped record must
+	 * survive being looked at again.
+	 */
+	private recordProgress(): void {
 		if (this.finished || !this.stored || this.stored.kind === 'superseded' || this._state.mode === 'rerun') {
 			return;
 		}
@@ -545,27 +591,20 @@ export class OnboardingSession extends Disposable {
 	}
 
 	private setState(next: OnboardingSessionState): void {
-		if (next.stage !== this._state.stage) {
+		const stageChanged = next.stage !== this._state.stage;
+		if (stageChanged) {
 			this.generation++;
 		}
 		this._state = Object.freeze({ ...next });
+		if (stageChanged) {
+			this.recordProgress();
+		}
 		this._onDidChangeState.fire(this._state);
 	}
 }
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Records a dismissal when the onboarding surface is genuinely closed.
- *
- * The signal has to be the editor input's own disposal, not the pane's `clearInput`, which also
- * fires when the singleton input is merely hidden and later reshown.
- */
-export function bindOnboardingDismissal(session: Pick<OnboardingSession, 'recordDismissal'>, onWillClose: Event<void>): IDisposable {
-	const listener = onWillClose(() => session.recordDismissal());
-	return toDisposable(() => listener.dispose());
 }
 
 export const IOnboardingService = createDecorator<IOnboardingService>('hucodeOnboardingService');

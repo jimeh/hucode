@@ -48,6 +48,7 @@
 		"src/vs/hucode/test/electron-browser/hucodeOmniDesktopExtensionPolicy.test.ts",
 		"src/vs/hucode/test/electron-browser/omniCommandService.test.ts",
 		"src/vs/hucode/test/electron-browser/onboardingEditorInput.test.ts",
+		"src/vs/hucode/test/electron-browser/setupModalEditors.test.ts",
 		"src/vs/hucode/test/electron-browser/shellControllerServiceAdapter.test.ts",
 		"src/vs/hucode/test/electron-main/desktopWorkbenchOwnership.test.ts",
 		"src/vs/hucode/test/electron-main/editorMigrationSourceChannel.test.ts",

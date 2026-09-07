@@ -14,7 +14,7 @@ import { EditorMigrationFlowPhase, EditorMigrationFlowSession, EditorMigrationFl
 import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAppearanceSnapshot } from '../../browser/onboarding/onboardingAppearance.js';
 import { IOnboardingOmniAuthority, OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
-import { OnboardingSession, OnboardingSessionState, bindOnboardingDismissal } from '../../browser/onboarding/onboardingSession.js';
+import { OnboardingSession, OnboardingSessionState } from '../../browser/onboarding/onboardingSession.js';
 import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 
 suite('OnboardingSession', () => {
@@ -23,6 +23,7 @@ suite('OnboardingSession', () => {
 	function setup(raw?: string, options: {
 		readonly manualAppearance?: boolean;
 		readonly commandsFail?: boolean;
+		readonly surfaceCloseTimeout?: number;
 	} = {}) {
 		const storage = disposables.add(new InMemoryStorageService());
 		if (raw !== undefined) {
@@ -42,6 +43,7 @@ suite('OnboardingSession', () => {
 			omni,
 			new NullLogService(),
 			() => 1_700_000_000_000,
+			options.surfaceCloseTimeout,
 		));
 		const finished: number[] = [];
 		const changes: OnboardingSessionState[] = [];
@@ -256,7 +258,7 @@ suite('OnboardingSession', () => {
 		const early = setup();
 		early.session.chooseRoute('skipImport');
 		await early.session.finishForNow();
-		assert.deepStrictEqual({ stored: early.stored(), finished: early.finished }, { stored: undefined, finished: [] });
+		assert.deepStrictEqual({ record: JSON.parse(early.stored()!), finished: early.finished }, { record: { version: 1, status: 'inProgress', stage: 'appearance', route: 'skipImport' }, finished: [] });
 	});
 
 	test('entering Meet Omni retakes the Omni snapshot on every entry', async () => {
@@ -292,6 +294,31 @@ suite('OnboardingSession', () => {
 			// The command runs only after the surface has finished, so its dialog is not under the modal.
 			project: [[['snapshot'], ['finish'], ['addProject']], 'completed'],
 			workbench: [[['snapshot'], ['finish'], ['openFolderAsWorkbench']], 'completed'],
+		});
+	});
+
+	test('a handoff waits for the bound surface to close, within a bound', async () => {
+		const closed = setup();
+		await closed.reachMeetOmni();
+		const closing = disposables.add(new Emitter<void>());
+		disposables.add(closed.session.bindSurface(closing.event));
+		const handoff = closed.session.addProject();
+		await timeout(0);
+		const beforeClose = closed.omni.calls.slice();
+		closing.fire();
+		await handoff;
+
+		const stuck = setup(undefined, { surfaceCloseTimeout: 1 });
+		await stuck.reachMeetOmni();
+		const never = disposables.add(new Emitter<void>());
+		disposables.add(stuck.session.bindSurface(never.event));
+		await stuck.session.openFolderAsWorkbench();
+
+		assert.deepStrictEqual({ beforeClose, afterClose: closed.omni.calls, stuck: stuck.omni.calls }, {
+			beforeClose: [['snapshot'], ['finish']],
+			afterClose: [['snapshot'], ['finish'], ['addProject']],
+			// A surface that never closes cannot swallow the command.
+			stuck: [['snapshot'], ['finish'], ['openFolderAsWorkbench']],
 		});
 	});
 
@@ -362,6 +389,31 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual(JSON.parse(migrate.stored()!), { version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' });
 	});
 
+	test('every stage change records the stage before any dismissal, except in rerun mode', async () => {
+		const { session, stored, reachMeetOmni } = setup();
+		const records: (string | undefined)[] = [];
+		session.chooseRoute('migrate');
+		records.push(stored());
+		session.back();
+		records.push(stored());
+		await reachMeetOmni();
+		records.push(stored());
+
+		const rerun = setup('{"version":1,"status":"skipped"}');
+		rerun.session.chooseRoute('skipImport');
+		await timeout(0);
+
+		assert.deepStrictEqual({ records: records.map(raw => JSON.parse(raw!)), rerun: JSON.parse(rerun.stored()!) }, {
+			// A window that exits without a dismissal still reopens where the user was.
+			records: [
+				{ version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' },
+				{ version: 1, status: 'inProgress', stage: 'bring' },
+				{ version: 1, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' },
+			],
+			rerun: { version: 1, status: 'skipped' },
+		});
+	});
+
 	test('dismissal during an admitted Apply asks the migration to cancel, and only then', () => {
 		const phases: Partial<Record<EditorMigrationFlowPhase, number>> = {};
 		for (const phase of ['loading', 'recovery', 'application', 'profile', 'target', 'review', 'publishers', 'apply', 'results'] as const) {
@@ -429,10 +481,10 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual({ raw: stored(), finished }, { raw: newer, finished: [1] });
 	});
 
-	test('binds dismissal to the input closing, not to renderer traffic', () => {
+	test('binds dismissal to the surface closing, not to renderer traffic', () => {
 		const { session, stored } = setup();
 		const closing = disposables.add(new Emitter<void>());
-		disposables.add(bindOnboardingDismissal(session, closing.event));
+		disposables.add(session.bindSurface(closing.event));
 
 		assert.strictEqual(stored(), undefined);
 		closing.fire();
@@ -448,6 +500,7 @@ suite('OnboardingSession', () => {
 		await session.continueStage();
 		assert.strictEqual(session.state.stage, 'appearance', 'Continue waits for the load');
 
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 		assert.deepStrictEqual(appearanceView(), {
@@ -480,6 +533,7 @@ suite('OnboardingSession', () => {
 	test('a snapshot that arrives after the stage was left cannot overwrite the newer state', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		const first = appearance.pendingSnapshot!;
 		assert.strictEqual(session.back(), true);
 		assert.deepStrictEqual(appearanceView(), { stage: 'bring', busy: false, loaded: false, draft: undefined, error: undefined, announcement: undefined });
@@ -489,6 +543,7 @@ suite('OnboardingSession', () => {
 		await timeout(0);
 		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: true, loaded: false, draft: undefined, error: undefined, announcement: undefined }, 'the first load belongs to a stage that is gone');
 
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 		assert.deepStrictEqual([appearanceView().busy, appearanceView().loaded], [false, true]);
@@ -525,6 +580,7 @@ suite('OnboardingSession', () => {
 	test('writes run one after another, each carrying what was chosen since, and Continue waits for them', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 
@@ -553,6 +609,7 @@ suite('OnboardingSession', () => {
 	test('a failed write shows its error and keeps the choice, and Continue writes it again', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 		session.selectMode('light');
@@ -574,6 +631,7 @@ suite('OnboardingSession', () => {
 	test('a write that still fails under Continue stays on appearance with its error', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 		session.selectMode('light');
@@ -591,6 +649,7 @@ suite('OnboardingSession', () => {
 	test('a failed snapshot leaves the stage passable and Continue writes nothing', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		appearance.rejectSnapshot(new Error('theme registry unavailable'));
 		await timeout(0);
 		assert.deepStrictEqual(appearanceView(), { stage: 'appearance', busy: false, loaded: false, draft: undefined, error: 'theme registry unavailable', announcement: 'theme registry unavailable' });
@@ -601,9 +660,34 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual(appearance.calls, [['snapshot']]);
 	});
 
+	test('re-entering appearance reads the snapshot only after a write from before Back has landed', async () => {
+		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
+		session.chooseRoute('skipImport');
+		await timeout(0);
+		appearance.resolveSnapshot();
+		await timeout(0);
+		session.selectMode('light');
+		await timeout(0);
+
+		assert.strictEqual(session.back(), true);
+		session.chooseRoute('skipImport');
+		await timeout(0);
+		const callsWhileWritePending = appearance.calls.map(call => call[0]);
+		appearance.resolveApply();
+		await timeout(0);
+
+		assert.deepStrictEqual({ callsWhileWritePending, calls: appearance.calls.map(call => call[0]), busy: appearanceView().busy }, {
+			// The reload would otherwise prefill from values the pending write is about to replace.
+			callsWhileWritePending: ['snapshot', 'apply'],
+			calls: ['snapshot', 'apply', 'snapshot'],
+			busy: true,
+		});
+	});
+
 	test('Back during a write leaves for bring and discards the write\'s result', async () => {
 		const { session, appearance, appearanceView } = setup(undefined, { manualAppearance: true });
 		session.chooseRoute('skipImport');
+		await timeout(0);
 		appearance.resolveSnapshot();
 		await timeout(0);
 		session.selectMode('light');

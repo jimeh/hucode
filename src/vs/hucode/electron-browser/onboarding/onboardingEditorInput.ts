@@ -12,7 +12,7 @@ import { IModalEditorOptions, IModalEditorOptionsProvider } from '../../../platf
 import { registerIcon } from '../../../platform/theme/common/iconRegistry.js';
 import { EditorInput } from '../../../workbench/common/editor/editorInput.js';
 import { EditorInputCapabilities, IUntypedEditorInput } from '../../../workbench/common/editor.js';
-import { OnboardingSession, bindOnboardingDismissal } from '../../browser/onboarding/onboardingSession.js';
+import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
 
 const onboardingIcon = registerIcon('hucode-onboarding-icon', Codicon.rocket, localize('onboarding.icon', "Icon for Hucode onboarding"));
 
@@ -57,7 +57,7 @@ export class OnboardingEditorInput extends EditorInput implements IModalEditorOp
 			throw new Error('OnboardingEditorInput already owns a session.');
 		}
 		this._session = session;
-		this.sessionLifetime.add(bindOnboardingDismissal(session, this.onWillDispose));
+		this.sessionLifetime.add(session.bindSurface(this.onWillDispose));
 		this.sessionLifetime.add(session);
 	}
 
