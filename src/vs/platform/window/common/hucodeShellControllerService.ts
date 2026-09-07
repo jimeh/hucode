@@ -149,6 +149,8 @@ export interface IHucodeShellControllerService {
 		worktreePath: string,
 		projectId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
+	/** Force-crashes one hosted renderer in an enabled desktop smoke test. */
+	crashWorkspaceRendererForSmokeTest(instanceId: string): Promise<void>;
 	suspendWorkspace(instanceId: string): Promise<IHucodeHostedWorkspaceState>;
 	retainAndOpenWorkbench(
 		folderUri: UriComponents
@@ -228,6 +230,7 @@ export const HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS = Object.freeze([
 	'focusNormalWindowByPath',
 	'openWorkspace',
 	'openAndFocusWorkspace',
+	'crashWorkspaceRendererForSmokeTest',
 	'suspendWorkspace',
 	'retainAndOpenWorkbench',
 	'unloadRetainedWorkbench',
@@ -321,6 +324,8 @@ export function createHucodeShellControllerClient(
 			remote.openWorkspace(path, projectId),
 		openAndFocusWorkspace: (path, projectId) =>
 			remote.openAndFocusWorkspace(path, projectId),
+		crashWorkspaceRendererForSmokeTest: instanceId =>
+			remote.crashWorkspaceRendererForSmokeTest(instanceId),
 		suspendWorkspace: instanceId => remote.suspendWorkspace(instanceId),
 		retainAndOpenWorkbench: folderUri =>
 			remote.retainAndOpenWorkbench(folderUri),

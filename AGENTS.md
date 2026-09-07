@@ -152,14 +152,15 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   ```
 - Do not run the packaged Linux Omni lifecycle smoke with
   `ELECTRON_DISABLE_SANDBOX=1` on GitHub-hosted runners. Under an unsandboxed
-  renderer there, `Page.crash` never produced Playwright's `crash` event, and
-  the release smoke failed its "crash Bravo" phase on every release from
+  renderer there, the former CDP `Page.crash` injection never produced
+  Playwright's `crash` event, and the release smoke failed its "crash Bravo"
+  phase on every release from
   v0.0.76 to v0.0.81 while passing locally with the same artifact and flag.
   The release job restores the root-owned 4755 `chrome-sandbox` after
   extracting the app tar instead, as the CI desktop smoke does for the dev
-  Electron. On a crash timeout the harness prints the `Page.crash` outcome,
-  the shell's Projects rows, and the app's process states; read those before
-  assuming the event was merely lost.
+  Electron. The crash phase now uses the guarded shell smoke driver. On a crash
+  timeout the harness prints the shell's Projects rows and the app's process
+  states; read those before assuming the event was merely lost.
 - That `VSCODE_SKIP_PRELAUNCH=1` also skips the build, and the Electron runner
   executes compiled `out/`. Editing a `.ts` file and re-running therefore tests
   the *previous* build. This matters most when deliberately breaking code to
@@ -355,10 +356,11 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
 - Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
   CDP. Identify them through
   `window.vscode.context.resolveConfiguration()` — their URLs are identical.
-  To crash one in a smoke test, subscribe to the page's `crash` event, fire
-  `Page.crash` without awaiting its response, and await the event instead; the
-  command response never arrives after the target dies, and the crashed page
-  remains in `context.pages()` until recovery destroys the crashed view.
+  To crash one in a smoke test, call the shell's enabled smoke driver with the
+  exact hosted instance ID. Desktop main gates that call behind
+  `--enable-smoke-test-driver` and uses `webContents.forcefullyCrashRenderer()`;
+  this avoids Chromium's experimental CDP `Page.crash`. The crashed page remains
+  in `context.pages()` until recovery destroys the crashed view.
 - Hosted unload and reload smoke commands can destroy their Playwright `Page`
   or detach their `Frame` before Quick Input reports itself hidden. Mark only
   those command calls with `surfaceMayClose`, then rely on the following exact
