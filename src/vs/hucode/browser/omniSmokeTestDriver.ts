@@ -16,6 +16,7 @@ export const HUCODE_OMNI_SMOKE_TEST_DRIVER_PROPERTY =
 /** Smoke-only operations exposed to packaged Omni lifecycle automation. */
 export interface IHucodeOmniSmokeTestDriver {
 	openWorkspace(worktreePath: string): Promise<void>;
+	crashWorkspace(instanceId: string): Promise<void>;
 	suspendWorkspace(instanceId: string): Promise<void>;
 	reloadActiveWorkspace(): Promise<void>;
 	focusActiveWorkspace(): Promise<void>;
@@ -42,6 +43,10 @@ export function registerOmniSmokeTestDriver(options: {
 		windowId: number,
 		worktreePath: string
 	) => Promise<unknown>;
+	readonly crashWorkspace: (
+		windowId: number,
+		instanceId: string
+	) => Promise<unknown>;
 	readonly reloadWorkspace: (windowId: number) => Promise<unknown>;
 	readonly focusWorkspace: (windowId: number) => Promise<unknown>;
 }): IDisposable {
@@ -57,6 +62,14 @@ export function registerOmniSmokeTestDriver(options: {
 				);
 			}
 			await options.openWorkspace(options.windowId, worktreePath);
+		},
+		async crashWorkspace(instanceId): Promise<void> {
+			if (!instanceId) {
+				throw new Error(
+					'The Omni smoke-test driver requires a hosted instance ID.'
+				);
+			}
+			await options.crashWorkspace(options.windowId, instanceId);
 		},
 		async suspendWorkspace(instanceId): Promise<void> {
 			if (!instanceId) {

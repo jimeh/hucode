@@ -33,6 +33,15 @@ interface IHucodeShellControllerPortRequestDependencies {
 	readonly logFailure: (error: unknown) => void;
 }
 
+/** Rejects privileged smoke operations outside an enabled smoke process. */
+export function assertHucodeSmokeTestCrashEnabled(enabled: boolean): void {
+	if (!enabled) {
+		throw new Error(
+			'Hosted renderer crash injection requires the smoke-test driver.'
+		);
+	}
+}
+
 /** Disposes a bound shell port only when its owning main frame goes away. */
 export function registerHucodeShellControllerOwnerLifecycle(
 	webContents: Electron.WebContents,

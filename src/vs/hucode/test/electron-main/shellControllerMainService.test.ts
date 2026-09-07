@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
 	acceptHucodeShellControllerPortRequest,
+	assertHucodeSmokeTestCrashEnabled,
 	IHucodeShellControllerPortOwner,
 	registerHucodeShellControllerOwnerLifecycle,
 } from '../../electron-main/shellControllerPortAcceptor.js';
@@ -159,6 +160,14 @@ suite('ShellControllerMainService capability port', () => {
 		webContents.emit('destroyed');
 		assert.strictEqual(disposeCalls, 1);
 		registration.dispose();
+	});
+
+	test('guards crash injection behind smoke mode', () => {
+		assert.throws(
+			() => assertHucodeSmokeTestCrashEnabled(false),
+			/requires the smoke-test driver/
+		);
+		assert.doesNotThrow(() => assertHucodeSmokeTestCrashEnabled(true));
 	});
 });
 

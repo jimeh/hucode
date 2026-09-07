@@ -74,6 +74,7 @@ class TestWebContents extends EventEmitter {
 	readonly closeCalls: Electron.CloseOpts[] = [];
 	readonly pasteCalls: number[] = [];
 	readonly reloadCalls: number[] = [];
+	readonly forcefullyCrashRendererCalls: number[] = [];
 	readonly devToolsCalls: number[] = [];
 	readonly invalidateCalls: number[] = [];
 	loadUrlError: Error | undefined = undefined;
@@ -183,6 +184,11 @@ class TestWebContents extends EventEmitter {
 
 	reload(): void {
 		this.reloadCalls.push(Date.now());
+	}
+
+	forcefullyCrashRenderer(): void {
+		this.forcefullyCrashRendererCalls.push(Date.now());
+		this.emit('render-process-gone');
 	}
 
 	toggleDevTools(): void {
@@ -2674,6 +2680,41 @@ suite('ResidentHostedWorkspacesController', () => {
 				state: 'active',
 			},
 		]);
+	});
+
+	test('smoke crash targets one live hosted instance', async () => {
+		const alpha = createWorktree('crash-target-alpha');
+		const bravo = createWorktree('crash-target-bravo');
+		const { controller, viewFactory } = createController();
+
+		await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+		controller.notifyHostedWorkspaceReady('instance-1');
+		await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+		controller.notifyHostedWorkspaceReady('instance-2');
+
+		controller.crashWorkspaceRendererForSmokeTest('instance-2');
+
+		assert.strictEqual(
+			viewFactory.views[0].rawWebContents
+				.forcefullyCrashRendererCalls.length,
+			0
+		);
+		assert.strictEqual(
+			viewFactory.views[1].rawWebContents
+				.forcefullyCrashRendererCalls.length,
+			1
+		);
+		assert.deepStrictEqual(controller.getState().instances.map(instance => ({
+			instanceId: instance.instanceId,
+			state: instance.state,
+		})), [
+			{ instanceId: 'instance-2', state: 'crashed' },
+			{ instanceId: 'instance-1', state: 'loaded' },
+		]);
+		assert.throws(
+			() => controller.crashWorkspaceRendererForSmokeTest('missing'),
+			/No live hosted workspace matches instance missing/
+		);
 	});
 
 	test('openFilesInWorkspace waits for new workspace readiness', async () => {

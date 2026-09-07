@@ -1377,18 +1377,23 @@ export async function runLinuxOmniSmoke(
 		const bravoPage = getTargetPage(runtime, restoredBravo);
 		reportLinuxOmniPhaseProgress('crash Bravo', 'starting', deadline);
 		const crashShellPage = shellPage;
-		await crashLinuxOmniPage(bravoPage, deadline, async () => {
-			const rows = await readWorkbenchRows(
-				crashShellPage,
-				deadline,
-				'crash Bravo'
-			).then(
-				value => JSON.stringify(value),
-				error => `<rows failed: ${formatError(error)}>`
-			);
-			const processes = await describeLinuxOmniProcesses(executablePath);
-			return `Projects rows: ${rows}\n${processes}`;
-		});
+		await crashWorkbenchThroughSmokeDriver(
+			crashShellPage,
+			restoredBravo.hostedInstanceId,
+			deadline,
+			async () => {
+				const rows = await readWorkbenchRows(
+					crashShellPage,
+					deadline,
+					'crash Bravo'
+				).then(
+					value => JSON.stringify(value),
+					error => `<rows failed: ${formatError(error)}>`
+				);
+				const processes = await describeLinuxOmniProcesses(executablePath);
+				return `Projects rows: ${rows}\n${processes}`;
+			}
+		);
 		crashedPages.add(bravoPage);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1919,18 +1924,14 @@ function assertNewInstance(
 
 /**
  * Describes the state the harness could still observe after a crash request
- * timed out, so a silent renderer can be told apart from a lost crash event.
+ * failed, so runner-only failures retain actionable process and UI evidence.
  */
 export type LinuxOmniCrashDiagnostics = () => Promise<string>;
 
-/**
- * Crashes one hosted renderer through CDP and waits for Playwright's crash
- * event. The command response is tracked only for diagnostics: a resolved
- * `Page.crash` means the renderer stayed alive, while a pending one means the
- * renderer died or hung before answering.
- */
-export async function crashLinuxOmniPage(
-	page: Page,
+/** Requests an exact hosted renderer crash through the bounded smoke driver. */
+export async function crashWorkbenchThroughSmokeDriver(
+	shellPage: Page,
+	instanceId: string,
 	deadline: number,
 	diagnostics?: LinuxOmniCrashDiagnostics
 ): Promise<void> {
@@ -1938,50 +1939,34 @@ export async function crashLinuxOmniPage(
 		deadline,
 		Date.now() + maximumCrashWaitMs
 	);
-	let crashListener: () => void;
-	const crashEvent = new Promise<void>(resolve => {
-		crashListener = resolve;
-		page.once('crash', crashListener);
-	});
-	let crashCommandOutcome = 'pending';
 	try {
-		const session = await runLinuxOmniBoundedProbe(
+		await runLinuxOmniBoundedProbe(
 			crashDeadline,
-			'Bravo crash CDP session creation',
-			() => getPageContext(page).newCDPSession(page)
+			'crash Bravo smoke-driver call',
+			() => shellPage.evaluate(async hostedInstanceId => {
+				const targetGlobal = globalThis as unknown as {
+					readonly __hucodeOmniSmokeTestDriver?: {
+						crashWorkspace(id: string): Promise<void>;
+					};
+				};
+				const driver = targetGlobal.__hucodeOmniSmokeTestDriver;
+				if (!driver) {
+					throw new Error(
+						'Omni smoke-test crash driver is unavailable'
+					);
+				}
+				await driver.crashWorkspace(hostedInstanceId);
+			}, instanceId)
 		);
-		void session.send('Page.crash').then(
-			() => {
-				crashCommandOutcome = 'resolved (renderer answered the crash request)';
-			},
-			error => {
-				crashCommandOutcome = `rejected: ${formatError(error)}`;
-			}
+	} catch (error) {
+		const diagnosticText = diagnostics
+			? await diagnostics().catch(diagnosticsError =>
+				`<crash diagnostics failed: ${formatError(diagnosticsError)}>`
+			)
+			: undefined;
+		throw new Error(
+			[formatError(error), diagnosticText].filter(Boolean).join('\n')
 		);
-		try {
-			await waitForPromise(
-				crashEvent,
-				crashDeadline,
-				'Timed out waiting for the Bravo renderer crash event'
-			);
-		} catch (error) {
-			const detail = error instanceof Error
-				? error.message
-				: String(error);
-			const diagnosticText = diagnostics
-				? await diagnostics().catch(diagnosticsError =>
-					`<crash diagnostics failed: ${formatError(diagnosticsError)}>`
-				)
-				: undefined;
-			throw new Error(
-				[
-					`${detail}; Page.crash command ${crashCommandOutcome}`,
-					diagnosticText,
-				].filter(Boolean).join('\n')
-			);
-		}
-	} finally {
-		page.off('crash', crashListener!);
 	}
 }
 
