@@ -83,6 +83,12 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   Fragments already numbered for a *different* PR are ignored, so an
   integration branch carrying several merged PRs, or a branch that merged a
   base which had just gained a fragment, does not fail for carrying them.
+- The "Validate package-lock.json changes" step diffs against
+  `github.event.pull_request.base.sha` from a depth-2 checkout. When the base
+  branch gains a commit between the PR event and the run, that SHA is not in
+  the checkout and the step fails with "Invalid symmetric difference
+  expression" regardless of the change. Rebase onto the current base and push;
+  the rerun passes.
 - An integration PR merging a batch should use a hidden type such as `chore:`.
   A `feat:`/`fix:` title still requires a fragment of its own, which an
   integration PR has no business adding — its constituents already carry theirs.
@@ -110,6 +116,14 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   before initial-startup untitled workspaces and empty-window backups are
   appended in `open()`. When changing default startup-window behavior, account
   for those later restores or the app can open an extra fallback window.
+- `npm run gulp transpile-client` produces an `out/` the Electron unit runner
+  cannot load (`ReferenceError: exports is not defined` in
+  `test/unit/electron/renderer.js`). Run `npm run gulp compile-client` before
+  `./scripts/test.sh`.
+- In zsh, `npm run -s precommit -- $files` passes the whole list as one
+  argument because zsh does not word-split unquoted variables. Pipe the list
+  through `xargs` or spell the paths out; otherwise precommit silently checks a
+  single nonexistent path and reports success.
 - `npm run test-build-scripts -- --test-name-pattern <pattern>` does not work:
   the build package test script places the test glob before forwarded args, so
   Node treats the pattern as another test file. For filtered build-script tests,
@@ -452,6 +466,36 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   For scrollbar screenshots and drag tests, launch Playwright Chromium with
   `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
   even when its computed colors are correct.
+- The setup UI stylesheet imports Tailwind with `source(none)` and explicit
+  `@source` globs. A new renderer directory under
+  `extensions/hucode-setup-ui/src/` needs its own `@source` line, or classes
+  used only there are silently absent from the bundle; jsdom tests do not
+  notice, only a real browser does.
+- `EditorMigrationSetupPresenter.dispatch()` is an exhaustive switch over every
+  protocol intent. Adding an onboarding-only intent fails `compile-client`
+  until the migration presenter lists it in its unreachable onboarding case.
+- `cd build && npm run typecheck` is the only checker covering
+  `build/hucode/*.ts`, and `npm run hucode:smoke:setup-ui-layout` is the only
+  runtime consumer of hand-built presentation snapshots. A protocol shape
+  change must be followed by both; `compile-client` and the unit suites stay
+  green while they are red.
+- `.build/electron` holds one binary named after the active `product.json`:
+  `code-oss` after a plain `npm run electron`, `hucode` after
+  `node build/hucode/run-with-mixin.js --quality stable -- npm run electron`.
+  `./scripts/test.sh` needs the former and `./scripts/hucode.sh` the latter, so
+  alternating between unit tests and a desktop run means rebuilding Electron
+  each time; the other name fails with "No such file or directory".
+- `npm run hucode:smoke:linux-omni` inherits the environment. Locally export
+  `ELECTRON_DISABLE_SANDBOX=1` alongside `VSCODE_SKIP_PRELAUNCH=1`, or the
+  launch aborts on `chrome-sandbox` ownership. Under xvfb, wrap it in
+  `dbus-run-session`.
+- Radix roving focus in the setup UI moves on a `setTimeout` and selects the
+  landing radio only while the arrow key is still held. Playwright's default
+  `press` releases instantly and looks like a broken list; use
+  `press('ArrowDown', { delay: 60 })` with a polled focus expectation.
+- Electron webviews are reachable over CDP as ordinary `page.frames()`
+  entries with `vscode-webview://` URLs; no out-of-process iframe handling is
+  needed to drive the setup UI in a desktop smoke.
 - `local/code-no-unexternalized-strings` and
   `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
   packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`

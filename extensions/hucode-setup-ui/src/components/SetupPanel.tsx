@@ -14,6 +14,9 @@ import type {
 } from '@/generated/editorMigrationSetupProtocol';
 import type { LocalSetupState } from '@/lib/localState';
 import { VirtualCollection } from '@/components/VirtualCollection';
+import { AppearancePanel } from '@/onboarding/AppearancePanel';
+import { BringPanel } from '@/onboarding/BringPanel';
+import { MeetOmniPanel } from '@/onboarding/MeetOmniPanel';
 import { ActionButton, Disclosure, FilterInput, GroupList, Lead, Note, PanelHeading, ProblemList, SubHeading } from '@/components/primitives';
 import { Button } from '@/vendor/shadcn/button';
 import { Checkbox } from '@/vendor/shadcn/checkbox';
@@ -50,6 +53,9 @@ export function SetupPanelView(props: SetupPanelProps) {
 		case 'resultsOverview': return <ResultsOverviewPanel {...props} panel={panel} />;
 		case 'resultsCategory': return <ResultsCategoryPanel {...props} panel={panel} />;
 		case 'restore': return <RestorePanel {...props} panel={panel} />;
+		case 'bring': return <BringPanel panel={panel} send={props.send} />;
+		case 'appearance': return <AppearancePanel panel={panel} local={props.local} scrollRef={props.scrollRef} send={props.send} />;
+		case 'meetOmni': return <MeetOmniPanel panel={panel} />;
 		case 'message': return (
 			<PanelBody>
 				<PanelHeading>{panel.heading}</PanelHeading>

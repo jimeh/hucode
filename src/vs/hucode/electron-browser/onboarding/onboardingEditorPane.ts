@@ -6,39 +6,24 @@
 import { clearNode, Dimension } from '../../../base/browser/dom.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
-import { URI } from '../../../base/common/uri.js';
 import { IEditorOptions } from '../../../platform/editor/common/editor.js';
 import { INativeEnvironmentService } from '../../../platform/environment/common/environment.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../platform/theme/common/themeService.js';
-import { IEditorMigrationFlowService } from '../../browser/migration/editorMigrationFlow.js';
-import { bindEditorMigrationCloseCancellation } from '../../browser/migration/editorMigrationSetupClose.js';
-import { EditorMigrationSetupPresenter } from '../../browser/migration/editorMigrationSetupPresenter.js';
 import { EditorMigrationSetupWebviewHost } from '../../browser/migration/editorMigrationSetupWebviewHost.js';
+import { IOnboardingService, OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
+import { OnboardingSetupPresenter } from '../../browser/onboarding/onboardingSetupPresenter.js';
 import { EditorPane } from '../../../workbench/browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../workbench/common/editor.js';
 import { IEditorGroup } from '../../../workbench/services/editor/common/editorGroupsService.js';
-import { EditorMigrationEditorInput } from './editorMigrationEditorInput.js';
+import { editorMigrationSetupMediaRoot } from '../migration/editorMigrationEditorPane.js';
+import { OnboardingEditorInput } from './onboardingEditorInput.js';
 
-/** Directory name of the built-in extension that packages the renderer assets. */
-export const SETUP_UI_EXTENSION_FOLDER = 'hucode-setup-ui';
-
-/**
- * Media directory holding the built renderer assets.
- *
- * `builtinExtensionsPath` covers the development layout, the packaged layout, and an explicit
- * `--builtin-extensions-dir`. Extension registration and enablement never participate, so the
- * import UI still loads with extensions disabled.
- */
-export function editorMigrationSetupMediaRoot(environmentService: INativeEnvironmentService): URI {
-	return URI.joinPath(URI.file(environmentService.builtinExtensionsPath), SETUP_UI_EXTENSION_FOLDER, 'media');
-}
-
-/** Modal editor pane hosting the setup webview. */
-export class EditorMigrationEditorPane extends EditorPane {
-	static readonly ID = 'workbench.editor.hucodeEditorMigration';
+/** Modal editor pane hosting the onboarding route of the setup webview. */
+export class OnboardingEditorPane extends EditorPane {
+	static readonly ID = 'workbench.editor.hucodeOnboarding';
 
 	private container: HTMLElement | undefined;
 	private host: EditorMigrationSetupWebviewHost | undefined;
@@ -49,11 +34,11 @@ export class EditorMigrationEditorPane extends EditorPane {
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
-		@IEditorMigrationFlowService private readonly flowService: IEditorMigrationFlowService,
+		@IOnboardingService private readonly onboardingService: IOnboardingService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@INativeEnvironmentService private readonly environmentService: INativeEnvironmentService,
 	) {
-		super(EditorMigrationEditorPane.ID, group, telemetryService, themeService, storageService);
+		super(OnboardingEditorPane.ID, group, telemetryService, themeService, storageService);
 	}
 
 	protected override createEditor(parent: HTMLElement): void {
@@ -62,29 +47,42 @@ export class EditorMigrationEditorPane extends EditorPane {
 		parent.appendChild(this.container);
 	}
 
-	override async setInput(input: EditorMigrationEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
+	override async setInput(input: OnboardingEditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
 		if (!this.container) {
 			return;
 		}
 		this.inputDisposables.clear();
 		clearNode(this.container);
-		const session = this.flowService.getStandaloneSession();
+		const session = this.sessionFor(input);
 		// The webview element lives for exactly one `setInput` to `clearInput` cycle. Hiding the
 		// singleton modal input disposes it; showing it again creates a fresh element whose state
-		// is reconstructed from the session.
+		// is reconstructed from the session the input still owns.
 		this.host = this.inputDisposables.add(this.instantiationService.createInstance(
 			EditorMigrationSetupWebviewHost,
 			this.container,
-			new EditorMigrationSetupPresenter(session),
+			new OnboardingSetupPresenter(session),
 			{
 				mediaRoot: editorMigrationSetupMediaRoot(this.environmentService),
 				onDone: () => void this.group.closeEditor(input),
 			},
 		));
-		// Escape and outside-click close the modal at the editor-part level, so the cancel request
-		// has to hang off the input's own disposal rather than anything the renderer sends.
-		this.inputDisposables.add(bindEditorMigrationCloseCancellation(session, input.onWillDispose));
+	}
+
+	/**
+	 * The session belongs to the input, not to this pane.
+	 *
+	 * Hide-then-reshow reaches `setInput` again with the same input and must present the same
+	 * session; closing the input disposes it and records the dismissal on the way.
+	 */
+	private sessionFor(input: OnboardingEditorInput): OnboardingSession {
+		if (input.session) {
+			return input.session;
+		}
+		const session = this.onboardingService.createSession();
+		session.initialize();
+		input.attachSession(session);
+		return session;
 	}
 
 	override focus(): void {

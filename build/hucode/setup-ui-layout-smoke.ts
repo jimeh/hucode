@@ -8,12 +8,17 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { chromium, expect, type Page } from '@playwright/test';
 import { parse } from 'jsonc-parser';
-import { EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, type EditorMigrationSetupPresentation } from '../../src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts';
+import {
+	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
+	type EditorMigrationSetupPanel,
+	type EditorMigrationSetupPresentation,
+} from '../../src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts';
 
 const mediaRoot = new URL('../../extensions/hucode-setup-ui/media/', import.meta.url);
 const artifacts = new URL('../../.build/hucode-smoke-artifacts/', import.meta.url);
 const presentation: EditorMigrationSetupPresentation = {
 	revision: 1,
+	route: 'import',
 	phase: 'review',
 	regionLabel: 'Editor Setup Import',
 	title: 'Import Setup from Another Editor',
@@ -217,7 +222,7 @@ test('setup owns its palette with visible controls, scrollbars, and keyboard-onl
 	await expect(importButton).toHaveCSS('outline-color', 'rgb(122, 165, 245)');
 });
 
-async function assertControlContrast(page: Page): Promise<void> {
+async function assertControlContrast(page: Page, expectedControls = 5): Promise<void> {
 	const ratios = await page.locator('body').evaluate(body => {
 		const document = body.ownerDocument;
 		const view = document.defaultView!;
@@ -253,7 +258,7 @@ async function assertControlContrast(page: Page): Promise<void> {
 			};
 		});
 	});
-	assert.equal(ratios.length, 5, 'check both radio states, the unchecked checkbox, and both footer buttons');
+	assert.equal(ratios.length, expectedControls, 'measure every radio, checkbox, and footer button the panel draws');
 	for (const { label, minimum, ratio } of ratios) {
 		assert.ok(ratio >= minimum, `${label}: contrast ${ratio.toFixed(2)} must be at least ${minimum}`);
 	}
@@ -310,3 +315,337 @@ test('snippet comparisons expand in the main pane with horizontal choices and fi
 		});
 	}
 });
+
+// #region onboarding
+
+type OnboardingStage = 'bring' | 'appearance' | 'meetOmni';
+
+/**
+ * Wraps one onboarding panel the way `onboardingPresentation()` does: the onboarding identity and
+ * step header, no rail, and the footer the stage owns. The strings mirror the core presentation so
+ * the screenshots read as the real stages.
+ */
+function onboardingSnapshot(stage: OnboardingStage, panel: EditorMigrationSetupPanel, mode: 'firstRun' | 'rerun' = 'firstRun'): EditorMigrationSetupPresentation {
+	const action = (id: string, label: string, intent: EditorMigrationSetupPresentation['footer']['actions'][number]['intent'], kind: 'default' | 'primary' = 'default') =>
+		({ id, label, kind, disabled: false, intent });
+	const back = action('back', 'Back', { type: 'back' });
+	const footers: Record<OnboardingStage, EditorMigrationSetupPresentation['footer']> = {
+		bring: { lines: [], actions: [action('skip', 'Skip', { type: 'skip' }), action('later', 'Do This Later', { type: 'close' })] },
+		appearance: { lines: [], actions: [back, action('appearance-continue', 'Continue', { type: 'continueStage' }, 'primary')] },
+		meetOmni: {
+			lines: [],
+			actions: [
+				back,
+				action('add-project', 'Add Project', { type: 'addProject' }),
+				action('open-workbench', 'Open Folder as Workbench', { type: 'openFolderAsWorkbench' }),
+				action('finish', 'Finish', { type: 'finishForNow' }, 'primary'),
+			],
+		},
+	};
+	const current = stage === 'meetOmni' ? 'meetOmni' : 'bring';
+	return {
+		revision: 1,
+		route: 'onboarding',
+		phase: stage,
+		regionLabel: 'Hucode Onboarding',
+		title: 'Welcome to Hucode',
+		steps: [
+			{ id: 'bring', label: 'Bring Your Setup', current: current === 'bring' },
+			{ id: 'review', label: 'Review', current: false },
+			{ id: 'meetOmni', label: 'Meet Omni', current: current === 'meetOmni' },
+		],
+		busy: false,
+		canceling: false,
+		sections: [],
+		scopeKey: `onboarding|${stage}|${mode}`,
+		panels: [panel],
+		footer: footers[stage],
+		sectionAnnouncementTemplate: 'Showing {0}.',
+	};
+}
+
+function bringSnapshot(mode: 'firstRun' | 'rerun'): EditorMigrationSetupPresentation {
+	const choices = [
+		{
+			id: 'migrate' as const,
+			label: mode === 'rerun' ? 'Start a New Import' : 'Import from Another Editor',
+			detail: 'Bring settings, keyboard shortcuts, snippets, and extensions from a supported editor installed on this machine. You review everything before anything is written.',
+		},
+		{ id: 'skipImport' as const, label: 'Skip Import', detail: 'Continue without importing from another editor. Nothing you have already configured is removed.' },
+	];
+	return onboardingSnapshot('bring', mode === 'rerun'
+		? {
+			kind: 'bring', id: '', heading: 'Onboarding Is Already Complete',
+			lead: 'You completed onboarding 3 days ago without importing from another editor. Reopening it changes nothing on its own.',
+			paragraphs: ['Nothing runs on its own. Choose a route to go through onboarding again, or leave: Skip records that you chose not to, and Do This Later closes this window and keeps your existing choice.'],
+			choices,
+		}
+		: {
+			kind: 'bring', id: '', heading: 'Bring Your Setup to Hucode',
+			lead: 'Import settings, keyboard shortcuts, snippets, and extensions from another editor, or continue without importing.',
+			paragraphs: ['Do This Later keeps your place, so onboarding reopens on this step when you come back to it. You can reopen it at any time with the Hucode: Open Onboarding command in the Command Palette.'],
+			choices,
+		}, mode);
+}
+
+const themeCount = 200;
+
+function appearanceSnapshot(): EditorMigrationSetupPresentation {
+	const themes = (scheme: 'light' | 'dark') => Array.from({ length: themeCount }, (_, i) => ({ id: `${scheme}-${i}`, label: `${scheme === 'light' ? 'Light' : 'Dark'} Theme ${i}` }));
+	const mode = (id: 'system' | 'light' | 'dark', label: string, description: string, checked: boolean) =>
+		({ id, label, description, checked, intent: { type: 'selectMode' as const, mode: id } });
+	return onboardingSnapshot('appearance', {
+		kind: 'appearance', id: '', heading: 'Choose How Hucode Looks',
+		lead: 'Choose whether Hucode follows your system, and which light and dark themes it uses. Each choice applies as you make it and is written to the Default profile, which the Omni shell uses.',
+		paragraphs: [
+			'Nothing you have already configured is removed, and only the values you change here are written. You can still import from another editor at any time with the Import Setup from Another Editor command in the Command Palette.',
+		],
+		modeGroupLabel: 'Appearance mode',
+		modes: [
+			mode('system', 'System', 'Follow the operating system\'s light or dark setting, using the preferred themes below.', true),
+			mode('light', 'Light', 'Always use the preferred light theme.', false),
+			mode('dark', 'Dark', 'Always use the preferred dark theme.', false),
+		],
+		light: { label: 'Preferred light theme', filterLabel: 'Filter light themes', listLabel: 'Light themes', noMatchText: 'Nothing matches the current filter.', selectedId: 'light-0', themes: themes('light') },
+		dark: { label: 'Preferred dark theme', filterLabel: 'Filter dark themes', listLabel: 'Dark themes', noMatchText: 'Nothing matches the current filter.', selectedId: 'dark-0', themes: themes('dark') },
+	});
+}
+
+function meetOmniSnapshot(): EditorMigrationSetupPresentation {
+	return onboardingSnapshot('meetOmni', {
+		kind: 'meetOmni', id: '', heading: 'Meet Omni',
+		lead: 'Omni is Hucode\'s outer shell. It keeps your projects and their worktrees in one sidebar and switches between loaded workbenches without opening another window.',
+		glossary: [
+			{ term: 'Project', definition: 'A saved Git repository. Hucode discovers its worktrees and nests them beneath it.' },
+			{ term: 'Worktree', definition: 'One checkout belonging to a project. Selecting it opens or activates a workbench for that checkout.' },
+			{ term: 'Workbench', definition: 'A VS Code window hosted inside Omni for one folder, or any saved folder that is not a project worktree.' },
+		],
+		shortcuts: [
+			{ label: 'Switch Workbench', keybinding: 'Ctrl+Shift+Alt+P', keybindingAriaLabel: 'Control+Shift+Alt+P' },
+			{ label: 'Quick Switch Loaded Workbench', keybinding: 'Ctrl+Alt+`', keybindingAriaLabel: 'Control+Alt+`' },
+			{ label: 'Switch to Next Loaded Workbench', noShortcutText: 'No keyboard shortcut is assigned. Use the Command Palette.' },
+			{ label: 'Switch to Previous Loaded Workbench', noShortcutText: 'No keyboard shortcut is assigned. Use the Command Palette.' },
+		],
+	});
+}
+
+const onboardingViewports = [{ width: 1400, height: 600 }, { width: 600, height: 400 }, { width: 500, height: 300 }];
+
+async function lastIntent(page: Page): Promise<unknown> {
+	return JSON.parse((await page.locator('body').getAttribute('data-last-intent'))!);
+}
+
+async function focusedId(page: Page): Promise<string | null> {
+	return page.locator('body').evaluate(body => {
+		const active = body.ownerDocument.activeElement;
+		return active?.closest('[data-focus-id]')?.getAttribute('data-focus-id') ?? active?.textContent ?? null;
+	});
+}
+
+/** Every element that has scrolled; the detail pane must be the only one. */
+async function scrolledElements(page: Page): Promise<string[]> {
+	return page.locator('body').evaluate(body => [...body.ownerDocument.querySelectorAll('*')]
+		.filter(element => element.scrollTop > 0)
+		.map(element => element.getAttribute('data-focus-id') ?? element.tagName.toLowerCase()));
+}
+
+async function assertFooterFixed(page: Page, viewport: { width: number; height: number }, actions: string[]): Promise<{ x: number; y: number; width: number; height: number }> {
+	const bounds = await page.locator('footer').boundingBox();
+	assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= viewport.height, `footer must stay within the viewport: ${JSON.stringify(bounds)}`);
+	for (const name of actions) {
+		await expect(page.getByRole('button', { name, exact: true })).toBeInViewport({ ratio: 1 });
+	}
+	return bounds;
+}
+
+test('onboarding bring stage offers both routes to the keyboard and the pointer', { timeout: 30_000 }, async t => {
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	await mkdir(artifacts, { recursive: true });
+	for (const mode of ['firstRun', 'rerun'] as const) {
+		await t.test(mode, async () => {
+			const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
+			const errors: string[] = [];
+			page.on('pageerror', error => errors.push(error.message));
+			try {
+				await mountPresentation(page, bringSnapshot(mode));
+				const migrate = page.locator('[data-focus-id="route-migrate"]');
+				const skipImport = page.locator('[data-focus-id="route-skipImport"]');
+				await expect(page.getByRole('heading', { name: mode === 'rerun' ? 'Onboarding Is Already Complete' : 'Bring Your Setup to Hucode', exact: true })).toBeVisible();
+				await expect(migrate).toContainText(mode === 'rerun' ? 'Start a New Import' : 'Import from Another Editor');
+				await expect(skipImport).toContainText('Skip Import');
+
+				// Keyboard only: from the content region the choices come first, then the footer.
+				await page.locator('[data-focus-id="detail"]').focus();
+				const order: (string | null)[] = [];
+				for (let i = 0; i < 4; i++) {
+					await page.keyboard.press('Tab');
+					order.push(await focusedId(page));
+				}
+				assert.deepStrictEqual(order, ['route-migrate', 'route-skipImport', 'skip', 'later']);
+				await page.keyboard.press('Shift+Tab');
+				await page.keyboard.press('Shift+Tab');
+				assert.equal(await focusedId(page), 'route-skipImport');
+				await expect(skipImport).toHaveCSS('outline-style', 'solid');
+				await page.keyboard.press('Enter');
+				assert.deepStrictEqual(await lastIntent(page), { type: 'chooseRoute', route: 'skipImport' });
+
+				await migrate.click();
+				assert.deepStrictEqual(await lastIntent(page), { type: 'chooseRoute', route: 'migrate' });
+				await expect(migrate).toHaveCSS('outline-style', 'none');
+				assert.deepStrictEqual(errors, [], 'renderer errors');
+			} finally {
+				await page.screenshot({ path: new URL(`onboarding-bring-${mode}.png`, artifacts).pathname });
+				await page.close();
+			}
+		});
+	}
+});
+
+test('onboarding appearance stage lays mode tiles over two theme lists behind a fixed footer', { timeout: 60_000 }, async t => {
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	await mkdir(artifacts, { recursive: true });
+	for (const viewport of onboardingViewports) {
+		await t.test(`${viewport.width}x${viewport.height}`, async () => {
+			const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+			const errors: string[] = [];
+			page.on('pageerror', error => errors.push(error.message));
+			try {
+				await mountPresentation(page, appearanceSnapshot());
+				const detail = page.locator('[data-focus-id="detail"]');
+				const lightList = page.getByRole('radiogroup', { name: 'Light themes' });
+				const darkList = page.getByRole('radiogroup', { name: 'Dark themes' });
+				const footerBounds = await assertFooterFixed(page, viewport, ['Back', 'Continue']);
+				await page.screenshot({ path: new URL(`onboarding-appearance-top-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
+
+				// The three mode tiles share one row; the two lists share one row above the medium width.
+				const tiles = page.getByRole('radiogroup', { name: 'Appearance mode' }).getByRole('radio');
+				await expect(tiles).toHaveText(['SystemFollow the operating system\'s light or dark setting, using the preferred themes below.', 'LightAlways use the preferred light theme.', 'DarkAlways use the preferred dark theme.']);
+				const tileBounds = await Promise.all([0, 1, 2].map(i => tiles.nth(i).boundingBox()));
+				assert.ok(tileBounds.every(bounds => bounds && Math.abs(bounds.y - tileBounds[0]!.y) < 2), `tiles share one row: ${JSON.stringify(tileBounds)}`);
+				await expect(page.getByRole('radio', { name: 'System', exact: true })).toHaveAttribute('data-state', 'checked');
+				const listBounds = await Promise.all([lightList, darkList].map(list => list.boundingBox()));
+				assert.equal(listBounds[1]!.x > listBounds[0]!.x + listBounds[0]!.width - 1, viewport.width >= 768, `two columns only from the medium width: ${JSON.stringify(listBounds)}`);
+
+				// 200 rows each, of which only a viewport's worth is mounted.
+				const mounted = await lightList.locator('[data-virtual-index]').count();
+				assert.ok(mounted > 0 && mounted < themeCount, `light list must virtualize, mounted ${mounted}`);
+				assert.equal(await lightList.getAttribute('aria-label'), 'Light themes');
+
+				// Arrow keys travel the tiles as one radio group; a click selects directly.
+				await page.getByRole('radio', { name: 'System', exact: true }).focus();
+				await page.keyboard.press('ArrowRight', { delay: 60 });
+				await expect(page.locator(':focus')).toHaveAttribute('data-focus-id', 'mode-light');
+				assert.deepStrictEqual(await lastIntent(page), { type: 'selectMode', mode: 'light' });
+				await expect(page.locator(':focus')).toHaveCSS('outline-style', 'solid');
+				await page.getByRole('radio', { name: 'Dark', exact: true }).click();
+				assert.deepStrictEqual(await lastIntent(page), { type: 'selectMode', mode: 'dark' });
+
+				// Filtering narrows the list; the dark list is untouched.
+				const filter = page.getByLabel('Filter light themes', { exact: true });
+				await filter.fill('Light Theme 12');
+				await expect(lightList.getByRole('radio')).toHaveCount(11);
+				await filter.fill('nothing here');
+				await expect(page.getByRole('status').filter({ hasText: 'Nothing matches the current filter.' })).toHaveCount(1);
+				await filter.fill('');
+				await expect(lightList.locator('[data-virtual-index]')).not.toHaveCount(0);
+
+				// Arrow keys and Tab travel the lists; only the detail pane scrolls to follow.
+				// Radix moves roving focus in a timeout and selects the landing radio only while the arrow
+				// key is still held, so hold each press the way a hand does and wait for focus to land.
+				await lightList.getByRole('radio').first().click();
+				for (let i = 1; i <= 6; i++) {
+					await page.keyboard.press('ArrowDown', { delay: 60 });
+					await expect(page.locator(':focus')).toHaveAttribute('data-focus-id', `theme-light-light-${i}`);
+				}
+				await expect(page.locator(':focus')).toBeInViewport({ ratio: 1 });
+				assert.deepStrictEqual(await lastIntent(page), { type: 'selectPreferredTheme', scheme: 'light', themeId: 'light-6' });
+				await page.keyboard.press('Tab');
+				await expect(page.getByLabel('Filter dark themes', { exact: true })).toBeFocused();
+				await page.keyboard.press('Tab');
+				assert.equal(await focusedId(page), 'theme-dark-dark-0');
+				await expect(page.locator(':focus')).toBeInViewport({ ratio: 1 });
+				assert.deepStrictEqual(await scrolledElements(page), ['detail']);
+				assert.deepStrictEqual(await page.locator('footer').boundingBox(), footerBounds, 'keyboard travel must not move the footer');
+
+				await expect(page.getByText('Import Setup from Another Editor', { exact: false })).toHaveCSS('font-size', '12px');
+				await detail.press('Control+End');
+				await expect(page.locator('[data-focus-id="theme-dark-dark-199"]')).toBeInViewport({ ratio: 1 });
+				assert.deepStrictEqual(await scrolledElements(page), ['detail']);
+				assert.deepStrictEqual(await page.locator('footer').boundingBox(), footerBounds);
+				assert.ok(await darkList.locator('[data-virtual-index]').count() < themeCount, 'dark list must virtualize');
+				await detail.press('Control+Home');
+				assert.deepStrictEqual(errors, [], 'renderer errors');
+			} finally {
+				await page.screenshot({ path: new URL(`onboarding-appearance-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
+				await page.close();
+			}
+		});
+	}
+});
+
+test('onboarding meet omni keeps the glossary, shortcuts, and footer within reach', { timeout: 60_000 }, async t => {
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	await mkdir(artifacts, { recursive: true });
+	for (const viewport of onboardingViewports) {
+		await t.test(`${viewport.width}x${viewport.height}`, async () => {
+			const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+			const errors: string[] = [];
+			page.on('pageerror', error => errors.push(error.message));
+			try {
+				await mountPresentation(page, meetOmniSnapshot());
+				await expect(page.getByRole('term')).toHaveText(['Project', 'Worktree', 'Workbench']);
+				await expect(page.getByRole('definition')).toHaveCount(3);
+				await expect(page.locator('kbd')).toHaveText(['Ctrl+Shift+Alt+P', 'Ctrl+Alt+`']);
+				await expect(page.getByText('No keyboard shortcut is assigned. Use the Command Palette.', { exact: true })).toHaveCount(2);
+
+				// Nothing in the content is interactive: from the content region, Tab lands on the footer.
+				await page.locator('[data-focus-id="detail"]').focus();
+				await page.keyboard.press('Tab');
+				assert.equal(await focusedId(page), 'back');
+				await assertFooterFixed(page, viewport, ['Back', 'Add Project', 'Open Folder as Workbench', 'Finish']);
+				assert.deepStrictEqual(errors, [], 'renderer errors');
+			} finally {
+				await page.screenshot({ path: new URL(`onboarding-meet-omni-${viewport.width}x${viewport.height}.png`, artifacts).pathname });
+				await page.close();
+			}
+		});
+	}
+});
+
+test('onboarding meet omni keeps control contrast across palettes under reduced motion', { timeout: 60_000 }, async t => {
+	const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
+	t.after(() => browser.close());
+	await mkdir(artifacts, { recursive: true });
+	const page = await browser.newPage({ viewport: { width: 1000, height: 600 }, reducedMotion: 'reduce' });
+	const errors: string[] = [];
+	page.on('pageerror', error => errors.push(error.message));
+	try {
+		await mountPresentation(page, meetOmniSnapshot());
+		assert.equal(await page.locator('body').evaluate(body => body.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)').matches), true);
+		for (const [name, mode] of [
+			['2026-dark', 'vscode-dark'], ['2026-light', 'vscode-light'],
+			['hc_black', 'vscode-high-contrast'], ['hc_light', 'vscode-high-contrast vscode-high-contrast-light'],
+			['fallback', 'vscode-dark'],
+		]) {
+			const colors = name === 'fallback' ? {} : await themeColors(new URL(`../../extensions/theme-defaults/themes/${name}.json`, import.meta.url));
+			await page.locator('html').evaluate((element, { colors, mode }) => {
+				element.removeAttribute('style');
+				for (const [key, value] of Object.entries(colors)) {
+					element.style.setProperty(`--vscode-${key.replaceAll('.', '-')}`, value);
+				}
+				element.ownerDocument.body.className = mode;
+			}, { colors, mode });
+			// The four footer actions are the stage's only controls.
+			await assertControlContrast(page, 4);
+			await page.screenshot({ path: new URL(`onboarding-meet-omni-theme-${name}.png`, artifacts).pathname });
+		}
+		assert.deepStrictEqual(errors, [], 'renderer errors');
+	} finally {
+		await page.close();
+	}
+});
+
+// #endregion
