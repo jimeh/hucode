@@ -83,6 +83,12 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   Fragments already numbered for a *different* PR are ignored, so an
   integration branch carrying several merged PRs, or a branch that merged a
   base which had just gained a fragment, does not fail for carrying them.
+- The "Validate package-lock.json changes" step diffs against
+  `github.event.pull_request.base.sha` from a depth-2 checkout. When the base
+  branch gains a commit between the PR event and the run, that SHA is not in
+  the checkout and the step fails with "Invalid symmetric difference
+  expression" regardless of the change. Rebase onto the current base and push;
+  the rerun passes.
 - An integration PR merging a batch should use a hidden type such as `chore:`.
   A `feat:`/`fix:` title still requires a fragment of its own, which an
   integration PR has no business adding — its constituents already carry theirs.
