@@ -348,19 +348,19 @@ suite('OnboardingPresentation', () => {
 					['Back', { type: 'back' }, false],
 					['Add Project', { type: 'addProject' }, false],
 					['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, false],
-					['Finish for Now', { type: 'finishForNow' }, false],
+					['Finish', { type: 'finishForNow' }, false],
 				],
 			},
 			migrateFooter: [
 				['Add Project', { type: 'addProject' }, false],
 				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, false],
-				['Finish for Now', { type: 'finishForNow' }, false],
+				['Finish', { type: 'finishForNow' }, false],
 			],
 			// Back stays usable while the session works; the finishes wait for it.
 			busyFooter: [
 				['Add Project', { type: 'addProject' }, true],
 				['Open Folder as Workbench', { type: 'openFolderAsWorkbench' }, true],
-				['Finish for Now', { type: 'finishForNow' }, true],
+				['Finish', { type: 'finishForNow' }, true],
 			],
 		});
 	});

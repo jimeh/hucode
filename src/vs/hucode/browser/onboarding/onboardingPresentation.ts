@@ -326,7 +326,7 @@ function footerFor(state: OnboardingSessionState): EditorMigrationSetupPresentat
 					...(state.route === 'skipImport' ? [backAction()] : []),
 					action('add-project', localize('onboarding.addProject', "Add Project"), { type: 'addProject' }, 'default', state.busy),
 					action('open-workbench', localize('onboarding.openFolderAsWorkbench', "Open Folder as Workbench"), { type: 'openFolderAsWorkbench' }, 'default', state.busy),
-					action('finish', localize('onboarding.finishForNow', "Finish for Now"), { type: 'finishForNow' }, 'primary', state.busy),
+					action('finish', localize('onboarding.finish', "Finish"), { type: 'finishForNow' }, 'primary', state.busy),
 				],
 			};
 	}

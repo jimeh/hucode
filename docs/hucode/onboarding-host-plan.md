@@ -149,7 +149,7 @@ Rules that keep the routes distinct:
 - Appearance choices are written as they are made, one write after another,
   so the theme changes while the stage is open. Continue lands any choice whose
   write failed. Back to `bring` keeps the choices in memory and undoes nothing.
-- Meet Omni writes nothing. Finish for Now, Add Project, and Open Folder as
+- Meet Omni writes nothing. Finish, Add Project, and Open Folder as
   Workbench record completion, close the surface, and only then run their
   command.
 - The onboarding session records the resumable stage after every stage change
@@ -248,7 +248,7 @@ standalone import command remains available from the Command Palette.
   bind keys only on macOS, so the snapshot carries an explicit no-shortcut
   state and the copy names the Command Palette as the fallback instead of
   showing an empty chord.
-- Offer Add Project, Open Folder as Workbench, and Finish for Now. The first
+- Offer Add Project, Open Folder as Workbench, and Finish. The first
   two execute `ADD_PROJECT_COMMAND_ID` and `ADD_WORKBENCH_COMMAND_ID` after the
   completion record, then close the modal. Those commands own their dialogs and
   path handling. The stage writes no settings.

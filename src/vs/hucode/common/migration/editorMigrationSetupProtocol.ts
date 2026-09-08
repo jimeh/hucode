@@ -197,7 +197,7 @@ export const EDITOR_MIGRATION_SETUP_INTENT_POLICY: Readonly<Record<EditorMigrati
 	ready: { phases: ALL_PHASES, whileBusy: true },
 	close: { phases: ALL_PHASES, whileBusy: true },
 
-	// Onboarding. Skip and Finish for Now end the flow, so a duplicate press must not record it
+	// Onboarding. Skip and Finish end the flow, so a duplicate press must not record it
 	// twice; a duplicate route choice or Continue would move two stages.
 	skip: { phases: ['bring'], whileBusy: false },
 	chooseRoute: { phases: ['bring'], whileBusy: false },

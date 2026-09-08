@@ -338,7 +338,7 @@ function onboardingSnapshot(stage: OnboardingStage, panel: EditorMigrationSetupP
 				back,
 				action('add-project', 'Add Project', { type: 'addProject' }),
 				action('open-workbench', 'Open Folder as Workbench', { type: 'openFolderAsWorkbench' }),
-				action('finish', 'Finish for Now', { type: 'finishForNow' }, 'primary'),
+				action('finish', 'Finish', { type: 'finishForNow' }, 'primary'),
 			],
 		},
 	};
@@ -605,7 +605,7 @@ test('onboarding meet omni keeps the glossary, shortcuts, and footer within reac
 				await page.locator('[data-focus-id="detail"]').focus();
 				await page.keyboard.press('Tab');
 				assert.equal(await focusedId(page), 'back');
-				await assertFooterFixed(page, viewport, ['Back', 'Add Project', 'Open Folder as Workbench', 'Finish for Now']);
+				await assertFooterFixed(page, viewport, ['Back', 'Add Project', 'Open Folder as Workbench', 'Finish']);
 				assert.deepStrictEqual(errors, [], 'renderer errors');
 			} finally {
 				await page.screenshot({ path: new URL(`onboarding-meet-omni-${viewport.width}x${viewport.height}.png`, artifacts).pathname });

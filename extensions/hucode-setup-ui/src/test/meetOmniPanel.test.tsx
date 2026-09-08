@@ -46,7 +46,7 @@ function meetOmniPresentation(): EditorMigrationSetupPresentation {
 			actions: [
 				{ id: 'add-project', label: 'Add Project', kind: 'default', disabled: false, intent: { type: 'addProject' } },
 				{ id: 'open-workbench', label: 'Open Folder as Workbench', kind: 'default', disabled: false, intent: { type: 'openFolderAsWorkbench' } },
-				{ id: 'finish', label: 'Finish for Now', kind: 'primary', disabled: false, intent: { type: 'finishForNow' } },
+				{ id: 'finish', label: 'Finish', kind: 'primary', disabled: false, intent: { type: 'finishForNow' } },
 			],
 		},
 	});
@@ -77,7 +77,7 @@ describe('MeetOmniPanel', () => {
 
 		await user.click(screen.getByRole('button', { name: 'Add Project' }));
 		await user.click(screen.getByRole('button', { name: 'Open Folder as Workbench' }));
-		await user.click(screen.getByRole('button', { name: 'Finish for Now' }));
+		await user.click(screen.getByRole('button', { name: 'Finish' }));
 		expect(intents(sent)).toEqual([
 			{ type: 'addProject' },
 			{ type: 'openFolderAsWorkbench' },

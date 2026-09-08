@@ -389,15 +389,19 @@ function reviewPanel(state: EditorMigrationFlowState, sectionId: string, readOnl
 
 function conflictRow(decision: EditorMigrationDraftDecision, state: EditorMigrationFlowState, readOnly: boolean): EditorMigrationSetupConflictRow {
 	const isSnippet = decision.category === 'snippets';
-	const current = isSnippet ? snippetContents(decision.target) : displayValue(decision.target);
-	const imported = isSnippet ? snippetContents(decision.source) : displayValue(decision.source);
+	// The comparison columns carry the complete values; the renderer previews and expands them.
+	// The spoken descriptions keep the short form, which is read aloud in one go.
+	const current = isSnippet ? snippetContents(decision.target) : settingContents(decision.target);
+	const imported = isSnippet ? snippetContents(decision.source) : settingContents(decision.source);
+	const currentSummary = displayValue(decision.target);
+	const importedSummary = displayValue(decision.source);
 	const choices: readonly EditorMigrationSetupRadioOption[] = [
 		{
 			id: `decision-${decision.id}-preserveTarget`,
 			label: localize('editorMigration.review.keepCurrentChoice', "Keep Current"),
 			description: isSnippet
 				? localize('editorMigration.review.keepSnippet', "Keep current snippet file {0}", decision.item)
-				: localize('editorMigration.review.keepCurrentLabel', "Keep current value {0} for {1}", current, decision.item),
+				: localize('editorMigration.review.keepCurrentLabel', "Keep current value {0} for {1}", currentSummary, decision.item),
 			checked: state.decisions[decision.id] === 'preserveTarget',
 			intent: { type: 'chooseDecision', decisionId: decision.id, choice: 'preserveTarget' },
 		},
@@ -406,7 +410,7 @@ function conflictRow(decision: EditorMigrationDraftDecision, state: EditorMigrat
 			label: localize('editorMigration.review.useImportedChoice', "Use Imported"),
 			description: isSnippet
 				? localize('editorMigration.review.replaceSnippet', "Replace snippet file {0} with the imported file", decision.item)
-				: localize('editorMigration.review.useImportedLabel', "Use imported value {0} for {1}", imported, decision.item),
+				: localize('editorMigration.review.useImportedLabel', "Use imported value {0} for {1}", importedSummary, decision.item),
 			checked: state.decisions[decision.id] === 'import',
 			intent: { type: 'chooseDecision', decisionId: decision.id, choice: 'import' },
 		},
@@ -419,7 +423,7 @@ function conflictRow(decision: EditorMigrationDraftDecision, state: EditorMigrat
 		importedValue: imported,
 		valuesDescription: isSnippet
 			? localize('editorMigration.review.snippetComparison', "Current and incoming contents of {0}", decision.item)
-			: localize('editorMigration.review.conflictValues', "Current value {0}. Imported value {1}.", current, imported),
+			: localize('editorMigration.review.conflictValues', "Current value {0}. Imported value {1}.", currentSummary, importedSummary),
 		comparison: {
 			currentLabel: localize('editorMigration.review.currentContent', "Current"),
 			importedLabel: localize('editorMigration.review.incomingContent', "Incoming"),
@@ -434,6 +438,11 @@ function conflictRow(decision: EditorMigrationDraftDecision, state: EditorMigrat
 				: localize('editorMigration.review.chosenCurrent', "Keeping current value")
 			: undefined,
 	};
+}
+
+/** The complete setting value, pretty-printed where it has structure, without preview truncation. */
+function settingContents(value: EditorMigrationJsonValue | undefined): string {
+	return value === undefined ? displayValue(undefined) : JSON.stringify(value, null, 2);
 }
 
 /** Shows normalized snippet content without transport metadata or preview truncation. */

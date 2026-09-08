@@ -192,7 +192,7 @@ For Skip Import:
   and one arbitrary workbench.
 - Offer **Use compact worktree and workbench lists** with an immediate preview.
 - Use resolved platform keybinding labels.
-- Offer **Add Project**, **Open Folder as Workbench**, and **Finish for Now**.
+- Offer **Add Project**, **Open Folder as Workbench**, and **Finish**.
 - Workspace-profile association for a non-Default target is deferred; see the
   [onboarding host plan](onboarding-host-plan.md).
 - Finish in the real Omni shell rather than opening another welcome page.

@@ -82,6 +82,7 @@ suite('EditorMigrationSetupPresentation', () => {
 		assert.strictEqual(settings.conflicts[0].currentValue, '13');
 		assert.strictEqual(settings.conflicts[0].importedValue, '14');
 		assert.match(settings.conflicts[0].valuesDescription, /Current value 13\. Imported value 14\./);
+		assert.deepStrictEqual([settings.conflicts[0].comparison?.currentLabel, settings.conflicts[0].comparison?.expandLabel], ['Current', 'Show Full Comparison'], 'settings conflicts compare in columns like snippets');
 		assert.strictEqual(settings.bulkActions?.length, 2, 'both bulk setting actions sit beside the conflict summary');
 		assert.ok(settings.additions, 'routine additions stay behind a disclosure');
 		assert.match(settings.additions!.summary, /2 new settings/);
@@ -118,6 +119,29 @@ suite('EditorMigrationSetupPresentation', () => {
 		const replaced = reviewPanel(editorMigrationSetupPresentation({ ...reviewState(conflictDraft, ['settings']), decisions: { 'settings:editor.fontSize': 'import' } }, 2), 'settings');
 		assert.match(replaced.lead, /^1 of 2 will be imported\./);
 		assert.match(replaced.lead, /1 setting already matches/);
+	});
+
+	test('a long settings value crosses in full for the comparison while its spoken summary stays short', () => {
+		const base = reviewDraft();
+		const commands = Array.from({ length: 12 }, (_, index) => `kilo-code.new.agentManager.command${index}`);
+		const draft = createEditorMigrationPlanDraft(
+			{ ...base.source, categories: [{ category: 'settings', state: 'present', value: { 'terminal.integrated.commandsToSkipShell': commands.slice(0, 2) } }] },
+			{ ...base.target, requestedCategories: ['settings'], categories: [{ category: 'settings', ownership: 'target', state: 'present', value: { 'terminal.integrated.commandsToSkipShell': commands } }] },
+			base.evidence,
+		);
+		const row = reviewPanel(editorMigrationSetupPresentation(reviewState(draft, ['settings']), 1), 'settings').conflicts[0];
+
+		assert.deepStrictEqual({
+			current: row.currentValue,
+			imported: row.importedValue,
+			summaryTruncated: /\.\.\.\. Imported value \[/.test(row.valuesDescription),
+			keepDescriptionTruncated: /\.\.\. for terminal/.test(row.choices![0].description ?? ''),
+		}, {
+			current: JSON.stringify(commands, null, 2),
+			imported: JSON.stringify(commands.slice(0, 2), null, 2),
+			summaryTruncated: true,
+			keepDescriptionTruncated: true,
+		});
 	});
 
 	test('explains an entirely matching settings import without listing every setting', () => {

@@ -244,7 +244,7 @@ suite('OnboardingSession', () => {
 		});
 	});
 
-	test('Finish for Now records completion with the route and the injected clock, once', async () => {
+	test('Finish records completion with the route and the injected clock, once', async () => {
 		const skipImport = setup();
 		await skipImport.reachMeetOmni();
 		await skipImport.session.finishForNow();
@@ -345,7 +345,7 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual(JSON.parse(stored()!), { version: 1, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' });
 	});
 
-	test('Finish for Now never rewrites a record a newer build owns, but still finishes', async () => {
+	test('Finish never rewrites a record a newer build owns, but still finishes', async () => {
 		const newer = '{"version":2,"status":"completed"}';
 		const { session, stored, finished, reachMeetOmni } = setup(newer);
 		await reachMeetOmni();
