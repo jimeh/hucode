@@ -1,11 +1,11 @@
 # Hucode onboarding host plan
 
-Status: proposed
+Status: implemented
 
-Tracks the manually reopenable onboarding experience for
-[#204](https://github.com/jimeh/hucode/issues/204) and prepares the surface
-that [#205](https://github.com/jimeh/hucode/issues/205) will connect to first
-launch.
+Tracks the modal experience from [#204](https://github.com/jimeh/hucode/issues/204).
+The [desktop first-launch contract](onboarding-first-launch.md) describes its
+automatic activation, acknowledged checkpoints, and folder/profile handoff
+from [#205](https://github.com/jimeh/hucode/issues/205).
 
 The product contract remains in the
 [first-launch onboarding plan](onboarding-plan.md). This plan supersedes that
@@ -19,8 +19,8 @@ renderer boundary defined by the [setup UI webview plan](setup-ui-webview-plan.m
 
 Add **Hucode: Open Onboarding**. It opens a three-stage flow in the Omni modal
 editor: bring a setup from another editor or skip the import, review and
-apply that choice, then meet Omni and open the first project or workbench. The flow is
-opt-in in this change. Nothing routes a new installation into it yet.
+apply that choice, then meet Omni and open the first project or workbench. New desktop installations open it automatically after the Omni shell restores.
+The command remains available to existing users and for later reruns.
 
 The change is complete when:
 
@@ -84,11 +84,11 @@ The change is complete when:
   window, and the copy says where the values go. Controls are prefilled from
   current values, each choice is written as it is made, and only values that
   changed are written.
-- **No workspace-profile association in this change.** Hosted workbenches
-  resolve their profile through VS Code's ordinary folder association, which
-  Hucode has no API to write, and the per-project versus per-worktree semantics
-  are unsettled. The final actions open projects on their normal profile. The
-  standalone import command has the same gap today.
+- **Profile association applies to one unopened folder.** After an eligible
+  import, the final folder action offers the actual imported ordinary profile
+  for the selected canonical folder. Keeping the current profile is the safe
+  default. Existing owners are focused without association changes or reload.
+  Sibling worktrees keep their own associations.
 - **Installation-scoped state uses application storage.** The onboarding record
   is stored under `StorageScope.APPLICATION` with `StorageTarget.MACHINE`, so it
   survives profile switches and is never synced. Migration operations keep
@@ -249,24 +249,28 @@ standalone import command remains available from the Command Palette.
   state and the copy names the Command Palette as the fallback instead of
   showing an empty chord.
 - Offer Add Project, Open Folder as Workbench, and Finish. The first
-  two execute `ADD_PROJECT_COMMAND_ID` and `ADD_WORKBENCH_COMMAND_ID` after the
-  completion record, then close the modal. Those commands own their dialogs and
-  path handling. The stage writes no settings.
+  two acknowledge completion and close the modal before the typed folder
+  operations run. Add Project also opens the resolved selected worktree.
+  The optional profile association is saved before creating a new owner.
 
 ## Onboarding state record
 
 ```ts
 interface OnboardingRecord {
-	readonly version: 1;
+	readonly version: 2;
 	readonly status: 'notStarted' | 'inProgress' | 'skipped' | 'completed';
 	readonly stage?: 'bring' | 'migrate' | 'appearance' | 'meetOmni';
 	readonly route?: 'migrate' | 'skipImport';
 	readonly completedAt?: number;
+	readonly handoffProfileId?: string;
 }
 ```
 
-The record stores navigation only. It holds no theme names, imported values,
-extension identifiers, paths, or operation identifiers. The migration journal remains the source for operation summaries.
+The record stores navigation and an optional reference to the eligible import
+target profile for the final folder offer. It holds no imported values, source
+paths, extension identifiers, or operation identifiers. The migration journal
+remains the authority for recoveries and results. Version 1 remains readable;
+the next legitimate write upgrades it. Newer versions remain untouched.
 
 ## Implementation sequence
 
@@ -354,7 +358,7 @@ and the desktop Omni smoke.
 
 | Risk | Control |
 | --- | --- |
-| A dismissed first-launch onboarding strands a new user | Record the stage on dismissal, keep the command in the palette, and let #205 decide how Omni surfaces resume |
+| A dismissed first-launch onboarding strands a new user | Record the stage on dismissal, keep the command in the palette, and resume on the next eligible reload or launch |
 | Continue after an import silently discards recovery data | Continue never acknowledges; the footer says the recovery data stays available from the import command |
 | Onboarding writes the shell profile by inference | Appearance writes are an explicit decision stated in copy; migration keeps its explicit target |
 | Skip Import reads as erasing configuration | Name the route as skipping the import, say nothing is removed, prefill current values, and write only changes |
@@ -365,16 +369,12 @@ and the desktop Omni smoke.
 
 ## Non-goals
 
-- Routing a new installation into onboarding, replacing upstream welcome
-  contributions, or any change to startup. That is #205.
 - Serve-web onboarding.
 - Additional source adapters or import categories, including explicit
   `.code-profile` file selection, which the migration system does not support
   today.
 - Any Omni layout or density setting. Omni's list density stays in Settings.
-- Associating a newly added project or workbench with a non-Default target
-  profile. Deferred until the per-project versus per-worktree semantics and a
-  write API exist.
+- Project-wide profile inheritance. The final offer covers one exact folder.
 - Onboarding-specific telemetry beyond what the migration flow already emits.
 
 ## Revisions after desktop testing

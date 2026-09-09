@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { resolveOnboardingWorkspaceIdentifier } from './onboarding/onboardingHandoff.js';
+import { HucodeOnboardingTarget, HucodeOnboardingOpenRequest, HucodeOnboardingOpenResult } from '../../platform/window/common/hucodeOnboardingHandoff.js';
+import { OnboardingMain } from './onboarding/onboardingMain.js';
+import { IStorageMainService } from '../../platform/storage/electron-main/storageMainService.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { CancellationToken } from '../../base/common/cancellation.js';
 import { Emitter, Event } from '../../base/common/event.js';
@@ -172,9 +176,11 @@ export class HucodeShellMainService extends Disposable
 		HucodeRegularWindowOwnershipLifetimes;
 	private regularAdmissionId = 0;
 	private ownershipBroadcastPending = false;
+	private readonly onboarding: OnboardingMain;
 	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
 
 	constructor(
+		@IStorageMainService storageMainService: IStorageMainService,
 		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
 		@IProtocolMainService
 		private readonly protocolMainService: IProtocolMainService,
@@ -193,6 +199,8 @@ export class HucodeShellMainService extends Disposable
 		private readonly projectManagerMainService: IProjectManagerMainService,
 	) {
 		super();
+		this.onboarding = new OnboardingMain(storageMainService.applicationStorage, () => this.logService.warn('Automatic onboarding skipped a malformed navigation record. Use Hucode: Open Onboarding to recover.'));
+		this._register(this.windowsMainService.onDidDestroyWindow(window => this.onboarding.release(window.id)));
 		this.ownershipCoordinator =
 			new HucodeDesktopWorkbenchOwnershipCoordinator({
 				onDidChange: () => this.scheduleOwnershipBroadcast(),
@@ -626,6 +634,12 @@ export class HucodeShellMainService extends Disposable
 		windowId: number,
 		connection: DisposableStore
 	): IHucodeShellControllerService {
+		const webContents = this.windowsMainService.getWindowById(windowId)?.win?.webContents;
+		if (webContents) {
+			const release = () => this.onboarding.release(windowId);
+			webContents.on('render-process-gone', release);
+			connection.add(toDisposable(() => webContents.removeListener('render-process-gone', release)));
+		}
 		const editorMigrationWriterLease = bindEditorMigrationWriterLease(this.editorMigrationWriterLeaseAuthority, windowId, connection);
 		return {
 			_serviceBrand: undefined,
@@ -635,6 +649,14 @@ export class HucodeShellMainService extends Disposable
 					change.windowId === windowId),
 				change => change.state
 			),
+			readOnboarding: () => this.onboarding.read(),
+			admitOnboarding: () => this.onboarding.admit(windowId, () => {
+				const window = this.windowsMainService.getWindowById(windowId);
+				return !!window?.isOmniWindow && !this.environmentMainService.args['skip-welcome'] && !this.environmentMainService.extensionTestsLocationURI;
+			}),
+			inspectOnboardingTarget: (path, profileId) => this.inspectOnboardingTarget(path, profileId),
+			openOnboardingWorkbench: request => this.openOnboardingWorkbench(windowId, request),
+			checkpointOnboarding: record => this.onboarding.checkpoint(record),
 			getState: () => this.getWindowState(windowId),
 			// These searches intentionally span windows so existing workbenches are
 			// reused instead of duplicated in the requesting shell.
@@ -861,7 +883,8 @@ export class HucodeShellMainService extends Disposable
 		windowId: number,
 		worktreePath: string,
 		projectId?: string,
-		canApply: () => boolean = () => true
+		canApply: () => boolean = () => true,
+		beforeCreate?: () => Promise<void>
 	): Promise<HucodeDesktopWorkbenchRouteOutcome> {
 		try {
 			for (const candidate of this.windowsMainService.getWindows()) {
@@ -883,7 +906,8 @@ export class HucodeShellMainService extends Disposable
 						worktreePath,
 						projectId,
 						canApply,
-						canApply
+						canApply,
+						beforeCreate
 					);
 					if (!canApply()) {
 						return { kind: 'superseded' };
@@ -1043,6 +1067,46 @@ export class HucodeShellMainService extends Disposable
 
 		window.focus();
 		return true;
+	}
+
+	private async inspectOnboardingTarget(worktreePath: string, profileId?: string): Promise<HucodeOnboardingTarget> {
+		const canonical = canonicalizeDesktopWorkbenchPath(worktreePath);
+		const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
+		for (const window of this.windowsMainService.getWindows()) {
+			this.reconcileRegularWindowOwnership(window);
+			if (window.isOmniWindow) { await this.getOrCreateController(window.id).ensureRestored(); }
+		}
+		const associated = this.userDataProfilesMainService.getProfileForWorkspace(workspace);
+		const imported = this.userDataProfilesMainService.profiles.find(profile => profile.id === profileId && !profile.isDefault && !profile.isTransient && !profile.isAgentsWindowProfile);
+		return {
+			worktreePath: canonical,
+			alreadyOpen: this.ownershipCoordinator.lookup(canonical).kind !== 'absent',
+			associatedProfileId: associated?.id,
+			associatedProfileName: associated?.name,
+			importedProfile: imported ? { id: imported.id, name: imported.name } : undefined,
+		};
+	}
+
+	private async openOnboardingWorkbench(windowId: number, request: HucodeOnboardingOpenRequest): Promise<HucodeOnboardingOpenResult> {
+		let associationSaved = false;
+		let conflict = false;
+		let created = false;
+		const canonical = canonicalizeDesktopWorkbenchPath(request.worktreePath);
+		const outcome = await this.routeWorkspaceOpen(windowId, canonical, request.projectId, () => true, async () => {
+			created = true;
+			const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
+			const saved = await this.userDataProfilesMainService.setProfileForWorkspaceWithAcknowledgement(workspace, request.profileId, request.expectedProfileId);
+			if (!saved) {
+				conflict = true;
+				throw new Error('The folder association or imported profile changed.');
+			}
+			associationSaved = request.profileId !== undefined;
+		});
+		if (conflict) { return { kind: 'conflict' }; }
+		if (outcome.kind === 'failed' || outcome.kind === 'superseded') {
+			return { kind: 'failed', associationSaved, message: outcome.kind === 'failed' && outcome.error instanceof Error ? outcome.error.message : 'The workbench could not be opened.' };
+		}
+		return { kind: created ? 'opened' : 'alreadyOpen', associationSaved };
 	}
 
 	async openWorkspace(

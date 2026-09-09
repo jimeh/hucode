@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { setHucodeProfileForWorkspace } from './hucodeProfileAssociation.js';
 import { Event } from '../../../base/common/event.js';
 import { joinPath } from '../../../base/common/resources.js';
 import { INativeEnvironmentService } from '../../environment/common/environment.js';
@@ -22,6 +23,8 @@ import { join, resolve } from '../../../base/common/path.js';
 
 export const IUserDataProfilesMainService = refineServiceDecorator<IUserDataProfilesService, IUserDataProfilesMainService>(IUserDataProfilesService);
 export interface IUserDataProfilesMainService extends IUserDataProfilesService {
+	/** Associates an unopened folder only if its observed association still matches. */
+	setProfileForWorkspaceWithAcknowledgement(workspace: IAnyWorkspaceIdentifier, profileId: string | undefined, expectedProfileId: string | undefined): Promise<boolean>;
 	createAgentsWindowProfile(): Promise<IUserDataProfile>;
 	getProfileForWorkspace(workspaceIdentifier: IAnyWorkspaceIdentifier): IUserDataProfile | undefined;
 	unsetWorkspace(workspaceIdentifier: IAnyWorkspaceIdentifier, transient?: boolean): void;
@@ -31,6 +34,13 @@ export interface IUserDataProfilesMainService extends IUserDataProfilesService {
 }
 
 export class UserDataProfilesMainService extends UserDataProfilesService implements IUserDataProfilesMainService {
+
+	/** Saves one exact-folder association through the acknowledged native state authority. */
+	setProfileForWorkspaceWithAcknowledgement(workspace: IAnyWorkspaceIdentifier, profileId: string | undefined, expectedProfileId: string | undefined): Promise<boolean> {
+		return setHucodeProfileForWorkspace(this, workspace, profileId, expectedProfileId, this.stateService.flushWithAcknowledgement
+			? matches => this.stateService.flushWithAcknowledgement!(UserDataProfilesMainService.PROFILE_ASSOCIATIONS_KEY, matches)
+			: undefined);
+	}
 
 	private readonly agentPluginsHome: URI;
 

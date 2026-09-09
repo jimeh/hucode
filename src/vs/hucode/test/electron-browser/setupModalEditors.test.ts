@@ -56,4 +56,27 @@ suite('openSetupModalEditor', () => {
 
 		assert.deepStrictEqual({ created, opened }, { created: [onboarding], opened: [onboarding, onboarding] });
 	});
+	test('startup admission waits behind a manual open and reveals its existing setup input', async () => {
+		const { service, opened, pending } = editorServiceStub();
+		const migration = disposables.add(new EditorMigrationEditorInput());
+		let admitted = 0;
+		const manual = openSetupModalEditor(service, () => migration);
+		const startup = openSetupModalEditor(service, () => { throw new Error('must reveal the existing setup'); }, async () => { admitted++; return true; });
+		pending[0].complete();
+		await manual;
+		await Promise.resolve();
+		pending[1]?.complete();
+		await startup;
+		assert.deepStrictEqual({ admitted, opened }, { admitted: 0, opened: [migration, migration] });
+	});
+
+	test('a declined or shutdown-cancelled startup admission creates no input', async () => {
+		const { service, opened } = editorServiceStub();
+		const admission = new DeferredPromise<boolean>();
+		const startup = openSetupModalEditor(service, () => { throw new Error('no input after cancellation'); }, () => admission.p);
+		admission.complete(false);
+		await startup;
+		assert.deepStrictEqual(opened, []);
+	});
+
 });

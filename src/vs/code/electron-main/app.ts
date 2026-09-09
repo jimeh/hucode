@@ -81,6 +81,7 @@ import { METERED_CONNECTION_CHANNEL } from '../../platform/meteredConnection/com
 import { MeteredConnectionChannel } from '../../platform/meteredConnection/electron-main/meteredConnectionChannel.js';
 import { MeteredConnectionMainService } from '../../platform/meteredConnection/electron-main/meteredConnectionMainService.js';
 import { IProductService } from '../../platform/product/common/productService.js';
+import { initializeHucodeOnboardingStorage } from '../../platform/storage/electron-main/hucodeOnboardingStorage.js';
 import { getRemoteAuthority } from '../../platform/remote/common/remoteHosts.js';
 import { SharedProcess } from '../../platform/sharedProcess/electron-main/sharedProcess.js';
 import { ISignService } from '../../platform/sign/common/sign.js';
@@ -791,6 +792,13 @@ export class CodeApplication extends Disposable {
 
 		// Transient profiles handler
 		this._register(appInstantiationService.createInstance(UserDataProfilesHandler));
+
+		if (this.productService.hucodeVersion && !this.environmentMainService.extensionTestsLocationURI) {
+			const applicationStorage = appInstantiationService.invokeFunction(accessor => accessor.get(IStorageMainService).applicationStorage);
+			await applicationStorage.init();
+			// Storage initialization catches failures. Retry here so a failed seed stops window admission.
+			await initializeHucodeOnboardingStorage(applicationStorage.storage, true);
+		}
 
 		// Init Channels
 		appInstantiationService.invokeFunction(accessor => this.initChannels(accessor, mainProcessElectronServer, sharedProcessClient));

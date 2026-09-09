@@ -321,7 +321,7 @@ function footerFor(state: OnboardingSessionState): EditorMigrationSetupPresentat
 			};
 		case 'meetOmni':
 			return {
-				lines: [],
+				lines: state.importHadIssues ? [localize('onboarding.importHadIssues', "Some import items still need attention. Your results remain available through Hucode: Import Editor Profile.")] : [],
 				actions: [
 					...(state.route === 'skipImport' ? [backAction()] : []),
 					action('add-project', localize('onboarding.addProject', "Add Project"), { type: 'addProject' }, 'default', state.busy),

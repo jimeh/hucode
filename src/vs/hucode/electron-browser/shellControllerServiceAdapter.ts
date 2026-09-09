@@ -469,6 +469,24 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		return this.withShell(shell =>
 			shell.setWorkspaceOverlayOcclusion(occluded));
 	}
+	/** Reads the main-owned profile offer for one folder. */
+	inspectOnboardingTarget(worktreePath: string, profileId?: string) {
+		return this.withShell(shell => shell.inspectOnboardingTarget(worktreePath, profileId));
+	}
+	/** Revalidates and opens the user's onboarding folder choice. */
+	openOnboardingWorkbench(request: Parameters<IHucodeShellControllerService['openOnboardingWorkbench']>[0]) {
+		return this.withShell(shell => shell.openOnboardingWorkbench(request));
+	}
+	/** Reads accepted main-owned onboarding state without waiting for the storage mirror. */
+	readOnboarding(): Promise<string | undefined> { return this.withShell(shell => shell.readOnboarding()); }
+	/** Requests automatic onboarding admission from the owning main process. */
+	admitOnboarding(): Promise<boolean> {
+		return this.withShell(shell => shell.admitOnboarding());
+	}
+	/** Awaits the main process's durable onboarding checkpoint. */
+	checkpointOnboarding(record: string): Promise<void> {
+		return this.withShell(shell => shell.checkpointOnboarding(record));
+	}
 	/** Acquires the migration writer lease through the privileged Omni shell. */
 	acquireEditorMigrationWriterLease(operationId: string) {
 		return this.withShell(shell =>

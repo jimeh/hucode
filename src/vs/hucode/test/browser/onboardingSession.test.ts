@@ -15,7 +15,7 @@ import { IOnboardingAppearanceAuthority, OnboardingAppearanceDraft, OnboardingAp
 import { IOnboardingOmniAuthority, OnboardingOmniSnapshot } from '../../browser/onboarding/onboardingOmni.js';
 import { EditorMigrationOperation } from '../../common/migration/editorMigrationApply.js';
 import { OnboardingSession, OnboardingSessionState } from '../../browser/onboarding/onboardingSession.js';
-import { ONBOARDING_STATE_STORAGE_KEY, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
+import { ONBOARDING_STATE_STORAGE_KEY, OnboardingRecord, OnboardingStateStore } from '../../browser/onboarding/onboardingStateStore.js';
 
 suite('OnboardingSession', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -24,6 +24,8 @@ suite('OnboardingSession', () => {
 		readonly manualAppearance?: boolean;
 		readonly commandsFail?: boolean;
 		readonly surfaceCloseTimeout?: number;
+		readonly checkpoint?: (record: OnboardingRecord) => Promise<void>;
+		readonly readAuthority?: () => Promise<string | undefined>;
 	} = {}) {
 		const storage = disposables.add(new InMemoryStorageService());
 		if (raw !== undefined) {
@@ -33,7 +35,7 @@ suite('OnboardingSession', () => {
 		const appearance = new AppearanceStub(options.manualAppearance ?? false);
 		const omni = new OmniStub(options.commandsFail ?? false);
 		const session = disposables.add(new OnboardingSession(
-			new OnboardingStateStore(storage),
+			new OnboardingStateStore(storage, options.checkpoint, options.readAuthority),
 			() => {
 				const migration = new MigrationStub();
 				migrations.push(migration);
@@ -79,7 +81,7 @@ suite('OnboardingSession', () => {
 			inProgress: setup('{"version":1,"status":"inProgress","stage":"bring"}').session.state.mode,
 			skipped: setup('{"version":1,"status":"skipped"}').session.state.mode,
 			completed: setup('{"version":1,"status":"completed","completedAt":1}').session.state.mode,
-			superseded: setup('{"version":2,"status":"notStarted"}').session.state.mode,
+			superseded: setup('{"version":3,"status":"notStarted"}').session.state.mode,
 		}, {
 			missing: 'first',
 			notStarted: 'first',
@@ -108,7 +110,7 @@ suite('OnboardingSession', () => {
 			appearance: { stage: 'appearance', route: 'skipImport' },
 			meetOmniSkip: { stage: 'meetOmni', route: 'skipImport' },
 			meetOmniMigrate: { stage: 'meetOmni', route: 'migrate' },
-			migrate: { stage: 'bring', route: undefined },
+			migrate: { stage: 'migrate', route: 'migrate' },
 			meetOmniNoRoute: { stage: 'bring', route: undefined },
 			noStage: { stage: 'bring', route: undefined },
 			completedAtMeetOmni: { stage: 'bring', route: undefined },
@@ -120,7 +122,7 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual({
 			completed: setup('{"version":1,"status":"completed","route":"migrate","completedAt":5}').session.state.previous,
 			skipped: setup('{"version":1,"status":"skipped"}').session.state.previous,
-			superseded: setup('{"version":2,"status":"completed","route":"migrate","completedAt":5}').session.state.previous,
+			superseded: setup('{"version":3,"status":"completed","route":"migrate","completedAt":5}').session.state.previous,
 			first: setup().session.state.previous,
 		}, {
 			completed: { status: 'completed', route: 'migrate', completedAt: 5 },
@@ -250,7 +252,7 @@ suite('OnboardingSession', () => {
 		await skipImport.session.finishForNow();
 		await skipImport.session.finishForNow();
 		assert.deepStrictEqual({ record: JSON.parse(skipImport.stored()!), finished: skipImport.finished }, {
-			record: { version: 1, status: 'completed', route: 'skipImport', completedAt: 1_700_000_000_000 },
+			record: { version: 2, status: 'completed', route: 'skipImport', completedAt: 1_700_000_000_000 },
 			finished: [1],
 		});
 
@@ -258,7 +260,7 @@ suite('OnboardingSession', () => {
 		const early = setup();
 		early.session.chooseRoute('skipImport');
 		await early.session.finishForNow();
-		assert.deepStrictEqual({ record: JSON.parse(early.stored()!), finished: early.finished }, { record: { version: 1, status: 'inProgress', stage: 'appearance', route: 'skipImport' }, finished: [] });
+		assert.deepStrictEqual({ record: JSON.parse(early.stored()!), finished: early.finished }, { record: { version: 2, status: 'inProgress', stage: 'appearance', route: 'skipImport' }, finished: [] });
 	});
 
 	test('entering Meet Omni retakes the Omni snapshot on every entry', async () => {
@@ -342,11 +344,11 @@ suite('OnboardingSession', () => {
 
 		session.recordDismissal();
 
-		assert.deepStrictEqual(JSON.parse(stored()!), { version: 1, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' });
+		assert.deepStrictEqual(JSON.parse(stored()!), { version: 2, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' });
 	});
 
 	test('Finish never rewrites a record a newer build owns, but still finishes', async () => {
-		const newer = '{"version":2,"status":"completed"}';
+		const newer = '{"version":3,"status":"completed"}';
 		const { session, stored, finished, reachMeetOmni } = setup(newer);
 		await reachMeetOmni();
 
@@ -355,20 +357,20 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual({ raw: stored(), finished }, { raw: newer, finished: [1] });
 	});
 
-	test('skip records the choice and finishes once', () => {
+	test('skip records the choice and finishes once', async () => {
 		const { session, stored, finished } = setup();
 
-		session.skip();
-		session.skip();
+		await session.skip();
+		await session.skip();
 
-		assert.deepStrictEqual({ record: JSON.parse(stored()!), finished }, { record: { version: 1, status: 'skipped' }, finished: [1] });
+		assert.deepStrictEqual({ record: JSON.parse(stored()!), finished }, { record: { version: 2, status: 'skipped' }, finished: [1] });
 	});
 
-	test('skip from a completed record finishes without downgrading it', () => {
+	test('skip from a completed record finishes without downgrading it', async () => {
 		const completed = '{"version":1,"status":"completed","completedAt":1}';
 		const { session, stored, finished } = setup(completed);
 
-		session.skip();
+		await session.skip();
 
 		assert.deepStrictEqual({ raw: stored(), finished }, { raw: completed, finished: [1] }, 'a completed installation keeps its record and its completedAt');
 	});
@@ -376,17 +378,17 @@ suite('OnboardingSession', () => {
 	test('dismissal records the current stage and route as resumable', () => {
 		const fresh = setup();
 		fresh.session.recordDismissal();
-		assert.deepStrictEqual(JSON.parse(fresh.stored()!), { version: 1, status: 'inProgress', stage: 'bring' });
+		assert.deepStrictEqual(JSON.parse(fresh.stored()!), { version: 2, status: 'inProgress', stage: 'bring' });
 
 		const appearance = setup();
 		appearance.session.chooseRoute('skipImport');
 		appearance.session.recordDismissal();
-		assert.deepStrictEqual(JSON.parse(appearance.stored()!), { version: 1, status: 'inProgress', stage: 'appearance', route: 'skipImport' });
+		assert.deepStrictEqual(JSON.parse(appearance.stored()!), { version: 2, status: 'inProgress', stage: 'appearance', route: 'skipImport' });
 
 		const migrate = setup();
 		migrate.session.chooseRoute('migrate');
 		migrate.session.recordDismissal();
-		assert.deepStrictEqual(JSON.parse(migrate.stored()!), { version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' });
+		assert.deepStrictEqual(JSON.parse(migrate.stored()!), { version: 2, status: 'inProgress', stage: 'migrate', route: 'migrate' });
 	});
 
 	test('every stage change records the stage before any dismissal, except in rerun mode', async () => {
@@ -406,9 +408,9 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual({ records: records.map(raw => JSON.parse(raw!)), rerun: JSON.parse(rerun.stored()!) }, {
 			// A window that exits without a dismissal still reopens where the user was.
 			records: [
-				{ version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' },
-				{ version: 1, status: 'inProgress', stage: 'bring' },
-				{ version: 1, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' },
+				{ version: 2, status: 'inProgress', stage: 'migrate', route: 'migrate' },
+				{ version: 2, status: 'inProgress', stage: 'bring' },
+				{ version: 2, status: 'inProgress', stage: 'meetOmni', route: 'skipImport' },
 			],
 			rerun: { version: 1, status: 'skipped' },
 		});
@@ -453,13 +455,13 @@ suite('OnboardingSession', () => {
 		assert.strictEqual(migration.disposed, true);
 	});
 
-	test('dismissal after skip changes nothing', () => {
+	test('dismissal after skip changes nothing', async () => {
 		const { session, stored } = setup();
-		session.skip();
+		await session.skip();
 
 		session.recordDismissal();
 
-		assert.deepStrictEqual(JSON.parse(stored()!), { version: 1, status: 'skipped' });
+		assert.deepStrictEqual(JSON.parse(stored()!), { version: 2, status: 'skipped' });
 	});
 
 	test('dismissal in rerun mode leaves an ended record alone', () => {
@@ -471,12 +473,12 @@ suite('OnboardingSession', () => {
 		assert.strictEqual(stored(), completed, 'looking at a completed onboarding again must not downgrade it');
 	});
 
-	test('never rewrites a record a newer build owns', () => {
-		const newer = '{"version":2,"status":"completed"}';
+	test('never rewrites a record a newer build owns', async () => {
+		const newer = '{"version":3,"status":"completed"}';
 		const { session, stored, finished } = setup(newer);
 
 		session.recordDismissal();
-		session.skip();
+		await session.skip();
 
 		assert.deepStrictEqual({ raw: stored(), finished }, { raw: newer, finished: [1] });
 	});
@@ -486,9 +488,9 @@ suite('OnboardingSession', () => {
 		const closing = disposables.add(new Emitter<void>());
 		disposables.add(session.bindSurface(closing.event));
 
-		assert.strictEqual(stored(), undefined);
+		assert.deepStrictEqual(JSON.parse(stored()!), { version: 2, status: 'inProgress', stage: 'bring' });
 		closing.fire();
-		assert.deepStrictEqual(JSON.parse(stored()!), { version: 1, status: 'inProgress', stage: 'bring' });
+		assert.deepStrictEqual(JSON.parse(stored()!), { version: 2, status: 'inProgress', stage: 'bring' });
 	});
 
 	test('entering appearance loads the snapshot while busy and prefills the draft from it', async () => {
@@ -705,13 +707,99 @@ suite('OnboardingSession', () => {
 		const { session, migrations, changes } = setup();
 		session.chooseRoute('migrate');
 		const migration = migrations[0];
-		session.skip();
+		await session.skip();
 		await timeout(0);
 
 		const before = changes.length;
 		migration.publish({ phase: 'application' });
 		assert.strictEqual(changes.length, before, 'a disposed migration no longer reaches the onboarding session');
 	});
+	test('native navigation waits for acknowledgement before loading appearance', async () => {
+		const pending = new DeferredPromise<void>();
+		const { session, appearance } = setup('{"version":2,"status":"inProgress","stage":"bring"}', { checkpoint: () => pending.p });
+		session.chooseRoute('skipImport');
+		assert.deepStrictEqual({ stage: session.state.stage, busy: session.state.busy, loads: appearance.calls.length }, { stage: 'bring', busy: true, loads: 0 });
+		pending.complete();
+		await timeout(0);
+		assert.deepStrictEqual({ stage: session.state.stage, busy: session.state.busy, loaded: !!session.state.appearance }, { stage: 'appearance', busy: false, loaded: true });
+	});
+
+	test('restored appearance cannot be overwritten by a delayed navigation checkpoint', async () => {
+		let writes = 0;
+		const { session } = setup('{"version":2,"status":"inProgress","stage":"appearance","route":"skipImport"}', { checkpoint: async () => { writes++; } });
+		await timeout(0);
+		assert.deepStrictEqual({ writes, stage: session.state.stage, loaded: !!session.state.appearance, busy: session.state.busy }, { writes: 0, stage: 'appearance', loaded: true, busy: false });
+	});
+
+	test('failed terminal checkpoint stays visible and retry performs another write before finishing', async () => {
+		let writes = 0;
+		const { session, finished } = setup('{"version":2,"status":"inProgress","stage":"meetOmni","route":"skipImport"}', { checkpoint: async () => { if (++writes === 1) { throw new Error('disk unavailable'); } } });
+		await session.finishForNow();
+		assert.deepStrictEqual({ finished: [...finished], error: session.state.error, busy: session.state.busy }, { finished: [], error: 'disk unavailable', busy: false });
+		await session.finishForNow();
+		assert.deepStrictEqual({ writes, finished }, { writes: 2, finished: [1] });
+	});
+
+	test('failed Skip stays resumable and does not close the surface', async () => {
+		const { session, finished } = setup('{"version":2,"status":"inProgress","stage":"bring"}', { checkpoint: async () => { throw new Error('disk unavailable'); } });
+		await session.skip();
+		assert.deepStrictEqual({ finished, error: session.state.error, busy: session.state.busy }, { finished: [], error: 'disk unavailable', busy: false });
+	});
+
+	test('a session disposed during terminal acknowledgement never starts its handoff', async () => {
+		const pending = new DeferredPromise<void>();
+		const { session, finished, omni } = setup('{"version":2,"status":"inProgress","stage":"meetOmni","route":"skipImport"}', { checkpoint: () => pending.p });
+		const completing = session.addProject();
+		session.dispose();
+		pending.complete();
+		await completing;
+		assert.deepStrictEqual({ finished, calls: omni.calls }, { finished: [], calls: [['snapshot']] });
+	});
+
+	test('immediate reopen reads accepted completion before the renderer storage mirror catches up', async () => {
+		const stale = '{"version":2,"status":"inProgress","stage":"meetOmni","route":"skipImport"}';
+		let accepted = stale;
+		const options = { checkpoint: async (record: OnboardingRecord) => { accepted = JSON.stringify(record); }, readAuthority: async () => accepted };
+		const first = setup(stale, options);
+		await timeout(0);
+		await first.session.finishForNow();
+		const reopened = setup(stale, options);
+		await timeout(0);
+		assert.deepStrictEqual({ mode: reopened.session.state.mode, previous: reopened.session.state.previous?.status }, { mode: 'rerun', previous: 'completed' });
+	});
+
+	test('restored migrate starts recovery discovery without another Import click or mutation', () => {
+		const { session, migrations } = setup('{"version":2,"status":"inProgress","stage":"migrate","route":"migrate"}');
+		assert.strictEqual(session.state.stage, 'migrate');
+		assert.strictEqual(migrations.length, 1);
+		assert.deepStrictEqual(migrations[0].calls, [['initialize']]);
+	});
+
+	test('handoff references use the attached target and exclude rollback and pending targets', async () => {
+		for (const operation of [
+			concludedOperation(),
+			{ ...concludedOperation(), aggregateOutcome: 'recoverable' as const },
+			{ ...concludedOperation(), aggregateOutcome: 'completedWithIssues' as const },
+			{ ...concludedOperation(), stage: 'rolledBack' as const, aggregateOutcome: 'rolledBack' as const },
+			{ ...concludedOperation(), aggregateOutcome: 'rolledBack' as const },
+			{ ...concludedOperation(), target: { state: 'pending' as const } },
+		]) {
+			const { session, migrations, stored } = setup();
+			session.chooseRoute('migrate');
+			migrations[0].publish({ phase: 'results', operation, busy: false });
+			await session.continueStage();
+			assert.strictEqual(JSON.parse(stored()!).handoffProfileId, operation.stage === 'settled' && operation.aggregateOutcome !== 'rolledBack' && operation.target.state === 'attached' ? 'imported' : undefined);
+			assert.strictEqual(session.state.importHadIssues, operation.aggregateOutcome === 'recoverable' || operation.aggregateOutcome === 'completedWithIssues');
+		}
+	});
+
+	test('malformed bytes survive manual open until an explicit route choice', () => {
+		const { session, stored } = setup('{broken');
+		assert.strictEqual(stored(), '{broken');
+		session.chooseRoute('migrate');
+		assert.strictEqual(JSON.parse(stored()!).stage, 'migrate');
+	});
+
 });
 
 /**
@@ -843,7 +931,7 @@ class OmniStub implements IOnboardingOmniAuthority {
 
 /** The least of a settled operation the session reads: its stage and outcome. */
 function concludedOperation(): EditorMigrationOperation {
-	return { id: 'operation', stage: 'settled', aggregateOutcome: 'completed' } as EditorMigrationOperation;
+	return { id: 'operation', stage: 'settled', aggregateOutcome: 'completed', target: { state: 'attached', profileId: 'imported' } } as EditorMigrationOperation;
 }
 
 function flowState(overrides: Partial<EditorMigrationFlowState>): EditorMigrationFlowState {

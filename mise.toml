@@ -43,3 +43,10 @@ run = "treeboot"
 [tasks."test:setup-ui-layout"]
 description = "Build the setup UI and verify scrolling and navigation in Chromium"
 run = "npm run hucode:smoke:setup-ui-layout"
+
+[tasks."test:onboarding-desktop"]
+description = "Verify compiled Linux desktop onboarding, import, and first-worktree handoff"
+run = [
+	"node build/hucode/run-with-mixin.js --quality stable -- npm run electron",
+	"node build/hucode/run-with-mixin.js --quality stable -- node build/hucode/onboarding-desktop-smoke.ts",
+]

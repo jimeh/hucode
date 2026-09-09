@@ -236,6 +236,7 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 			buildLinuxOmniSmokeArguments('/tmp/user-data', '/tmp/extensions', 9222),
 			[
 				'--user-data-dir=/tmp/user-data',
+				'--shared-data-dir=/tmp/user-data/shared',
 				'--extensions-dir=/tmp/extensions',
 				'--remote-debugging-port=9222',
 				'--disable-extensions',

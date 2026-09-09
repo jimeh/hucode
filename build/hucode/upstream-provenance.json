@@ -316,7 +316,7 @@
 			"testSuites": [
 				{
 					"file": "src/vs/platform/windows/test/electron-main/windowsFinder.test.ts",
-					"reason": "upstream suite over window resolution, which Hucode changes in windowsMainService — rationale predates this list and is unrecorded elsewhere"
+					"reason": "upstream suite over window resolution, which Hucode changes in windowsMainService \u2014 rationale predates this list and is unrecorded elsewhere"
 				}
 			]
 		},
@@ -338,7 +338,7 @@
 			"testSuites": [
 				{
 					"file": "src/vs/workbench/contrib/browserView/test/electron-browser/overlayManager.test.ts",
-					"reason": "upstream suite in the browser-view contribution Hucode extends — rationale predates this list and is unrecorded elsewhere"
+					"reason": "upstream suite in the browser-view contribution Hucode extends \u2014 rationale predates this list and is unrecorded elsewhere"
 				}
 			]
 		},
@@ -357,6 +357,119 @@
 					"reason": "Hucode patches the subject for Omni shell extension filtering"
 				}
 			]
+		},
+		{
+			"path": "src/vs/base/parts/storage/common/storage.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode acknowledges persistent onboarding writes before publishing accepted cache state",
+			"upstream": {
+				"path": "src/vs/base/parts/storage/common/storage.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "68a46e2f7166b2f97510f08e7e5e89a5cb8d8fcd"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/code/electron-main/app.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode initializes durable first-launch intent before admitting renderer windows",
+			"upstream": {
+				"path": "src/vs/code/electron-main/app.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "c9736ff355fa22791e95f12c9d38b2a26ece4832"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/state/node/state.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode exposes acknowledged profile association persistence",
+			"upstream": {
+				"path": "src/vs/platform/state/node/state.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "d409432cf504ec952b001f4ce3d18e089f02bf90"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/state/node/stateService.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode verifies exact-folder profile state persistence before native workbench creation",
+			"upstream": {
+				"path": "src/vs/platform/state/node/stateService.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "ef71d504bf68a93a6fc7df32a5ef2bdb089b65ee"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/electron-main/storageMain.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode seeds first-launch onboarding before the application newness marker",
+			"upstream": {
+				"path": "src/vs/platform/storage/electron-main/storageMain.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "a56091d0ff79a71cf7b8d2d8defd75a219fee8ce"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/userDataProfile/electron-main/userDataProfile.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode compares and persists exact-folder profile associations during first-workbench admission",
+			"upstream": {
+				"path": "src/vs/platform/userDataProfile/electron-main/userDataProfile.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "433fc3c46e07168a1115f3dc361a1c4c6a64e968"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/window/common/hucodeShellControllerService.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode defines trusted shell onboarding admission and folder handoff calls",
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/contrib/welcomeGettingStarted/browser/startupPage.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode suppresses native automatic upstream onboarding and first-process startup pages",
+			"upstream": {
+				"path": "src/vs/workbench/contrib/welcomeGettingStarted/browser/startupPage.ts",
+				"lastSyncedBaseline": "1.136.1",
+				"blob": "777f3ad872c6de562252c1635e423c63692a3225"
+			},
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/common/hucodeOnboardingStorage.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns the shared versioned onboarding record and provenance parser",
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/storage/electron-main/hucodeOnboardingStorage.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode seeds acknowledged first-launch intent in application storage",
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/userDataProfile/electron-main/hucodeProfileAssociation.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns exact-folder profile association comparison and acknowledged persistence",
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/platform/window/common/hucodeOnboardingHandoff.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns typed trusted-shell onboarding handoff results",
+			"testSuites": []
+		},
+		{
+			"path": "src/vs/workbench/contrib/welcomeGettingStarted/browser/hucodeStartupPolicy.ts",
+			"kind": "hucode-owned-upstream-path",
+			"reason": "Hucode owns native upstream-startup suppression policy",
+			"testSuites": []
 		}
 	]
 }
