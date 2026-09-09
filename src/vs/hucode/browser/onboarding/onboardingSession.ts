@@ -120,11 +120,9 @@ export function onboardingMigrationCanContinue(state: EditorMigrationFlowState):
  * Maps a stored record onto the stage and route a reopened session lands on.
  *
  * Only `inProgress` resumes. `appearance` implies the Skip Import route; `meetOmni` restores the
- * route it was reached by. A record at `migrate` cannot restore a live migration session, so it
- * lands on `bring`: an operation that was admitted before the dismissal is still in the durable
- * journal, and choosing Import again surfaces it through the migration flow's own `recovery`
- * phase. Anything else, including no stage at all, lands on the first stage rather than failing
- * to open.
+ * route it was reached by. A record at `migrate` resumes the migration flow directly, where an
+ * admitted operation is surfaced through its durable journal and explicit `recovery` phase.
+ * Anything else, including no stage at all, lands on the first stage rather than failing to open.
  */
 export function onboardingResumePosition(stored: OnboardingStoredState): { readonly stage: OnboardingStage; readonly route?: OnboardingRoute } {
 	if (stored.kind !== 'record' || stored.record.status !== 'inProgress') {

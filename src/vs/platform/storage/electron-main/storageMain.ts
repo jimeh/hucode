@@ -328,7 +328,13 @@ export class ApplicationStorageMain extends BaseProfileAwareStorageMain {
 		await super.doInit(storage);
 
 		if (this.path) {
-			await initializeHucodeOnboardingStorage(storage);
+			try {
+				await initializeHucodeOnboardingStorage(storage);
+			} catch {
+				// Retry before telemetry and the newness marker. A second failure reaches
+				// the base initialization catch, allowing degraded startup without enrollment.
+				await initializeHucodeOnboardingStorage(storage);
+			}
 		}
 
 		// Apply telemetry values as part of the application storage initialization

@@ -517,3 +517,9 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   `Page.reload` bypasses the native reload path and can leave duplicate IPC
   replies and broken setup-webview resource responses. Keep process-kill tests
   inside an outer mixin wrapper so killing the app cannot strand the overlay.
+
+- `BaseStorageMain.init()` catches initialization failures and continues degraded
+  startup. Keep onboarding seed retries inside `ApplicationStorageMain.doInit()`:
+  retrying afterward bypasses telemetry and the generic first-process newness
+  bookkeeping. A failed seed must leave the newness marker unset for the next
+  launch; a successful seed must reach that bookkeeping exactly once.

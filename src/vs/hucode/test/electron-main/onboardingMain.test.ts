@@ -11,6 +11,13 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { ONBOARDING_STATE_STORAGE_KEY as KEY } from '../../../platform/storage/common/hucodeOnboardingStorage.js';
 import { IS_NEW_KEY, loadKeyTargets, StorageTarget } from '../../../platform/storage/common/storage.js';
 import { initializeHucodeOnboardingStorage } from '../../../platform/storage/electron-main/hucodeOnboardingStorage.js';
+import { ApplicationStorageMain } from '../../../platform/storage/electron-main/storageMain.js';
+import { FileService } from '../../../platform/files/common/fileService.js';
+import { NullLogService } from '../../../platform/log/common/log.js';
+import product from '../../../platform/product/common/product.js';
+import { currentSessionDateStorageKey, firstSessionDateStorageKey, lastSessionDateStorageKey } from '../../../platform/telemetry/common/telemetry.js';
+import { IUserDataProfilesService, toUserDataProfile } from '../../../platform/userDataProfile/common/userDataProfile.js';
+import { URI } from '../../../base/common/uri.js';
 import { OnboardingMain } from '../../electron-main/onboarding/onboardingMain.js';
 
 class Database implements IStorageDatabase {
@@ -18,6 +25,7 @@ class Database implements IStorageDatabase {
 	readonly items = new Map<string, string>();
 	writes = 0;
 	fail = false;
+	failuresRemaining = 0;
 	loseWrite = false;
 	memory = false;
 	connection: Promise<boolean> | undefined;
@@ -25,7 +33,7 @@ class Database implements IStorageDatabase {
 	async getItems(): Promise<Map<string, string>> { return new Map(this.items); }
 	async updateItems(request: IUpdateRequest): Promise<void> {
 		this.writes++;
-		if (this.fail) { throw new Error('disk failed'); }
+		if (this.fail || this.failuresRemaining-- > 0) { throw new Error('disk failed'); }
 		if (this.loseWrite) { return; }
 		request.insert?.forEach((value, key) => this.items.set(key, value));
 		request.delete?.forEach(key => this.items.delete(key));
@@ -154,5 +162,85 @@ suite('Hucode onboarding main checkpoints', () => {
 		await main.checkpoint('{"version":2,"status":"skipped"}');
 		assert.strictEqual(JSON.parse((await main.read())!).status, 'completed');
 		assert.strictEqual(JSON.parse((await main.read())!).completedAt, 42);
+	});
+});
+
+
+suite('Hucode application storage startup', () => {
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+	let productVersion: PropertyDescriptor | undefined;
+
+	setup(() => {
+		productVersion = Object.getOwnPropertyDescriptor(product, 'hucodeVersion');
+		Object.defineProperty(product, 'hucodeVersion', { configurable: true, value: 'test' });
+	});
+
+	teardown(() => {
+		if (productVersion) { Object.defineProperty(product, 'hucodeVersion', productVersion); }
+		else { Reflect.deleteProperty(product, 'hucodeVersion'); }
+	});
+
+	function create(database: Database) {
+		const errors: (string | Error)[] = [];
+		const log = new class extends NullLogService {
+			override error(message: string | Error): void { errors.push(message); }
+		};
+		const profile = toUserDataProfile('default', 'Default', URI.file('/unused'), URI.file('/cache'));
+		class TestApplicationStorage extends ApplicationStorageMain {
+			protected override async doCreate(): Promise<Storage> { return new Storage(database); }
+		}
+		const application = disposables.add(new TestApplicationStorage({}, { defaultProfile: profile } as IUserDataProfilesService, log, disposables.add(new FileService(log))));
+		return { application, errors };
+	}
+
+	test('fallback memory continues launch without a durable onboarding record', async () => {
+		const database = new Database();
+		database.memory = true;
+		const { application, errors } = create(database);
+		await application.init();
+		await application.init();
+		assert.strictEqual(application.storage.get(KEY), undefined);
+		assert.strictEqual(database.items.get(KEY), undefined);
+		assert.strictEqual(await new OnboardingMain(application).admit(1, () => true), false);
+		assert.strictEqual(errors.length, 1);
+		assert.strictEqual(database.writes, 0);
+	});
+
+	test('persistent seed failure continues launch and remains retryable in the next process', async () => {
+		const database = new Database();
+		database.fail = true;
+		const first = create(database);
+		await first.application.init();
+		assert.strictEqual(first.application.storage.get(KEY), undefined);
+		assert.strictEqual(first.application.storage.get(IS_NEW_KEY), undefined);
+		assert.strictEqual(first.errors.length, 1);
+		assert.strictEqual(database.writes, 2);
+		await first.application.close();
+		database.fail = false;
+		const next = create(database);
+		await next.application.init();
+		assert.strictEqual(JSON.parse(next.application.storage.get(KEY)!).stage, 'bring');
+		assert.strictEqual(next.application.storage.getBoolean(IS_NEW_KEY), true);
+		assert.strictEqual(next.errors.length, 0);
+	});
+
+	test('successful seed retry runs telemetry and first-process newness bookkeeping exactly once', async () => {
+		const database = new Database();
+		database.failuresRemaining = 1;
+		const { application, errors } = create(database);
+		await application.init();
+		await application.init();
+		assert.strictEqual(JSON.parse(database.items.get(KEY)!).stage, 'bring');
+		assert.strictEqual(application.storage.getBoolean(IS_NEW_KEY), true);
+		assert.strictEqual(typeof application.storage.get(firstSessionDateStorageKey), 'string');
+		assert.strictEqual(typeof application.storage.get(currentSessionDateStorageKey), 'string');
+		assert.strictEqual(application.storage.get(lastSessionDateStorageKey), undefined);
+		assert.strictEqual(errors.length, 0);
+		await application.close();
+		assert.strictEqual(database.items.get(IS_NEW_KEY), 'true');
+		const next = create(database);
+		await next.application.init();
+		assert.strictEqual(next.application.storage.getBoolean(IS_NEW_KEY), false);
+		assert.strictEqual(next.application.storage.get(lastSessionDateStorageKey), database.items.get(currentSessionDateStorageKey));
 	});
 });
