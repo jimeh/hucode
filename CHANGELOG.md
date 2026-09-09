@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.82 - 2026-09-09
+
+### Features
+
+- **onboarding:** add the modal Hucode onboarding experience (#225)
+- **onboarding:** open setup on first desktop launch (#228)
+
 ## 0.0.81 - 2026-09-06
 
 ### Features
