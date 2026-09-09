@@ -117,7 +117,7 @@ async function click(label: string): Promise<void> {
 	})()`), Boolean);
 }
 
-function record(): { status: string; stage?: string; handoffProfileId?: string } {
+function record(): { status: string; stage?: string; handoffProfileId?: string; importHadIssues?: boolean } {
 	const inspectionRoot = mkdtempSync(path.join(root, 'checkpoint-inspection-'));
 	const original = path.join(userDirectory(), 'User', 'globalStorage', 'state.vscdb');
 	const copy = path.join(inspectionRoot, 'state.vscdb');
@@ -256,9 +256,11 @@ try {
 	if (operation.aggregateOutcome !== 'completed') { await textIncludes('Some import items still need attention'); }
 	await stop();
 	assert.equal(await fs.readFile(operationPath, 'utf8'), operationBytes);
-	assert.equal(record().handoffProfileId, operation.target.profileId);
+	const expectedImportIssues = operation.aggregateOutcome === 'recoverable' || operation.aggregateOutcome === 'completedWithIssues';
+	assert.deepStrictEqual({ handoffProfileId: record().handoffProfileId, importHadIssues: record().importHadIssues }, { handoffProfileId: operation.target.profileId, importHadIssues: expectedImportIssues || undefined });
 	await launch();
 	await textIncludes('Meet Omni');
+	assert.equal(await webview<number>(`document.body.innerText.includes('Some import items still need attention') ? 1 : 0`), Number(expectedImportIssues));
 	const folder = path.join(root, 'first-folder');
 	const repository = path.join(root, 'repository');
 	await fs.mkdir(repository);

@@ -258,6 +258,7 @@ export class OnboardingSession extends Disposable {
 			stage: position.stage,
 			route: position.route,
 			handoffProfileId: stored.kind === 'record' && stored.record.status === 'inProgress' ? stored.record.handoffProfileId : undefined,
+			importHadIssues: stored.kind === 'record' && stored.record.status === 'inProgress' && position.stage === 'meetOmni' && position.route === 'migrate' ? stored.record.importHadIssues : undefined,
 			busy: false,
 			mode: onboardingModeFor(stored),
 			previous: onboardingPreviousOutcome(stored),
@@ -285,10 +286,10 @@ export class OnboardingSession extends Disposable {
 		}
 		if (!this.stored) { this.initialize(); return; }
 		if (route === 'skipImport') {
-			void this.commitStage({ ...this._state, stage: 'appearance', route, handoffProfileId: undefined }, () => { void this.loadAppearance(); });
+			void this.commitStage({ ...this._state, stage: 'appearance', route, handoffProfileId: undefined, importHadIssues: undefined }, () => { void this.loadAppearance(); });
 			return;
 		}
-		void this.commitStage({ ...this._state, stage: 'migrate', route, handoffProfileId: undefined }, () => this.startMigration());
+		void this.commitStage({ ...this._state, stage: 'migrate', route, handoffProfileId: undefined, importHadIssues: undefined }, () => this.startMigration());
 	}
 
 	private startMigration(): void {
@@ -319,14 +320,14 @@ export class OnboardingSession extends Disposable {
 				if (!this._migration || !onboardingOwnsMigrationBack(this._migration.state.phase)) {
 					return false;
 				}
-				void this.commitStage({ ...this._state, stage: 'bring', route: undefined, handoffProfileId: undefined }, () => this.disposeMigration());
+				void this.commitStage({ ...this._state, stage: 'bring', route: undefined, handoffProfileId: undefined, importHadIssues: undefined }, () => this.disposeMigration());
 				return true;
 			}
 			case 'appearance':
 				// Choices already written stay written. The draft stays in memory; a write in flight
 				// lands or fails on its own and its result is discarded, because the snapshot it
 				// diffed against is replaced when the stage is entered again.
-				void this.commitStage({ ...this._state, stage: 'bring', route: undefined, busy: false, error: undefined });
+				void this.commitStage({ ...this._state, stage: 'bring', route: undefined, importHadIssues: undefined, busy: false, error: undefined });
 				return true;
 			case 'meetOmni':
 				if (this._state.route !== 'skipImport') {
@@ -477,7 +478,8 @@ export class OnboardingSession extends Disposable {
 			if (this._migration && onboardingMigrationCanContinue(this._migration.state)) {
 				const operation = this._migration.state.operation!;
 				const handoffProfileId = operation.stage === 'settled' && operation.aggregateOutcome !== 'rolledBack' && operation.target.state === 'attached' ? operation.target.profileId : undefined;
-				await this.enterMeetOmni({ ...this._state, handoffProfileId, importHadIssues: operation.aggregateOutcome === 'completedWithIssues' || operation.aggregateOutcome === 'recoverable' }, () => this.disposeMigration());
+				const importHadIssues = operation.aggregateOutcome === 'completedWithIssues' || operation.aggregateOutcome === 'recoverable' || undefined;
+				await this.enterMeetOmni({ ...this._state, handoffProfileId, importHadIssues }, () => this.disposeMigration());
 			}
 			return;
 		}
@@ -621,7 +623,7 @@ export class OnboardingSession extends Disposable {
 			this.checkpointPending = false;
 			if (this.finished || this._store.isDisposed) { return; }
 			if (next.mode === 'first') {
-				this.stored = { kind: 'record', record: { version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: next.stage, route: next.route, handoffProfileId: next.handoffProfileId } };
+				this.stored = { kind: 'record', record: { version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: next.stage, route: next.route, handoffProfileId: next.handoffProfileId, importHadIssues: next.importHadIssues } };
 			}
 			this.setState({ ...next, busy: false, error: undefined });
 			after?.();
@@ -631,7 +633,7 @@ export class OnboardingSession extends Disposable {
 			return;
 		}
 		try {
-			const write = this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: next.stage, route: next.route, handoffProfileId: next.handoffProfileId });
+			const write = this.store.write({ version: ONBOARDING_RECORD_VERSION, status: 'inProgress', stage: next.stage, route: next.route, handoffProfileId: next.handoffProfileId, importHadIssues: next.importHadIssues });
 			if (write) {
 				this.checkpointPending = true;
 				this.setState({ ...this._state, busy: true, error: undefined });

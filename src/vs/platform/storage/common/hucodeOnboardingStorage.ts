@@ -29,6 +29,8 @@ export interface OnboardingRecord {
 	readonly completedAt?: number;
 	/** Exact ordinary import target offered for the next folder handoff. */
 	readonly handoffProfileId?: string;
+	/** Whether the concluded import still has recoverable or incomplete items to call out. */
+	readonly importHadIssues?: boolean;
 }
 
 /**
@@ -93,7 +95,8 @@ function parseRecord(value: Record<string, unknown>): OnboardingRecord | undefin
 		|| !isOptionalOneOf<OnboardingRecordStage>(value.stage, STAGES)
 		|| !isOptionalOneOf<OnboardingRecordRoute>(value.route, ROUTES)
 		|| (value.completedAt !== undefined && (typeof value.completedAt !== 'number' || !Number.isFinite(value.completedAt)))
-		|| (value.handoffProfileId !== undefined && (typeof value.handoffProfileId !== 'string' || !value.handoffProfileId || value.handoffProfileId.length > 256))) {
+		|| (value.handoffProfileId !== undefined && (typeof value.handoffProfileId !== 'string' || !value.handoffProfileId || value.handoffProfileId.length > 256))
+		|| (value.importHadIssues !== undefined && typeof value.importHadIssues !== 'boolean')) {
 		return undefined;
 	}
 	return {
@@ -103,5 +106,6 @@ function parseRecord(value: Record<string, unknown>): OnboardingRecord | undefin
 		route: value.route,
 		completedAt: value.completedAt,
 		...(value.version === 2 && value.handoffProfileId !== undefined ? { handoffProfileId: value.handoffProfileId as string } : {}),
+		...(value.version === 2 && value.importHadIssues !== undefined ? { importHadIssues: value.importHadIssues as boolean } : {}),
 	};
 }

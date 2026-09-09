@@ -24,14 +24,14 @@ suite('OnboardingStateStore', () => {
 	});
 
 	test('reads a malformed record as not started rather than failing to open', () => {
-		for (const raw of ['{', '[]', '"skipped"', '{"status":"skipped"}', '{"version":0,"status":"skipped"}', '{"version":1,"status":"finished"}', '{"version":1,"status":"inProgress","stage":"done"}', '{"version":1,"status":"completed","completedAt":"yesterday"}']) {
+		for (const raw of ['{', '[]', '"skipped"', '{"status":"skipped"}', '{"version":0,"status":"skipped"}', '{"version":1,"status":"finished"}', '{"version":1,"status":"inProgress","stage":"done"}', '{"version":1,"status":"completed","completedAt":"yesterday"}', '{"version":2,"status":"inProgress","importHadIssues":"yes"}']) {
 			assert.deepStrictEqual(setup(raw).store.read(), { kind: 'record', origin: 'malformed', record: { version: 2, status: 'notStarted' } }, raw);
 		}
 	});
 
 	test('round-trips a version 2 record under application scope and machine target', () => {
 		const { storage, store } = setup();
-		const record: OnboardingRecord = { version: 2, status: 'inProgress', stage: 'bring', route: 'skipImport', completedAt: 1700000000000 };
+		const record: OnboardingRecord = { version: 2, status: 'inProgress', stage: 'meetOmni', route: 'migrate', completedAt: 1700000000000, handoffProfileId: 'imported', importHadIssues: true };
 
 		store.write(record);
 

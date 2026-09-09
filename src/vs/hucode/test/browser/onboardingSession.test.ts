@@ -791,7 +791,7 @@ suite('OnboardingSession', () => {
 		assert.deepStrictEqual(migrations[0].calls, [['initialize']]);
 	});
 
-	test('handoff references use the attached target and exclude rollback and pending targets', async () => {
+	test('handoff references and import warnings survive a new session for eligible outcomes', async () => {
 		for (const operation of [
 			concludedOperation(),
 			{ ...concludedOperation(), aggregateOutcome: 'recoverable' as const },
@@ -804,8 +804,16 @@ suite('OnboardingSession', () => {
 			session.chooseRoute('migrate');
 			migrations[0].publish({ phase: 'results', operation, busy: false });
 			await session.continueStage();
-			assert.strictEqual(JSON.parse(stored()!).handoffProfileId, operation.stage === 'settled' && operation.aggregateOutcome !== 'rolledBack' && operation.target.state === 'attached' ? 'imported' : undefined);
-			assert.strictEqual(session.state.importHadIssues, operation.aggregateOutcome === 'recoverable' || operation.aggregateOutcome === 'completedWithIssues');
+			const expectedProfileId = operation.stage === 'settled' && operation.aggregateOutcome !== 'rolledBack' && operation.target.state === 'attached' ? 'imported' : undefined;
+			const expectedIssues = operation.aggregateOutcome === 'recoverable' || operation.aggregateOutcome === 'completedWithIssues' || undefined;
+			const record = JSON.parse(stored()!);
+			assert.strictEqual(record.handoffProfileId, expectedProfileId);
+			assert.strictEqual(record.importHadIssues, expectedIssues);
+			const reopened = setup(stored()).session.state;
+			assert.deepStrictEqual(
+				{ stage: reopened.stage, handoffProfileId: reopened.handoffProfileId, importHadIssues: reopened.importHadIssues },
+				{ stage: 'meetOmni', handoffProfileId: expectedProfileId, importHadIssues: expectedIssues },
+			);
 		}
 	});
 

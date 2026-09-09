@@ -263,14 +263,16 @@ interface OnboardingRecord {
 	readonly route?: 'migrate' | 'skipImport';
 	readonly completedAt?: number;
 	readonly handoffProfileId?: string;
+	readonly importHadIssues?: boolean;
 }
 ```
 
-The record stores navigation and an optional reference to the eligible import
-target profile for the final folder offer. It holds no imported values, source
-paths, extension identifiers, or operation identifiers. The migration journal
-remains the authority for recoveries and results. Version 1 remains readable;
-the next legitimate write upgrades it. Newer versions remain untouched.
+The record stores navigation, an optional reference to the eligible import
+target profile for the final folder offer, and whether the concluded import
+still needs attention. It holds no imported values, source paths, extension
+identifiers, or operation identifiers. The migration journal remains the
+authority for recoveries and results. Version 1 remains readable; the next
+legitimate write upgrades it. Newer versions remain untouched.
 
 ## Implementation sequence
 
