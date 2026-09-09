@@ -70,6 +70,27 @@ suite('openSetupModalEditor', () => {
 		assert.deepStrictEqual({ admitted, opened }, { admitted: 0, opened: [migration, migration] });
 	});
 
+	test('a queued caller runs its own admission and open after the preceding open rejects', async () => {
+		for (const secondFails of [false, true]) {
+			const { service, opened, pending } = editorServiceStub();
+			const firstInput = disposables.add(new EditorMigrationEditorInput());
+			const secondInput = disposables.add(new OnboardingEditorInput());
+			let admitted = 0;
+			let created = 0;
+			const first = openSetupModalEditor(service, () => firstInput);
+			const firstRejected = assert.rejects(first, /first failed/);
+			const second = openSetupModalEditor(service, () => { created++; return secondInput; }, async () => { admitted++; return true; });
+			const secondResult = secondFails ? assert.rejects(second, /second failed/) : second;
+			pending[0].error(new Error('first failed'));
+			await firstRejected;
+			await Promise.resolve();
+			assert.deepStrictEqual({ admitted, created, opened }, { admitted: 1, created: 1, opened: [firstInput, secondInput] });
+			if (secondFails) { pending[1].error(new Error('second failed')); }
+			else { pending[1].complete(); }
+			await secondResult;
+		}
+	});
+
 	test('a declined or shutdown-cancelled startup admission creates no input', async () => {
 		const { service, opened } = editorServiceStub();
 		const admission = new DeferredPromise<boolean>();

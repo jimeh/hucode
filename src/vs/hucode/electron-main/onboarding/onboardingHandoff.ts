@@ -16,3 +16,13 @@ export async function resolveOnboardingWorkspaceIdentifier(worktreePath: string)
 	}
 	return getSingleFolderWorkspaceIdentifier(URI.file(worktreePath), stat);
 }
+
+/** Routing may retry creation; a committed association must not compare against its old value again. */
+export function createOnboardingAssociationCommit(save: () => Promise<void>): () => Promise<void> {
+	let committed = false;
+	return async () => {
+		if (committed) { return; }
+		await save();
+		committed = true;
+	};
+}

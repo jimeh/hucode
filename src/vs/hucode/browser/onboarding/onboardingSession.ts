@@ -569,8 +569,8 @@ export class OnboardingSession extends Disposable {
 	 * and skipped. The surface finishes in every case.
 	 */
 	async skip(): Promise<void> {
-		if (!this.stored) { this.initialize(); return; }
 		if (this.finished || this._state.busy) { return; }
+		if (!this.stored) { this.initialize(); return; }
 		this.checkpointPending = true;
 		this.setState({ ...this._state, busy: true, error: undefined });
 		try {

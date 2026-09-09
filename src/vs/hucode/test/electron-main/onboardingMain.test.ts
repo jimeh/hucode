@@ -151,6 +151,25 @@ suite('Hucode onboarding main checkpoints', () => {
 		}
 	});
 
+	test('terminal checkpoints preserve exact bytes except an intentional skipped-to-completed rerun', async () => {
+		for (const terminal of ['completed', 'skipped']) {
+			const raw = `{ "version": 2, "status": "${terminal}", "completedAt": 42 }`;
+			const { main, database } = await setup(raw);
+			for (const status of ['completed', 'skipped', 'inProgress', 'notStarted']) {
+				if (terminal === 'skipped' && status === 'completed') { continue; }
+				await main.checkpoint(JSON.stringify({ version: 2, status, completedAt: 100 }));
+				assert.strictEqual(await main.read(), raw);
+				assert.strictEqual(database.items.get(KEY), raw);
+				assert.strictEqual(database.writes, 0);
+			}
+			if (terminal === 'skipped') {
+				await main.checkpoint(completed);
+				assert.strictEqual(await main.read(), completed);
+				assert.strictEqual(database.items.get(KEY), completed);
+			}
+		}
+	});
+
 	test('failed completion remains resumable and completed state resists stale dismissal and skip', async () => {
 		const { main, database } = await setup(progress);
 		database.fail = true;

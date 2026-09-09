@@ -28,7 +28,7 @@ const opening = new WeakMap<IEditorService, Promise<void>>();
 export async function openSetupModalEditor(editorService: IEditorService, create: () => EditorInput, canCreate?: () => Promise<boolean>): Promise<void> {
 	const previous = opening.get(editorService);
 	const own = (async () => {
-		if (previous) { await previous; }
+		if (previous) { await previous.catch(() => undefined); }
 		const open = editorService.editors.find(isHucodeSetupEditorInput);
 		if (!open && canCreate && !await canCreate()) { return; }
 		await editorService.openEditor(open ?? create(), { pinned: true, revealIfOpened: true }, MODAL_GROUP);

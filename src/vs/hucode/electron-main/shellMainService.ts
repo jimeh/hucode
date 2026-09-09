@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { resolveOnboardingWorkspaceIdentifier } from './onboarding/onboardingHandoff.js';
+import { createOnboardingAssociationCommit, resolveOnboardingWorkspaceIdentifier } from './onboarding/onboardingHandoff.js';
 import { HucodeOnboardingTarget, HucodeOnboardingOpenRequest, HucodeOnboardingOpenResult } from '../../platform/window/common/hucodeOnboardingHandoff.js';
 import { OnboardingMain } from './onboarding/onboardingMain.js';
 import { IStorageMainService } from '../../platform/storage/electron-main/storageMainService.js';
@@ -1092,8 +1092,7 @@ export class HucodeShellMainService extends Disposable
 		let conflict = false;
 		let created = false;
 		const canonical = canonicalizeDesktopWorkbenchPath(request.worktreePath);
-		const outcome = await this.routeWorkspaceOpen(windowId, canonical, request.projectId, () => true, async () => {
-			created = true;
+		const beforeCreate = createOnboardingAssociationCommit(async () => {
 			const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
 			const saved = await this.userDataProfilesMainService.setProfileForWorkspaceWithAcknowledgement(workspace, request.profileId, request.expectedProfileId);
 			if (!saved) {
@@ -1101,7 +1100,10 @@ export class HucodeShellMainService extends Disposable
 				throw new Error('The folder association or imported profile changed.');
 			}
 			associationSaved = request.profileId !== undefined;
+			conflict = false;
+			created = true;
 		});
+		const outcome = await this.routeWorkspaceOpen(windowId, canonical, request.projectId, () => true, beforeCreate);
 		if (conflict) { return { kind: 'conflict' }; }
 		if (outcome.kind === 'failed' || outcome.kind === 'superseded') {
 			return { kind: 'failed', associationSaved, message: outcome.kind === 'failed' && outcome.error instanceof Error ? outcome.error.message : 'The workbench could not be opened.' };

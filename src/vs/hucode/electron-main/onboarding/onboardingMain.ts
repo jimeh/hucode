@@ -67,7 +67,7 @@ export class OnboardingMain {
 			if (current.kind === 'superseded') {
 				throw new Error('This onboarding record belongs to a newer Hucode version.');
 			}
-			if (current.kind === 'record' && (current.record.status === 'completed' || current.record.status === 'skipped') && (next.record.status === 'inProgress' || current.record.status === 'completed' && next.record.status === 'skipped')) {
+			if (current.kind === 'record' && (current.record.status === 'completed' || current.record.status === 'skipped' && next.record.status !== 'completed')) {
 				return;
 			}
 			await this.persist(next.record);

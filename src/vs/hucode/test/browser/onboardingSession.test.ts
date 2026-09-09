@@ -74,6 +74,22 @@ suite('OnboardingSession', () => {
 		return { session, stored, finished, changes, migrations, position, appearance, appearanceView, omni, reachMeetOmni };
 	}
 
+	test('repeated Skip while the initial authority read is pending does not read or finish again', async () => {
+		const read = new DeferredPromise<string | undefined>();
+		let reads = 0;
+		let writes = 0;
+		const { session, finished } = setup(undefined, {
+			readAuthority: () => { reads++; return read.p; },
+			checkpoint: async () => { writes++; },
+		});
+		await session.skip();
+		await session.skip();
+		assert.deepStrictEqual({ reads, writes, finished, busy: session.state.busy }, { reads: 1, writes: 0, finished: [], busy: true });
+		read.complete('{"version":2,"status":"inProgress","stage":"bring"}');
+		await timeout(0);
+		assert.deepStrictEqual({ reads, writes, finished, busy: session.state.busy }, { reads: 1, writes: 0, finished: [], busy: false });
+	});
+
 	test('opens in first mode for a fresh or resumable record and rerun mode for an ended one', () => {
 		assert.deepStrictEqual({
 			missing: setup().session.state.mode,
