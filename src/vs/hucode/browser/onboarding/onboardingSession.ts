@@ -65,6 +65,7 @@ export interface OnboardingSessionState {
 	/** Set once the user has left `bring` by one of its two choices. */
 	readonly route?: OnboardingRoute;
 	readonly handoffProfileId?: string;
+	/** Whether Meet Omni should point back to import results that still need attention. */
 	readonly importHadIssues?: boolean;
 	readonly previous?: OnboardingPreviousOutcome;
 	readonly announcement?: string;

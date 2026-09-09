@@ -42,9 +42,10 @@ onboarding, account, Sync, and Copilot commands remain registered.
 
 ## Persistence and recovery
 
-The record uses application storage with the MACHINE target. Version 2 adds only
-an optional `handoffProfileId` to navigation state. Version 1 is read and upgraded
-on the next legitimate write. Newer versions are not downgraded.
+The record uses application storage with the MACHINE target. Version 2 adds an
+optional `handoffProfileId` and an `importHadIssues` flag to navigation state.
+Version 1 is read and upgraded on the next legitimate write. Newer versions are
+not downgraded.
 
 Main serializes onboarding writes and acknowledges the underlying persistent
 database update plus readback before publishing accepted cache state. It rejects
