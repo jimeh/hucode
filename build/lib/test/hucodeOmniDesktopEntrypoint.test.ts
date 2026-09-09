@@ -117,6 +117,10 @@ const addedByOmniDesktop = new Map([
 		'Omni-only editor setup import command and modal editor host.',
 	],
 	[
+		'src/vs/hucode/electron-browser/onboarding/onboardingStartup.js',
+		'Automatic first-launch onboarding admission after the Omni shell restores.',
+	],
+	[
 		'src/vs/hucode/electron-browser/onboarding/onboarding.contribution.js',
 		'Omni-only onboarding command and modal editor host.',
 	],

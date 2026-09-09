@@ -25,14 +25,14 @@ const opening = new WeakMap<IEditorService, Promise<void>>();
  * only appears among the open editors once its open has settled, so a command that arrives
  * while another open is in flight waits for it and then looks again.
  */
-export async function openSetupModalEditor(editorService: IEditorService, create: () => EditorInput): Promise<void> {
-	let pending = opening.get(editorService);
-	while (pending) {
-		await pending;
-		pending = opening.get(editorService);
-	}
-	const open = editorService.editors.find(isHucodeSetupEditorInput);
-	const own = editorService.openEditor(open ?? create(), { pinned: true, revealIfOpened: true }, MODAL_GROUP).then(() => undefined);
+export async function openSetupModalEditor(editorService: IEditorService, create: () => EditorInput, canCreate?: () => Promise<boolean>): Promise<void> {
+	const previous = opening.get(editorService);
+	const own = (async () => {
+		if (previous) { await previous.catch(() => undefined); }
+		const open = editorService.editors.find(isHucodeSetupEditorInput);
+		if (!open && canCreate && !await canCreate()) { return; }
+		await editorService.openEditor(open ?? create(), { pinned: true, revealIfOpened: true }, MODAL_GROUP);
+	})();
 	opening.set(editorService, own);
 	try {
 		await own;

@@ -10,11 +10,10 @@ from Visual Studio Code, Visual Studio Code Insiders, or Cursor, review every
 planned change, and learn the small part of Omni they need before opening their
 first project or workbench.
 
-The migration flow will ship first as the rerunnable **Hucode: Import Setup from
-Another Editor...** command. First-launch onboarding will embed the same flow
-after it has independent test and runtime evidence. The final activation change
-will only replace startup routing, connect versioned completion state, and turn
-the Hucode experience on for new installations.
+The rerunnable **Hucode: Import Setup from Another Editor...** command and
+first-launch onboarding embed the same migration flow. The
+[desktop first-launch contract](onboarding-first-launch.md) defines startup
+admission, durable checkpoints, recovery, and the exact folder/profile offer.
 
 The [editor migration architecture and implementation plan](editor-migration-architecture-plan.md)
 defines the reusable service boundaries and issue-by-issue implementation below

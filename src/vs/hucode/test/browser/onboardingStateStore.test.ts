@@ -20,18 +20,18 @@ suite('OnboardingStateStore', () => {
 	}
 
 	test('reads a missing record as not started', () => {
-		assert.deepStrictEqual(setup().store.read(), { kind: 'record', record: { version: 1, status: 'notStarted' } });
+		assert.deepStrictEqual(setup().store.read(), { kind: 'record', origin: 'missing', record: { version: 2, status: 'notStarted' } });
 	});
 
 	test('reads a malformed record as not started rather than failing to open', () => {
-		for (const raw of ['{', '[]', '"skipped"', '{"status":"skipped"}', '{"version":0,"status":"skipped"}', '{"version":1,"status":"finished"}', '{"version":1,"status":"inProgress","stage":"done"}', '{"version":1,"status":"completed","completedAt":"yesterday"}']) {
-			assert.deepStrictEqual(setup(raw).store.read(), { kind: 'record', record: { version: 1, status: 'notStarted' } }, raw);
+		for (const raw of ['{', '[]', '"skipped"', '{"status":"skipped"}', '{"version":0,"status":"skipped"}', '{"version":1,"status":"finished"}', '{"version":1,"status":"inProgress","stage":"done"}', '{"version":1,"status":"completed","completedAt":"yesterday"}', '{"version":2,"status":"inProgress","importHadIssues":"yes"}']) {
+			assert.deepStrictEqual(setup(raw).store.read(), { kind: 'record', origin: 'malformed', record: { version: 2, status: 'notStarted' } }, raw);
 		}
 	});
 
-	test('round-trips a version 1 record under application scope and machine target', () => {
+	test('round-trips a version 2 record under application scope and machine target', () => {
 		const { storage, store } = setup();
-		const record: OnboardingRecord = { version: 1, status: 'inProgress', stage: 'bring', route: 'skipImport', completedAt: 1700000000000 };
+		const record: OnboardingRecord = { version: 2, status: 'inProgress', stage: 'meetOmni', route: 'migrate', completedAt: 1700000000000, handoffProfileId: 'imported', importHadIssues: true };
 
 		store.write(record);
 
@@ -42,10 +42,10 @@ suite('OnboardingStateStore', () => {
 	});
 
 	test('reports a newer schema as superseded and leaves it untouched', () => {
-		const raw = '{"version":2,"status":"completed","stage":"finale","secret":true}';
+		const raw = '{"version":3,"status":"completed","stage":"finale","secret":true}';
 		const { storage, store } = setup(raw);
 
-		assert.deepStrictEqual(store.read(), { kind: 'superseded', version: 2 });
+		assert.deepStrictEqual(store.read(), { kind: 'superseded', version: 3 });
 		assert.strictEqual(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION), raw, 'reading must not rewrite a record a newer build owns');
 	});
 });

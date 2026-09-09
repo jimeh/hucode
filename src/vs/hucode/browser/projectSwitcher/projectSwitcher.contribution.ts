@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/projectSwitcher.css';
+import { pickProjectSwitcherFolder } from './projectSwitcherOperations.js';
 import '../omniItemLayoutConfigurationMigration.js';
 import * as dom from '../../../base/browser/dom.js';
 import { mainWindow } from '../../../base/browser/window.js';
@@ -2902,36 +2903,9 @@ registerAction2(class extends Action2 {
 	}
 
 	async run(accessor: ServicesAccessor): Promise<void> {
-		const fileDialogService = accessor.get(IFileDialogService);
-		const projectManagerService = accessor.get(IProjectManagerService);
-		const environmentService = accessor.get(IWorkbenchEnvironmentService);
-		const shellService = accessor.get(IHucodeShellControllerService);
 		const notificationService = accessor.get(INotificationService);
-
-		try {
-			const folder = await fileDialogService.showOpenDialog({
-				canSelectFiles: false,
-				canSelectFolders: true,
-				canSelectMany: false,
-				openLabel: localize('addProjectOpenLabel', 'Add Project'),
-				title: localize('addProjectTitle', 'Add Git Project'),
-			});
-			if (!folder?.length) {
-				return;
-			}
-
-			const project = await projectManagerService.addProject(folder[0]);
-			if (environmentService.isOmniShellWindow) {
-				await shellService.promoteRetainedWorkbenchProjectFolders(
-					project.worktrees.map(worktree => ({
-						projectId: project.id,
-						folderUri: URI.file(worktree.path).toJSON(),
-					}))
-				);
-			}
-		} catch (error) {
-			notificationService.error(String(error));
-		}
+		const result = await pickProjectSwitcherFolder('project', accessor.get(IFileDialogService), accessor.get(IProjectManagerService), accessor.get(IHucodeShellControllerService), accessor.get(IWorkbenchEnvironmentService).isOmniShellWindow);
+		if (result.kind === 'failed') { notificationService.error(String(result.error)); }
 	}
 });
 
@@ -3039,17 +3013,10 @@ registerAction2(class extends Action2 {
 		const projectManagerService = accessor.get(IProjectManagerService);
 		const notificationService = accessor.get(INotificationService);
 		try {
-			const folder = await fileDialogService.showOpenDialog({
-				canSelectFiles: false,
-				canSelectFolders: true,
-				canSelectMany: false,
-				openLabel: localize('addWorkbenchOpenLabel', 'Add Workbench'),
-				title: localize('addWorkbenchTitle', 'Open Folder as Workbench'),
-			});
-			if (!folder?.length) {
-				return;
-			}
-			const uri = folder[0];
+			const result = await pickProjectSwitcherFolder('workbench', fileDialogService, projectManagerService, shellService, true);
+			if (result.kind === 'failed') { throw result.error; }
+			if (result.kind === 'cancelled') { return; }
+			const uri = result.folder;
 			const target = canonicalizeProjectSwitcherTarget(
 				{ worktreePath: uri.fsPath },
 				await projectManagerService.getProjects(),

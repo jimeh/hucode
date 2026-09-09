@@ -63,7 +63,7 @@ suite('OnboardingEditorInput', () => {
 
 		input.dispose();
 
-		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 1, status: 'inProgress', stage: 'bring' });
+		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 2, status: 'inProgress', stage: 'bring' });
 	});
 
 	test('asks an admitted Apply to cancel before the embedded migration is disposed with the input', () => {
@@ -89,7 +89,7 @@ suite('OnboardingEditorInput', () => {
 		input.dispose();
 
 		assert.deepStrictEqual(events, ['requestCancellation', 'dispose']);
-		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 1, status: 'inProgress', stage: 'migrate', route: 'migrate' });
+		assert.deepStrictEqual(JSON.parse(storage.get(ONBOARDING_STATE_STORAGE_KEY, StorageScope.APPLICATION)!), { version: 2, status: 'inProgress', stage: 'migrate', route: 'migrate' });
 	});
 });
 

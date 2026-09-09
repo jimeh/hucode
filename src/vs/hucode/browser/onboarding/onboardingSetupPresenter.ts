@@ -67,7 +67,7 @@ export class OnboardingSetupPresenter implements ISetupWebviewPresenter {
 		}
 		switch (intent.type) {
 			case 'skip':
-				this.session.skip();
+				void this.session.skip();
 				return 'accepted';
 			case 'chooseRoute':
 				this.session.chooseRoute(intent.route);

@@ -792,6 +792,11 @@ export class CodeApplication extends Disposable {
 		// Transient profiles handler
 		this._register(appInstantiationService.createInstance(UserDataProfilesHandler));
 
+		if (this.productService.hucodeVersion && !this.environmentMainService.extensionTestsLocationURI) {
+			const applicationStorage = appInstantiationService.invokeFunction(accessor => accessor.get(IStorageMainService).applicationStorage);
+			await applicationStorage.init();
+		}
+
 		// Init Channels
 		appInstantiationService.invokeFunction(accessor => this.initChannels(accessor, mainProcessElectronServer, sharedProcessClient));
 

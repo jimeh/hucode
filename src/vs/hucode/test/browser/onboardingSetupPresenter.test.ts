@@ -333,7 +333,7 @@ class MigrationStub extends Disposable {
 
 /** The least of a settled operation the presenter and session read: its stage and outcome. */
 function concludedOperation(): EditorMigrationOperation {
-	return { id: 'operation', stage: 'settled', aggregateOutcome: 'completed' } as EditorMigrationOperation;
+	return { id: 'operation', stage: 'settled', aggregateOutcome: 'completed', target: { state: 'attached', profileId: 'imported' } } as EditorMigrationOperation;
 }
 
 function progress(stage: EditorMigrationApplyProgress['stage'], recorded: number): EditorMigrationApplyProgress {
