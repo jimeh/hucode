@@ -710,7 +710,7 @@ function toCatalogProfileFingerprintEntry(raw: RawRead, profile: EditorMigration
 		identityDigest: raw.identityDigest,
 		state: 'present',
 		contentHash: sha256String(JSON.stringify({
-			name: profile.name,
+			name: profile.name.normalize('NFC'),
 			location: normalizePath(profile.location.fsPath, platform),
 			icon: profile.icon ?? null,
 			useDefaultFlags,

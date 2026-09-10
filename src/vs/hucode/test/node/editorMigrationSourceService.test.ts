@@ -371,6 +371,24 @@ suite('EditorMigrationSourceService', () => {
 		assert.strictEqual((await service.verifySourceSnapshot(named.ref, unchangedFingerprint, CancellationToken.None)).status, 'changed');
 	});
 
+	test('ignores canonically equivalent profile name encodings when verifying a named profile', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const catalogResource = joinPath(source.userData, 'globalStorage', 'storage.json');
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			userDataProfiles: [{ name: 'Caf\u00e9', location: 'work', useDefaultFlags: { settings: true } }],
+		}));
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const named = discovery.sources.find(item => item.profile.id === 'work')!;
+
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			userDataProfiles: [{ name: 'Cafe\u0301', location: 'work', useDefaultFlags: { settings: true } }],
+		}));
+
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None)).status, 'unchanged');
+	});
+
 	test('keeps catalog definitions and fingerprints coherent across catalog races', async () => {
 		const fileSystem = new FixtureFileSystem();
 		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
