@@ -351,12 +351,24 @@ suite('EditorMigrationSourceService', () => {
 		const verification = await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None);
 
 		assert.strictEqual(verification.status, 'unchanged');
+		assert.ok(verification.currentFingerprint);
 		assert.strictEqual(verification.currentFingerprint?.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, initialCatalogHash);
+		const unchangedFingerprint = verification.currentFingerprint;
+
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			userDataProfiles: [{ name: 'Renamed work', location: 'work', icon: 'briefcase', useDefaultFlags: { prompts: true, settings: true } }],
+		}));
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, unchangedFingerprint, CancellationToken.None)).status, 'changed');
 
 		fileSystem.addFile(catalogResource, JSON.stringify({
 			userDataProfiles: [{ name: 'Work', location: 'work', icon: 'star', useDefaultFlags: { prompts: true, settings: true } }],
 		}));
-		assert.strictEqual((await service.verifySourceSnapshot(named.ref, verification.currentFingerprint!, CancellationToken.None)).status, 'changed');
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, unchangedFingerprint, CancellationToken.None)).status, 'changed');
+
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			userDataProfiles: [{ name: 'Work', location: 'work', icon: 'briefcase', useDefaultFlags: { prompts: false, settings: true } }],
+		}));
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, unchangedFingerprint, CancellationToken.None)).status, 'changed');
 	});
 
 	test('keeps catalog definitions and fingerprints coherent across catalog races', async () => {
