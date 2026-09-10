@@ -99,10 +99,15 @@ interface InternalProfileRead {
 	readonly newestModificationTime: number;
 }
 
-interface CatalogRead {
-	readonly profiles: readonly EditorMigrationParsedCatalogProfile[];
-	readonly diagnostics: readonly EditorMigrationDiagnostic[];
+interface CatalogProfileRead {
+	readonly profile: EditorMigrationParsedCatalogProfile;
 	readonly fingerprintEntry: EditorMigrationSourceFingerprintEntry;
+}
+
+interface CatalogRead {
+	readonly profiles: readonly CatalogProfileRead[];
+	readonly diagnostics: readonly EditorMigrationDiagnostic[];
+	readonly state: EditorMigrationResourceState;
 }
 
 class EditorMigrationSourceUnavailableError extends Error {
@@ -209,9 +214,9 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 			return { profile, diagnostics: [] };
 		}
 		const catalog = await this.readCatalog(profile.adapter, profile.logicalUserRoot, profile.catalogResource, token);
-		const current = catalog.profiles.find(candidate => candidate.id === profile.identity.id);
+		const current = catalog.profiles.find(candidate => candidate.profile.id === profile.identity.id);
 		if (!current) {
-			const diagnostics = catalog.fingerprintEntry.state === 'absent' ? [{
+			const diagnostics = catalog.state === 'absent' ? [{
 				code: 'candidateAbsent' as const,
 				severity: 'info' as const,
 				scope: 'catalog' as const,
@@ -231,11 +236,11 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 		return {
 			profile: {
 				...profile,
-				identity: { id: current.id, name: current.name, kind: 'named', icon: current.icon },
-				profileRoot: current.location,
-				canonicalProfileRoot: await this.canonicalizeProfileRoot(current.location, token),
-				useDefaultFlags: current.useDefaultFlags,
-				catalogFingerprintEntry: catalog.fingerprintEntry,
+				identity: { id: current.profile.id, name: current.profile.name, kind: 'named', icon: current.profile.icon },
+				profileRoot: current.profile.location,
+				canonicalProfileRoot: await this.canonicalizeProfileRoot(current.profile.location, token),
+				useDefaultFlags: current.profile.useDefaultFlags,
+				catalogFingerprintEntry: current.fingerprintEntry,
 			},
 			diagnostics: catalog.diagnostics,
 		};
@@ -290,15 +295,15 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 		for (const named of catalog.profiles) {
 			rawProfiles.push({
 				adapter,
-				identity: { id: named.id, name: named.name, kind: 'named', icon: named.icon },
+				identity: { id: named.profile.id, name: named.profile.name, kind: 'named', icon: named.profile.icon },
 				canonicalUserRoot,
-				canonicalProfileRoot: await this.canonicalizeProfileRoot(named.location, token),
+				canonicalProfileRoot: await this.canonicalizeProfileRoot(named.profile.location, token),
 				logicalUserRoot: paths.userData,
 				extensionRoot: paths.extensions,
-				profileRoot: named.location,
-				useDefaultFlags: named.useDefaultFlags,
+				profileRoot: named.profile.location,
+				useDefaultFlags: named.profile.useDefaultFlags,
 				catalogResource,
-				catalogFingerprintEntry: catalog.fingerprintEntry,
+				catalogFingerprintEntry: named.fingerprintEntry,
 			});
 		}
 
@@ -552,10 +557,10 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 		const defaultProfile = this.catalogDiagnosticProfile(adapter, userRoot);
 		const raw = await this.readRawFile(defaultProfile, 'profileCatalog', resource, EDITOR_MIGRATION_PROFILE_CATALOG_MAX_BYTES, token);
 		if (raw.state === 'absent') {
-			return { profiles: [], diagnostics: [], fingerprintEntry: toFingerprintEntry('profileCatalog', raw) };
+			return { profiles: [], diagnostics: [], state: raw.state };
 		}
 		if (raw.state !== 'present') {
-			return { profiles: [], diagnostics: raw.diagnostic ? [raw.diagnostic] : [], fingerprintEntry: toFingerprintEntry('profileCatalog', raw) };
+			return { profiles: [], diagnostics: raw.diagnostic ? [raw.diagnostic] : [], state: raw.state };
 		}
 		let container: EditorMigrationJsonValue | undefined;
 		try {
@@ -564,17 +569,17 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 			return {
 				profiles: [],
 				diagnostics: [malformedDiagnostic(defaultProfile, undefined, resource, 'catalog')],
-				fingerprintEntry: toFingerprintEntry('profileCatalog', raw),
+				state: raw.state,
 			};
 		}
 		if (!isJsonObject(container) || !Array.isArray(container['userDataProfiles'])) {
 			return {
 				profiles: [],
 				diagnostics: [{ code: 'unsupportedNamedProfileCatalogSchema', severity: 'warning', scope: 'catalog', adapterId: adapter.identity.id, details: { path: resource.fsPath } }],
-				fingerprintEntry: toFingerprintEntry('profileCatalog', raw),
+				state: raw.state,
 			};
 		}
-		const profiles: EditorMigrationParsedCatalogProfile[] = [];
+		const profiles: CatalogProfileRead[] = [];
 		const diagnostics: EditorMigrationDiagnostic[] = [];
 		const profileIds = new Set<string>();
 		for (let index = 0; index < container['userDataProfiles'].length; index++) {
@@ -591,9 +596,12 @@ export class EditorMigrationSourceService extends Disposable implements IEditorM
 				continue;
 			}
 			profileIds.add(parsed.profile.id);
-			profiles.push(parsed.profile);
+			profiles.push({
+				profile: parsed.profile,
+				fingerprintEntry: toCatalogProfileFingerprintEntry(raw, parsed.profile, this.environment.platform),
+			});
 		}
-		return { profiles, diagnostics, fingerprintEntry: toFingerprintEntry('profileCatalog', raw) };
+		return { profiles, diagnostics, state: raw.state };
 	}
 
 	private catalogDiagnosticProfile(adapter: IEditorMigrationSourceAdapter, userRoot: URI): InternalProfile {
@@ -691,8 +699,23 @@ function sha256String(value: string): string {
 	return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function toFingerprintEntry(category: EditorMigrationCategory | 'profileCatalog', raw: RawRead): EditorMigrationSourceFingerprintEntry {
+function toFingerprintEntry(category: EditorMigrationCategory, raw: RawRead): EditorMigrationSourceFingerprintEntry {
 	return { category, identityDigest: raw.identityDigest, state: raw.state, contentHash: raw.contentHash };
+}
+
+function toCatalogProfileFingerprintEntry(raw: RawRead, profile: EditorMigrationParsedCatalogProfile, platform: EditorMigrationPathEnvironment['platform']): EditorMigrationSourceFingerprintEntry {
+	const useDefaultFlags = Object.entries(profile.useDefaultFlags).sort(([left], [right]) => compareEditorMigrationCodePoints(left, right));
+	return {
+		category: 'profileCatalog',
+		identityDigest: raw.identityDigest,
+		state: 'present',
+		contentHash: sha256String(JSON.stringify({
+			name: profile.name,
+			location: normalizePath(profile.location.fsPath, platform),
+			icon: profile.icon ?? null,
+			useDefaultFlags,
+		})),
+	};
 }
 
 function compareFingerprintEntries(a: EditorMigrationSourceFingerprintEntry, b: EditorMigrationSourceFingerprintEntry): number {

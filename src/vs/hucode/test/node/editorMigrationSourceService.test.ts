@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { createHash } from 'crypto';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { DeferredPromise } from '../../../base/common/async.js';
@@ -317,6 +316,49 @@ suite('EditorMigrationSourceService', () => {
 		]);
 	});
 
+	test('ignores unrelated catalog rewrites when verifying a named profile', async () => {
+		const fileSystem = new FixtureFileSystem();
+		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
+		const catalogResource = joinPath(source.userData, 'globalStorage', 'storage.json');
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			windowState: { focused: true },
+			userDataProfiles: [
+				{ name: 'Work', location: 'work', icon: 'briefcase', useDefaultFlags: { prompts: true, settings: true }, ignored: 'first' },
+				{ name: 'Other', location: 'other' },
+			],
+		}));
+		const service = disposables.add(new EditorMigrationSourceService(fileSystem, linuxEnvironment));
+		const discovery = await service.discoverSources({}, CancellationToken.None);
+		const named = discovery.sources.find(item => item.profile.id === 'work')!;
+		const initialCatalogHash = named.discoveryFingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash;
+		assert.ok(initialCatalogHash);
+
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			windowState: { focused: false, width: 1200 },
+			unrelatedState: 'changed',
+			userDataProfiles: [
+				{ name: 'Renamed other', location: 'other', icon: 'star' },
+				{
+					ignored: 'second',
+					useDefaultFlags: { settings: true, prompts: true },
+					icon: 'briefcase',
+					location: joinPath(source.userData, 'profiles', 'work').toJSON(),
+					name: 'Work',
+				},
+			],
+		}, undefined, 2));
+
+		const verification = await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None);
+
+		assert.strictEqual(verification.status, 'unchanged');
+		assert.strictEqual(verification.currentFingerprint?.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, initialCatalogHash);
+
+		fileSystem.addFile(catalogResource, JSON.stringify({
+			userDataProfiles: [{ name: 'Work', location: 'work', icon: 'star', useDefaultFlags: { prompts: true, settings: true } }],
+		}));
+		assert.strictEqual((await service.verifySourceSnapshot(named.ref, verification.currentFingerprint!, CancellationToken.None)).status, 'changed');
+	});
+
 	test('keeps catalog definitions and fingerprints coherent across catalog races', async () => {
 		const fileSystem = new FixtureFileSystem();
 		const source = populateDefault(fileSystem, 'vscode', linuxEnvironment);
@@ -333,13 +375,14 @@ suite('EditorMigrationSourceService', () => {
 		assert.strictEqual(fileSystem.fileReadCount(catalogResource), 1);
 		assert.strictEqual(named.profile.name, 'Work A');
 		assert.strictEqual(named.localPaths.userData.endsWith('/work'), true);
-		assert.strictEqual(named.discoveryFingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, sha256(catalogA));
+		const catalogAHash = named.discoveryFingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash;
+		assert.ok(catalogAHash);
 
 		const current = await service.readSourceProfile(named.ref, ['settings'], CancellationToken.None);
 		assert.strictEqual(fileSystem.fileReadCount(catalogResource), 2);
 		assert.strictEqual(current.profile.name, 'Work B');
 		assert.deepStrictEqual(categoryValue(current.categories[0]), ['settings', 'present', { catalog: 'b' }]);
-		assert.strictEqual(current.fingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, sha256(catalogB));
+		assert.notStrictEqual(current.fingerprint.entries.find(entry => entry.category === 'profileCatalog')?.contentHash, catalogAHash);
 		assert.notStrictEqual(current.fingerprint.value, named.discoveryFingerprint.value);
 		assert.strictEqual((await service.verifySourceSnapshot(named.ref, named.discoveryFingerprint, CancellationToken.None)).status, 'changed');
 
@@ -816,10 +859,6 @@ function populateCursorNamedFixture(fileSystem: FixtureFileSystem, environment: 
 
 function extensionManifest(id: string): string {
 	return JSON.stringify([{ identifier: { id, uuid: 'uuid' }, version: '1.2.3', location: { path: '/ignored' }, metadata: { preRelease: false, hasPreReleaseVersion: true } }]);
-}
-
-function sha256(value: string): string {
-	return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function createNativeProvider(overrides: Partial<IEditorMigrationDiskProvider>): IEditorMigrationDiskProvider {
