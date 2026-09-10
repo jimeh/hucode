@@ -141,7 +141,7 @@ export interface EditorMigrationSnippet {
 /** Read state of one logical source resource. */
 export type EditorMigrationResourceState = 'present' | 'absent' | 'unreadable';
 
-/** Fingerprint entry for one exact parsed input. */
+/** Fingerprint entry for one parsed source input, using exact bytes or normalized metadata. */
 export interface EditorMigrationSourceFingerprintEntry {
 	readonly category: EditorMigrationCategory | 'profileCatalog';
 	readonly identityDigest: string;
@@ -149,7 +149,7 @@ export interface EditorMigrationSourceFingerprintEntry {
 	readonly contentHash?: string;
 }
 
-/** Versioned fingerprint of the exact bytes parsed for a source snapshot. */
+/** Versioned fingerprint of the relevant inputs parsed for a source snapshot. */
 export interface EditorMigrationSourceFingerprint {
 	readonly schemaVersion: typeof EDITOR_MIGRATION_SOURCE_SCHEMA_VERSION;
 	readonly algorithm: 'sha256';
