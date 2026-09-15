@@ -238,8 +238,7 @@ export class BrowserViewGroup extends Disposable implements ICDPBrowserTarget, I
 			throw new Error('Can only get window for BrowserView targets');
 		}
 
-		const view = target.view.getWebContentsView();
-		const viewBounds = view.getBounds();
+		const viewBounds = target.view.getWindowRelativeBounds();
 		return {
 			windowId: this.targetContext.hostWindowId,
 			bounds: {
