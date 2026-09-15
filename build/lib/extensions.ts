@@ -20,6 +20,7 @@ import * as jsoncParser from 'jsonc-parser';
 import { getProductionDependencies } from './dependencies.ts';
 import { type IExtensionDefinition, getExtensionStream } from './builtInExtensions.ts';
 import { fetchUrls, fetchGithub } from './fetch.ts';
+import { getGithubReleaseAssetName } from './hucodeGithubFetch.ts';
 import { createTsgoStream, spawnTsgo } from './tsgo.ts';
 import watcher from './watch/index.ts';
 
@@ -290,7 +291,9 @@ export function fromGithub({ name, version, repo, sha256, metadata }: IExtension
 
 	return fetchGithub(new URL(repo).pathname, {
 		version,
-		name: asset ? asset.assetName : name => name.endsWith('.vsix'),
+		name: asset?.assetName ?? (latest
+			? name => name.endsWith('.vsix')
+			: getGithubReleaseAssetName(name, version)),
 		// The checksum is tied to a specific version; when resolving the latest release the
 		// downloaded asset differs, so it cannot be validated against the pinned checksum.
 		checksumSha256: latest ? undefined : (asset ? asset.sha256 : sha256),

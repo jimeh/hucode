@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) Hucode contributors. All rights reserved.
+# Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+
+set -e
+
+update-alternatives --remove editor /usr/bin/@@NAME@@

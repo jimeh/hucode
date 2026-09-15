@@ -12,6 +12,10 @@ import tseslint from 'typescript-eslint';
 
 import stylistic from '@stylistic/eslint-plugin';
 import * as pluginLocal from './.eslint-plugin-local/index.ts';
+import {
+	copyrightHeaderEslintPattern,
+	copyrightHeaderEslintTemplate,
+} from './build/hucode/copyright-headers.ts';
 import * as pluginCopilotLocal from './extensions/copilot/.eslintplugin/index.ts';
 import pluginImport from 'eslint-plugin-import';
 import pluginJsdoc from 'eslint-plugin-jsdoc';
@@ -135,12 +139,10 @@ export default defineConfig(
 			'header/header': [
 				2,
 				'block',
-				[
-					'---------------------------------------------------------------------------------------------',
-					' *  Copyright (c) Microsoft Corporation. All rights reserved.',
-					' *  Licensed under the MIT License. See License.txt in the project root for license information.',
-					' *--------------------------------------------------------------------------------------------'
-				]
+				{
+					pattern: copyrightHeaderEslintPattern,
+					template: copyrightHeaderEslintTemplate,
+				}
 			]
 		},
 	},
@@ -1597,7 +1599,9 @@ export default defineConfig(
 						'yauzl',
 						'yazl',
 						'zlib',
-						'chrome-remote-interface'
+						'chrome-remote-interface',
+						'vs/hucode/common/**',
+						'vs/hucode/electron-main/**'
 					]
 				},
 				{
@@ -1926,6 +1930,22 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
 					'target': 'src/vs/sessions/electron-browser/sessions.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -2025,6 +2045,23 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/omni.common.main.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/contrib/terminal/terminal.all.js'
+					]
+				},
+				{
 					'target': 'src/vs/workbench/workbench.desktop.main.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -2038,7 +2075,28 @@ export default defineConfig(
 						'vs/workbench/api/~',
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
-						'vs/workbench/workbench.common.main.js'
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/electron-browser/omniWindowService.js',
+						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/omni.desktop.main.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/*/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/omni.common.main.js',
+						'vs/hucode/~'
 					]
 				},
 				{
