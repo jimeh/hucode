@@ -16,6 +16,7 @@ import { IApplicationStorageMainService } from '../../storage/electron-main/stor
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 import { AvailableForDownload, IUpdate, State, StateType, UpdateType } from '../common/update.js';
 import { AbstractUpdateService, createUpdateURL, IUpdateURLOptions } from './abstractUpdateService.js';
+import { getHucodeLinuxUpdateAction } from './hucodeLinuxUpdate.js';
 
 export class LinuxUpdateService extends AbstractUpdateService {
 
@@ -75,12 +76,12 @@ export class LinuxUpdateService extends AbstractUpdateService {
 	}
 
 	protected override async doDownloadUpdate(state: AvailableForDownload): Promise<void> {
-		// Use the download URL if available as we don't currently detect the package type that was
-		// installed and the website download page is more useful than the tarball generally.
-		if (this.productService.downloadUrl && this.productService.downloadUrl.length > 0) {
-			this.nativeHostMainService.openExternal(undefined, this.productService.downloadUrl);
-		} else if (state.update.url) {
-			this.nativeHostMainService.openExternal(undefined, state.update.url);
+		const action = getHucodeLinuxUpdateAction(
+			this.productService.downloadUrl,
+			state.update.url
+		);
+		if (action) {
+			this.nativeHostMainService.openExternal(undefined, action.url);
 		}
 
 		this.setState(State.Idle(UpdateType.Archive));
