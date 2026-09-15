@@ -7,4 +7,5 @@
 // its name, it owns registration side effects rather than a broad service.
 import './hostedShellServiceAdapter.js';
 import './hucodeClipboardService.js';
+import './migration/editorMigrationSourceService.js';
 import './shellControllerServiceAdapter.js';
