@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.83 - 2026-09-15
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.136.2
+
+### Bug Fixes
+
+- **migration:** stabilize named-profile source fingerprints (#229)
+
 ## 0.0.82 - 2026-09-09
 
 ### Features
