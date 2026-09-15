@@ -243,6 +243,13 @@ suite('HucodeOmniWorkspaceOpen', () => {
 			isOmniWindow: true,
 		} as ICodeWindow;
 		const fileUri = URI.file('/repo/file.txt');
+		const diffOriginal = URI.file('/repo/original.txt');
+		const diffModified = URI.file('/repo/modified.txt');
+		const mergeBase = URI.file('/repo/base.txt');
+		const mergeInputOne = URI.file('/repo/input-one.txt');
+		const mergeInputTwo = URI.file('/repo/input-two.txt');
+		const mergeResult = URI.file('/repo/result.txt');
+		const waitMarkerFileUri = URI.file('/tmp/wait-marker');
 		let openedRequest: unknown;
 
 		const accessor = {
@@ -291,8 +298,20 @@ suite('HucodeOmniWorkspaceOpen', () => {
 				URI.file('/repo'),
 				{
 					filesToOpenOrCreate: [{ fileUri }],
-					filesToDiff: [],
-					filesToMerge: [],
+					filesToDiff: [
+						{ fileUri: diffOriginal },
+						{ fileUri: diffModified },
+					],
+					filesToMerge: [
+						{ fileUri: mergeBase },
+						{ fileUri: mergeInputOne },
+						{ fileUri: mergeInputTwo },
+						{ fileUri: mergeResult },
+					],
+					filesToWait: {
+						paths: [{ fileUri }, { fileUri: mergeResult }],
+						waitMarkerFileUri,
+					},
 				},
 				'vscode'
 			),
@@ -300,9 +319,20 @@ suite('HucodeOmniWorkspaceOpen', () => {
 		);
 		assert.deepStrictEqual(openedRequest, {
 			filesToOpenOrCreate: [{ fileUri }],
-			filesToDiff: [],
-			filesToMerge: [],
-			filesToWait: undefined,
+			filesToDiff: [
+				{ fileUri: diffOriginal },
+				{ fileUri: diffModified },
+			],
+			filesToMerge: [
+				{ fileUri: mergeBase },
+				{ fileUri: mergeInputOne },
+				{ fileUri: mergeInputTwo },
+				{ fileUri: mergeResult },
+			],
+			filesToWait: {
+				paths: [{ fileUri }, { fileUri: mergeResult }],
+				waitMarkerFileUri,
+			},
 			termProgram: 'vscode',
 		});
 	});

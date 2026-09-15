@@ -16,6 +16,7 @@ import {
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedNavigationSnapshot,
+	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedReadyResult,
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
@@ -146,6 +147,11 @@ export class HostedOmniWebShellService extends Disposable
 		);
 	}
 
+	publishAppearance(appearance: IHucodeHostedAppearanceSnapshot) {
+		return this.runOperation(shell => shell.publishAppearance?.(appearance) ??
+			Promise.resolve(HucodeHostedShellOperationOutcome.Unsupported));
+	}
+
 	closeSelf() {
 		return this.runOperation(shell => shell.closeSelf());
 	}
@@ -214,6 +220,7 @@ function createUnavailableHostedShellClient(): IHucodeHostedShellService {
 		notifyReady: async () => ({
 			outcome: HucodeHostedShellOperationOutcome.Unavailable,
 		}),
+		publishAppearance: unavailable,
 		closeSelf: unavailable,
 		reopenSelfInNormalWindow: unavailable,
 		reloadSelf: unavailable,

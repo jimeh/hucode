@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import { app, BrowserWindow, WebContents, shell } from 'electron';
 import { addUNCHostToAllowlist } from '../../../base/node/unc.js';
 import { hostname, release, arch } from 'os';
+import { DeferredPromise } from '../../../base/common/async.js';
 import { coalesce, distinct } from '../../../base/common/arrays.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CharCode } from '../../../base/common/charCode.js';
@@ -41,15 +42,36 @@ import { AgentsWindowOpenSource, IAddRemoveFoldersRequest, INativeOpenFileReques
 import { CodeWindow } from './windowImpl.js';
 import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
 import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
-import { tryOpenFolderInHucodeHostedWorkspace } from '../../../hucode/electron-main/omniWorkspaceOpen.js';
+import {
+	toNativeOpenFileRequest,
+	tryOpenFolderInHucodeHostedWorkspace,
+} from '../../../hucode/electron-main/omniWorkspaceOpen.js';
+import { IHucodeShellMainService } from '../../../hucode/electron-main/omniWindow.js';
+import {
+	discardHucodeFailedRegularWindowTarget,
+	HucodeRegularWindowLoadCoordinator,
+	isHucodeRegularWindowAvailableForQueuedLoad,
+	retainHucodeNativeOpenPayloadAfterAdmission,
+	shouldDiscardHucodeFailedRegularWindowTarget,
+	shouldDiscardHucodeRegularWindowAfterOpenFailure,
+	shouldSettleHucodeNativeOpenWaitMarkerAfterAdmission,
+	shouldAwaitHucodeRegularWindowLoadCommit,
+	type HucodeRegularWorkbenchAdmissionOutcome,
+	type HucodeRegularWorkbenchOpenAttempt,
+	type HucodeRegularWindowTargetCommitOutcome,
+	waitForHucodeRegularWindowLoadCommit,
+	waitForHucodeRegularWindowTargetCommit,
+} from '../../../hucode/electron-main/desktopWorkbenchOwnership.js';
 import {
 	createHucodeOmniWindowPath,
 	distinctHucodeOmniWindowPaths,
 	filterHucodePreserveRestorePaths,
 	getHucodeDefaultStartupWindowPath,
+	getHucodeNewWindowDefaultProfile,
 	getHucodeOmniBrowserWindowOptions,
 	getHucodeOmniFileOpenPlan,
 	getHucodeOmniPathFromWindowState,
+	getHucodeOmniShellProfile,
 	IHucodeOmniWindowPath,
 	isHucodeOmniPathToOpen,
 	openNewHucodeOmniWindow
@@ -103,6 +125,18 @@ interface IOpenBrowserWindowOptions {
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly hucodeAwaitLoadCommit?: boolean;
+}
+
+class HucodeRegularWindowOpenVetoError extends Error { }
+
+class HucodeRegularWindowLoadCommitError extends Error {
+	constructor(readonly outcome: Extract<
+		HucodeRegularWindowTargetCommitOutcome,
+		{ readonly kind: 'failed' }
+	>) {
+		super(`Regular workbench window load failed: ${outcome.reason}.`);
+	}
 }
 
 interface IPathResolveOptions {
@@ -237,6 +271,8 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	readonly onDidTriggerSystemContextMenu = this._onDidTriggerSystemContextMenu.event;
 
 	private readonly windows = new Map<number, ICodeWindow>();
+	private readonly hucodeRegularWindowLoads =
+		new HucodeRegularWindowLoadCoordinator();
 
 	private readonly windowsStateHandler: WindowsStateHandler;
 
@@ -458,7 +494,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		}
 
 		// Open based on config
-		const { windows: usedWindows, filesOpenedInWindow } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
+		const { windows: usedWindows, filesOpenedInWindow, admissionErrors } = await this.doOpen(openConfig, workspacesToOpen, foldersToOpen, emptyWindowsWithBackupsToRestore, omniWindowsToRestore, maybeOpenEmptyWindow, filesToOpen, foldersToAdd, foldersToRemove);
 
 		this.logService.trace(`windowsManager#open used window count ${usedWindows.length} (workspacesToOpen: ${workspacesToOpen.length}, foldersToOpen: ${foldersToOpen.length}, emptyToRestore: ${emptyWindowsWithBackupsToRestore.length}, maybeOpenEmptyWindow: ${maybeOpenEmptyWindow})`);
 
@@ -535,6 +571,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// Handle `<app> chat`
 		this.handleChatRequest(openConfig, usedWindows);
 
+		if (admissionErrors.length === 1) {
+			throw admissionErrors[0];
+		}
+		if (admissionErrors.length > 1) {
+			throw new AggregateError(
+				admissionErrors,
+				'Multiple regular workbench windows failed to open.'
+			);
+		}
+
 		return usedWindows;
 	}
 
@@ -547,13 +593,31 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		if (openConfig.context === OpenContext.CLI && waitMarkerFileURI && usedWindows.length === 1 && usedWindows[0]) {
 			(async () => {
 				await usedWindows[0].whenClosedOrLoaded;
-
-				try {
-					await this.fileService.del(waitMarkerFileURI);
-				} catch (error) {
-					// ignore - could have been deleted from the window already
-				}
+				await this.deleteWaitMarkerFile(waitMarkerFileURI);
 			})();
+		}
+	}
+
+	private handleHucodeAdmissionWaitMarker(
+		openConfig: IOpenConfiguration,
+		hasNativeOpenPayload: boolean,
+		admission: HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow>
+	): void {
+		if (openConfig.context === OpenContext.CLI &&
+			openConfig.waitMarkerFileURI &&
+			shouldSettleHucodeNativeOpenWaitMarkerAfterAdmission(
+				hasNativeOpenPayload,
+				admission
+			)) {
+			void this.deleteWaitMarkerFile(openConfig.waitMarkerFileURI);
+		}
+	}
+
+	private async deleteWaitMarkerFile(waitMarkerFileURI: URI): Promise<void> {
+		try {
+			await this.fileService.del(waitMarkerFileURI);
+		} catch (error) {
+			// Ignore markers already deleted by the receiving window.
 		}
 	}
 
@@ -588,11 +652,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		filesToOpen: IFilesToOpen | undefined,
 		foldersToAdd: ISingleFolderWorkspacePathToOpen[],
 		foldersToRemove: ISingleFolderWorkspacePathToOpen[]
-	): Promise<{ windows: ICodeWindow[]; filesOpenedInWindow: ICodeWindow | undefined }> {
+	): Promise<{
+		windows: ICodeWindow[];
+		filesOpenedInWindow: ICodeWindow | undefined;
+		admissionErrors: unknown[];
+	}> {
 
 		// Keep track of used windows and remember
 		// if files have been opened in one of them
 		const usedWindows: ICodeWindow[] = [];
+		const admissionErrors: unknown[] = [];
 		let filesOpenedInWindow: ICodeWindow | undefined = undefined;
 		function addUsedWindow(window: ICodeWindow, openedFiles?: boolean): void {
 			usedWindows.push(window);
@@ -730,7 +799,62 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, remoteAuthority) ? filesToOpen : undefined;
 
 				// Do open folder
-				addUsedWindow(await this.doOpenFolderOrWorkspace(openConfig, workspaceToOpen, openFolderInNewWindow, filesToOpenInWindow), !!filesToOpenInWindow);
+				const admission = !openConfig
+					.hucodeDesktopOwnershipAlreadyReserved &&
+					workspaceToOpen.workspace.configPath.scheme === Schemas.file
+					? await this.instantiationService.invokeFunction(
+						accessor => accessor.get(IHucodeShellMainService)
+							.openRegularWorkbenchWithAdmission(
+								workspaceToOpen.workspace.configPath.fsPath,
+								{
+									filesToOpen: filesToOpenInWindow &&
+										toNativeOpenFileRequest(
+											filesToOpenInWindow,
+											openConfig.userEnv?.['TERM_PROGRAM']
+										),
+									forceStandalone: openConfig.forceNewWindow,
+									openRegularWindow: () =>
+										this.doOpenFolderOrWorkspaceForAdmission(
+											openConfig,
+											workspaceToOpen,
+											openFolderInNewWindow,
+											filesToOpenInWindow
+										),
+								}
+							)
+					)
+					: {
+						kind: 'opened' as const,
+						value: await this.doOpenFolderOrWorkspace(
+							openConfig,
+							workspaceToOpen,
+							openFolderInNewWindow,
+							filesToOpenInWindow
+						),
+						filesDelivered: !!filesToOpenInWindow,
+						payloadDisposition: filesToOpenInWindow
+							? 'delivered' as const
+							: 'preserve' as const,
+					};
+				this.handleHucodeAdmissionWaitMarker(
+					openConfig,
+					!!filesToOpenInWindow,
+					admission
+				);
+				filesToOpen = retainHucodeNativeOpenPayloadAfterAdmission(
+					filesToOpen,
+					admission
+				);
+				if (admission.kind === 'failed') {
+					admissionErrors.push(admission.error ?? new Error(
+						'Regular workbench window failed to open.'
+					));
+				}
+				if (admission.kind === 'opened' ||
+					admission.kind === 'focused-regular' ||
+					admission.kind === 'focused-hosted') {
+					addUsedWindow(admission.value, admission.filesDelivered);
+				}
 
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}
@@ -759,15 +883,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				}
 
 				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, folderToOpen.remoteAuthority) ? filesToOpen : undefined;
-				const result = await this.instantiationService.invokeFunction(
-					accessor => tryOpenFolderInHucodeHostedWorkspace(
-						accessor,
-						this.getWindows(),
-						folderToOpen.workspace.uri,
-						filesToOpenInWindow,
-						openConfig.userEnv?.['TERM_PROGRAM']
-					)
-				);
+				const result = openConfig.forceNewWindow ? undefined :
+					await this.instantiationService.invokeFunction(
+						accessor => tryOpenFolderInHucodeHostedWorkspace(
+							accessor,
+							this.getWindows(),
+							folderToOpen.workspace.uri,
+							filesToOpenInWindow,
+							openConfig.userEnv?.['TERM_PROGRAM']
+						)
+					);
 				if (result) {
 					addUsedWindow(result.window, result.openedFiles);
 					foldersOpenedInOmni.add(folderToOpen.workspace.uri);
@@ -789,7 +914,62 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 				const filesToOpenInWindow = isEqualAuthority(filesToOpen?.remoteAuthority, remoteAuthority) ? filesToOpen : undefined;
 
 				// Do open folder
-				addUsedWindow(await this.doOpenFolderOrWorkspace(openConfig, folderToOpen, openFolderInNewWindow, filesToOpenInWindow), !!filesToOpenInWindow);
+				const admission = !openConfig
+					.hucodeDesktopOwnershipAlreadyReserved &&
+					folderToOpen.workspace.uri.scheme === Schemas.file
+					? await this.instantiationService.invokeFunction(
+						accessor => accessor.get(IHucodeShellMainService)
+							.openRegularWorkbenchWithAdmission(
+								folderToOpen.workspace.uri.fsPath,
+								{
+									filesToOpen: filesToOpenInWindow &&
+										toNativeOpenFileRequest(
+											filesToOpenInWindow,
+											openConfig.userEnv?.['TERM_PROGRAM']
+										),
+									forceStandalone: openConfig.forceNewWindow,
+									openRegularWindow: () =>
+										this.doOpenFolderOrWorkspaceForAdmission(
+											openConfig,
+											folderToOpen,
+											openFolderInNewWindow,
+											filesToOpenInWindow
+										),
+								}
+							)
+					)
+					: {
+						kind: 'opened' as const,
+						value: await this.doOpenFolderOrWorkspace(
+							openConfig,
+							folderToOpen,
+							openFolderInNewWindow,
+							filesToOpenInWindow
+						),
+						filesDelivered: !!filesToOpenInWindow,
+						payloadDisposition: filesToOpenInWindow
+							? 'delivered' as const
+							: 'preserve' as const,
+					};
+				this.handleHucodeAdmissionWaitMarker(
+					openConfig,
+					!!filesToOpenInWindow,
+					admission
+				);
+				filesToOpen = retainHucodeNativeOpenPayloadAfterAdmission(
+					filesToOpen,
+					admission
+				);
+				if (admission.kind === 'failed') {
+					admissionErrors.push(admission.error ?? new Error(
+						'Regular workbench window failed to open.'
+					));
+				}
+				if (admission.kind === 'opened' ||
+					admission.kind === 'focused-regular' ||
+					admission.kind === 'focused-hosted') {
+					addUsedWindow(admission.value, admission.filesDelivered);
+				}
 
 				openFolderInNewWindow = true; // any other folders to open must open in new window then
 			}
@@ -827,7 +1007,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			addUsedWindow(await this.doOpenEmpty(openConfig, openFolderInNewWindow, remoteAuthority, filesToOpen), !!filesToOpen);
 		}
 
-		return { windows: distinct(usedWindows), filesOpenedInWindow };
+		return {
+			windows: distinct(usedWindows),
+			filesOpenedInWindow,
+			admissionErrors,
+		};
 	}
 
 	private doOpenFilesInExistingWindow(configuration: IOpenConfiguration, window: ICodeWindow, filesToOpen?: IFilesToOpen): ICodeWindow {
@@ -919,7 +1103,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		);
 	}
 
-	private doOpenFolderOrWorkspace(openConfig: IOpenConfiguration, folderOrWorkspace: IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen, forceNewWindow: boolean, filesToOpen: IFilesToOpen | undefined, windowToUse?: ICodeWindow): Promise<ICodeWindow> {
+	private doOpenFolderOrWorkspace(openConfig: IOpenConfiguration, folderOrWorkspace: IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen, forceNewWindow: boolean, filesToOpen: IFilesToOpen | undefined, windowToUse?: ICodeWindow, hucodeAwaitLoadCommit = false): Promise<ICodeWindow> {
 		this.logService.trace('windowsManager#doOpenFolderOrWorkspace', { folderOrWorkspace, filesToOpen });
 
 		if (!windowToUse) {
@@ -939,8 +1123,42 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			filesToOpen,
 			windowToUse,
 			forceProfile: openConfig.forceProfile,
-			forceTempProfile: openConfig.forceTempProfile
+			forceTempProfile: openConfig.forceTempProfile,
+			hucodeAwaitLoadCommit:
+				shouldAwaitHucodeRegularWindowLoadCommit(
+					openConfig.hucodeDesktopOwnershipAlreadyReserved,
+					hucodeAwaitLoadCommit
+				),
 		});
+	}
+
+	private async doOpenFolderOrWorkspaceForAdmission(
+		openConfig: IOpenConfiguration,
+		folderOrWorkspace:
+			IWorkspacePathToOpen | ISingleFolderWorkspacePathToOpen,
+		forceNewWindow: boolean,
+		filesToOpen: IFilesToOpen | undefined
+	): Promise<HucodeRegularWorkbenchOpenAttempt<ICodeWindow>> {
+		try {
+			const window = await this.doOpenFolderOrWorkspace(
+				openConfig,
+				folderOrWorkspace,
+				forceNewWindow,
+				filesToOpen,
+				undefined,
+				true
+			);
+			return {
+				kind: 'committed',
+				windowId: window.id,
+				value: window,
+				filesDelivered: !!filesToOpen,
+			};
+		} catch (error) {
+			return error instanceof HucodeRegularWindowOpenVetoError
+				? { kind: 'vetoed' }
+				: { kind: 'failed', error };
+		}
 	}
 
 	private async getPathsToOpen(openConfig: IOpenConfiguration): Promise<IPathToOpen[]> {
@@ -1659,9 +1877,22 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const lastActiveWindow = this.getLastActiveWindow();
 		const newWindowProfile = windowConfig?.newWindowProfile
 			? this.userDataProfilesMainService.profiles.find(profile => profile.name === windowConfig.newWindowProfile) : undefined;
-		const defaultProfile = newWindowProfile ?? (lastActiveWindow?.profile?.isAgentsWindowProfile ? undefined : lastActiveWindow?.profile) ?? this.userDataProfilesMainService.defaultProfile;
+		const activeHostedProfile = lastActiveWindow?.isOmniWindow
+			? this.instantiationService.invokeFunction(accessor =>
+				accessor.get(IHucodeShellMainService)
+					.getActiveHostedWorkspaceProfile(lastActiveWindow.id))
+			: undefined;
+		const defaultProfile = getHucodeNewWindowDefaultProfile({
+			configuredProfile: newWindowProfile,
+			lastActiveProfile: lastActiveWindow?.profile,
+			lastActiveIsOmni: lastActiveWindow?.isOmniWindow,
+			activeHostedProfile,
+			applicationDefaultProfile:
+				this.userDataProfilesMainService.defaultProfile,
+		});
 
 		let window: ICodeWindow | undefined;
+		let createdWindowForOpen = false;
 		if (!options.forceNewWindow && !options.forceNewTabbedWindow) {
 			window = options.windowToUse || (lastActiveWindow?.config?.isSessionsWindow ? undefined : lastActiveWindow);
 			if (window) {
@@ -1750,6 +1981,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 		// New window
 		if (!window) {
+			createdWindowForOpen = true;
 			const state = this.windowsStateHandler.getNewWindowState(configuration);
 
 			// Create the window
@@ -1821,20 +2053,165 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// that we have the window object in hand.
 		configuration.windowId = window.id;
 
-		// If the window was already loaded, make sure to unload it
-		// first and only load the new configuration if that was
-		// not vetoed
-		if (window.isReady) {
-			this.lifecycleMainService.unload(window, UnloadReason.LOAD).then(async veto => {
-				if (!veto) {
-					await this.doOpenInBrowserWindow(window, configuration, options, defaultProfile);
+		const openWasReady = window.isReady;
+		const ordinaryLoadStarted = !options.hucodeAwaitLoadCommit &&
+			!openWasReady
+			? new DeferredPromise<void>()
+			: undefined;
+		const serializedOpen = this.hucodeRegularWindowLoads.run(
+			window.id,
+			async () => {
+				try {
+					if (!isHucodeRegularWindowAvailableForQueuedLoad({
+						window,
+						registeredWindow: this.windows.get(window.id),
+						nativeWindow: window.win,
+					})) {
+						throw new HucodeRegularWindowLoadCommitError({
+							kind: 'failed',
+							reason: 'destroyed',
+						});
+					}
+					if (window.isReady) {
+						const veto = await this.lifecycleMainService.unload(
+							window,
+							UnloadReason.LOAD
+						);
+						if (veto) {
+							if (options.hucodeAwaitLoadCommit) {
+								throw new HucodeRegularWindowOpenVetoError();
+							}
+							await ordinaryLoadStarted?.complete();
+							return;
+						}
+					}
+					if (!options.hucodeAwaitLoadCommit) {
+						await this.doOpenInBrowserWindowAndWaitForLoadCommit(
+							window,
+							configuration,
+							options,
+							defaultProfile,
+							() => void ordinaryLoadStarted?.complete()
+						);
+						return;
+					}
+					await this.doOpenInBrowserWindowAndWaitForTarget(
+						window,
+						configuration,
+						options,
+						defaultProfile
+					);
+				} catch (error) {
+					if (createdWindowForOpen &&
+						shouldDiscardHucodeRegularWindowAfterOpenFailure(
+							error instanceof HucodeRegularWindowLoadCommitError
+								? error.outcome
+								: undefined
+						)) {
+						discardHucodeFailedRegularWindowTarget(window.win);
+					}
+					throw error;
+				}
+			}
+		);
+
+		if (options.hucodeAwaitLoadCommit) {
+			await serializedOpen;
+		} else {
+			void serializedOpen.catch(error => {
+				if (ordinaryLoadStarted && !ordinaryLoadStarted.isSettled) {
+					void ordinaryLoadStarted.error(error);
+				} else {
+					this.logService.error(error);
 				}
 			});
-		} else {
-			await this.doOpenInBrowserWindow(window, configuration, options, defaultProfile);
+			// Ready-window unload remains asynchronous. Other callers return once
+			// their load is invoked while the coordinator awaits renderer readiness.
+			await ordinaryLoadStarted?.p;
 		}
 
 		return window;
+	}
+
+	private async doOpenInBrowserWindowAndWaitForLoadCommit(
+		window: ICodeWindow,
+		configuration: INativeWindowConfiguration,
+		options: IOpenBrowserWindowOptions,
+		defaultProfile: IUserDataProfile,
+		onLoadStarted: () => void
+	): Promise<void> {
+		const waiter = waitForHucodeRegularWindowLoadCommit({
+			onDidSignalReady: window.onDidSignalReady,
+			onDidClose: window.onDidClose,
+			onDidDestroy: window.onDidDestroy,
+		});
+		try {
+			await this.doOpenInBrowserWindow(
+				window,
+				configuration,
+				options,
+				defaultProfile
+			);
+			onLoadStarted();
+			const outcome = await waiter.result;
+			if (outcome.kind === 'failed') {
+				throw new HucodeRegularWindowLoadCommitError(outcome);
+			}
+		} finally {
+			waiter.dispose();
+		}
+	}
+
+	private async doOpenInBrowserWindowAndWaitForTarget(
+		window: ICodeWindow,
+		configuration: INativeWindowConfiguration,
+		options: IOpenBrowserWindowOptions,
+		defaultProfile: IUserDataProfile
+	): Promise<void> {
+		const expectedTarget = configuration.workspace;
+		if (!expectedTarget) {
+			throw new HucodeRegularWindowLoadCommitError({
+				kind: 'failed',
+				reason: 'wrong-target',
+			});
+		}
+		const waiter = waitForHucodeRegularWindowTargetCommit({
+			onDidSignalReady: window.onDidSignalReady,
+			onDidClose: window.onDidClose,
+			onDidDestroy: window.onDidDestroy,
+			getTarget: () => window.openedWorkspace,
+			expectedTarget,
+			targetsEqual: (actual, expected) =>
+				isWorkspaceIdentifier(actual) &&
+					isWorkspaceIdentifier(expected)
+					? actual.id === expected.id
+					: isSingleFolderWorkspaceIdentifier(actual) &&
+					isSingleFolderWorkspaceIdentifier(expected) &&
+					extUriBiasedIgnorePathCase.isEqual(
+						actual.uri,
+						expected.uri
+					),
+			timeoutMs: 30000,
+		});
+		try {
+			await this.doOpenInBrowserWindow(
+				window,
+				configuration,
+				options,
+				defaultProfile
+			);
+			const outcome = await waiter.result;
+			if (outcome.kind === 'failed') {
+				// The reservation will be released or restored elsewhere. Prevent
+				// a late renderer from leaving the same target open without ownership.
+				if (shouldDiscardHucodeFailedRegularWindowTarget(outcome)) {
+					discardHucodeFailedRegularWindowTarget(window.win);
+				}
+				throw new HucodeRegularWindowLoadCommitError(outcome);
+			}
+		} finally {
+			waiter.dispose();
+		}
 	}
 
 	private async doOpenInBrowserWindow(window: ICodeWindow, configuration: INativeWindowConfiguration, options: IOpenBrowserWindowOptions, defaultProfile: IUserDataProfile): Promise<void> {
@@ -1892,6 +2269,14 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	}
 
 	private resolveProfileForBrowserWindow(options: IOpenBrowserWindowOptions, workspace: IAnyWorkspaceIdentifier, defaultProfile: IUserDataProfile): Promise<IUserDataProfile> | IUserDataProfile {
+		const omniShellProfile = getHucodeOmniShellProfile(
+			options.isOmniWindow,
+			this.userDataProfilesMainService.defaultProfile
+		);
+		if (omniShellProfile) {
+			return omniShellProfile;
+		}
+
 		if (options.forceProfile) {
 			return this.userDataProfilesMainService.profiles.find(p => p.name === options.forceProfile) ?? this.userDataProfilesMainService.createNamedProfile(options.forceProfile);
 		}

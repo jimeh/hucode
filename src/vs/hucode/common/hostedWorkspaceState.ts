@@ -12,6 +12,8 @@ import {
 	IHucodeHostedWorkbenchInstance,
 	IHucodeHostedWorkspaceState,
 } from './omniWindow.js';
+import { IHucodeHostedAppearanceSnapshot } from
+	'../../platform/window/common/hucodeHostedShellService.js';
 import {
 	DEFAULT_PROJECT_SWITCHER_OMNI_SECTION_ORDER,
 	isProjectSwitcherOmniSectionOrder,
@@ -26,6 +28,7 @@ export interface IHostedWorkspaceStateEntry {
 	readonly visible: boolean;
 	readonly focused: boolean;
 	lastActiveAt?: number;
+	appearance?: IHucodeHostedAppearanceSnapshot;
 }
 
 /**
@@ -293,6 +296,13 @@ export function isHostedWorkspaceRestorable(
 	return isHostedWorkspaceAvailable(entry) || entry.state === 'dormant';
 }
 
+/** Returns whether an entry still owns its live hosted-workbench path. */
+export function isHostedWorkspaceOwnershipRetained(
+	entry: IHostedWorkspaceStateEntry
+): boolean {
+	return isHostedWorkspaceRestorable(entry) || entry.state === 'crashed';
+}
+
 /**
  * Waits until a hosted workspace leaves its pending-ready state.
  */
@@ -424,6 +434,7 @@ export function defaultExternalInstance(
 		visible: entry.visible,
 		focused: entry.focused,
 		lastActiveAt: entry.lastActiveAt,
+		...(entry.appearance ? { appearance: entry.appearance } : {}),
 	};
 }
 

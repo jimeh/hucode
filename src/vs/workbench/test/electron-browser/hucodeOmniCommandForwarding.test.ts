@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { mainWindow } from '../../../base/browser/window.js';
 import { Event } from '../../../base/common/event.js';
+import { toDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
@@ -93,6 +94,32 @@ suite('HucodeOmniCommandForwarding', () => {
 
 		assert.deepStrictEqual(fixture.commandCalls, []);
 		assert.deepStrictEqual(fixture.actionExecutedCalls, []);
+		assert.deepStrictEqual(fixture.channel.calls, [{
+			command: 'runActionInWorkspace',
+			arg: [request]
+		}]);
+	});
+
+	test('does not run profile actions in the Omni shell', async () => {
+		const fixture = createFixture({
+			isOmniWindow: true,
+			channelResponse: false
+		});
+		const input = mainWindow.document.createElement('input');
+		mainWindow.document.body.appendChild(input);
+		disposables.add(toDisposable(() => input.remove()));
+		input.focus();
+		const request: INativeRunActionInWindowRequest = {
+			id: 'workbench.profiles.actions.switchProfile',
+			from: 'menu'
+		};
+
+		await fixture.forwarding.handleRunActionInWindow(
+			request,
+			fixture.handlers
+		);
+
+		assert.deepStrictEqual(fixture.commandCalls, []);
 		assert.deepStrictEqual(fixture.channel.calls, [{
 			command: 'runActionInWorkspace',
 			arg: [request]

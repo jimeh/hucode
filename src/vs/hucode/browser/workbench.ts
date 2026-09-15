@@ -15,7 +15,8 @@ import { isFullscreen, onDidChangeFullscreen, isChrome, isFirefox, isSafari } fr
 import { mark } from '../../base/common/performance.js';
 import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { isWindows, isLinux, isWeb, isNative, isMacintosh } from '../../base/common/platform.js';
-import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString, LayoutSettings } from '../../workbench/services/layout/browser/layoutService.js';
+import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString, LayoutSettings, ModernUIDensity } from '../../workbench/services/layout/browser/layoutService.js';
+import { getHucodeOmniProjectedModernUI } from './omniAppearanceProjection.contribution.js';
 import { ILayoutOffsetInfo } from '../../platform/layout/browser/layoutService.js';
 import { Part } from '../../workbench/browser/part.js';
 import { Direction, ISerializableView, ISerializedGrid, IViewSize, SerializableGrid } from '../../base/browser/ui/grid/grid.js';
@@ -62,8 +63,7 @@ import { NotificationsToasts } from '../../workbench/browser/parts/notifications
 import { COMPACT_NOTIFICATION_ROW_HEIGHT, DEFAULT_NOTIFICATION_ROW_HEIGHT, setNotificationRowHeight } from '../../workbench/browser/parts/notifications/notificationsViewer.js';
 import { IMarkdownRendererService } from '../../platform/markdown/browser/markdownRenderer.js';
 import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
-import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
-import { TitleService } from './parts/titlebarPart.js';
+import { registerHucodeOmniTitleService } from './parts/titlebarPart.js';
 import { OmniHostPart } from './parts/omniHostPart.js';
 import { ProjectsPart } from './parts/projectsPart.js';
 import { createOmniGridDescriptor } from './omniLayoutModel.js';
@@ -406,14 +406,14 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		// Layout Service
 		serviceCollection.set(IWorkbenchLayoutService, this);
 
-		// Title Service - Hucode Omni titlebar with dedicated part overrides
-		serviceCollection.set(ITitleService, new SyncDescriptor(TitleService, []));
-
 		// All Contributed Services
 		const contributedServices = getSingletonServiceDescriptors();
 		for (const [id, descriptor] of contributedServices) {
 			serviceCollection.set(id, descriptor);
 		}
+
+		// Override the platform title service after contributed services install.
+		registerHucodeOmniTitleService(serviceCollection);
 
 		const instantiationService = new InstantiationService(serviceCollection, true);
 
@@ -896,7 +896,17 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 	}
 
 	isFloatingPanelsEnabled(): boolean {
-		return this.configurationService.getValue<boolean>(LayoutSettings.MODERN_UI) === true;
+		return getHucodeOmniProjectedModernUI() ??
+			this.configurationService.getValue<boolean>(
+				LayoutSettings.MODERN_UI
+			) === true;
+	}
+
+	isModernUICompact(): boolean {
+		return this.isFloatingPanelsEnabled() &&
+			this.configurationService.getValue<ModernUIDensity>(
+				LayoutSettings.MODERN_UI_DENSITY
+			) === ModernUIDensity.Compact;
 	}
 
 	private updateFloatingPanels(): void {

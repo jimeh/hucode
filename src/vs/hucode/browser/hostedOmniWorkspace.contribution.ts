@@ -80,6 +80,7 @@ import {
 import { observeHucodeHostedShellState } from
 	'./hostedShellStateObserver.js';
 import './projectSwitcher/createProjectWorktree.contribution.js';
+import './hostedWorkbenchAppearance.contribution.js';
 import './projectSwitcher/renameProjectWorktree.contribution.js';
 import './projectSwitcher/switchProjectWorktree.contribution.js';
 import {

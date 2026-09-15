@@ -41,6 +41,8 @@ import {
 	hucodeOmniTitleBackground,
 	hucodeOmniTitleForeground,
 } from '../../common/theme.js';
+import { getHucodeOmniProjectedAppearance } from
+	'../omniAppearanceProjection.contribution.js';
 import {
 	isMacintosh,
 	isNative,
@@ -61,6 +63,10 @@ import {
 } from '../../../base/browser/dom.js';
 import { IInstantiationService } from
 	'../../../platform/instantiation/common/instantiation.js';
+import { SyncDescriptor } from
+	'../../../platform/instantiation/common/descriptors.js';
+import { ServiceCollection } from
+	'../../../platform/instantiation/common/serviceCollection.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
@@ -89,6 +95,21 @@ import {
 	HiddenItemStrategy,
 	MenuWorkbenchToolBar,
 } from '../../../platform/actions/browser/toolbar.js';
+
+/** Resolves projected title colors against the same opaque shell surface as theme colors. */
+export function resolveHucodeOmniTitleBackground(
+	projected: string | undefined,
+	fallback: string | null | undefined,
+	theme: IColorTheme
+): string {
+	const color = projected ? Color.Format.CSS.parse(projected) : undefined;
+	if (color) {
+		return (color.isOpaque()
+			? color
+			: color.makeOpaque(WORKBENCH_BACKGROUND(theme))).toString();
+	}
+	return fallback ?? '';
+}
 
 /**
  * Omni-specific titlebar part.
@@ -313,10 +334,18 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 		this.element.classList.toggle('inactive', this.isInactive);
 
 		const modernUI = this.layoutService.isFloatingPanelsEnabled();
+		const projectedAppearance = getHucodeOmniProjectedAppearance();
+		const projectedTitleBackground = modernUI
+			? this.isInactive
+				? projectedAppearance?.colors['titleBar.inactiveBackground'] ??
+				projectedAppearance?.colors['titleBar.activeBackground']
+				: projectedAppearance?.colors['titleBar.activeBackground']
+			: projectedAppearance?.colors['hucodeOmniTitle.background'] ??
+			projectedAppearance?.colors['titleBar.activeBackground'];
 		const makeOpaque = (color: Color, theme: IColorTheme) => color.isOpaque()
 			? color
 			: color.makeOpaque(WORKBENCH_BACKGROUND(theme));
-		const titleBackground = (this.getColor(
+		const fallbackTitleBackground = this.getColor(
 			modernUI
 				? this.isInactive
 					? TITLE_BAR_INACTIVE_BACKGROUND
@@ -325,7 +354,12 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 			makeOpaque
 		) || (modernUI && this.isInactive
 			? this.getColor(TITLE_BAR_ACTIVE_BACKGROUND, makeOpaque)
-			: undefined)) || '';
+			: undefined);
+		const titleBackground = resolveHucodeOmniTitleBackground(
+			projectedTitleBackground,
+			fallbackTitleBackground,
+			this.themeService.getColorTheme()
+		);
 		this.element.style.backgroundColor = titleBackground;
 
 		const workbenchContainer = this.layoutService.getContainer(
@@ -348,7 +382,15 @@ export class TitlebarPart extends Part implements ITitlebarPart {
 			this.element.classList.remove('light');
 		}
 
-		const titleForeground = this.getColor(hucodeOmniTitleForeground);
+		const projectedTitleForeground = modernUI
+			? this.isInactive
+				? projectedAppearance?.colors['titleBar.inactiveForeground'] ??
+				projectedAppearance?.colors['titleBar.activeForeground']
+				: projectedAppearance?.colors['titleBar.activeForeground']
+			: projectedAppearance?.colors['hucodeOmniTitle.foreground'] ??
+			projectedAppearance?.colors['titleBar.activeForeground'];
+		const titleForeground = projectedTitleForeground ??
+			this.getColor(hucodeOmniTitleForeground);
 		this.element.style.color = titleForeground || '';
 	}
 
@@ -543,4 +585,14 @@ export class TitleService extends MultiWindowParts<TitlebarPart>
 			part.registerVariables(variables);
 		}
 	}
+}
+
+/** Replaces the platform title service with Omni's projected-aware titlebar. */
+export function registerHucodeOmniTitleService(
+	serviceCollection: ServiceCollection
+): void {
+	serviceCollection.set(
+		ITitleService,
+		new SyncDescriptor(TitleService, [])
+	);
 }

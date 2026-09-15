@@ -14,14 +14,36 @@ import {
 	TITLE_BAR_ACTIVE_BACKGROUND,
 	TITLE_BAR_INACTIVE_BACKGROUND,
 } from '../../../../workbench/common/theme.js';
+import { ColorScheme } from '../../../../platform/theme/common/theme.js';
+import { TestThemeService } from
+	'../../../../platform/theme/test/common/testThemeService.js';
+import { MockContextKeyService } from
+	'../../../../platform/keybinding/test/common/mockKeybindingService.js';
+import { SyncDescriptor } from
+	'../../../../platform/instantiation/common/descriptors.js';
+import { ServiceCollection } from
+	'../../../../platform/instantiation/common/serviceCollection.js';
 import { shouldApplyFloatingEditorLayout } from
 	'../../../../workbench/browser/parts/editor/editorPart.js';
+import { BrowserTitleService } from
+	'../../../../workbench/browser/parts/titlebar/titlebarPart.js';
+import { ITitleService } from
+	'../../../../workbench/services/title/browser/titleService.js';
+import { TestLayoutService } from
+	'../../../../workbench/test/browser/workbenchTestServices.js';
+import { TestStorageService } from
+	'../../../../workbench/test/common/workbenchTestServices.js';
 import { AuxiliaryBarPart } from
 	'../../../browser/parts/auxiliaryBarPart.js';
 import { OmniHostPart } from '../../../browser/parts/omniHostPart.js';
 import { PanelPart } from '../../../browser/parts/panelPart.js';
 import { ProjectsPart } from '../../../browser/parts/projectsPart.js';
-import { TitlebarPart } from '../../../browser/parts/titlebarPart.js';
+import {
+	registerHucodeOmniTitleService,
+	resolveHucodeOmniTitleBackground,
+	TitleService,
+	TitlebarPart,
+} from '../../../browser/parts/titlebarPart.js';
 import {
 	hucodeOmniTitleBackground,
 	hucodeOmniTitleForeground,
@@ -37,6 +59,19 @@ import {
 
 suite('Omni Parts', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('Omni title service overrides the browser title service', () => {
+		const services = new ServiceCollection([
+			ITitleService,
+			new SyncDescriptor(BrowserTitleService, []),
+		]);
+
+		registerHucodeOmniTitleService(services);
+
+		const descriptor = services.get(ITitleService);
+		assert.ok(descriptor instanceof SyncDescriptor);
+		assert.strictEqual(descriptor.ctor, TitleService);
+	});
 
 	test('modal editor ignores Modern UI floating-card insets', () => {
 		assert.deepStrictEqual({
@@ -165,6 +200,9 @@ suite('Omni Parts', () => {
 				getContainer: () => container,
 			},
 			getColor: (id: string) => colors.get(id) ?? null,
+			themeService: {
+				getColorTheme: () => ({ type: ColorScheme.DARK }),
+			},
 		});
 
 		TitlebarPart.prototype.updateStyles.call(host);
@@ -227,6 +265,9 @@ suite('Omni Parts', () => {
 				getContainer: () => container,
 			},
 			getColor: (id: string) => colors.get(id) ?? null,
+			themeService: {
+				getColorTheme: () => ({ type: ColorScheme.DARK }),
+			},
 		});
 
 		TitlebarPart.prototype.updateStyles.call(host);
@@ -240,6 +281,17 @@ suite('Omni Parts', () => {
 			background: 'rgb(25, 26, 27)',
 			shellBackground: '#191A1B',
 		});
+	});
+
+	test('TitlebarPart makes projected alpha colors opaque against the workbench', () => {
+		assert.strictEqual(
+			resolveHucodeOmniTitleBackground(
+				'rgba(255, 0, 0, 0.5)',
+				'#000000',
+				{ type: ColorScheme.DARK } as never
+			),
+			'#921213'
+		);
 	});
 
 	test('OmniHostPart exposes a loaded active workbench', () => {

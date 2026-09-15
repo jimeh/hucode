@@ -63,6 +63,7 @@ suite('OmniCommandService', () => {
 			} as unknown as IHucodeShellControllerService;
 			const environmentService = {
 				isOmniWindow: true,
+				isOmniShellWindow: true,
 				window: { id: 42 },
 			} as Partial<IWorkbenchEnvironmentService> as
 				IWorkbenchEnvironmentService;
@@ -167,6 +168,90 @@ suite('OmniCommandService', () => {
 			]);
 		}
 	);
+
+	test('does not run profile changes locally when no child accepts them',
+		async () => {
+			const commandId = 'workbench.profiles.actions.switchProfile';
+			const shellCalls: INativeRunActionInWindowRequest[] = [];
+			const shellService = {
+				runActionInWorkspace(
+					request: INativeRunActionInWindowRequest
+				): Promise<boolean> {
+					shellCalls.push(request);
+					return Promise.resolve(false);
+				},
+			} as unknown as IHucodeShellControllerService;
+			const instantiationService = new InstantiationService(
+				new ServiceCollection([
+					IHucodeShellControllerService,
+					shellService,
+				])
+			);
+			const service = disposables.add(new OmniCommandService(
+				instantiationService,
+				new NullExtensionService(),
+				new NullLogService(),
+				{
+					isOmniWindow: true,
+					isOmniShellWindow: true,
+				} as IWorkbenchEnvironmentService,
+				new HucodeOmniCommandForwardingContext()
+			));
+			let localCalls = 0;
+			disposables.add(CommandsRegistry.registerCommand(commandId, () => {
+				localCalls++;
+			}));
+			const input = mainWindow.document.createElement('input');
+			mainWindow.document.body.appendChild(input);
+			disposables.add(toDisposable(() => input.remove()));
+			input.focus();
+
+			await service.executeCommand(commandId);
+
+			assert.strictEqual(localCalls, 0);
+			assert.deepStrictEqual(shellCalls, [{
+				id: commandId,
+				from: 'keybinding',
+				args: undefined,
+			}]);
+		}
+	);
+
+	test('does not forward commands from an untrusted Omni URL flag', async () => {
+		const commandId = 'workbench.profiles.actions.switchProfile';
+		let shellCalls = 0;
+		const shellService = {
+			runActionInWorkspace(): Promise<boolean> {
+				shellCalls++;
+				return Promise.resolve(true);
+			},
+		} as unknown as IHucodeShellControllerService;
+		const instantiationService = new InstantiationService(
+			new ServiceCollection([
+				IHucodeShellControllerService,
+				shellService,
+			])
+		);
+		const service = disposables.add(new OmniCommandService(
+			instantiationService,
+			new NullExtensionService(),
+			new NullLogService(),
+			{
+				isOmniWindow: true,
+				isOmniShellWindow: false,
+			} as IWorkbenchEnvironmentService,
+			new HucodeOmniCommandForwardingContext()
+		));
+		let localCalls = 0;
+		disposables.add(CommandsRegistry.registerCommand(commandId, () => {
+			localCalls++;
+		}));
+
+		await service.executeCommand(commandId);
+
+		assert.strictEqual(localCalls, 1);
+		assert.strictEqual(shellCalls, 0);
+	});
 
 	test('forwards Projects clipboard events to the hosted workbench',
 		async () => {
