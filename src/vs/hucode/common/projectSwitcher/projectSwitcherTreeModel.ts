@@ -428,13 +428,13 @@ export function getProjectSwitcherPresentationFields(
 			branch: layout === 'compact' && item.branch === item.name
 				? undefined
 				: item.branch,
-			path: layout === 'twoLine' ? item.path : undefined,
+			path: layout === 'default' ? item.path : undefined,
 		};
 	}
 	if (isRetainedWorkbenchItem(item)) {
 		return {
 			name: item.name,
-			branch: layout === 'twoLine' ? item.branch : undefined,
+			branch: layout === 'default' ? item.branch : undefined,
 			path: item.path,
 		};
 	}

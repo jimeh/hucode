@@ -23,6 +23,7 @@ import {
 	runHostedWorkbenchSmokeCommand,
 	waitForOmniProjectsSidebarVisibility,
 } from './omni-hosted-command-smoke.ts';
+import { assertOmniLandingSmokeState } from './omni-landing-smoke.ts';
 
 const defaultTimeoutMs = 300_000;
 const maximumCrashWaitMs = 30_000;
@@ -40,6 +41,16 @@ const smokeArtifactRoot = path.join(
 	'.build',
 	'hucode-smoke-artifacts'
 );
+
+type LinuxOmniTemporaryRootRemover = (
+	temporaryRoot: string,
+	options: {
+		readonly recursive: true;
+		readonly force: true;
+		readonly maxRetries: number;
+		readonly retryDelay: number;
+	}
+) => Promise<void>;
 
 type LinuxOmniWorkbenchLabel = typeof workbenchLabels[number];
 const linuxOmniWorkbenchStates = [
@@ -169,6 +180,8 @@ export const linuxOmniLifecyclePhases = [
 	'hosted last active to Alpha',
 	'hosted quick switch to Bravo',
 	'hosted unload Bravo',
+	'last unload',
+	'restore Alpha after last unload',
 	'restore Bravo after hosted unload',
 	'suspend Bravo',
 	'restore Bravo',
@@ -342,6 +355,34 @@ export function createLinuxOmniLifecycleExpectations(
 			crashedRendererCount: 0,
 		},
 		'hosted unload Bravo': {
+			rows: [
+				{
+					label: 'Alpha', state: 'active', active: true,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'unloaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [alphaPath],
+			crashedRendererCount: 0,
+		},
+		'last unload': {
+			rows: [
+				{
+					label: 'Alpha', state: 'unloaded', active: false,
+					ariaDescription: alphaPath,
+				},
+				{
+					label: 'Bravo', state: 'unloaded', active: false,
+					ariaDescription: bravoPath,
+				},
+			],
+			targetPaths: [],
+			crashedRendererCount: 0,
+		},
+		'restore Alpha after last unload': {
 			rows: [
 				{
 					label: 'Alpha', state: 'active', active: true,
@@ -923,6 +964,11 @@ export async function runLinuxOmniSmoke(
 			getLifecycleExpectation(lifecycleExpectations, 'initial restore')
 		);
 		let shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'hidden',
+			getRemainingTimeout(deadline)
+		);
 		const initialAlpha = getWorkbenchTarget(
 			runtime,
 			alphaPath
@@ -1013,6 +1059,12 @@ export async function runLinuxOmniSmoke(
 			false,
 			getRemainingTimeout(deadline)
 		);
+		await waitForLinuxHostedWorkspaceSidebarLayout(
+			shellPage,
+			hostedPage,
+			false,
+			deadline
+		);
 		await runHostedWorkbenchSmokeCommand(
 			hostedPage,
 			hostedPage,
@@ -1024,6 +1076,12 @@ export async function runLinuxOmniSmoke(
 			true,
 			getRemainingTimeout(deadline)
 		);
+		await waitForLinuxHostedWorkspaceSidebarLayout(
+			shellPage,
+			hostedPage,
+			true,
+			deadline
+		);
 		const reloadNavigation = hostedPage.waitForNavigation({
 			waitUntil: 'domcontentloaded',
 			timeout: getRemainingTimeout(deadline),
@@ -1033,7 +1091,8 @@ export async function runLinuxOmniSmoke(
 				hostedPage,
 				hostedPage,
 				hostedWorkbenchSmokeCommands.reloadDesktop,
-				getRemainingTimeout(deadline)
+				getRemainingTimeout(deadline),
+				{ surfaceMayClose: true }
 			),
 			reloadNavigation,
 		]);
@@ -1057,7 +1116,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.switchWorkbench,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1146,7 +1205,7 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedWorkbenchSmokeCommands.quickSwitchLoaded,
 			getRemainingTimeout(deadline),
-			'Bravo'
+			{ selectionLabel: 'Bravo' }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1174,7 +1233,8 @@ export async function runLinuxOmniSmoke(
 			hostedPage,
 			hostedPage,
 			hostedWorkbenchSmokeCommands.unloadCurrent,
-			getRemainingTimeout(deadline)
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
 		);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1187,8 +1247,72 @@ export async function runLinuxOmniSmoke(
 				'hosted unload Bravo'
 			)
 		);
-
+		hostedPage = getTargetPage(runtime, getWorkbenchTarget(
+			runtime,
+			alphaPath
+		));
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.toggleProjectsSidebar,
+			getRemainingTimeout(deadline)
+		);
 		shellPage = getShellPage(runtime);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			false,
+			getRemainingTimeout(deadline)
+		);
+		await runHostedWorkbenchSmokeCommand(
+			hostedPage,
+			hostedPage,
+			hostedWorkbenchSmokeCommands.unloadCurrent,
+			getRemainingTimeout(deadline),
+			{ surfaceMayClose: true }
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'last unload',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(lifecycleExpectations, 'last unload')
+		);
+		shellPage = getShellPage(runtime);
+		await waitForOmniProjectsSidebarVisibility(
+			shellPage,
+			true,
+			getRemainingTimeout(deadline)
+		);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'catalog',
+			getRemainingTimeout(deadline)
+		);
+		await clickWorkbenchRow(
+			shellPage,
+			'Alpha',
+			deadline,
+			'restore Alpha after last unload'
+		);
+		runtime = await waitForLinuxOmniPhase(
+			launch,
+			deadline,
+			'restore Alpha after last unload',
+			expectedPaths,
+			crashedPages,
+			getLifecycleExpectation(
+				lifecycleExpectations,
+				'restore Alpha after last unload'
+			)
+		);
+		shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'hidden',
+			getRemainingTimeout(deadline)
+		);
+
 		await clickWorkbenchRow(
 			shellPage,
 			'Bravo',
@@ -1262,8 +1386,13 @@ export async function runLinuxOmniSmoke(
 			crashedPages,
 			getLifecycleExpectation(lifecycleExpectations, 'crash Bravo')
 		);
-
 		shellPage = getShellPage(runtime);
+		await assertOmniLandingSmokeState(
+			shellPage,
+			'crashed',
+			getRemainingTimeout(deadline)
+		);
+
 		await clickWorkbenchRow(
 			shellPage,
 			'Bravo',
@@ -1345,7 +1474,26 @@ export async function runLinuxOmniSmoke(
 		if (launch) {
 			await terminateProcessGroup(launch.child);
 		}
-		await fs.rm(temporaryRoot, { recursive: true, force: true });
+		await removeLinuxOmniTemporaryRoot(temporaryRoot);
+	}
+}
+
+/** Removes a smoke profile, ignoring only exhausted late Chromium cache writes. */
+export async function removeLinuxOmniTemporaryRoot(
+	temporaryRoot: string,
+	remove: LinuxOmniTemporaryRootRemover = fs.rm
+): Promise<void> {
+	try {
+		await remove(temporaryRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 200,
+		});
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException)?.code !== 'ENOTEMPTY') {
+			throw error;
+		}
 	}
 }
 
@@ -1854,6 +2002,64 @@ function reportLinuxOmniPhaseProgress(
 	console.log(
 		`Linux Omni lifecycle phase ${status}: ${phase} ` +
 			`(${Math.max(0, deadline - Date.now())}ms remaining)`
+	);
+}
+
+async function waitForLinuxHostedWorkspaceSidebarLayout(
+	shellPage: Page,
+	hostedPage: Page,
+	visible: boolean,
+	deadline: number
+): Promise<void> {
+	let lastObserved = '<not observed>';
+	while (Date.now() < deadline) {
+		const [shell, hostedWidth] = await Promise.all([
+			runLinuxOmniBoundedProbe(
+				deadline,
+				'Projects sidebar layout probe',
+				() => shellPage.evaluate(() => {
+					const targetGlobal = globalThis as unknown as {
+						readonly document: {
+							getElementById(id: string): {
+								getBoundingClientRect(): { readonly width: number };
+							} | null;
+						};
+						readonly innerWidth: number;
+					};
+					const sidebar = targetGlobal.document.getElementById(
+						'workbench.parts.sidebar'
+					);
+					const bounds = sidebar?.getBoundingClientRect();
+					return {
+						windowWidth: targetGlobal.innerWidth,
+						sidebarWidth: bounds?.width ?? 0,
+					};
+				})
+			),
+			runLinuxOmniBoundedProbe(
+				deadline,
+				'hosted workspace width probe',
+				() => hostedPage.evaluate(() => (
+					globalThis as unknown as { readonly innerWidth: number }
+				).innerWidth)
+			),
+		]);
+		const expectedMaximumWidth = shell.windowWidth - shell.sidebarWidth;
+		const matches = visible
+			? shell.sidebarWidth > 0
+				&& hostedWidth >= expectedMaximumWidth - 1
+				&& hostedWidth <= expectedMaximumWidth + 1
+			: shell.sidebarWidth === 0 && hostedWidth >= shell.windowWidth - 1;
+		if (matches) {
+			return;
+		}
+		lastObserved = JSON.stringify({ shell, hostedWidth });
+		await delay(Math.min(pollIntervalMs, deadline - Date.now()));
+	}
+
+	throw new Error(
+		`Timed out waiting for Projects sidebar native layout ` +
+		`${visible ? 'shown' : 'hidden'}; last observed ${lastObserved}`
 	);
 }
 
