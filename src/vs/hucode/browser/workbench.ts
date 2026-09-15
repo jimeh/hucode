@@ -63,8 +63,7 @@ import { NotificationsToasts } from '../../workbench/browser/parts/notifications
 import { COMPACT_NOTIFICATION_ROW_HEIGHT, DEFAULT_NOTIFICATION_ROW_HEIGHT, setNotificationRowHeight } from '../../workbench/browser/parts/notifications/notificationsViewer.js';
 import { IMarkdownRendererService } from '../../platform/markdown/browser/markdownRenderer.js';
 import { EditorMarkdownCodeBlockRenderer } from '../../editor/browser/widget/markdownRenderer/browser/editorMarkdownCodeBlockRenderer.js';
-import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
-import { TitleService } from './parts/titlebarPart.js';
+import { registerHucodeOmniTitleService } from './parts/titlebarPart.js';
 import { OmniHostPart } from './parts/omniHostPart.js';
 import { ProjectsPart } from './parts/projectsPart.js';
 import { createOmniGridDescriptor } from './omniLayoutModel.js';
@@ -407,14 +406,14 @@ export class Workbench extends Disposable implements IWorkbenchLayoutService {
 		// Layout Service
 		serviceCollection.set(IWorkbenchLayoutService, this);
 
-		// Title Service - Hucode Omni titlebar with dedicated part overrides
-		serviceCollection.set(ITitleService, new SyncDescriptor(TitleService, []));
-
 		// All Contributed Services
 		const contributedServices = getSingletonServiceDescriptors();
 		for (const [id, descriptor] of contributedServices) {
 			serviceCollection.set(id, descriptor);
 		}
+
+		// Override the platform title service after contributed services install.
+		registerHucodeOmniTitleService(serviceCollection);
 
 		const instantiationService = new InstantiationService(serviceCollection, true);
 

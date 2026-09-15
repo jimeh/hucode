@@ -21,8 +21,16 @@ import { TestThemeService } from
 	'../../../../platform/theme/test/common/testThemeService.js';
 import { MockContextKeyService } from
 	'../../../../platform/keybinding/test/common/mockKeybindingService.js';
+import { SyncDescriptor } from
+	'../../../../platform/instantiation/common/descriptors.js';
+import { ServiceCollection } from
+	'../../../../platform/instantiation/common/serviceCollection.js';
 import { shouldApplyFloatingEditorLayout } from
 	'../../../../workbench/browser/parts/editor/editorPart.js';
+import { BrowserTitleService } from
+	'../../../../workbench/browser/parts/titlebar/titlebarPart.js';
+import { ITitleService } from
+	'../../../../workbench/services/title/browser/titleService.js';
 import { TestLayoutService } from
 	'../../../../workbench/test/browser/workbenchTestServices.js';
 import { TestStorageService } from
@@ -37,7 +45,9 @@ import {
 import { PanelPart } from '../../../browser/parts/panelPart.js';
 import { ProjectsPart } from '../../../browser/parts/projectsPart.js';
 import {
+	registerHucodeOmniTitleService,
 	resolveHucodeOmniTitleBackground,
+	TitleService,
 	TitlebarPart,
 } from '../../../browser/parts/titlebarPart.js';
 import {
@@ -57,6 +67,19 @@ import { ProjectRecord } from
 
 suite('Omni Parts', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('Omni title service overrides the browser title service', () => {
+		const services = new ServiceCollection([
+			ITitleService,
+			new SyncDescriptor(BrowserTitleService, []),
+		]);
+
+		registerHucodeOmniTitleService(services);
+
+		const descriptor = services.get(ITitleService);
+		assert.ok(descriptor instanceof SyncDescriptor);
+		assert.strictEqual(descriptor.ctor, TitleService);
+	});
 
 	test('modal editor ignores Modern UI floating-card insets', () => {
 		assert.deepStrictEqual({

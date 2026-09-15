@@ -63,6 +63,10 @@ import {
 } from '../../../base/browser/dom.js';
 import { IInstantiationService } from
 	'../../../platform/instantiation/common/instantiation.js';
+import { SyncDescriptor } from
+	'../../../platform/instantiation/common/descriptors.js';
+import { ServiceCollection } from
+	'../../../platform/instantiation/common/serviceCollection.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { IStorageService } from
 	'../../../platform/storage/common/storage.js';
@@ -581,4 +585,14 @@ export class TitleService extends MultiWindowParts<TitlebarPart>
 			part.registerVariables(variables);
 		}
 	}
+}
+
+/** Replaces the platform title service with Omni's projected-aware titlebar. */
+export function registerHucodeOmniTitleService(
+	serviceCollection: ServiceCollection
+): void {
+	serviceCollection.set(
+		ITitleService,
+		new SyncDescriptor(TitleService, [])
+	);
 }
