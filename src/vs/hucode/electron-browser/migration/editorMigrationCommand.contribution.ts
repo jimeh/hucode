@@ -12,7 +12,8 @@ import { Registry } from '../../../platform/registry/common/platform.js';
 import { IMPORT_EDITOR_SETUP_COMMAND_ID } from '../../../platform/window/common/hucodeOmniCommandRouting.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../workbench/browser/editor.js';
 import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../../../workbench/common/editor.js';
-import { IEditorService, MODAL_GROUP } from '../../../workbench/services/editor/common/editorService.js';
+import { IEditorService } from '../../../workbench/services/editor/common/editorService.js';
+import { openSetupModalEditor } from '../setupModalEditors.js';
 import { EditorMigrationEditorInput } from './editorMigrationEditorInput.js';
 import { EditorMigrationEditorPane } from './editorMigrationEditorPane.js';
 
@@ -48,7 +49,7 @@ class ImportEditorSetupAction extends Action2 {
 	}
 
 	async run(accessor: ServicesAccessor): Promise<void> {
-		await accessor.get(IEditorService).openEditor(new EditorMigrationEditorInput(), { pinned: true, revealIfOpened: true }, MODAL_GROUP);
+		await openSetupModalEditor(accessor.get(IEditorService), () => new EditorMigrationEditorInput());
 	}
 }
 

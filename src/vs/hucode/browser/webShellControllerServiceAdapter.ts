@@ -207,6 +207,16 @@ export class WebShellControllerServiceAdapter
 			occluded
 		);
 	}
+	/** Native onboarding offers are unavailable on web. */
+	inspectOnboardingTarget(): ReturnType<IHucodeShellControllerService['inspectOnboardingTarget']> { return Promise.reject(new Error('Native onboarding is unavailable.')); }
+	/** Native onboarding handoff is unavailable on web. */
+	openOnboardingWorkbench(): ReturnType<IHucodeShellControllerService['openOnboardingWorkbench']> { return Promise.reject(new Error('Native onboarding is unavailable.')); }
+	/** Native onboarding state is unavailable on web. */
+	readOnboarding(): Promise<string | undefined> { return Promise.reject(new Error('Native onboarding is unavailable.')); }
+	/** Automatic onboarding is native only. */
+	admitOnboarding(): Promise<boolean> { return Promise.resolve(false); }
+	/** Web has no native onboarding checkpoint authority. */
+	checkpointOnboarding(_record: string): Promise<void> { return Promise.reject(new Error('Native onboarding is unavailable.')); }
 	/** Denies migration writer leases because the web adapter has no privileged shell authority. */
 	acquireEditorMigrationWriterLease(_operationId: string): Promise<boolean> {
 		return Promise.resolve(false);

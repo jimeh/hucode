@@ -257,6 +257,13 @@ suite('Hucode upstream provenance', () => {
 			surface => surface.upstream
 		);
 		const expectedPaths = [
+			'src/vs/base/parts/storage/common/storage.ts',
+			'src/vs/code/electron-main/app.ts',
+			'src/vs/platform/state/node/state.ts',
+			'src/vs/platform/state/node/stateService.ts',
+			'src/vs/platform/storage/electron-main/storageMain.ts',
+			'src/vs/platform/userDataProfile/electron-main/userDataProfile.ts',
+			'src/vs/workbench/contrib/welcomeGettingStarted/browser/startupPage.ts',
 			'cli/src/commands/args.rs',
 			'cli/src/commands/serve_web.rs',
 			'src/vs/base/parts/storage/node/storage.ts',
@@ -284,6 +291,13 @@ suite('Hucode upstream provenance', () => {
 			'src/vs/workbench/services/storage/browser/storageService.ts',
 		].sort();
 		const expectedBaselineByPath = new Map<string, string>([
+			['src/vs/base/parts/storage/common/storage.ts', '1.136.1'],
+			['src/vs/code/electron-main/app.ts', '1.136.1'],
+			['src/vs/platform/state/node/state.ts', '1.136.1'],
+			['src/vs/platform/state/node/stateService.ts', '1.136.1'],
+			['src/vs/platform/storage/electron-main/storageMain.ts', '1.136.1'],
+			['src/vs/platform/userDataProfile/electron-main/userDataProfile.ts', '1.136.1'],
+			['src/vs/workbench/contrib/welcomeGettingStarted/browser/startupPage.ts', '1.136.1'],
 			['src/vs/hucode/browser/parts/auxiliaryBarPart.ts', '1.130.0'],
 			['cli/src/commands/serve_web.rs', '1.136.0'],
 			[

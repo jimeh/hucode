@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { HucodeOnboardingTarget, HucodeOnboardingOpenRequest, HucodeOnboardingOpenResult } from './hucodeOnboardingHandoff.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { Event } from '../../../base/common/event.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
@@ -135,6 +136,16 @@ export interface IHucodeShellControllerService {
 	readonly supportsWorkspaceScreenshotOverlay: boolean;
 	readonly onDidChangeState: Event<IHucodeHostedWorkspaceState>;
 
+	/** Attempts automatic onboarding admission for this trusted shell. */
+	admitOnboarding(): Promise<boolean>;
+	/** Returns authoritative navigation state after earlier checkpoint operations settle. */
+	readOnboarding(): Promise<string | undefined>;
+	/** Reads the exact-folder handoff offer from authoritative profiles and owners. */
+	inspectOnboardingTarget(worktreePath: string, profileId?: string): Promise<HucodeOnboardingTarget>;
+	/** Opens under ownership admission, optionally saving an explicit profile association. */
+	openOnboardingWorkbench(request: HucodeOnboardingOpenRequest): Promise<HucodeOnboardingOpenResult>;
+	/** Persists a validated navigation checkpoint and waits for database acknowledgement. */
+	checkpointOnboarding(record: string): Promise<void>;
 	getState(): Promise<IHucodeHostedWorkspaceState>;
 	focusHostedWorkspaceByPath(
 		worktreePath: string,
@@ -258,6 +269,11 @@ export const HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS = Object.freeze([
 	'layoutWorkspace',
 	'captureWorkspaceScreenshot',
 	'setWorkspaceOverlayOcclusion',
+	'inspectOnboardingTarget',
+	'openOnboardingWorkbench',
+	'readOnboarding',
+	'admitOnboarding',
+	'checkpointOnboarding',
 	'acquireEditorMigrationWriterLease',
 	'validateEditorMigrationWriterLease',
 	'releaseEditorMigrationWriterLease',
@@ -371,6 +387,11 @@ export function createHucodeShellControllerClient(
 			remote.captureWorkspaceScreenshot(rect, quality),
 		setWorkspaceOverlayOcclusion: occluded =>
 			remote.setWorkspaceOverlayOcclusion(occluded),
+		inspectOnboardingTarget: (path, profileId) => remote.inspectOnboardingTarget(path, profileId),
+		openOnboardingWorkbench: request => remote.openOnboardingWorkbench(request),
+		readOnboarding: () => remote.readOnboarding(),
+		admitOnboarding: () => remote.admitOnboarding(),
+		checkpointOnboarding: record => remote.checkpointOnboarding(record),
 		acquireEditorMigrationWriterLease: operationId =>
 			remote.acquireEditorMigrationWriterLease(operationId),
 		validateEditorMigrationWriterLease: operationId =>

@@ -43,6 +43,8 @@ export const TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID =
 	'workbench.action.omniWindow.toggleProjectsSidebar';
 export const IMPORT_EDITOR_SETUP_COMMAND_ID =
 	'workbench.action.hucode.importEditorSetup';
+export const OPEN_ONBOARDING_COMMAND_ID =
+	'workbench.action.hucode.openOnboarding';
 
 const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
 	FOCUS_PROJECT_PANE_COMMAND_ID,
@@ -54,6 +56,7 @@ const HUCODE_OMNI_SHELL_ACTION_IDS = new Set([
 	UNLOAD_CURRENT_WORKTREE_COMMAND_ID,
 	TOGGLE_PROJECTS_SIDEBAR_COMMAND_ID,
 	IMPORT_EDITOR_SETUP_COMMAND_ID,
+	OPEN_ONBOARDING_COMMAND_ID,
 ]);
 
 const HUCODE_OMNI_SHELL_LAYOUT_ACTION_IDS = new Set([

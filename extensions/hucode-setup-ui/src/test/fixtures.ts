@@ -19,6 +19,7 @@ import { SetupHost } from '@/lib/host';
 export function presentation(overrides: Partial<EditorMigrationSetupPresentation> = {}): EditorMigrationSetupPresentation {
 	return {
 		revision: 1,
+		route: 'import',
 		phase: 'application',
 		regionLabel: 'Editor Setup Import',
 		title: 'Import Setup from Another Editor',
