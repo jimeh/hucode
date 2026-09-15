@@ -154,6 +154,34 @@ export class NativeWorkbenchEnvironmentService extends AbstractNativeEnvironment
 	@memoize
 	get isSessionsWindow(): boolean { return !!this.configuration.isSessionsWindow; }
 
+	@memoize
+	get isOmniWindow(): boolean { return !!this.configuration.isOmniWindow; }
+
+	@memoize
+	get isHostedOmniWorkspace(): boolean {
+		return !!this.configuration.isHostedOmniWorkspace;
+	}
+
+	/**
+	 * The window configuration comes from the main process, so unlike web
+	 * these flags cannot be set by the page itself.
+	 */
+	@memoize
+	get isOmniShellWindow(): boolean {
+		return !!this.configuration.isOmniWindow
+			&& !this.configuration.isHostedOmniWorkspace;
+	}
+
+	@memoize
+	get hostedWebContentsId(): number | undefined {
+		return this.configuration.hostedWebContentsId;
+	}
+
+	@memoize
+	get hostedInstanceId(): string | undefined {
+		return this.configuration.hostedInstanceId;
+	}
+
 	constructor(
 		private readonly configuration: INativeWindowConfiguration,
 		productService: IProductService

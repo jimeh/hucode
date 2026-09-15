@@ -228,6 +228,12 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   both `omni.web.main.ts` and `omniWebUserData.factory.ts`. The latter is the
   default root entrypoint under server-side user-data storage; omitting shared
   registrations leaves the page blank before the workbench renders.
+- The desktop Omni shell has its own service bootstrap in
+  `src/vs/hucode/electron-browser/omni.main.ts`. When upstream adds a required
+  service to `DesktopMain.initServices()`, mirror the registration there; an
+  omitted service can pass compilation and unit tests but fail when a
+  block-startup contribution is instantiated. Verify this boundary with the
+  Linux Omni smoke or a real desktop launch.
 - CSS imported by route-specific Hucode web entrypoints is flattened into the
   shared stylesheet in minified server-web builds, even when a development
   dynamic import never executes. Scope Omni-only selectors under
