@@ -38,6 +38,7 @@ import {
 	IHucodeOmniSmokeTestDriverTarget,
 	registerOmniSmokeTestDriver,
 } from './omniSmokeTestDriver.js';
+import './omniAppearanceProjection.contribution.js';
 
 async function openSelectedInOmniWindow(
 	shellService: IHucodeShellControllerService,

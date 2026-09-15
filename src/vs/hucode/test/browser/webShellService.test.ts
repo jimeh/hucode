@@ -73,6 +73,7 @@ import {
 	IWebHucodeShellFolderAccess,
 	IWebHucodeShellPersistedState,
 	IWebHucodeShellPersistenceAdapter,
+	SessionStorageWebHucodeShellPersistence,
 	IWebHucodeHostedNavigationProjectManager,
 	WebHucodeShellController,
 } from '../../browser/webShellService.js';
@@ -85,6 +86,55 @@ suite('WebHucodeShellService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let bootstrapDocumentSequence = 0;
 	const buildIdentity = getServerProductSegment(product);
+
+	test('session persistence survives reload without sharing later tab writes', () => {
+		const firstStorage = new MemorySessionStorage();
+		const firstPage = new SessionStorageWebHucodeShellPersistence(
+			firstStorage
+		);
+		const firstState: IWebHucodeShellPersistedState = {
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'one',
+				worktreePath: '/srv/one',
+			}],
+			activeWorktreePath: '/srv/one',
+		};
+		firstPage.save(firstState);
+		assert.deepStrictEqual(
+			new SessionStorageWebHucodeShellPersistence(firstStorage).load(),
+			firstState
+		);
+
+		const duplicatedStorage = firstStorage.copy();
+		const duplicatePage = new SessionStorageWebHucodeShellPersistence(
+			duplicatedStorage
+		);
+		duplicatePage.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [{
+				projectId: 'two',
+				worktreePath: '/srv/two',
+			}],
+			activeWorktreePath: '/srv/two',
+		});
+
+		assert.strictEqual(firstPage.load()?.activeWorktreePath, '/srv/one');
+		assert.strictEqual(duplicatePage.load()?.activeWorktreePath, '/srv/two');
+	});
+
+	test('session persistence tolerates blocked storage access', () => {
+		const persistence = new SessionStorageWebHucodeShellPersistence(
+			undefined,
+			() => { throw new Error('blocked'); }
+		);
+
+		assert.doesNotThrow(() => persistence.save({
+			retainedWorkbenches: [],
+			residentWorkspaces: [],
+		}));
+		assert.strictEqual(persistence.load(), undefined);
+	});
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -1481,11 +1531,13 @@ suite('WebHucodeShellService', () => {
 		assert.deepStrictEqual({
 			pathname: src.pathname,
 			folder: src.searchParams.get('folder'),
+			profile: src.searchParams.get('profile'),
 			isHostedOmniWorkspace: payload.get('isHostedOmniWorkspace'),
 			hostedInstanceId: payload.get('hostedInstanceId'),
 		}, {
 			pathname: '/omni/workbench',
 			folder: '/tmp/hucode-worktree',
+			profile: null,
 			isHostedOmniWorkspace: 'true',
 			hostedInstanceId: state.instances[0].instanceId,
 		});
@@ -1519,6 +1571,60 @@ suite('WebHucodeShellService', () => {
 		const change = await raceTimeout(stateChange, 2000);
 		assert.strictEqual(change?.projectSwitcherCanGoBack, true);
 	});
+
+	test('caches appearance per instance across web connection replacement',
+		async () => {
+			const { service, surface, browser } = createService();
+			const alphaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-alpha'
+			);
+			const alphaId = alphaState.activeInstanceId!;
+			const alpha = connectChild(browser, surface, alphaId);
+			const betaState = await service.openWorkspace(
+				browser.windowId,
+				'/tmp/appearance-beta'
+			);
+			const betaId = betaState.activeInstanceId!;
+			connectChild(browser, surface, betaId);
+			const alphaAppearance = {
+				colorScheme: 'light' as const,
+				workbenchBackground: '#f3f3f3',
+				colors: { 'sideBar.background': '#eeeeee' },
+				modernUI: false,
+				modernUIUppercaseViewHeaders: false,
+			};
+			assert.strictEqual(
+				await alpha.shell.publishAppearance!(alphaAppearance),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
+			assert.deepStrictEqual(
+				(await service.getWindowState(browser.windowId)).instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
+			);
+
+			const currentBeta = connectChild(browser, surface, betaId);
+			assert.strictEqual(await currentBeta.shell.publishAppearance!({
+				...alphaAppearance,
+				colorScheme: 'hc-light',
+				modernUI: true,
+			}), HucodeHostedShellOperationOutcome.Accepted);
+			const finalState = await service.getWindowState(browser.windowId);
+			assert.strictEqual(
+				finalState.instances.find(
+					instance => instance.instanceId === betaId
+				)?.appearance?.colorScheme,
+				'hc-light'
+			);
+			assert.deepStrictEqual(
+				finalState.instances.find(
+					instance => instance.instanceId === alphaId
+				)?.appearance,
+				alphaAppearance
+			);
+		});
 
 	test('does not register the removed legacy hosted shell channel', async () => {
 		const { service, surface, browser } = createService();
@@ -6239,6 +6345,26 @@ class FakePersistence implements IWebHucodeShellPersistenceAdapter {
 	save(state: IWebHucodeShellPersistedState): void {
 		this.saveCalls++;
 		this.state = structuredClone(state);
+	}
+}
+
+class MemorySessionStorage {
+	private readonly values: Map<string, string>;
+
+	constructor(values: ReadonlyMap<string, string> = new Map()) {
+		this.values = new Map(values);
+	}
+
+	getItem(key: string): string | null {
+		return this.values.get(key) ?? null;
+	}
+
+	setItem(key: string, value: string): void {
+		this.values.set(key, value);
+	}
+
+	copy(): MemorySessionStorage {
+		return new MemorySessionStorage(this.values);
 	}
 }
 

@@ -18,6 +18,7 @@ import {
 	HUCODE_OMNI_PROJECTS_SELECTOR,
 	IHucodeOmniCommandForwardingScope,
 	isHucodeForwardedFromOmniShell,
+	isHucodeHostedWorkbenchProfileAction,
 	isHucodeOmniShellAction,
 	isHucodeOmniShellLayoutAction,
 } from '../../platform/window/common/hucodeOmniCommandRouting.js';
@@ -196,10 +197,12 @@ export class HucodeOmniCommandForwarding {
 	async forwardActionToWorkspace(
 		request: INativeRunActionInWindowRequest
 	): Promise<boolean> {
+		const hostedProfileAction =
+			isHucodeHostedWorkbenchProfileAction(request.id);
 		if (
 			!this.nativeEnvironmentService.isOmniWindow ||
 			isHucodeForwardedFromOmniShell(request) ||
-			this.isShellLocalInputFocused()
+			(this.isShellLocalInputFocused() && !hostedProfileAction)
 		) {
 			return false;
 		}
@@ -209,7 +212,8 @@ export class HucodeOmniCommandForwarding {
 		}
 
 		const forwarded = await this.tryForwardActionToWorkspace(request);
-		return forwarded || isHucodeOmniShellLayoutAction(request.id);
+		return forwarded || hostedProfileAction ||
+			isHucodeOmniShellLayoutAction(request.id);
 	}
 
 	async forwardKeybindingToWorkspace(

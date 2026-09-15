@@ -117,10 +117,12 @@ export class WebShellControllerServiceAdapter
 	}
 	async prepareWorkspaceForStandaloneOpen(request: Parameters<
 		IHucodeShellControllerService['prepareWorkspaceForStandaloneOpen']
-	>[0]): Promise<boolean> {
+	>[0]): ReturnType<
+		IHucodeShellControllerService['prepareWorkspaceForStandaloneOpen']
+	> {
 		const folderUri = URI.revive(request.folderUri);
 		if (!folderUri || folderUri.scheme !== 'file') {
-			return false;
+			return 'failed';
 		}
 		if (request.retainedWorkbenchId) {
 			const state = await this.unloadRetainedWorkbench(
@@ -129,20 +131,22 @@ export class WebShellControllerServiceAdapter
 			const retained = state.retainedWorkbenches?.find(record =>
 				record.id === request.retainedWorkbenchId);
 			if (retained && retained.desiredState !== 'unloaded') {
-				return false;
+				return 'failed';
 			}
 		}
 		const path = folderUri.fsPath;
 		const owner = await this.shell.findHostedWorkspaceByPath(path);
 		if (!owner) {
-			return true;
+			return 'open-by-caller';
 		}
 		const state = await this.shell.closeWorkspace(
 			owner.windowId,
 			owner.instanceId
 		);
-		return !state.instances.some(instance =>
-			instance.instanceId === owner.instanceId);
+		return state.instances.some(instance =>
+			instance.instanceId === owner.instanceId)
+			? 'failed'
+			: 'open-by-caller';
 	}
 	focusWorkspace() { return this.shell.focusWorkspace(this.windowId); }
 	focusShell() { return this.shell.focusShell(this.windowId); }

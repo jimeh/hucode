@@ -15,7 +15,8 @@ import { INativeOpenFileRequest, IPath } from '../../platform/window/common/wind
 import { ICodeWindow } from '../../platform/window/electron-main/window.js';
 import { IHucodeShellMainService } from './omniWindow.js';
 
-interface IHucodeFilesToOpen {
+/** Native file payload retained while an Omni routing decision is pending. */
+export interface IHucodeFilesToOpen {
 	filesToOpenOrCreate: IPath[];
 	filesToDiff: IPath[];
 	filesToMerge: IPath[];
@@ -124,7 +125,8 @@ export function findHucodeProjectWorktreeByPath(
 	return undefined;
 }
 
-function toNativeOpenFileRequest(
+/** Adds the originating terminal identity to a native file-open payload. */
+export function toNativeOpenFileRequest(
 	filesToOpen: IHucodeFilesToOpen,
 	termProgram: string | undefined
 ): INativeOpenFileRequest {

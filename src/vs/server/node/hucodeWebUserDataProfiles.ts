@@ -5,9 +5,9 @@
 
 import * as fs from 'fs';
 import { Event } from '../../base/common/event.js';
-import { IURITransformer, transformIncomingURIs, transformOutgoingURIs } from '../../base/common/uriIpc.js';
+import { IURITransformer, transformAndReviveIncomingURIs, transformOutgoingURIs } from '../../base/common/uriIpc.js';
 import { join } from '../../base/common/path.js';
-import { URI } from '../../base/common/uri.js';
+import { isUriComponents, URI } from '../../base/common/uri.js';
 import { IServerChannel } from '../../base/parts/ipc/common/ipc.js';
 import { IEnvironmentService } from '../../platform/environment/common/environment.js';
 import { IFileService } from '../../platform/files/common/files.js';
@@ -181,24 +181,26 @@ export class HucodeWebUserDataProfilesChannel<TContext = unknown> implements ISe
 		return this.runOperation(async () => {
 			this.service.assertCatalogReady();
 			const transformer = this.getUriTransformer(context);
-			const incoming = transformIncomingURIs(args, transformer) as unknown[];
+			const incoming = transformAndReviveIncomingURIs(args, transformer) as unknown[];
 			let result: unknown;
 			switch (command) {
-				case 'createNamedProfile': result = await this.service.createNamedProfile(incoming[0] as string, incoming[1] as never, incoming[2] as never); break;
+				case 'createNamedProfile': result = await this.service.createNamedProfile(incoming[0] as string, incoming[1] as never, reviveWorkspaceIdentifier(incoming[2], transformer)); break;
 				case 'createProfile': {
 					const id = incoming[0];
 					if (!isSafeProfileId(id) || this.service.profiles.some(profile => profile.id.toLowerCase() === id.toLowerCase())) {
 						throw new Error('Invalid web user-data profile identifier.');
 					}
-					result = await this.service.createProfile(id, incoming[1] as string, incoming[2] as never, incoming[3] as never);
+					result = await this.service.createProfile(id, incoming[1] as string, incoming[2] as never, reviveWorkspaceIdentifier(incoming[3], transformer));
 					break;
 				}
-				case 'createTransientProfile': result = await this.service.createTransientProfile(incoming[0] as never); break;
+				case 'createTransientProfile': result = await this.service.createTransientProfile(reviveWorkspaceIdentifier(incoming[0], transformer)); break;
 				case 'setProfileForWorkspace': {
 					const requested = incoming[1] as IUserDataProfile;
 					const profile = this.service.profiles.find(candidate => candidate.id === requested.id);
 					if (!profile) { throw new Error('Unknown web user-data profile.'); }
-					result = await this.service.setProfileForWorkspace(incoming[0] as never, profile);
+					const workspaceIdentifier = reviveWorkspaceIdentifier(incoming[0], transformer);
+					if (!workspaceIdentifier) { throw new Error('Invalid web user-data workspace identifier.'); }
+					result = await this.service.setProfileForWorkspace(workspaceIdentifier, profile);
 					break;
 				}
 				case 'removeProfile': {
@@ -224,7 +226,9 @@ export class HucodeWebUserDataProfilesChannel<TContext = unknown> implements ISe
 				case 'cleanUpTransientProfiles': result = await this.service.cleanUpTransientProfiles(); break;
 				default: throw new Error(`Invalid call ${command}`);
 			}
-			return transformOutgoingURIs(result, transformer) as T;
+			return isProfileResultCommand(command)
+				? transformProfile(result as IUserDataProfile, transformer) as T
+				: transformOutgoingURIs(result, transformer) as T;
 		});
 	}
 }
@@ -286,17 +290,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function reviveWorkspaceIdentifier(value: unknown, transformer: IURITransformer) {
+	if (!isRecord(value) || typeof value.id !== 'string') {
+		return undefined;
+	}
+	if (Object.hasOwn(value, 'uri')) {
+		const uri = reviveWorkspaceUri(value.uri, transformer);
+		return uri ? { id: value.id, uri } : undefined;
+	}
+	if (Object.hasOwn(value, 'configPath')) {
+		const configPath = reviveWorkspaceUri(value.configPath, transformer);
+		return configPath ? { id: value.id, configPath } : undefined;
+	}
+	return { id: value.id };
+}
+
+function reviveWorkspaceUri(value: unknown, transformer: IURITransformer): URI | undefined {
+	if (URI.isUri(value)) {
+		return value;
+	}
+	return isUriComponents(value)
+		? URI.revive(transformer.transformIncoming(value))
+		: undefined;
+}
+
 function isBooleanRecord(value: unknown): value is Record<string, boolean> {
 	return isRecord(value) && Object.values(value).every(entry => typeof entry === 'boolean');
 }
 
 function transformProfileChange(change: DidChangeProfilesEvent, transformer: IURITransformer): DidChangeProfilesEvent {
 	return {
-		all: change.all.map(profile => transformOutgoingURIs({ ...profile }, transformer)),
-		added: change.added.map(profile => transformOutgoingURIs({ ...profile }, transformer)),
-		removed: change.removed.map(profile => transformOutgoingURIs({ ...profile }, transformer)),
-		updated: change.updated.map(profile => transformOutgoingURIs({ ...profile }, transformer)),
+		all: change.all.map(profile => transformProfile(profile, transformer)),
+		added: change.added.map(profile => transformProfile(profile, transformer)),
+		removed: change.removed.map(profile => transformProfile(profile, transformer)),
+		updated: change.updated.map(profile => transformProfile(profile, transformer)),
 	};
+}
+
+function transformProfile(profile: IUserDataProfile, transformer: IURITransformer): IUserDataProfile {
+	return transformOutgoingURIs({
+		...profile,
+		workspaces: profile.workspaces ? [...profile.workspaces] : undefined,
+	}, transformer);
+}
+
+function isProfileResultCommand(command: string): boolean {
+	return command === 'createNamedProfile' ||
+		command === 'createProfile' ||
+		command === 'createTransientProfile' ||
+		command === 'updateProfile';
 }
 
 function createWebEnvironment(environmentService: IEnvironmentService, userHome: string): IEnvironmentService {

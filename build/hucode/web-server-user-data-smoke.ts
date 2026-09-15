@@ -91,7 +91,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			executablePath: chromium.executablePath(),
 			headless: true,
 		});
-		page = await browser.newPage();
+		const context = await browser.newContext();
+		page = await context.newPage();
 		await page.context().grantPermissions(
 			['clipboard-read', 'clipboard-write'],
 			{ origin: new URL(launch.url).origin }
@@ -331,6 +332,47 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 				[...projectEventStreamUrls].join(', ')
 			);
 		}
+
+		const firstTabPage = page;
+		const secondTabPage = await firstTabPage.context().newPage();
+		secondTabPage.on('pageerror', error =>
+			pageErrors.push(error.stack ?? error.message));
+		secondTabPage.on('console', message => {
+			if (message.type() === 'error') {
+				consoleErrors.push(message.text());
+			}
+		});
+		const secondTabReadiness = Promise.all([
+			observeServerUserDataBootstrap(secondTabPage, deadline),
+			secondTabPage.waitForSelector(omniWorkbenchSelector, {
+				state: 'visible',
+				timeout: remainingTime(deadline),
+			}),
+		]);
+		void secondTabReadiness.catch(() => undefined);
+		await secondTabPage.goto(launch.url, {
+			waitUntil: 'domcontentloaded',
+			timeout: remainingTime(deadline),
+		});
+		await secondTabReadiness;
+		await waitForWebSmokeTestDriver(secondTabPage, deadline);
+
+		await openWorkspaceThroughSmokeDriver(
+			secondTabPage,
+			alphaPath,
+			deadline
+		);
+		await waitForWebWorkbenchState(secondTabPage, deadline, [
+			{ label: 'Alpha', state: 'active', active: true },
+		]);
+		await waitForHostedFrame(secondTabPage, alphaPath, deadline);
+		await waitForWebWorkbenchState(firstTabPage, deadline, [
+			{ label: 'Alpha', state: 'active', active: true },
+			{ label: 'Bravo', state: 'loaded', active: false },
+		]);
+		await waitForHostedFrame(firstTabPage, alphaPath, deadline);
+
+		page = secondTabPage;
 		targetInventory = await formatWebTargetInventory(page);
 
 		console.log(
@@ -338,7 +380,8 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 			`${bootstrap.pathname} (${bootstrap.status}); exercised hosted ` +
 			`navigation, clipboard/focus bridging, one shell-owned project ` +
 			`event stream, a shell action, unload, and command-driven ` +
-			`connection recovery across Alpha and Bravo`
+			`connection recovery across Alpha and Bravo; verified independent ` +
+			`same-path workbenches in two browser tabs and tab-local lifecycle state`
 		);
 	} catch (error) {
 		if (page) {

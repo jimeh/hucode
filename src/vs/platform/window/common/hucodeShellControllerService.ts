@@ -56,6 +56,15 @@ interface IHucodeHostedWorkspaceState {
 	readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+	readonly desktopOwnerships?: readonly IHucodeDesktopWorkbenchOwnershipState[];
+}
+
+interface IHucodeDesktopWorkbenchOwnershipState {
+	readonly worktreePath: string;
+	readonly location: 'this-omni' | 'another-omni' | 'regular';
+	readonly windowId: number;
+	readonly instanceId?: string;
+	readonly phase: 'live' | 'recovering' | 'transferring';
 }
 
 interface IHucodeCompleteProjectCatalogEntry {
@@ -111,6 +120,9 @@ export interface IHucodeStandaloneWorkspaceRequest {
 	readonly folderUri: UriComponents;
 	readonly retainedWorkbenchId?: string;
 }
+
+export type HucodeStandaloneWorkspaceOpenDisposition =
+	'opened' | 'open-by-caller' | 'failed';
 
 export const IHucodeShellControllerService =
 	createDecorator<IHucodeShellControllerService>(
@@ -173,7 +185,7 @@ export interface IHucodeShellControllerService {
 	reopenWorkspaceInNormalWindow(instanceId: string): Promise<boolean>;
 	prepareWorkspaceForStandaloneOpen(
 		request: IHucodeStandaloneWorkspaceRequest
-	): Promise<boolean>;
+	): Promise<HucodeStandaloneWorkspaceOpenDisposition>;
 	focusWorkspace(): Promise<void>;
 	focusShell(): Promise<void>;
 	setProjectsSidebarVisible(visible: boolean): Promise<void>;

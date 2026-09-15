@@ -20,6 +20,8 @@ import {
 } from './retainedWorkbench.js';
 import { ProjectSwitcherOmniSection } from
 	'./projectSwitcher/projectSwitcherViewState.js';
+import { IHucodeHostedAppearanceSnapshot } from
+	'../../platform/window/common/hucodeHostedShellService.js';
 
 export { UNLOAD_CURRENT_WORKTREE_COMMAND_ID } from
 	'../../platform/window/common/hucodeOmniCommandRouting.js';
@@ -50,6 +52,7 @@ export interface IHucodeHostedWorkbenchInstance {
 	readonly visible: boolean;
 	readonly focused: boolean;
 	readonly lastActiveAt?: number;
+	readonly appearance?: IHucodeHostedAppearanceSnapshot;
 }
 
 /**
@@ -63,6 +66,16 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectSwitcherSectionOrder?: readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
+	readonly desktopOwnerships?: readonly IHucodeDesktopWorkbenchOwnershipState[];
+}
+
+/** Desktop-only live path ownership projected into one Omni shell. */
+export interface IHucodeDesktopWorkbenchOwnershipState {
+	readonly worktreePath: string;
+	readonly location: 'this-omni' | 'another-omni' | 'regular';
+	readonly windowId: number;
+	readonly instanceId?: string;
+	readonly phase: 'live' | 'recovering' | 'transferring';
 }
 
 /**
