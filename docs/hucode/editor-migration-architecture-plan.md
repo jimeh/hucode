@@ -178,8 +178,10 @@ extension manifests.
 ### Source snapshot
 
 A source snapshot contains the normalized contents read for selected categories
-and a versioned fingerprint of the exact inputs. The reader computes each hash
-from the same bytes it parses. It does not hash one read and parse another.
+and a versioned fingerprint of the relevant inputs. The reader computes category
+hashes from the same bytes it parses. For a named profile, it hashes only that
+profile's normalized catalog metadata from the same catalog read. Unrelated
+application state and other profiles do not invalidate Review.
 
 The aggregate fingerprint includes:
 
@@ -187,6 +189,8 @@ The aggregate fingerprint includes:
 - a digest of each canonical logical resource identity, never the raw path;
 - a present, absent, or unreadable state for each requested resource;
 - content hashes for readable files;
+- normalized name, icon, location, and inheritance flags for the selected named
+  profile;
 - sorted relative names and content hashes for accepted snippet files.
 
 Modification times may support ranking, but they are not sufficient for plan
