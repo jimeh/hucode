@@ -22,6 +22,22 @@ export const EDITOR_MIGRATION_OPERATION_PLANNING_SCHEMA_VERSION = 2;
 /** Version of the complete-plan integrity envelope in operation schema v2. */
 export const EDITOR_MIGRATION_OPERATION_INTEGRITY_SCHEMA_VERSION = 1;
 
+/** Expected Apply failures that callers can handle without parsing messages. */
+export type EditorMigrationApplyErrorCode =
+	| 'planDrift'
+	| 'invalidAuthorization'
+	| 'writerContention'
+	| 'journalUnavailable'
+	| 'rollbackDrift';
+
+/** An expected migration Apply failure with a stable machine-readable code. */
+export class EditorMigrationApplyError extends Error {
+	constructor(readonly code: EditorMigrationApplyErrorCode, message: string) {
+		super(message);
+		this.name = 'EditorMigrationApplyError';
+	}
+}
+
 /** Opaque, short-lived proof that Review confirmed a plan's publishers. */
 export interface EditorMigrationApplyAuthorization {
 	readonly nonce: string;
@@ -55,7 +71,7 @@ export class EditorMigrationApplyAuthorizationIssuer {
 		const expected = editorMigrationPublishers(plan);
 		const confirmed = canonicalPublishers(confirmedPublishers);
 		if (!equalStrings(expected, confirmed)) {
-			throw new Error('Confirmed publisher set does not match the reviewed plan');
+			throw new EditorMigrationApplyError('invalidAuthorization', 'Confirmed publisher set does not match the reviewed plan');
 		}
 		const publisherSetFingerprint = await fingerprintEditorMigrationValue(expected);
 		let nonce = this.nonce();
@@ -75,22 +91,22 @@ export class EditorMigrationApplyAuthorizationIssuer {
 	async consume(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization): Promise<EditorMigrationConsumedAuthorization> {
 		const planFingerprint = await verifiedEditorMigrationPlanFingerprint(plan);
 		if (!authorization || typeof authorization.nonce !== 'string' || typeof authorization.publisherSetFingerprint !== 'string') {
-			throw new Error('Apply authorization is malformed');
+			throw new EditorMigrationApplyError('invalidAuthorization', 'Apply authorization is malformed');
 		}
 		const pending = this.pending.get(authorization.nonce);
 		if (!pending) {
-			throw new Error('Apply authorization is unknown or has already been consumed');
+			throw new EditorMigrationApplyError('invalidAuthorization', 'Apply authorization is unknown or has already been consumed');
 		}
 		if (pending.planningSchemaVersion !== plan.schemaVersion
 			|| pending.planFingerprint !== planFingerprint
 			|| pending.publisherSetFingerprint !== authorization.publisherSetFingerprint
 			|| !equalStrings(pending.publishers, editorMigrationPublishers(plan))) {
-			throw new Error('Apply authorization does not match the reviewed plan');
+			throw new EditorMigrationApplyError('invalidAuthorization', 'Apply authorization does not match the reviewed plan');
 		}
 		const consumedAt = this.now();
 		if (consumedAt - pending.issuedAt > 10 * 60 * 1_000) {
 			this.pending.delete(authorization.nonce);
-			throw new Error('Apply authorization has expired');
+			throw new EditorMigrationApplyError('invalidAuthorization', 'Apply authorization has expired');
 		}
 		this.pending.delete(authorization.nonce);
 		return Object.freeze({ ...pending, consumedAt });
@@ -280,6 +296,8 @@ export interface EditorMigrationOperationTarget {
 export interface EditorMigrationExtensionInstallIntent {
 	readonly operationId: string;
 	readonly actualProfileLocation: string;
+	/** Privacy-safe durable placement metadata; absent only on records written before this field existed. */
+	readonly applicationScoped?: boolean;
 }
 
 /** Secondary snapshot retained before a force rollback overwrites drift. */
@@ -318,6 +336,8 @@ export interface EditorMigrationRollbackIntent {
 	readonly beforeFlags: EditorMigrationProfileFlags;
 	readonly afterFlags: EditorMigrationProfileFlags;
 	readonly ownershipState: 'pending' | 'restored';
+	/** Set durably before the first ownership or resource mutation. */
+	readonly mutationStarted: boolean;
 	readonly resources: readonly EditorMigrationRollbackResourceProgress[];
 }
 
@@ -371,7 +391,38 @@ export interface EditorMigrationOperationResult {
 export interface EditorMigrationRollbackOptions {
 	readonly categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
 	readonly forceCategories?: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
+	readonly inspectionFingerprint?: string;
 }
+
+/** Read-only rollback evidence that a force confirmation is bound to. */
+export interface EditorMigrationRollbackInspection {
+	readonly operationId: string;
+	readonly operationRevision: number;
+	readonly eligibleCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
+	readonly driftedCategories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
+	readonly fingerprint: string;
+}
+
+/** One progress snapshot emitted only after the matching journal revision is durable. */
+export interface EditorMigrationApplyProgress {
+	readonly operationId: string;
+	readonly revision: number;
+	readonly stage: EditorMigrationOperationStage;
+	readonly target: EditorMigrationOperationTarget;
+	readonly selectedItemCount: number;
+	readonly results: readonly EditorMigrationItemResult[];
+	readonly extensionInstallIntents?: readonly Pick<EditorMigrationExtensionInstallIntent, 'operationId' | 'applicationScoped'>[];
+	readonly cancellationRequested: boolean;
+	readonly rollback?: {
+		readonly categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[];
+		readonly restoredResourceCount: number;
+		readonly resourceCount: number;
+		readonly mutationStarted: boolean;
+	};
+}
+
+/** Presentation-only observer for durable Apply checkpoints. */
+export type EditorMigrationApplyProgressReporter = (progress: EditorMigrationApplyProgress) => void;
 
 /** Public desktop Apply coordinator. */
 export const IEditorMigrationApplyService = createDecorator<IEditorMigrationApplyService>('editorMigrationApplyService');
@@ -380,13 +431,38 @@ export const IEditorMigrationApplyService = createDecorator<IEditorMigrationAppl
 export interface IEditorMigrationApplyService {
 	readonly _serviceBrand: undefined;
 	createApplyAuthorization(plan: EditorMigrationReviewedPlan, confirmedPublishers: readonly string[]): Promise<EditorMigrationApplyAuthorization>;
-	apply(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization, token: CancellationToken): Promise<EditorMigrationOperationResult>;
+	apply(plan: EditorMigrationReviewedPlan, authorization: EditorMigrationApplyAuthorization, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult>;
 	getOperation(operationId: string): Promise<EditorMigrationOperation>;
 	listRecoverableOperations(): Promise<readonly EditorMigrationOperationSummary[]>;
-	resume(operationId: string, token: CancellationToken): Promise<EditorMigrationOperationResult>;
-	retry(operationId: string, token: CancellationToken): Promise<EditorMigrationOperationResult>;
-	rollback(operationId: string, options: EditorMigrationRollbackOptions, token: CancellationToken): Promise<EditorMigrationOperationResult>;
+	resume(operationId: string, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult>;
+	retry(operationId: string, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult>;
+	inspectRollback(operationId: string, categories: readonly Exclude<EditorMigrationCategory, 'extensions'>[]): Promise<EditorMigrationRollbackInspection>;
+	rollback(operationId: string, options: EditorMigrationRollbackOptions, token: CancellationToken, reporter?: EditorMigrationApplyProgressReporter): Promise<EditorMigrationOperationResult>;
 	acknowledge(operationId: string): Promise<void>;
+}
+
+/** Builds an immutable presentation snapshot from one durable operation revision. */
+export function toEditorMigrationApplyProgress(operation: EditorMigrationOperation): EditorMigrationApplyProgress {
+	const rollback = operation.rollbackIntent ? {
+		categories: operation.rollbackIntent.categories,
+		restoredResourceCount: operation.rollbackIntent.resources.filter(resource => resource.state === 'restored').length,
+		resourceCount: operation.rollbackIntent.resources.length,
+		mutationStarted: operation.rollbackIntent.mutationStarted,
+	} : undefined;
+	return Object.freeze({
+		operationId: operation.id,
+		revision: operation.revision,
+		stage: operation.stage,
+		target: Object.freeze({ ...operation.target }),
+		selectedItemCount: new Set([
+			...operation.plan.choices.selectedCategories,
+			...operation.plan.operations.filter(item => item.category === 'snippets' || item.category === 'extensions').map(item => item.id),
+		]).size,
+		results: Object.freeze(operation.results.map(result => Object.freeze({ ...result }))),
+		extensionInstallIntents: Object.freeze(operation.extensionInstallIntents.map(intent => Object.freeze({ operationId: intent.operationId, applicationScoped: intent.applicationScoped }))),
+		cancellationRequested: operation.cancellationRequested,
+		...(rollback ? { rollback: Object.freeze(rollback) } : {}),
+	});
 }
 
 /** Derives the aggregate operation result from durable item outcomes. */

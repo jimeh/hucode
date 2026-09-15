@@ -105,6 +105,7 @@ import '../platform/projectManager/electron-browser/projectManagerService.js';
 import './electron-browser/omniWindowService.js';
 import './browser/omniWindowUI.js';
 import './browser/omniProjectsSidebarActions.js';
+import './electron-browser/migration/editorMigrationCommand.contribution.js';
 
 import { IAgentHostService } from
 	'../platform/agentHost/common/agentService.js';
