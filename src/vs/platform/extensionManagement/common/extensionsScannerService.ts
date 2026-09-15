@@ -107,14 +107,14 @@ interface IBuiltInExtensionControl {
 	[name: string]: 'marketplace' | 'disabled' | string;
 }
 
-function getProductBuiltInExtensionsEnabledWithAutoUpdates(productService: IProductService, environmentService: IEnvironmentService): Set<string> {
+function getProductBuiltInExtensionsEnabledWithAutoUpdates(productService: IProductService): Set<string> {
 	const result = new Set<string>();
+	// This value is serialized into the shared built-in extension cache. Keep it
+	// independent from window-scoped filters such as skipBuiltinExtensions; those
+	// filters are applied after scanning. If environment-specific state needs to
+	// change cached scan output, add it to ExtensionScannerInput/cache identity.
 	for (const id of productService.builtInExtensionsEnabledWithAutoUpdates) {
-		const toLowerCaseId = id.toLowerCase();
-		if (environmentService.skipBuiltinExtensions?.some(skipId => skipId.toLowerCase() === toLowerCaseId)) {
-			continue;
-		}
-		result.add(toLowerCaseId);
+		result.add(id.toLowerCase());
 	}
 	return result;
 }
@@ -413,7 +413,7 @@ export abstract class AbstractExtensionsScannerService extends Disposable implem
 				result.set(extension.identifier.id, extension);
 			}
 		});
-		const productBuiltInExtensionsEnabledWithAutoUpdates = getProductBuiltInExtensionsEnabledWithAutoUpdates(this.productService, this.environmentService);
+		const productBuiltInExtensionsEnabledWithAutoUpdates = getProductBuiltInExtensionsEnabledWithAutoUpdates(this.productService);
 		user?.forEach((extension) => {
 			const existing = result.get(extension.identifier.id);
 			if (!existing && system && extension.type === ExtensionType.System) {
@@ -600,7 +600,7 @@ class ExtensionsScanner extends Disposable {
 	) {
 		super();
 		this.productQuality = productService.quality;
-		this.productBuiltInExtensionsEnabledWithAutoUpdates = getProductBuiltInExtensionsEnabledWithAutoUpdates(productService, environmentService);
+		this.productBuiltInExtensionsEnabledWithAutoUpdates = getProductBuiltInExtensionsEnabledWithAutoUpdates(productService);
 	}
 
 	async scanExtensions(input: ExtensionScannerInput): Promise<IRelaxedScannedExtension[]> {
