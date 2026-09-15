@@ -261,7 +261,7 @@ function planSettings(
 function planKeybindings(source: EditorMigrationSourceSnapshot, target: EditorMigrationTargetSnapshot, evidence: EditorMigrationPlanningEvidence, decisions: EditorMigrationDraftDecision[]): void {
 	const sourceEntries = sourceCategory(source, 'keybindings')?.value ?? [];
 	const targetEntries = targetCategory(target, 'keybindings')?.value ?? [];
-	const targetRows = targetEntries.map((entry, index) => ({ ...normalizedKeybinding(entry, evidence), rowId: keybindingRowId(entry, evidence, index) }));
+	const targetRows = targetEntries.map((entry, index) => ({ ...normalizedKeybinding(entry, evidence), rowId: editorMigrationKeybindingRowId(entry, evidence, index) }));
 	const seen = new Set<string>();
 	for (const entry of sourceEntries) {
 		const normalized = normalizedKeybinding(entry, evidence);
@@ -355,18 +355,55 @@ function planExtensions(
 }
 
 function toOperation(decision: EditorMigrationDraftDecision): EditorMigrationPlanOperation {
-	const kind = decision.category === 'settings' ? 'setSetting'
-		: decision.category === 'keybindings' ? (decision.kind === 'conflict' ? 'replaceKeybinding' : 'addKeybinding')
-			: decision.category === 'snippets' ? (decision.kind === 'conflict' ? 'replaceSnippet' : 'addSnippet')
-				: 'installExtension';
-	return {
-		id: decision.id,
-		category: decision.category,
-		kind,
-		item: decision.item,
-		source: decision.source,
-		...(decision.relatedTargetIds ? { relatedTargetIds: decision.relatedTargetIds } : {}),
-	};
+	switch (decision.category) {
+		case 'settings':
+			return { id: decision.id, category: 'settings', kind: 'setSetting', item: decision.item, source: decision.source };
+		case 'keybindings':
+			if (!isJsonObject(decision.source)) {
+				throw new EditorMigrationPlanningError('nonCanonicalInput', 'Keybinding operation source must be an object');
+			}
+			return {
+				id: decision.id,
+				category: 'keybindings',
+				kind: decision.kind === 'conflict' ? 'replaceKeybinding' : 'addKeybinding',
+				item: decision.item,
+				source: decision.source,
+				relatedTargetIds: decision.relatedTargetIds ?? [],
+			};
+		case 'snippets': {
+			const source = decision.source;
+			if (!isJsonObject(source) || typeof source.name !== 'string' || typeof source.contentHash !== 'string' || !isJsonObject(source.contents)) {
+				throw new EditorMigrationPlanningError('nonCanonicalInput', 'Snippet operation source must contain a name, contents, and content hash');
+			}
+			return { id: decision.id, category: 'snippets', kind: decision.kind === 'conflict' ? 'replaceSnippet' : 'addSnippet', item: decision.item, source: { name: source.name, contents: source.contents, contentHash: source.contentHash } };
+		}
+		case 'extensions': {
+			const source = decision.source;
+			if (!isAvailableGalleryResult(source)) {
+				throw new EditorMigrationPlanningError('nonCanonicalInput', 'Extension operation source must be an available exact gallery coordinate');
+			}
+			return { id: decision.id, category: 'extensions', kind: 'installExtension', item: decision.item, source };
+		}
+	}
+}
+
+/** Narrows a migration JSON value to an object. */
+function isJsonObject(value: EditorMigrationJsonValue): value is Readonly<Record<string, EditorMigrationJsonValue>> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Checks whether gallery evidence identifies an exact installable extension coordinate. */
+function isAvailableGalleryResult(value: EditorMigrationJsonValue): value is Extract<EditorMigrationGalleryResult, { readonly status: 'available' }> {
+	return isJsonObject(value)
+		&& typeof value.id === 'string'
+		&& (value.requestedChannel === 'stable' || value.requestedChannel === 'preRelease')
+		&& value.status === 'available'
+		&& typeof value.version === 'string'
+		&& typeof value.targetPlatform === 'string'
+		&& (value.selectedChannel === 'stable' || value.selectedChannel === 'preRelease')
+		&& typeof value.engine === 'string'
+		&& typeof value.galleryIdentity === 'string'
+		&& (value.uuid === undefined || typeof value.uuid === 'string');
 }
 
 function validateInputs(source: EditorMigrationSourceSnapshot, target: EditorMigrationTargetSnapshot, evidence: EditorMigrationPlanningEvidence, categories: readonly EditorMigrationCategory[]): void {
@@ -416,7 +453,8 @@ function normalizedKeybinding(value: Readonly<Record<string, EditorMigrationJson
 	};
 }
 
-function keybindingRowId(value: Readonly<Record<string, EditorMigrationJsonValue>>, evidence: EditorMigrationPlanningEvidence, index: number): string {
+/** Produces the stable indexed row ID shared by planning and Apply. */
+export function editorMigrationKeybindingRowId(value: Readonly<Record<string, EditorMigrationJsonValue>>, evidence: EditorMigrationPlanningEvidence, index: number): string {
 	return canonicalizeEditorMigrationValue({ identity: normalizedKeybinding(value, evidence).identity, index });
 }
 
