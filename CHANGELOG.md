@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.84 - 2026-09-15
+
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.137.0
+
 ## 0.0.83 - 2026-09-15
 
 ### Features
