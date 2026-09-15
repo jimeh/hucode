@@ -253,7 +253,7 @@ export class StorageMainService extends Disposable implements IStorageMainServic
 	}
 
 	private createProfileStorage(profile: IUserDataProfile): IStorageMain {
-		if (this.shutdownReason === ShutdownReason.KILL) {
+		if (this.shutdownReason !== undefined) {
 
 			// Workaround for native crashes that we see when
 			// SQLite DBs are being created even after shutdown
@@ -292,7 +292,7 @@ export class StorageMainService extends Disposable implements IStorageMainServic
 	}
 
 	private createWorkspaceStorage(workspace: IAnyWorkspaceIdentifier): IStorageMain {
-		if (this.shutdownReason === ShutdownReason.KILL) {
+		if (this.shutdownReason !== undefined) {
 
 			// Workaround for native crashes that we see when
 			// SQLite DBs are being created even after shutdown
