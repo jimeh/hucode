@@ -853,7 +853,13 @@ export interface IWorkbenchObjectTreeOptionsUpdate<T> extends IAbstractTreeOptio
 	readonly overrideStyles?: IStyleOverride<IListStyles>;
 }
 
-export interface IWorkbenchObjectTreeOptions<T, TFilterData> extends IObjectTreeOptions<T, TFilterData>, IWorkbenchObjectTreeOptionsUpdate<T>, IResourceNavigatorOptions {
+/** Workbench-specific indentation options shared by tree implementations. */
+export interface IWorkbenchTreeIndentOptions {
+	/** Whether an explicit indent should override `workbench.tree.indent`. */
+	readonly overrideWorkbenchTreeIndent?: boolean;
+}
+
+export interface IWorkbenchObjectTreeOptions<T, TFilterData> extends IObjectTreeOptions<T, TFilterData>, IWorkbenchObjectTreeOptionsUpdate<T>, IResourceNavigatorOptions, IWorkbenchTreeIndentOptions {
 	readonly accessibilityProvider: IListAccessibilityProvider<T>;
 	readonly selectionNavigation?: boolean;
 	readonly scrollToActiveElement?: boolean;
@@ -900,7 +906,7 @@ export interface IWorkbenchCompressibleObjectTreeOptionsUpdate<T> extends ICompr
 	readonly overrideStyles?: IStyleOverride<IListStyles>;
 }
 
-export interface IWorkbenchCompressibleObjectTreeOptions<T, TFilterData> extends IWorkbenchCompressibleObjectTreeOptionsUpdate<T>, ICompressibleObjectTreeOptions<T, TFilterData>, IResourceNavigatorOptions {
+export interface IWorkbenchCompressibleObjectTreeOptions<T, TFilterData> extends IWorkbenchCompressibleObjectTreeOptionsUpdate<T>, ICompressibleObjectTreeOptions<T, TFilterData>, IResourceNavigatorOptions, IWorkbenchTreeIndentOptions {
 	readonly accessibilityProvider: IListAccessibilityProvider<T>;
 	readonly selectionNavigation?: boolean;
 }
@@ -946,7 +952,7 @@ export interface IWorkbenchDataTreeOptionsUpdate<T> extends IAbstractTreeOptions
 	readonly overrideStyles?: IStyleOverride<IListStyles>;
 }
 
-export interface IWorkbenchDataTreeOptions<T, TFilterData> extends IWorkbenchDataTreeOptionsUpdate<T>, IDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions {
+export interface IWorkbenchDataTreeOptions<T, TFilterData> extends IWorkbenchDataTreeOptionsUpdate<T>, IDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions, IWorkbenchTreeIndentOptions {
 	readonly accessibilityProvider: IListAccessibilityProvider<T>;
 	readonly selectionNavigation?: boolean;
 }
@@ -993,7 +999,7 @@ export interface IWorkbenchAsyncDataTreeOptionsUpdate<T> extends IAsyncDataTreeO
 	readonly overrideStyles?: IStyleOverride<IListStyles>;
 }
 
-export interface IWorkbenchAsyncDataTreeOptions<T, TFilterData> extends IWorkbenchAsyncDataTreeOptionsUpdate<T>, IAsyncDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions {
+export interface IWorkbenchAsyncDataTreeOptions<T, TFilterData> extends IWorkbenchAsyncDataTreeOptionsUpdate<T>, IAsyncDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions, IWorkbenchTreeIndentOptions {
 	readonly accessibilityProvider: IListAccessibilityProvider<T>;
 	readonly selectionNavigation?: boolean;
 }
@@ -1036,7 +1042,7 @@ export class WorkbenchAsyncDataTree<TInput, T, TFilterData = void> extends Async
 	}
 }
 
-export interface IWorkbenchCompressibleAsyncDataTreeOptions<T, TFilterData> extends ICompressibleAsyncDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions {
+export interface IWorkbenchCompressibleAsyncDataTreeOptions<T, TFilterData> extends ICompressibleAsyncDataTreeOptions<T, TFilterData>, IResourceNavigatorOptions, IWorkbenchTreeIndentOptions {
 	readonly accessibilityProvider: IListAccessibilityProvider<T>;
 	readonly overrideStyles?: IStyleOverride<IListStyles>;
 	readonly selectionNavigation?: boolean;
@@ -1107,7 +1113,7 @@ function getDefaultTreeFindMatchType(configurationService: IConfigurationService
 	return undefined;
 }
 
-function workbenchTreeDataPreamble<T, TFilterData, TOptions extends IAbstractTreeOptions<T, TFilterData> | IAsyncDataTreeOptions<T, TFilterData>>(
+function workbenchTreeDataPreamble<T, TFilterData, TOptions extends (IAbstractTreeOptions<T, TFilterData> | IAsyncDataTreeOptions<T, TFilterData>) & IWorkbenchTreeIndentOptions>(
 	accessor: ServicesAccessor,
 	options: TOptions,
 ): { options: TOptions; getTypeNavigationMode: () => TypeNavigationMode | undefined; disposable: IDisposable } {
@@ -1148,6 +1154,13 @@ function workbenchTreeDataPreamble<T, TFilterData, TOptions extends IAbstractTre
 	const horizontalScrolling = options.horizontalScrolling !== undefined ? options.horizontalScrolling : Boolean(configurationService.getValue(horizontalScrollingKey));
 	const [workbenchListOptions, disposable] = instantiationService.invokeFunction(toWorkbenchListOptions, options);
 	const paddingBottom = options.paddingBottom;
+	const configuredIndent = configurationService.getValue(treeIndentKey);
+	const indent = options.overrideWorkbenchTreeIndent
+		&& options.indent !== undefined
+		? options.indent
+		: typeof configuredIndent === 'number'
+			? configuredIndent
+			: undefined;
 	const renderIndentGuides = options.renderIndentGuides !== undefined ? options.renderIndentGuides : configurationService.getValue<RenderIndentGuides>(treeRenderIndentGuidesKey);
 
 	return {
@@ -1158,7 +1171,7 @@ function workbenchTreeDataPreamble<T, TFilterData, TOptions extends IAbstractTre
 			// ...options, // TODO@Joao why is this not splatted here?
 			keyboardSupport: false,
 			...workbenchListOptions,
-			indent: typeof configurationService.getValue(treeIndentKey) === 'number' ? configurationService.getValue(treeIndentKey) : undefined,
+			indent,
 			renderIndentGuides,
 			smoothScrolling: Boolean(configurationService.getValue(listSmoothScrolling)),
 			defaultFindMode: options.defaultFindMode ?? getDefaultTreeFindMode(configurationService),
@@ -1286,7 +1299,9 @@ class WorkbenchTreeInternals<TInput, T, TFilterData> {
 				if (e.affectsConfiguration(multiSelectModifierSettingKey)) {
 					this._useAltAsMultipleSelectionModifier = useAltAsMultipleSelectionModifier(configurationService);
 				}
-				if (e.affectsConfiguration(treeIndentKey)) {
+				if (e.affectsConfiguration(treeIndentKey)
+					&& !(options.overrideWorkbenchTreeIndent
+						&& options.indent !== undefined)) {
 					const indent = configurationService.getValue<number>(treeIndentKey);
 					newOptions = { ...newOptions, indent };
 				}
