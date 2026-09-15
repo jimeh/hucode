@@ -166,6 +166,11 @@ export const tocData: ITOCEntry<string> = {
 			]
 		},
 		{
+			id: 'hucode',
+			label: localize('hucode', "Hucode"),
+			settings: ['hucode.*']
+		},
+		{
 			id: 'window',
 			label: localize('window', "Window"),
 			settings: ['window.*'],

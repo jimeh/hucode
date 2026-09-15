@@ -32,11 +32,13 @@ export class ContextMenuService implements IContextMenuService {
 
 	declare readonly _serviceBrand: undefined;
 
+	private readonly htmlImpl: HTMLContextMenuService;
+	private readonly nativeImpl: NativeContextMenuService;
 	private impl: HTMLContextMenuService | NativeContextMenuService;
 	private listener?: IDisposable;
 
-	get onDidShowContextMenu(): Event<void> { return this.impl.onDidShowContextMenu; }
-	get onDidHideContextMenu(): Event<void> { return this.impl.onDidHideContextMenu; }
+	readonly onDidShowContextMenu: Event<void>;
+	readonly onDidHideContextMenu: Event<void>;
 
 	constructor(
 		@INotificationService notificationService: INotificationService,
@@ -47,15 +49,33 @@ export class ContextMenuService implements IContextMenuService {
 		@IMenuService menuService: IMenuService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 	) {
-		function createContextMenuService(native: boolean) {
-			return native ?
-				new NativeContextMenuService(notificationService, telemetryService, keybindingService, menuService, contextKeyService)
-				: new HTMLContextMenuService(telemetryService, notificationService, contextViewService, keybindingService, menuService, contextKeyService);
-		}
+		this.nativeImpl = new NativeContextMenuService(
+			notificationService,
+			telemetryService,
+			keybindingService,
+			menuService,
+			contextKeyService
+		);
+		this.htmlImpl = new HTMLContextMenuService(
+			telemetryService,
+			notificationService,
+			contextViewService,
+			keybindingService,
+			menuService,
+			contextKeyService
+		);
+		this.onDidShowContextMenu = Event.any(
+			this.nativeImpl.onDidShowContextMenu,
+			this.htmlImpl.onDidShowContextMenu
+		);
+		this.onDidHideContextMenu = Event.any(
+			this.nativeImpl.onDidHideContextMenu,
+			this.htmlImpl.onDidHideContextMenu
+		);
 
 		// set initial context menu service
 		let isNativeContextMenu = hasNativeContextMenu(configurationService);
-		this.impl = createContextMenuService(isNativeContextMenu);
+		this.impl = isNativeContextMenu ? this.nativeImpl : this.htmlImpl;
 
 		// MacOS does not need a restart when the menu style changes
 		// It should update the context menu style on menu style configuration change
@@ -70,8 +90,9 @@ export class ContextMenuService implements IContextMenuService {
 					return;
 				}
 
-				this.impl.dispose();
-				this.impl = createContextMenuService(newIsNativeContextMenu);
+				this.impl = newIsNativeContextMenu
+					? this.nativeImpl
+					: this.htmlImpl;
 				isNativeContextMenu = newIsNativeContextMenu;
 			});
 		}
@@ -79,10 +100,16 @@ export class ContextMenuService implements IContextMenuService {
 
 	dispose(): void {
 		this.listener?.dispose();
-		this.impl.dispose();
+		this.htmlImpl.dispose();
+		this.nativeImpl.dispose();
 	}
 
 	showContextMenu(delegate: IContextMenuDelegate | IContextMenuMenuDelegate): void {
+		if (delegate.forceNative) {
+			this.nativeImpl.showContextMenu(delegate);
+			return;
+		}
+
 		this.impl.showContextMenu(delegate);
 	}
 }
