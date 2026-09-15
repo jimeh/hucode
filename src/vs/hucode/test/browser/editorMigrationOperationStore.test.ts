@@ -106,6 +106,48 @@ suite('EditorMigrationOperationStore', () => {
 		assert.deepStrictEqual(await store.list(), []);
 	});
 
+	test('reads a schema-v2 rollback journal written before mutationStarted existed', async () => {
+		const base = await operation('legacy-rollback-intent');
+		const legacyIntent = {
+			categories: ['settings'],
+			forceCategories: [],
+			beforeFlags: {},
+			afterFlags: {},
+			ownershipState: 'pending',
+			resources: [],
+		};
+		const raw = `${JSON.stringify({ ...base, stage: 'rollbackPending', rollbackIntent: legacyIntent })}\n`;
+		assert.ok(!raw.includes('mutationStarted'), 'the fixture must reproduce the omission, not an explicit value');
+		const resource = joinPath(store.root, base.id, 'operation.json');
+		await fileService.writeFile(resource, VSBuffer.fromString(raw));
+
+		const read = await store.read(base.id);
+		assert.strictEqual(read.rollbackIntent?.mutationStarted, false, 'the known same-version omission reads as not yet mutated');
+		assert.deepStrictEqual((await store.list()).map(item => [item.id, item.recoverable, item.unsupportedSchemaVersion]), [[base.id, true, undefined]]);
+		assert.strictEqual((await fileService.readFile(resource)).value.toString(), raw, 'reading and listing must not rewrite the journal');
+
+		await fileService.writeFile(resource, VSBuffer.fromString(JSON.stringify({ ...base, stage: 'rollbackPending', rollbackIntent: { ...legacyIntent, mutationStarted: 'yes' } })));
+		await assert.rejects(() => store.read(base.id), /unsupported or corrupt/, 'an explicit non-boolean stays corrupt');
+		assert.deepStrictEqual((await store.list()).map(item => [item.id, item.unsupportedSchemaVersion]), [[base.id, -1]]);
+
+		await fileService.writeFile(resource, VSBuffer.fromString(JSON.stringify({ ...base, stage: 'rollbackPending', rollbackIntent: 'corrupt' })));
+		await assert.rejects(() => store.read(base.id), /unsupported or corrupt/, 'a malformed rollback intent must not be normalized into a supported record');
+
+		for (const rollbackIntent of [
+			{ ...legacyIntent, categories: ['extensions'] },
+			{ ...legacyIntent, beforeFlags: [] },
+			{ ...legacyIntent, afterFlags: { settings: 'yes' } },
+			{ ...legacyIntent, resources: [{}] },
+		]) {
+			await fileService.writeFile(resource, VSBuffer.fromString(JSON.stringify({ ...base, stage: 'rollbackPending', rollbackIntent })));
+			await assert.rejects(() => store.read(base.id), /unsupported or corrupt/, 'malformed nested rollback data must not be normalized');
+			assert.deepStrictEqual((await store.list()).map(item => [item.id, item.unsupportedSchemaVersion]), [[base.id, -1]]);
+		}
+
+		await fileService.writeFile(resource, VSBuffer.fromString(JSON.stringify({ ...base, stage: 'rollbackPending', rollbackIntent: { ...legacyIntent, mutationStarted: true } })));
+		assert.strictEqual((await store.read(base.id)).rollbackIntent?.mutationStarted, true, 'an explicit value is preserved');
+	});
+
 	test('reads planner-independent persisted evidence but rejects aggregate fingerprint tampering', async () => {
 		const original = await operation('planner-independent');
 		const changedPlan = {

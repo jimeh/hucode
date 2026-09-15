@@ -389,3 +389,62 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   instead of wrapping it in `FileOperationError`. Read-only migration readers
   that distinguish absent resources must classify both through
   `toFileOperationResult()`.
+- The setup UI renderer under `extensions/hucode-setup-ui/` is an asset-only
+  built-in extension with no `main`, `browser`, activation events, or
+  contributions. Core creates the webview and resolves
+  `<builtinExtensionsPath>/hucode-setup-ui/media`, so the import UI still loads
+  with `--disable-extensions`. Its wire protocol lives in
+  `src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts` and is
+  mirrored byte-for-byte into `src/generated/` by
+  `build/hucode/setup-ui-protocol.ts`; edit the canonical file and run
+  `npm run hucode:sync-setup-protocol`, never the mirror.
+- Migration settings drafts omit matching values entirely. Count matches as
+  source settings minus decisions and policy exclusions, not source settings
+  minus planned imports: preserved conflicts and exclusions are not matches.
+  Do not reuse that arithmetic for keybindings, whose planner also deduplicates
+  source rows.
+- Lockfile validation re-resolves package records absent from the PR base. A
+  new package's valid lockfile can therefore fail after newer versions become
+  eligible. Refresh that package with the repository's Node/npm using
+  `npm update --package-lock-only --ignore-scripts`, inspect the dependency
+  changes, and rerun validation against the PR base before publishing.
+- A built-in extension that is not recognized as bundled goes through
+  `vsce.listFiles({ packageManager: Npm })`, which resolves every production
+  dependency into the package no matter what `.vscodeignore` says.
+  `build/lib/extensions.ts` only recognizes `esbuild.mts`/`esbuild.browser.mts`
+  (or a dotted `.esbuild.mts`) at the extension root, so a differently named
+  build script such as `esbuild.setup.mts` leaves the extension on the normal
+  path. `hucode-setup-ui` therefore declares no `dependencies` at all — the
+  renderer libraries are bundled into `media/index.js` and belong in
+  `devDependencies` — and `build/lib/test/hucodeSetupUiExtension.test.ts`
+  asserts the real `listFiles` result rather than the ignore file.
+- Tailwind v4's PostCSS plugin resolves automatic source detection from the
+  working directory, not from the CSS file. Because the package script and the
+  gulp media build run from different directories, the setup stylesheet must
+  use `@import "tailwindcss" source(none)` with explicit `@source` globs, or the
+  bundled CSS silently picks up unrelated repository files and changes size with
+  the caller.
+- React attaches an ancestor's ref *after* a descendant's layout effects, so a
+  child that virtualizes against a parent-owned scroll container must read that
+  ref from a passive effect and store it in state. Reading it during layout
+  leaves TanStack Virtual with no viewport and renders zero rows on first mount.
+- Keep the setup webview's `html`, `body`, and React `#root` height chain bounded.
+  An auto-height mount lets expanded details push the footer beyond the clipped
+  body instead of scrolling. Run `mise run test:setup-ui-layout` for real Chromium
+  coverage; the renderer's jsdom tests do not calculate layout.
+- The setup webview owns its color palettes; only the workbench's light/dark/
+  high-contrast mode selects one. Do not map `--vscode-*` colors to controls.
+  Keep explicit native scrollbar thumb colors and `scrollbar-color: auto` to
+  override the pre-page's theme-dependent scrollbar rules. Include the actual
+  pre-page CSS in renderer smoke tests; standalone CSS misses that layer.
+  For scrollbar screenshots and drag tests, launch Playwright Chromium with
+  `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
+  even when its computed colors are correct.
+- `local/code-no-unexternalized-strings` and
+  `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
+  packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`
+  relaxation does not match `.test.tsx`.
+- `npx shadcn` cannot `init` a package it detects as a "Manual" framework: it
+  skips dependency installation, the `utils` helper, and the theme CSS. Keep
+  `components.json` checked in by hand, verify it with `npx shadcn info`, and
+  add the peer dependencies yourself. `shadcn add` still works from there.

@@ -1,0 +1,281 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * `source(none)` turns off automatic source detection. Without it Tailwind walks up from the
+ * working directory, which differs between the package script and the repository media build, so
+ * the same stylesheet would pick up unrelated repository files and change size with the caller.
+ */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+
+@source "../components/**/*.tsx";
+@source "../import/**/*.tsx";
+@source "../lib/**/*.ts";
+@source "../vendor/**/*.tsx";
+
+/*
+ * Hucode owns its palettes and controls. Only the workbench's light/dark/high-contrast mode
+ * selects a palette; arbitrary theme colors must not weaken control or scrollbar contrast.
+ */
+@custom-variant hucode-light (&:where(body.vscode-light, body.vscode-light *));
+@custom-variant hucode-hc-dark (&:where(body.vscode-high-contrast, body.vscode-high-contrast *));
+@custom-variant hucode-hc-light (&:where(body.vscode-high-contrast-light, body.vscode-high-contrast-light *));
+@custom-variant dark (&:where(body.vscode-dark, body.vscode-dark *, body.vscode-high-contrast:not(.vscode-high-contrast-light), body.vscode-high-contrast:not(.vscode-high-contrast-light) *));
+
+@theme inline {
+	--color-background: var(--hucode-background);
+	--color-foreground: var(--hucode-foreground);
+	--color-card: var(--hucode-card);
+	--color-card-foreground: var(--hucode-foreground);
+	--color-popover: var(--hucode-card);
+	--color-popover-foreground: var(--hucode-foreground);
+	--color-primary: var(--hucode-accent);
+	--color-primary-foreground: var(--hucode-accent-foreground);
+	--color-secondary: var(--hucode-subtle);
+	--color-secondary-foreground: var(--hucode-foreground);
+	--color-muted: var(--hucode-subtle);
+	--color-muted-foreground: var(--hucode-muted-foreground);
+	--color-accent: var(--hucode-subtle);
+	--color-accent-foreground: var(--hucode-foreground);
+	--color-selection: var(--hucode-subtle);
+	--color-selection-foreground: var(--hucode-foreground);
+	--color-destructive: var(--hucode-danger);
+	--color-destructive-foreground: var(--hucode-accent-foreground);
+	--color-border: var(--hucode-border);
+	--color-input: var(--hucode-input);
+	--color-ring: var(--hucode-ring);
+
+	--color-attention: var(--hucode-attention);
+	--color-ok: var(--hucode-ok);
+
+	--radius-sm: 3px;
+	--radius-md: 5px;
+	--radius-lg: 7px;
+	--radius-xl: 10px;
+
+	--font-sans: var(--hucode-font-sans);
+	--font-mono: var(--hucode-font-mono);
+}
+
+/* Dark graphite is the base palette; the three remaining modes override it. */
+:root {
+	--hucode-font-sans: system-ui, -apple-system, "Segoe UI", "Ubuntu", "Droid Sans", sans-serif;
+	--hucode-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", "Droid Sans Mono", monospace;
+
+	--hucode-background: #17191c;
+	--hucode-card: #1e2125;
+	--hucode-subtle: #24282d;
+	--hucode-foreground: #dfe3e8;
+	--hucode-muted-foreground: #939ba5;
+	--hucode-border: #2f343a;
+	--hucode-input: #7c8796;
+	--hucode-rule: #24282d;
+	--hucode-accent: #5b8def;
+	--hucode-accent-foreground: #0d1014;
+	--hucode-ring: #7aa5f5;
+	--hucode-danger: #e0574d;
+	--hucode-attention: #d9a441;
+	--hucode-ok: #58a877;
+}
+
+body.vscode-light {
+	--hucode-background: #f6f7f9;
+	--hucode-card: #ffffff;
+	--hucode-subtle: #eceef1;
+	--hucode-foreground: #1d2126;
+	--hucode-muted-foreground: #5c646e;
+	--hucode-border: #d6dae0;
+	--hucode-input: #737d8a;
+	--hucode-rule: #e4e7eb;
+	--hucode-accent: #2f6bd8;
+	--hucode-accent-foreground: #ffffff;
+	--hucode-ring: #2f6bd8;
+	--hucode-danger: #b3261e;
+	--hucode-attention: #8a5a00;
+	--hucode-ok: #1f6f43;
+}
+
+body.vscode-high-contrast {
+	--hucode-background: #000000;
+	--hucode-card: #000000;
+	--hucode-subtle: #000000;
+	--hucode-foreground: #ffffff;
+	--hucode-muted-foreground: #ffffff;
+	--hucode-border: #ffffff;
+	--hucode-input: #ffffff;
+	--hucode-rule: #ffffff;
+	--hucode-accent: #63aaff;
+	--hucode-accent-foreground: #000000;
+	--hucode-ring: #f38518;
+	--hucode-danger: #ff8a80;
+	--hucode-attention: #ffd000;
+	--hucode-ok: #6fe09a;
+}
+
+body.vscode-high-contrast-light {
+	--hucode-background: #ffffff;
+	--hucode-card: #ffffff;
+	--hucode-subtle: #ffffff;
+	--hucode-foreground: #000000;
+	--hucode-muted-foreground: #000000;
+	--hucode-border: #000000;
+	--hucode-input: #000000;
+	--hucode-rule: #000000;
+	--hucode-accent: #0f4a85;
+	--hucode-accent-foreground: #ffffff;
+	--hucode-ring: #0f4a85;
+	--hucode-danger: #b5200d;
+	--hucode-attention: #6c4a00;
+	--hucode-ok: #0b5c33;
+}
+
+/*
+ * The pinned Radix Nova selection controls emit `data-checked` utilities, while Radix exposes
+ * `data-state="checked"`. Keep generated source untouched and bridge that mismatch in owned CSS.
+ */
+[data-slot="checkbox"][data-state="checked"] {
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
+}
+
+[data-slot="radio-group-item"][data-state="checked"] {
+	border-color: var(--hucode-accent);
+	background-color: var(--hucode-accent);
+	color: var(--hucode-accent-foreground);
+}
+
+[data-slot="input"] {
+	background-color: var(--hucode-card);
+	color: var(--hucode-foreground);
+}
+
+[data-slot="input"]::placeholder {
+	color: var(--hucode-muted-foreground);
+}
+
+[data-slot="button"][data-variant="outline"] {
+	border-color: var(--hucode-input);
+}
+
+/*
+ * The webview pre-page ships its defaults inside `@layer vscode-default`, so these unlayered rules
+ * win without `!important`. Keep our spacing, typography, and keyboard-only focus treatment even
+ * when workbench colors change.
+ */
+html,
+body {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+/* Chromium's non-auto scrollbar-color overrides the pseudo-element hover/active styles below. */
+html {
+	scrollbar-color: auto;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+::-webkit-scrollbar-corner {
+	background-color: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background-color: var(--hucode-muted-foreground);
+	border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background-color: var(--hucode-foreground);
+}
+
+::-webkit-scrollbar-thumb:active {
+	background-color: var(--hucode-accent);
+}
+
+.overflow-y-auto {
+	scrollbar-gutter: stable;
+}
+
+/* Keep the shell bounded so expanded details scroll without pushing its footer out of view. */
+#root {
+	height: 100%;
+}
+
+body {
+	background-color: var(--hucode-background);
+	color: var(--hucode-foreground);
+	font-family: var(--hucode-font-sans);
+	font-size: 13px;
+	font-weight: 400;
+	line-height: 1.45;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: none;
+	outline-offset: 0;
+}
+
+/* Keyboard focus is reintroduced here, and only here, so pointer interaction stays quiet. */
+:focus-visible {
+	outline: 2px solid var(--hucode-ring);
+	outline-offset: 2px;
+	border-radius: 3px;
+}
+
+/*
+ * Phase changes move accessibility focus to the detail heading so a screen reader announces the
+ * new context. The heading is not interactive, and drawing a full-width ring around it reads as a
+ * stray divider rather than a focus cue. Interactive controls retain the rule above.
+ */
+[data-panel-heading]:focus,
+[data-panel-heading]:focus-visible {
+	outline: none;
+}
+
+code {
+	font-family: var(--hucode-font-mono);
+	background-color: transparent;
+	color: inherit;
+	padding: 0;
+}
+
+@media (forced-colors: active) {
+	:focus-visible {
+		outline: 2px solid Highlight;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
+@utility hucode-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}

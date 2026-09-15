@@ -630,6 +630,7 @@ export async function esbuildExtensions(taskName: string, isWatch: boolean, scri
 
 // Additional projects to run esbuild on. These typically build code for webviews
 const esbuildMediaScripts: { script: string; tsconfig: string }[] = [
+	{ script: 'hucode-setup-ui/esbuild.setup.mts', tsconfig: 'hucode-setup-ui/src/tsconfig.json' },
 	{ script: 'ipynb/esbuild.notebook.mts', tsconfig: 'ipynb/notebook-src/tsconfig.json' },
 	{ script: 'markdown-language-features/esbuild.notebook.mts', tsconfig: 'markdown-language-features/notebook/tsconfig.json' },
 	{ script: 'markdown-language-features/esbuild.webview.mts', tsconfig: 'markdown-language-features/preview-src/tsconfig.json' },

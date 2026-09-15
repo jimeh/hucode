@@ -39,3 +39,7 @@ fi
 [tasks.treeboot]
 description = "Bootstrap the current worktree with treeboot"
 run = "treeboot"
+
+[tasks."test:setup-ui-layout"]
+description = "Build the setup UI and verify scrolling and navigation in Chromium"
+run = "npm run hucode:smoke:setup-ui-layout"

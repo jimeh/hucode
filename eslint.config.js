@@ -3113,6 +3113,36 @@ export default defineConfig(
 			],
 		}
 	},
+	// hucode-setup-ui renderer.
+	//
+	// Every user-visible string in the setup UI is localized by core and arrives over the setup
+	// protocol, so this package has nothing to externalize. Its double-quoted strings are JSX
+	// attributes, Tailwind class lists, and `data-*` values, which the workbench externalization
+	// rule can only report as false positives.
+	{
+		files: [
+			'extensions/hucode-setup-ui/src/**/*.{ts,tsx}',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-unexternalized-strings': 'off',
+		},
+	},
+	// Renderer test support. `**/*.test.ts` already relaxes this rule; the renderer's suites and
+	// their fixtures are `.tsx` and live beside it.
+	{
+		files: [
+			'extensions/hucode-setup-ui/src/test/**/*.{ts,tsx}',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-dangerous-type-assertions': 'off',
+		},
+	},
 	// Forbid new JavaScript files - use TypeScript instead.
 	// The allowlist of pre-existing JS/CJS/MJS files lives in
 	// `.eslint-allowed-javascript-files`, which is gated by CODEOWNERS.

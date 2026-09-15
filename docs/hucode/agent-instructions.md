@@ -784,6 +784,12 @@ human-facing guides rather than replacing them.
 
 ## Other Hucode Gotchas
 
+- Every CSS custom property a stylesheet declares or reads must be listed in
+  `build/lib/stylelint/vscode-known-variables.json`, or `npm run precommit`
+  fails with `Unknown variable: --name` for each use. Color-valued custom
+  properties belong in `others`, not `colors`; `colors` holds only
+  `--vscode-*` theme tokens. Length-valued ones belong in `sizes`.
+
 - Editor profile discovery modules named `editorMigrationSource*` have scoped
   ESLint import restrictions. Keep them behind
   `IEditorMigrationSourceFileSystem`; only the native wrapper may import
