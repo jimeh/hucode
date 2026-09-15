@@ -1,0 +1,1789 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Archived Hucode Serve-Web Omni Plan</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #10110f;
+			--surface: #181b17;
+			--surface-alt: #20251f;
+			--text: #f3f0e8;
+			--muted: #aaa99d;
+			--line: #343a32;
+			--accent: #5fd4bd;
+			--accent-strong: #7ee7d1;
+			--warn: #f0b35b;
+			--danger: #ff8f83;
+			--code-bg: #272d25;
+			--pre-bg: #0b0d0b;
+			--pre-text: #f7f4ec;
+			--shadow: 0 18px 46px rgb(0 0 0 / 34%);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--text);
+			font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+				sans-serif;
+		}
+
+		a {
+			color: var(--accent-strong);
+		}
+
+		header {
+			background: var(--surface);
+			border-bottom: 1px solid var(--line);
+		}
+
+		.header-inner,
+		main {
+			width: min(1160px, calc(100vw - 40px));
+			margin: 0 auto;
+		}
+
+		.header-inner {
+			padding: 48px 0 36px;
+		}
+
+		.eyebrow {
+			margin: 0 0 10px;
+			color: var(--accent-strong);
+			font-size: 12px;
+			font-weight: 700;
+			letter-spacing: 0;
+			text-transform: uppercase;
+		}
+
+		h1 {
+			margin: 0;
+			max-width: 900px;
+			font-size: clamp(34px, 6vw, 58px);
+			line-height: 1.02;
+			letter-spacing: 0;
+		}
+
+		.summary {
+			max-width: 880px;
+			margin: 22px 0 0;
+			color: var(--muted);
+			font-size: 18px;
+		}
+
+		main {
+			padding: 32px 0 56px;
+		}
+
+		.layout {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) 280px;
+			gap: 24px;
+			align-items: start;
+		}
+
+		nav {
+			position: sticky;
+			top: 16px;
+			padding: 18px;
+			background: var(--surface);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			box-shadow: var(--shadow);
+		}
+
+		nav h2 {
+			margin: 0 0 10px;
+			font-size: 14px;
+		}
+
+		nav a {
+			display: block;
+			padding: 6px 0;
+			color: var(--muted);
+			text-decoration: none;
+		}
+
+		nav a:hover {
+			color: var(--accent-strong);
+		}
+
+		section {
+			margin: 0 0 24px;
+			padding: 28px;
+			background: var(--surface);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			box-shadow: var(--shadow);
+		}
+
+		h2 {
+			margin: 0 0 16px;
+			font-size: 24px;
+			line-height: 1.2;
+			letter-spacing: 0;
+		}
+
+		h3 {
+			margin: 24px 0 10px;
+			font-size: 17px;
+			letter-spacing: 0;
+		}
+
+		p {
+			margin: 0 0 14px;
+		}
+
+		ul,
+		ol {
+			margin: 0 0 16px 20px;
+			padding: 0;
+		}
+
+		li {
+			margin: 6px 0;
+		}
+
+		code {
+			padding: 1px 5px;
+			background: var(--code-bg);
+			border-radius: 4px;
+			font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+				monospace;
+			font-size: 0.92em;
+		}
+
+		pre {
+			overflow: auto;
+			margin: 16px 0;
+			padding: 16px;
+			background: var(--pre-bg);
+			color: var(--pre-text);
+			border-radius: 8px;
+			font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas,
+				monospace;
+		}
+
+		table {
+			width: 100%;
+			margin: 16px 0;
+			border-collapse: collapse;
+			font-size: 14px;
+		}
+
+		th,
+		td {
+			padding: 10px 12px;
+			border: 1px solid var(--line);
+			text-align: left;
+			vertical-align: top;
+		}
+
+		th {
+			background: var(--surface-alt);
+			font-weight: 700;
+		}
+
+		.callout {
+			margin: 18px 0;
+			padding: 14px 16px;
+			background: var(--surface-alt);
+			border-left: 4px solid var(--accent);
+			border-radius: 6px;
+		}
+
+		.callout.warning {
+			border-left-color: var(--warn);
+		}
+
+		.callout.danger {
+			border-left-color: var(--danger);
+		}
+
+		.badges {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin: 20px 0 0;
+		}
+
+		.badge {
+			display: inline-flex;
+			align-items: center;
+			min-height: 28px;
+			padding: 4px 10px;
+			background: var(--code-bg);
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		.phase {
+			margin-top: 18px;
+			padding-top: 18px;
+			border-top: 1px solid var(--line);
+		}
+
+		.phase:first-of-type {
+			margin-top: 0;
+			padding-top: 0;
+			border-top: 0;
+		}
+
+		.meta {
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		.diagram {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 10px;
+			margin: 18px 0;
+		}
+
+		.node {
+			min-height: 96px;
+			padding: 14px;
+			background: var(--surface-alt);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+		}
+
+		.node strong {
+			display: block;
+			margin-bottom: 6px;
+		}
+
+		@media (max-width: 900px) {
+			.layout {
+				grid-template-columns: 1fr;
+			}
+
+			nav {
+				position: static;
+				order: -1;
+			}
+
+			.diagram {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header>
+		<div class="header-inner">
+			<p class="eyebrow">Archived Implementation Plan</p>
+			<h1>Omni Projects View for <code>hucode serve-web</code></h1>
+			<p class="summary">
+				<strong>This plan is preserved for decision history and does not define
+				current route behavior.</strong> All Hucode web routes are now gated by
+				<code>--omni</code>. See the current
+				<a href="../architecture.md">architecture guide</a>.
+			</p>
+			<p class="summary">
+				A phased plan for adding stable Omni and workbench web routes while
+				preserving regular VS Code web workbench behavior at root by
+				default.
+			</p>
+			<div class="badges">
+				<span class="badge">Default: regular serve-web</span>
+				<span class="badge">Omni route: /omni</span>
+				<span class="badge">Workbench route: /workbench</span>
+				<span class="badge">--omni swaps root</span>
+				<span class="badge">Hosted workbenches: iframes</span>
+				<span class="badge">Scope: server-web archive</span>
+			</div>
+		</div>
+	</header>
+
+	<main>
+		<div class="layout">
+			<div>
+				<section id="objective">
+					<h2>Objective</h2>
+					<p>
+						Change <code>hucode serve-web</code> so it always exposes a
+						Hucode Omni Projects shell at <code>/omni</code> and a normal
+						VS Code web workbench at <code>/workbench</code>. The default
+						root route should continue to serve the regular VS Code web
+						workbench.
+					</p>
+					<p>
+						When <code>--omni</code> is passed, only the root route changes:
+						<code>/</code> should serve the same Omni shell that is already
+						available at <code>/omni</code>. Regular individual workbenches
+						must remain available at explicit <code>/workbench</code> URLs,
+						including folder, workspace, and empty-window URLs.
+					</p>
+
+					<h3>Success Criteria</h3>
+					<ul>
+						<li><code>hucode serve-web</code> keeps printing and serving
+							the regular root workbench by default.</li>
+						<li><code>/omni</code> serves the Omni shell whether or not the
+							CLI was launched with <code>--omni</code>.</li>
+						<li><code>hucode serve-web --omni</code> makes root serve the
+							Omni shell instead of the regular workbench.</li>
+						<li><code>/workbench?folder=/path/to/project</code> loads a
+							normal VS Code web workbench for that folder.</li>
+						<li><code>/workbench?ew=true</code> loads a normal empty
+							VS Code web workbench.</li>
+						<li>The Omni shell can open, switch, hide, and close hosted
+							workbenches without replacing the browser page.</li>
+						<li>The Omni shell preserves desktop Omni command-routing
+							semantics where browsers permit it, using iframe messaging
+							instead of Electron <code>WebContentsView</code> APIs.</li>
+						<li>The server-web release archive contains every new HTML,
+							JavaScript, CSS, and static resource needed by Omni web.</li>
+					</ul>
+				</section>
+
+				<section id="scope">
+					<h2>Scope</h2>
+					<table>
+						<thead>
+							<tr>
+								<th>Area</th>
+								<th>In Scope</th>
+								<th>Out of Scope Initially</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>CLI</td>
+								<td>
+									Add a flag that swaps the root route to Omni while keeping
+									<code>/omni</code> and <code>/workbench</code> available in
+									all modes.
+								</td>
+								<td>
+									Changing update discovery, release download, or
+									connection-token policy.
+								</td>
+							</tr>
+							<tr>
+								<td>Server routing</td>
+								<td>
+									Keep the regular workbench at root by default; always serve
+									Omni at <code>/omni</code> and the normal workbench at
+									<code>/workbench</code>; map root to Omni only with
+									<code>--omni</code>.
+								</td>
+								<td>
+									Supporting arbitrary nested reverse-proxy rewrites
+									beyond existing <code>server-base-path</code>.
+								</td>
+							</tr>
+							<tr>
+								<td>Omni web shell</td>
+								<td>
+									Browser entrypoint, Projects sidebar, iframe host,
+									state tracking, workspace lifecycle, and semantic command
+									routing parity with desktop Omni.
+								</td>
+								<td>
+									Literal reuse of Electron-only native menu,
+									<code>WebContentsView</code>, and native paste
+									implementations.
+								</td>
+							</tr>
+							<tr>
+								<td>Project manager</td>
+								<td>
+									Server-backed channel so Omni web can list and
+									update project/worktree metadata. Store server-web project
+									metadata under the server data dir, separate from browser
+									user-data/settings storage.
+								</td>
+								<td>
+									Cloud sync of project metadata, or changing VS Code web
+									user settings/profile persistence.
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="current-state">
+					<h2>Current State</h2>
+					<p>
+						The Rust CLI command is a server-of-servers. It validates
+						license and prerequisites, creates or reads a shared
+						connection token, starts a versioned server-web process, and
+						proxies HTTP and WebSocket traffic over a socket.
+					</p>
+					<p>
+						The Node server currently serves the web workbench HTML only
+						at <code>/</code> after base-path and product-path stripping.
+						It also serves <code>/static/*</code>,
+						<code>/callback</code>, and
+						<code>/web-extension-resource/*</code>. Paths such as
+						<code>/omni</code> and <code>/workbench</code> are not currently
+						valid HTML routes.
+					</p>
+					<p>
+						Normal web workbench selection is query-driven. A folder URL
+						uses <code>?folder=/repo</code>, a workspace URL uses
+						<code>?workspace=/repo/foo.code-workspace</code>, and an
+						empty window uses <code>?ew=true</code>. When none of those
+						are present, server-provided <code>default-folder</code> or
+						<code>default-workspace</code> config is used.
+					</p>
+					<p>
+						Desktop Omni is not a normal workbench overlay. It has its own
+						renderer entrypoint and shell bootstrap. The hosted desktop
+						workbenches are native Electron <code>WebContentsView</code>
+						instances, controlled by an Electron main-process shell
+						service. The web version cannot reuse that containment model.
+					</p>
+				</section>
+
+				<section id="source-recheck">
+					<h2>Current Source Recheck</h2>
+					<p>
+						Rechecked against the current Hucode tree on 2026-06-24. The
+						original shape still holds, but the implementation plan should
+						be stricter about Hucode isolation and current file names.
+					</p>
+					<table>
+						<thead>
+							<tr>
+								<th>Current File</th>
+								<th>Observed State</th>
+								<th>Plan Adjustment</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td><code>cli/src/commands/args.rs</code></td>
+								<td>
+									<code>ServeWebArgs</code> has host, port, token,
+									base-path, data-dir, default folder/workspace, telemetry,
+									and commit flags. No Omni flag exists yet.
+								</td>
+								<td>
+									Add a Hucode-owned root-swap flag to the existing struct
+									and keep default behavior unchanged.
+								</td>
+							</tr>
+							<tr>
+								<td><code>cli/src/commands/serve_web.rs</code></td>
+								<td>
+									Downloaded server startup forwards known server args to the
+									spawned server entrypoint in <code>start_version</code>.
+								</td>
+								<td>
+									Forward <code>--hucode-web-omni-root</code> when the new
+									CLI flag is set.
+								</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/serverEnvironmentService.ts</code></td>
+								<td>
+									Server options include <code>default-folder</code>,
+									<code>default-workspace</code>, and base-path options. No
+									Hucode Omni-root option exists yet.
+								</td>
+								<td>
+									Keep the upstream-shaped edit to one option and one parsed
+									arg field.
+								</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/webClientServer.ts</code></td>
+								<td>
+									<code>handle()</code> serves static, callback, extension
+									resource, and root routes. <code>_handleRoot()</code> builds
+									the regular workbench HTML directly; <code>/workbench</code>
+									is still a 404.
+								</td>
+								<td>
+									Keep this file as route dispatch and delegation only. Move
+									Hucode route/template decisions to a Hucode-named server
+									companion.
+								</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/serverServices.ts</code></td>
+								<td>
+									Server channels are registered here. No project-manager
+									channel is registered yet.
+								</td>
+								<td>
+									Add one small registration call to a Hucode server companion
+									after the project-manager channel exists.
+								</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/workbench/services/environment/browser/environmentService.ts</code></td>
+								<td>
+									The browser environment service reads
+									<code>isOmniWindow</code> from web payload today, but does
+									not expose hosted Omni workspace payload fields yet.
+								</td>
+								<td>
+									Add only thin getters for
+									<code>isHostedOmniWorkspace</code> and
+									<code>hostedInstanceId</code>. Keep hosted-workbench
+									behavior in Hucode-owned code.
+								</td>
+							</tr>
+							<tr>
+								<td><code>build/next/index.ts</code></td>
+								<td>
+									Desktop bundles already include
+									<code>vs/hucode/omni.desktop.main</code>. Web bundles only
+									include upstream web workbench entrypoints.
+								</td>
+								<td>
+									Add <code>vs/hucode/omni.web.main</code> to web entrypoints
+									once the web bootstrap exists.
+								</td>
+							</tr>
+							<tr>
+								<td><code>build/gulpfile.reh.ts</code></td>
+								<td>
+									Server-web resources include
+									<code>out-build/vs/code/browser/workbench/*.html</code>.
+								</td>
+								<td>
+									Either place the Omni HTML under that included directory or
+									add a narrow include for the Hucode-owned HTML path.
+								</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/platform/projectManager/*</code></td>
+								<td>
+									The project-manager service is currently wired for Electron
+									main/browser. Shared interfaces exist in
+									<code>common/projectManager.ts</code>, but there is no server
+									channel/client pair. Desktop data is persisted through
+									<code>IStateService</code> using the
+									<code>hucode.projectManager.projects</code> key.
+								</td>
+								<td>
+									Extract reusable project-manager core into common/node
+									modules and add server channel/client wiring instead of
+									importing Electron services into web. Persist server-web
+									project metadata in the server data dir, not browser
+									localStorage or client-side user settings.
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="architecture">
+					<h2>Target Architecture</h2>
+					<div class="diagram" aria-label="Target architecture">
+						<div class="node">
+							<strong>Rust CLI</strong>
+							Launches server-web, owns token setup, passes
+							<code>--hucode-web-omni-root</code> when requested.
+						</div>
+						<div class="node">
+							<strong>Node Server</strong>
+							Always serves <code>/omni</code> and
+							<code>/workbench</code>; routes root to Omni only when the
+							boolean Omni-root flag is set.
+						</div>
+						<div class="node">
+							<strong>Omni Web Shell</strong>
+							Projects sidebar, shell layout, iframe host, web shell
+							service.
+						</div>
+						<div class="node">
+							<strong>Hosted Workbench</strong>
+							Normal VS Code web workbench loaded inside a same-origin
+							iframe.
+						</div>
+					</div>
+
+					<h3>URL Contract</h3>
+					<table>
+						<thead>
+							<tr>
+								<th>URL</th>
+								<th>Default Mode</th>
+								<th><code>--omni</code> Mode</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td><code>/</code></td>
+								<td>Regular workbench</td>
+								<td>Omni shell</td>
+							</tr>
+							<tr>
+								<td><code>/?tkn=...</code></td>
+								<td>
+									Token cookie redirect, then regular workbench
+									at clean root URL.
+								</td>
+								<td>
+									Token cookie redirect, then Omni shell at
+									clean root URL.
+								</td>
+							</tr>
+							<tr>
+								<td><code>/omni</code></td>
+								<td>Omni shell</td>
+								<td>Omni shell</td>
+							</tr>
+							<tr>
+								<td><code>/omni?tkn=...</code></td>
+								<td>
+									Token cookie redirect, then Omni shell at
+									clean <code>/omni</code> URL.
+								</td>
+								<td>
+									Token cookie redirect, then Omni shell at
+									clean <code>/omni</code> URL.
+								</td>
+							</tr>
+							<tr>
+								<td><code>/omni/?folder=/repo</code></td>
+								<td>
+									Redirect to <code>/omni?folder=/repo</code>, preserving
+									query parameters.
+								</td>
+								<td>
+									Redirect to <code>/omni?folder=/repo</code>, preserving
+									query parameters.
+								</td>
+							</tr>
+							<tr>
+								<td><code>/workbench?folder=/repo</code></td>
+								<td>Regular workbench for <code>/repo</code></td>
+								<td>Regular workbench for <code>/repo</code></td>
+							</tr>
+							<tr>
+								<td><code>/workbench?ew=true</code></td>
+								<td>Regular empty workbench</td>
+								<td>Regular empty workbench</td>
+							</tr>
+							<tr>
+								<td><code>/workbench/?folder=/repo</code></td>
+								<td>
+									Redirect to <code>/workbench?folder=/repo</code>, preserving
+									query parameters.
+								</td>
+								<td>
+									Redirect to <code>/workbench?folder=/repo</code>, preserving
+									query parameters.
+								</td>
+							</tr>
+							<tr>
+								<td><code>/static/*</code></td>
+								<td>Static resources</td>
+								<td>Static resources</td>
+							</tr>
+						</tbody>
+					</table>
+
+					<div class="callout">
+						<p>
+							Keep <code>/workbench</code> deliberately boring. It should
+							serve the same normal web workbench template as upstream
+							<code>/</code>, only with a different pathname. It should be
+							available in both modes so Omni can host direct workbench URLs
+							and users can load a workbench without changing root behavior.
+						</p>
+					</div>
+					<div class="callout">
+						<p>
+							Canonical routes are <code>/omni</code> and
+							<code>/workbench</code>. Accept trailing-slash aliases only as
+							redirects to the canonical paths, preserving all query
+							parameters and base-path prefixes.
+						</p>
+					</div>
+
+					<div class="callout">
+						<p>
+							The current server CSP already permits same-origin frames with
+							<code>frame-src 'self'</code> and <code>child-src 'self'</code>.
+							That keeps iframe hosting feasible, but it does not solve
+							lifecycle, focus, dirty-state, or storage isolation.
+						</p>
+					</div>
+				</section>
+
+				<section id="shared-core-adapters">
+					<h2>Shared Cores And Adapters</h2>
+					<p>
+						The web implementation should not copy desktop Omni systems
+						wholesale. Extract platform-neutral behavior first, then inject
+						small adapters for Electron desktop and browser/server-web
+						differences.
+					</p>
+					<table>
+						<thead>
+							<tr>
+								<th>Area</th>
+								<th>Shared Core</th>
+								<th>Desktop Adapter</th>
+								<th>Web/Server Adapter</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Hosted workspace controller</td>
+								<td>
+									Instance registry, active selection, lifecycle states,
+									visibility intent, reload/close/unload transitions, events.
+								</td>
+								<td>
+									Creates, attaches, hides, focuses, and disposes
+									<code>WebContentsView</code> instances. Provides optional
+									screenshot capture for Electron overlay fallback only.
+								</td>
+								<td>
+									Creates, hides, focuses, navigates, and disposes
+									same-origin iframe hosts. Uses normal DOM stacking for
+									shell overlays above iframes, without screenshot fallback.
+								</td>
+							</tr>
+							<tr>
+								<td>Project manager</td>
+								<td>
+									Project/worktree record normalization, ordering, labels,
+									pinning, last-active updates, refresh semantics.
+								</td>
+								<td>
+									Electron-main state, file watchers, and local git/worktree
+									access.
+								</td>
+								<td>
+									Server-side state, file watchers, git/worktree access, and a
+									browser channel client.
+								</td>
+							</tr>
+							<tr>
+								<td>Hosted workbench descriptor</td>
+								<td>
+									Converts folder, workspace, empty-window, and worktree
+									targets into normalized hosted-workbench descriptors.
+								</td>
+								<td>
+									Maps descriptors to hosted desktop window configuration and
+									load URLs.
+								</td>
+								<td>
+									Maps descriptors to <code>/workbench</code> iframe URLs and
+									web bootstrap payloads.
+								</td>
+							</tr>
+							<tr>
+								<td>Shell command surface</td>
+								<td>
+									Shared <code>IHucodeShellService</code> contract plus helper
+									decisions for open, switch, close, focus, and reload.
+								</td>
+								<td>Native/Electron implementation.</td>
+								<td>Browser-safe implementation plus iframe message bridge.</td>
+							</tr>
+							<tr>
+								<td>Command routing policy</td>
+								<td>
+									Shared command IDs, forwarding predicates, loop-prevention
+									markers, and routing decisions for shell-local,
+									shell-to-workbench, and workbench-to-shell actions.
+								</td>
+								<td>
+									Uses <code>OmniCommandService</code>, native menu/action
+									forwarding, native keybinding forwarding, and Electron paste
+									where available.
+								</td>
+								<td>
+									Uses shell/iframe messages, focus handoff, and explicit
+									browser fallbacks for clipboard and reserved shortcut
+									limitations.
+								</td>
+							</tr>
+							<tr>
+								<td>Route decision logic</td>
+								<td>
+									Small pure helper that maps request path and the Omni-root
+									boolean to Omni shell, regular workbench, callback, static,
+									or 404.
+								</td>
+								<td>None needed.</td>
+								<td>
+									Server adapter reads parsed args and renders the selected
+									template.
+								</td>
+							</tr>
+							<tr>
+								<td>Hosted workbench messaging</td>
+								<td>
+									Message names and payload types for ready, focus, dirty,
+									unload request/response, crash, and status updates.
+								</td>
+								<td>Maps Electron events into the shared message model.</td>
+								<td>Uses <code>postMessage</code> with origin checks.</td>
+							</tr>
+						</tbody>
+					</table>
+					<div class="callout">
+						<p>
+							Share state machines, descriptors, contracts, and decision
+							helpers. Do not force desktop and web to share containment or
+							bootstrap code when the platform APIs are naturally different.
+						</p>
+					</div>
+				</section>
+
+				<section id="phase-plan">
+					<h2>Phased Plan</h2>
+
+					<div class="phase">
+						<h3>Phase 0 - Confirm Constraints</h3>
+						<p class="meta">Goal: reduce hidden coupling before writing code.</p>
+						<ol>
+							<li>Re-run a source pass over current
+								<code>serve_web.rs</code>,
+								<code>webClientServer.ts</code>, Omni shell, and build
+								entrypoint files.</li>
+							<li>Decide the flag name. Recommended:
+								<code>--omni</code>, because it is concise and only changes
+								the root route target.</li>
+							<li>Confirm route names. Recommended:
+								<code>/omni</code> for the Projects shell and
+								<code>/workbench</code> for direct workbench loads, with root
+								staying regular by default and becoming Omni only when the
+								flag is present.</li>
+							<li>Confirm that root token cleanup can preserve non-token
+								query parameters when redirecting.</li>
+							<li>Identify the minimum shared-core extractions before web
+								work starts: route decisions, hosted-workbench descriptors,
+								hosted-workspace controller state, and project-manager core.</li>
+						</ol>
+						<p><strong>Tests:</strong> none yet, but record decisions in the
+							implementation PR description.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 1 - CLI And Server Routing</h3>
+						<p class="meta">Goal: make stable routes and root selection explicit.</p>
+						<ol>
+							<li>Add <code>omni: bool</code> to
+								<code>ServeWebArgs</code> in the Rust CLI.</li>
+							<li>Forward the flag to the spawned server-web entrypoint as
+								a Hucode-owned server argument, for example
+								<code>--hucode-web-omni-root</code>.</li>
+							<li>Add the server argument to
+								<code>ServerParsedArgs</code> and the server option table.
+								Keep the name Hucode-specific to avoid colliding with
+								upstream VS Code options.</li>
+							<li>Refactor <code>WebClientServer</code> root handling so
+								it can dispatch root, <code>/omni</code>, and
+								<code>/workbench</code>, but keep Hucode decisions in a
+								companion such as
+								<code>src/vs/server/node/hucodeWebOmniRoutes.ts</code>.</li>
+							<li>Add <code>/omni</code> as the stable Omni shell route in
+								both modes.</li>
+							<li>Add <code>/workbench</code> as the stable normal
+								workbench route in both modes.</li>
+							<li>Add canonicalization redirects from <code>/omni/</code> to
+								<code>/omni</code> and from <code>/workbench/</code> to
+								<code>/workbench</code>, preserving query parameters and
+								<code>server-base-path</code> prefixes.</li>
+							<li>Update printed CLI URL. The CLI can keep printing root;
+								<code>--omni</code> only changes what root serves.</li>
+						</ol>
+						<p><strong>Tests:</strong> add Node route tests around
+							<code>WebClientServer</code> if a local test seam exists; add
+							Rust unit coverage for flag parsing and forwarding if the CLI
+							test harness can exercise <code>ServeWebArgs</code> without
+							starting a real server.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 2 - Shared Core Boundaries</h3>
+						<p class="meta">Goal: prevent desktop/web duplication before adding web host code.</p>
+						<ol>
+							<li>Extract a hosted-workspace controller core that owns
+								instance IDs, active selection, lifecycle state, visibility
+								intent, close/reload/unload transitions, and event emission.</li>
+							<li>Define a hosted-workspace host adapter interface for
+								create, navigate, show, hide, focus, reload, and dispose
+								operations. Keep screenshot capture as an optional
+								desktop-only capability, not a shared web requirement.</li>
+							<li>Move hosted-workbench target-to-descriptor and descriptor-
+								to-URL decisions into shared helpers that both desktop and web
+								can call.</li>
+							<li>Extract project-manager record/state logic away from
+								Electron-only construction so desktop and server can share
+								normalization, ordering, labels, pins, visits, and refresh
+								semantics.</li>
+							<li>Define shared hosted-workbench message payloads for ready,
+								focus, dirty, unload, crash, and status reporting.</li>
+							<li>Extract or extend the shared Omni command-routing policy so
+								desktop and web agree on shell-owned commands, layout actions,
+								forwarding guards, and forwarded-request markers.</li>
+						</ol>
+						<p><strong>Tests:</strong> add core unit tests before platform
+							adapters. Cover lifecycle transitions once, then add smaller
+							adapter conformance tests for desktop and web behavior.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 3 - Omni Web Entrypoint</h3>
+						<p class="meta">Goal: boot an Omni shell page in browser/server-web.</p>
+						<ol>
+							<li>Create a web shell bootstrap near the existing Hucode Omni
+								entrypoints. Candidate names:
+								<code>src/vs/hucode/omni.web.main.ts</code> and a Hucode-owned
+								HTML template such as
+								<code>src/vs/hucode/browser/omni-web.html</code>.</li>
+							<li>Keep the shell close to a real workbench bootstrap, as
+								desktop Omni does. Reuse Hucode-owned browser parts where
+								layering allows.</li>
+							<li>Do not parameterize upstream
+								<code>src/vs/code/browser/workbench/workbench.html</code>
+								unless the Hucode-owned template path proves unworkable.</li>
+							<li>Inject web configuration with a payload that marks the
+								root renderer as <code>isOmniWindow=true</code>.</li>
+							<li>Add a browser-safe shell service implementation that
+								implements the shared <code>IHucodeShellService</code>
+								contract without Electron APIs.</li>
+							<li>Implement the service methods needed for desktop-equivalent
+								Projects, lifecycle, focus, reload, and command routing.
+								Return no-ops only for behavior classified as Electron-only
+								with no browser equivalent.</li>
+						</ol>
+						<p><strong>Tests:</strong> browser unit tests for service state
+							transitions and context keys. Avoid brittle full-DOM assertions
+							until the route is loading end to end.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 4 - Iframe Hosted Workbench Adapter</h3>
+						<p class="meta">Goal: replace Electron WebContentsView hosting with same-origin iframes.</p>
+						<ol>
+							<li>Create a web hosted-workbench adapter for the shared hosted
+								workspace controller core, scoped to browser primitives.</li>
+							<li>Key resident hosted workbenches by normalized worktree
+								path through the shared core, matching the desktop model.</li>
+							<li>Generate iframe URLs against the explicit workbench route:
+								<code>/workbench?folder=/path</code> for folders and
+								<code>/workbench?ew=true</code> for empty windows, using the
+								shared descriptor helper.</li>
+							<li>Use visibility toggles for resident inactive iframes.
+								Keep them attached to preserve runtime state until the user
+								explicitly closes that hosted workbench.</li>
+							<li>Do not implement app-level iframe eviction. Browser tab
+								discard is treated as a whole-shell reload concern, not as a
+								per-workbench memory policy.</li>
+							<li>Use <code>postMessage</code> between parent shell and
+								hosted workbench to report readiness, focus, dirty state,
+								unload intent, command requests, and shell-owned action
+								requests.</li>
+							<li>Add a web-only host-surface seam in the Hucode
+								<code>OmniHostPart</code> if the iframe adapter needs to attach
+								iframes under a real DOM parent. Keep desktop layout via
+								bounds intact.</li>
+							<li>Do not port the desktop screenshot overlay fallback to web.
+								Shell overlays should sit above hosted iframes through normal
+								DOM positioning and stacking.</li>
+							<li>Add a hosted-web contribution loaded by normal web
+								workbenches when a payload marks
+								<code>isHostedOmniWorkspace=true</code>.</li>
+							<li>Add browser environment payload getters for
+								<code>isHostedOmniWorkspace</code> and
+								<code>hostedInstanceId</code> before relying on existing
+								hosted-workbench context keys.</li>
+							<li>Implement same-origin focus transfer. The shell should
+								focus the active iframe after selection and should restore
+								Projects focus when requested.</li>
+						</ol>
+						<p><strong>Tests:</strong> browser tests for open, activate,
+							reuse existing, close active, close last, and crashed iframe
+							state. Add Playwright coverage once the dev server can serve
+							the route.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 5 - Project Manager On Server-Web</h3>
+						<p class="meta">Goal: make Projects sidebar useful in browser-only Omni.</p>
+						<ol>
+							<li>Use the extracted project-manager core from Phase 2 so the
+								server implementation shares record normalization, ordering,
+								labels, pins, visits, and refresh semantics with desktop.</li>
+							<li>Add a Hucode-owned project-manager channel and client for
+								the existing <code>PROJECT_MANAGER_CHANNEL_NAME</code>.</li>
+							<li>Register the channel from <code>serverServices.ts</code>
+								through a Hucode companion function, keeping the upstream
+								file to service creation plus one registration call.</li>
+							<li>Add a browser-side client registration for
+								<code>IProjectManagerService</code> in the Omni web
+								entrypoint.</li>
+							<li>Persist server-web project metadata under the server data
+								dir. Recommended path shape:
+								<code>&lt;server-data-dir&gt;/hucode/projects.json</code> or
+								a Hucode-owned state file under
+								<code>&lt;server-data-dir&gt;/data</code>; keep it separate
+								from browser localStorage and client-side settings.</li>
+							<li>Start server-web with an empty project registry. Do not
+								migrate or import desktop Omni project state; this matches
+								existing serve-web behavior, which does not migrate desktop
+								user settings or state into the web server environment.</li>
+							<li>Do not fold future server-side user data/settings storage
+								into this work. Project metadata is a Hucode server-side
+								registry; user settings/profile persistence is a later,
+								separate serve-web enhancement.</li>
+							<li>Keep worktree watchers server-side so one project registry
+								feeds all iframe workbenches and the shell.</li>
+						</ol>
+						<p><strong>Tests:</strong> node unit tests for server project
+							manager persistence and channel methods. Reuse existing
+							project-manager test fixtures where possible.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 6 - Build And Packaging</h3>
+						<p class="meta">Goal: ship the new web shell in server-web archives.</p>
+						<ol>
+							<li>Add the Omni web entrypoint to the server-web bundle path
+								in <code>build/next/index.ts</code>.</li>
+							<li>Add the entrypoint to CSS bundling if it imports CSS.</li>
+							<li>Update legacy gulp build lists if they remain active for
+								<code>vscode-reh-web-*-min-ci</code>.</li>
+							<li>Ensure HTML templates and any static assets are copied
+								into <code>out-vscode-reh-web*</code> and the packaged
+								<code>vscode-reh-web-*</code> archive.</li>
+							<li>Verify Hucode product mixin staging still applies while
+								server-web is packaged.</li>
+						</ol>
+						<p><strong>Tests:</strong> run the server-web bundle target used
+							by Hucode CI, then inspect the output archive for Omni web
+							JavaScript, CSS, and HTML.</p>
+					</div>
+
+					<div class="phase">
+						<h3>Phase 7 - Lifecycle And Command Polish</h3>
+						<p class="meta">Goal: make the shell reliable under real use.</p>
+						<ol>
+							<li>Implement hosted workbench unload negotiation before
+								removing an iframe.</li>
+							<li>Inventory the current desktop Omni command-forwarding
+								paths and maintain a parity matrix: browser-supported,
+								naturally handled by iframe focus, browser fallback, or
+								Electron-only no-op.</li>
+							<li>Forward shell commands that desktop would route to the
+								active hosted workbench, while keeping Projects and other
+								shell-owned commands local.</li>
+							<li>Support hosted workbench to shell forwarding for Projects
+								sidebar commands, navigation affordances, and shell-owned
+								actions that already route back to desktop Omni.</li>
+							<li>Keep QuickInput and context menus local to the renderer
+								that opened them. Do not forward commands while shell
+								QuickInput or local shell input has focus.</li>
+							<li>Let a focused hosted iframe handle normal workbench
+								keybindings directly. Forward keybinding-originated commands
+								only when focus is in the shell and the routing policy says
+								the active workbench should handle the command.</li>
+							<li>Handle paste as focus handoff plus browser-native paste
+								where possible. Do not depend on synthetic paste events
+								matching Electron <code>webContents.paste()</code>.</li>
+							<li>Handle iframe navigation failure as <code>crashed</code>
+								or <code>unloaded</code> state in Projects UI.</li>
+							<li>Handle whole-tab discard/restore using lifecycle signals
+								such as <code>document.wasDiscarded</code> where available.
+								After restore, rebuild shell state from the server-side
+								project registry rather than assuming resident iframes
+								survived.</li>
+							<li>Detect individual hosted-workbench failure with readiness
+								timeouts, load errors where observable, and optional heartbeat
+								messages. Treat failures as reloadable hosted-workbench state,
+								not as a reason to evict other iframes.</li>
+							<li>Review localStorage and IndexedDB behavior when several
+								same-origin workbenches are loaded at once.</li>
+						</ol>
+						<p><strong>Tests:</strong> integration tests for project switch,
+							reload active workbench, close active workbench, dirty unload,
+							shell-to-workbench command forwarding, workbench-to-shell
+							action forwarding, keybinding focus cases, paste fallback, and
+							no-workbench command behavior.</p>
+					</div>
+				</section>
+
+				<section id="code-map">
+					<h2>Likely File Map</h2>
+					<table>
+						<thead>
+							<tr>
+								<th>File or Area</th>
+								<th>Expected Work</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td><code>cli/src/commands/args.rs</code></td>
+								<td>Add CLI flag to <code>ServeWebArgs</code>.</td>
+							</tr>
+							<tr>
+								<td><code>cli/src/commands/serve_web.rs</code></td>
+								<td>Forward Omni-root preference to spawned server process.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/serverEnvironmentService.ts</code></td>
+								<td>Add one Hucode web Omni-root server option and parsed-arg
+									field.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/webClientServer.ts</code></td>
+								<td>Thin route dispatch for root, <code>/omni</code>, and
+									<code>/workbench</code>;
+									delegate Hucode decisions.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/hucodeWebOmniRoutes.ts</code></td>
+								<td>New Hucode-owned route/template selection and web
+									configuration helper.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/common/hostedWorkspaceCore.ts</code></td>
+								<td>Shared hosted-workspace lifecycle/state controller core
+									used by desktop and web adapters.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/common/hostedWorkbenchDescriptor.ts</code></td>
+								<td>Shared descriptor and URL/payload helpers for folder,
+									workspace, empty-window, and worktree targets.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/common/hostedWorkbenchMessages.ts</code></td>
+								<td>Shared ready, focus, dirty, unload, crash, and status
+									message contracts.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/platform/window/common/hucodeOmniCommandRouting.ts</code></td>
+								<td>Extend the existing Hucode command-routing helper, or
+									extract a Hucode-owned companion if layer rules allow it.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/electron-main/hostedWorkspaceAdapter.ts</code></td>
+								<td>Desktop adapter from the shared hosted-workspace core to
+									<code>WebContentsView</code>.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/serverServices.ts</code></td>
+								<td>One registration call for the Hucode project-manager
+									server channel.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/server/node/hucodeProjectManagerServer.ts</code></td>
+								<td>New Hucode-owned server service/channel registration
+									helper.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/omni.web.main.ts</code></td>
+								<td>New browser/server-web Omni shell entrypoint.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/browser/omni-web.html</code></td>
+								<td>New Hucode-owned Omni web HTML template, copied into the
+									server-web archive.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/browser/*</code></td>
+								<td>Reuse shell workbench, Projects part, and project switcher
+									where layering permits.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/browser/parts/omniHostPart.ts</code></td>
+								<td>Add a narrow web host-surface registration seam if the
+									iframe adapter needs a DOM parent instead of only viewport
+									bounds.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/browser/webHostedWorkspacesController.ts</code></td>
+								<td>Iframe-backed adapter for the shared hosted-workspace
+									core.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/hucode/browser/webShellService.ts</code></td>
+								<td>Browser implementation of
+									<code>IHucodeShellService</code>.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/platform/projectManager/*</code></td>
+								<td>Extract shared node project-manager logic; add channel
+									and browser client without Electron imports.</td>
+							</tr>
+							<tr>
+								<td><code>src/vs/workbench/services/environment/browser/environmentService.ts</code></td>
+								<td>Add thin payload getters for
+									<code>isHostedOmniWorkspace</code> and
+									<code>hostedInstanceId</code>.</td>
+							</tr>
+							<tr>
+								<td><code>build/next/index.ts</code></td>
+								<td>Add Omni web bundle and CSS entrypoints for server-web.</td>
+							</tr>
+							<tr>
+								<td><code>build/gulpfile.reh.ts</code></td>
+								<td>Add the narrow Hucode HTML/static include if the template
+									lives outside <code>vs/code/browser/workbench</code>.</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="upstream-boundaries">
+					<h2>Upstream Boundaries</h2>
+					<p>
+						The implementation should be structured so that upstream VS Code
+						files carry only narrow integration hooks. Hucode-specific
+						decisions, state machines, and route/template policy should live
+						in Hucode-owned files.
+					</p>
+					<table>
+						<thead>
+							<tr>
+								<th>Upstream-Shaped File</th>
+								<th>Allowed Change</th>
+								<th>Avoid</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td><code>serverEnvironmentService.ts</code></td>
+								<td>Declare <code>hucode-web-omni-root</code> option and parsed
+									arg.</td>
+								<td>Embedding routing or shell policy.</td>
+							</tr>
+							<tr>
+								<td><code>webClientServer.ts</code></td>
+								<td>Dispatch <code>/</code>, <code>/omni</code>, and
+									<code>/workbench</code> to a Hucode helper; share existing
+									root workbench rendering where possible.</td>
+								<td>Large inline Omni template selection, iframe policy, or
+									project-manager logic.</td>
+							</tr>
+							<tr>
+								<td><code>serverServices.ts</code></td>
+								<td>Call a Hucode registration helper after core services are
+									available.</td>
+								<td>Inline project-manager construction and channel method
+									implementations.</td>
+							</tr>
+							<tr>
+								<td><code>environmentService.ts</code> (browser)</td>
+								<td>Expose Hucode hosted-workbench payload flags through simple
+									getters.</td>
+								<td>Adding shell, iframe, project-manager, or routing behavior.</td>
+							</tr>
+							<tr>
+								<td><code>build/next/index.ts</code></td>
+								<td>Add the Hucode web entrypoint to the existing web bundle
+									list.</td>
+								<td>Changing upstream web workbench entrypoint semantics.</td>
+							</tr>
+							<tr>
+								<td><code>build/gulpfile.reh.ts</code></td>
+								<td>Add a targeted include for Hucode web assets if needed.</td>
+								<td>Broad archive include changes that alter unrelated
+									server-web packaging.</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="risks">
+					<h2>Risks And Mitigations</h2>
+					<table>
+						<thead>
+							<tr>
+								<th>Risk</th>
+								<th>Impact</th>
+								<th>Mitigation</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Desktop/web controller drift</td>
+								<td>
+									Copying the desktop controller into a web controller creates
+									two lifecycle systems that diverge under close, reload,
+									dirty-unload, and crash handling.
+								</td>
+								<td>
+									Extract a shared hosted-workspace core first, then require
+									desktop <code>WebContentsView</code> and web iframe adapters
+									to pass the same lifecycle conformance tests. Keep
+									Electron-only screenshot fallback outside the shared core.
+								</td>
+							</tr>
+							<tr>
+								<td>Accidental screenshot dependency on web</td>
+								<td>
+									Web implementation could inherit desktop screenshot polling
+									even though iframes can be layered under shell DOM directly.
+								</td>
+								<td>
+									Treat capture as an optional desktop adapter capability.
+									Web overlays must use DOM stacking above the iframe host.
+								</td>
+							</tr>
+							<tr>
+								<td>Iframe storage collisions</td>
+								<td>
+									Several workbenches share origin, cookies, localStorage,
+									IndexedDB, and callback state.
+								</td>
+								<td>
+									Audit workspace-scoped storage keys. Add hosted-workbench
+									payload identity. Prefer server-side state for Projects.
+								</td>
+							</tr>
+							<tr>
+								<td>Dirty unload</td>
+								<td>
+									Closing an iframe directly can lose state or edits.
+								</td>
+								<td>
+									Add parent-child unload protocol before iframe removal.
+									Treat missing response as a veto or timeout policy decision.
+								</td>
+							</tr>
+							<tr>
+								<td>Browser tab discard</td>
+								<td>
+									The browser can discard or reload the whole Omni tab under
+									resource pressure, taking the shell and all hosted iframes
+									with it.
+								</td>
+								<td>
+									Treat discard as whole-shell recovery. Use
+									<code>document.wasDiscarded</code> where available and
+									rebuild from server-side project state. Do not try to
+									prevent or override browser discard.
+								</td>
+							</tr>
+							<tr>
+								<td>Hosted iframe failure</td>
+								<td>
+									A hosted workbench iframe can fail to load, stop responding,
+									or be reloaded independently of user intent.
+								</td>
+								<td>
+									Track readiness, optional heartbeat, load failure, and
+									reload state per hosted workbench. Surface it as reloadable
+									state in Projects without closing unrelated iframes.
+								</td>
+							</tr>
+							<tr>
+								<td>Command and keybinding ambiguity</td>
+								<td>
+									Shell commands can accidentally run in the hosted workbench,
+									or hosted commands can run in the shell.
+								</td>
+								<td>
+									Keep command routing command-id based and shared with the
+									desktop policy. Scope shell-to-workbench forwarding to the
+									active iframe only when shell focus is outside local inputs;
+									route shell-owned commands locally.
+								</td>
+							</tr>
+							<tr>
+								<td>Browser input trust and clipboard limits</td>
+								<td>
+									Browser pages cannot reliably synthesize trusted key or
+									paste events into an iframe the way Electron can call native
+									<code>webContents</code> APIs.
+								</td>
+								<td>
+									Let focused iframes handle normal browser events directly.
+									Use focus handoff for paste and document any Electron-only
+									behavior as an explicit parity exception.
+								</td>
+							</tr>
+							<tr>
+								<td>Project manager unavailable in web</td>
+								<td>
+									Projects sidebar is empty or actions fail.
+								</td>
+								<td>
+									Promote project manager to a server node channel before
+									treating Omni web as complete.
+								</td>
+							</tr>
+							<tr>
+								<td>Project metadata mixed with user settings</td>
+								<td>
+									The implementation could accidentally couple Hucode project
+									registry storage to future serve-web user settings/profile
+									storage.
+								</td>
+								<td>
+									Store project metadata in a Hucode-owned file under the
+									server data dir. Keep server-side user data/settings
+									persistence as a separate future feature.
+								</td>
+							</tr>
+							<tr>
+								<td>Server-web archive misses assets</td>
+								<td>
+									Local dev works, released <code>hucode serve-web</code>
+									404s the Omni shell.
+								</td>
+								<td>
+									Add archive inspection to validation and test the packaged
+									server-web output, not only source dev mode.
+								</td>
+							</tr>
+							<tr>
+								<td>Reverse proxy base-path regression</td>
+								<td>
+									Omni or iframe URLs fail under <code>--server-base-path</code>.
+								</td>
+								<td>
+									Construct routes from server-provided base path. Include
+									base-path cases in route tests.
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="non-negotiable-constraints">
+					<h2>Non-Negotiable Constraints</h2>
+					<ul>
+						<li>Do not change default <code>hucode serve-web</code> root
+							behavior. Without <code>--omni</code>, root <code>/</code>
+							must remain the regular VS Code web workbench.</li>
+						<li>Always expose the Omni Projects shell at <code>/omni</code>
+							and a normal workbench at <code>/workbench</code>, regardless
+							of whether <code>--omni</code> is present.</li>
+						<li><code>--omni</code> only changes what root <code>/</code>
+							serves. It must not hide or alter <code>/workbench</code>.</li>
+						<li>Canonical paths are <code>/omni</code> and
+							<code>/workbench</code>. Trailing slash variants must redirect
+							to canonical paths while preserving query parameters and
+							<code>--server-base-path</code>.</li>
+						<li>Keep upstream VS Code files as thin integration points.
+							Hucode routing, shell, lifecycle, project-manager, command
+							routing, and iframe policy must live in Hucode-owned helpers or
+							clearly named <code>hucode*</code> companions.</li>
+						<li>Do not copy the desktop hosted-workspace controller into a
+							separate web controller. Extract shared state-machine logic
+							first, then attach desktop and web adapters.</li>
+						<li>Use iframes for web hosted workbenches. Do not use Electron
+							<code>WebContentsView</code> concepts in the web adapter.</li>
+						<li>Do not implement app-level iframe eviction. Hosted workbenches
+							stay resident until the user closes them; browser tab discard is
+							a whole-shell recovery concern.</li>
+						<li>Do not port desktop screenshot overlay fallback to web. Web
+							shell overlays should layer above iframe workbenches through
+							normal DOM stacking.</li>
+						<li>Project metadata for server-web belongs in a Hucode-owned
+							file under the server data dir. Do not store it in browser
+							localStorage, VS Code user settings, or client-side profile
+							state.</li>
+						<li>Do not implement desktop-to-server project migration. Existing
+							serve-web does not migrate desktop user data, and project
+							metadata should follow that separation.</li>
+						<li>Preserve semantic parity with desktop Omni command routing
+							where browsers permit it. Browser-only exceptions must be
+							explicitly documented and tested.</li>
+					</ul>
+
+					<h3>Route Matrix</h3>
+					<table>
+						<thead>
+							<tr>
+								<th>Mode</th>
+								<th>Path</th>
+								<th>Expected Result</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>No <code>--omni</code></td>
+								<td><code>/</code></td>
+								<td>Regular VS Code web workbench.</td>
+							</tr>
+							<tr>
+								<td>No <code>--omni</code></td>
+								<td><code>/omni</code></td>
+								<td>Omni Projects shell.</td>
+							</tr>
+							<tr>
+								<td>No <code>--omni</code></td>
+								<td><code>/workbench?folder=/path</code></td>
+								<td>Regular workbench for that folder, without Omni chrome.</td>
+							</tr>
+							<tr>
+								<td>No <code>--omni</code></td>
+								<td><code>/workbench?ew=true</code></td>
+								<td>Regular empty workbench, without Omni chrome.</td>
+							</tr>
+							<tr>
+								<td><code>--omni</code></td>
+								<td><code>/</code></td>
+								<td>Omni Projects shell.</td>
+							</tr>
+							<tr>
+								<td><code>--omni</code></td>
+								<td><code>/omni</code></td>
+								<td>Omni Projects shell.</td>
+							</tr>
+							<tr>
+								<td><code>--omni</code></td>
+								<td><code>/workbench?folder=/path</code></td>
+								<td>Regular workbench for that folder, without Omni chrome.</td>
+							</tr>
+							<tr>
+								<td>Any</td>
+								<td><code>/omni/</code> or <code>/workbench/</code></td>
+								<td>Redirect to no-slash canonical path, preserving query and
+									base path.</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+
+				<section id="implementation-checklist">
+					<h2>Implementation Checklist</h2>
+					<ol>
+						<li>Reconfirm the current source seams before editing:
+							<code>ServeWebArgs</code>, <code>start_version</code>,
+							<code>serverEnvironmentService.ts</code>,
+							<code>webClientServer.ts</code>, server-web bundling, desktop
+							Omni controller, project manager, and command-routing tests.</li>
+						<li>Add the CLI flag and internal server boolean:
+							<code>--omni</code> in the Rust CLI, forwarding
+							<code>--hucode-web-omni-root</code> only when requested.</li>
+						<li>Extract route decision logic into a Hucode-owned helper and
+							keep <code>webClientServer.ts</code> as dispatch/delegation
+							only. Add route tests before broad shell work.</li>
+						<li>Add <code>/omni</code>, <code>/workbench</code>, and canonical
+							trailing-slash redirects. Validate folder, workspace,
+							empty-window, query preservation, and base-path behavior.</li>
+						<li>Extract shared hosted-workspace core behavior with tests:
+							instance IDs, active selection, lifecycle state, visibility
+							intent, close, reload, unload negotiation, failure state, and
+							events.</li>
+						<li>Move target normalization into shared descriptor helpers:
+							folder, workspace, empty window, worktree, iframe URL, and
+							hosted payload decisions.</li>
+						<li>Adapt desktop Omni to the shared core before building the web
+							adapter. Desktop behavior and existing tests should continue to
+							pass after the extraction.</li>
+						<li>Create the Omni web entrypoint and Hucode-owned HTML template.
+							Add server-web bundle, CSS, and resource-copy wiring with
+							narrow build-file edits.</li>
+						<li>Add the browser shell service and iframe hosted-workbench
+							adapter. Use same-origin iframes, a Hucode-owned host DOM seam,
+							and normal DOM layering for overlays.</li>
+						<li>Add hosted-workbench message contracts for ready, focus,
+							dirty, unload, crash/failure, status, command requests, and
+							shell-owned action requests. Use origin checks on
+							<code>postMessage</code>.</li>
+						<li>Add thin browser environment payload getters for
+							<code>isHostedOmniWorkspace</code> and
+							<code>hostedInstanceId</code>. Do not put hosted behavior in
+							the environment service.</li>
+						<li>Extract reusable project-manager logic and add a server
+							channel/client. Store server-web project metadata under the
+							server data dir in a Hucode-owned file.</li>
+						<li>Implement command-routing parity: shell-owned commands stay
+							local, shell-focus workbench commands forward to the active
+							iframe, iframe-origin shell commands forward back to the shell,
+							and forwarded markers prevent loops.</li>
+						<li>Handle browser exceptions explicitly: focused iframe
+							keybindings are naturally local; paste uses focus handoff and
+							browser-native behavior where possible; Electron native paste is
+							not expected on web.</li>
+						<li>Run unit, integration, and packaged server-web validation.
+							Update Hucode CI wiring if new test files need to run in CI.</li>
+					</ol>
+
+					<h3>Done Means</h3>
+					<ul>
+						<li>Default root, Omni root swap, <code>/omni</code>, and
+							<code>/workbench</code> all behave according to the route
+							matrix.</li>
+						<li>At least one folder workbench and one empty workbench can load
+							inside the Omni web shell as resident iframes.</li>
+						<li>Switching workbenches hides inactive iframes without unloading
+							them, and explicit close performs unload negotiation first.</li>
+						<li>Projects sidebar state comes from the server-side project
+							manager, with metadata stored under the server data dir.</li>
+						<li>Command routing has focused coverage for shell-to-workbench,
+							workbench-to-shell, shell-local inputs, no-workbench behavior,
+							and browser paste/keybinding exceptions.</li>
+						<li>New substantive behavior has Hucode-named tests near the
+							Hucode-owned modules or layer-compatible companions.</li>
+						<li>Packaged server-web output includes the Omni web entrypoint,
+							HTML, CSS, and static assets; source-mode success alone is not
+							enough.</li>
+					</ul>
+				</section>
+
+				<section id="testing">
+					<h2>Testing Strategy</h2>
+					<h3>Unit And Component Tests</h3>
+					<ul>
+						<li>Route selection: default root regular, default
+							<code>/omni</code> shell, <code>--omni</code> root shell,
+							workbench folder URL, workbench empty URL, trailing-slash
+							redirects, query preservation, base-path variants.
+							Prefer Hucode-named tests around the new route helper instead
+							of broad assertions against all of <code>WebClientServer</code>.</li>
+						<li>CLI forwarding: <code>ServeWebArgs.omni</code> defaults to
+							false and sends <code>--hucode-web-omni-root</code> only when
+							requested.</li>
+						<li>Shared hosted-workspace core: open, activate, reuse, hide,
+							close active, close last, reload, dirty unload, crash/unload,
+							browser-discard recovery, and event-order transitions without
+							platform APIs.</li>
+						<li>Host adapter conformance: desktop and web adapters both
+							satisfy create, navigate, show, hide, focus, reload, and
+							dispose contracts against the same fake core tests. Cover
+							screenshot capture only in desktop adapter tests.</li>
+						<li>Descriptor helpers: folder, workspace, empty-window, worktree,
+							base-path, and hosted-payload cases produce matching desktop and
+							web descriptors before adapter-specific URL/config mapping.</li>
+						<li>Web shell service: initial empty state, open workspace,
+							reuse workspace, activate existing workspace, close active,
+							close last workspace.</li>
+						<li>Iframe controller: URL generation, visibility transitions,
+							readiness message handling, heartbeat timeout, failure state
+							handling, explicit user close, and no automatic eviction.</li>
+						<li>Project manager server channel: get, add, refresh, move,
+							rename, last-active update.</li>
+						<li>Command-routing policy: shell-owned commands stay local,
+							workbench commands forward only when shell focus allows it,
+							forwarded-request markers prevent loops, and layout actions
+							match desktop handling.</li>
+					</ul>
+
+					<h3>Integration Tests</h3>
+					<ul>
+						<li>Launch server-web without the Omni flag and navigate to root.
+							Assert the regular workbench appears.</li>
+						<li>Launch server-web without the Omni flag and navigate to
+							<code>/omni</code>. Assert Omni shell and Projects sidebar
+							appear.</li>
+						<li>Launch server-web with the Omni flag and navigate to root.
+							Assert Omni shell and Projects sidebar appear.</li>
+						<li>Navigate to <code>/workbench?folder=/tmp/foo</code>. Assert
+							regular workbench appears without Omni chrome.</li>
+						<li>Navigate to <code>/workbench?ew=true</code>. Assert regular
+							empty workbench appears.</li>
+						<li>Navigate to <code>/omni/?folder=/tmp/foo</code> and
+							<code>/workbench/?folder=/tmp/foo</code>. Assert each redirects
+							to the no-trailing-slash canonical path while preserving
+							<code>folder</code>.</li>
+						<li>From Omni Projects, select a worktree and assert an iframe
+							loads a normal workbench.</li>
+						<li>Switch between two worktrees and assert the previous iframe
+							stays resident but hidden.</li>
+						<li>Simulate hosted iframe readiness timeout or failed navigation
+							and assert Projects shows a reloadable failure state without
+							closing other hosted workbenches.</li>
+						<li>From Projects focus, invoke a workbench-owned command and
+							assert it forwards to the active hosted iframe.</li>
+						<li>From hosted iframe focus, invoke a Projects/sidebar command
+							and assert it forwards back to the shell.</li>
+						<li>Assert normal keybindings stay in the focused iframe, while
+							shell-local inputs such as QuickInput do not forward.</li>
+						<li>Simulate shell restore after browser discard where possible,
+							or unit-test the recovery path from
+							<code>document.wasDiscarded</code>.</li>
+						<li>Run under <code>--server-base-path /x</code> and repeat
+							root, <code>/omni</code>, and <code>/workbench</code> route
+							checks.</li>
+						<li>Run at least one packaged server-web archive check, because
+							<code>hucode serve-web</code> consumes downloaded archives, not
+							only source-mode server output.</li>
+					</ul>
+
+					<h3>Build Validation</h3>
+					<pre>npm run hucode:prepare
+npm run hucode:validate
+npm run -s precommit -- &lt;edited files&gt;
+npm run gulp vscode-reh-web-darwin-arm64-min-ci</pre>
+					<p>
+						The exact server-web target should match the platform being
+						tested. For CI, wire the relevant Node/common browser tests into
+						the Hucode-focused workflow rather than relying on local-only
+						manual checks.
+					</p>
+				</section>
+
+				<section id="open-decisions">
+					<h2>Open Decisions</h2>
+					<p>
+						None currently. Command forwarding is no longer a reduced
+						first-release subset: the target is semantic parity with desktop
+						Omni command routing, with explicit browser-only exceptions for
+						Electron-native behavior such as trusted paste injection.
+					</p>
+				</section>
+
+				<section id="recommended-order">
+					<h2>Recommended Order</h2>
+					<ol>
+						<li>Land route split for root, <code>/omni</code>, and
+							<code>/workbench</code> with tests.</li>
+						<li>Extract shared hosted-workspace, hosted descriptor, route
+							decision, project-manager, and message-contract cores with
+							focused unit tests.</li>
+						<li>Land inert Omni web shell at <code>/omni</code> with Projects
+							chrome but no hosted workbench loading.</li>
+						<li>Land <code>--omni</code> root swap once <code>/omni</code> is
+							working.</li>
+						<li>Land iframe hosted-workbench adapter with manual folder
+							opening, backed by the shared hosted-workspace core and
+							no automatic iframe eviction.</li>
+						<li>Land server project-manager channel and full Projects
+							sidebar integration on the shared project-manager core.</li>
+						<li>Land lifecycle, unload, command routing, and packaging
+							hardening.</li>
+					</ol>
+					<div class="callout warning">
+						<p>
+							Do not treat the root route change as complete until a
+							packaged server-web archive has been tested. This feature is
+							specifically consumed through downloaded server-web archives,
+							so source-mode success is not enough.
+						</p>
+					</div>
+				</section>
+			</div>
+
+			<nav aria-label="Plan sections">
+				<h2>Sections</h2>
+				<a href="#objective">Objective</a>
+				<a href="#scope">Scope</a>
+				<a href="#current-state">Current State</a>
+				<a href="#architecture">Target Architecture</a>
+				<a href="#shared-core-adapters">Shared Cores</a>
+				<a href="#phase-plan">Phased Plan</a>
+				<a href="#code-map">Likely File Map</a>
+				<a href="#risks">Risks</a>
+				<a href="#non-negotiable-constraints">Constraints</a>
+				<a href="#implementation-checklist">Checklist</a>
+				<a href="#testing">Testing</a>
+				<a href="#open-decisions">Open Decisions</a>
+				<a href="#recommended-order">Recommended Order</a>
+			</nav>
+		</div>
+	</main>
+</body>
+</html>
