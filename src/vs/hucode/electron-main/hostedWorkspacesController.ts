@@ -1247,7 +1247,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		worktreePath: string,
 		projectId?: string,
 		canActivate: () => boolean = () => true,
-		canApply: () => boolean = () => true
+		canApply: () => boolean = () => true,
+		beforeCreate?: () => Promise<void>
 	): Promise<void> {
 		if (this.shuttingDown) {
 			return;
@@ -1435,7 +1436,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				recoveryOperation
 					? () => recoveryOperation!.canApply()
 					: canApply,
-				() => supersededOpenRolledBack = true
+				() => supersededOpenRolledBack = true,
+				beforeCreate
 			);
 		} finally {
 			if (recoveryOperation) {
@@ -1955,7 +1957,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		activationIntent?: number,
 		canActivate: () => boolean = () => true,
 		canApply: () => boolean = () => true,
-		onSupersededRollback: () => void = () => { }
+		onSupersededRollback: () => void = () => { },
+		beforeCreate?: () => Promise<void>
 	): Promise<IHostedWorkbenchInstance | undefined> {
 		if (this.shuttingDown || !canApply()) {
 			return undefined;
@@ -2035,6 +2038,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.markRetainedWorkbenchOwnershipConflict(worktreePath);
 			this.emitState();
 			return undefined;
+		}
+
+		try {
+			await beforeCreate?.();
+			const currentOwnership = this.ownershipCoordinator.lookup(worktreePath);
+			if (this.shuttingDown || !canApply() || !instance.ownership || currentOwnership.kind !== 'current-owner' || currentOwnership.ownership.generation !== instance.ownership.generation || currentOwnership.ownership.owner.kind !== 'hosted' || currentOwnership.ownership.owner.instanceId !== instance.instanceId) {
+				this.releaseInstanceOwnership(instance);
+				if (!canApply()) {
+					onSupersededRollback();
+				}
+				return undefined;
+			}
+		} catch (error) {
+			this.releaseInstanceOwnership(instance);
+			throw error;
 		}
 
 		instance.projectId = projectId ?? instance.projectId;

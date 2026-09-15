@@ -583,6 +583,7 @@ export function buildLinuxOmniSmokeArguments(
 ): string[] {
 	return [
 		`--user-data-dir=${userDataDir}`,
+		`--shared-data-dir=${path.join(userDataDir, 'shared')}`,
 		`--extensions-dir=${extensionsDir}`,
 		`--remote-debugging-port=${remoteDebuggingPort}`,
 		'--disable-extensions',

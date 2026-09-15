@@ -28,6 +28,8 @@ separate application window for each one.
   Plan](omni-profile-spaces-plan.md) records global live-path ownership,
   independent hosted profiles, and a shell that follows the active workbench's
   appearance on desktop and serve-web.
+- [Desktop first-launch onboarding](onboarding-first-launch.md) describes
+  automatic admission, checkpoint durability, and the exact folder/profile handoff.
 - [First-Launch Onboarding and Editor Migration Plan](onboarding-plan.md)
   defines the desktop onboarding, reusable migration flow, safe import
   boundaries, Omni setup, and staged delivery tracked by issue #192.
@@ -46,6 +48,9 @@ separate application window for each one.
 - [Setup UI Webview Plan](setup-ui-webview-plan.md) defines the isolated React,
   Tailwind, shadcn, and TanStack Virtual renderer for issue #203 and the shared
   presentation boundary that issue #204 will reuse.
+- [Onboarding Host Plan](onboarding-host-plan.md) defines the modal onboarding
+  host, onboarding session, Start Fresh and Meet Omni stages, installation
+  state, and delivery sequence for issue #204.
 
 ## Developing Hucode
 

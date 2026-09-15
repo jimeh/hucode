@@ -620,6 +620,61 @@ suite('ResidentHostedWorkspacesController', () => {
 		};
 	}
 
+	test('onboarding association runs under the owner reservation before profile configuration', async () => {
+		const worktreePath = createWorktree('onboarding-profile');
+		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const imported = createProfile('imported');
+		const fixture = createController({ ownershipCoordinator: coordinator, profiles: [createProfile('default', [], true), imported] });
+		const entered = new DeferredPromise<void>();
+		const save = new DeferredPromise<void>();
+		const opening = fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => true, async () => {
+			entered.complete();
+			await save.p;
+			fixture.workspaceProfileOverrides.set(URI.file(worktreePath).toString(), imported);
+		});
+		await entered.p;
+		assert.strictEqual(coordinator.lookup(worktreePath).kind, 'current-owner');
+		assert.strictEqual(fixture.viewFactory.views.length, 0);
+		save.complete();
+		await opening;
+		assert.strictEqual((fixture.protocolMainService.objectUrls[0].value as INativeWindowConfiguration).profiles.profile.id, imported.id);
+	});
+
+	test('onboarding association failure releases its reservation without creating a view', async () => {
+		const worktreePath = createWorktree('onboarding-profile-failed');
+		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator();
+		const fixture = createController({ ownershipCoordinator: coordinator });
+		await assert.rejects(fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => true, async () => { throw new Error('profile save failed'); }), /profile save failed/);
+		assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+	});
+
+	test('shutdown or supersession during onboarding persistence prevents late view creation', async () => {
+		for (const shutdown of [true, false]) {
+			const worktreePath = createWorktree(`onboarding-profile-cancel-${shutdown}`);
+			const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator();
+			const fixture = createController({ ownershipCoordinator: coordinator });
+			const entered = new DeferredPromise<void>();
+			const save = new DeferredPromise<void>();
+			let current = true;
+			const opening = fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => current, async () => { entered.complete(); await save.p; });
+			await entered.p;
+			if (shutdown) { await fixture.controller.shutdownAllWorkspaces(UnloadReason.QUIT); }
+			else { current = false; }
+			save.complete();
+			await opening;
+			assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+		}
+	});
+
+	test('an existing hosted owner never invokes onboarding association or reloads', async () => {
+		const worktreePath = createWorktree('onboarding-already-open');
+		const fixture = createController();
+		await fixture.controller.openAdmittedWorkspace(worktreePath);
+		let associations = 0;
+		await fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => true, async () => { associations++; });
+		assert.deepStrictEqual({ associations, views: fixture.viewFactory.views.length, reloads: fixture.viewFactory.views[0].rawWebContents.reloadCalls.length }, { associations: 0, views: 1, reloads: 0 });
+	});
+
 	test('uses workspace profiles without changing the shell profile', async () => {
 		const firstPath = createWorktree('first');
 		const secondPath = createWorktree('second');

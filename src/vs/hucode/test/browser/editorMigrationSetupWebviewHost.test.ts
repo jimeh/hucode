@@ -20,9 +20,19 @@ import {
 } from '../../browser/migration/editorMigrationSetupWebviewHost.js';
 import { bindEditorMigrationCloseCancellation, shouldCancelEditorMigrationOnClose } from '../../browser/migration/editorMigrationSetupClose.js';
 import {
+	EditorMigrationSetupPresenter,
+	ISetupWebviewPresenter,
+	SetupWebviewDispatchableIntent,
+	SetupWebviewIntentOutcome,
+} from '../../browser/migration/editorMigrationSetupPresenter.js';
+import { OnboardingSession } from '../../browser/onboarding/onboardingSession.js';
+import {
 	EDITOR_MIGRATION_SETUP_HEADING_FOCUS_ID,
+	EDITOR_MIGRATION_SETUP_INTENT_POLICY,
 	EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION,
 	EditorMigrationSetupIntent,
+	EditorMigrationSetupIntentType,
+	EditorMigrationSetupPresentation,
 } from '../../common/migration/editorMigrationSetupProtocol.js';
 import { EditorMigrationApplyProgress } from '../../common/migration/editorMigrationApply.js';
 
@@ -38,7 +48,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const webviews = new StubWebviewService();
 		const host = disposables.add(new EditorMigrationSetupWebviewHost(
 			parent,
-			sessionStub({ phase: 'application' }),
+			new EditorMigrationSetupPresenter(sessionStub({ phase: 'application' })),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(resource => {
@@ -69,7 +79,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const parent = testParent();
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			parent,
-			sessionStub({ phase: 'application' }),
+			new EditorMigrationSetupPresenter(sessionStub({ phase: 'application' })),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -99,7 +109,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -124,7 +134,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -156,7 +166,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'apply', progress: progress('applying', 1) });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -186,7 +196,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'apply', progress: progress('applying', 1) });
 		const host = disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -209,7 +219,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
 		const host = disposables.add(new EditorMigrationSetupWebviewHost(
 			parent,
-			session,
+			new EditorMigrationSetupPresenter(session),
 			// A short deadline keeps this a behaviour test rather than a ten-second wait.
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
 			webviews as unknown as IWebviewService,
@@ -239,7 +249,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const parent = testParent();
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			parent,
-			sessionStub({ phase: 'application' }),
+			new EditorMigrationSetupPresenter(sessionStub({ phase: 'application' })),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -259,7 +269,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const webviews = new StubWebviewService();
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			sessionStub({ phase: 'application', applications: [application('cursor')] }),
+			new EditorMigrationSetupPresenter(sessionStub({ phase: 'application', applications: [application('cursor')] })),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -285,7 +295,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -315,7 +325,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'application', applications: [application('cursor')] });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -360,7 +370,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'apply', progress: progress('applying', 1) });
 		const host = disposables.add(new EditorMigrationSetupWebviewHost(
 			parent,
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { }, readyTimeout: 10 },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -384,7 +394,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'publishers', publishers: ['acme'] });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -417,7 +427,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'publishers' });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -444,7 +454,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'review', busy: true });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -468,7 +478,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'profile', selectedSourceRef: { value: 'cursor-default' } });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -498,7 +508,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'review' });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -524,7 +534,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'target', busy: true });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -548,7 +558,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'recovery' });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -572,7 +582,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'results', operation: settledOperation() });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -599,7 +609,7 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		const session = sessionStub({ phase: 'results', busy: true, operation: settledOperation() });
 		disposables.add(new EditorMigrationSetupWebviewHost(
 			testParent(),
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{ mediaRoot: MEDIA_ROOT, onDone: () => { } },
 			webviews as unknown as IWebviewService,
 			fileServiceStub(() => true),
@@ -627,6 +637,78 @@ suite('EditorMigrationSetupWebviewHost', () => {
 		assert.strictEqual(isProgressOnlyChange(base, { ...base, error: 'failed' }), false);
 		assert.strictEqual(isProgressOnlyChange(base, { ...base, phase: 'results' }), false);
 		assert.strictEqual(isProgressOnlyChange(undefined, base), false);
+	});
+
+	test('maps every dispatchable intent onto exactly one session method', () => {
+		// The protocol promises a one-for-one mapping: migration intents onto the migration
+		// session, the onboarding intents onto the onboarding session. `back` is the one intent
+		// both answer, because onboarding routes it by stage. Anything else on both, or on neither,
+		// is a drift.
+		const migration = new Set(Object.getOwnPropertyNames(EditorMigrationFlowSession.prototype));
+		const onboarding = new Set(Object.getOwnPropertyNames(OnboardingSession.prototype));
+		const owner = (type: string) => migration.has(type) && onboarding.has(type) ? 'both' : migration.has(type) ? 'migration' : onboarding.has(type) ? 'onboarding' : 'none';
+		const types = (Object.keys(EDITOR_MIGRATION_SETUP_INTENT_POLICY) as EditorMigrationSetupIntentType[]).filter(type => type !== 'ready' && type !== 'close');
+		const onboardingOwned: readonly EditorMigrationSetupIntentType[] = ['skip', 'chooseRoute', 'selectMode', 'selectPreferredTheme', 'continueStage', 'finishForNow', 'addProject', 'openFolderAsWorkbench'];
+		const expected = Object.fromEntries(types.map(type => [type, type === 'back' ? 'both' : onboardingOwned.includes(type) ? 'onboarding' : 'migration']));
+		assert.deepStrictEqual(Object.fromEntries(types.map(type => [type, owner(type)])), expected);
+	});
+
+	test('serves a non-migration presenter with the same lifecycle, answers, and coalescing', async () => {
+		const webviews = new StubWebviewService();
+		let onDone = 0;
+		const presenter = new StubPresenter();
+		disposables.add(new EditorMigrationSetupWebviewHost(
+			testParent(),
+			presenter,
+			{ mediaRoot: MEDIA_ROOT, onDone: () => { onDone += 1; } },
+			webviews as unknown as IWebviewService,
+			fileServiceStub(() => true),
+			new NullLogService(),
+		));
+		await settle();
+		const [webview] = webviews.created;
+		assert.strictEqual(webview.init.title, 'Stub Surface', 'the presenter names the document');
+		assert.match(webview.html ?? '', /role="status">Stub is starting\.\.\.<\/p>/);
+
+		webview.receive({ protocolVersion: EDITOR_MIGRATION_SETUP_PROTOCOL_VERSION, revision: 0, intent: { type: 'ready' } });
+		assert.deepStrictEqual(webview.posted.map(message => message.type), ['state', 'focus']);
+		assert.deepStrictEqual([webview.posted[0].presentation.route, webview.posted[0].presentation.revision], ['onboarding', 1]);
+		assert.deepStrictEqual(presenter.presented, [1], 'the host stamps the revision it assigned');
+
+		// Each outcome keeps the host's existing answer shape.
+		const answers: Record<SetupWebviewIntentOutcome, string[]> = { accepted: [], superseded: [], staleRevision: [], unresolvable: [] };
+		for (const outcome of Object.keys(answers) as SetupWebviewIntentOutcome[]) {
+			presenter.outcome = outcome;
+			webview.posted.length = 0;
+			send(webview, 1, { type: 'skip' });
+			answers[outcome] = webview.posted.map(message => message.type);
+		}
+		assert.deepStrictEqual(answers, {
+			accepted: ['accepted'],
+			superseded: ['state'],
+			staleRevision: ['state', 'error'],
+			unresolvable: ['state', 'error'],
+		});
+		// An accepted intent does not resend state, so the second send still carries the current
+		// stamp; the superseded answer and each refusal advance it, which is why the rest are stale.
+		assert.deepStrictEqual(presenter.handled.map(([intent, current]) => [intent.type, current]), [['skip', true], ['skip', true], ['skip', false], ['skip', false]],
+			'the host tells the presenter whether the stamp is current, and only the presenter decides what that means');
+
+		// The coalescing hook: a non-coalescable change crosses at once, a coalescable one waits a frame.
+		webview.posted.length = 0;
+		presenter.coalescable = false;
+		presenter.change();
+		assert.strictEqual(webview.posted.length, 1);
+		presenter.coalescable = true;
+		presenter.change();
+		presenter.change();
+		assert.strictEqual(webview.posted.length, 1, 'coalescable changes wait for the next frame');
+		await animationFrame();
+		assert.strictEqual(webview.posted.length, 2, 'the frame delivers once');
+
+		// Finishing closes the framing through the same path as a renderer close.
+		presenter.finish();
+		assert.strictEqual(onDone, 1);
 	});
 });
 
@@ -705,6 +787,56 @@ function settledOperation(): NonNullable<EditorMigrationFlowState['operation']> 
 			decisions: [],
 		},
 	} as unknown as NonNullable<EditorMigrationFlowState['operation']>;
+}
+
+/** A presenter that is not the migration one, so the host can only be talking to the interface. */
+class StubPresenter implements ISetupWebviewPresenter {
+	private readonly changeEmitter = new Emitter<void>();
+	private readonly finishEmitter = new Emitter<void>();
+	readonly onDidChangeState = this.changeEmitter.event;
+	readonly onDidFinish = this.finishEmitter.event;
+	readonly title = 'Stub Surface';
+	readonly bootstrapText = 'Stub is starting...';
+	readonly presented: number[] = [];
+	readonly handled: [SetupWebviewDispatchableIntent, boolean][] = [];
+	outcome: SetupWebviewIntentOutcome = 'accepted';
+	coalescable = false;
+
+	presentation(revision: number): EditorMigrationSetupPresentation {
+		this.presented.push(revision);
+		return {
+			revision,
+			route: 'onboarding',
+			phase: 'bring',
+			regionLabel: 'Stub',
+			title: 'Stub',
+			steps: [],
+			busy: false,
+			canceling: false,
+			sections: [],
+			scopeKey: 'stub',
+			panels: [{ kind: 'bring', id: '', heading: 'Stub', lead: 'l', paragraphs: [], choices: [] }],
+			footer: { lines: [], actions: [] },
+			sectionAnnouncementTemplate: '{0}',
+		};
+	}
+
+	isPendingChangeCoalescable(): boolean {
+		return this.coalescable;
+	}
+
+	handleIntent(intent: SetupWebviewDispatchableIntent, isCurrentRevision: boolean): SetupWebviewIntentOutcome {
+		this.handled.push([intent, isCurrentRevision]);
+		return this.outcome;
+	}
+
+	change(): void {
+		this.changeEmitter.fire();
+	}
+
+	finish(): void {
+		this.finishEmitter.fire();
+	}
 }
 
 interface SessionStub extends EditorMigrationFlowSession {

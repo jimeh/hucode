@@ -472,6 +472,32 @@ suite('EditorMigrationFlow', () => {
 		assert.strictEqual(session.state.phase, 'results');
 	});
 
+	test('disposing the session during Apply cancels the token and lets the apply service settle on its own', async () => {
+		// Onboarding disposes its embedded migration session with the modal input. The operation
+		// itself lives in the apply service: it reads the cancelled token at its next checkpoint and
+		// records the durable outcome regardless of whether the session that started it still exists.
+		const completion = new DeferredPromise<ReturnType<typeof applyResult>>();
+		const applyStarted = new DeferredPromise<void>();
+		let token: { readonly isCancellationRequested: boolean } | undefined;
+		const scenario = await createReadyFlowScenario(async (_plan, _authorization, applyToken, reporter) => {
+			token = applyToken;
+			applyStarted.complete();
+			reporter?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: false });
+			return await completion.p;
+		});
+		const session = scenario.session;
+		const acceptance = session.acceptReview();
+		await applyStarted.p;
+		assert.strictEqual(session.state.phase, 'apply');
+
+		session.dispose();
+		assert.strictEqual(token?.isCancellationRequested, true, 'disposal is how the running operation learns it should stop at a safe checkpoint');
+
+		// The service settles the operation after the session is gone, without throwing into it.
+		completion.complete(applyResult());
+		await acceptance;
+	});
+
 	test('moves a thrown post-admission Apply to durable Results and clears stale progress for another import', async () => {
 		const scenario = await createReadyFlowScenario(async (_plan, _authorization, _token, reporter) => {
 			reporter?.({ operationId: 'operation-1', revision: 1, stage: 'admitted', target: { state: 'pending' }, selectedItemCount: 1, results: [], cancellationRequested: false });

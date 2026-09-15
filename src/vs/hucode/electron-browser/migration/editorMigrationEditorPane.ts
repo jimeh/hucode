@@ -15,6 +15,7 @@ import { ITelemetryService } from '../../../platform/telemetry/common/telemetry.
 import { IThemeService } from '../../../platform/theme/common/themeService.js';
 import { IEditorMigrationFlowService } from '../../browser/migration/editorMigrationFlow.js';
 import { bindEditorMigrationCloseCancellation } from '../../browser/migration/editorMigrationSetupClose.js';
+import { EditorMigrationSetupPresenter } from '../../browser/migration/editorMigrationSetupPresenter.js';
 import { EditorMigrationSetupWebviewHost } from '../../browser/migration/editorMigrationSetupWebviewHost.js';
 import { EditorPane } from '../../../workbench/browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../workbench/common/editor.js';
@@ -75,7 +76,7 @@ export class EditorMigrationEditorPane extends EditorPane {
 		this.host = this.inputDisposables.add(this.instantiationService.createInstance(
 			EditorMigrationSetupWebviewHost,
 			this.container,
-			session,
+			new EditorMigrationSetupPresenter(session),
 			{
 				mediaRoot: editorMigrationSetupMediaRoot(this.environmentService),
 				onDone: () => void this.group.closeEditor(input),

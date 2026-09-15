@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
+import { initializeHucodeOnboardingStorage } from './hucodeOnboardingStorage.js';
 import { top } from '../../../base/common/arrays.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
@@ -325,6 +326,16 @@ export class ApplicationStorageMain extends BaseProfileAwareStorageMain {
 
 	protected override async doInit(storage: IStorage): Promise<void> {
 		await super.doInit(storage);
+
+		if (this.path) {
+			try {
+				await initializeHucodeOnboardingStorage(storage);
+			} catch {
+				// Retry before telemetry and the newness marker. A second failure reaches
+				// the base initialization catch, allowing degraded startup without enrollment.
+				await initializeHucodeOnboardingStorage(storage);
+			}
+		}
 
 		// Apply telemetry values as part of the application storage initialization
 		this.updateTelemetryState(storage);

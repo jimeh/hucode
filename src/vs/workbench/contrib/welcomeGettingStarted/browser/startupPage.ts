@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { suppressHucodeStartupPage, suppressHucodeUpstreamOnboarding } from './hucodeStartupPolicy.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import * as arrays from '../../../../base/common/arrays.js';
@@ -100,7 +101,9 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 	) {
 		super();
 
-		this.tryShowOnboarding();
+		if (!suppressHucodeUpstreamOnboarding(isWeb, this.productService.hucodeVersion)) {
+			this.tryShowOnboarding();
+		}
 		this.run().then(undefined, onUnexpectedError);
 		this._register(this.editorService.onDidCloseEditor((e) => {
 			if (e.editor instanceof GettingStartedInput) {
@@ -111,6 +114,10 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 	}
 
 	private async run() {
+
+		if (suppressHucodeStartupPage(isWeb, this.productService.hucodeVersion, this.storageService.isNew(StorageScope.APPLICATION))) {
+			return;
+		}
 
 		// Wait for resolving startup editor until we are restored to reduce startup pressure
 		await this.lifecycleService.when(LifecyclePhase.Restored);
