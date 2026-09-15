@@ -8,5 +8,6 @@
 import './hostedShellServiceAdapter.js';
 import './hucodeClipboardService.js';
 import './migration/editorMigrationSourceService.js';
+import '../browser/migration/editorMigrationApplyService.js';
 import '../browser/migration/editorMigrationPlanningService.js';
 import './shellControllerServiceAdapter.js';
