@@ -12,7 +12,12 @@ import { IConfigurationService } from '../../configuration/common/configuration.
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
 import { IStateService } from '../../state/node/state.js';
-import { INativeWindowConfiguration, IWindowSettings } from '../../window/common/window.js';
+import {
+	INativeWindowConfiguration,
+	IOmniRetainedWorkbench,
+	IOmniWorkspaceRestoreEntry,
+	IWindowSettings,
+} from '../../window/common/window.js';
 import { IWindowsMainService } from './windows.js';
 import { defaultWindowState, ICodeWindow, IWindowState as IWindowUIState, WindowMode } from '../../window/electron-main/window.js';
 import { isSingleFolderWorkspaceIdentifier, isWorkspaceIdentifier, IWorkspaceIdentifier } from '../../workspace/common/workspace.js';
@@ -23,6 +28,10 @@ export interface IWindowState {
 	folderUri?: URI;
 	backupPath?: string;
 	remoteAuthority?: string;
+	windowKind?: 'workbench' | 'omni';
+	omniActiveWorktreePath?: string;
+	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
 	uiState: IWindowUIState;
 }
 
@@ -47,6 +56,10 @@ interface ISerializedWindowState {
 	readonly folder?: string;
 	readonly backupPath?: string;
 	readonly remoteAuthority?: string;
+	readonly windowKind?: 'workbench' | 'omni';
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	readonly omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
 	readonly uiState: IWindowUIState;
 }
 
@@ -263,6 +276,10 @@ export class WindowsStateHandler extends Disposable {
 			folderUri: isSingleFolderWorkspaceIdentifier(window.openedWorkspace) ? window.openedWorkspace.uri : undefined,
 			backupPath: window.backupPath,
 			remoteAuthority: window.remoteAuthority,
+			windowKind: window.isOmniWindow ? 'omni' : 'workbench',
+			omniActiveWorktreePath: window.config?.omniActiveWorktreePath,
+			omniResidentWorkspaces: window.config?.omniResidentWorkspaces,
+			omniRetainedWorkbenches: window.config?.omniRetainedWorkbenches,
 			uiState: window.serializeWindowState()
 		};
 	}
@@ -457,6 +474,24 @@ function restoreWindowState(windowState: ISerializedWindowState): IWindowState {
 		result.remoteAuthority = windowState.remoteAuthority;
 	}
 
+	if (windowState.windowKind) {
+		result.windowKind = windowState.windowKind;
+	}
+
+	if (windowState.omniActiveWorktreePath) {
+		result.omniActiveWorktreePath = windowState.omniActiveWorktreePath;
+	}
+
+	if (Array.isArray(windowState.omniResidentWorkspaces)) {
+		result.omniResidentWorkspaces =
+			windowState.omniResidentWorkspaces;
+	}
+
+	if (Array.isArray(windowState.omniRetainedWorkbenches)) {
+		result.omniRetainedWorkbenches =
+			windowState.omniRetainedWorkbenches;
+	}
+
 	if (windowState.folder) {
 		result.folderUri = URI.parse(windowState.folder);
 	}
@@ -482,6 +517,10 @@ function serializeWindowState(windowState: IWindowState): ISerializedWindowState
 		folder: windowState.folderUri?.toString(),
 		backupPath: windowState.backupPath,
 		remoteAuthority: windowState.remoteAuthority,
+		windowKind: windowState.windowKind,
+		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
+		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
+		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
 		uiState: windowState.uiState
 	};
 }

@@ -5,6 +5,7 @@
 
 import { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { IRendererReplyTarget } from '../../window/common/window.js';
 
 export const IExtensionHostStarter = createDecorator<IExtensionHostStarter>('extensionHostStarter');
 
@@ -12,7 +13,7 @@ export const ipcExtensionHostStarterChannelName = 'extensionHostStarter';
 export const extensionHostGraceTimeMs = 6000;
 
 export interface IExtensionHostProcessOptions {
-	responseWindowId: number;
+	responseTarget: IRendererReplyTarget;
 	responseChannel: string;
 	responseNonce: string;
 	env: { [key: string]: string | undefined };
