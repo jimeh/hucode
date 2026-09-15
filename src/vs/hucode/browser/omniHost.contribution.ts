@@ -169,6 +169,8 @@ class OmniSmokeTestDriverContribution extends Disposable
 			windowId: getWindowId(mainWindow),
 			openWorkspace: (_windowId, worktreePath) =>
 				shellService.openWorkspace(worktreePath),
+			crashWorkspace: (_windowId, instanceId) =>
+				shellService.crashWorkspaceRendererForSmokeTest(instanceId),
 			suspendWorkspace: (_windowId, instanceId) =>
 				shellService.suspendWorkspace(instanceId),
 			reloadWorkspace: _windowId => shellService.reloadWorkspace(),
