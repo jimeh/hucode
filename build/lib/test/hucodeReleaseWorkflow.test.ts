@@ -312,11 +312,20 @@ suite('Hucode release workflow contract', () => {
 			);
 		});
 
-		test('disables the sandbox the artifact cannot carry', () => {
+		test('restores the sandbox helper the artifact cannot carry', () => {
 			// tar cannot restore chrome-sandbox as root-owned mode 4755 for a
-			// non-root extraction, so the setuid bit is gone from the artifact
-			// and Electron aborts in the SUID sandbox helper without this.
-			assert.match(launchStep, /env:\n          ELECTRON_DISABLE_SANDBOX: 1/);
+			// non-root extraction. Running unsandboxed instead made the
+			// renderer-crash phase time out on every release from v0.0.76 to
+			// v0.0.81, so the job restores the helper before the launch step.
+			const restoreStep = job.slice(
+				job.indexOf('- name: Restore Electron sandbox helper'),
+				job.indexOf('- name: Run packaged Omni lifecycle smoke')
+			);
+			assert.match(
+				restoreStep,
+				/sudo chown root \.\.\/VSCode-linux-x64\/chrome-sandbox\n\s+sudo chmod 4755 \.\.\/VSCode-linux-x64\/chrome-sandbox/
+			);
+			assert.doesNotMatch(launchStep, /ELECTRON_DISABLE_SANDBOX/);
 		});
 
 		test('keeps the composite action build toolchain', () => {

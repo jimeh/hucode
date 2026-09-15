@@ -9,8 +9,9 @@ import {
 	assertLinuxOmniLifecycleObservation,
 	buildLinuxOmniSmokeArguments,
 	classifyLinuxOmniTargets,
-	crashLinuxOmniPage,
+	crashWorkbenchThroughSmokeDriver,
 	createLinuxOmniLifecycleExpectations,
+	describeLinuxOmniProcesses,
 	createLinuxOmniLaunchEnvironment,
 	createLinuxOmniSmokeFixture,
 	formatLinuxOmniUnexpectedExit,
@@ -720,116 +721,126 @@ suite('Hucode Linux Omni lifecycle smoke', () => {
 		}
 	);
 
-	test('bounds CDP session creation by the lifecycle deadline',
-		{ timeout: 500 },
+	test('targets the exact hosted instance through the smoke driver',
 		async () => {
-			let removedCrashListeners = 0;
+			const calls: string[] = [];
 			const page = {
-				once(event: string): void {
-					assert.strictEqual(event, 'crash');
-				},
-				off(event: string): void {
-					assert.strictEqual(event, 'crash');
-					removedCrashListeners++;
-				},
-				context() {
-					return {
-						newCDPSession(): Promise<never> {
-							return new Promise(() => undefined);
+				async evaluate(
+					callback: (instanceId: string) => Promise<void>,
+					instanceId: string
+				): Promise<void> {
+					const targetGlobal = globalThis as unknown as {
+						__hucodeOmniSmokeTestDriver?: {
+							crashWorkspace(id: string): Promise<void>;
+						};
+					};
+					targetGlobal.__hucodeOmniSmokeTestDriver = {
+						async crashWorkspace(id): Promise<void> {
+							calls.push(id);
 						},
 					};
+					try {
+						await callback(instanceId);
+					} finally {
+						delete targetGlobal.__hucodeOmniSmokeTestDriver;
+					}
+				},
+			};
+
+			await crashWorkbenchThroughSmokeDriver(
+				page as never,
+				'bravo-instance',
+				Date.now() + 500
+			);
+			assert.deepStrictEqual(calls, ['bravo-instance']);
+		}
+	);
+
+	test('reports a timed-out smoke-driver call with diagnostics',
+		{ timeout: 500 },
+		async () => {
+			const page = {
+				evaluate(): Promise<never> {
+					return new Promise(() => undefined);
 				},
 			};
 
 			await assert.rejects(
-				crashLinuxOmniPage(page as never, Date.now() + 10),
-				/Timed out during Bravo crash CDP session creation/
+				crashWorkbenchThroughSmokeDriver(
+					page as never,
+					'bravo-instance',
+					Date.now() + 50,
+					async () => 'Projects rows: [{"label":"Bravo","state":"loaded"}]'
+				),
+				error => {
+					const message = (error as Error).message;
+					assert.match(
+						message,
+						/Timed out during crash Bravo smoke-driver call/
+					);
+					assert.match(message, /Projects rows: .*"state":"loaded"/);
+					return true;
+				}
 			);
-			assert.strictEqual(removedCrashListeners, 1);
 		}
 	);
 
-	test('does not wait for CDP detach after the renderer crash event',
-		async () => {
-			let crashListener: (() => void) | undefined;
-			let detachCalls = 0;
-			let removedCrashListeners = 0;
-			const page = {
-				once(event: string, listener: () => void): void {
-					assert.strictEqual(event, 'crash');
-					crashListener = listener;
-				},
-				off(event: string, listener: () => void): void {
-					assert.strictEqual(event, 'crash');
-					assert.strictEqual(listener, crashListener);
-					removedCrashListeners++;
-				},
-				context() {
-					return {
-						async newCDPSession() {
-							return {
-								send(method: string): Promise<void> {
-									assert.strictEqual(method, 'Page.crash');
-									crashListener?.();
-									return new Promise(() => undefined);
-								},
-								detach(): Promise<void> {
-									detachCalls++;
-									return new Promise(() => undefined);
-								},
-							};
-						},
-					};
-				},
-			};
+	test('reports failed smoke-driver diagnostics', async () => {
+		const page = {
+			evaluate(): Promise<never> {
+				return new Promise(() => undefined);
+			},
+		};
 
-			await assert.doesNotReject(runLinuxOmniBoundedProbe(
-				Date.now() + 500,
-				'crashed renderer cleanup',
-				() => crashLinuxOmniPage(page as never, Date.now() + 500)
-			));
-			assert.strictEqual(detachCalls, 0);
-			assert.strictEqual(removedCrashListeners, 1);
-		}
-	);
+		await assert.rejects(
+			crashWorkbenchThroughSmokeDriver(
+				page as never,
+				'bravo-instance',
+				Date.now() + 20,
+				async () => {
+					throw new Error('ps unavailable');
+				}
+			),
+			error => {
+				const message = (error as Error).message;
+				assert.match(
+					message,
+					/Timed out during crash Bravo smoke-driver call/
+				);
+				assert.match(message, /crash diagnostics failed: Error: ps unavailable/);
+				return true;
+			}
+		);
+	});
 
-	test('reports a rejected crash command when no crash event follows',
-		{ timeout: 500 },
-		async () => {
-			let crashListener: (() => void) | undefined;
-			let removedCrashListeners = 0;
-			const page = {
-				once(event: string, listener: () => void): void {
-					assert.strictEqual(event, 'crash');
-					crashListener = listener;
-				},
-				off(event: string, listener: () => void): void {
-					assert.strictEqual(event, 'crash');
-					assert.strictEqual(listener, crashListener);
-					removedCrashListeners++;
-				},
-				context() {
-					return {
-						async newCDPSession() {
-							return {
-								send(): Promise<void> {
-									return Promise.reject(
-										new Error('Page.crash unavailable')
-									);
-								},
-							};
-						},
-					};
-				},
-			};
-
-			await assert.rejects(
-				crashLinuxOmniPage(page as never, Date.now() + 10),
-				/Timed out waiting for the Bravo renderer crash event.*Page\.crash unavailable/
-			);
-			assert.strictEqual(removedCrashListeners, 1);
-		}
-	);
+	test('lists only the packaged application processes', async () => {
+		const listing = await describeLinuxOmniProcesses(
+			'/opt/VSCode-linux-x64/hucode',
+			async (file, args) => {
+				assert.strictEqual(file, 'ps');
+				assert.deepStrictEqual(args, ['-eo', 'pid,ppid,stat,etimes,args']);
+				return [
+					'    PID    PPID STAT ELAPSED COMMAND',
+					'      1       0 Ss       900 /sbin/init',
+					'   4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+					'   4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+					'',
+				].join('\n');
+			}
+		);
+		assert.strictEqual(
+			listing,
+			[
+				'Application processes:',
+				'4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+				'4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+			].join('\n')
+		);
+		assert.strictEqual(
+			await describeLinuxOmniProcesses('/opt/other', async () => 'PID\n'),
+			'Application processes:\n<none>'
+		);
+	});
 
 	test('formats phase-specific unexpected-exit diagnostics', () => {
 		assert.strictEqual(

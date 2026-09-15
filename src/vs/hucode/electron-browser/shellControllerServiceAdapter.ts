@@ -354,6 +354,10 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 		return this.withShell(shell =>
 			shell.openAndFocusWorkspace(path, projectId));
 	}
+	crashWorkspaceRendererForSmokeTest(instanceId: string) {
+		return this.withShell(shell =>
+			shell.crashWorkspaceRendererForSmokeTest(instanceId));
+	}
 	suspendWorkspace(instanceId: string) {
 		return this.withShell(shell => shell.suspendWorkspace(instanceId));
 	}

@@ -98,6 +98,7 @@ import {
 } from '../../platform/window/common/hucodeShellControllerService.js';
 import {
 	acceptHucodeShellControllerPortRequest,
+	assertHucodeSmokeTestCrashEnabled,
 	IHucodeShellControllerPortConnection,
 	IHucodeShellControllerPortOwner,
 	registerHucodeShellControllerOwnerLifecycle,
@@ -645,6 +646,8 @@ export class HucodeShellMainService extends Disposable
 				this.openWorkspace(windowId, path, projectId),
 			openAndFocusWorkspace: (path, projectId) =>
 				this.openAndFocusWorkspace(windowId, path, projectId),
+			crashWorkspaceRendererForSmokeTest: instanceId =>
+				this.crashWorkspaceRendererForSmokeTest(windowId, instanceId),
 			suspendWorkspace: instanceId =>
 				this.suspendWorkspace(windowId, instanceId),
 			retainAndOpenWorkbench: folderUri =>
@@ -1073,6 +1076,17 @@ export class HucodeShellMainService extends Disposable
 		const controller = this.getOrCreateController(windowId);
 		await controller.suspendWorkspace(instanceId);
 		return this.withDesktopOwnershipState(windowId, controller.getState());
+	}
+
+	private async crashWorkspaceRendererForSmokeTest(
+		windowId: number,
+		instanceId: string
+	): Promise<void> {
+		assertHucodeSmokeTestCrashEnabled(
+			!!this.environmentMainService.args['enable-smoke-test-driver']
+		);
+		this.getOrCreateController(windowId)
+			.crashWorkspaceRendererForSmokeTest(instanceId);
 	}
 
 	async retainAndOpenWorkbench(

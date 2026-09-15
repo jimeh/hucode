@@ -1656,6 +1656,20 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		});
 	}
 
+	/** Force-crashes one exact live renderer for packaged smoke recovery. */
+	crashWorkspaceRendererForSmokeTest(instanceId: string): void {
+		const instance = this.instancesById.get(instanceId);
+		const webContents = instance && this.getLiveWebContents(instance);
+		if (!webContents || (
+			instance.state !== 'active' && instance.state !== 'loaded'
+		)) {
+			throw new Error(
+				`No live hosted workspace matches instance ${instanceId}.`
+			);
+		}
+		webContents.forcefullyCrashRenderer();
+	}
+
 	async unloadRetainedWorkbench(workbenchId: string): Promise<void> {
 		await this.ensureRestored();
 		const record = this.retainedWorkbenches.getById(workbenchId);

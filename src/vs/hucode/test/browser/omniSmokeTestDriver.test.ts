@@ -30,6 +30,9 @@ suite('HucodeOmniSmokeTestDriver', () => {
 				openWorkspace: async () => {
 					throw new Error('disabled driver forwarded');
 				},
+				crashWorkspace: async () => {
+					throw new Error('disabled driver forwarded');
+				},
 				suspendWorkspace: async () => {
 					throw new Error('disabled driver forwarded');
 				},
@@ -59,6 +62,9 @@ suite('HucodeOmniSmokeTestDriver', () => {
 				openWorkspace: async (windowId, worktreePath) => {
 					calls.push(`open:${windowId}:${worktreePath}`);
 				},
+				crashWorkspace: async (windowId, instanceId) => {
+					calls.push(`crash:${windowId}:${instanceId}`);
+				},
 				suspendWorkspace: async (windowId, instanceId) => {
 					calls.push(`suspend:${windowId}:${instanceId}`);
 				},
@@ -74,17 +80,20 @@ suite('HucodeOmniSmokeTestDriver', () => {
 
 			assert.ok(driver);
 			assert.deepStrictEqual(Object.keys(driver).sort(), [
+				'crashWorkspace',
 				'focusActiveWorkspace',
 				'openWorkspace',
 				'reloadActiveWorkspace',
 				'suspendWorkspace',
 			]);
 			await driver.openWorkspace('/tmp/Alpha');
+			await driver.crashWorkspace('bravo-instance');
 			await driver.suspendWorkspace('bravo-instance');
 			await driver.reloadActiveWorkspace();
 			await driver.focusActiveWorkspace();
 			assert.deepStrictEqual(calls, [
 				'open:7:/tmp/Alpha',
+				'crash:7:bravo-instance',
 				'suspend:7:bravo-instance',
 				'reload:7',
 				'focus:7',
@@ -92,6 +101,10 @@ suite('HucodeOmniSmokeTestDriver', () => {
 			await assert.rejects(
 				driver.openWorkspace(''),
 				/worktree path/
+			);
+			await assert.rejects(
+				driver.crashWorkspace(''),
+				/hosted instance ID/
 			);
 			await assert.rejects(
 				driver.suspendWorkspace(''),
@@ -114,12 +127,14 @@ suite('HucodeOmniSmokeTestDriver', () => {
 			isOmniShellWindow: true,
 			windowId: 7,
 			openWorkspace: async () => undefined,
+			crashWorkspace: async () => undefined,
 			suspendWorkspace: async () => undefined,
 			reloadWorkspace: async () => undefined,
 			focusWorkspace: async () => undefined,
 		}));
 		const replacement: IHucodeOmniSmokeTestDriver = {
 			openWorkspace: async () => undefined,
+			crashWorkspace: async () => undefined,
 			suspendWorkspace: async () => undefined,
 			reloadActiveWorkspace: async () => undefined,
 			focusActiveWorkspace: async () => undefined,

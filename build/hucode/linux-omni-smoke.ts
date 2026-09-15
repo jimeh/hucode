@@ -9,7 +9,7 @@ import {
 	chromium,
 	type Page,
 } from '@playwright/test';
-import { spawn, type ChildProcess } from 'child_process';
+import { execFile, spawn, type ChildProcess } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import { createServer } from 'net';
 import os from 'os';
@@ -1376,7 +1376,24 @@ export async function runLinuxOmniSmoke(
 
 		const bravoPage = getTargetPage(runtime, restoredBravo);
 		reportLinuxOmniPhaseProgress('crash Bravo', 'starting', deadline);
-		await crashLinuxOmniPage(bravoPage, deadline);
+		const crashShellPage = shellPage;
+		await crashWorkbenchThroughSmokeDriver(
+			crashShellPage,
+			restoredBravo.hostedInstanceId,
+			deadline,
+			async () => {
+				const rows = await readWorkbenchRows(
+					crashShellPage,
+					deadline,
+					'crash Bravo'
+				).then(
+					value => JSON.stringify(value),
+					error => `<rows failed: ${formatError(error)}>`
+				);
+				const processes = await describeLinuxOmniProcesses(executablePath);
+				return `Projects rows: ${rows}\n${processes}`;
+			}
+		);
 		crashedPages.add(bravoPage);
 		runtime = await waitForLinuxOmniPhase(
 			launch,
@@ -1905,52 +1922,90 @@ function assertNewInstance(
 	}
 }
 
-export async function crashLinuxOmniPage(
-	page: Page,
-	deadline: number
+/**
+ * Describes the state the harness could still observe after a crash request
+ * failed, so runner-only failures retain actionable process and UI evidence.
+ */
+export type LinuxOmniCrashDiagnostics = () => Promise<string>;
+
+/** Requests an exact hosted renderer crash through the bounded smoke driver. */
+export async function crashWorkbenchThroughSmokeDriver(
+	shellPage: Page,
+	instanceId: string,
+	deadline: number,
+	diagnostics?: LinuxOmniCrashDiagnostics
 ): Promise<void> {
 	const crashDeadline = Math.min(
 		deadline,
 		Date.now() + maximumCrashWaitMs
 	);
-	let crashListener: () => void;
-	const crashEvent = new Promise<void>(resolve => {
-		crashListener = resolve;
-		page.once('crash', crashListener);
-	});
-	let crashCommandError: Error | undefined;
 	try {
-		const session = await runLinuxOmniBoundedProbe(
+		await runLinuxOmniBoundedProbe(
 			crashDeadline,
-			'Bravo crash CDP session creation',
-			() => getPageContext(page).newCDPSession(page)
+			'crash Bravo smoke-driver call',
+			() => shellPage.evaluate(async hostedInstanceId => {
+				const targetGlobal = globalThis as unknown as {
+					readonly __hucodeOmniSmokeTestDriver?: {
+						crashWorkspace(id: string): Promise<void>;
+					};
+				};
+				const driver = targetGlobal.__hucodeOmniSmokeTestDriver;
+				if (!driver) {
+					throw new Error(
+						'Omni smoke-test crash driver is unavailable'
+					);
+				}
+				await driver.crashWorkspace(hostedInstanceId);
+			}, instanceId)
 		);
-		void session.send('Page.crash').catch(error => {
-			crashCommandError = error instanceof Error
-				? error
-				: new Error(String(error));
-		});
-		try {
-			await waitForPromise(
-				crashEvent,
-				crashDeadline,
-				'Timed out waiting for the Bravo renderer crash event'
-			);
-		} catch (error) {
-			if (!crashCommandError) {
-				throw error;
-			}
-			const detail = error instanceof Error
-				? error.message
-				: String(error);
-			throw new Error(
-				`${detail}; Page.crash command failed: ` +
-					crashCommandError.message
-			);
-		}
-	} finally {
-		page.off('crash', crashListener!);
+	} catch (error) {
+		const diagnosticText = diagnostics
+			? await diagnostics().catch(diagnosticsError =>
+				`<crash diagnostics failed: ${formatError(diagnosticsError)}>`
+			)
+			: undefined;
+		throw new Error(
+			[formatError(error), diagnosticText].filter(Boolean).join('\n')
+		);
 	}
+}
+
+/**
+ * Lists the packaged application's OS processes with their scheduler states,
+ * so a renderer stuck in a signal handler shows up as alive after a crash.
+ */
+export async function describeLinuxOmniProcesses(
+	executablePath: string,
+	run: (
+		file: string,
+		args: readonly string[]
+	) => Promise<string> = runProcessListing
+): Promise<string> {
+	const listing = await run('ps', ['-eo', 'pid,ppid,stat,etimes,args']);
+	const lines = listing
+		.split('\n')
+		.filter(line => line.includes(executablePath))
+		.map(line => line.trim().replace(/--[a-z-]*=[^ ]{200,}/g, match =>
+			`${match.slice(0, 200)}…`
+		));
+	return lines.length > 0
+		? `Application processes:\n${lines.join('\n')}`
+		: 'Application processes:\n<none>';
+}
+
+function runProcessListing(
+	file: string,
+	args: readonly string[]
+): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile(file, [...args], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+			resolve(stdout);
+		});
+	});
 }
 
 async function quitLinuxOmniThroughKeyboard(

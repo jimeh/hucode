@@ -48,6 +48,11 @@ export class WebShellControllerServiceAdapter
 	openAndFocusWorkspace(path: string, projectId?: string) {
 		return this.shell.openAndFocusWorkspace(this.windowId, path, projectId);
 	}
+	crashWorkspaceRendererForSmokeTest(): Promise<void> {
+		return Promise.reject(new Error(
+			'Hosted renderer crash injection is available only in desktop smoke tests.'
+		));
+	}
 	suspendWorkspace(instanceId: string) {
 		return this.shell.suspendWorkspace(this.windowId, instanceId);
 	}
