@@ -1,0 +1,461 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { mainWindow } from '../../../../base/browser/window.js';
+import { isWeb } from '../../../../base/common/platform.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from
+	'../../../../base/test/common/utils.js';
+import type { IConfigurationService } from
+	'../../../../platform/configuration/common/configuration.js';
+import type { INotificationService } from
+	'../../../../platform/notification/common/notification.js';
+import type { IProjectManagerService } from
+	'../../../../platform/projectManager/common/projectManager.js';
+import type {
+	IInputOptions,
+	IQuickInputService,
+} from '../../../../platform/quickinput/common/quickInput.js';
+import type { INativeRunActionInWindowRequest } from
+	'../../../../platform/window/common/window.js';
+import type { IWorkbenchEnvironmentService } from
+	'../../../../workbench/services/environment/common/environmentService.js';
+import type { IHucodeShellControllerService } from
+	'../../../../platform/window/common/hucodeShellControllerService.js';
+import {
+	WebProjectManagerClient,
+	WebProjectManagerFetch,
+} from '../../../browser/projectManager/webProjectManagerService.js';
+import {
+	pickCreateWorktreeBranchName,
+	pickCreateWorktreeOptions,
+} from '../../../browser/projectSwitcher/createProjectWorktree.contribution.js';
+import { CREATE_WORKTREE_COMMAND_ID } from
+	'../../../browser/projectSwitcher/projectSwitcherCommon.js';
+import { tryForwardShellCreateWorktreeCommand } from
+	'../../../browser/projectSwitcher/createProjectWorktreeRouting.js';
+
+suite('CreateProjectWorktreeRouting', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('keeps web Omni Create Worktree in the shell', async () => {
+		const calls: IForwardedAction[] = [];
+		const handle = { $treeItemHandle: 'project:pinned:project' };
+		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
+			{ isOmniWindow: true, isWebClient: true },
+			shell(calls),
+			handle
+		), false);
+
+		assert.deepStrictEqual(calls, []);
+	});
+
+	test('forwards native Omni Create Worktree to the workbench', async () => {
+		const calls: IForwardedAction[] = [];
+		const handle = { $treeItemHandle: 'project:pinned:project' };
+		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
+			{ isOmniWindow: true, isWebClient: false },
+			shell(calls),
+			handle
+		), true);
+
+		assert.deepStrictEqual(calls, [{
+			request: {
+				id: CREATE_WORKTREE_COMMAND_ID,
+				from: 'mouse',
+				args: [handle],
+			},
+		}]);
+	});
+
+	test('returns false when native Omni forwarding misses', async () => {
+		const calls: IForwardedAction[] = [];
+		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
+			{ isOmniWindow: true, isWebClient: false },
+			shell(calls, false)
+		), false);
+		assert.deepStrictEqual(calls, [{
+			request: {
+				id: CREATE_WORKTREE_COMMAND_ID,
+				from: 'mouse',
+				args: undefined,
+			},
+		}]);
+	});
+
+	test('does not forward Create Worktree outside Omni', async () => {
+		const calls: IForwardedAction[] = [];
+		assert.strictEqual(await tryForwardShellCreateWorktreeCommand(
+			{ isOmniWindow: false, isWebClient: false },
+			shell(calls)
+		), false);
+		assert.deepStrictEqual(calls, []);
+	});
+
+	test('does not use shell quick-input behavior for an untrusted Omni flag',
+		async () => {
+			const result = await pickCreateWorktreeOptions(
+				'project',
+				{
+					getWorktreeRefs: async () => [],
+				} as Partial<IProjectManagerService> as IProjectManagerService,
+				{
+					async pick(picks: Promise<unknown>) {
+						await picks;
+						return undefined;
+					},
+				} as Partial<IQuickInputService> as IQuickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{
+					isOmniWindow: true,
+					isOmniShellWindow: false,
+				} as IWorkbenchEnvironmentService,
+				undefined,
+				false
+			);
+
+			assert.strictEqual(result, undefined);
+		});
+
+	test('cancels ref loading when the picker is dismissed', async () => {
+		let requestSignal: AbortSignal | undefined;
+		let resolveRequestAbort: (() => void) | undefined;
+		const requestAborted = new Promise<void>(resolve => {
+			resolveRequestAbort = resolve;
+		});
+		let expectedCancellationReason: unknown;
+		const unhandledRejections: unknown[] = [];
+		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+			if (event.reason !== expectedCancellationReason) {
+				return;
+			}
+			unhandledRejections.push(event.reason);
+			event.preventDefault();
+		};
+		mainWindow.addEventListener(
+			'unhandledrejection',
+			onUnhandledRejection
+		);
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			requestSignal = init?.signal ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener(
+					'abort',
+					() => {
+						reject(requestSignal?.reason);
+						resolveRequestAbort?.();
+					},
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
+		const loadRefs = projectManagerService.getWorktreeRefs.bind(
+			projectManagerService
+		);
+		projectManagerService.getWorktreeRefs = async (
+			...args: Parameters<WebProjectManagerClient['getWorktreeRefs']>
+		) => {
+			try {
+				return await loadRefs(...args);
+			} catch (error) {
+				expectedCancellationReason = error;
+				throw error;
+			}
+		};
+		const quickInputService = {
+			pick(picks: Promise<unknown>) {
+				// QuickInputController separately derives this promise from
+				// lazy picks without attaching a rejection handler.
+				void Promise.all([picks, Promise.resolve(undefined)])
+					.then(() => undefined);
+				return Promise.resolve(undefined);
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		try {
+			const result = await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellControllerService,
+				true
+			);
+
+			assert.strictEqual(result, undefined);
+			assert.strictEqual(requestSignal?.aborted, true);
+			await requestAborted;
+			await Promise.resolve();
+			for (let turn = 0; turn < 5; turn++) {
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+			}
+			assert.deepStrictEqual(unhandledRejections, []);
+		} finally {
+			mainWindow.removeEventListener(
+				'unhandledrejection',
+				onUnhandledRejection
+			);
+			projectManagerService.dispose();
+		}
+	});
+
+	test('rethrows a genuine ref-loading failure after dismissing the picker',
+		async () => {
+			const failure = new Error('ref loading failed');
+			const projectManagerService = {
+				getWorktreeRefs: async () => {
+					throw failure;
+				},
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				pick(picks: Promise<unknown>) {
+					void Promise.all([picks, Promise.resolve(undefined)])
+						.then(() => undefined);
+					return Promise.resolve(undefined);
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+
+			await assert.rejects(
+				pickCreateWorktreeOptions(
+					'project',
+					projectManagerService,
+					quickInputService,
+					{} as INotificationService,
+					{
+						getValue: () => 'committerdate',
+					} as Partial<IConfigurationService> as
+					IConfigurationService,
+					{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+					{} as IHucodeShellControllerService,
+					false
+				),
+				error => error === failure
+			);
+		});
+
+	test('dismisses a desktop picker without waiting for ref loading',
+		async () => {
+			const projectManagerService = {
+				getWorktreeRefs: () => new Promise(() => { }),
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				pick() {
+					return Promise.resolve(undefined);
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+			let timeoutHandle: number | undefined;
+			const timeout = new Promise<'timeout'>(resolve => {
+				timeoutHandle = mainWindow.setTimeout(
+					() => resolve('timeout'),
+					100
+				);
+			});
+
+			try {
+				const result = await Promise.race([
+					pickCreateWorktreeOptions(
+						'project',
+						projectManagerService,
+						quickInputService,
+						{} as INotificationService,
+						{
+							getValue: () => 'committerdate',
+						} as Partial<IConfigurationService> as
+						IConfigurationService,
+						{ isOmniWindow: false } as
+						IWorkbenchEnvironmentService,
+						{} as IHucodeShellControllerService,
+						false
+					),
+					timeout,
+				]);
+
+				assert.strictEqual(result, undefined);
+			} finally {
+				if (timeoutHandle !== undefined) {
+					mainWindow.clearTimeout(timeoutHandle);
+				}
+			}
+		});
+
+	test('uses the platform request-cancellation contract',
+		async () => {
+			const argumentCounts: number[] = [];
+			const projectManagerService = {
+				getWorktreeRefs(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve([]);
+				},
+				isValidBranchName(...args: unknown[]) {
+					argumentCounts.push(args.length);
+					return Promise.resolve(true);
+				},
+			} as Partial<IProjectManagerService> as IProjectManagerService;
+			const quickInputService = {
+				async pick(picks: Promise<unknown>) {
+					await picks;
+					return undefined;
+				},
+				async input(options: IInputOptions) {
+					await options.validateInput?.('branch');
+					return undefined;
+				},
+			} as Partial<IQuickInputService> as IQuickInputService;
+
+			await pickCreateWorktreeOptions(
+				'project',
+				projectManagerService,
+				quickInputService,
+				{} as INotificationService,
+				{
+					getValue: () => 'committerdate',
+				} as Partial<IConfigurationService> as IConfigurationService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellControllerService
+			);
+			await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellControllerService
+			);
+
+			assert.deepStrictEqual(
+				argumentCounts,
+				isWeb ? [3, 3] : [2, 2]
+			);
+		});
+
+	test('does not accept a branch from superseded validation', async () => {
+		const requestSignals: AbortSignal[] = [];
+		const fakeFetch: WebProjectManagerFetch = async (_input, init) => {
+			const signal = init?.signal;
+			assert.ok(signal);
+			requestSignals.push(signal);
+			return new Promise<Response>((_resolve, reject) => {
+				signal.addEventListener(
+					'abort',
+					() => reject(signal.reason),
+					{ once: true }
+				);
+			});
+		};
+		const projectManagerService = new WebProjectManagerClient(
+			'/api/projects',
+			{ fetch: fakeFetch }
+		);
+		let staleAccepted = false;
+		let dismissedValidation: Promise<unknown> | undefined;
+		const quickInputService = {
+			async input(options: IInputOptions) {
+				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
+				dismissedValidation = options.validateInput?.('second');
+				await staleAcceptance;
+				return undefined;
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		try {
+			const result = await pickCreateWorktreeBranchName(
+				'project',
+				[],
+				projectManagerService,
+				quickInputService,
+				{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+				{} as IHucodeShellControllerService,
+				true
+			);
+
+			assert.strictEqual(result, undefined);
+			assert.ok(await dismissedValidation);
+			assert.strictEqual(staleAccepted, false);
+			assert.strictEqual(requestSignals.length, 2);
+			assert.strictEqual(
+				requestSignals.every(signal => signal.aborted),
+				true
+			);
+		} finally {
+			projectManagerService.dispose();
+		}
+	});
+
+	test('does not accept late native validation after supersession', async () => {
+		const validations: ((valid: boolean) => void)[] = [];
+		const projectManagerService = {
+			isValidBranchName() {
+				return new Promise<boolean>(resolve => {
+					validations.push(resolve);
+				});
+			},
+		} as Partial<IProjectManagerService> as IProjectManagerService;
+		let staleAccepted = false;
+		let dismissedValidation: Promise<unknown> | undefined;
+		const quickInputService = {
+			async input(options: IInputOptions) {
+				const staleValidation = options.validateInput?.('first');
+				const staleAcceptance = staleValidation?.then(result => {
+					if (!result) {
+						staleAccepted = true;
+					}
+				});
+				dismissedValidation = options.validateInput?.('second');
+				validations[0](true);
+				await staleAcceptance;
+				return undefined;
+			},
+		} as Partial<IQuickInputService> as IQuickInputService;
+
+		const result = await pickCreateWorktreeBranchName(
+			'project',
+			[],
+			projectManagerService,
+			quickInputService,
+			{ isOmniWindow: false } as IWorkbenchEnvironmentService,
+			{} as IHucodeShellControllerService,
+			false
+		);
+		validations[1](true);
+
+		assert.strictEqual(result, undefined);
+		assert.ok(await dismissedValidation);
+		assert.strictEqual(staleAccepted, false);
+	});
+});
+
+/** Records a forwarded shell action for routing assertions. */
+interface IForwardedAction {
+	readonly request: INativeRunActionInWindowRequest;
+}
+
+/** Creates a shell-service stub that records forwarded actions. */
+function shell(
+	calls: IForwardedAction[],
+	result = true
+): Pick<IHucodeShellControllerService, 'runActionInWorkspace'> {
+	return {
+		async runActionInWorkspace(request) {
+			calls.push({ request });
+			return result;
+		},
+	};
+}
