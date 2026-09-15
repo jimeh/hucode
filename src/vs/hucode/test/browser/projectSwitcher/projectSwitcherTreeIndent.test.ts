@@ -13,10 +13,14 @@ import {
 import { TestConfigurationService } from
 	'../../../../platform/configuration/test/common/testConfigurationService.js';
 import {
+	getProjectSwitcherSectionIndentAdjustment,
 	getProjectSwitcherTreeIndent,
 	onDidChangeProjectSwitcherTreeIndent,
+	PROJECT_SWITCHER_DEFAULT_INDENT,
 } from '../../../browser/projectSwitcher/projectSwitcherTreeIndent.js';
 import {
+	HUCODE_OMNI_SECTION_INDENT_SETTING,
+	HUCODE_OMNI_SECTION_INDENT_DEFAULT,
 	HUCODE_OMNI_TREE_INDENT_DEFAULT,
 	HUCODE_OMNI_TREE_INDENT_MAXIMUM,
 	HUCODE_OMNI_TREE_INDENT_MINIMUM,
@@ -31,6 +35,54 @@ suite('ProjectSwitcherTreeIndent', () => {
 
 	setup(() => {
 		configurationService = new TestConfigurationService();
+	});
+
+	test('resolves the structural synthetic section adjustment', async () => {
+		assert.deepStrictEqual({
+			omni: getProjectSwitcherSectionIndentAdjustment(
+				true,
+				configurationService
+			),
+			nonOmni: getProjectSwitcherSectionIndentAdjustment(
+				false,
+				configurationService
+			),
+		}, {
+			omni: HUCODE_OMNI_SECTION_INDENT_DEFAULT
+				- PROJECT_SWITCHER_DEFAULT_INDENT
+				- HUCODE_OMNI_TREE_INDENT_DEFAULT,
+			nonOmni: 0,
+		});
+
+		await configurationService.setUserConfiguration(
+			HUCODE_OMNI_SECTION_INDENT_SETTING,
+			-4
+		);
+		assert.strictEqual(
+			getProjectSwitcherSectionIndentAdjustment(
+				true,
+				configurationService
+			),
+			HUCODE_OMNI_SECTION_INDENT_DEFAULT
+			- PROJECT_SWITCHER_DEFAULT_INDENT
+			- HUCODE_OMNI_TREE_INDENT_DEFAULT
+		);
+
+		await configurationService.setUserConfiguration(
+			HUCODE_OMNI_TREE_INDENT_SETTING,
+			16
+		);
+		await configurationService.setUserConfiguration(
+			HUCODE_OMNI_SECTION_INDENT_SETTING,
+			4
+		);
+		assert.strictEqual(
+			getProjectSwitcherSectionIndentAdjustment(
+				true,
+				configurationService
+			),
+			4 - PROJECT_SWITCHER_DEFAULT_INDENT - 16
+		);
 	});
 
 	/** Fires a configuration event for the provided setting key. */

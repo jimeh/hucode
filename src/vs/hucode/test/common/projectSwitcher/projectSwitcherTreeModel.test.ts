@@ -752,7 +752,7 @@ suite('ProjectSwitcherTreeModel', () => {
 			[
 				matching.description,
 				getProjectSwitcherItemDescription(matching, 'compact'),
-				getProjectSwitcherItemDescription(matching, 'twoLine'),
+				getProjectSwitcherItemDescription(matching, 'default'),
 				getWorktree(
 					model.roots,
 					'/repos/hucode.worktrees/fix-user-login'
@@ -832,21 +832,21 @@ suite('ProjectSwitcherTreeModel', () => {
 		assert.deepStrictEqual({
 			projectDescription: project.description,
 			main: getProjectSwitcherPresentationFields(main, 'compact'),
-			mainTwoLine: getProjectSwitcherPresentationFields(main, 'twoLine'),
+			mainDefault: getProjectSwitcherPresentationFields(main, 'default'),
 			linkedCompact: getProjectSwitcherPresentationFields(linked, 'compact'),
-			linkedTwoLine: getProjectSwitcherPresentationFields(linked, 'twoLine'),
+			linkedDefault: getProjectSwitcherPresentationFields(linked, 'default'),
 			gitCompact: getProjectSwitcherPresentationFields(workbenches[0], 'compact'),
-			gitTwoLine: getProjectSwitcherPresentationFields(workbenches[0], 'twoLine'),
+			gitDefault: getProjectSwitcherPresentationFields(workbenches[0], 'default'),
 			detachedCompact: getProjectSwitcherPresentationFields(
 				workbenches[1],
 				'compact'
 			),
-			detachedTwoLine: getProjectSwitcherPresentationFields(
+			detachedDefault: getProjectSwitcherPresentationFields(
 				workbenches[1],
-				'twoLine'
+				'default'
 			),
 			plainCompact: getProjectSwitcherPresentationFields(workbenches[2], 'compact'),
-			plainTwoLine: getProjectSwitcherPresentationFields(workbenches[2], 'twoLine'),
+			plainDefault: getProjectSwitcherPresentationFields(workbenches[2], 'default'),
 		}, {
 			projectDescription: 'label:/repos',
 			main: {
@@ -854,7 +854,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: 'main',
 				path: undefined,
 			},
-			mainTwoLine: {
+			mainDefault: {
 				name: 'local',
 				branch: 'main',
 				path: 'label:/repos/hucode',
@@ -864,7 +864,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: undefined,
 				path: undefined,
 			},
-			linkedTwoLine: {
+			linkedDefault: {
 				name: 'feature',
 				branch: 'feature',
 				path: `label:${linkedPath}`,
@@ -874,7 +874,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: undefined,
 				path: `label:${gitWorkbenchPath}`,
 			},
-			gitTwoLine: {
+			gitDefault: {
 				name: 'subdirectory',
 				branch: 'topic',
 				path: `label:${gitWorkbenchPath}`,
@@ -884,7 +884,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: undefined,
 				path: `label:${detachedWorkbenchPath}`,
 			},
-			detachedTwoLine: {
+			detachedDefault: {
 				name: 'detached',
 				branch: 'Detached',
 				path: `label:${detachedWorkbenchPath}`,
@@ -894,7 +894,7 @@ suite('ProjectSwitcherTreeModel', () => {
 				branch: undefined,
 				path: `label:${plainWorkbenchPath}`,
 			},
-			plainTwoLine: {
+			plainDefault: {
 				name: 'plain',
 				branch: undefined,
 				path: `label:${plainWorkbenchPath}`,

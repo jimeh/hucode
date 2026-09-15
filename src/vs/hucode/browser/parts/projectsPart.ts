@@ -20,7 +20,7 @@ import { Part } from '../../../workbench/browser/part.js';
 import { SIDE_BAR_FOREGROUND } from '../../../workbench/common/theme.js';
 import {
 	FLOATING_PANEL_INNER_MARGIN,
-	FLOATING_PANEL_MARGIN,
+	getFloatingPanelOuterMargin,
 	IWorkbenchLayoutService,
 	Parts,
 } from '../../../workbench/services/layout/browser/layoutService.js';
@@ -140,12 +140,13 @@ export class ProjectsPart extends Part {
 		let contentHeight = layout.contentSize.height;
 		if (floating) {
 			const borderTotal = 2;
+			const outerMargin = getFloatingPanelOuterMargin(this.layoutService);
 			const horizontalCardInsets = (
-				FLOATING_PANEL_MARGIN * 2 +
+				outerMargin +
 				borderTotal
 			);
 			const verticalCardInsets = (
-				FLOATING_PANEL_MARGIN * 2 +
+				outerMargin +
 				FLOATING_PANEL_INNER_MARGIN +
 				MODERN_UI_CARD_TOP_ALIGNMENT_OFFSET +
 				borderTotal
