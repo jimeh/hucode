@@ -15,7 +15,19 @@ import { ApplicationStorageDatabaseClient, ApplicationSharedStorageDatabaseClien
 import { isUserDataProfile, IUserDataProfile } from '../../userDataProfile/common/userDataProfile.js';
 import { IAnyWorkspaceIdentifier } from '../../workspace/common/workspace.js';
 
+export interface IAtomicApplicationStorageService {
+	getApplicationStorageValue(key: string): Promise<string | undefined>;
+	compareAndSwapApplicationStorage(key: string, expectedValue: string | undefined, newValue: string): Promise<{ readonly swapped: boolean; readonly currentValue: string | undefined }>;
+}
+
+export function isAtomicApplicationStorageService(value: unknown): value is IAtomicApplicationStorageService {
+	const candidate = value as Partial<IAtomicApplicationStorageService> | undefined;
+	return typeof candidate?.getApplicationStorageValue === 'function' && typeof candidate.compareAndSwapApplicationStorage === 'function';
+}
+
 export class RemoteStorageService extends AbstractStorageService {
+
+	private applicationStorageDatabaseClient!: ApplicationStorageDatabaseClient;
 
 	private readonly applicationStorageProfile: IUserDataProfile;
 	protected readonly applicationStorage: IStorage;
@@ -49,9 +61,17 @@ export class RemoteStorageService extends AbstractStorageService {
 		this.workspaceStorage = this.createWorkspaceStorage(initialWorkspace);
 	}
 
+	async getApplicationStorageValue(key: string): Promise<string | undefined> {
+		return this.applicationStorageDatabaseClient.getValue(key);
+	}
+
+	async compareAndSwapApplicationStorage(key: string, expectedValue: string | undefined, newValue: string): Promise<{ readonly swapped: boolean; readonly currentValue: string | undefined }> {
+		return this.applicationStorageDatabaseClient.compareAndSwap(key, expectedValue, newValue);
+	}
+
 	private createApplicationStorage(): IStorage {
-		const storageDataBaseClient = this._register(new ApplicationStorageDatabaseClient(this.remoteService.getChannel('storage')));
-		const applicationStorage = this._register(new Storage(storageDataBaseClient));
+		this.applicationStorageDatabaseClient = this._register(new ApplicationStorageDatabaseClient(this.remoteService.getChannel('storage')));
+		const applicationStorage = this._register(new Storage(this.applicationStorageDatabaseClient));
 
 		this._register(applicationStorage.onDidChangeStorage(e => this.emitDidChangeValue(StorageScope.APPLICATION, e)));
 
