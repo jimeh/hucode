@@ -172,8 +172,8 @@
 			"reason": "Hucode selects the trusted remote user-data home only in server mode",
 			"upstream": {
 				"path": "src/vs/workbench/services/environment/browser/environmentService.ts",
-				"lastSyncedBaseline": "1.133.0",
-				"blob": "a0efae00fc1ce5844d6149200fd6198c9dccd2ae"
+				"lastSyncedBaseline": "1.137.0",
+				"blob": "a448fc1049dfb534b1c321aa55760e2620edd019"
 			},
 			"testSuites": []
 		},
@@ -216,8 +216,8 @@
 			"reason": "Omni owns a separate title bar Part derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/parts/titlebarPart.ts",
-				"lastSyncedBaseline": "1.136.0",
-				"blob": "5e3d803ea7ba6ecad6283f5b71d7ed7d1c976c40"
+				"lastSyncedBaseline": "1.137.0",
+				"blob": "d643be71cbbcb58b3c0d9d3fe86875f69c18559d"
 			},
 			"testSuites": []
 		},
@@ -227,8 +227,8 @@
 			"reason": "Omni owns a separate workbench layout derived from the Sessions workbench",
 			"upstream": {
 				"path": "src/vs/sessions/browser/workbench.ts",
-				"lastSyncedBaseline": "1.136.0",
-				"blob": "27158096898604ea125f9accb108c815010deb03"
+				"lastSyncedBaseline": "1.137.0",
+				"blob": "b07fe04791440e54051b8dfd88a4a933a5830165"
 			},
 			"testSuites": []
 		},
