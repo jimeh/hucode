@@ -24,6 +24,7 @@ import {
 	type HucodeDesktopWorkbenchOwner,
 	type IHucodeDesktopRestoreCandidate,
 	selectHucodeDesktopRestoreWinners,
+	projectHucodeDesktopRetainedRestoreWorkbenches,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 	waitForHucodeRegularWindowLoadCommit,
@@ -1389,6 +1390,63 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			]);
 		}
 	);
+
+	test('arbitrates migrated global overlays across Omni windows', () => {
+		const globalWorkbenches = [{ id: 'global', path: '/shared' }];
+		const pathsEqual = (left: string, right: string) =>
+			left.toLowerCase() === right.toLowerCase();
+		const project = (
+			windowId: number,
+			lastActiveAt: number
+		) => createHucodeDesktopRestoreCandidates({
+			windowId,
+			windowLastFocusTime: windowId,
+			residentWorkspaces: [],
+			retainedWorkbenches:
+				projectHucodeDesktopRetainedRestoreWorkbenches({
+					globalWorkbenches,
+					overlays: [{
+						workbenchId: 'global',
+						desiredState: 'loaded',
+						lastActiveAt,
+					}],
+					legacyRetainedWorkbenches: [{
+						id: `legacy-${windowId}`,
+						path: '/SHARED',
+						desiredState: 'loaded',
+					}],
+					pendingAdoptions: [{
+						path: '/shared',
+						desiredState: 'loaded',
+					}],
+				}, pathsEqual),
+		}, pathsEqual);
+		const candidates = [...project(1, 10), ...project(2, 20)];
+		const winners = selectHucodeDesktopRestoreWinners(candidates, {
+			canonicalizePath: path => path.toLowerCase(),
+			isCaseSensitive: true,
+		});
+
+		assert.deepStrictEqual(candidates.map(candidate => ({
+			windowId: candidate.windowId,
+			stableInstanceId: candidate.stableInstanceId,
+		})), [{
+			windowId: 1,
+			stableInstanceId: 'retained:global',
+		}, {
+			windowId: 2,
+			stableInstanceId: 'retained:global',
+		}]);
+		assert.deepStrictEqual(Array.from(winners.values(), winner => ({
+			path: winner.path,
+			windowId: winner.windowId,
+			stableInstanceId: winner.stableInstanceId,
+		})), [{
+			path: '/shared',
+			windowId: 2,
+			stableInstanceId: 'retained:global',
+		}]);
+	});
 
 	test('transfers hosted ownership to the opened regular window', async () => {
 		const coordinator = createCoordinator();

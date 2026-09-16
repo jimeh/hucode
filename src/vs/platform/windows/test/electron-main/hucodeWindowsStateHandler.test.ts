@@ -9,6 +9,9 @@ import { join } from '../../../../base/common/path.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
+	applyHucodeOmniWorkbenchMigration,
+	applyHucodeOmniWorkbenchMigrationToWindowState,
+	getHucodeOmniMigrationWindowStates,
 	getWindowsStateStoreData,
 	IWindowsState,
 	restoreWindowsState,
@@ -23,6 +26,16 @@ suite('HucodeWindowsStateHandler', () => {
 			folderUri: URI.file(join(tmpdir(), 'scratch')).toJSON(),
 			desiredState: 'unloaded' as const,
 			order: 0,
+		}];
+		const workbenchOverlays = [{
+			workbenchId: 'global-scratch',
+			desiredState: 'loaded' as const,
+			lastActiveAt: 456,
+		}];
+		const pendingWorkbenchAdoptions = [{
+			worktreePath: join(tmpdir(), 'orphaned'),
+			desiredState: 'loaded' as const,
+			lastActiveAt: 789,
 		}];
 		const windowState: IWindowsState = {
 			openedWindows: [{
@@ -43,6 +56,8 @@ suite('HucodeWindowsStateHandler', () => {
 					lastActiveAt: 123,
 				}],
 				omniRetainedWorkbenches: retainedWorkbenches,
+				omniWorkbenchOverlays: workbenchOverlays,
+				omniPendingWorkbenchAdoptions: pendingWorkbenchAdoptions,
 			}]
 		};
 
@@ -55,6 +70,9 @@ suite('HucodeWindowsStateHandler', () => {
 			omniActiveWorktreePath: restoredWindow.omniActiveWorktreePath,
 			omniResidentWorkspaces: restoredWindow.omniResidentWorkspaces,
 			omniRetainedWorkbenches: restoredWindow.omniRetainedWorkbenches,
+			omniWorkbenchOverlays: restoredWindow.omniWorkbenchOverlays,
+			omniPendingWorkbenchAdoptions:
+				restoredWindow.omniPendingWorkbenchAdoptions,
 		}, {
 			windowKind: 'omni',
 			omniActiveWorktreePath: worktreePath,
@@ -65,7 +83,135 @@ suite('HucodeWindowsStateHandler', () => {
 				lastActiveAt: 123,
 			}],
 			omniRetainedWorkbenches: retainedWorkbenches,
+			omniWorkbenchOverlays: workbenchOverlays,
+			omniPendingWorkbenchAdoptions: pendingWorkbenchAdoptions,
 		});
+	});
+
+	test('migrates every persisted Omni source and remaps duplicate IDs', () => {
+		const firstPath = join(tmpdir(), 'migration', 'first');
+		const secondPath = join(tmpdir(), 'migration', 'second');
+		const projectPath = join(tmpdir(), 'migration', 'project');
+		const state: IWindowsState = {
+			lastActiveWindow: {
+				windowKind: 'omni',
+				uiState: { x: 0, y: 0, width: 100, height: 100, mode: 0 },
+				omniRetainedWorkbenches: [{
+					id: 'duplicate',
+					folderUri: URI.file(firstPath).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+			},
+			openedWindows: [{
+				windowKind: 'omni',
+				uiState: { x: 0, y: 0, width: 100, height: 100, mode: 0 },
+				omniRetainedWorkbenches: [{
+					id: 'duplicate',
+					folderUri: URI.file(secondPath).toJSON(),
+					desiredState: 'unloaded',
+					order: 0,
+				}],
+				omniResidentWorkspaces: [{ worktreePath: projectPath }],
+			}],
+		};
+
+		assert.deepStrictEqual(
+			getHucodeOmniMigrationWindowStates(state).map(source => source.sourceId),
+			['lastActiveWindow', 'openedWindows:0']
+		);
+		applyHucodeOmniWorkbenchMigration(state, [{
+			sourceId: 'lastActiveWindow',
+			workbenchIdsByLegacyId: { duplicate: 'global-first' },
+			workbenchIdsByPath: { [firstPath]: 'global-first' },
+			projectIdsByPath: {},
+		}, {
+			sourceId: 'openedWindows:0',
+			workbenchIdsByLegacyId: { duplicate: 'global-second' },
+			workbenchIdsByPath: { [secondPath]: 'global-second' },
+			projectIdsByPath: { [projectPath]: 'project' },
+		}]);
+
+		assert.deepStrictEqual(state.lastActiveWindow?.omniWorkbenchOverlays, [{
+			workbenchId: 'global-first',
+			desiredState: 'loaded',
+		}]);
+		assert.deepStrictEqual(state.openedWindows[0].omniWorkbenchOverlays, [{
+			workbenchId: 'global-second',
+			desiredState: 'unloaded',
+		}]);
+		assert.deepStrictEqual(state.openedWindows[0].omniResidentWorkspaces, [{
+			worktreePath: projectPath,
+			projectId: 'project',
+		}]);
+		assert.strictEqual(
+			state.lastActiveWindow?.omniRetainedWorkbenches,
+			undefined
+		);
+	});
+
+	test('migrates a loaded project outcome into resident restore state', () => {
+		const worktreePath = join(tmpdir(), 'migration', 'loaded-project');
+		const state: IWindowsState = {
+			openedWindows: [{
+				windowKind: 'omni',
+				uiState: { x: 0, y: 0, width: 100, height: 100, mode: 0 },
+				omniActiveWorktreePath: worktreePath,
+				omniRetainedWorkbenches: [{
+					id: 'legacy-project',
+					folderUri: URI.file(worktreePath).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+					lastActiveAt: 87,
+				}],
+			}],
+		};
+
+		applyHucodeOmniWorkbenchMigration(state, [{
+			sourceId: 'openedWindows:0',
+			workbenchIdsByLegacyId: {},
+			workbenchIdsByPath: {},
+			projectIdsByPath: { [worktreePath]: 'project' },
+		}]);
+
+		assert.deepStrictEqual(state.openedWindows[0].omniResidentWorkspaces, [{
+			projectId: 'project',
+			worktreePath,
+			state: 'loaded',
+			lastActiveAt: 87,
+		}]);
+		assert.deepStrictEqual(
+			state.openedWindows[0].omniWorkbenchOverlays,
+			[]
+		);
+		assert.strictEqual(
+			state.openedWindows[0].omniActiveWorktreePath,
+			worktreePath
+		);
+
+		const liveConfig: Pick<IWindowsState['openedWindows'][number],
+			'omniRetainedWorkbenches' | 'omniResidentWorkspaces' |
+			'omniWorkbenchOverlays'> = {
+			omniRetainedWorkbenches: [{
+				id: 'live-legacy-project',
+				folderUri: URI.file(worktreePath).toJSON(),
+				desiredState: 'loaded' as const,
+				order: 0,
+				lastActiveAt: 88,
+			}],
+		};
+		applyHucodeOmniWorkbenchMigrationToWindowState(liveConfig, {
+			sourceId: 'live:1',
+			workbenchIdsByLegacyId: {},
+			workbenchIdsByPath: {},
+			projectIdsByPath: { [worktreePath]: 'project' },
+		});
+		assert.deepStrictEqual(liveConfig.omniResidentWorkspaces, [{
+			projectId: 'project',
+			worktreePath,
+			state: 'loaded',
+			lastActiveAt: 88,
+		}]);
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();

@@ -19,11 +19,17 @@ The Projects sidebar combines two related catalogs:
 If an arbitrary workbench later becomes a known project worktree, the project
 record becomes authoritative and Hucode removes the duplicate catalog entry.
 
-The project catalog is global. Every Omni window and serve-web tab sees the
-same saved projects and discovered worktrees. Each Omni session separately
+Projects and arbitrary workbenches form one global saved catalog. Every Omni
+window and serve-web tab sees the same project and workbench labels and manual
+order. Each Omni session separately
 tracks its active, loaded, dormant, and restored workbench state, so two Omni
 windows can hold different working sets without turning profiles into project
 namespaces.
+
+If another session dismisses a workbench that is already live here, it remains
+available as a session-only row until unload. Removing a project while one of
+its workbenches is still restorable adopts that folder into the global catalog;
+temporary save failures are retried across reloads.
 
 A common workflow is:
 
@@ -186,10 +192,11 @@ Different tabs, browser profiles, devices, and origins may therefore host the
 same path independently. Hucode does not use Web Locks, cross-tab messages, or
 server-side leases to activate or exclude another tab.
 
-Hosted-workbench lifecycle and retained-workbench state is stored in the
-top-level tab's browser session. It survives a reload, but one tab cannot
-overwrite another tab's restore intent. A duplicated tab may begin with the
-browser's copied session snapshot and then restore and evolve independently.
+The server-backed catalog is stored in `hucode/projects.json`. Hosted-workbench
+lifecycle overlays are stored in the top-level tab's `sessionStorage`. They
+survive a reload, but one tab cannot overwrite another tab's restore intent.
+A duplicated tab may begin with the browser's copied session snapshot and then
+restore and evolve independently.
 
 ## Current Scope
 

@@ -191,6 +191,26 @@ export interface IHucodeDesktopRestoreWindowSource {
 	}[];
 }
 
+export interface IHucodeDesktopRetainedRestoreProjectionSource {
+	readonly globalWorkbenches: readonly {
+		readonly id: string;
+		readonly path: string;
+	}[];
+	readonly overlays: readonly {
+		readonly workbenchId: string;
+		readonly desiredState: 'loaded' | 'unloaded';
+		readonly lastActiveAt?: number;
+	}[];
+	readonly legacyRetainedWorkbenches: IHucodeDesktopRestoreWindowSource[
+	'retainedWorkbenches'
+	];
+	readonly pendingAdoptions: readonly {
+		readonly path: string;
+		readonly desiredState: 'loaded' | 'unloaded';
+		readonly lastActiveAt?: number;
+	}[];
+}
+
 /** Result of an explicit hosted-to-regular ownership transfer. */
 export type HucodeDesktopWorkbenchTransferOutcome =
 	| {
@@ -911,6 +931,57 @@ export function getHucodeLegacyRetainedRestoreCandidateId(
 		canonicalizeDesktopWorkbenchPath(path),
 		isLinux
 	)}`;
+}
+
+/** Joins global metadata to one window's lifecycle state for restore claims. */
+export function projectHucodeDesktopRetainedRestoreWorkbenches(
+	source: IHucodeDesktopRetainedRestoreProjectionSource,
+	pathsEqual: (left: string, right: string) => boolean =
+		(left, right) => left === right
+): IHucodeDesktopRestoreWindowSource['retainedWorkbenches'] {
+	const projected: IHucodeDesktopRestoreWindowSource[
+		'retainedWorkbenches'
+	][number][] = [];
+	const add = (
+		entry: IHucodeDesktopRestoreWindowSource['retainedWorkbenches'][number]
+	) => {
+		if (!projected.some(candidate => pathsEqual(candidate.path, entry.path))) {
+			projected.push(entry);
+		}
+	};
+	for (const overlay of source.overlays) {
+		const global = source.globalWorkbenches.find(workbench =>
+			workbench.id === overlay.workbenchId
+		);
+		if (global) {
+			add({
+				path: global.path,
+				id: global.id,
+				desiredState: overlay.desiredState,
+				lastActiveAt: overlay.lastActiveAt,
+			});
+		}
+	}
+	for (const legacy of source.legacyRetainedWorkbenches) {
+		add(legacy);
+	}
+	for (const pending of source.pendingAdoptions) {
+		if (pending.desiredState !== 'loaded') {
+			continue;
+		}
+		const global = source.globalWorkbenches.find(workbench =>
+			pathsEqual(workbench.path, pending.path)
+		);
+		add({
+			path: global?.path ?? pending.path,
+			id: global?.id ?? getHucodeLegacyRetainedRestoreCandidateId(
+				pending.path
+			),
+			desiredState: 'loaded',
+			lastActiveAt: pending.lastActiveAt,
+		});
+	}
+	return projected;
 }
 
 /** Builds the restore claims the controller will submit for one Omni window. */

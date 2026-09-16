@@ -84,6 +84,71 @@ export interface ProjectRecord {
 	readonly worktrees: readonly WorktreeRecord[];
 }
 
+/** Globally persisted arbitrary single-folder workbench metadata. */
+export interface ArbitraryWorkbenchRecord {
+	readonly id: string;
+	readonly folderUri: URI;
+	readonly label?: string;
+	readonly order: number;
+}
+
+/** Persisted arbitrary single-folder workbench metadata. */
+export interface StoredArbitraryWorkbenchRecord {
+	id: string;
+	folderPath: string;
+	label?: string;
+	order: number;
+}
+
+/** One coherent project and arbitrary-workbench catalog revision. */
+export interface ProjectCatalogSnapshot {
+	readonly epoch: string;
+	readonly revision: number;
+	readonly projects: readonly ProjectRecord[];
+	readonly workbenches: readonly ArbitraryWorkbenchRecord[];
+}
+
+/** Result of idempotently ensuring an arbitrary workbench path. */
+export type EnsureWorkbenchResult =
+	| {
+		readonly kind: 'workbench';
+		readonly workbench: ArbitraryWorkbenchRecord;
+		readonly created: boolean;
+	}
+	| {
+		readonly kind: 'projectWorktree';
+		readonly projectId: string;
+		readonly worktree: WorktreeRecord;
+	};
+
+/** One legacy workbench submitted by a session migration. */
+export interface LegacyWorkbenchImportRecord {
+	readonly legacyId: string;
+	readonly folderUri: URI;
+	readonly label?: string;
+	readonly order: number;
+}
+
+/** Per-entry outcome from a legacy workbench import. */
+export type LegacyWorkbenchImportOutcome =
+	| {
+		readonly legacyId: string;
+		readonly kind: 'workbench';
+		readonly workbenchId: string;
+	}
+	| {
+		readonly legacyId: string;
+		readonly kind: 'projectWorktree';
+		readonly projectId: string;
+		readonly worktreePath: string;
+	};
+
+/** Result of importing a session's legacy arbitrary-workbench catalog. */
+export interface ImportWorkbenchesResult {
+	readonly catalog: ProjectCatalogSnapshot;
+	readonly outcomes: readonly LegacyWorkbenchImportOutcome[];
+}
+
 /**
  * Git reference that can be used as the start point for a new worktree.
  */
@@ -149,6 +214,7 @@ export interface StoredProjectRecord {
 export interface StoredProjectManagerState {
 	readonly version: number;
 	readonly projects: readonly StoredProjectRecord[];
+	readonly workbenches?: readonly StoredArbitraryWorkbenchRecord[];
 }
 
 /**
@@ -213,9 +279,19 @@ export interface IProjectManagerService {
 	readonly _serviceBrand: undefined;
 
 	readonly onDidChangeProjects: Event<readonly ProjectRecord[]>;
+	readonly onDidChangeCatalog: Event<ProjectCatalogSnapshot>;
 	readonly onDidChangeGitWorktreeTargets: Event<GitWorktreeTargetChange>;
 
 	getProjects(): Promise<readonly ProjectRecord[]>;
+	getCatalog(): Promise<ProjectCatalogSnapshot>;
+	ensureWorkbench(uri: URI): Promise<EnsureWorkbenchResult>;
+	importWorkbenches(
+		entries: readonly LegacyWorkbenchImportRecord[]
+	): Promise<ImportWorkbenchesResult>;
+	renameWorkbench(id: string, label: string): Promise<void>;
+	resetWorkbenchLabel(id: string): Promise<void>;
+	moveWorkbench(id: string, beforeWorkbenchId?: string): Promise<void>;
+	removeWorkbench(id: string): Promise<void>;
 	addProject(uri: URI): Promise<ProjectRecord>;
 	renameProject(id: string, label: string): Promise<void>;
 	resetProjectLabel(id: string): Promise<void>;

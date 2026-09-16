@@ -67,6 +67,38 @@ suite('RetainedWorkbench', () => {
 		assert.strictEqual(catalog.reorder([first.id]), false);
 	});
 
+	test('joins global metadata with independent session lifecycle', () => {
+		const catalog = new RetainedWorkbenchCatalog(
+			[],
+			uri => uri.fsPath.toLowerCase(),
+			() => 'legacy'
+		);
+		const local = catalog.retain(URI.file('/scratch'), 'loaded', 42);
+		catalog.synchronizeGlobalRecords([{
+			id: 'global',
+			folderUri: URI.file('/SCRATCH'),
+			label: 'Global Label',
+			order: 0,
+		}], () => true);
+
+		assert.deepStrictEqual(catalog.all.map(record => ({
+			...record,
+			folderUri: URI.revive(record.folderUri).fsPath,
+		})), [{
+			id: 'global',
+			folderUri: '/SCRATCH',
+			desiredState: 'loaded',
+			order: 0,
+			label: 'Global Label',
+			lastActiveAt: 42,
+		}]);
+		assert.notStrictEqual(catalog.all[0].id, local.id);
+
+		catalog.synchronizeGlobalRecords([], () => true);
+		assert.deepStrictEqual(catalog.all.map(record => record.id), ['global']);
+		assert.strictEqual(catalog.all[0].sessionOnly, true);
+	});
+
 	test('dismisses records and reconciles project promotions', () => {
 		let nextId = 0;
 		const catalog = new RetainedWorkbenchCatalog(

@@ -66,6 +66,7 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectSwitcherSectionOrder?: readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
+	readonly workbenchCatalogHydrated?: boolean;
 	readonly desktopOwnerships?: readonly IHucodeDesktopWorkbenchOwnershipState[];
 }
 
