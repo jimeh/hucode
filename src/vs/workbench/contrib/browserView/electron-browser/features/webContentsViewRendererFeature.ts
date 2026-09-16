@@ -23,7 +23,7 @@ import {
 	IContainerLayout,
 	IContainerLayoutOverride,
 } from '../browserEditor.js';
-import { BrowserOverlayManager, BrowserOverlayType } from '../overlayManager.js';
+import { BrowserOverlayManager, BrowserOverlayType } from '../../browser/overlayManager.js';
 
 /**
  * Default browser renderer: drives a Chromium WebContentsView.
