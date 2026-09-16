@@ -1,0 +1,268 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* ---- Sidebar & Auxiliary Bar Card Appearance ---- */
+
+/**
+ * The auxiliary bar and panel use a card-like appearance with margins and border-radius
+ * applied directly on the .part element. The grid allocates full space; CSS margin shrinks
+ * the part within its split-view-view wrapper. Layout dimensions are reduced in code
+ * (AgenticAuxiliaryBarPart) to keep internal layout correct.
+ *
+ * No z-index or stacking-context changes - sashes render naturally on top.
+ *
+ * Margin values (must match the constants in the Part classes):
+ *   Sidebar:       no card (flush, spans full height)
+ *   Auxiliary bar:  top=16, bottom=18, right=16
+ *   Panel:          bottom=18, left=16, right=16
+ */
+
+.hucode-omni-workbench .part.sidebar {
+	background: var(--vscode-sessionsSidebar-background);
+}
+
+.hucode-omni-workbench .part.hucode-omni-host {
+	margin: 0 10px 0px 10px;
+	background: var(--part-background);
+	border: 1px solid var(--part-border-color, transparent);
+	border-radius: 8px;
+	box-sizing: border-box;
+}
+
+/* Flush card parts against the sidebar, or the window edge when Omni hides it. */
+.hucode-omni-workbench:not(.nosidebar) .part.hucode-omni-host,
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.hucode-omni-host {
+	margin-left: 0;
+}
+
+.hucode-omni-workbench .part.auxiliarybar {
+	margin: 0 10px 0px 0;
+	background: var(--part-background);
+	border: 1px solid var(--part-border-color, transparent);
+	border-radius: 8px;
+	box-sizing: border-box;
+}
+
+.hucode-omni-workbench .part.auxiliarybar > .content .pane-body {
+	background-color: var(--vscode-sessionsAuxiliaryBar-background);
+}
+
+.hucode-omni-workbench .part.panel {
+	margin: 0 10px 10px 10px;
+	background: var(--part-background);
+	border: 1px solid var(--part-border-color, transparent);
+	border-radius: 8px;
+	box-sizing: border-box;
+}
+
+.hucode-omni-workbench:not(.nosidebar) .part.panel,
+.hucode-omni-workbench.hucode-omni-window.nosidebar .part.panel {
+	margin-left: 0;
+}
+
+/* Grid background matches the sessions sidebar background */
+.hucode-omni-workbench > .monaco-grid-view {
+	background-color: var(--vscode-sessionsSidebar-background);
+}
+
+.hucode-omni-workbench .monaco-sash:before {
+	border-radius: calc(var(--vscode-sash-hover-size) / 2);
+}
+
+.hucode-omni-workbench .monaco-sash:not(.disabled) > .orthogonal-drag-handle {
+	border-radius: var(--vscode-sash-size);
+}
+
+.monaco-workbench.vs.hucode-omni-workbench .part.hucode-omni-host,
+.monaco-workbench.vs.hucode-omni-workbench .part.auxiliarybar,
+.monaco-workbench.vs.hucode-omni-workbench .part.panel {
+	border-color: var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
+}
+
+/* ---- Sessions Action Widget Pickers ---- */
+
+.hucode-omni-workbench .action-widget {
+	background-color: var(--vscode-sessionsPanel-background);
+}
+
+.hucode-omni-workbench .action-widget .action-widget-action-bar,
+.hucode-omni-workbench .action-widget .action-list-filter {
+	background-color: var(--vscode-sessionsPanel-background);
+}
+
+.hucode-omni-workbench .action-widget .monaco-scrollable-element > .monaco-list-rows {
+	background-color: var(--vscode-sessionsPanel-background) !important;
+}
+
+/* ---- Sessions Quick Picks ---- */
+
+.hucode-omni-workbench .quick-input-widget,
+.hucode-omni-workbench .quick-input-titlebar {
+	background-color: var(--vscode-sessionsPanel-background) !important;
+}
+
+.hucode-omni-workbench .quick-input-header,
+.hucode-omni-workbench .quick-input-html-widget,
+.hucode-omni-workbench .quick-input-list .monaco-scrollable-element > .monaco-list-rows,
+.hucode-omni-workbench .quick-input-tree .monaco-scrollable-element > .monaco-list-rows {
+	background-color: var(--vscode-sessionsPanel-background) !important;
+}
+
+/* ---- Sessions Context Menus ---- */
+
+.hucode-omni-workbench .context-view.monaco-menu-container,
+.hucode-omni-workbench .context-view.monaco-menu-container .monaco-menu,
+.hucode-omni-workbench .context-view.monaco-menu-container .monaco-scrollable-element {
+	background-color: var(--vscode-sessionsPanel-background) !important;
+}
+
+/* ---- Modal Editor Block ---- */
+
+.hucode-omni-workbench .monaco-modal-editor-block {
+	background: rgba(0, 0, 0, 0.5);
+}
+
+.hucode-omni-workbench .monaco-modal-editor-block .modal-editor-sidebar .monaco-tl-twistie.force-no-twistie {
+	width: 0 !important;
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+}
+
+
+/* ---- Customization Empty State ---- */
+
+/* Icon + title side by side in a row, description underneath */
+.hucode-omni-workbench .ai-customization-list-widget .list-empty-state .empty-state-header {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.hucode-omni-workbench .ai-customization-list-widget .list-empty-state .empty-state-header > .empty-state-icon {
+	font-size: 16px;
+	margin-bottom: 0;
+	flex-shrink: 0;
+}
+
+/* MCP / Plugin empty state: icon + title side by side */
+.hucode-omni-workbench .mcp-empty-state .empty-state-header {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.hucode-omni-workbench .mcp-empty-state .empty-state-header > .empty-icon {
+	font-size: 16px;
+	margin-bottom: 0;
+	flex-shrink: 0;
+}
+
+/* ---- Part Appear Transitions ---- */
+
+/*
+ * Subtle appear animation when parts transition from display:none → visible
+ * (via split-view-view .visible class).
+ *
+ * Auxiliary bar, panel, and Omni host animate their container via opacity,
+ * margin, border-color, and background. The sidebar reveal animation applies
+ * only to `.part.sidebar > .content`, using opacity + transform so the
+ * sidebar container, header, and footer stay visually fixed.
+ *
+ * Opacity transiently creates a stacking context while it animates from 0 to 1
+ * over 250ms — once settled at opacity: 1, no additional stacking context is
+ * introduced by this animation. Margin and transform shifts are purely visual
+ * within the grid-allocated space.
+ */
+
+.hucode-omni-workbench .part.auxiliarybar,
+.hucode-omni-workbench .part.panel,
+.hucode-omni-workbench .part.hucode-omni-host {
+	transition:
+		opacity 250ms ease-out,
+		margin-top 250ms ease-out,
+		margin-right 250ms ease-out,
+		margin-bottom 250ms ease-out,
+		border-color 250ms ease-out,
+		background 250ms ease-out;
+}
+
+/* Auxiliary bar also transitions horizontal margin */
+.hucode-omni-workbench .part.auxiliarybar {
+	transition:
+		opacity 250ms ease-out,
+		margin 250ms ease-out,
+		border-color 250ms ease-out,
+		background 250ms ease-out;
+}
+
+.hucode-omni-workbench .part.sidebar > .content {
+	transition:
+		opacity 250ms ease-out,
+		transform 250ms ease-out;
+}
+
+@starting-style {
+	/* Shared starting values */
+	.hucode-omni-workbench .part.auxiliarybar,
+	.hucode-omni-workbench .part.panel,
+	.hucode-omni-workbench .part.hucode-omni-host {
+		opacity: 0;
+		border-color: transparent;
+	}
+
+	/* Card parts: blend from surrounding background */
+	.hucode-omni-workbench .part.auxiliarybar,
+	.hucode-omni-workbench .part.panel,
+	.hucode-omni-workbench .part.hucode-omni-host {
+		background: color-mix(in srgb, var(--part-background) 60%, var(--vscode-sideBar-background));
+	}
+
+	.hucode-omni-workbench .part.sidebar > .content {
+		opacity: 0;
+		transform: translateX(-6px);
+	}
+
+	/* Panel (bottom): slides down from 6px above → margin: 0 10px 10px 10px */
+	.hucode-omni-workbench .part.panel {
+		margin: 6px 16px 16px 16px;
+	}
+
+	/* Auxiliary bar (right): slides in from 6px right → margin: 0 10px 0px 0 */
+	.hucode-omni-workbench .part.auxiliarybar {
+		margin: 0 16px 0px 6px;
+	}
+
+	/* Omni host: slides up from 6px below. */
+	.hucode-omni-workbench .part.hucode-omni-host {
+		margin: 6px 16px 0px 16px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hucode-omni-workbench .part.auxiliarybar,
+	.hucode-omni-workbench .part.panel,
+	.hucode-omni-workbench .part.hucode-omni-host {
+		transition: none;
+	}
+
+	.hucode-omni-workbench .part.sidebar > .content {
+		transition: none;
+	}
+}
+
+/* ---- Widget Customizations ---- */
+
+/* Action Widget */
+.hucode-omni-workbench .action-widget .monaco-list .monaco-list-row {
+	padding-right: 0;
+}
+
+/* Badge */
+.hucode-omni-workbench .badge > .badge-content {
+	border-radius: 4px !important;
+}

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
+import { initializeHucodeOnboardingStorage } from './hucodeOnboardingStorage.js';
 import { top } from '../../../base/common/arrays.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
@@ -86,12 +87,12 @@ export interface IStorageMain extends IDisposable {
 	 * Store a string value under the given key to storage. The value will
 	 * be converted to a string.
 	 */
-	set(key: string, value: string | boolean | number | undefined | null): void;
+	set(key: string, value: string | boolean | number | undefined | null): Promise<void>;
 
 	/**
 	 * Delete an element stored under the provided key from storage.
 	 */
-	delete(key: string): void;
+	delete(key: string): Promise<void>;
 
 	/**
 	 * Whether the storage is using in-memory persistence or not.
@@ -325,6 +326,16 @@ export class ApplicationStorageMain extends BaseProfileAwareStorageMain {
 
 	protected override async doInit(storage: IStorage): Promise<void> {
 		await super.doInit(storage);
+
+		if (this.path) {
+			try {
+				await initializeHucodeOnboardingStorage(storage);
+			} catch {
+				// Retry before telemetry and the newness marker. A second failure reaches
+				// the base initialization catch, allowing degraded startup without enrollment.
+				await initializeHucodeOnboardingStorage(storage);
+			}
+		}
 
 		// Apply telemetry values as part of the application storage initialization
 		this.updateTelemetryState(storage);
