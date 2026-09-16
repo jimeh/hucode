@@ -452,6 +452,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	function createController(options: {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
 		readonly retainedWorkbenches?: INativeWindowConfiguration['omniRetainedWorkbenches'];
+		readonly pendingWorkbenchAdoptions?: INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 		readonly activeWorktreePath?: string;
 		readonly ids?: string[];
 		readonly ipcMain?: TestHostedWorkspaceIpcMain;
@@ -552,6 +553,8 @@ suite('ResidentHostedWorkspacesController', () => {
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
 				omniRetainedWorkbenches: options.retainedWorkbenches,
+				omniPendingWorkbenchAdoptions:
+					options.pendingWorkbenchAdoptions,
 			} as unknown as INativeWindowConfiguration,
 		} as ICodeWindow;
 		const controller = disposables.add(new ResidentHostedWorkspacesController(
@@ -2133,8 +2136,60 @@ suite('ResidentHostedWorkspacesController', () => {
 				).toSorted(),
 				[alpha, bravo, dormant].toSorted()
 			);
+			assert.deepStrictEqual(
+				window.config?.omniPendingWorkbenchAdoptions?.map(entry =>
+					entry.worktreePath
+				).toSorted(),
+				[alpha, bravo, dormant].toSorted()
+			);
 		}
 	);
+
+	test('preserves pending adoption lifecycle through initial catalog sync', () => {
+		const worktreePath = createWorktree('pending-adoption-reload');
+		const { controller } = createController({
+			pendingWorkbenchAdoptions: [{
+				worktreePath,
+				desiredState: 'loaded',
+				lastActiveAt: 42,
+			}],
+		});
+
+		controller.synchronizeGlobalWorkbenchCatalog([]);
+		const pending = controller.getState().retainedWorkbenches?.[0];
+		assert.ok(pending);
+		assert.deepStrictEqual({
+			desiredState: pending.desiredState,
+			lastActiveAt: pending.lastActiveAt,
+			sessionOnly: pending.sessionOnly,
+		}, {
+			desiredState: 'loaded',
+			lastActiveAt: 42,
+			sessionOnly: true,
+		});
+
+		controller.completePendingWorkbenchAdoption(worktreePath);
+		controller.synchronizeGlobalWorkbenchCatalog([{
+			id: 'global-pending',
+			folderUri: URI.file(worktreePath),
+			order: 0,
+		}]);
+		const adopted = controller.getState().retainedWorkbenches?.[0];
+		assert.ok(adopted);
+		assert.deepStrictEqual({
+			id: adopted.id,
+			desiredState: adopted.desiredState,
+			lastActiveAt: adopted.lastActiveAt,
+			sessionOnly: !!adopted.sessionOnly,
+			pending: controller.getPendingWorkbenchAdoptions(),
+		}, {
+			id: 'global-pending',
+			desiredState: 'loaded',
+			lastActiveAt: 42,
+			sessionOnly: false,
+			pending: [],
+		});
+	});
 
 	test('adopts a pre-fix project snapshot during initial reconciliation',
 		async () => {

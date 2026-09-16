@@ -40,7 +40,7 @@ import { getRemoteAuthority } from '../../remote/common/remoteHosts.js';
 import { IStateService } from '../../state/node/state.js';
 import { AgentsWindowOpenSource, IAddRemoveFoldersRequest, INativeOpenFileRequest, INativeWindowConfiguration, IOpenEmptyWindowOptions, IPath, IPathsToWaitFor, isFileToOpen, isFolderToOpen, isWorkspaceToOpen, IWindowOpenable, IWindowSettings } from '../../window/common/window.js';
 import { CodeWindow } from './windowImpl.js';
-import { IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
+import { IHucodeOmniMigrationWindowState, IHucodeOmniWindowMigrationResult, IOpenConfiguration, IOpenEmptyConfiguration, IWindowsCountChangedEvent, IWindowsMainService, OpenContext, getLastFocused } from './windows.js';
 import { tryOpenFilesInHucodeOmniWindow } from '../../../hucode/electron-main/omniFileOpen.js';
 import {
 	toNativeOpenFileRequest,
@@ -125,6 +125,10 @@ interface IOpenBrowserWindowOptions {
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly omniWorkbenchOverlays?:
+	INativeWindowConfiguration['omniWorkbenchOverlays'];
+	readonly omniPendingWorkbenchAdoptions?:
+	INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 	readonly hucodeAwaitLoadCommit?: boolean;
 }
 
@@ -220,6 +224,10 @@ interface IPathToOpen<T = IEditorOptions> extends IPath<T> {
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly omniWorkbenchOverlays?:
+	INativeWindowConfiguration['omniWorkbenchOverlays'];
+	readonly omniPendingWorkbenchAdoptions?:
+	INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 }
 
 const EMPTY_WINDOW: IPathToOpen = Object.create(null);
@@ -1973,6 +1981,9 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			omniActiveWorktreePath: options.omniActiveWorktreePath,
 			omniResidentWorkspaces: options.omniResidentWorkspaces,
 			omniRetainedWorkbenches: options.omniRetainedWorkbenches,
+			omniWorkbenchOverlays: options.omniWorkbenchOverlays,
+			omniPendingWorkbenchAdoptions:
+				options.omniPendingWorkbenchAdoptions,
 			'skip-sessions-welcome': options.isOmniWindow || undefined,
 		};
 
@@ -2351,6 +2362,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 
 	getWindows(): ICodeWindow[] {
 		return Array.from(this.windows.values());
+	}
+
+	getHucodeOmniMigrationWindowStates(): readonly IHucodeOmniMigrationWindowState[] {
+		return this.windowsStateHandler.getHucodeOmniMigrationWindowStates();
+	}
+
+	applyHucodeOmniWorkbenchMigration(
+		results: readonly IHucodeOmniWindowMigrationResult[]
+	): void {
+		this.windowsStateHandler.applyHucodeOmniWorkbenchMigration(results);
 	}
 
 	getWindowCount(): number {

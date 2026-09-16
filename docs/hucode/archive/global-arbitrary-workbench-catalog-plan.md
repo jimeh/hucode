@@ -1,6 +1,6 @@
 ---
 title: Global Arbitrary Workbench Catalog Plan
-status: proposed implementation
+status: implemented
 last_updated: 2026-09-16
 ---
 
@@ -8,7 +8,7 @@ last_updated: 2026-09-16
 
 ## Document purpose
 
-This document plans the move from per-Omni-session arbitrary-workbench
+This document records the implemented move from per-Omni-session arbitrary-workbench
 catalogs to one persisted global catalog shared by every desktop Omni window
 and every serve-web Omni tab.
 
@@ -892,7 +892,7 @@ Verification for this phase:
 - Add any non-obvious migration or verification hazards discovered during
   implementation to `docs/hucode/agent-instructions.md`.
 - Regenerate the Hucode test-suite snapshot if new suites are added.
-- Move this plan to `docs/hucode/archive/` after implementation and current
+- Retain this plan in `docs/hucode/archive/` after implementation and current
   guides fully describe the delivered behavior.
 
 Verification for this phase:

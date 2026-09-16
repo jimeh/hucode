@@ -16,9 +16,13 @@ import { InstantiationType, registerSingleton } from
 	'../../../platform/instantiation/common/extensions.js';
 import {
 	CreateWorktreeOptions,
+	EnsureWorkbenchResult,
 	GitWorktreeTargetChange,
 	GitWorktreeTargetObservation,
 	IProjectManagerService,
+	ImportWorkbenchesResult,
+	LegacyWorkbenchImportRecord,
+	ProjectCatalogSnapshot,
 	ProjectRecord,
 	RemoveWorktreeOptions,
 	RemoveWorktreeResult,
@@ -31,9 +35,7 @@ import { IBrowserWorkbenchEnvironmentService } from
 	'../../../workbench/services/environment/browser/environmentService.js';
 import { getHucodeOmniProjectsApi } from '../../../platform/environment/common/hucodeWebConfiguration.js';
 
-interface ProjectsResponse {
-	readonly projects: readonly ProjectRecord[];
-}
+interface ProjectsResponse extends ProjectCatalogSnapshot { }
 
 interface ProjectResponse extends ProjectsResponse {
 	readonly project: ProjectRecord;
@@ -100,6 +102,8 @@ export class WebProjectManagerClient extends Disposable
 
 	private readonly _onDidChangeProjects: Emitter<readonly ProjectRecord[]>;
 	readonly onDidChangeProjects: VSCodeEvent<readonly ProjectRecord[]>;
+	private readonly _onDidChangeCatalog: Emitter<ProjectCatalogSnapshot>;
+	readonly onDidChangeCatalog: VSCodeEvent<ProjectCatalogSnapshot>;
 	private readonly _onDidChangeGitWorktreeTargets:
 		Emitter<GitWorktreeTargetChange>;
 	readonly onDidChangeGitWorktreeTargets: VSCodeEvent<GitWorktreeTargetChange>;
@@ -117,6 +121,9 @@ export class WebProjectManagerClient extends Disposable
 	private eventConnectionGeneration = 0;
 	private hasEventSource = false;
 	private eventConnected = false;
+	private catalogEpoch: string | undefined;
+	private catalogRevision = -1;
+	private readonly retiredCatalogEpochs = new Set<string>();
 
 	constructor(
 		private readonly projectsApi: string,
@@ -130,6 +137,10 @@ export class WebProjectManagerClient extends Disposable
 			onWillAddFirstListener: ensureProjectEvents,
 		}));
 		this.onDidChangeProjects = this._onDidChangeProjects.event;
+		this._onDidChangeCatalog = this._register(new Emitter({
+			onWillAddFirstListener: ensureProjectEvents,
+		}));
+		this.onDidChangeCatalog = this._onDidChangeCatalog.event;
 		this._onDidChangeGitWorktreeTargets = this._register(new Emitter({
 			onWillAddFirstListener: ensureProjectEvents,
 		}));
@@ -138,9 +149,75 @@ export class WebProjectManagerClient extends Disposable
 	}
 
 	async getProjects(): Promise<readonly ProjectRecord[]> {
+		return (await this.getCatalog()).projects;
+	}
+
+	async getCatalog(): Promise<ProjectCatalogSnapshot> {
 		return this.readProjectsResponse(
 			await this.request<ProjectsResponse>('', { method: 'GET' })
 		);
+	}
+
+	async ensureWorkbench(uri: URI): Promise<EnsureWorkbenchResult> {
+		const response = await this.request<{
+			readonly result: EnsureWorkbenchResult;
+			readonly catalog: ProjectsResponse;
+		}>('workbenches/ensure', {
+			method: 'POST',
+			body: { folderPath: uri.fsPath || uri.path },
+		});
+		this.readProjectsResponse(response.catalog);
+		return reviveEnsureWorkbenchResult(response.result);
+	}
+
+	async importWorkbenches(
+		entries: readonly LegacyWorkbenchImportRecord[]
+	): Promise<ImportWorkbenchesResult> {
+		const response = await this.request<ImportWorkbenchesResult>(
+			'workbenches/import',
+			{
+				method: 'POST',
+				body: {
+					entries: entries.map(entry => ({
+						...entry,
+						folderPath: entry.folderUri.fsPath || entry.folderUri.path,
+						folderUri: undefined,
+					})),
+				},
+			}
+		);
+		return {
+			catalog: this.readProjectsResponse(response.catalog),
+			outcomes: response.outcomes,
+		};
+	}
+
+	async renameWorkbench(id: string, label: string): Promise<void> {
+		await this.writeProjectMutation(
+			`workbenches/${encodeURIComponent(id)}/label`,
+			{ label }
+		);
+	}
+
+	async resetWorkbenchLabel(id: string): Promise<void> {
+		await this.writeProjectMutation(
+			`workbenches/${encodeURIComponent(id)}/label/reset`,
+			{}
+		);
+	}
+
+	async moveWorkbench(id: string, beforeWorkbenchId?: string): Promise<void> {
+		await this.writeProjectMutation(
+			`workbenches/${encodeURIComponent(id)}/move`,
+			{ beforeWorkbenchId }
+		);
+	}
+
+	async removeWorkbench(id: string): Promise<void> {
+		this.readProjectsResponse(await this.request<ProjectsResponse>(
+			`workbenches/${encodeURIComponent(id)}`,
+			{ method: 'DELETE' }
+		));
 	}
 
 	async addProject(uri: URI): Promise<ProjectRecord> {
@@ -211,7 +288,7 @@ export class WebProjectManagerClient extends Disposable
 		return this.readProjectsResponse(await this.request<ProjectsResponse>(
 			id ? `${id}/refresh` : 'refresh',
 			{ method: 'POST', body: {} }
-		));
+		)).projects;
 	}
 
 	async getWorktreeRefs(
@@ -394,29 +471,49 @@ export class WebProjectManagerClient extends Disposable
 	}
 
 	private readProjectResponse(response: ProjectResponse): ProjectRecord {
-		const projects = this.reviveProjects(response.projects);
-		this._onDidChangeProjects.fire(projects);
+		this.readProjectsResponse(response);
 		return reviveProject(response.project);
 	}
 
 	private readWorktreeResponse(response: WorktreeResponse): WorktreeRecord {
-		const projects = this.reviveProjects(response.projects);
-		this._onDidChangeProjects.fire(projects);
+		this.readProjectsResponse(response);
 		return response.worktree;
 	}
 
 	private readProjectsResponse(
 		response: ProjectsResponse
-	): readonly ProjectRecord[] {
-		const projects = this.reviveProjects(response.projects);
-		this._onDidChangeProjects.fire(projects);
-		return projects;
+	): ProjectCatalogSnapshot {
+		const catalog = reviveCatalog(response);
+		if (!this.acceptCatalog(catalog)) {
+			return this.currentCatalog() ?? catalog;
+		}
+		this._onDidChangeProjects.fire(catalog.projects);
+		this._onDidChangeCatalog.fire(catalog);
+		return catalog;
 	}
 
-	private reviveProjects(
-		projects: readonly ProjectRecord[]
-	): readonly ProjectRecord[] {
-		return projects.map(project => reviveProject(project));
+	private acceptCatalog(catalog: ProjectCatalogSnapshot): boolean {
+		if (this.retiredCatalogEpochs.has(catalog.epoch)) {
+			return false;
+		}
+		if (this.catalogEpoch !== undefined && this.catalogEpoch !== catalog.epoch) {
+			this.retiredCatalogEpochs.add(this.catalogEpoch);
+			this.catalogRevision = -1;
+		}
+		if (this.catalogEpoch === catalog.epoch &&
+			catalog.revision < this.catalogRevision) {
+			return false;
+		}
+		this.catalogEpoch = catalog.epoch;
+		this.catalogRevision = catalog.revision;
+		this.lastCatalog = catalog;
+		return true;
+	}
+
+	private lastCatalog: ProjectCatalogSnapshot | undefined;
+
+	private currentCatalog(): ProjectCatalogSnapshot | undefined {
+		return this.lastCatalog;
 	}
 
 	private async request<T>(
@@ -505,9 +602,10 @@ export class WebProjectManagerClient extends Disposable
 			}
 		});
 		events.addEventListener('projects', event => {
-			const projects = readProjectEvent(event);
-			if (projects) {
-				this._onDidChangeProjects.fire(projects);
+			const catalog = readProjectEvent(event);
+			if (catalog && this.acceptCatalog(catalog)) {
+				this._onDidChangeProjects.fire(catalog.projects);
+				this._onDidChangeCatalog.fire(catalog);
 			}
 		});
 		events.addEventListener('git-worktrees', event => {
@@ -555,7 +653,7 @@ function sameStringArray(
 	return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function readProjectEvent(event: Event): readonly ProjectRecord[] | undefined {
+function readProjectEvent(event: Event): ProjectCatalogSnapshot | undefined {
 	const data = (event as { readonly data?: unknown }).data;
 	if (typeof data !== 'string') {
 		return undefined;
@@ -566,11 +664,36 @@ function readProjectEvent(event: Event): readonly ProjectRecord[] | undefined {
 		if (!Array.isArray(body.projects)) {
 			return undefined;
 		}
-
-		return body.projects.map(project => reviveProject(project));
+		return reviveCatalog(body);
 	} catch {
 		return undefined;
 	}
+}
+
+function reviveCatalog(catalog: ProjectsResponse): ProjectCatalogSnapshot {
+	return {
+		epoch: typeof catalog.epoch === 'string' ? catalog.epoch : 'legacy',
+		revision: Number.isSafeInteger(catalog.revision) ? catalog.revision : 0,
+		projects: catalog.projects.map(project => reviveProject(project)),
+		workbenches: (catalog.workbenches ?? []).map(workbench => ({
+			...workbench,
+			folderUri: URI.revive(workbench.folderUri),
+		})),
+	};
+}
+
+function reviveEnsureWorkbenchResult(
+	result: EnsureWorkbenchResult
+): EnsureWorkbenchResult {
+	return result.kind === 'workbench'
+		? {
+			...result,
+			workbench: {
+				...result.workbench,
+				folderUri: URI.revive(result.workbench.folderUri),
+			},
+		}
+		: result;
 }
 
 function readGitWorktreeEvent(event: Event): GitWorktreeTargetChange | undefined {

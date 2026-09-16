@@ -55,6 +55,27 @@ suite('ProjectSwitcherTreeModel', () => {
 		));
 	});
 
+	test('shows when the global workbench catalog is unavailable', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				workbenchCatalogHydrated: false,
+			},
+		});
+		const section = model.roots[0].element;
+		assert.deepStrictEqual({
+			description: section.description,
+			tooltip: section.tooltip,
+		}, {
+			description: 'Unavailable',
+			tooltip: 'Workbench catalog is unavailable. Hucode will retry.',
+		});
+	});
+
 	test('applies persisted Omni section order', () => {
 		const model = buildProjectSwitcherTreeModel({
 			projects: [],
@@ -271,6 +292,31 @@ suite('ProjectSwitcherTreeModel', () => {
 			isActive: false,
 			icon: 'warning',
 		}]);
+	});
+
+	test('marks a globally dismissed live workbench as session-only', () => {
+		const model = buildProjectSwitcherTreeModel({
+			projects: [],
+			collapsedProjectIds: new Set(),
+			getPathLabel: path => path,
+			isOmniWindow: true,
+			hostedWorkspaceState: {
+				...createHostedState(),
+				retainedWorkbenches: [{
+					id: 'session-only',
+					folderUri: URI.file('/scratch/live').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+					sessionOnly: true,
+				}],
+			},
+		});
+		const item = flatten(model.roots)
+			.map(element => element.element)
+			.find(isRetainedWorkbenchItem);
+		assert.ok(item);
+		assert.strictEqual(item.isSessionOnly, true);
+		assert.match(item.tooltip ?? '', /only open in this session/);
 	});
 
 	test('shows an adopted orphan when its former project is absent', () => {

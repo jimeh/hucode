@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../base/common/uri.js';
+import { ArbitraryWorkbenchRecord } from
+	'../../platform/projectManager/common/projectManager.js';
 import { IOmniRetainedWorkbench } from
 	'../../platform/window/common/window.js';
 
@@ -122,6 +124,63 @@ export class RetainedWorkbenchCatalog {
 		return this.records.find(record =>
 			this.toResourceKey(URI.revive(record.folderUri)) === key
 		);
+	}
+
+	/**
+	 * Projects the global saved catalog through this session's lifecycle state.
+	 * Saved records absent from the session default to unloaded.
+	 */
+	synchronizeGlobalRecords(
+		records: readonly ArbitraryWorkbenchRecord[],
+		keepRemoved: (record: IHucodeRetainedWorkbench) => boolean = () => false
+	): boolean {
+		const previous = this.records;
+		const previousById = new Map(previous.map(record => [record.id, record]));
+		const previousByResource = new Map(previous.map(record => [
+			this.toResourceKey(URI.revive(record.folderUri)),
+			record,
+		]));
+		const globalIds = new Set(records.map(record => record.id));
+		const globalResources = new Set(records.map(record =>
+			this.toResourceKey(URI.revive(record.folderUri))
+		));
+		const next = records
+			.slice()
+			.sort((a, b) => a.order - b.order)
+			.map((record, order): IHucodeRetainedWorkbench => {
+				const folderUri = URI.revive(record.folderUri);
+				const session = previousById.get(record.id) ??
+					previousByResource.get(this.toResourceKey(folderUri));
+				return {
+					id: record.id,
+					folderUri: folderUri.toJSON(),
+					desiredState: session?.desiredState ?? 'unloaded',
+					order,
+					...(record.label === undefined ? {} : { label: record.label }),
+					...(session?.folderStatus === undefined
+						? {}
+						: { folderStatus: session.folderStatus }),
+					...(session?.lastActiveAt === undefined
+						? {}
+						: { lastActiveAt: session.lastActiveAt }),
+				};
+			});
+		for (const record of previous) {
+			if (!globalIds.has(record.id) &&
+				!globalResources.has(this.toResourceKey(URI.revive(record.folderUri))) &&
+				keepRemoved(record)) {
+				next.push({
+					...record,
+					order: next.length,
+					sessionOnly: true,
+				});
+			}
+		}
+		if (JSON.stringify(previous) === JSON.stringify(next)) {
+			return false;
+		}
+		this.records = next;
+		return true;
 	}
 
 	/** Adds a folder or reuses its existing retained record. */

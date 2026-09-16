@@ -24,15 +24,21 @@ import { IStateService } from '../../state/node/state.js';
 import { ILogService } from '../../log/common/log.js';
 import { IFileService } from '../../files/common/files.js';
 import {
+	ArbitraryWorkbenchRecord,
 	CreateWorktreeOptions,
+	EnsureWorkbenchResult,
 	GitWorktreeTargetObservation,
 	IProjectManagerService,
+	ImportWorkbenchesResult,
+	LegacyWorkbenchImportRecord,
 	PROJECT_MANAGER_STORAGE_KEY,
 	ProjectRecord,
+	ProjectCatalogSnapshot,
 	ProjectWorktreeState,
 	RemoveWorktreeOptions,
 	RemoveWorktreeResult,
 	StoredProjectRecord,
+	StoredArbitraryWorkbenchRecord,
 	WorktreeRecord,
 	WorktreeRefQueryOptions,
 	WorktreeRefRecord,
@@ -46,7 +52,7 @@ import {
 	createStoredProjectManagerState,
 	filterStoredWorktreeLabel,
 	filterStoredWorktreePath,
-	loadStoredProjectManagerState,
+	loadStoredProjectManagerCatalogState,
 	projectManagerPathsEqual,
 	pruneStoredPinnedWorktreePaths,
 	pruneStoredWorktreeLabels,
@@ -148,10 +154,16 @@ export class ProjectManagerMainService extends Disposable
 	private readonly _onDidChangeProjects =
 		this._register(new Emitter<readonly ProjectRecord[]>());
 	readonly onDidChangeProjects = this._onDidChangeProjects.event;
+	private readonly _onDidChangeCatalog =
+		this._register(new Emitter<ProjectCatalogSnapshot>());
+	readonly onDidChangeCatalog = this._onDidChangeCatalog.event;
 	readonly onDidChangeGitWorktreeTargets:
 		IProjectManagerService['onDidChangeGitWorktreeTargets'];
 
 	private storedProjects: StoredProjectRecord[] = [];
+	private storedWorkbenches: StoredArbitraryWorkbenchRecord[] = [];
+	private readonly catalogEpoch = generateUuid();
+	private catalogRevision = 0;
 	private projectWorktrees = new Map<string, readonly WorktreeRecord[]>();
 	private readonly projectWorktreeStates =
 		new Map<string, ProjectWorktreeState>();
@@ -209,6 +221,115 @@ export class ProjectManagerMainService extends Disposable
 		this.ensureStateLoaded();
 		await this.hydrateMissingProjectWorktrees();
 		return this.toProjectRecords();
+	}
+
+	async getCatalog(): Promise<ProjectCatalogSnapshot> {
+		const projects = await this.getProjects();
+		return this.toCatalogSnapshot(projects);
+	}
+
+	async ensureWorkbench(uri: URI): Promise<EnsureWorkbenchResult> {
+		this.ensureStateLoaded();
+		const result = this.ensureWorkbenchWithoutPublication(uri);
+		if (result.kind === 'workbench' && result.created) {
+			this.saveState();
+			this.emitChange();
+		}
+		return result;
+	}
+
+	async importWorkbenches(
+		entries: readonly LegacyWorkbenchImportRecord[]
+	): Promise<ImportWorkbenchesResult> {
+		this.ensureStateLoaded();
+		const outcomes: ImportWorkbenchesResult['outcomes'][number][] =
+			new Array(entries.length);
+		let changed = false;
+		const orderedEntries = entries.map((entry, index) => ({ entry, index }))
+			.sort((a, b) => a.entry.order - b.entry.order || a.index - b.index);
+		for (const { entry, index } of orderedEntries) {
+			const result = this.ensureWorkbenchWithoutPublication(
+				entry.folderUri,
+				entry.label,
+				entry.legacyId
+			);
+			changed ||= result.kind === 'workbench' && result.created;
+			outcomes[index] = result.kind === 'workbench'
+				? {
+					legacyId: entry.legacyId,
+					kind: 'workbench',
+					workbenchId: result.workbench.id,
+				}
+				: {
+					legacyId: entry.legacyId,
+					kind: 'projectWorktree',
+					projectId: result.projectId,
+					worktreePath: result.worktree.path,
+				};
+		}
+		if (changed) {
+			this.saveState();
+			this.emitChange();
+		}
+		return { catalog: this.toCatalogSnapshot(), outcomes };
+	}
+
+	async renameWorkbench(id: string, label: string): Promise<void> {
+		this.ensureStateLoaded();
+		const workbench = this.requireWorkbench(id);
+		const normalized = label.trim();
+		if (!normalized || workbench.label === normalized) {
+			return;
+		}
+		workbench.label = normalized;
+		this.saveState();
+		this.emitChange();
+	}
+
+	async resetWorkbenchLabel(id: string): Promise<void> {
+		this.ensureStateLoaded();
+		const workbench = this.requireWorkbench(id);
+		if (workbench.label === undefined) {
+			return;
+		}
+		workbench.label = undefined;
+		this.saveState();
+		this.emitChange();
+	}
+
+	async moveWorkbench(id: string, beforeWorkbenchId?: string): Promise<void> {
+		this.ensureStateLoaded();
+		const workbench = this.requireWorkbench(id);
+		if (beforeWorkbenchId === id) {
+			return;
+		}
+		const before = beforeWorkbenchId
+			? this.requireWorkbench(beforeWorkbenchId)
+			: undefined;
+		const ordered = this.storedWorkbenches
+			.filter(entry => entry.id !== id)
+			.sort((a, b) => a.order - b.order);
+		ordered.splice(before
+			? ordered.findIndex(entry => entry.id === before.id)
+			: ordered.length, 0, workbench);
+		this.storedWorkbenches = ordered.map((entry, order) => ({
+			...entry,
+			order,
+		}));
+		this.saveState();
+		this.emitChange();
+	}
+
+	async removeWorkbench(id: string): Promise<void> {
+		this.ensureStateLoaded();
+		if (!this.storedWorkbenches.some(entry => entry.id === id)) {
+			return;
+		}
+		this.storedWorkbenches = this.storedWorkbenches
+			.filter(entry => entry.id !== id)
+			.map((entry, order) => ({ ...entry, order }));
+		this.saveState();
+		this.emitChange();
 	}
 
 	async addProject(uri: URI): Promise<ProjectRecord> {
@@ -794,6 +915,10 @@ export class ProjectManagerMainService extends Disposable
 				stagedProject,
 				visitedWorktrees
 			);
+			const promoted = this.removeWorkbenchesForProjectPaths([
+				stagedProject.rootPath,
+				...worktrees.map(worktree => worktree.path),
+			]);
 
 			if (stagedProject.lastActiveWorktreePath &&
 				!worktrees.some(worktree =>
@@ -806,7 +931,7 @@ export class ProjectManagerMainService extends Disposable
 				stagedProject.lastActiveWorktreePath = undefined;
 			}
 
-			const stateChanged =
+			const stateChanged = promoted ||
 				this.projectWorktreeStates.get(project.id) !== 'current' ||
 				!equals(project, stagedProject) ||
 				!equals(this.projectWorktrees.get(project.id), worktrees);
@@ -1062,6 +1187,128 @@ export class ProjectManagerMainService extends Disposable
 			.map(project => this.toProjectRecord(project));
 	}
 
+	private toCatalogSnapshot(
+		projects: readonly ProjectRecord[] = this.toProjectRecords()
+	): ProjectCatalogSnapshot {
+		return {
+			epoch: this.catalogEpoch,
+			revision: this.catalogRevision,
+			projects,
+			workbenches: this.storedWorkbenches
+				.slice()
+				.sort((a, b) => a.order - b.order)
+				.map(workbench => ({
+					id: workbench.id,
+					folderUri: URI.file(workbench.folderPath),
+					...(workbench.label === undefined
+						? {}
+						: { label: workbench.label }),
+					order: workbench.order,
+				})),
+		};
+	}
+
+	private ensureWorkbenchWithoutPublication(
+		uri: URI,
+		label?: string,
+		preferredId?: string
+	): EnsureWorkbenchResult {
+		const projectOwner = this.findProjectWorktree(uri.fsPath);
+		if (projectOwner) {
+			return {
+				kind: 'projectWorktree',
+				projectId: projectOwner.project.id,
+				worktree: projectOwner.worktree,
+			};
+		}
+		const existing = this.storedWorkbenches.find(workbench =>
+			this.pathsEqual(workbench.folderPath, uri.fsPath)
+		);
+		if (existing) {
+			return {
+				kind: 'workbench',
+				workbench: this.toWorkbenchRecord(existing),
+				created: false,
+			};
+		}
+
+		// This check and insert are deliberately synchronous. Concurrent desktop
+		// callers therefore converge after any caller-side asynchronous preflight.
+		const stored: StoredArbitraryWorkbenchRecord = {
+			id: preferredId?.trim() && !this.storedWorkbenches.some(
+				workbench => workbench.id === preferredId
+			)
+				? preferredId
+				: generateUuid(),
+			folderPath: uri.fsPath,
+			...(label?.trim() ? { label: label.trim() } : {}),
+			order: this.storedWorkbenches.length,
+		};
+		this.storedWorkbenches = [...this.storedWorkbenches, stored];
+		return {
+			kind: 'workbench',
+			workbench: this.toWorkbenchRecord(stored),
+			created: true,
+		};
+	}
+
+	private findProjectWorktree(folderPath: string): {
+		readonly project: StoredProjectRecord;
+		readonly worktree: WorktreeRecord;
+	} | undefined {
+		for (const project of this.storedProjects) {
+			const discovered = this.projectWorktrees.get(project.id) ?? [];
+			const worktree = discovered.find(entry =>
+				this.pathsEqual(entry.path, folderPath)
+			);
+			if (worktree && this.projectWorktreeStates.get(project.id) === 'current') {
+				return { project, worktree };
+			}
+			if (this.pathsEqual(project.rootPath, folderPath)) {
+				return {
+					project,
+					worktree: worktree ?? {
+						path: project.rootPath,
+						label: basename(project.rootPath),
+						isMain: true,
+						isDetached: false,
+					},
+				};
+			}
+		}
+		return undefined;
+	}
+
+	private toWorkbenchRecord(
+		workbench: StoredArbitraryWorkbenchRecord
+	): ArbitraryWorkbenchRecord {
+		return {
+			id: workbench.id,
+			folderUri: URI.file(workbench.folderPath),
+			...(workbench.label === undefined ? {} : { label: workbench.label }),
+			order: workbench.order,
+		};
+	}
+
+	private requireWorkbench(id: string): StoredArbitraryWorkbenchRecord {
+		const workbench = this.storedWorkbenches.find(entry => entry.id === id);
+		if (!workbench) {
+			throw new Error(`Unknown workbench "${id}".`);
+		}
+		return workbench;
+	}
+
+	private removeWorkbenchesForProjectPaths(paths: readonly string[]): boolean {
+		const next = this.storedWorkbenches.filter(workbench =>
+			!paths.some(path => this.pathsEqual(path, workbench.folderPath))
+		);
+		if (next.length === this.storedWorkbenches.length) {
+			return false;
+		}
+		this.storedWorkbenches = next.map((entry, order) => ({ ...entry, order }));
+		return true;
+	}
+
 	private toProjectRecord(project: StoredProjectRecord): ProjectRecord {
 		return {
 			id: project.id,
@@ -1086,7 +1333,10 @@ export class ProjectManagerMainService extends Disposable
 	}
 
 	private emitChange(): void {
-		this._onDidChangeProjects.fire(this.toProjectRecords());
+		this.catalogRevision++;
+		const catalog = this.toCatalogSnapshot();
+		this._onDidChangeProjects.fire(catalog.projects);
+		this._onDidChangeCatalog.fire(catalog);
 	}
 
 	private setProjectOrder(orderedProjectIds: readonly string[]): void {
@@ -1108,20 +1358,26 @@ export class ProjectManagerMainService extends Disposable
 			return;
 		}
 
-		this.storedProjects = this.loadState();
+		const state = this.loadState();
+		this.storedProjects = state.projects;
+		this.storedWorkbenches = state.workbenches;
 		this.stateLoaded = true;
 	}
 
-	private loadState(): StoredProjectRecord[] {
-		return loadStoredProjectManagerState(this.stateService.getItem(
-			PROJECT_MANAGER_STORAGE_KEY
-		));
+	private loadState() {
+		return loadStoredProjectManagerCatalogState(
+			this.stateService.getItem(PROJECT_MANAGER_STORAGE_KEY),
+			isLinux
+		);
 	}
 
 	private saveState(): void {
 		this.stateService.setItem(
 			PROJECT_MANAGER_STORAGE_KEY,
-			createStoredProjectManagerState(this.storedProjects)
+			createStoredProjectManagerState(
+				this.storedProjects,
+				this.storedWorkbenches
+			)
 		);
 	}
 

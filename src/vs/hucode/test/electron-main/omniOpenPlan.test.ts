@@ -51,6 +51,16 @@ suite('HucodeOmniOpenPlan', () => {
 			desiredState: 'unloaded' as const,
 			order: 0,
 		}];
+		const workbenchOverlays = [{
+			workbenchId: 'global-scratch',
+			desiredState: 'loaded' as const,
+			lastActiveAt: 2,
+		}];
+		const pendingWorkbenchAdoptions = [{
+			worktreePath: '/pending',
+			desiredState: 'loaded' as const,
+			lastActiveAt: 3,
+		}];
 		const omniPath = createHucodeOmniWindowPath({
 			omniActiveWorktreePath: '/repo',
 			omniResidentWorkspaces: [{
@@ -60,6 +70,8 @@ suite('HucodeOmniOpenPlan', () => {
 				state: 'active'
 			}],
 			omniRetainedWorkbenches: retainedWorkbenches,
+			omniWorkbenchOverlays: workbenchOverlays,
+			omniPendingWorkbenchAdoptions: pendingWorkbenchAdoptions,
 		});
 
 		assert.strictEqual(isHucodeOmniPathToOpen(omniPath), true);
@@ -70,6 +82,8 @@ suite('HucodeOmniOpenPlan', () => {
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: omniPath.omniResidentWorkspaces,
 				omniRetainedWorkbenches: retainedWorkbenches,
+				omniWorkbenchOverlays: workbenchOverlays,
+				omniPendingWorkbenchAdoptions: pendingWorkbenchAdoptions,
 			}),
 			omniPath
 		);
@@ -144,6 +158,8 @@ suite('HucodeOmniOpenPlan', () => {
 				omniActiveWorktreePath: '/repo',
 				omniResidentWorkspaces: undefined,
 				omniRetainedWorkbenches: undefined,
+				omniWorkbenchOverlays: undefined,
+				omniPendingWorkbenchAdoptions: undefined,
 			}
 		);
 	});

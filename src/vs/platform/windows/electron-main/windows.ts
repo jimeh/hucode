@@ -17,7 +17,7 @@ import { ServicesAccessor, createDecorator } from '../../instantiation/common/in
 import { ILogService } from '../../log/common/log.js';
 import { IProductService } from '../../product/common/productService.js';
 import { IThemeMainService } from '../../theme/electron-main/themeMainService.js';
-import { AgentsWindowOpenSource, IOpenEmptyWindowOptions, IWindowOpenable, IWindowSettings, TitlebarStyle, WindowMinimumSize, hasNativeTitlebar, useNativeFullScreen, useWindowControlsOverlay, zoomLevelToZoomFactor } from '../../window/common/window.js';
+import { AgentsWindowOpenSource, IOpenEmptyWindowOptions, IWindowOpenable, IWindowSettings, IOmniRetainedWorkbench, IOmniWorkbenchSessionEntry, IOmniWorkspaceRestoreEntry, TitlebarStyle, WindowMinimumSize, hasNativeTitlebar, useNativeFullScreen, useWindowControlsOverlay, zoomLevelToZoomFactor } from '../../window/common/window.js';
 import { ICodeWindow, IWindowState, WindowMode, defaultWindowState } from '../../window/electron-main/window.js';
 
 export const IWindowsMainService = createDecorator<IWindowsMainService>('windowsMainService');
@@ -56,6 +56,27 @@ export interface IWindowsMainService {
 
 	getWindowById(windowId: number): ICodeWindow | undefined;
 	getWindowByWebContents(webContents: electron.WebContents): ICodeWindow | undefined;
+
+	/** Hucode's complete persisted Omni state, including windows not restored. */
+	getHucodeOmniMigrationWindowStates?(): readonly IHucodeOmniMigrationWindowState[];
+	/** Installs and persists the session-only result of Hucode catalog migration. */
+	applyHucodeOmniWorkbenchMigration?(
+		results: readonly IHucodeOmniWindowMigrationResult[]
+	): void;
+}
+
+export interface IHucodeOmniMigrationWindowState {
+	readonly sourceId: string;
+	readonly retainedWorkbenches: readonly IOmniRetainedWorkbench[];
+	readonly residentWorkspaces: readonly IOmniWorkspaceRestoreEntry[];
+	readonly workbenchOverlays: readonly IOmniWorkbenchSessionEntry[];
+}
+
+export interface IHucodeOmniWindowMigrationResult {
+	readonly sourceId: string;
+	readonly workbenchIdsByLegacyId: Readonly<Record<string, string>>;
+	readonly workbenchIdsByPath: Readonly<Record<string, string>>;
+	readonly projectIdsByPath: Readonly<Record<string, string>>;
 }
 
 export interface IWindowsCountChangedEvent {

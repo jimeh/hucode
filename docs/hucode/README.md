@@ -28,10 +28,6 @@ separate application window for each one.
   Plan](omni-profile-spaces-plan.md) records global live-path ownership,
   independent hosted profiles, and a shell that follows the active workbench's
   appearance on desktop and serve-web.
-- [Global Arbitrary Workbench Catalog
-  Plan](global-arbitrary-workbench-catalog-plan.md) defines shared saved
-  workbench persistence, per-session lifecycle overlays, legacy migration, and
-  desktop and serve-web delivery steps.
 - [Desktop first-launch onboarding](onboarding-first-launch.md) describes
   automatic admission, checkpoint durability, and the exact folder/profile handoff.
 - [First-Launch Onboarding and Editor Migration Plan](onboarding-plan.md)
@@ -75,6 +71,8 @@ decision history. They describe the state and assumptions at the time they
 were written; the guides above are the source of truth for current behavior.
 
 - [Omni Workbenches and Projects Plan](archive/omni-workbenches-plan.md)
+- [Global Arbitrary Workbench Catalog
+  Plan](archive/global-arbitrary-workbench-catalog-plan.md)
 - [Serve-Web Omni Plan](archive/serve-web-omni-plan.html)
 - [Serve-Web Omni Self-Review](archive/serve-web-omni-self-review.md)
 - [Release Build Size Analysis](archive/release-build-size-analysis.md)

@@ -473,15 +473,14 @@ suite('ProjectSwitcherContribution', () => {
 		]);
 	});
 
-	test('keeps complete project catalog reconciliation in the shell',
+	test('reads shell state without renderer catalog reconciliation',
 		async () => {
 			const calls: string[] = [];
-			const reconciled = hostedState('reconciled');
+			const shellState = hostedState('shell-state');
 			const shellService = {
-				async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-				) {
-					calls.push('reconcile');
-					return reconciled;
+				async getState() {
+					calls.push('getState');
+					return shellState;
 				},
 			} as unknown as IHucodeShellControllerService;
 
@@ -519,9 +518,9 @@ suite('ProjectSwitcherContribution', () => {
 				fromShell: fromShell?.activeInstanceId,
 				fromUntrustedWindow,
 			}, {
-				calls: ['reconcile'],
+				calls: ['getState'],
 				fromHosted: undefined,
-				fromShell: 'reconciled',
+				fromShell: 'shell-state',
 				fromUntrustedWindow: undefined,
 			});
 		});

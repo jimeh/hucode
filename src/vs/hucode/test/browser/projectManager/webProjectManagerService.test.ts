@@ -302,6 +302,73 @@ suite('WebProjectManagerService', () => {
 		);
 	});
 
+	test('ignores a late HTTP catalog older than the newest SSE revision', async () => {
+		const response = new DeferredPromise<Response>();
+		const service = disposables.add(createService(() => response.p));
+		const events: number[] = [];
+		disposables.add(service.onDidChangeCatalog(catalog =>
+			events.push(catalog.revision)
+		));
+		const pending = service.getCatalog();
+
+		FakeEventSource.instances[0].emit(
+			'projects',
+			new MessageEvent('projects', {
+				data: JSON.stringify({
+					epoch: 'server-a',
+					revision: 2,
+					projects: [rawProject('/new')],
+					workbenches: [],
+				}),
+			})
+		);
+		response.complete(new Response(JSON.stringify({
+			epoch: 'server-a',
+			revision: 1,
+			projects: [rawProject('/old')],
+			workbenches: [],
+		})));
+
+		const catalog = await pending;
+		assert.deepStrictEqual({
+			revision: catalog.revision,
+			root: catalog.projects[0].rootUri.fsPath,
+			events,
+		}, {
+			revision: 2,
+			root: '/new',
+			events: [2],
+		});
+	});
+
+	test('accepts a lower revision from a new server epoch', () => {
+		const service = disposables.add(createService(async () =>
+			new Response(JSON.stringify({ projects: [] }))
+		));
+		const events: string[] = [];
+		disposables.add(service.onDidChangeCatalog(catalog =>
+			events.push(`${catalog.epoch}:${catalog.revision}`)
+		));
+
+		for (const catalog of [
+			{ epoch: 'server-a', revision: 8 },
+			{ epoch: 'server-b', revision: 0 },
+		]) {
+			FakeEventSource.instances[0].emit(
+				'projects',
+				new MessageEvent('projects', {
+					data: JSON.stringify({
+						...catalog,
+						projects: [],
+						workbenches: [],
+					}),
+				})
+			);
+		}
+
+		assert.deepStrictEqual(events, ['server-a:8', 'server-b:0']);
+	});
+
 	test('starts exactly one project stream for Git-monitor targets', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({ observations: [] }));
