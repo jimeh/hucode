@@ -293,6 +293,110 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('applies the newest catalog event after migration recovery settles',
+		async () => {
+			const legacyPath = '/tmp/recovery-race-legacy';
+			const intermediatePath = '/tmp/recovery-race-intermediate';
+			const concurrentPath = '/tmp/recovery-race-concurrent';
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'legacy',
+					folderUri: URI.file(legacyPath).toJSON(),
+					desiredState: 'unloaded',
+					order: 0,
+				}],
+				residentWorkspaces: [],
+			});
+			const catalogs = new Emitter<ProjectCatalogSnapshot>();
+			disposables.add(catalogs);
+			const recoveryImport = new DeferredPromise<{
+				catalog: ProjectCatalogSnapshot;
+				outcomes: readonly [{
+					legacyId: string;
+					kind: 'workbench';
+					workbenchId: string;
+				}];
+			}>();
+			let importCalls = 0;
+			const recoveredCatalog: ProjectCatalogSnapshot = {
+				epoch: 'recovery-race',
+				revision: 1,
+				projects: [],
+				workbenches: [{
+					id: 'global-legacy',
+					folderUri: URI.file(legacyPath),
+					order: 0,
+				}],
+			};
+			const intermediateCatalog: ProjectCatalogSnapshot = {
+				...recoveredCatalog,
+				revision: 2,
+				workbenches: [...recoveredCatalog.workbenches, {
+					id: 'global-intermediate',
+					folderUri: URI.file(intermediatePath),
+					order: 1,
+				}],
+			};
+			const concurrentCatalog: ProjectCatalogSnapshot = {
+				...recoveredCatalog,
+				revision: 3,
+				workbenches: [...recoveredCatalog.workbenches, {
+					id: 'global-concurrent',
+					folderUri: URI.file(concurrentPath),
+					order: 1,
+				}],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => [],
+				getCatalog: async () => recoveredCatalog,
+				importWorkbenches: async () => {
+					importCalls++;
+					if (importCalls === 1) {
+						throw new Error('startup unavailable');
+					}
+					return recoveryImport.p;
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none',
+				undefined,
+				undefined,
+				undefined,
+				manager
+			);
+
+			await service.getWindowState(browser.windowId);
+			catalogs.fire(recoveredCatalog);
+			await waitFor(() => importCalls === 2, 'expected catalog recovery');
+			catalogs.fire(intermediateCatalog);
+			catalogs.fire(concurrentCatalog);
+			recoveryImport.complete({
+				catalog: recoveredCatalog,
+				outcomes: [{
+					legacyId: 'legacy',
+					kind: 'workbench',
+					workbenchId: 'global-legacy',
+				}],
+			});
+
+			await waitFor(async () => {
+				const state = await service.getWindowState(browser.windowId);
+				return state.retainedWorkbenches?.some(
+					workbench => workbench.id === 'global-concurrent'
+				) ?? false;
+			}, 'expected concurrent catalog after recovery');
+			assert.deepStrictEqual(
+				(await service.getWindowState(browser.windowId))
+					.retainedWorkbenches?.map(workbench => workbench.id),
+				['global-legacy', 'global-concurrent']
+			);
+		}
+	);
+
 	test('stats server folders through the remote file-system resource',
 		async () => {
 			const resources: URI[] = [];
@@ -6688,10 +6792,19 @@ suite('WebHucodeShellService', () => {
 			browser.expireTimeouts(1000);
 			await Promise.resolve();
 			assert.strictEqual(ensureCalls, 1);
-			assert.deepStrictEqual(
-				(await service.getWindowState(browser.windowId)).retainedWorkbenches,
-				[]
+			const dismissed = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(dismissed.retainedWorkbenches?.map(record => ({
+				id: record.id,
+				sessionOnly: record.sessionOnly,
+			})), [{ id: 'global-dismissed', sessionOnly: true }]);
+			assert.strictEqual(dismissed.instances.length, 1);
+
+			const unloaded = await service.unloadRetainedWorkbench(
+				browser.windowId,
+				'global-dismissed'
 			);
+			assert.deepStrictEqual(unloaded.retainedWorkbenches, []);
+			assert.deepStrictEqual(unloaded.instances, []);
 		}
 	);
 

@@ -188,7 +188,8 @@ export class HucodeShellMainService extends Disposable
 	private readonly onboarding: OnboardingMain;
 	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
 	private globalCatalog: ProjectCatalogSnapshot | undefined;
-	private readonly globalCatalogReady = new DeferredPromise<void>();
+	private readonly desktopWorkbenchMigrationSettled =
+		new DeferredPromise<void>();
 	private readonly pendingAdoptionRetries = new Map<string, {
 		attempt: number;
 		running?: boolean;
@@ -237,7 +238,6 @@ export class HucodeShellMainService extends Disposable
 		));
 		this._register(this.projectManagerMainService.onDidChangeCatalog(catalog => {
 			this.globalCatalog = catalog;
-			this.globalCatalogReady.complete();
 			this.synchronizeControllerCatalogs(catalog);
 			this.retryPendingWorkbenchAdoptions();
 		}));
@@ -249,13 +249,14 @@ export class HucodeShellMainService extends Disposable
 			}
 			this.pendingAdoptionRetries.clear();
 		}));
-		void this.loadAndMigrateDesktopWorkbenchCatalog().then(catalog => {
-			this.globalCatalog = catalog;
-			this.globalCatalogReady.complete();
-			this.synchronizeControllerCatalogs(catalog);
-		}, error => this.logService.warn(
-			`[hucode] Global workbench catalog is unavailable: ${String(error)}`
-		));
+		void this.loadAndMigrateDesktopWorkbenchCatalog()
+			.then(catalog => {
+				this.globalCatalog = catalog;
+				this.synchronizeControllerCatalogs(catalog);
+			}, error => this.logService.warn(
+				`[hucode] Global workbench catalog is unavailable: ${String(error)}`
+			))
+			.finally(() => this.desktopWorkbenchMigrationSettled.complete());
 
 		const onHostedShellPortRequest = (
 			event: Electron.IpcMainEvent,
@@ -1208,7 +1209,6 @@ export class HucodeShellMainService extends Disposable
 		}
 		const catalog = await this.projectManagerMainService.getCatalog();
 		this.globalCatalog = catalog;
-		this.globalCatalogReady.complete();
 		controller.synchronizeGlobalWorkbenchCatalog(catalog);
 		await this.routeWorkspaceOpen(windowId, ensured.workbench.folderUri.fsPath);
 		return this.withDesktopOwnershipState(windowId, controller.getState());
@@ -1764,7 +1764,7 @@ export class HucodeShellMainService extends Disposable
 						'active',
 					shouldRestoreCandidate: candidate =>
 						this.isRestoreCandidateWinner(windowId, candidate),
-					beforeRestore: () => this.globalCatalogReady.p,
+					beforeRestore: () => this.desktopWorkbenchMigrationSettled.p,
 				}
 			);
 		if (this.globalCatalog) {
@@ -1821,7 +1821,6 @@ export class HucodeShellMainService extends Disposable
 			this.pendingAdoptionRetries.delete(key);
 			const catalog = await this.projectManagerMainService.getCatalog();
 			this.globalCatalog = catalog;
-			this.globalCatalogReady.complete();
 			this.synchronizeControllerCatalogs(catalog);
 		} catch (error) {
 			retry.running = false;
