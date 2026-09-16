@@ -23,6 +23,34 @@ For a push under the same condition, also set `GIT_LFS_SKIP_PUSH=1`. Do not use
 this fallback when the new commits contain an LFS payload. Install `git-lfs`
 and publish the object instead.
 
+## Headless Linux Electron suites
+
+Build the upstream-named Electron runtime, resolve the generated Hucode suite
+inventory, and pass every resolved suite to the Electron runner:
+
+```sh
+npm run electron
+bash -lc '
+set -euo pipefail
+mapfile -t suites < <(node build/hucode/test-suites.ts --runner electron)
+((${#suites[@]} > 0)) || { echo "No Hucode Electron suites resolved" >&2; exit 1; }
+env \
+	-u ELECTRON_RUN_AS_NODE \
+	-u VSCODE_ESM_ENTRYPOINT \
+	-u VSCODE_CWD \
+	-u VSCODE_NLS_CONFIG \
+	VSCODE_SKIP_PRELAUNCH=1 \
+	ELECTRON_DISABLE_SANDBOX=1 \
+	xvfb-run -a ./scripts/test.sh "${suites[@]/#/--run=}"
+'
+```
+
+This unsandboxed fallback is for local Electron unit suites only. Never reuse
+`ELECTRON_DISABLE_SANDBOX=1` for the packaged Linux Omni lifecycle smoke. That
+smoke must restore `chrome-sandbox` ownership and mode and run sandboxed, as the
+release workflow does, because unsandboxed runs have produced false lifecycle
+results in CI.
+
 ## Headless Linux launch
 
 After `npm run hucode:compile`, use a bounded launch of the compiled output:

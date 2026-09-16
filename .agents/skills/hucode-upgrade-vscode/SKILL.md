@@ -366,6 +366,21 @@ done < <(git diff --name-only --diff-filter=ACMRT -z upstream-<new-version>..ser
 No output is expected from that scan. Deleted files are excluded because they
 cannot contain unresolved markers in the final worktree.
 
+Range-wide `git diff --check` warnings can come from either upstream or the old
+Hucode series. Attribute them before editing files merely to make the final
+range clean:
+
+```sh
+git diff --check upstream-<new-version>..series-<new-version>
+git diff --check upstream-<old-version>..upstream-<new-version>
+git diff --check upstream-<old-version>..series-<old-version>-replay
+```
+
+Warnings already present in the upstream delta or old replay are inherited.
+Only unexplained warnings in the new series are upgrade-authored. Do not rewrite
+upstream files or archival Hucode documents solely to silence inherited
+warnings; report their provenance instead.
+
 ### Replay Completeness Check
 
 A cherry-pick sequence can silently drop a commit: if a pick fails for an
@@ -419,6 +434,8 @@ npm run hucode:check-upstream-provenance -- \
 git diff --name-only --diff-filter=ACMRT -z \
   upstream-<new-version>..series-<new-version> | \
   xargs -0 npm run -s precommit --
+(cd build && npm run typecheck)
+npm run hucode:check-test-suites
 npm run hucode:compile
 ```
 
@@ -440,6 +457,14 @@ Run a full `npm run test-node` pass on upgrade branches; it takes under a
 minute and runs against the same esbuild-transpiled `out/` that Hucode CI
 uses, so local results predict the CI Unit Tests job. Run additional targeted
 tests for touched Hucode areas when available.
+
+Run the complete generated Hucode Electron suite list too. Resolve it with
+`node build/hucode/test-suites.ts --runner electron`; do not replace it with a
+hand-maintained subset. Require both a successful runner exit and its final
+passing count. A process disappearing without those signals is not evidence of
+success. On headless Linux, read
+[Host Environment Recovery](references/host-environment.md) for the exact local
+runner setup and its sandbox limitation.
 
 ### Undocumented Upstream Seams
 
@@ -666,18 +691,46 @@ gh run view <matching-run-id> -R jimeh/hucode \
 The selected run's `headSha` must equal `$SERIES_HEAD`.
 
 For a published upgrade intended to become the active development line, move
-the GitHub default branch only after exact-head CI passes, then refresh the
+the GitHub default branch only after exact-head CI passes and both required
+remote refs match the intended local commits:
+
+```sh
+TARGET_HEAD=$(git rev-parse <new-version>)
+UPSTREAM_HEAD=$(git rev-parse upstream-<new-version>)
+SERIES_HEAD=$(git rev-parse series-<new-version>)
+CI_HEAD=$(gh run view <matching-run-id> -R jimeh/hucode \
+  --json headSha,conclusion \
+  --jq 'select(.conclusion == "success") | .headSha')
+ORIGIN_UPSTREAM_HEAD=$(git ls-remote --exit-code --heads origin \
+  refs/heads/upstream-<new-version> | awk '{print $1}')
+ORIGIN_SERIES_HEAD=$(git ls-remote --exit-code --heads origin \
+  refs/heads/series-<new-version> | awk '{print $1}')
+
+test "$TARGET_HEAD" = "$UPSTREAM_HEAD"
+test "$UPSTREAM_HEAD" = "$ORIGIN_UPSTREAM_HEAD"
+test "$SERIES_HEAD" = "$ORIGIN_SERIES_HEAD"
+test "$SERIES_HEAD" = "$CI_HEAD"
+```
+
+The upstream branch's initial push and any repair push remain external
+mutations that require user authorization. If either remote ref is absent or
+mismatched and publication has not been authorized, stop and ask rather than
+inferring push authority.
+
+After all four comparisons pass, change the default branch and refresh the
 local remote HEAD:
 
 ```sh
 gh api --method PATCH repos/jimeh/hucode \
   -f default_branch=series-<new-version>
+gh repo view jimeh/hucode --json defaultBranchRef
 git remote set-head origin -a
 git symbolic-ref --short refs/remotes/origin/HEAD
 ```
 
 Stop before changing the default branch if the matching run is absent, still
-running, or unsuccessful.
+running, or unsuccessful, or if either required remote ref is absent or points
+at the wrong commit.
 
 Report:
 
