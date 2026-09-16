@@ -22,8 +22,8 @@ export function patchDarwinInfoPlistContents(contents: string, version: string):
 	}
 
 	const patchedInfoPlist = infoPlist as Record<string, unknown>;
-	patchedInfoPlist['CFBundleVersion'] = version;
-	patchedInfoPlist['CFBundleShortVersionString'] = version;
+	patchedInfoPlist.CFBundleVersion = version;
+	patchedInfoPlist.CFBundleShortVersionString = version;
 
 	return Buffer.from(plist.build(patchedInfoPlist));
 }

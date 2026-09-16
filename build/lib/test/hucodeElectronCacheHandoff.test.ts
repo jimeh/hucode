@@ -24,13 +24,13 @@ test('gulp-electron consumes the artifact written by the prefetch cache', {
 	);
 	t.after(() => rm(tempDirectory, { recursive: true, force: true }));
 
-	const previousCacheHome = process.env['XDG_CACHE_HOME'];
-	process.env['XDG_CACHE_HOME'] = path.join(tempDirectory, 'cache');
+	const previousCacheHome = process.env.XDG_CACHE_HOME;
+	process.env.XDG_CACHE_HOME = path.join(tempDirectory, 'cache');
 	t.after(() => {
 		if (previousCacheHome === undefined) {
-			delete process.env['XDG_CACHE_HOME'];
+			delete process.env.XDG_CACHE_HOME;
 		} else {
-			process.env['XDG_CACHE_HOME'] = previousCacheHome;
+			process.env.XDG_CACHE_HOME = previousCacheHome;
 		}
 	});
 
@@ -100,7 +100,7 @@ test('gulp-electron consumes the artifact written by the prefetch cache', {
 
 	assert.strictEqual(packagedPath, prefetchedPath);
 	assert.ok(
-		prefetchedPath.startsWith(process.env['XDG_CACHE_HOME'] as string)
+		prefetchedPath.startsWith(process.env.XDG_CACHE_HOME as string)
 	);
 	assert.strictEqual(downloadRequests.length, 1);
 	assert.match(downloadRequests[0], new RegExp(`${artifactFileName}$`));

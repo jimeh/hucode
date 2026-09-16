@@ -196,7 +196,7 @@ suite('Hucode release workflow contract', () => {
 				'  --arch "${{ matrix.arch }}"\n'
 		);
 		assert.strictEqual(
-			steps[build].env?.['HUCODE_ELECTRON_PREFETCHED'],
+			steps[build].env?.HUCODE_ELECTRON_PREFETCHED,
 			'1'
 		);
 	});

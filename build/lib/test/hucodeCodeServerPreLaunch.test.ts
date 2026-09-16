@@ -38,7 +38,7 @@ printf '/usr/bin/true\\n'
 		env: {
 			...process.env,
 			HUCODE_STUB_NODE_LOG: logPath,
-			PATH: `${binDirectory}${path.delimiter}${process.env['PATH']}`,
+			PATH: `${binDirectory}${path.delimiter}${process.env.PATH}`,
 			VSCODE_SKIP_PRELAUNCH: ''
 		}
 	});

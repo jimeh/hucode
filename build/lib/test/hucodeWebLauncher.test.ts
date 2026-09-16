@@ -35,7 +35,7 @@ printf '%s\\n' "$@" > "$HUCODE_STUB_NODE_LOG"
 			env: {
 				...process.env,
 				HUCODE_STUB_NODE_LOG: logPath,
-				PATH: `${binDirectory}${path.delimiter}${process.env['PATH']}`
+				PATH: `${binDirectory}${path.delimiter}${process.env.PATH}`
 			}
 		});
 		assert.strictEqual(result.status, 0, result.stderr);
