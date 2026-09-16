@@ -1,0 +1,41 @@
+{
+  "generator": "shadcn",
+  "generatorVersion": "4.20.1",
+  "style": "radix-nova",
+  "base": "radix",
+  "iconLibrary": "lucide",
+  "tailwind": "v4",
+  "license": "MIT",
+  "licenseUrl": "https://github.com/shadcn-ui/ui/blob/main/LICENSE.md",
+  "registry": "https://ui.shadcn.com/r/styles/radix-nova/{name}.json",
+  "components": [
+    "button",
+    "badge",
+    "checkbox",
+    "radio-group",
+    "input",
+    "field",
+    "alert",
+    "progress",
+    "separator",
+    "collapsible",
+    "tooltip",
+    "skeleton"
+  ],
+  "files": {
+    "alert.tsx": "sha256:4900d0b6f5fa3214bd39ca917ce0aa83fc3e900f5547b88a793f57a377363b49",
+    "badge.tsx": "sha256:1ccdf0333b9f3359e4b899547bb84e90cbab55237ba22552b6b4fa264e599fb3",
+    "button.tsx": "sha256:1f7874c232a3ec91bc45d755e649423025fa82d8f4a1291d9b83d125da5af374",
+    "checkbox.tsx": "sha256:45940f056d4ac9d1f42f27507159e9bc67aa14188213de155271b067469967a6",
+    "collapsible.tsx": "sha256:eb4ee2a9ddb3c566c509753a79e4f4c9425d9f8474d55f61f8c8694928b6a509",
+    "field.tsx": "sha256:2f084024362fee5794b8ab4ae4ffcd043661667826d4444465c90b9d4e6e4d57",
+    "input.tsx": "sha256:726cc050616e58b85581693cc5d9f4839448e7fd512563b2389f6e5bc9db1fca",
+    "label.tsx": "sha256:43227170fa99f763c6505b2dbddd4ba2264684303f93aed6593a0e33f99b9c54",
+    "lib/utils.ts": "sha256:7c8c3dfc0cdd370d44932828eb067ef771c8fe7996693221d5d4b90af6d54f2d",
+    "progress.tsx": "sha256:aa9b3d9a7e85134196c65649d918336a494c46d93d836aa9cfcd55d91640d0a3",
+    "radio-group.tsx": "sha256:2a648fb875d46f64125da86566ebd3529b5f400dd8b1267fe281ec8a747f9fde",
+    "separator.tsx": "sha256:41ff8b1eaf7266bdc33c0d9d27331257bc76e6f7501f6b11908dabaea8f1848c",
+    "skeleton.tsx": "sha256:2d170f2ef3bdf33652c8bc569ae6ef0e9b6961430fe5b19db964a0876704ee8f",
+    "tooltip.tsx": "sha256:1540bb69a195a3dae4724d90e7a7947eff21704b1e27136003c3783ce56de313"
+  }
+}
