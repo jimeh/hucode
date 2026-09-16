@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { IRendererReplyTarget } from '../../window/common/window.js';
+
 export interface IUtilityProcessWorkerProcess {
 
 	/**
@@ -69,7 +71,7 @@ export interface IUtilityProcessWorkerConfiguration {
 	 * communication message port to the receiver window.
 	 */
 	readonly reply: {
-		readonly windowId: number;
+		readonly target: IRendererReplyTarget;
 		readonly channel?: string;
 		readonly nonce?: string;
 	};
@@ -77,7 +79,7 @@ export interface IUtilityProcessWorkerConfiguration {
 
 export interface IUtilityProcessWorkerCreateConfiguration extends IUtilityProcessWorkerConfiguration {
 	readonly reply: {
-		readonly windowId: number;
+		readonly target: IRendererReplyTarget;
 		readonly channel: string;
 		readonly nonce: string;
 	};
