@@ -294,6 +294,29 @@ export class RetainedWorkbenchCatalog {
 		return true;
 	}
 
+	/** Moves one known record before another without replacing unseen records. */
+	move(id: string, beforeId?: string): boolean {
+		if (id === beforeId) {
+			return false;
+		}
+		const source = this.records.find(record => record.id === id);
+		const before = beforeId === undefined
+			? undefined
+			: this.records.find(record => record.id === beforeId);
+		if (!source || (beforeId !== undefined && !before)) {
+			return false;
+		}
+		const ordered = this.records.filter(record => record.id !== id);
+		const index = before ? ordered.findIndex(record => record.id === before.id) : ordered.length;
+		ordered.splice(index, 0, source);
+		const next = ordered.map((record, order) => ({ ...record, order }));
+		if (JSON.stringify(next) === JSON.stringify(this.records)) {
+			return false;
+		}
+		this.records = next;
+		return true;
+	}
+
 	/** Removes records whose folders have been promoted to project worktrees. */
 	reconcileProjectPaths(projectPaths: readonly URI[]): boolean {
 		const projectKeys = new Set(projectPaths.map(this.toResourceKey));

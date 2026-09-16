@@ -183,6 +183,7 @@ export interface IWebHucodeShellPersistedState {
 		readonly worktreePath: string;
 		readonly desiredState: 'loaded' | 'unloaded';
 		readonly lastActiveAt?: number;
+		readonly observedWorkbenchId?: string;
 	}[];
 	readonly residentWorkspaces: readonly {
 		readonly projectId?: string;
@@ -278,7 +279,9 @@ export function sanitizeWebHucodeShellPersistedState(
 						(entry.desiredState === 'loaded' ||
 							entry.desiredState === 'unloaded') &&
 						(entry.lastActiveAt === undefined ||
-							Number.isFinite(entry.lastActiveAt))
+							Number.isFinite(entry.lastActiveAt)) &&
+						(entry.observedWorkbenchId === undefined ||
+							typeof entry.observedWorkbenchId === 'string')
 					),
 			}
 			: {}),
@@ -560,6 +563,7 @@ export class WebHucodeShellController extends Disposable
 	private pendingGlobalRestore: IWebHucodeShellPersistedState | undefined;
 	private globalRestoreAttempt: Promise<void> | undefined;
 	private initialGlobalCatalogLoading = false;
+	private deferredInitialCatalog: ProjectCatalogSnapshot | undefined;
 	private pendingSessionOverlays: IWebHucodeShellPersistedState[
 		'workbenchOverlays'
 	];
@@ -569,6 +573,7 @@ export class WebHucodeShellController extends Disposable
 		worktreePath: string;
 		desiredState: 'loaded' | 'unloaded';
 		lastActiveAt?: number;
+		observedWorkbenchId?: string;
 		attempt: number;
 		running?: boolean;
 		timer?: WebHucodeShellTimer;
@@ -1136,14 +1141,15 @@ export class WebHucodeShellController extends Disposable
 		}
 		await this.deferStateEmission(async () => {
 			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const disposition = record.sessionOnly ? 'dismiss' : 'unload';
 			const instance = this.getInstanceByPath(worktreePath);
 			if (instance && instance.state !== 'dormant') {
-				await this.unloadAndRemoveInstance(instance, 'unload');
+				await this.unloadAndRemoveInstance(instance, disposition);
 				return;
 			}
 			this.applyTerminalUnloadDisposition(
 				worktreePath,
-				'unload',
+				disposition,
 				workbenchId
 			);
 		});
@@ -1199,20 +1205,26 @@ export class WebHucodeShellController extends Disposable
 		}
 	}
 
-	async reorderRetainedWorkbenches(
+	async moveRetainedWorkbench(
 		windowId: number,
-		orderedWorkbenchIds: readonly string[]
+		workbenchId: string,
+		beforeWorkbenchId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId === this.windowId) {
 			if (this.navigationProjectManager?.moveWorkbench) {
-				for (let index = orderedWorkbenchIds.length - 1; index >= 0; index--) {
+				if (this.globalWorkbenchIds.has(workbenchId) &&
+					(beforeWorkbenchId === undefined ||
+						this.globalWorkbenchIds.has(beforeWorkbenchId))) {
 					await this.navigationProjectManager.moveWorkbench(
-						orderedWorkbenchIds[index],
-						orderedWorkbenchIds[index + 1]
+						workbenchId,
+						beforeWorkbenchId
 					);
 				}
-			} else if (this.retainedWorkbenches.reorder(orderedWorkbenchIds)) {
+			} else if (this.retainedWorkbenches.move(
+				workbenchId,
+				beforeWorkbenchId
+			)) {
 				this.emitState();
 			}
 		}
@@ -1226,6 +1238,10 @@ export class WebHucodeShellController extends Disposable
 	): Promise<IHucodeHostedWorkspaceState> {
 		await this.initialization;
 		if (windowId === this.windowId) {
+			const record = this.retainedWorkbenches.getById(workbenchId);
+			if (record?.sessionOnly) {
+				return this.getState();
+			}
 			if (this.navigationProjectManager?.renameWorkbench &&
 				this.navigationProjectManager.resetWorkbenchLabel) {
 				if (label === undefined) {
@@ -2291,6 +2307,7 @@ export class WebHucodeShellController extends Disposable
 			this.applyGlobalCatalog(migrated.catalog);
 			this.pendingGlobalRestore = undefined;
 			await this.restorePersistedWorkbenches(migrated.persisted);
+			this.applyGlobalCatalog(migrated.catalog);
 		} catch (error) {
 			this.logService.warn(
 				`[hucode] Workbench catalog is unavailable; ` +
@@ -2299,9 +2316,14 @@ export class WebHucodeShellController extends Disposable
 			await this.restorePersistedWorkbenches(persisted ? {
 				...persisted,
 				retainedWorkbenches: [],
-			} : undefined);
+			} : undefined, false);
 		} finally {
 			this.initialGlobalCatalogLoading = false;
+			const deferred = this.deferredInitialCatalog;
+			this.deferredInitialCatalog = undefined;
+			if (deferred) {
+				this.handleGlobalCatalog(deferred);
+			}
 		}
 	}
 
@@ -2384,18 +2406,26 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private handleGlobalCatalog(catalog: ProjectCatalogSnapshot): void {
-		this.applyGlobalCatalog(catalog);
-		this.retryPendingWorkbenchAdoptions();
-		if (this.initialGlobalCatalogLoading || !this.pendingGlobalRestore ||
-			this.globalRestoreAttempt) {
+		if (this.initialGlobalCatalogLoading) {
+			this.deferredInitialCatalog = catalog;
+			return;
+		}
+		if (!this.pendingGlobalRestore) {
+			this.applyGlobalCatalog(catalog);
+			this.retryPendingWorkbenchAdoptions();
+			return;
+		}
+		if (this.globalRestoreAttempt) {
 			return;
 		}
 		const persisted = this.pendingGlobalRestore;
-		this.globalRestoreAttempt = this.loadOrImportGlobalCatalog(persisted)
+		this.globalRestoreAttempt = Promise.resolve()
+			.then(() => this.loadOrImportGlobalCatalog(persisted))
 			.then(async imported => {
 				this.applyGlobalCatalog(imported.catalog);
 				this.pendingGlobalRestore = undefined;
 				await this.restorePersistedWorkbenches(imported.persisted);
+				this.applyGlobalCatalog(imported.catalog);
 			})
 			.catch(error => this.logService.warn(
 				`[hucode] Workbench catalog retry failed: ${String(error)}`
@@ -2404,38 +2434,63 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private applyGlobalCatalog(catalog: ProjectCatalogSnapshot): void {
-		const ownedPathKeys = new Set([
-			...catalog.workbenches.map(workbench => this.toPathKey(
-				URI.revive(workbench.folderUri).fsPath
-			)),
-			...catalog.projects.flatMap(project => [
-				URI.revive(project.rootUri).fsPath,
-				...(project.worktreeState === 'current'
-					? project.worktrees.map(worktree => worktree.path)
-					: []),
-			]).map(path => this.toPathKey(path)),
-		]);
+		let pendingChanged = false;
+		const workbenchesByPath = new Map(catalog.workbenches.map(workbench => [
+			this.toPathKey(URI.revive(workbench.folderUri).fsPath),
+			workbench,
+		]));
+		const projectPathKeys = new Set(catalog.projects.flatMap(project => [
+			URI.revive(project.rootUri).fsPath,
+			...(project.worktreeState === 'current'
+				? project.worktrees.map(worktree => worktree.path)
+				: []),
+		]).map(path => this.toPathKey(path)));
 		for (const [key, pending] of this.pendingWorkbenchAdoptions) {
-			if (!ownedPathKeys.has(key)) {
+			if (projectPathKeys.has(key)) {
+				if (pending.timer) {
+					this.browser.clearTimeout(pending.timer);
+				}
+				this.pendingWorkbenchAdoptions.delete(key);
+				pendingChanged = true;
 				continue;
 			}
-			if (pending.timer) {
-				this.browser.clearTimeout(pending.timer);
+			const workbench = workbenchesByPath.get(key);
+			if (workbench) {
+				if (pending.timer) {
+					this.browser.clearTimeout(pending.timer);
+					pending.timer = undefined;
+				}
+				pendingChanged ||= pending.observedWorkbenchId !== workbench.id;
+				pending.observedWorkbenchId = workbench.id;
+				continue;
 			}
-			this.pendingWorkbenchAdoptions.delete(key);
+			if (pending.observedWorkbenchId) {
+				if (pending.timer) {
+					this.browser.clearTimeout(pending.timer);
+				}
+				this.pendingWorkbenchAdoptions.delete(key);
+				pendingChanged = true;
+				const retained = this.retainedWorkbenches.getByUri(
+					URI.file(pending.worktreePath)
+				);
+				if (retained) {
+					this.retainedWorkbenches.dismiss(retained.id);
+				}
+			}
 		}
 		this.globalWorkbenchIds = new Set(catalog.workbenches.map(
 			workbench => workbench.id
 		));
 		this.globalCatalogHydrated = true;
-		let changed = this.retainedWorkbenches.synchronizeGlobalRecords(
+		let changed = this.reconcileAuthoritativeProjectCatalog(catalog);
+		changed = this.retainedWorkbenches.synchronizeGlobalRecords(
 			catalog.workbenches,
 			record => {
 				const worktreePath = URI.revive(record.folderUri).fsPath;
 				return !!this.getInstanceByPath(worktreePath) ||
 					this.pendingWorkbenchAdoptions.has(this.toPathKey(worktreePath));
 			}
-		);
+		) || changed;
 		if (this.pendingSessionOverlays) {
 			for (const overlay of this.pendingSessionOverlays) {
 				changed = !!this.retainedWorkbenches.update(
@@ -2448,14 +2503,84 @@ export class WebHucodeShellController extends Disposable
 			}
 			this.pendingSessionOverlays = undefined;
 		}
-		if (changed) {
+		for (const instance of this.instancesById.values()) {
+			if (!instance.projectId) {
+				instance.retainedWorkbenchId = this.retainedWorkbenches.getByUri(
+					URI.file(instance.worktreePath)
+				)?.id;
+			}
+		}
+		if (changed || pendingChanged) {
 			this.emitState();
 		}
 	}
 
+	private reconcileAuthoritativeProjectCatalog(
+		catalog: ProjectCatalogSnapshot
+	): boolean {
+		const liveProjectIds = new Set(catalog.projects.map(project => project.id));
+		const projectFolders = catalog.projects.flatMap(project => [{
+			projectId: project.id,
+			folderUri: URI.revive(project.rootUri),
+		}, ...(project.worktreeState === 'current'
+			? project.worktrees.map(worktree => ({
+				projectId: project.id,
+				folderUri: URI.file(worktree.path),
+			}))
+			: [])]);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			this.toPathKey(folder.folderUri.fsPath),
+			folder.projectId,
+		]));
+		this.projectCatalogSnapshot = {
+			generation: (this.projectCatalogSnapshot?.generation ?? 0) + 1,
+			liveProjectIds,
+			projectIdsByPath,
+		};
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				this.toPathKey(instance.worktreePath)
+			);
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId ||
+					instance.retainedWorkbenchId !== undefined;
+				instance.projectId = claimedProjectId;
+				instance.retainedWorkbenchId = undefined;
+				continue;
+			}
+			if (!isHostedWorkspaceRestorable(instance) || !instance.projectId ||
+				liveProjectIds.has(instance.projectId)) {
+				continue;
+			}
+			const retained = this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			instance.projectId = undefined;
+			instance.retainedWorkbenchId = retained.id;
+			const key = this.toPathKey(instance.worktreePath);
+			if (!this.pendingWorkbenchAdoptions.has(key)) {
+				this.pendingWorkbenchAdoptions.set(key, {
+					worktreePath: instance.worktreePath,
+					desiredState: 'loaded',
+					lastActiveAt: instance.lastActiveAt,
+					attempt: 0,
+				});
+			}
+			changed = true;
+		}
+		return this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		) || changed;
+	}
+
 	private retryPendingWorkbenchAdoptions(): void {
 		for (const pending of this.pendingWorkbenchAdoptions.values()) {
-			void this.attemptPendingWorkbenchAdoption(pending.worktreePath);
+			if (!pending.observedWorkbenchId) {
+				void this.attemptPendingWorkbenchAdoption(pending.worktreePath);
+			}
 		}
 	}
 
@@ -2468,7 +2593,7 @@ export class WebHucodeShellController extends Disposable
 		}
 		const key = this.toPathKey(worktreePath);
 		const pending = this.pendingWorkbenchAdoptions.get(key);
-		if (!pending || pending.running) {
+		if (!pending || pending.running || pending.observedWorkbenchId) {
 			return;
 		}
 		if (pending.timer) {
@@ -2505,12 +2630,15 @@ export class WebHucodeShellController extends Disposable
 	}
 
 	private async restorePersistedWorkbenches(
-		persisted: IWebHucodeShellPersistedState | undefined
+		persisted: IWebHucodeShellPersistedState | undefined,
+		includeRetained = true
 	): Promise<void> {
 		if (!persisted || this.initializationCancelled) {
 			return;
 		}
-		const retainedCandidates = this.retainedWorkbenches.all
+		const retainedCandidates = (includeRetained
+			? this.retainedWorkbenches.all
+			: [])
 			.filter(record => record.desiredState === 'loaded')
 			.map(record => ({
 				worktreePath: URI.revive(record.folderUri).fsPath,
@@ -2532,6 +2660,9 @@ export class WebHucodeShellController extends Disposable
 				this.toPathKey(a) === this.toPathKey(b));
 
 		for (const candidate of plan.dormant) {
+			if (this.getInstanceByPath(candidate.worktreePath)) {
+				continue;
+			}
 			this.hostedWorkspaces.addInstance({
 				instanceId: generateUuid(),
 				projectId: candidate.projectId,
@@ -2548,6 +2679,13 @@ export class WebHucodeShellController extends Disposable
 
 		let activeInstance: IHostedIframeInstance | undefined;
 		for (const [index, candidate] of plan.eager.entries()) {
+			const existing = this.getInstanceByPath(candidate.worktreePath);
+			if (existing) {
+				if (index === 0) {
+					activeInstance = existing;
+				}
+				continue;
+			}
 			const instance = this.createInstance(
 				candidate.worktreePath,
 				candidate.projectId,
@@ -3278,6 +3416,12 @@ export class WebHucodeShellController extends Disposable
 						...(pending.lastActiveAt === undefined
 							? {}
 							: { lastActiveAt: pending.lastActiveAt }),
+						...(pending.observedWorkbenchId === undefined
+							? {}
+							: {
+								observedWorkbenchId:
+									pending.observedWorkbenchId,
+							}),
 					})
 				),
 				residentWorkspaces: Array.from(this.instancesById.values())

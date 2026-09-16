@@ -1167,13 +1167,11 @@ export class ProjectSwitcherDragAndDrop
 		if (targetIndex < 0) {
 			return;
 		}
-		orderedIds.splice(
-			targetIndex + (isBeforeDropPosition(targetSector) ? 0 : 1),
-			0,
-			source.retainedWorkbenchId
-		);
-		await this.shellService.reorderRetainedWorkbenches(
-			orderedIds
+		const insertionIndex = targetIndex +
+			(isBeforeDropPosition(targetSector) ? 0 : 1);
+		await this.shellService.moveRetainedWorkbench(
+			source.retainedWorkbenchId,
+			orderedIds[insertionIndex]
 		);
 	}
 }
@@ -2221,15 +2219,15 @@ export class ProjectSwitcherWidget extends Disposable {
 				item.hostedWorkbenchState
 			);
 			return [
-				toAction({
+				...(!item.isSessionOnly ? [toAction({
 					id: RENAME_WORKBENCH_COMMAND_ID,
 					label: localize('renameWorkbench', 'Rename Workbench'),
 					run: () => this.commandService.executeCommand(
 						RENAME_WORKBENCH_COMMAND_ID,
 						handle
 					),
-				}),
-				...(item.hasCustomLabel
+				})] : []),
+				...(!item.isSessionOnly && item.hasCustomLabel
 					? [toAction({
 						id: RESET_WORKBENCH_LABEL_COMMAND_ID,
 						label: localize(
@@ -2933,7 +2931,7 @@ registerAction2(class extends Action2 {
 				.retainedWorkbenches?.find(candidate =>
 					candidate.id === workbenchId
 				);
-			if (!record) {
+			if (!record || record.sessionOnly) {
 				return;
 			}
 
@@ -2981,18 +2979,21 @@ registerAction2(class extends Action2 {
 		});
 	}
 
-	run(
+	async run(
 		accessor: ServicesAccessor,
 		handle: TreeViewItemHandleArg
-	): Promise<unknown> {
+	): Promise<void> {
 		const id = parseWorkbenchHandle(handle.$treeItemHandle);
-		return id
-			? accessor.get(IHucodeShellControllerService)
-				.setRetainedWorkbenchLabel(
-					id,
-					undefined
-				)
-			: Promise.resolve();
+		if (!id) {
+			return;
+		}
+		const shellService = accessor.get(IHucodeShellControllerService);
+		const record = (await shellService.getState()).retainedWorkbenches?.find(
+			candidate => candidate.id === id
+		);
+		if (!record?.sessionOnly) {
+			await shellService.setRetainedWorkbenchLabel(id, undefined);
+		}
 	}
 });
 

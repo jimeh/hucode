@@ -372,8 +372,9 @@ export class DesktopShellControllerServiceAdapter extends Disposable
 	dismissRetainedWorkbench(id: string) {
 		return this.withShell(shell => shell.dismissRetainedWorkbench(id));
 	}
-	reorderRetainedWorkbenches(ids: readonly string[]) {
-		return this.withShell(shell => shell.reorderRetainedWorkbenches(ids));
+	moveRetainedWorkbench(id: string, beforeId?: string) {
+		return this.withShell(shell =>
+			shell.moveRetainedWorkbench(id, beforeId));
 	}
 	setRetainedWorkbenchLabel(id: string, label: string | undefined) {
 		return this.withShell(shell =>

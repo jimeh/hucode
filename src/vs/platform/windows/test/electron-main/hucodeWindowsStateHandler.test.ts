@@ -214,5 +214,42 @@ suite('HucodeWindowsStateHandler', () => {
 		}]);
 	});
 
+	test('migrates a resident-only arbitrary workbench into a loaded overlay',
+		() => {
+			const worktreePath = join(tmpdir(), 'migration', 'resident-arbitrary');
+			const state: IWindowsState = {
+				openedWindows: [{
+					windowKind: 'omni',
+					uiState: { x: 0, y: 0, width: 100, height: 100, mode: 0 },
+					omniResidentWorkspaces: [{
+						worktreePath,
+						state: 'loaded',
+						lastActiveAt: 91,
+					}],
+				}],
+			};
+
+			applyHucodeOmniWorkbenchMigration(state, [{
+				sourceId: 'openedWindows:0',
+				workbenchIdsByLegacyId: {},
+				workbenchIdsByPath: { [worktreePath]: 'global-resident' },
+				projectIdsByPath: {},
+			}]);
+
+			assert.deepStrictEqual(
+				state.openedWindows[0].omniWorkbenchOverlays,
+				[{
+					workbenchId: 'global-resident',
+					desiredState: 'loaded',
+					lastActiveAt: 91,
+				}]
+			);
+			assert.deepStrictEqual(
+				state.openedWindows[0].omniResidentWorkspaces,
+				[]
+			);
+		}
+	);
+
 	ensureNoDisposablesAreLeakedInTestSuite();
 });
