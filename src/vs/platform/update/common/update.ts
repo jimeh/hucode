@@ -10,6 +10,7 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
 export interface IUpdate {
 	version: string; // Build commit ID
 	productVersion?: string; // Product version like 1.2.3
+	hucodeVersion?: string; // Hucode app release version like 0.0.32
 	timestamp?: number;
 	url?: string;
 	sha256hash?: string;
