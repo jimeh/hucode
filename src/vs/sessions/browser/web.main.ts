@@ -39,9 +39,9 @@ export class SessionsBrowserMain extends BrowserMain {
 		_workspace: IAnyWorkspaceIdentifier,
 		environmentService: IBrowserWorkbenchEnvironmentService,
 		userDataProfileService: IUserDataProfileService,
-		_userDataProfilesService: BrowserUserDataProfilesService,
+		userDataProfilesService: BrowserUserDataProfilesService,
 		fileService: FileService,
-		_remoteAgentService: IRemoteAgentService,
+		remoteAgentService: IRemoteAgentService,
 		uriIdentityService: IUriIdentityService,
 		policyService: IPolicyService,
 		logService: ILogService,
@@ -82,7 +82,14 @@ export class SessionsBrowserMain extends BrowserMain {
 		serviceCollection.set(IWorkbenchConfigurationService, configurationService);
 
 		// Storage
-		const storageService = await this.createStorageService(workspaceIdentifier, logService, userDataProfileService);
+		const storageService = await this.createStorageService(
+			workspaceIdentifier,
+			logService,
+			userDataProfileService,
+			userDataProfilesService,
+			remoteAgentService,
+			environmentService,
+		);
 		serviceCollection.set(IStorageService, storageService);
 
 		// Workspace Trust Service
