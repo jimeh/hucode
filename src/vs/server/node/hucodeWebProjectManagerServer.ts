@@ -24,11 +24,13 @@ import { generateUuid } from '../../base/common/uuid.js';
 import { ILogService } from '../../platform/log/common/log.js';
 import {
 	CreateWorktreeOptions,
+	LegacyWorkbenchImportRecord,
 	GitWorktreeTargetChange,
 	PROJECT_MANAGER_GIT_TARGET_LIMIT,
 	PROJECT_MANAGER_STORAGE_KEY,
 	PROJECT_MANAGER_STORAGE_VERSION,
 	ProjectRecord,
+	ProjectCatalogSnapshot,
 	RemoveWorktreeOptions,
 	StoredProjectManagerState,
 	StoredProjectRecord,
@@ -92,7 +94,7 @@ interface HucodeWebProjectEventClient {
 	readonly gitConsumers: Map<string, WebGitConsumerRegistration>;
 	closed: boolean;
 	ready: boolean;
-	pendingInitialProjects: readonly ProjectRecord[] | undefined;
+	pendingInitialCatalog: ProjectCatalogSnapshot | undefined;
 	blocked: boolean;
 	pendingFrame: string | undefined;
 	readonly pendingGitWorktreeTargets: Map<string, GitWorktreeTargetChange>;
@@ -324,6 +326,16 @@ export class HucodeProjectFileStateService implements IStateService {
 			if (!isStoredProjectManagerState(state)) {
 				throw new InvalidProjectStateError();
 			}
+			if (!hasValidStoredWorkbenchState(state)) {
+				this.preserveCorruptStateFile(new InvalidProjectStateError());
+				this.state = {
+					version: PROJECT_MANAGER_STORAGE_VERSION,
+					projects: state.projects,
+				};
+				this.loaded = true;
+				this.writeState();
+				return;
+			}
 			this.state = state;
 		} catch (error) {
 			if (!(error instanceof SyntaxError) &&
@@ -349,7 +361,7 @@ export class HucodeProjectFileStateService implements IStateService {
 		}
 		this.logService.error(
 			'[Hucode Projects] Stored project state is corrupt; ' +
-			`continuing with empty state (${this.storagePath})`,
+			`preserving it before recovery (${this.storagePath})`,
 			error,
 		);
 		try {
@@ -633,7 +645,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		| {
 			readonly id: number;
 			readonly generation: number;
-			readonly projects: readonly ProjectRecord[];
+			readonly catalog: ProjectCatalogSnapshot;
 		}
 		| undefined;
 	private nextProjectPublicationId = 0;
@@ -709,8 +721,8 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			logService,
 			{ metadataWatcher: new NodeGitMetadataWatcher(logService) },
 		);
-		this._register(this.service.onDidChangeProjects(projects => {
-			this.queueProjectsPublication(projects);
+		this._register(this.service.onDidChangeCatalog(catalog => {
+			this.queueProjectsPublication(catalog);
 		}));
 		this._register(this.service.onDidChangeGitWorktreeTargets(change => {
 			this.broadcastGitWorktreeTargets(change);
@@ -812,12 +824,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 				}
 
 				if (req.method === 'GET' && !relativePath) {
-					return this.writeProjects(
+					return this.writeCatalog(
 						res,
 						200,
 						await this.runGitRead(
 							requestCancellation.token,
-							() => service.getProjects()
+							() => service.getCatalog()
 						)
 					);
 				}
@@ -830,27 +842,42 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						);
 						return {
 							project,
-							projects: await service.getProjects(),
+							catalog: await service.getCatalog(),
 						};
 					}, requestCancellation.token);
 					return this.writeJson(res, 201, {
 						project: result.project,
-						projects: result.projects,
+						...result.catalog,
 					});
 				}
 
 				if (req.method === 'DELETE' &&
+					relativePath.startsWith('workbenches/')) {
+					const workbenchId = decodeURIComponent(
+						relativePath.substring('workbenches/'.length)
+					);
+					if (!workbenchId || workbenchId.includes('/')) {
+						return this.writeJson(res, 404, { error: 'Not found.' });
+					}
+					const catalog = await this.runDurableMutation(async () => {
+						await service.removeWorkbench(workbenchId);
+						return service.getCatalog();
+					}, requestCancellation.token);
+					return this.writeCatalog(res, 200, catalog);
+				}
+
+				if (req.method === 'DELETE' &&
 					isSinglePathSegment(relativePath)) {
-					const projects = await this.runDurableMutation(async () => {
+					const catalog = await this.runDurableMutation(async () => {
 						const projectId = decodeURIComponent(relativePath);
 						if ((await service.getProjects()).some(
 							project => project.id === projectId
 						)) {
 							await service.removeProject(projectId);
 						}
-						return service.getProjects();
+						return service.getCatalog();
 					}, requestCancellation.token);
-					return this.writeProjects(res, 200, projects);
+					return this.writeCatalog(res, 200, catalog);
 				}
 
 				if (req.method === 'DELETE') {
@@ -893,6 +920,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		return !this.disposed && this.service
 			? this.service.getProjects()
 			: [];
+	}
+
+	async getCatalog(): Promise<ProjectCatalogSnapshot | undefined> {
+		return !this.disposed && this.service
+			? this.service.getCatalog()
+			: undefined;
 	}
 
 	/**
@@ -945,6 +978,56 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		body: unknown,
 		token: CancellationToken,
 	): Promise<boolean> {
+		if (relativePath === 'workbenches/ensure') {
+			const result = await this.runDurableMutation(async () => {
+				const ensured = await service.ensureWorkbench(
+					URI.file(requireString(body, 'folderPath'))
+				);
+				return { result: ensured, catalog: await service.getCatalog() };
+			}, token);
+			return this.writeJson(res, 200, result);
+		}
+		if (relativePath === 'workbenches/import') {
+			const entries = readLegacyWorkbenchImportRecords(body);
+			return this.writeJson(
+				res,
+				200,
+				await this.runDurableMutation(
+					() => service.importWorkbenches(entries),
+					token
+				)
+			);
+		}
+		if (relativePath.startsWith('workbenches/')) {
+			const [encodedId, ...parts] = relativePath
+				.substring('workbenches/'.length)
+				.split('/');
+			const id = decodeURIComponent(encodedId);
+			const command = parts.join('/');
+			const catalog = await this.runDurableMutation(async () => {
+				switch (command) {
+					case 'label':
+						await service.renameWorkbench(
+							id,
+							requireString(body, 'label')
+						);
+						break;
+					case 'label/reset':
+						await service.resetWorkbenchLabel(id);
+						break;
+					case 'move':
+						await service.moveWorkbench(
+							id,
+							optionalString(body, 'beforeWorkbenchId')
+						);
+						break;
+					default:
+						throw new BadRequestError('Unknown workbench command.');
+				}
+				return service.getCatalog();
+			}, token);
+			return this.writeCatalog(res, 200, catalog);
+		}
 		if (relativePath === 'git-monitor/targets') {
 			const sessionId = requireString(body, 'sessionId');
 			const consumerId = requireString(body, 'consumerId');
@@ -1300,12 +1383,23 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 	}
 
-	private writeProjects(
+	private async writeProjects(
 		res: HucodeWebProjectManagerResponse,
 		status: number,
-		projects: readonly ProjectRecord[],
+		_projects: readonly ProjectRecord[],
+	): Promise<true> {
+		if (!this.service) {
+			throw new ProjectRequestUnavailableError();
+		}
+		return this.writeCatalog(res, status, await this.service.getCatalog());
+	}
+
+	private writeCatalog(
+		res: HucodeWebProjectManagerResponse,
+		status: number,
+		catalog: ProjectCatalogSnapshot
 	): true {
-		return this.writeJson(res, status, { projects });
+		return this.writeJson(res, status, catalog);
 	}
 
 	private writeJson(
@@ -1371,7 +1465,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			gitConsumers: new Map(),
 			closed: false,
 			ready: false,
-			pendingInitialProjects: undefined,
+			pendingInitialCatalog: undefined,
 			blocked: false,
 			pendingFrame: undefined,
 			pendingGitWorktreeTargets: new Map(),
@@ -1389,16 +1483,16 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		res.on?.('close', client.onTerminated);
 		res.on?.('error', client.onTerminated);
 
-		let projects: readonly ProjectRecord[];
+		let catalog: ProjectCatalogSnapshot;
 		try {
-			projects = await this.runGitRead(token, async () => {
-				const nextProjects = await service.getProjects();
+			catalog = await this.runGitRead(token, async () => {
+				const nextCatalog = await service.getCatalog();
 				const writeGeneration =
 					this.stateService?.currentWriteGeneration ?? 0;
 				await this.stateService?.retryDirtyState();
 				this.retryPendingProjectPublication();
 				await this.stateService?.flushWritesThrough(writeGeneration);
-				return nextProjects;
+				return nextCatalog;
 			});
 		} catch (error) {
 			if (client.closed) {
@@ -1418,12 +1512,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			'Cache-Control': 'no-store',
 			Connection: 'keep-alive',
 		});
-		const initialProjects = client.pendingInitialProjects ?? projects;
-		client.pendingInitialProjects = undefined;
+		const initialCatalog = client.pendingInitialCatalog ?? catalog;
+		client.pendingInitialCatalog = undefined;
 		client.ready = true;
 		this.writeProjectsEvent(
 			client,
-			initialProjects,
+			initialCatalog,
 			`: connected\n\nretry: ${EVENT_RETRY_MS}\n\n`
 		);
 		if (!client.closed) {
@@ -1457,12 +1551,12 @@ export class HucodeWebProjectManagerServer extends Disposable {
 	}
 
 	private queueProjectsPublication(
-		projects: readonly ProjectRecord[]
+		catalog: ProjectCatalogSnapshot
 	): void {
 		const publication = {
 			id: ++this.nextProjectPublicationId,
 			generation: this.stateService?.currentWriteGeneration ?? 0,
-			projects,
+			catalog,
 		};
 		this.pendingProjectPublication = publication;
 		void this.publishProjectsWhenDurable(publication);
@@ -1488,7 +1582,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			return;
 		}
 		this.pendingProjectPublication = undefined;
-		this.broadcastProjects(publication.projects);
+		this.broadcastProjects(publication.catalog);
 	}
 
 	private retryPendingProjectPublication(): void {
@@ -1503,18 +1597,18 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			: {
 				id: ++this.nextProjectPublicationId,
 				generation,
-				projects: publication.projects,
+				catalog: publication.catalog,
 			};
 		this.pendingProjectPublication = retry;
 		void this.publishProjectsWhenDurable(retry);
 	}
 
-	private broadcastProjects(projects: readonly ProjectRecord[]): void {
+	private broadcastProjects(catalog: ProjectCatalogSnapshot): void {
 		for (const client of this.eventClients) {
 			if (client.ready) {
-				this.writeProjectsEvent(client, projects);
+				this.writeProjectsEvent(client, catalog);
 			} else {
-				client.pendingInitialProjects = projects;
+				client.pendingInitialCatalog = catalog;
 			}
 		}
 	}
@@ -1554,13 +1648,13 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 	private writeProjectsEvent(
 		client: HucodeWebProjectEventClient,
-		projects: readonly ProjectRecord[],
+		catalog: ProjectCatalogSnapshot,
 		prefix = ''
 	): void {
 		this.writeEventFrame(
 			client,
 			`${prefix}event: projects\n` +
-			`data: ${JSON.stringify({ projects })}\n\n`
+			`data: ${JSON.stringify(catalog)}\n\n`
 		);
 	}
 
@@ -1649,7 +1743,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			client.res.removeListener?.('drain', client.onDrain);
 			client.drainListening = false;
 		}
-		client.pendingInitialProjects = undefined;
+		client.pendingInitialCatalog = undefined;
 		client.pendingFrame = undefined;
 		if (client.heartbeatTimer) {
 			clearInterval(client.heartbeatTimer);
@@ -1821,6 +1915,38 @@ function requireStringArray(body: unknown, key: string): readonly string[] {
 	return value.filter(entry => entry.length > 0);
 }
 
+function readLegacyWorkbenchImportRecords(
+	body: unknown
+): readonly LegacyWorkbenchImportRecord[] {
+	const value = readProperty(body, 'entries');
+	if (!Array.isArray(value)) {
+		throw new BadRequestError('Invalid entries.');
+	}
+	return value.map(entry => {
+		if (!isRecord(entry)) {
+			throw new BadRequestError('Invalid workbench import entry.');
+		}
+		const legacyId = requireString(entry, 'legacyId');
+		const folderPath = requireString(entry, 'folderPath');
+		const labelValue = readProperty(entry, 'label');
+		const order = readProperty(entry, 'order');
+		if (labelValue !== undefined && typeof labelValue !== 'string') {
+			throw new BadRequestError('Invalid workbench import label.');
+		}
+		if (typeof order !== 'number' || !Number.isFinite(order) || order < 0) {
+			throw new BadRequestError('Invalid workbench import order.');
+		}
+		return {
+			legacyId,
+			folderUri: URI.file(folderPath),
+			...(typeof labelValue === 'string' && labelValue.trim()
+				? { label: labelValue.trim() }
+				: {}),
+			order,
+		};
+	});
+}
+
 function readCreateWorktreeOptions(body: unknown): CreateWorktreeOptions {
 	const value = readProperty(body, 'options');
 	if (value === undefined) {
@@ -1937,6 +2063,17 @@ function isStoredProjectManagerState(
 		return false;
 	}
 	return value.projects.every(isStoredProjectRecord);
+}
+
+function hasValidStoredWorkbenchState(state: StoredProjectManagerState): boolean {
+	return state.workbenches === undefined ||
+		Array.isArray(state.workbenches) && state.workbenches.every(value =>
+			isRecord(value) &&
+			typeof value.id === 'string' && value.id.length > 0 &&
+			typeof value.folderPath === 'string' && value.folderPath.length > 0 &&
+			isOptionalString(value.label) &&
+			isFiniteNumber(value.order) && value.order >= 0
+		);
 }
 
 function isStoredProjectRecord(value: unknown): value is StoredProjectRecord {

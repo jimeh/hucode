@@ -262,6 +262,93 @@ suite('HucodeWebProjectManagerServer', function () {
 		assert.deepStrictEqual(second.body.projects, [first.body.project]);
 	});
 
+	test('serves durable global workbench mutations on reserved routes', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		const first = await handle<{
+			readonly result: {
+				readonly kind: 'workbench';
+				readonly workbench: { readonly id: string };
+				readonly created: boolean;
+			};
+			readonly workbenches: readonly { readonly id: string }[];
+		}>(server, 'POST', `${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/ensure`, {
+			folderPath: join(serverDataPath, 'scratch'),
+		});
+		const duplicate = await handle<typeof first.body>(
+			server,
+			'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/ensure`,
+			{ folderPath: join(serverDataPath, 'scratch') }
+		);
+		const id = first.body.result.workbench.id;
+		const renamed = await handle<{
+			readonly workbenches: readonly {
+				readonly id: string;
+				readonly label?: string;
+			}[];
+		}>(server, 'POST',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/${id}/label`,
+			{ label: 'Scratch' }
+		);
+		const removed = await handle<{
+			readonly workbenches: readonly unknown[];
+		}>(server, 'DELETE',
+			`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/${id}`
+		);
+
+		assert.deepStrictEqual({
+			created: [first.body.result.created, duplicate.body.result.created],
+			ids: [
+				first.body.result.workbench.id,
+				duplicate.body.result.workbench.id,
+			],
+			label: renamed.body.workbenches[0].label,
+			remaining: removed.body.workbenches.length,
+		}, {
+			created: [true, false],
+			ids: [id, id],
+			label: 'Scratch',
+			remaining: 0,
+		});
+	});
+
+	test('moves one global workbench through the relative move route',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const ids: string[] = [];
+			for (const name of ['first', 'second', 'third']) {
+				const response = await handle<{
+					readonly result: {
+						readonly kind: 'workbench';
+						readonly workbench: { readonly id: string };
+					};
+				}>(
+					server,
+					'POST',
+					`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/ensure`,
+					{ folderPath: join(serverDataPath, name) }
+				);
+				ids.push(response.body.result.workbench.id);
+			}
+
+			const moved = await handle<{
+				readonly epoch: string;
+				readonly workbenches: readonly { readonly id: string }[];
+			}>(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/${ids[2]}/move`,
+				{ beforeWorkbenchId: ids[0] }
+			);
+
+			assert.deepStrictEqual(
+				moved.body.workbenches.map(workbench => workbench.id),
+				[ids[2], ids[0], ids[1]]
+			);
+			assert.notStrictEqual(moved.body.epoch, 'legacy');
+		}
+	);
+
 	test('observes and clears ephemeral Git targets through the web API',
 		async () => {
 			const server = createServer(serverDataPath, disposables, servers);
@@ -1016,9 +1103,9 @@ suite('HucodeWebProjectManagerServer', function () {
 			headersValue(events.headers, 'Content-Type'),
 			'text/event-stream'
 		);
-		assert.deepStrictEqual(readProjectEvents(events.body), [
-			{ projects: [] },
-		]);
+		assert.deepStrictEqual(readProjectEvents(events.body).map(event =>
+			(event as { readonly projects: readonly unknown[] }).projects
+		), [[]]);
 
 		const add = await handle<ProjectResponseBody>(
 			server,
@@ -1028,8 +1115,10 @@ suite('HucodeWebProjectManagerServer', function () {
 		);
 
 		assert.deepStrictEqual(
-			readProjectEvents(events.body).at(-1),
-			{ projects: add.body.projects }
+			(readProjectEvents(events.body).at(-1) as {
+				readonly projects: readonly unknown[];
+			}).projects,
+			add.body.projects
 		);
 
 		events.close();
@@ -1078,9 +1167,9 @@ suite('HucodeWebProjectManagerServer', function () {
 			await releaseWrite.complete();
 			await add.completion;
 
-			assert.deepStrictEqual(eventsBeforeWrite, [
-				{ projects: [] },
-			]);
+			assert.deepStrictEqual(eventsBeforeWrite.map(event =>
+				(event as { readonly projects: readonly unknown[] }).projects
+			), [[]]);
 			assert.strictEqual(readProjectEvents(events.body).length, 2);
 			events.close();
 		}
@@ -3430,13 +3519,21 @@ suite('HucodeWebProjectManagerServer', function () {
 			const events = startEvents(server);
 			void initialProjects.complete(staleProjects);
 			(server as unknown as {
-				broadcastProjects(projects: readonly unknown[]): void;
-			}).broadcastProjects(latestProjects);
+				broadcastProjects(catalog: {
+					readonly epoch: string;
+					readonly revision: number;
+					readonly projects: readonly unknown[];
+					readonly workbenches: readonly unknown[];
+				}): void;
+			}).broadcastProjects({
+				epoch: 'test',
+				revision: 1,
+				projects: latestProjects,
+				workbenches: [],
+			});
 			await events.completion;
 
-			assert.deepStrictEqual(readProjectEvents(events.body), [
-				{ projects: latestProjects },
-			]);
+			assert.deepStrictEqual(projectsFromEvents(events.body), [latestProjects]);
 			events.close();
 		}
 	);
@@ -3613,18 +3710,15 @@ suite('HucodeWebProjectManagerServer', function () {
 			{ label: 'latest' }
 		);
 
-		assert.deepStrictEqual(readProjectEvents(slow.body), [
-			{ projects: [] },
-		]);
+		assert.deepStrictEqual(projectsFromEvents(slow.body), [[]]);
 		assert.deepStrictEqual(
-			readProjectEvents(healthy.body).at(-1),
-			{ projects: latest.body.projects }
+			projectsFromEvents(healthy.body).at(-1),
+			latest.body.projects
 		);
 
 		slow.response.emit('drain');
-		assert.deepStrictEqual(readProjectEvents(slow.body), [
-			{ projects: [] },
-			{ projects: latest.body.projects },
+		assert.deepStrictEqual(projectsFromEvents(slow.body), [
+			[], latest.body.projects,
 		]);
 
 		slow.close();
@@ -3751,9 +3845,8 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		slow.response.emit('drain');
 		assert.strictEqual(slow.response.listenerCount('drain'), 1);
-		assert.deepStrictEqual(readProjectEvents(slow.body), [
-			{ projects: [] },
-			{ projects: first.body.projects },
+		assert.deepStrictEqual(projectsFromEvents(slow.body), [
+			[], first.body.projects,
 		]);
 
 		await handle<ProjectsResponseBody>(
@@ -3771,10 +3864,8 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		slow.response.emit('drain');
 		assert.strictEqual(slow.response.listenerCount('drain'), 0);
-		assert.deepStrictEqual(readProjectEvents(slow.body), [
-			{ projects: [] },
-			{ projects: first.body.projects },
-			{ projects: latest.body.projects },
+		assert.deepStrictEqual(projectsFromEvents(slow.body), [
+			[], first.body.projects, latest.body.projects,
 		]);
 		slow.close();
 	});
@@ -3912,17 +4003,66 @@ suite('HucodeWebProjectManagerServer', function () {
 		const corruptPath = `${storagePath}.corrupt`;
 
 		assert.deepStrictEqual({
-			response: loaded,
+			statusCode: loaded.statusCode,
+			projects: loaded.body.projects,
 			preservedState: await pathExists(corruptPath)
 				? await fs.readFile(corruptPath, 'utf8')
 				: undefined,
 			primaryExists: await pathExists(storagePath),
 		}, {
-			response: { statusCode: 200, body: { projects: [] } },
+			statusCode: 200,
+			projects: [],
 			preservedState: invalidState,
 			primaryExists: false,
 		});
 	});
+
+	test('isolates malformed optional workbenches and preserves valid projects',
+		async () => {
+			const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+			const state = {
+				version: 1,
+				projects: [{
+					id: 'project',
+					label: 'Project',
+					rootPath: projectPath,
+					pinned: false,
+					order: 1,
+				}],
+				workbenches: [{ id: '', folderPath: '/bad', order: 0 }],
+			};
+			await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+			await fs.writeFile(storagePath, JSON.stringify(state));
+			const server = createServer(serverDataPath, disposables, servers);
+
+			const loaded = await handle<ProjectsResponseBody>(
+				server,
+				'GET',
+				HUCODE_WEB_PROJECTS_API_PATH
+			);
+			await server.flushState();
+			const clean = JSON.parse(await fs.readFile(storagePath, 'utf8'));
+
+			assert.deepStrictEqual({
+				projectIds: loaded.body.projects.map(project =>
+					(project as { readonly id: string }).id
+				),
+				workbenches: (loaded.body as ProjectsResponseBody & {
+					readonly workbenches: readonly unknown[];
+				}).workbenches,
+				preserved: JSON.parse(await fs.readFile(
+					`${storagePath}.corrupt`,
+					'utf8'
+				)),
+				clean,
+			}, {
+				projectIds: ['project'],
+				workbenches: [],
+				preserved: state,
+				clean: { version: 1, projects: state.projects },
+			});
+		}
+	);
 
 	test('does not overwrite an existing corrupt-state backup', async () => {
 		const storagePath = join(serverDataPath, 'hucode', 'projects.json');
@@ -3946,7 +4086,8 @@ suite('HucodeWebProjectManagerServer', function () {
 		const newBackupPath = `${storagePath}.corrupt.1`;
 
 		assert.deepStrictEqual({
-			response: loaded,
+			statusCode: loaded.statusCode,
+			projects: loaded.body.projects,
 			oldBackup: await fs.readFile(`${storagePath}.corrupt`, 'utf8'),
 			newBackup: await pathExists(newBackupPath)
 				? await fs.readFile(newBackupPath, 'utf8')
@@ -3954,7 +4095,8 @@ suite('HucodeWebProjectManagerServer', function () {
 			primaryExists: await pathExists(storagePath),
 			existenceChecks: fileSystem.existenceChecks,
 		}, {
-			response: { statusCode: 200, body: { projects: [] } },
+			statusCode: 200,
+			projects: [],
 			oldBackup: oldCorruptState,
 			newBackup: newCorruptState,
 			primaryExists: false,
@@ -4055,7 +4197,8 @@ suite('HucodeWebProjectManagerServer', function () {
 		);
 
 		assert.deepStrictEqual({
-			empty,
+			emptyStatus: empty.statusCode,
+			emptyProjects: empty.body.projects,
 			addStatus: added.statusCode,
 			storedRootPath: (
 				JSON.parse(await fs.readFile(storagePath, 'utf8')) as {
@@ -4065,7 +4208,8 @@ suite('HucodeWebProjectManagerServer', function () {
 				}
 			).projects[0].rootPath,
 		}, {
-			empty: { statusCode: 200, body: { projects: [] } },
+			emptyStatus: 200,
+			emptyProjects: [],
 			addStatus: 201,
 			storedRootPath: projectPath,
 		});
@@ -4247,14 +4391,16 @@ suite('HucodeWebProjectManagerServer', function () {
 
 		assert.deepStrictEqual({
 			failed,
-			retried,
+			retriedStatus: retried.statusCode,
+			retriedProjects: retried.body.projects,
 			storedProjectCount: stored.projects.length,
 		}, {
 			failed: {
 				statusCode: 500,
 				body: { error: 'delete write failed' },
 			},
-			retried: { statusCode: 200, body: { projects: [] } },
+			retriedStatus: 200,
+			retriedProjects: [],
 			storedProjectCount: 0,
 		});
 	});
@@ -5298,6 +5444,12 @@ function readProjectEvents(body: string): unknown[] {
 		.map(chunk => chunk.split('\n').find(line => line.startsWith('data: ')))
 		.filter(line => !!line)
 		.map(line => JSON.parse(line!.substring('data: '.length)));
+}
+
+function projectsFromEvents(body: string): readonly (readonly unknown[])[] {
+	return readProjectEvents(body).map(event =>
+		(event as { readonly projects: readonly unknown[] }).projects
+	);
 }
 
 function readEventFrames(body: string, eventName: string): string[] {

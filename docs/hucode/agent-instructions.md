@@ -525,12 +525,16 @@ human-facing guides rather than replacing them.
   the record with desired state `unloaded`; dismiss removes it only after the
   normal unload handshake succeeds. Desired-loaded startup entries may be
   `dormant`, which is restorable but not live and must not own a renderer.
-- Desktop stores retained catalogs in Omni window state. Serve-web stores the
-  equivalent catalog and resident snapshot in profile storage. Page/window
-  teardown must not overwrite the pre-shutdown desired restore set.
+- Desktop stores the combined saved project/workbench catalog in application
+  project-manager state; serve-web stores it in `hucode/projects.json`.
+  Desktop window state and serve-web tab-local `sessionStorage` contain only
+  lifecycle overlays and resident restore state. Page/window teardown must not
+  overwrite the pre-shutdown desired restore set.
 - If a retained path becomes a project worktree, update any live instance with
-  the project id before removing the retained record. Do not recreate the
-  arbitrary record when the project is later removed.
+  the project id before removing the retained record. If that project is later
+  removed while an instance is still restorable, persist and retry an
+  idempotent global adoption. Cancel the adoption when the local instance
+  unloads, and never retry an intentional global dismissal.
 - Omni resident-workspace restore must always choose one active workspace, even
   for older restore entries without an explicit `active` state. Shell-to-workspace
   action forwarding should wait for restore before looking up the active hosted

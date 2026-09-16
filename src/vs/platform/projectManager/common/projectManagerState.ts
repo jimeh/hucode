@@ -6,11 +6,19 @@
 import { isEqual } from '../../../base/common/extpath.js';
 import {
 	PROJECT_MANAGER_STORAGE_VERSION,
+	StoredArbitraryWorkbenchRecord,
 	StoredProjectManagerState,
 	StoredProjectRecord,
 	StoredWorktreeLabel,
 	WorktreeRecord,
 } from './projectManager.js';
+
+/** Parsed additive version-1 project-manager state. */
+export interface LoadedProjectManagerState {
+	readonly projects: StoredProjectRecord[];
+	readonly workbenches: StoredArbitraryWorkbenchRecord[];
+	readonly malformedWorkbenches: boolean;
+}
 
 /**
  * Returns a cloned project list from a compatible persisted project state.
@@ -48,14 +56,76 @@ export function loadStoredProjectManagerState(
 }
 
 /**
+ * Parses the combined catalog while isolating malformed optional workbench
+ * data from otherwise valid project state.
+ */
+export function loadStoredProjectManagerCatalogState(
+	state: StoredProjectManagerState | undefined,
+	isCaseSensitive: boolean
+): LoadedProjectManagerState {
+	const projects = loadStoredProjectManagerState(state);
+	if (!state || state.version !== PROJECT_MANAGER_STORAGE_VERSION ||
+		state.workbenches === undefined) {
+		return { projects, workbenches: [], malformedWorkbenches: false };
+	}
+	if (!Array.isArray(state.workbenches)) {
+		return { projects, workbenches: [], malformedWorkbenches: true };
+	}
+
+	const ids = new Set<string>();
+	const paths = new Set<string>();
+	const workbenches: StoredArbitraryWorkbenchRecord[] = [];
+	for (const candidate of state.workbenches) {
+		if (!isStoredArbitraryWorkbenchRecord(candidate)) {
+			return { projects, workbenches: [], malformedWorkbenches: true };
+		}
+		const pathKey = getProjectManagerPathComparisonKey(
+			candidate.folderPath,
+			isCaseSensitive
+		);
+		if (ids.has(candidate.id) || paths.has(pathKey)) {
+			continue;
+		}
+		ids.add(candidate.id);
+		paths.add(pathKey);
+		workbenches.push({
+			id: candidate.id,
+			folderPath: candidate.folderPath,
+			...(candidate.label?.trim()
+				? { label: candidate.label.trim() }
+				: {}),
+			order: candidate.order,
+		});
+	}
+	workbenches.sort((a, b) => a.order - b.order);
+	return {
+		projects,
+		workbenches: workbenches.map((record, order) => ({ ...record, order })),
+		malformedWorkbenches: false,
+	};
+}
+
+function isStoredArbitraryWorkbenchRecord(
+	value: StoredArbitraryWorkbenchRecord
+): value is StoredArbitraryWorkbenchRecord {
+	return !!value && typeof value === 'object' &&
+		typeof value.id === 'string' && value.id.length > 0 &&
+		typeof value.folderPath === 'string' && value.folderPath.length > 0 &&
+		(value.label === undefined || typeof value.label === 'string') &&
+		Number.isFinite(value.order) && value.order >= 0;
+}
+
+/**
  * Creates the persisted project-manager state shape.
  */
 export function createStoredProjectManagerState(
-	projects: readonly StoredProjectRecord[]
+	projects: readonly StoredProjectRecord[],
+	workbenches?: readonly StoredArbitraryWorkbenchRecord[]
 ): StoredProjectManagerState {
 	return {
 		version: PROJECT_MANAGER_STORAGE_VERSION,
 		projects,
+		...(workbenches?.length ? { workbenches } : {}),
 	};
 }
 

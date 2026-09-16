@@ -172,8 +172,9 @@ export interface IHucodeShellControllerService {
 	dismissRetainedWorkbench(
 		workbenchId: string
 	): Promise<IHucodeHostedWorkspaceState>;
-	reorderRetainedWorkbenches(
-		orderedWorkbenchIds: readonly string[]
+	moveRetainedWorkbench(
+		workbenchId: string,
+		beforeWorkbenchId?: string
 	): Promise<IHucodeHostedWorkspaceState>;
 	setRetainedWorkbenchLabel(
 		workbenchId: string,
@@ -246,7 +247,7 @@ export const HUCODE_SHELL_CONTROLLER_REMOTE_MEMBERS = Object.freeze([
 	'retainAndOpenWorkbench',
 	'unloadRetainedWorkbench',
 	'dismissRetainedWorkbench',
-	'reorderRetainedWorkbenches',
+	'moveRetainedWorkbench',
 	'setRetainedWorkbenchLabel',
 	'reconcileRetainedWorkbenchesWithCompleteProjectCatalog',
 	'promoteRetainedWorkbenchProjectFolders',
@@ -349,8 +350,8 @@ export function createHucodeShellControllerClient(
 			remote.unloadRetainedWorkbench(workbenchId),
 		dismissRetainedWorkbench: workbenchId =>
 			remote.dismissRetainedWorkbench(workbenchId),
-		reorderRetainedWorkbenches: ids =>
-			remote.reorderRetainedWorkbenches(ids),
+		moveRetainedWorkbench: (id, beforeId) =>
+			remote.moveRetainedWorkbench(id, beforeId),
 		setRetainedWorkbenchLabel: (workbenchId, label) =>
 			remote.setRetainedWorkbenchLabel(workbenchId, label),
 		reconcileRetainedWorkbenchesWithCompleteProjectCatalog: projects =>

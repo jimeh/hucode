@@ -224,12 +224,18 @@ The Omni sidebar surface is shell-owned under
 `src/vs/hucode/browser/parts/projectsPart.ts`. It is not a normal registered
 workbench view/container in the Omni sidebar.
 
-It combines a per-window catalog of arbitrary folder workbenches with the
-global project manager. Arbitrary entries persist independently of hosted
+It projects the global project manager's combined project and arbitrary-folder
+catalog through one session's hosted-workbench lifecycle overlay. Arbitrary
+entries persist independently of hosted
 renderer instances: unload removes the instance but retains the entry, while
 dismiss removes the entry after a successful unload. When a retained path
 becomes a project worktree, the project record becomes authoritative and the
 catalog entry is removed.
+
+A dismissal in another session does not force-close a live instance. The
+remaining instance is shown as session-only until it unloads. If removing a
+project orphans a restorable instance, that session persists an adoption and
+retries saving the folder globally with capped backoff.
 
 This keeps Explorer, Search, SCM, and other standard sidebar behavior from
 leaking into the Omni shell. Hosted workbenches can still deregister redundant
@@ -282,7 +288,8 @@ preflight so concurrent requests in one tab converge on one renderer. The
 retained-workbench catalog uses the same comparison boundary for arbitrary
 folders.
 
-The project catalog remains server-backed and shared, but it does not own live
+The combined project and arbitrary-workbench catalog remains server-backed and
+shared, but it does not own live
 browser renderers. Separate tabs, browser profiles, devices, and origins may
 host the same path independently; serve-web does not use Web Locks, cross-tab
 activation messages, or server-side ownership leases.

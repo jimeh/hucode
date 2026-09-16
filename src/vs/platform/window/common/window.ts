@@ -66,6 +66,22 @@ export interface IOmniRetainedWorkbench {
 	readonly folderStatus?: 'missing';
 	readonly order: number;
 	readonly lastActiveAt?: number;
+	/** Live in this session after its durable global record was removed. */
+	readonly sessionOnly?: boolean;
+}
+
+/** Per-Omni-session lifecycle state for one globally saved workbench. */
+export interface IOmniWorkbenchSessionEntry {
+	readonly workbenchId: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly lastActiveAt?: number;
+}
+
+/** Retryable project-removal adoption retained by one Omni session. */
+export interface IOmniPendingWorkbenchAdoption {
+	readonly worktreePath: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly lastActiveAt?: number;
 }
 
 export interface IBaseOpenWindowsOptions {
@@ -546,6 +562,8 @@ export interface INativeWindowConfiguration extends IWindowConfiguration, Native
 	omniActiveWorktreePath?: string;
 	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
 	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+	omniWorkbenchOverlays?: readonly IOmniWorkbenchSessionEntry[];
+	omniPendingWorkbenchAdoptions?: readonly IOmniPendingWorkbenchAdoption[];
 }
 
 /**

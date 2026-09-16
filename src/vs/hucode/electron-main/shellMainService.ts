@@ -8,6 +8,7 @@ import { HucodeOnboardingTarget, HucodeOnboardingOpenRequest, HucodeOnboardingOp
 import { OnboardingMain } from './onboarding/onboardingMain.js';
 import { IStorageMainService } from '../../platform/storage/electron-main/storageMainService.js';
 import { VSBuffer } from '../../base/common/buffer.js';
+import { DeferredPromise } from '../../base/common/async.js';
 import { CancellationToken } from '../../base/common/cancellation.js';
 import { Emitter, Event } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
@@ -33,6 +34,10 @@ import { IProtocolMainService } from
 	'../../platform/protocol/electron-main/protocol.js';
 import { IProjectManagerMainService } from
 	'../../platform/projectManager/electron-main/projectManager.js';
+import { ProjectCatalogSnapshot } from
+	'../../platform/projectManager/common/projectManager.js';
+import { getProjectManagerPathComparisonKey } from
+	'../../platform/projectManager/common/projectManagerState.js';
 import { isSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspace/common/workspace.js';
 import { IUserDataProfilesMainService } from
@@ -49,6 +54,8 @@ import {
 } from '../../platform/window/common/window.js';
 import { IWindowsMainService, OpenContext } from
 	'../../platform/windows/electron-main/windows.js';
+import { applyHucodeOmniWorkbenchMigrationToWindowState } from
+	'../../platform/windows/electron-main/windowsStateHandler.js';
 import {
 	IHucodeCompleteProjectCatalogEntry,
 	IHucodeHostedWorkspaceState,
@@ -72,6 +79,7 @@ import { findHucodeProjectWorktreeByPath } from './omniWorkspaceOpen.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
+	deserializeRetainedWorkbenches,
 } from
 	'../common/retainedWorkbench.js';
 import { ShellControllerStore } from '../common/shellControllerStore.js';
@@ -121,6 +129,7 @@ import {
 	type HucodeRegularWorkbenchAdmissionOutcome,
 	type HucodeRegularWorkbenchOpenAttempt,
 	selectHucodeDesktopRestoreWinners,
+	projectHucodeDesktopRetainedRestoreWorkbenches,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 } from './desktopWorkbenchOwnership.js';
@@ -178,6 +187,14 @@ export class HucodeShellMainService extends Disposable
 	private ownershipBroadcastPending = false;
 	private readonly onboarding: OnboardingMain;
 	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
+	private globalCatalog: ProjectCatalogSnapshot | undefined;
+	private readonly desktopWorkbenchMigrationSettled =
+		new DeferredPromise<void>();
+	private readonly pendingAdoptionRetries = new Map<string, {
+		attempt: number;
+		running?: boolean;
+		timer?: ReturnType<typeof setTimeout>;
+	}>();
 
 	constructor(
 		@IStorageMainService storageMainService: IStorageMainService,
@@ -219,6 +236,27 @@ export class HucodeShellMainService extends Disposable
 				window => window.id
 			)
 		));
+		this._register(this.projectManagerMainService.onDidChangeCatalog(catalog => {
+			this.globalCatalog = catalog;
+			this.synchronizeControllerCatalogs(catalog);
+			this.retryPendingWorkbenchAdoptions();
+		}));
+		this._register(toDisposable(() => {
+			for (const retry of this.pendingAdoptionRetries.values()) {
+				if (retry.timer) {
+					clearTimeout(retry.timer);
+				}
+			}
+			this.pendingAdoptionRetries.clear();
+		}));
+		void this.loadAndMigrateDesktopWorkbenchCatalog()
+			.then(catalog => {
+				this.globalCatalog = catalog;
+				this.synchronizeControllerCatalogs(catalog);
+			}, error => this.logService.warn(
+				`[hucode] Global workbench catalog is unavailable: ${String(error)}`
+			))
+			.finally(() => this.desktopWorkbenchMigrationSettled.complete());
 
 		const onHostedShellPortRequest = (
 			event: Electron.IpcMainEvent,
@@ -678,8 +716,8 @@ export class HucodeShellMainService extends Disposable
 				this.unloadRetainedWorkbench(windowId, workbenchId),
 			dismissRetainedWorkbench: workbenchId =>
 				this.dismissRetainedWorkbench(windowId, workbenchId),
-			reorderRetainedWorkbenches: ids =>
-				this.reorderRetainedWorkbenches(windowId, ids),
+			moveRetainedWorkbench: (id, beforeId) =>
+				this.moveRetainedWorkbench(windowId, id, beforeId),
 			setRetainedWorkbenchLabel: (workbenchId, label) =>
 				this.setRetainedWorkbenchLabel(windowId, workbenchId, label),
 			reconcileRetainedWorkbenchesWithCompleteProjectCatalog: projects =>
@@ -819,6 +857,9 @@ export class HucodeShellMainService extends Disposable
 	async getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
 		await controller.ensureRestored();
+		for (const worktreePath of controller.getPendingWorkbenchAdoptions()) {
+			void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
+		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1160,8 +1201,16 @@ export class HucodeShellMainService extends Disposable
 		folderUri: UriComponents
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		controller.retainWorkbench(URI.revive(folderUri));
-		await this.routeWorkspaceOpen(windowId, URI.revive(folderUri).fsPath);
+		const folder = URI.revive(folderUri);
+		const ensured = await this.projectManagerMainService.ensureWorkbench(folder);
+		if (ensured.kind === 'projectWorktree') {
+			await this.routeWorkspaceOpen(windowId, ensured.worktree.path);
+			return this.withDesktopOwnershipState(windowId, controller.getState());
+		}
+		const catalog = await this.projectManagerMainService.getCatalog();
+		this.globalCatalog = catalog;
+		controller.synchronizeGlobalWorkbenchCatalog(catalog);
+		await this.routeWorkspaceOpen(windowId, ensured.workbench.folderUri.fsPath);
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1180,15 +1229,32 @@ export class HucodeShellMainService extends Disposable
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
 		await controller.dismissRetainedWorkbench(workbenchId);
+		if (this.globalCatalog?.workbenches.some(
+			workbench => workbench.id === workbenchId
+		) && !controller.getState().retainedWorkbenches?.some(
+			workbench => workbench.id === workbenchId
+		)) {
+			await this.projectManagerMainService.removeWorkbench(workbenchId);
+		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
-	async reorderRetainedWorkbenches(
+	async moveRetainedWorkbench(
 		windowId: number,
-		orderedWorkbenchIds: readonly string[]
+		workbenchId: string,
+		beforeWorkbenchId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		controller.reorderRetainedWorkbenches(orderedWorkbenchIds);
+		const globalIds = new Set(this.globalCatalog?.workbenches.map(
+			workbench => workbench.id
+		));
+		if (globalIds.has(workbenchId) &&
+			(beforeWorkbenchId === undefined || globalIds.has(beforeWorkbenchId))) {
+			await this.projectManagerMainService.moveWorkbench(
+				workbenchId,
+				beforeWorkbenchId
+			);
+		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1202,7 +1268,11 @@ export class HucodeShellMainService extends Disposable
 		label: string | undefined,
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		controller.setRetainedWorkbenchLabel(workbenchId, label);
+		if (label === undefined) {
+			await this.projectManagerMainService.resetWorkbenchLabel(workbenchId);
+		} else {
+			await this.projectManagerMainService.renameWorkbench(workbenchId, label);
+		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1219,6 +1289,12 @@ export class HucodeShellMainService extends Disposable
 				),
 			}))
 		);
+		await Promise.all(controller.getPendingWorkbenchAdoptions().map(
+			worktreePath => this.attemptPendingWorkbenchAdoption(
+				windowId,
+				worktreePath
+			)
+		));
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1688,9 +1764,265 @@ export class HucodeShellMainService extends Disposable
 						'active',
 					shouldRestoreCandidate: candidate =>
 						this.isRestoreCandidateWinner(windowId, candidate),
+					beforeRestore: () => this.desktopWorkbenchMigrationSettled.p,
 				}
 			);
+		if (this.globalCatalog) {
+			controller.synchronizeGlobalWorkbenchCatalog(this.globalCatalog);
+		}
+		for (const worktreePath of controller.getPendingWorkbenchAdoptions()) {
+			void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
+		}
 		return controller;
+	}
+
+	private retryPendingWorkbenchAdoptions(): void {
+		for (const window of this.windowsMainService.getWindows()) {
+			const windowId = window.id;
+			const controller = this.controllers.get(windowId);
+			if (!controller) {
+				continue;
+			}
+			for (const worktreePath of
+				controller.getPendingWorkbenchAdoptions()) {
+				void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
+			}
+		}
+	}
+
+	private async attemptPendingWorkbenchAdoption(
+		windowId: number,
+		worktreePath: string
+	): Promise<void> {
+		const controller = this.controllers.get(windowId);
+		if (!controller?.getPendingWorkbenchAdoptions().includes(worktreePath)) {
+			this.clearPendingAdoptionRetry(windowId, worktreePath);
+			return;
+		}
+		const key = `${windowId}:${getProjectManagerPathComparisonKey(
+			worktreePath,
+			isLinux
+		)}`;
+		const retry = this.pendingAdoptionRetries.get(key) ?? { attempt: 0 };
+		if (retry.running) {
+			return;
+		}
+		if (retry.timer) {
+			clearTimeout(retry.timer);
+			retry.timer = undefined;
+		}
+		this.pendingAdoptionRetries.set(key, retry);
+		retry.running = true;
+		try {
+			await this.projectManagerMainService.ensureWorkbench(
+				URI.file(worktreePath)
+			);
+			controller.completePendingWorkbenchAdoption(worktreePath);
+			this.pendingAdoptionRetries.delete(key);
+			const catalog = await this.projectManagerMainService.getCatalog();
+			this.globalCatalog = catalog;
+			this.synchronizeControllerCatalogs(catalog);
+		} catch (error) {
+			retry.running = false;
+			if (!controller.getPendingWorkbenchAdoptions().includes(worktreePath)) {
+				this.pendingAdoptionRetries.delete(key);
+				return;
+			}
+			const delay = [1000, 5000, 30000][
+				Math.min(retry.attempt++, 2)
+			];
+			this.logService.warn(
+				`[hucode] Failed to adopt ${worktreePath}; retrying in ` +
+				`${delay}ms: ${String(error)}`
+			);
+			retry.timer = setTimeout(() => {
+				retry.timer = undefined;
+				void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
+			}, delay);
+		}
+	}
+
+	private clearPendingAdoptionRetry(
+		windowId: number,
+		worktreePath: string
+	): void {
+		const key = `${windowId}:${getProjectManagerPathComparisonKey(
+			worktreePath,
+			isLinux
+		)}`;
+		const retry = this.pendingAdoptionRetries.get(key);
+		if (retry?.timer) {
+			clearTimeout(retry.timer);
+		}
+		this.pendingAdoptionRetries.delete(key);
+	}
+
+	private synchronizeControllerCatalogs(catalog: ProjectCatalogSnapshot): void {
+		for (const window of this.windowsMainService.getWindows()) {
+			this.controllers.get(window.id)?.synchronizeGlobalWorkbenchCatalog(
+				catalog
+			);
+		}
+	}
+
+	private async loadAndMigrateDesktopWorkbenchCatalog(): Promise<
+		ProjectCatalogSnapshot
+	> {
+		const sources = [
+			...(this.windowsMainService
+				.getHucodeOmniMigrationWindowStates?.() ?? []),
+			...this.windowsMainService.getWindows().flatMap(window =>
+				window.config ? [{
+					sourceId: `live:${window.id}`,
+					retainedWorkbenches:
+						window.config.omniRetainedWorkbenches ?? [],
+					residentWorkspaces:
+						window.config.omniResidentWorkspaces ?? [],
+					workbenchOverlays:
+						window.config.omniWorkbenchOverlays ?? [],
+				}] : []
+			),
+		];
+		const byPath = new Map<string, {
+			legacyId: string;
+			folderUri: URI;
+			label?: string;
+			order: number;
+			lastActiveAt?: number;
+			contributors: {
+				sourceId: string;
+				legacyId?: string;
+				worktreePath: string;
+			}[];
+		}>();
+		let order = 0;
+		for (const source of sources) {
+			const retainedRecords = deserializeRetainedWorkbenches(
+				source.retainedWorkbenches,
+				uri => getProjectManagerPathComparisonKey(uri.fsPath, isLinux)
+			);
+			for (const retained of retainedRecords) {
+				const folderUri = URI.revive(retained.folderUri);
+				const key = getProjectManagerPathComparisonKey(
+					folderUri.fsPath,
+					isLinux
+				);
+				const current = byPath.get(key);
+				if (!current) {
+					byPath.set(key, {
+						legacyId: retained.id,
+						folderUri,
+						...(retained.label === undefined
+							? {}
+							: { label: retained.label }),
+						order: order++,
+						lastActiveAt: retained.lastActiveAt,
+						contributors: [{
+							sourceId: source.sourceId,
+							legacyId: retained.id,
+							worktreePath: folderUri.fsPath,
+						}],
+					});
+				} else {
+					current.contributors.push({
+						sourceId: source.sourceId,
+						legacyId: retained.id,
+						worktreePath: folderUri.fsPath,
+					});
+					if ((retained.lastActiveAt ?? -1) >
+						(current.lastActiveAt ?? -1)) {
+						current.label = retained.label;
+						current.lastActiveAt = retained.lastActiveAt;
+					}
+				}
+			}
+			for (const resident of source.residentWorkspaces) {
+				if (resident.projectId) {
+					continue;
+				}
+				const folderUri = URI.file(resident.worktreePath);
+				const key = getProjectManagerPathComparisonKey(
+					folderUri.fsPath,
+					isLinux
+				);
+				const current = byPath.get(key);
+				if (!current) {
+					byPath.set(key, {
+						legacyId: `resident:${order}`,
+						folderUri,
+						order: order++,
+						lastActiveAt: resident.lastActiveAt,
+						contributors: [{
+							sourceId: source.sourceId,
+							worktreePath: folderUri.fsPath,
+						}],
+					});
+				} else {
+					current.contributors.push({
+						sourceId: source.sourceId,
+						worktreePath: folderUri.fsPath,
+					});
+				}
+			}
+		}
+		if (byPath.size === 0) {
+			return this.projectManagerMainService.getCatalog();
+		}
+		const candidates = Array.from(byPath.values());
+		const imported = await this.projectManagerMainService.importWorkbenches(
+			candidates.map(candidate => ({
+				legacyId: candidate.legacyId,
+				folderUri: candidate.folderUri,
+				...(candidate.label === undefined
+					? {}
+					: { label: candidate.label }),
+				order: candidate.order,
+			}))
+		);
+		const results = new Map<string, {
+			sourceId: string;
+			workbenchIdsByLegacyId: Record<string, string>;
+			workbenchIdsByPath: Record<string, string>;
+			projectIdsByPath: Record<string, string>;
+		}>();
+		for (const source of sources) {
+			results.set(source.sourceId, {
+				sourceId: source.sourceId,
+				workbenchIdsByLegacyId: {},
+				workbenchIdsByPath: {},
+				projectIdsByPath: {},
+			});
+		}
+		for (let index = 0; index < candidates.length; index++) {
+			const candidate = candidates[index];
+			const outcome = imported.outcomes[index];
+			for (const contributor of candidate.contributors) {
+				const result = results.get(contributor.sourceId)!;
+				if (outcome.kind === 'workbench') {
+					result.workbenchIdsByPath[contributor.worktreePath] =
+						outcome.workbenchId;
+					if (contributor.legacyId) {
+						result.workbenchIdsByLegacyId[contributor.legacyId] =
+							outcome.workbenchId;
+					}
+				} else {
+					result.projectIdsByPath[contributor.worktreePath] =
+						outcome.projectId;
+				}
+			}
+		}
+		this.windowsMainService.applyHucodeOmniWorkbenchMigration?.(
+			Array.from(results.values())
+		);
+		for (const window of this.windowsMainService.getWindows()) {
+			const config = window.config;
+			const result = results.get(`live:${window.id}`);
+			if (!config || !result) {
+				continue;
+			}
+			applyHucodeOmniWorkbenchMigrationToWindowState(config, result);
+		}
+		return imported.catalog;
 	}
 
 	private async recordLastActiveWorktreeByPath(
@@ -1712,7 +2044,16 @@ export class HucodeShellMainService extends Disposable
 		windowId: number,
 		candidate: IHucodeHostedRestoreCandidate
 	): boolean {
-		const candidates = this.windowsMainService.getWindows()
+		const pathsEqual = (left: string, right: string) =>
+			isEqual(left, right, !isLinux);
+		const globalWorkbenches = (this.globalCatalog?.workbenches ?? []).map(
+			workbench => ({
+				id: workbench.id,
+				path: URI.revive(workbench.folderUri).fsPath,
+			})
+		);
+		const windows = this.windowsMainService.getWindows();
+		const candidates = windows
 			.filter(window => window.isOmniWindow)
 			.flatMap(window => createHucodeDesktopRestoreCandidates({
 				windowId: window.id,
@@ -1725,15 +2066,27 @@ export class HucodeShellMainService extends Disposable
 					projectId: entry.projectId,
 					lastActiveAt: entry.lastActiveAt,
 				})),
-				retainedWorkbenches: (
-					window.config?.omniRetainedWorkbenches ?? []
-				).map(record => ({
-					path: URI.revive(record.folderUri).fsPath,
-					id: record.id,
-					desiredState: record.desiredState,
-					lastActiveAt: record.lastActiveAt,
-				})),
-			}, (left, right) => isEqual(left, right, !isLinux)));
+				retainedWorkbenches:
+					projectHucodeDesktopRetainedRestoreWorkbenches({
+						globalWorkbenches,
+						overlays: window.config?.omniWorkbenchOverlays ?? [],
+						legacyRetainedWorkbenches: (
+							window.config?.omniRetainedWorkbenches ?? []
+						).map(record => ({
+							path: URI.revive(record.folderUri).fsPath,
+							id: record.id,
+							desiredState: record.desiredState,
+							lastActiveAt: record.lastActiveAt,
+						})),
+						pendingAdoptions: (
+							window.config?.omniPendingWorkbenchAdoptions ?? []
+						).map(pending => ({
+							path: pending.worktreePath,
+							desiredState: pending.desiredState,
+							lastActiveAt: pending.lastActiveAt,
+						})),
+					}, pathsEqual),
+			}, pathsEqual));
 		const winner = Array.from(
 			selectHucodeDesktopRestoreWinners(candidates).values()
 		).find(entry => isEqual(
@@ -1741,8 +2094,17 @@ export class HucodeShellMainService extends Disposable
 			canonicalizeDesktopWorkbenchPath(candidate.path),
 			!isLinux
 		));
-		return winner?.windowId === windowId &&
-			winner.stableInstanceId === candidate.stableInstanceId;
+		if (winner?.windowId !== windowId) {
+			return false;
+		}
+		if (winner.stableInstanceId === candidate.stableInstanceId) {
+			return true;
+		}
+		return !!windows.find(window => window.id === windowId)?.config
+			?.omniPendingWorkbenchAdoptions?.some(pending =>
+				pending.desiredState === 'loaded' &&
+				pathsEqual(pending.worktreePath, candidate.path)
+			);
 	}
 
 	private trackTrust(

@@ -66,6 +66,7 @@ export interface IHucodeHostedWorkspaceState {
 	readonly projectSwitcherSectionOrder?: readonly ProjectSwitcherOmniSection[];
 	readonly instances: readonly IHucodeHostedWorkbenchInstance[];
 	readonly retainedWorkbenches?: readonly IHucodeRetainedWorkbench[];
+	readonly workbenchCatalogHydrated?: boolean;
 	readonly desktopOwnerships?: readonly IHucodeDesktopWorkbenchOwnershipState[];
 }
 
@@ -167,10 +168,11 @@ export interface IHucodeShellService {
 		windowId: number,
 		workbenchId: string,
 	): Promise<IHucodeHostedWorkspaceState>;
-	/** Persists the complete manual order of arbitrary workbench records. */
-	reorderRetainedWorkbenches(
+	/** Atomically moves one arbitrary workbench before another. */
+	moveRetainedWorkbench(
 		windowId: number,
-		orderedWorkbenchIds: readonly string[],
+		workbenchId: string,
+		beforeWorkbenchId?: string,
 	): Promise<IHucodeHostedWorkspaceState>;
 	/** Sets or resets a retained workbench's custom display label. */
 	setRetainedWorkbenchLabel(

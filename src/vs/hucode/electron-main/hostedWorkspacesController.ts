@@ -56,6 +56,8 @@ import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../platform/projectManager/common/projectManagerState.js';
+import { ProjectCatalogSnapshot } from
+	'../../platform/projectManager/common/projectManager.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
 	IHucodeHostedWorkbenchInstance,
@@ -122,6 +124,7 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly shouldRestoreCandidate?: (
 		candidate: IHucodeHostedRestoreCandidate
 	) => boolean;
+	readonly beforeRestore?: () => Promise<void>;
 	readonly viewFactory?: IHostedWorkbenchViewFactory;
 	readonly ipc?: IHostedWorkspaceIpcMain;
 }
@@ -231,6 +234,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		IHostedWorkbenchInstance
 	>;
 	private readonly retainedWorkbenches: RetainedWorkbenchCatalog;
+	private pendingWorkbenchOverlays: INativeWindowConfiguration[
+		'omniWorkbenchOverlays'
+	];
+	private globalCatalogHydrated = false;
+	private globalWorkbenchIds = new Set<string>();
+	private readonly pendingWorkbenchAdoptions = new Set<string>();
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
@@ -244,6 +253,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
 	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
+	private authoritativeCatalog: ProjectCatalogSnapshot | undefined;
+	private catalogReconciledAfterRestore = false;
 	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
@@ -261,6 +272,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		new Map<string, ICrashRecoveryOperation>();
 	private readonly shouldRestoreCandidate:
 		(candidate: IHucodeHostedRestoreCandidate) => boolean;
+	private readonly beforeRestore: () => Promise<void>;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
 	private readonly ipc: IHostedWorkspaceIpcMain;
 
@@ -313,6 +325,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.now = options.now ?? Date.now;
 		this.shouldRestoreCandidate = options.shouldRestoreCandidate ??
 			(() => true);
+		this.beforeRestore = options.beforeRestore ?? (async () => { });
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => getProjectManagerPathComparisonKey(path, isLinux),
 			this.now
@@ -322,6 +335,20 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			uri => getProjectManagerPathComparisonKey(uri.fsPath, isLinux),
 			this.createInstanceId
 		);
+		this.pendingWorkbenchOverlays =
+			this.window.config?.omniWorkbenchOverlays;
+		for (const pending of
+			this.window.config?.omniPendingWorkbenchAdoptions ?? []) {
+			if (!pending.worktreePath) {
+				continue;
+			}
+			this.pendingWorkbenchAdoptions.add(pending.worktreePath);
+			this.retainedWorkbenches.retain(
+				URI.file(pending.worktreePath),
+				pending.desiredState,
+				pending.lastActiveAt
+			);
+		}
 		this.traceRestoreStartedAt = this.now();
 		this.viewFactory = options.viewFactory ??
 			defaultHostedWorkbenchViewFactory;
@@ -483,8 +510,40 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.window.config.omniActiveWorktreePath =
 			this.getActiveInstance()?.worktreePath;
 		this.window.config.omniResidentWorkspaces = this.getRestoreEntries();
-		this.window.config.omniRetainedWorkbenches =
-			this.retainedWorkbenches.all;
+		if (this.globalCatalogHydrated) {
+			this.window.config.omniWorkbenchOverlays =
+				this.retainedWorkbenches.all
+					.filter(workbench => this.globalWorkbenchIds.has(workbench.id))
+					.map(workbench => ({
+						workbenchId: workbench.id,
+						desiredState: workbench.desiredState,
+						...(workbench.lastActiveAt === undefined
+							? {}
+							: { lastActiveAt: workbench.lastActiveAt }),
+					}));
+			this.window.config.omniRetainedWorkbenches = undefined;
+		} else {
+			// Preserve the legacy snapshot until the global catalog has hydrated.
+			// Startup migration consumes this value; clearing it early would lose
+			// restore intent when catalog loading is temporarily unavailable.
+			this.window.config.omniRetainedWorkbenches =
+				this.retainedWorkbenches.all;
+		}
+		this.window.config.omniPendingWorkbenchAdoptions = Array.from(
+			this.pendingWorkbenchAdoptions,
+			worktreePath => {
+				const retained = this.retainedWorkbenches.getByUri(
+					URI.file(worktreePath)
+				);
+				return {
+					worktreePath,
+					desiredState: retained?.desiredState ?? 'loaded',
+					...(retained?.lastActiveAt === undefined
+						? {}
+						: { lastActiveAt: retained.lastActiveAt }),
+				};
+			}
+		);
 	}
 
 	private getRestoreEntries(): IOmniWorkspaceRestoreEntry[] {
@@ -966,12 +1025,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (this.restored) {
 			return;
 		}
+		await this.beforeRestore();
 
 		this.restorePromise ??= this.restoreResidentWorkspaces().finally(() => {
 			this.restorePromise = undefined;
 		});
 
 		await this.restorePromise;
+		if (!this.catalogReconciledAfterRestore && this.authoritativeCatalog) {
+			this.catalogReconciledAfterRestore = true;
+			if (this.reconcileAuthoritativeProjectCatalog(
+				this.authoritativeCatalog
+			)) {
+				this.emitState();
+			}
+		}
 	}
 
 	private async restoreResidentWorkspaces(): Promise<void> {
@@ -1516,6 +1584,93 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
+	/** Applies the authoritative catalog while preserving session lifecycle. */
+	synchronizeGlobalWorkbenchCatalog(
+		catalog: ProjectCatalogSnapshot
+	): void {
+		this.globalCatalogHydrated = true;
+		this.authoritativeCatalog = catalog;
+		const workbenches = catalog.workbenches;
+		this.globalWorkbenchIds = new Set(workbenches.map(workbench => workbench.id));
+		const pendingPathKeys = new Set(Array.from(
+			this.pendingWorkbenchAdoptions,
+			worktreePath => getProjectManagerPathComparisonKey(worktreePath, isLinux)
+		));
+		let changed = this.retainedWorkbenches.synchronizeGlobalRecords(
+			workbenches,
+			record => {
+				const worktreePath = URI.revive(record.folderUri).fsPath;
+				return !!this.hostedWorkspaces.getInstanceByPath(worktreePath) ||
+					pendingPathKeys.has(getProjectManagerPathComparisonKey(
+						worktreePath,
+						isLinux
+					));
+			}
+		);
+		if (this.pendingWorkbenchOverlays) {
+			for (const overlay of this.pendingWorkbenchOverlays) {
+				changed = !!this.retainedWorkbenches.update(
+					overlay.workbenchId,
+					{
+						desiredState: overlay.desiredState,
+						lastActiveAt: overlay.lastActiveAt,
+					}
+				) || changed;
+			}
+			this.pendingWorkbenchOverlays = undefined;
+		}
+		changed = this.reconcileAuthoritativeProjectCatalog(catalog) || changed;
+		if (changed) {
+			this.emitState();
+		}
+	}
+
+	private reconcileAuthoritativeProjectCatalog(
+		catalog: ProjectCatalogSnapshot
+	): boolean {
+		const liveProjectIds = new Set(catalog.projects.map(project => project.id));
+		const projectFolders = catalog.projects.flatMap(project => [{
+			projectId: project.id,
+			folderUri: URI.revive(project.rootUri),
+		}, ...(project.worktreeState === 'current'
+			? project.worktrees.map(worktree => ({
+				projectId: project.id,
+				folderUri: URI.file(worktree.path),
+			}))
+			: [])]);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			getProjectManagerPathComparisonKey(folder.folderUri.fsPath, isLinux),
+			folder.projectId,
+		]));
+		this.projectCatalogSnapshot = { liveProjectIds, projectIdsByPath };
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				getProjectManagerPathComparisonKey(instance.worktreePath, isLinux)
+			);
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId;
+				instance.projectId = claimedProjectId;
+				continue;
+			}
+			if (!isHostedWorkspaceRestorable(instance) || !instance.projectId ||
+				liveProjectIds.has(instance.projectId)) {
+				continue;
+			}
+			this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			this.pendingWorkbenchAdoptions.add(instance.worktreePath);
+			instance.projectId = undefined;
+			changed = true;
+		}
+		return this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		) || changed;
+	}
+
 	async navigateHostedShellToFolder(
 		binding: IHucodeHostedShellBinding,
 		request: IHucodeHostedNavigationRequest,
@@ -1691,9 +1846,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.hostedWorkspaces.removeInstance(instance);
 				this.releaseInstanceOwnership(instance);
 			}
-			this.retainedWorkbenches.update(workbenchId, {
-				desiredState: 'unloaded',
-			});
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const pendingAdoption =
+				this.pendingWorkbenchAdoptions.delete(worktreePath);
+			if (record.sessionOnly || pendingAdoption) {
+				this.retainedWorkbenches.dismiss(workbenchId);
+			} else {
+				this.retainedWorkbenches.update(workbenchId, {
+					desiredState: 'unloaded',
+				});
+			}
 			this.emitState();
 		});
 	}
@@ -1706,9 +1868,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		await this.deferStateEmission(async () => {
-			const instance = this.hostedWorkspaces.getInstanceByPath(
-				URI.revive(record.folderUri).fsPath
-			);
+			const worktreePath = URI.revive(record.folderUri).fsPath;
+			const instance = this.hostedWorkspaces.getInstanceByPath(worktreePath);
 			if (instance && instance.state !== 'dormant') {
 				if (!await this.closeInstance(instance)) {
 					return;
@@ -1718,6 +1879,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.releaseInstanceOwnership(instance);
 			}
 			this.retainedWorkbenches.dismiss(workbenchId);
+			this.pendingWorkbenchAdoptions.delete(worktreePath);
 			this.emitState();
 		});
 	}
@@ -1749,6 +1911,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		workbenchId: string,
 		label: string | undefined,
 	): void {
+		if (this.retainedWorkbenches.getById(workbenchId)?.sessionOnly) {
+			return;
+		}
 		if (this.retainedWorkbenches.setLabel(workbenchId, label)) {
 			this.emitState();
 		}
@@ -1807,6 +1972,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				'loaded',
 				instance.lastActiveAt
 			);
+			this.pendingWorkbenchAdoptions.add(instance.worktreePath);
 			instance.projectId = undefined;
 			changed = true;
 		}
@@ -2622,6 +2788,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		return true;
+	}
+
+	/** Returns project-removal paths awaiting durable global adoption. */
+	getPendingWorkbenchAdoptions(): readonly string[] {
+		return Array.from(this.pendingWorkbenchAdoptions);
+	}
+
+	/** Completes one pending adoption after the catalog authority accepts it. */
+	completePendingWorkbenchAdoption(worktreePath: string): void {
+		if (this.pendingWorkbenchAdoptions.delete(worktreePath)) {
+			this.emitState();
+		}
 	}
 
 	private reloadInstanceAfterInterruptedUnload(
