@@ -1890,7 +1890,7 @@ suite('ProjectSwitcherContribution', () => {
 	});
 
 	test('splices a retained workbench around its target ordering', async () => {
-		const reorderings: string[][] = [];
+		const moves: { id: string; beforeId: string | undefined }[] = [];
 		const source = retainedWorkbenchItem({
 			id: 'workbench:c',
 			handle: 'workbench:c',
@@ -1915,8 +1915,8 @@ suite('ProjectSwitcherContribution', () => {
 					retainedRecord('c', '/c', 2),
 				],
 			},
-			reorderRetainedWorkbenches: async ids => {
-				reorderings.push([...ids]);
+			moveRetainedWorkbench: async (id, beforeId) => {
+				moves.push({ id, beforeId });
 			},
 		});
 
@@ -1936,9 +1936,9 @@ suite('ProjectSwitcherContribution', () => {
 			new DragEvent('drop')
 		);
 
-		assert.deepStrictEqual(reorderings, [
-			['c', 'a', 'b'],
-			['a', 'c', 'b'],
+		assert.deepStrictEqual(moves, [
+			{ id: 'c', beforeId: 'a' },
+			{ id: 'c', beforeId: 'b' },
 		]);
 	});
 
@@ -3336,8 +3336,9 @@ function createDragAndDrop(options: {
 	readonly error?: (value: unknown) => void;
 	readonly projects?: readonly ProjectRecord[];
 	readonly windowState?: IHucodeHostedWorkspaceState;
-	readonly reorderRetainedWorkbenches?: (
-		ids: readonly string[]
+	readonly moveRetainedWorkbench?: (
+		id: string,
+		beforeId?: string
 	) => Promise<void>;
 } = {}): ProjectSwitcherDragAndDrop {
 	return new ProjectSwitcherDragAndDrop(
@@ -3355,8 +3356,8 @@ function createDragAndDrop(options: {
 		{
 			getState: async () =>
 				options.windowState ?? hostedState(),
-			reorderRetainedWorkbenches:
-				options.reorderRetainedWorkbenches ??
+			moveRetainedWorkbench:
+				options.moveRetainedWorkbench ??
 				(async () => undefined),
 		} as unknown as IHucodeShellControllerService
 	);

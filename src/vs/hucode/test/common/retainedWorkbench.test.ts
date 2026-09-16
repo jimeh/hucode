@@ -65,6 +65,11 @@ suite('RetainedWorkbench', () => {
 			[second.id, first.id]
 		);
 		assert.strictEqual(catalog.reorder([first.id]), false);
+		assert.strictEqual(catalog.move(first.id, second.id), true);
+		const moved = catalog.all.map(record => record.id);
+		assert.strictEqual(catalog.move(first.id, 'unknown'), false);
+		assert.strictEqual(catalog.move('unknown', second.id), false);
+		assert.deepStrictEqual(catalog.all.map(record => record.id), moved);
 	});
 
 	test('joins global metadata with independent session lifecycle', () => {

@@ -648,7 +648,6 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			readonly catalog: ProjectCatalogSnapshot;
 		}
 		| undefined;
-	private currentCatalog: ProjectCatalogSnapshot | undefined;
 	private nextProjectPublicationId = 0;
 	private nextWebGitRegistrationId = 0;
 	private disposed = false;
@@ -723,7 +722,6 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			{ metadataWatcher: new NodeGitMetadataWatcher(logService) },
 		);
 		this._register(this.service.onDidChangeCatalog(catalog => {
-			this.currentCatalog = catalog;
 			this.queueProjectsPublication(catalog);
 		}));
 		this._register(this.service.onDidChangeGitWorktreeTargets(change => {
@@ -1385,18 +1383,15 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		}
 	}
 
-	private writeProjects(
+	private async writeProjects(
 		res: HucodeWebProjectManagerResponse,
 		status: number,
-		projects: readonly ProjectRecord[],
-	): true {
-		const catalog = this.currentCatalog;
-		return this.writeJson(res, status, catalog ?? {
-			epoch: 'legacy',
-			revision: 0,
-			projects,
-			workbenches: [],
-		});
+		_projects: readonly ProjectRecord[],
+	): Promise<true> {
+		if (!this.service) {
+			throw new ProjectRequestUnavailableError();
+		}
+		return this.writeCatalog(res, status, await this.service.getCatalog());
 	}
 
 	private writeCatalog(
@@ -1404,7 +1399,6 @@ export class HucodeWebProjectManagerServer extends Disposable {
 		status: number,
 		catalog: ProjectCatalogSnapshot
 	): true {
-		this.currentCatalog = catalog;
 		return this.writeJson(res, status, catalog);
 	}
 

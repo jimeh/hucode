@@ -2767,6 +2767,47 @@ suite('ProjectManagerMainService', () => {
 		});
 	});
 
+	test('moves one workbench atomically and rejects an unknown target',
+		async () => {
+			const service = createService(
+				new TestStateService(),
+				new TestGitWorktreeService()
+			);
+			const first = await service.ensureWorkbench(URI.file('/scratch/first'));
+			const second = await service.ensureWorkbench(URI.file('/scratch/second'));
+			const third = await service.ensureWorkbench(URI.file('/scratch/third'));
+			assert.strictEqual(first.kind, 'workbench');
+			assert.strictEqual(second.kind, 'workbench');
+			assert.strictEqual(third.kind, 'workbench');
+			if (first.kind !== 'workbench' || second.kind !== 'workbench' ||
+				third.kind !== 'workbench') {
+				return;
+			}
+
+			await service.moveWorkbench(
+				third.workbench.id,
+				first.workbench.id
+			);
+			const movedIds = (await service.getCatalog()).workbenches.map(
+				workbench => workbench.id
+			);
+			await assert.rejects(
+				service.moveWorkbench(first.workbench.id, 'unknown'),
+				/Unknown workbench/
+			);
+
+			assert.deepStrictEqual(movedIds, [
+				third.workbench.id,
+				first.workbench.id,
+				second.workbench.id,
+			]);
+			assert.deepStrictEqual(
+				(await service.getCatalog()).workbenches.map(workbench => workbench.id),
+				movedIds
+			);
+		}
+	);
+
 	test('imports stable legacy IDs and remaps duplicate IDs', async () => {
 		const service = createService(
 			new TestStateService(),

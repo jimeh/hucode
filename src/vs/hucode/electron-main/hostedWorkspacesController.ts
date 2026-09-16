@@ -56,7 +56,7 @@ import { getSingleFolderWorkspaceIdentifier } from
 	'../../platform/workspaces/node/workspaces.js';
 import { getProjectManagerPathComparisonKey } from
 	'../../platform/projectManager/common/projectManagerState.js';
-import { ArbitraryWorkbenchRecord } from
+import { ProjectCatalogSnapshot } from
 	'../../platform/projectManager/common/projectManager.js';
 import {
 	HucodeHostedWorkbenchLifecycleState,
@@ -124,6 +124,7 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly shouldRestoreCandidate?: (
 		candidate: IHucodeHostedRestoreCandidate
 	) => boolean;
+	readonly beforeRestore?: () => Promise<void>;
 	readonly viewFactory?: IHostedWorkbenchViewFactory;
 	readonly ipc?: IHostedWorkspaceIpcMain;
 }
@@ -252,6 +253,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private stateEmissionPending = false;
 	private activationIntentGeneration = 0;
 	private projectCatalogSnapshot: IProjectCatalogSnapshot | undefined;
+	private authoritativeCatalog: ProjectCatalogSnapshot | undefined;
+	private catalogReconciledAfterRestore = false;
 	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
@@ -269,6 +272,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		new Map<string, ICrashRecoveryOperation>();
 	private readonly shouldRestoreCandidate:
 		(candidate: IHucodeHostedRestoreCandidate) => boolean;
+	private readonly beforeRestore: () => Promise<void>;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
 	private readonly ipc: IHostedWorkspaceIpcMain;
 
@@ -321,6 +325,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.now = options.now ?? Date.now;
 		this.shouldRestoreCandidate = options.shouldRestoreCandidate ??
 			(() => true);
+		this.beforeRestore = options.beforeRestore ?? (async () => { });
 		this.hostedWorkspaces = new HostedWorkspaceStateModel(
 			path => getProjectManagerPathComparisonKey(path, isLinux),
 			this.now
@@ -1020,12 +1025,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (this.restored) {
 			return;
 		}
+		await this.beforeRestore();
 
 		this.restorePromise ??= this.restoreResidentWorkspaces().finally(() => {
 			this.restorePromise = undefined;
 		});
 
 		await this.restorePromise;
+		if (!this.catalogReconciledAfterRestore && this.authoritativeCatalog) {
+			this.catalogReconciledAfterRestore = true;
+			if (this.reconcileAuthoritativeProjectCatalog(
+				this.authoritativeCatalog
+			)) {
+				this.emitState();
+			}
+		}
 	}
 
 	private async restoreResidentWorkspaces(): Promise<void> {
@@ -1570,11 +1584,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.emitState();
 	}
 
-	/** Applies global saved metadata while preserving this session's lifecycle. */
+	/** Applies the authoritative catalog while preserving session lifecycle. */
 	synchronizeGlobalWorkbenchCatalog(
-		workbenches: readonly ArbitraryWorkbenchRecord[]
+		catalog: ProjectCatalogSnapshot
 	): void {
 		this.globalCatalogHydrated = true;
+		this.authoritativeCatalog = catalog;
+		const workbenches = catalog.workbenches;
 		this.globalWorkbenchIds = new Set(workbenches.map(workbench => workbench.id));
 		const pendingPathKeys = new Set(Array.from(
 			this.pendingWorkbenchAdoptions,
@@ -1603,9 +1619,56 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 			this.pendingWorkbenchOverlays = undefined;
 		}
+		changed = this.reconcileAuthoritativeProjectCatalog(catalog) || changed;
 		if (changed) {
 			this.emitState();
 		}
+	}
+
+	private reconcileAuthoritativeProjectCatalog(
+		catalog: ProjectCatalogSnapshot
+	): boolean {
+		const liveProjectIds = new Set(catalog.projects.map(project => project.id));
+		const projectFolders = catalog.projects.flatMap(project => [{
+			projectId: project.id,
+			folderUri: URI.revive(project.rootUri),
+		}, ...(project.worktreeState === 'current'
+			? project.worktrees.map(worktree => ({
+				projectId: project.id,
+				folderUri: URI.file(worktree.path),
+			}))
+			: [])]);
+		const projectIdsByPath = new Map(projectFolders.map(folder => [
+			getProjectManagerPathComparisonKey(folder.folderUri.fsPath, isLinux),
+			folder.projectId,
+		]));
+		this.projectCatalogSnapshot = { liveProjectIds, projectIdsByPath };
+		let changed = false;
+		for (const instance of this.instancesById.values()) {
+			const claimedProjectId = projectIdsByPath.get(
+				getProjectManagerPathComparisonKey(instance.worktreePath, isLinux)
+			);
+			if (claimedProjectId) {
+				changed ||= instance.projectId !== claimedProjectId;
+				instance.projectId = claimedProjectId;
+				continue;
+			}
+			if (!isHostedWorkspaceRestorable(instance) || !instance.projectId ||
+				liveProjectIds.has(instance.projectId)) {
+				continue;
+			}
+			this.retainedWorkbenches.retain(
+				URI.file(instance.worktreePath),
+				'loaded',
+				instance.lastActiveAt
+			);
+			this.pendingWorkbenchAdoptions.add(instance.worktreePath);
+			instance.projectId = undefined;
+			changed = true;
+		}
+		return this.retainedWorkbenches.reconcileProjectPaths(
+			projectFolders.map(folder => folder.folderUri)
+		) || changed;
 	}
 
 	async navigateHostedShellToFolder(
@@ -1784,7 +1847,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.releaseInstanceOwnership(instance);
 			}
 			const worktreePath = URI.revive(record.folderUri).fsPath;
-			if (this.pendingWorkbenchAdoptions.delete(worktreePath)) {
+			const pendingAdoption =
+				this.pendingWorkbenchAdoptions.delete(worktreePath);
+			if (record.sessionOnly || pendingAdoption) {
 				this.retainedWorkbenches.dismiss(workbenchId);
 			} else {
 				this.retainedWorkbenches.update(workbenchId, {
@@ -1846,6 +1911,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		workbenchId: string,
 		label: string | undefined,
 	): void {
+		if (this.retainedWorkbenches.getById(workbenchId)?.sessionOnly) {
+			return;
+		}
 		if (this.retainedWorkbenches.setLabel(workbenchId, label)) {
 			this.emitState();
 		}

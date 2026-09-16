@@ -312,6 +312,43 @@ suite('HucodeWebProjectManagerServer', function () {
 		});
 	});
 
+	test('moves one global workbench through the relative move route',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const ids: string[] = [];
+			for (const name of ['first', 'second', 'third']) {
+				const response = await handle<{
+					readonly result: {
+						readonly kind: 'workbench';
+						readonly workbench: { readonly id: string };
+					};
+				}>(
+					server,
+					'POST',
+					`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/ensure`,
+					{ folderPath: join(serverDataPath, name) }
+				);
+				ids.push(response.body.result.workbench.id);
+			}
+
+			const moved = await handle<{
+				readonly epoch: string;
+				readonly workbenches: readonly { readonly id: string }[];
+			}>(
+				server,
+				'POST',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/${ids[2]}/move`,
+				{ beforeWorkbenchId: ids[0] }
+			);
+
+			assert.deepStrictEqual(
+				moved.body.workbenches.map(workbench => workbench.id),
+				[ids[2], ids[0], ids[1]]
+			);
+			assert.notStrictEqual(moved.body.epoch, 'legacy');
+		}
+	);
+
 	test('observes and clears ephemeral Git targets through the web API',
 		async () => {
 			const server = createServer(serverDataPath, disposables, servers);

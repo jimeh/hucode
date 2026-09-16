@@ -8,6 +8,7 @@ import { HucodeOnboardingTarget, HucodeOnboardingOpenRequest, HucodeOnboardingOp
 import { OnboardingMain } from './onboarding/onboardingMain.js';
 import { IStorageMainService } from '../../platform/storage/electron-main/storageMainService.js';
 import { VSBuffer } from '../../base/common/buffer.js';
+import { DeferredPromise } from '../../base/common/async.js';
 import { CancellationToken } from '../../base/common/cancellation.js';
 import { Emitter, Event } from '../../base/common/event.js';
 import { isEqual } from '../../base/common/extpath.js';
@@ -187,6 +188,7 @@ export class HucodeShellMainService extends Disposable
 	private readonly onboarding: OnboardingMain;
 	private readonly editorMigrationWriterLeaseAuthority = new EditorMigrationWriterLeaseAuthority();
 	private globalCatalog: ProjectCatalogSnapshot | undefined;
+	private readonly globalCatalogReady = new DeferredPromise<void>();
 	private readonly pendingAdoptionRetries = new Map<string, {
 		attempt: number;
 		running?: boolean;
@@ -235,6 +237,7 @@ export class HucodeShellMainService extends Disposable
 		));
 		this._register(this.projectManagerMainService.onDidChangeCatalog(catalog => {
 			this.globalCatalog = catalog;
+			this.globalCatalogReady.complete();
 			this.synchronizeControllerCatalogs(catalog);
 			this.retryPendingWorkbenchAdoptions();
 		}));
@@ -248,6 +251,7 @@ export class HucodeShellMainService extends Disposable
 		}));
 		void this.loadAndMigrateDesktopWorkbenchCatalog().then(catalog => {
 			this.globalCatalog = catalog;
+			this.globalCatalogReady.complete();
 			this.synchronizeControllerCatalogs(catalog);
 		}, error => this.logService.warn(
 			`[hucode] Global workbench catalog is unavailable: ${String(error)}`
@@ -711,8 +715,8 @@ export class HucodeShellMainService extends Disposable
 				this.unloadRetainedWorkbench(windowId, workbenchId),
 			dismissRetainedWorkbench: workbenchId =>
 				this.dismissRetainedWorkbench(windowId, workbenchId),
-			reorderRetainedWorkbenches: ids =>
-				this.reorderRetainedWorkbenches(windowId, ids),
+			moveRetainedWorkbench: (id, beforeId) =>
+				this.moveRetainedWorkbench(windowId, id, beforeId),
 			setRetainedWorkbenchLabel: (workbenchId, label) =>
 				this.setRetainedWorkbenchLabel(windowId, workbenchId, label),
 			reconcileRetainedWorkbenchesWithCompleteProjectCatalog: projects =>
@@ -852,6 +856,9 @@ export class HucodeShellMainService extends Disposable
 	async getWindowState(windowId: number): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
 		await controller.ensureRestored();
+		for (const worktreePath of controller.getPendingWorkbenchAdoptions()) {
+			void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
+		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1199,9 +1206,10 @@ export class HucodeShellMainService extends Disposable
 			await this.routeWorkspaceOpen(windowId, ensured.worktree.path);
 			return this.withDesktopOwnershipState(windowId, controller.getState());
 		}
-		controller.synchronizeGlobalWorkbenchCatalog(
-			(await this.projectManagerMainService.getCatalog()).workbenches
-		);
+		const catalog = await this.projectManagerMainService.getCatalog();
+		this.globalCatalog = catalog;
+		this.globalCatalogReady.complete();
+		controller.synchronizeGlobalWorkbenchCatalog(catalog);
 		await this.routeWorkspaceOpen(windowId, ensured.workbench.folderUri.fsPath);
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
@@ -1231,15 +1239,20 @@ export class HucodeShellMainService extends Disposable
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
-	async reorderRetainedWorkbenches(
+	async moveRetainedWorkbench(
 		windowId: number,
-		orderedWorkbenchIds: readonly string[]
+		workbenchId: string,
+		beforeWorkbenchId?: string
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
-		for (let index = orderedWorkbenchIds.length - 1; index >= 0; index--) {
+		const globalIds = new Set(this.globalCatalog?.workbenches.map(
+			workbench => workbench.id
+		));
+		if (globalIds.has(workbenchId) &&
+			(beforeWorkbenchId === undefined || globalIds.has(beforeWorkbenchId))) {
 			await this.projectManagerMainService.moveWorkbench(
-				orderedWorkbenchIds[index]!,
-				orderedWorkbenchIds[index + 1]
+				workbenchId,
+				beforeWorkbenchId
 			);
 		}
 		return this.withDesktopOwnershipState(windowId, controller.getState());
@@ -1751,12 +1764,11 @@ export class HucodeShellMainService extends Disposable
 						'active',
 					shouldRestoreCandidate: candidate =>
 						this.isRestoreCandidateWinner(windowId, candidate),
+					beforeRestore: () => this.globalCatalogReady.p,
 				}
 			);
 		if (this.globalCatalog) {
-			controller.synchronizeGlobalWorkbenchCatalog(
-				this.globalCatalog.workbenches
-			);
+			controller.synchronizeGlobalWorkbenchCatalog(this.globalCatalog);
 		}
 		for (const worktreePath of controller.getPendingWorkbenchAdoptions()) {
 			void this.attemptPendingWorkbenchAdoption(windowId, worktreePath);
@@ -1809,6 +1821,7 @@ export class HucodeShellMainService extends Disposable
 			this.pendingAdoptionRetries.delete(key);
 			const catalog = await this.projectManagerMainService.getCatalog();
 			this.globalCatalog = catalog;
+			this.globalCatalogReady.complete();
 			this.synchronizeControllerCatalogs(catalog);
 		} catch (error) {
 			retry.running = false;
@@ -1848,7 +1861,7 @@ export class HucodeShellMainService extends Disposable
 	private synchronizeControllerCatalogs(catalog: ProjectCatalogSnapshot): void {
 		for (const window of this.windowsMainService.getWindows()) {
 			this.controllers.get(window.id)?.synchronizeGlobalWorkbenchCatalog(
-				catalog.workbenches
+				catalog
 			);
 		}
 	}

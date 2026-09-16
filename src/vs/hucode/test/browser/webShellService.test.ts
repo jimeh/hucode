@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
-import { Event } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { getServerProductSegment } from '../../../base/common/network.js';
 import { basename } from '../../../base/common/path.js';
 import { URI } from '../../../base/common/uri.js';
@@ -27,7 +27,7 @@ import {
 	FileOperationResult,
 } from '../../../platform/files/common/files.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
-import { ProjectRecord } from
+import { ProjectCatalogSnapshot, ProjectRecord } from
 	'../../../platform/projectManager/common/projectManager.js';
 import { InMemoryStorageService } from
 	'../../../platform/storage/common/storage.js';
@@ -159,6 +159,139 @@ suite('WebHucodeShellService', () => {
 			const state = await service.getWindowState(browser.windowId);
 			assert.strictEqual(state.workbenchCatalogHydrated, false);
 		});
+
+	test('preserves legacy persistence when SSE arrives before import fails',
+		async () => {
+			const legacyState: IWebHucodeShellPersistedState = {
+				retainedWorkbenches: [{
+					id: 'legacy',
+					folderUri: URI.file('/tmp/legacy-retry').toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+					lastActiveAt: 17,
+				}],
+				residentWorkspaces: [],
+				activeWorktreePath: '/tmp/legacy-retry',
+			};
+			const persistence = new FakePersistence(structuredClone(legacyState));
+			const catalogs = new Emitter<ProjectCatalogSnapshot>();
+			disposables.add(catalogs);
+			let importCalls = 0;
+			const emptyCatalog: ProjectCatalogSnapshot = {
+				epoch: 'race',
+				revision: 1,
+				projects: [],
+				workbenches: [],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => [],
+				getCatalog: async () => emptyCatalog,
+				importWorkbenches: async () => {
+					importCalls++;
+					if (importCalls === 1) {
+						catalogs.fire(emptyCatalog);
+					}
+					throw new Error('import unavailable');
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'none',
+				undefined,
+				undefined,
+				undefined,
+				manager
+			);
+
+			const state = await service.getWindowState(browser.windowId);
+			await waitFor(() => importCalls === 2, 'expected catalog retry');
+
+			assert.strictEqual(state.workbenchCatalogHydrated, false);
+			assert.strictEqual(persistence.saveCalls, 0);
+			assert.deepStrictEqual(persistence.state, legacyState);
+		}
+	);
+
+	test('restores each workspace once when catalog recovery follows startup',
+		async () => {
+			const legacyPath = '/tmp/recovered-legacy';
+			const residentPath = '/tmp/recovered-resident';
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [{
+					id: 'legacy',
+					folderUri: URI.file(legacyPath).toJSON(),
+					desiredState: 'loaded',
+					order: 0,
+				}],
+				residentWorkspaces: [{
+					projectId: 'resident-project',
+					worktreePath: residentPath,
+				}],
+			});
+			const catalogs = new Emitter<ProjectCatalogSnapshot>();
+			disposables.add(catalogs);
+			let recover = false;
+			const recoveredCatalog: ProjectCatalogSnapshot = {
+				epoch: 'recovery',
+				revision: 1,
+				projects: [],
+				workbenches: [{
+					id: 'global-legacy',
+					folderUri: URI.file(legacyPath),
+					order: 0,
+				}],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => [],
+				getCatalog: async () => recoveredCatalog,
+				importWorkbenches: async entries => {
+					if (!recover) {
+						throw new Error('startup unavailable');
+					}
+					return {
+						catalog: recoveredCatalog,
+						outcomes: entries.map(entry => ({
+							legacyId: entry.legacyId,
+							kind: 'workbench' as const,
+							workbenchId: 'global-legacy',
+						})),
+					};
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				persistence,
+				'all',
+				{ exists: async () => true },
+				undefined,
+				undefined,
+				manager
+			);
+			const initial = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				initial.instances.map(instance => instance.worktreePath),
+				[residentPath]
+			);
+
+			recover = true;
+			catalogs.fire(recoveredCatalog);
+			await waitFor(
+				() => persistence.state?.retainedWorkbenches[0]?.id ===
+					'global-legacy',
+				'expected migration recovery'
+			);
+			const recovered = await service.getWindowState(browser.windowId);
+			assert.deepStrictEqual(
+				recovered.instances.map(instance => instance.worktreePath).toSorted(),
+				[legacyPath, residentPath].toSorted()
+			);
+		}
+	);
 
 	test('stats server folders through the remote file-system resource',
 		async () => {
@@ -4969,9 +5102,10 @@ suite('WebHucodeShellService', () => {
 		const ids = opened.retainedWorkbenches?.map(record => record.id);
 		assert.ok(ids);
 
-		await service.reorderRetainedWorkbenches(
+		await service.moveRetainedWorkbench(
 			browser.windowId,
-			[ids[1], ids[0]]
+			ids[1],
+			ids[0]
 		);
 
 		assert.deepStrictEqual(
@@ -4982,6 +5116,63 @@ suite('WebHucodeShellService', () => {
 			[[ids[1], 0], [ids[0], 1]]
 		);
 	});
+
+	test('sends one global move and ignores unknown session-only IDs',
+		async () => {
+			const moves: { id: string; beforeId: string | undefined }[] = [];
+			const catalog: ProjectCatalogSnapshot = {
+				epoch: 'move',
+				revision: 1,
+				projects: [],
+				workbenches: [{
+					id: 'first',
+					folderUri: URI.file('/tmp/first'),
+					order: 0,
+				}, {
+					id: 'second',
+					folderUri: URI.file('/tmp/second'),
+					order: 1,
+				}],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				getProjects: async () => [],
+				getCatalog: async () => catalog,
+				importWorkbenches: async () => ({ catalog, outcomes: [] }),
+				moveWorkbench: async (id, beforeId) => {
+					moves.push({ id, beforeId });
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'none',
+				undefined,
+				undefined,
+				undefined,
+				manager
+			);
+			await service.getWindowState(browser.windowId);
+
+			await service.moveRetainedWorkbench(
+				browser.windowId,
+				'second',
+				'first'
+			);
+			await service.moveRetainedWorkbench(
+				browser.windowId,
+				'session-only',
+				'first'
+			);
+			await service.moveRetainedWorkbench(
+				browser.windowId,
+				'first',
+				'session-only'
+			);
+
+			assert.deepStrictEqual(moves, [{ id: 'second', beforeId: 'first' }]);
+		}
+	);
 
 	test('persists retained workbench label changes', async () => {
 		const persistence = new FakePersistence();
@@ -6195,12 +6386,16 @@ suite('WebHucodeShellService', () => {
 			const persistence = new FakePersistence();
 			let ensureCalls = 0;
 			let workbenchId: string | undefined;
+			const project = navigationProjectRecord(
+				'removed-project',
+				'/tmp/retry-orphan'
+			);
 			const manager: IWebHucodeHostedNavigationProjectManager = {
-				getProjects: async () => [],
+				getProjects: async () => [project],
 				getCatalog: async () => ({
 					epoch: 'test',
 					revision: workbenchId ? 1 : 0,
-					projects: [],
+					projects: workbenchId ? [] : [project],
 					workbenches: workbenchId ? [{
 						id: workbenchId,
 						folderUri: URI.file('/tmp/retry-orphan'),
@@ -6262,6 +6457,61 @@ suite('WebHucodeShellService', () => {
 			);
 			const state = await service.getWindowState(browser.windowId);
 			assert.strictEqual(state.retainedWorkbenches?.[0].id, 'global-orphan');
+		}
+	);
+
+	test('adopts project orphans from an authoritative catalog event',
+		async () => {
+			const worktreePath = '/tmp/catalog-event-orphan';
+			const project = navigationProjectRecord('removed', worktreePath);
+			const catalogs = new Emitter<ProjectCatalogSnapshot>();
+			disposables.add(catalogs);
+			let ensureCalls = 0;
+			let catalog: ProjectCatalogSnapshot = {
+				epoch: 'orphan',
+				revision: 0,
+				projects: [project],
+				workbenches: [],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => catalog.projects,
+				getCatalog: async () => catalog,
+				importWorkbenches: async () => ({ catalog, outcomes: [] }),
+				ensureWorkbench: async uri => {
+					ensureCalls++;
+					return {
+						kind: 'workbench',
+						created: true,
+						workbench: {
+							id: 'adopted',
+							folderUri: uri,
+							order: 0,
+						},
+					};
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(),
+				undefined,
+				'none',
+				undefined,
+				undefined,
+				undefined,
+				manager
+			);
+			await service.getWindowState(browser.windowId);
+			await service.openWorkspace(browser.windowId, worktreePath, project.id);
+
+			catalog = { ...catalog, revision: 1, projects: [] };
+			catalogs.fire(catalog);
+			await waitFor(() => ensureCalls === 1, 'expected orphan adoption');
+
+			assert.strictEqual(
+				(await service.getWindowState(browser.windowId)).instances[0].projectId,
+				undefined
+			);
 		}
 	);
 
@@ -6351,6 +6601,97 @@ suite('WebHucodeShellService', () => {
 				lastActiveAt: 73,
 				sessionOnly: false,
 			}]);
+			assert.deepStrictEqual(
+				Array.from((service as unknown as {
+					instancesById: Map<string, { retainedWorkbenchId?: string }>;
+				}).instancesById.values(), instance => instance.retainedWorkbenchId),
+				['global-reloaded']
+			);
+		}
+	);
+
+	test('does not retry adoption after its observed workbench is dismissed',
+		async () => {
+			const worktreePath = '/tmp/dismissed-pending-adoption';
+			const persistence = new FakePersistence({
+				retainedWorkbenches: [],
+				pendingWorkbenchAdoptions: [{
+					worktreePath,
+					desiredState: 'loaded',
+					lastActiveAt: 101,
+				}],
+				residentWorkspaces: [],
+			});
+			const browser = new ManualTimeoutBrowserAdapter();
+			const catalogs = new Emitter<ProjectCatalogSnapshot>();
+			disposables.add(catalogs);
+			const ensureStarted = new DeferredPromise<void>();
+			const commitEnsure = new DeferredPromise<void>();
+			const dismissWorkbench = new DeferredPromise<void>();
+			let ensureCalls = 0;
+			const emptyCatalog: ProjectCatalogSnapshot = {
+				epoch: 'dismissal',
+				revision: 0,
+				projects: [],
+				workbenches: [],
+			};
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => [],
+				getCatalog: async () => emptyCatalog,
+				importWorkbenches: async () => ({
+					catalog: emptyCatalog,
+					outcomes: [],
+				}),
+				ensureWorkbench: async () => {
+					ensureCalls++;
+					ensureStarted.complete();
+					await commitEnsure.p;
+					catalogs.fire({
+						...emptyCatalog,
+						revision: 1,
+						workbenches: [{
+							id: 'global-dismissed',
+							folderUri: URI.file(worktreePath),
+							order: 0,
+						}],
+					});
+					await dismissWorkbench.p;
+					catalogs.fire({ ...emptyCatalog, revision: 2 });
+					throw new Error('ensure response lost');
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service } = createService(
+				browser,
+				persistence,
+				'none',
+				undefined,
+				undefined,
+				undefined,
+				manager
+			);
+			await ensureStarted.p;
+
+			commitEnsure.complete();
+			await waitFor(
+				() => persistence.state?.pendingWorkbenchAdoptions?.[0]
+					.observedWorkbenchId === 'global-dismissed',
+				'expected observed adoption to persist'
+			);
+			dismissWorkbench.complete();
+			await waitFor(
+				() => !persistence.state?.pendingWorkbenchAdoptions?.length,
+				'expected dismissal to clear pending adoption'
+			);
+
+			browser.expireTimeouts(1000);
+			await Promise.resolve();
+			assert.strictEqual(ensureCalls, 1);
+			assert.deepStrictEqual(
+				(await service.getWindowState(browser.windowId)).retainedWorkbenches,
+				[]
+			);
 		}
 	);
 

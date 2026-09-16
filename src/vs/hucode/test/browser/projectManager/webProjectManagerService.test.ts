@@ -58,6 +58,30 @@ suite('WebProjectManagerService', () => {
 			.rootUri.fsPath, '/repo');
 	});
 
+	test('posts one relative workbench move', async () => {
+		const calls: { input: RequestInfo | URL; init?: RequestInit }[] = [];
+		const service = disposables.add(createService(async (input, init) => {
+			calls.push({ input, init });
+			return new Response(JSON.stringify({
+				epoch: 'move',
+				revision: 1,
+				projects: [],
+				workbenches: [],
+			}));
+		}));
+
+		await service.moveWorkbench('source/id', 'target/id');
+
+		assert.strictEqual(
+			calls[0].input.toString(),
+			'/api/projects/workbenches/source%2Fid/move'
+		);
+		assert.strictEqual(calls[0].init?.method, 'POST');
+		assert.deepStrictEqual(JSON.parse(calls[0].init?.body as string), {
+			beforeWorkbenchId: 'target/id',
+		});
+	});
+
 	test('preserves worktree freshness through JSON responses', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({

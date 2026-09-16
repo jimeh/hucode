@@ -132,7 +132,6 @@ export function applyHucodeOmniWorkbenchMigrationToWindowState(
 			});
 		}
 	}
-	windowState.omniWorkbenchOverlays = Array.from(overlays.values());
 	const residents = (
 		windowState.omniResidentWorkspaces ?? []
 	).flatMap(resident => {
@@ -146,11 +145,23 @@ export function applyHucodeOmniWorkbenchMigrationToWindowState(
 		if (projectId) {
 			return [{ ...resident, projectId }];
 		}
-		return findMigrationPathValue(
+		const workbenchId = findMigrationPathValue(
 			result.workbenchIdsByPath,
 			resident.worktreePath
-		) ? [] : [resident];
+		);
+		if (workbenchId) {
+			overlays.set(workbenchId, {
+				workbenchId,
+				desiredState: 'loaded',
+				...(resident.lastActiveAt === undefined
+					? {}
+					: { lastActiveAt: resident.lastActiveAt }),
+			});
+			return [];
+		}
+		return [resident];
 	});
+	windowState.omniWorkbenchOverlays = Array.from(overlays.values());
 	for (const retained of windowState.omniRetainedWorkbenches ?? []) {
 		if (retained.desiredState !== 'loaded') {
 			continue;

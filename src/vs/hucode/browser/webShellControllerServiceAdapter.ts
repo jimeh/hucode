@@ -67,8 +67,8 @@ export class WebShellControllerServiceAdapter
 	dismissRetainedWorkbench(id: string) {
 		return this.shell.dismissRetainedWorkbench(this.windowId, id);
 	}
-	reorderRetainedWorkbenches(ids: readonly string[]) {
-		return this.shell.reorderRetainedWorkbenches(this.windowId, ids);
+	moveRetainedWorkbench(id: string, beforeId?: string) {
+		return this.shell.moveRetainedWorkbench(this.windowId, id, beforeId);
 	}
 	setRetainedWorkbenchLabel(id: string, label: string | undefined) {
 		return this.shell.setRetainedWorkbenchLabel(this.windowId, id, label);

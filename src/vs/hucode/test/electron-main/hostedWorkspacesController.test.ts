@@ -452,6 +452,7 @@ suite('ResidentHostedWorkspacesController', () => {
 	function createController(options: {
 		readonly restoreEntries?: INativeWindowConfiguration['omniResidentWorkspaces'];
 		readonly retainedWorkbenches?: INativeWindowConfiguration['omniRetainedWorkbenches'];
+		readonly workbenchOverlays?: INativeWindowConfiguration['omniWorkbenchOverlays'];
 		readonly pendingWorkbenchAdoptions?: INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 		readonly activeWorktreePath?: string;
 		readonly ids?: string[];
@@ -473,6 +474,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		HucodeDesktopWorkbenchOwnershipCoordinator;
 		readonly shouldRestoreCandidate?: IResidentHostedWorkspacesControllerOptions[
 		'shouldRestoreCandidate'];
+		readonly beforeRestore?: () => Promise<void>;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -553,6 +555,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				omniActiveWorktreePath: options.activeWorktreePath,
 				omniResidentWorkspaces: options.restoreEntries,
 				omniRetainedWorkbenches: options.retainedWorkbenches,
+				omniWorkbenchOverlays: options.workbenchOverlays,
 				omniPendingWorkbenchAdoptions:
 					options.pendingWorkbenchAdoptions,
 			} as unknown as INativeWindowConfiguration,
@@ -599,6 +602,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
 				shouldRestoreCandidate: options.shouldRestoreCandidate,
+				beforeRestore: options.beforeRestore,
 				viewFactory,
 				ipc: ipcMain,
 			}
@@ -624,6 +628,44 @@ suite('ResidentHostedWorkspacesController', () => {
 			window,
 		};
 	}
+
+	test('waits for global catalog hydration before restoring overlays',
+		async () => {
+			const worktreePath = createWorktree('catalog-gated-overlay');
+			const catalogReady = new DeferredPromise<void>();
+			const { controller } = createController({
+				retainedWorkbenches: [],
+				workbenchOverlays: [{
+					workbenchId: 'global-overlay',
+					desiredState: 'loaded',
+					lastActiveAt: 42,
+				}],
+				beforeRestore: () => catalogReady.p,
+				restorePolicy: 'all',
+			});
+			const restoring = controller.ensureRestored();
+			await Promise.resolve();
+			assert.deepStrictEqual(controller.getState().instances, []);
+
+			controller.synchronizeGlobalWorkbenchCatalog({
+				epoch: 'test',
+				revision: 1,
+				projects: [],
+				workbenches: [{
+					id: 'global-overlay',
+					folderUri: URI.file(worktreePath),
+					order: 0,
+				}],
+			});
+			catalogReady.complete();
+			await restoring;
+
+			assert.deepStrictEqual(
+				controller.getState().instances.map(instance => instance.worktreePath),
+				[worktreePath]
+			);
+		}
+	);
 
 	test('onboarding association runs under the owner reservation before profile configuration', async () => {
 		const worktreePath = createWorktree('onboarding-profile');
@@ -2155,7 +2197,12 @@ suite('ResidentHostedWorkspacesController', () => {
 			}],
 		});
 
-		controller.synchronizeGlobalWorkbenchCatalog([]);
+		controller.synchronizeGlobalWorkbenchCatalog({
+			epoch: 'test',
+			revision: 0,
+			projects: [],
+			workbenches: [],
+		});
 		const pending = controller.getState().retainedWorkbenches?.[0];
 		assert.ok(pending);
 		assert.deepStrictEqual({
@@ -2169,11 +2216,16 @@ suite('ResidentHostedWorkspacesController', () => {
 		});
 
 		controller.completePendingWorkbenchAdoption(worktreePath);
-		controller.synchronizeGlobalWorkbenchCatalog([{
-			id: 'global-pending',
-			folderUri: URI.file(worktreePath),
-			order: 0,
-		}]);
+		controller.synchronizeGlobalWorkbenchCatalog({
+			epoch: 'test',
+			revision: 1,
+			projects: [],
+			workbenches: [{
+				id: 'global-pending',
+				folderUri: URI.file(worktreePath),
+				order: 0,
+			}],
+		});
 		const adopted = controller.getState().retainedWorkbenches?.[0];
 		assert.ok(adopted);
 		assert.deepStrictEqual({
@@ -2190,6 +2242,48 @@ suite('ResidentHostedWorkspacesController', () => {
 			pending: [],
 		});
 	});
+
+	test('adopts project orphans from authoritative catalog synchronization',
+		async () => {
+			const worktreePath = createWorktree('catalog-orphan');
+			const { controller } = createController({
+				restoreEntries: [{
+					projectId: 'removed-project',
+					worktreePath,
+					state: 'loaded',
+				}],
+				restorePolicy: 'none',
+			});
+			controller.synchronizeGlobalWorkbenchCatalog({
+				epoch: 'test',
+				revision: 0,
+				projects: [{
+					id: 'removed-project',
+					label: 'removed',
+					rootUri: URI.file(worktreePath),
+					pinned: false,
+					order: 0,
+					worktreeState: 'current',
+					worktrees: [],
+				}],
+				workbenches: [],
+			});
+			await controller.ensureRestored();
+
+			controller.synchronizeGlobalWorkbenchCatalog({
+				epoch: 'test',
+				revision: 1,
+				projects: [],
+				workbenches: [],
+			});
+
+			assert.strictEqual(controller.getState().instances[0].projectId, undefined);
+			assert.deepStrictEqual(
+				controller.getPendingWorkbenchAdoptions(),
+				[worktreePath]
+			);
+		}
+	);
 
 	test('adopts a pre-fix project snapshot during initial reconciliation',
 		async () => {
