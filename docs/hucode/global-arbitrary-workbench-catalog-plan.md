@@ -248,6 +248,7 @@ export interface StoredArbitraryWorkbenchRecord {
 }
 
 export interface ProjectCatalogSnapshot {
+	readonly epoch: string;
 	readonly revision: number;
 	readonly projects: readonly ProjectRecord[];
 	readonly workbenches: readonly ArbitraryWorkbenchRecord[];
@@ -305,6 +306,12 @@ export interface OmniWorkbenchSessionEntry {
 	readonly desiredState: 'loaded' | 'unloaded';
 	readonly lastActiveAt?: number;
 }
+
+export interface OmniPendingWorkbenchAdoption {
+	readonly folderUri: URI;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly lastActiveAt?: number;
+}
 ```
 
 Missing-folder status is derived during folder preflight and retained only in
@@ -320,8 +327,10 @@ preserving the current missing-folder safety before renderer creation.
 Desktop window state and serve-web session storage continue to persist:
 
 - active worktree path;
-- resident project workspace restore entries; and
-- arbitrary-workbench session overlays.
+- resident project workspace restore entries;
+- arbitrary-workbench session overlays;
+- and pending project-removal adoptions until they become globally saved, become
+  project-owned again, or unload locally.
 
 They no longer persist label, order, or the authoritative folder list.
 
@@ -387,10 +396,19 @@ export interface LegacyWorkbenchImportRecord {
 
 export interface ImportWorkbenchesResult {
 	readonly catalog: ProjectCatalogSnapshot;
-	readonly idMappings: readonly {
-		readonly legacyId: string;
-		readonly workbenchId: string;
-	}[];
+	readonly outcomes: readonly (
+		| {
+			readonly legacyId: string;
+			readonly kind: 'workbench';
+			readonly workbenchId: string;
+		}
+		| {
+			readonly legacyId: string;
+			readonly kind: 'projectWorktree';
+			readonly projectId: string;
+			readonly worktreePath: string;
+		}
+	)[];
 }
 ```
 
@@ -468,14 +486,14 @@ Extend the existing response and event payloads to carry the combined catalog.
 Do not create a second endpoint family, state file, event stream, or browser
 storage authority.
 
-Every catalog snapshot carries a monotonically increasing service revision.
-HTTP responses and SSE events use the same revision sequence, and
-`WebProjectManagerClient` ignores a response or event older than the newest
-revision it has already applied. This prevents an initial GET that started
-before a mutation from overwriting a newer SSE snapshot when it finishes
-later. A server restart establishes a new connection generation; current
-hosted-shell protocol policy requires the page reload that installs that new
-generation.
+Every catalog snapshot carries a service-startup epoch and a monotonically
+increasing revision within that epoch. HTTP responses and SSE events use the
+same pair. `WebProjectManagerClient` resets its revision high-water mark when a
+new epoch arrives and otherwise ignores a response or event older than the
+newest revision it has already applied. This prevents an initial GET that
+started before a mutation from overwriting a newer SSE snapshot, while still
+allowing an automatically reconnected EventSource to accept the initial
+snapshot after a same-version server restart resets the revision sequence.
 
 Dispatch reserved `workbenches` routes before the existing handler interprets
 the first URL segment as a project ID.
@@ -592,11 +610,17 @@ live paths. This avoids a project-manager-to-shell dependency and keeps the
 catalog service independent of renderer ownership.
 
 Until durable ensure succeeds, the shell keeps each path as a pending adoption
-and a session-only row. It retries after catalog reconnection or the next valid
-catalog snapshot, and clears the pending adoption only after success or local
-unload. A workbench removed by global dismissal is marked separately and never
-enters this retry path, so reconnection cannot resurrect an intentional
-dismissal.
+and a session-only row. Pending adoption has its own cancellable bounded-backoff
+retry loop; reconnection or a valid catalog snapshot may trigger an immediate
+attempt but is not required for progress. The shell clears the pending entry
+after `ensureWorkbench()` returns either a saved workbench or project-worktree
+outcome, or after local unload.
+
+Persist pending adoption as session state, including the folder path and
+desired state, so a reload reconstructs the retry without depending on a live
+renderer or a new catalog event. A workbench removed by global dismissal is
+marked separately and never enters or persists through this retry path, so
+reconnection and reload cannot resurrect an intentional dismissal.
 
 Instances that are not live or restorable do not create new saved entries only
 because a project was removed.
@@ -664,12 +688,13 @@ During web shell initialization:
 
 1. Parse the legacy payload.
 2. Send its validated catalog entries through `importWorkbenches()` on the
-   server-backed project manager and retain the returned legacy-to-global ID
-   mappings.
+   server-backed project manager and retain the returned per-entry outcomes.
 3. Await the resulting catalog snapshot before arbitrary-workbench restore
    scheduling; resident project restore proceeds independently.
-4. Rewrite session storage to the new version containing only remapped
-   overlays, resident project workspaces, and the active path.
+4. Rewrite session storage to the new version. Remap workbench outcomes to
+   their global IDs. For a project-worktree outcome, remove the arbitrary
+   overlay and, when it was loaded, reclassify the live instance and resident
+   restore entry to the returned project and worktree.
 5. Mark the local payload version so the tab does not import again.
 
 If import or the catalog request fails, keep the legacy payload byte-for-byte,
@@ -679,9 +704,12 @@ successful attempt performs the rewrite.
 The import runs in the serialized durable mutation queue. Entries for new paths
 append after the current global order in legacy order and preserve their label.
 For a path already in the global catalog, the existing global ID, label, and
-order win; the result maps the legacy ID to that global ID. Multiple tabs may
-therefore import the same folder concurrently without duplicating it or letting
-a later stale tab overwrite metadata already accepted from an earlier import.
+order win; the result maps the legacy ID to that global workbench. If the path
+is a stored project root or a worktree from current discovery, the result
+returns a project-worktree outcome instead of creating a duplicate arbitrary
+record. Multiple tabs may therefore import the same folder concurrently
+without duplicating it or letting a later stale tab overwrite metadata already
+accepted from an earlier import.
 
 An already-open tab that does not reload cannot participate in the new
 protocol. A tab holding old session storage may reintroduce a previously
@@ -779,15 +807,17 @@ Verification for this phase:
 - window-state serialization tests proving catalog metadata is no longer
   copied into each window;
 - multi-window tests for add, rename, reorder, unload independence, promotion,
-  dismissal, orphan-adoption failure/retry, and unload cancellation of pending
-  adoption; and
+  dismissal, orphan-adoption failure with no catalog event, bounded-backoff
+  retry success, reload between failure and success, unload cancellation of
+  pending adoption, and dismissal remaining non-retryable; and
 - focused desktop runtime validation with two Omni windows.
 
 ### Phase 4: Extend serve-web transport and migrate tabs
 
 - Extend HTTP responses and SSE catalog events to include workbenches.
 - Add workbench mutation routes to the existing same-origin API.
-- Add the idempotent bulk-import route and legacy-to-global ID mappings.
+- Add the idempotent bulk-import route and per-entry workbench or
+  project-worktree outcomes.
 - Dispatch reserved workbench routes before project-ID route parsing.
 - Run all durable workbench mutations through the existing serialized mutation
   admission and state-write generation tracking.
@@ -799,8 +829,9 @@ Verification for this phase:
   catalog unhydrated on failure, and retry catalog load or legacy import
   without overwriting the old payload.
 - Preserve event reconnect behavior and Git-target re-registration.
-- Apply catalog snapshots by revision so late HTTP responses cannot replace a
-  newer SSE event.
+- Apply catalog snapshots by epoch and revision so late HTTP responses cannot
+  replace a newer SSE event and a server restart can establish a fresh
+  revision sequence.
 
 Verification for this phase:
 
@@ -808,9 +839,11 @@ Verification for this phase:
   bulk-import conflict semantics, reserved-route dispatch, disconnect
   behavior, write failure, retry, and SSE publication;
 - web client tests for catalog revival, both HTTP/SSE delivery orders, stale
-  revision rejection, and reconnect updates;
+  revision rejection, a same-version server restart with a lower revision, and
+  reconnect updates;
 - two-client tests proving shared catalog and independent loaded state;
-- duplicate legacy-tab import tests; and
+- duplicate legacy-tab import tests, including a path that has become a
+  project worktree; and
 - serve-web browser validation using two Omni tabs and one page reload.
 
 ### Phase 5: Adapt sidebar and command flows
@@ -894,13 +927,15 @@ The implementation is complete when all of the following are true:
   unavailable, shows Workbenches as unhydrated, and restores eligible arbitrary
   workbenches after the first valid snapshot.
 - A late serve-web HTTP response cannot replace a newer catalog revision
-  already received over SSE.
+  already received over SSE, and an automatic reconnect accepts the lower
+  revision of a new server epoch.
 - Global add is idempotent under concurrent requests for the same normalized
   path.
 - Project promotion publishes no snapshot containing both a project worktree
   and arbitrary workbench for the same path.
 - Project removal preserves a still-live workbench through global orphan
-  adoption, including retry after a transient adoption failure.
+  adoption, including retry without another catalog event and recovery across
+  a session reload after a transient adoption failure.
 - A local unload veto prevents initiating-session dismissal from removing the
   global entry.
 - Global dismissal does not force-close another session's live workbench and
@@ -909,7 +944,8 @@ The implementation is complete when all of the following are true:
   entries migrate without losing projects or workbench folders, and duplicate
   legacy IDs are remapped consistently.
 - Serve-web legacy session catalogs import without duplicates and are rewritten
-  to session-only storage with every overlay remapped to its global ID.
+  to session-only storage with workbench overlays remapped to global IDs and
+  project-owned entries reclassified without an arbitrary duplicate.
 - Valid projects survive a malformed optional workbench field; serve-web also
   preserves the original malformed file for recovery.
 - Serve-web failed durable writes do not publish a catalog snapshot that was
@@ -948,15 +984,18 @@ assumed from the existing renderer path.
 
 ### A late catalog response overwrites a newer event
 
-Mitigation: attach one monotonic revision sequence to HTTP and SSE catalog
-snapshots and ignore revisions older than the newest snapshot already applied.
-Test both response/event delivery orders.
+Mitigation: attach a server-startup epoch plus a monotonic revision to HTTP and
+SSE catalog snapshots. Reset the client high-water mark for a new epoch and
+otherwise ignore revisions older than the newest snapshot already applied.
+Test both response/event delivery orders and automatic reconnect after restart.
 
 ### Orphan adoption fails after project removal
 
-Mitigation: retain a session-local pending-adoption marker and retry on
-reconnection or the next catalog snapshot. Keep dismissal tombstones distinct
-so retry never recreates an intentionally removed workbench.
+Mitigation: persist a session-local pending-adoption record and drive retries
+with cancellable bounded backoff, using reconnection and catalog events only as
+additional immediate triggers. Reconstruct the retry after reload. Keep
+dismissal tombstones distinct so retry never recreates an intentionally removed
+workbench.
 
 ### Catalog hydration blocks serve-web startup
 
