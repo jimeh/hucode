@@ -3,3 +3,523 @@
 This file provides instructions for AI coding agents working with the VS Code codebase.
 
 For detailed project overview, architecture, coding guidelines, and validation steps, see the [Copilot Instructions](.github/copilot-instructions.md).
+
+## Hucode fork notes
+
+Before Hucode-specific code or documentation changes, agents MUST read
+[Hucode Agent Instructions](docs/hucode/agent-instructions.md). Treat that file
+as the required Hucode instruction set for work in this fork.
+
+- Use [Hucode Docs](docs/hucode/README.md) as the map for architecture, repo
+  strategy, roadmap, and upgrade workflow.
+- Hucode product identity is applied through the tracked overlay under
+  `build/hucode/mixin/stable/`. Keep root `product.json` and upstream resource
+  files as VS Code OSS unless a Hucode wrapper command has staged the overlay
+  temporarily for a subprocess.
+- Hucode's app release version lives in the overlay as `hucodeVersion`. Keep
+  upstream `version` for VS Code compatibility and extension checks.
+- Before opening or updating a Hucode PR titled with `feat`, `fix`, `perf`,
+  `revert`, or a breaking `!` marker, add a matching `.changes/*.md` fragment.
+  Once a PR number exists, name it `.changes/<pr-number>-<slug>.md`; the first
+  non-empty line must exactly match the PR title's Conventional Commit header.
+- Common local commands:
+  - `npm run hucode:prepare`: generate the stable mixin overlay into
+    `.build/distro/mixin/stable/`.
+  - `npm run hucode:validate`: verify the Hucode mixin and generated output.
+  - `npm run hucode:compile`: build client, built-in extensions, and extension
+    media with Hucode product config.
+  - `npm run hucode:watch`: run the incremental Hucode watch flow.
+  - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
+  - `npm run hucode:web`: launch the local serve-web development server
+    through the Hucode wrapper.
+- For VS Code release upgrades, use the project-local
+  `hucode-upgrade-vscode` skill and follow
+  [Repo Strategy](docs/hucode/repo-strategy.md).
+
+## Worktree bootstrap
+
+If a linked worktree is missing files or dependencies needed for development,
+run `mise run treeboot` before setting it up manually. The task follows
+`.treeboot.toml`; in Hucode it seeds reusable `node_modules`, installs
+dependencies, and initializes or updates the worktree-local CodeGraph index.
+
+## Repository hygiene notes
+
+- npm is this repository's package manager. Do not run `pnpm` or `yarn`.
+  `build/npm/preinstall.ts` rejects yarn by name and refuses npm 12 or newer,
+  but it does **not** catch pnpm: pnpm sets a different
+  `npm_config_user_agent`, so the version check finds no match, silently does
+  nothing, and the install proceeds with the wrong resolver. `.npmrc` also
+  carries Electron native-build settings — `runtime`, `target`, `disturl`,
+  `build_from_source` — that native modules such as `@vscode/sqlite3` and
+  `node-pty` depend on.
+- `npm install` downloads `@vscode/ripgrep` through the GitHub Releases API.
+  If that request is rate limited, rerun the install with a raw GitHub token in
+  `GITHUB_TOKEN`; `GITHUB_TOKEN="$(gh auth token)" mise run deps:install` keeps
+  the repository task graph while authenticating the package installer.
+- The tracked `pnpm-lock.yaml` at the repository root is upstream debris, not
+  a supported alternative. Upstream committed it by accident inside an
+  unrelated CSS commit, nothing reads it, and it has not been updated since.
+  Running pnpm rewrites that tracked file and leaves an untracked
+  `pnpm-workspace.yaml` beside it; restore the lockfile and delete the
+  workspace file rather than committing either.
+- Do not copy or sync `.codegraph` between worktrees. A running CodeGraph MCP
+  server writes process, socket, SQLite WAL, and lock state into that directory,
+  so Treeboot must rebuild the index locally through `mise run setup`.
+- For code changes, inspect nearby existing tests before considering the work
+  complete. Add or extend focused tests for new behavior and regressions when
+  an applicable test suite exists. If automated coverage is not practical, say
+  why and describe the manual verification performed. Hygiene/precommit checks
+  are not a substitute for behavior coverage.
+- After editing files, run the same hygiene path as the pre-commit hook before
+  considering the work complete. If changes are already staged for a commit,
+  run `npm run -s precommit`; otherwise run `npm run -s precommit -- <paths>`
+  for the edited files. Do not bypass or ignore hygiene failures; fix them or
+  report the blocker.
+- The `coderabbit:review` label does not override CodeRabbit's draft-PR skip.
+  Mark a PR ready before waiting for a label-triggered CodeRabbit review.
+- `changelog.ts check-pr` requires the PR title to match any added `.changes/`
+  fragment that the PR owns — an unnumbered one, or one numbered for this PR.
+  Fragments already numbered for a *different* PR are ignored, so an
+  integration branch carrying several merged PRs, or a branch that merged a
+  base which had just gained a fragment, does not fail for carrying them.
+- The "Validate package-lock.json changes" step diffs against
+  `github.event.pull_request.base.sha` from a depth-2 checkout. When the base
+  branch gains a commit between the PR event and the run, that SHA is not in
+  the checkout and the step fails with "Invalid symmetric difference
+  expression" regardless of the change. Rebase onto the current base and push;
+  the rerun passes.
+- An integration PR merging a batch should use a hidden type such as `chore:`.
+  A `feat:`/`fix:` title still requires a fragment of its own, which an
+  integration PR has no business adding — its constituents already carry theirs.
+- Pushing to a branch while CodeRabbit is mid-review aborts that review with
+  "head commit changed during the review". Let a review finish, or re-request
+  it afterwards with a new `@coderabbitai review` comment.
+- Build-script changelog tests create temporary Git commits and inherit global
+  `commit.gpgSign`. On hosts with signing enabled, run the suite with
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign`
+  `GIT_CONFIG_VALUE_0=false npm run test-build-scripts` so test commits do not
+  require an interactive pinentry.
+- Release app packaging downloads Electron through `@electron/get` before the
+  platform package task can start. Keep the retrying
+  `build/hucode/electron-prefetch.ts` step after dependency installation and
+  before `Build release app`, and set `HUCODE_ELECTRON_PREFETCHED=1` only on
+  that build step. The flag makes packaging serve pinned checksums locally and
+  reject an Electron artifact cache miss instead of returning to the network;
+  the downstream `@vscode/gulp-electron` retry classifier does not recognize
+  all native-fetch/Undici timeout codes.
+- If `npm ci` retries after an Electron header download fails with
+  `ECONNRESET`, remove only the matching `~/.cache/node-gyp/<target>/`
+  directory first. The failed attempt can leave that target incomplete, and
+  node-gyp will otherwise reuse it and fail because `common.gypi` is missing.
+- `windowsMainService.getPathsToOpen()` selects the default fallback window
+  before initial-startup untitled workspaces and empty-window backups are
+  appended in `open()`. When changing default startup-window behavior, account
+  for those later restores or the app can open an extra fallback window.
+- `npm run gulp transpile-client` produces an `out/` the Electron unit runner
+  cannot load (`ReferenceError: exports is not defined` in
+  `test/unit/electron/renderer.js`). Run `npm run gulp compile-client` before
+  `./scripts/test.sh`.
+- In zsh, `npm run -s precommit -- $files` passes the whole list as one
+  argument because zsh does not word-split unquoted variables. Pipe the list
+  through `xargs` or spell the paths out; otherwise precommit silently checks a
+  single nonexistent path and reports success.
+- `npm run test-build-scripts -- --test-name-pattern <pattern>` does not work:
+  the build package test script places the test glob before forwarded args, so
+  Node treats the pattern as another test file. For filtered build-script tests,
+  run `cd build && node --test --test-name-pattern <pattern> \
+  '{lib,next}/**/*.test.ts'`.
+- TOML files cannot carry VS Code's standard block copyright header. Keep
+  `*.toml` and TOML-formatted lockfiles such as `mise.lock` excluded from
+  copyright hygiene rather than adding invalid TOML.
+- Do not run `npm run test-node -- --run ...` concurrently with
+  `npm run gulp compile-client`; the compile task cleans `out/`, which can make
+  the test runner fail to resolve freshly built modules.
+- Do not run multiple `./scripts/test.sh` invocations concurrently. They share
+  the same `.build/electron` app preparation path and can race while creating
+  framework symlinks.
+- The esbuild `out/` transpile (used by dev compiles and CI unit tests since
+  VS Code 1.126.0) lowers classes with static fields to renamed const
+  bindings (e.g. `_ChatRequestTextPart`), so tests must not assert
+  `constructor.name`. Upstream fixed its ChatService tests in
+  microsoft/vscode@d416fdd194 (#322698), backported here; write new tests
+  against stable discriminators such as `kind` instead.
+- IDE-integrated shells can inherit extension-host variables such as
+  `ELECTRON_RUN_AS_NODE=1` and `VSCODE_ESM_ENTRYPOINT`. Before running
+  `./scripts/test.sh`, unset `ELECTRON_RUN_AS_NODE` and inherited `VSCODE_*`
+  variables or Electron unit tests may start in Node mode before loading tests.
+- `build/lib/preLaunch.ts` validates only the Electron version, not the
+  product-branded executable name. CI that runs upstream Electron tests before
+  a Hucode desktop smoke must rebuild Electron under `run-with-mixin.js`,
+  reapply the Linux sandbox ownership, and launch with
+  `VSCODE_SKIP_PRELAUNCH=1`.
+- Local `./scripts/test.sh` runs need `ELECTRON_DISABLE_SANDBOX=1`, because
+  `.build/electron/chrome-sandbox` must be root-owned with mode 4755 and only
+  CI does that (`sudo chown root` / `sudo chmod 4755`). Without it the runner
+  aborts with `FATAL:setuid_sandbox_host.cc`. On headless hosts also wrap the
+  call in `xvfb-run`, and set `VSCODE_SKIP_PRELAUNCH=1` to avoid re-running
+  `npm run electron` on every invocation:
+
+  ```sh
+  VSCODE_SKIP_PRELAUNCH=1 ELECTRON_DISABLE_SANDBOX=1 xvfb-run \
+    ./scripts/test.sh --run <test-file>
+  ```
+- Do not run the packaged Linux Omni lifecycle smoke with
+  `ELECTRON_DISABLE_SANDBOX=1` on GitHub-hosted runners. Under an unsandboxed
+  renderer there, the former CDP `Page.crash` injection never produced
+  Playwright's `crash` event, and the release smoke failed its "crash Bravo"
+  phase on every release from
+  v0.0.76 to v0.0.81 while passing locally with the same artifact and flag.
+  The release job restores the root-owned 4755 `chrome-sandbox` after
+  extracting the app tar instead, as the CI desktop smoke does for the dev
+  Electron. The crash phase now uses the guarded shell smoke driver. On a crash
+  timeout the harness prints the shell's Projects rows and the app's process
+  states; read those before assuming the event was merely lost.
+- That `VSCODE_SKIP_PRELAUNCH=1` also skips the build, and the Electron runner
+  executes compiled `out/`. Editing a `.ts` file and re-running therefore tests
+  the *previous* build. This matters most when deliberately breaking code to
+  confirm a test catches it: the run passes, which reads as "the test does not
+  detect this" when the truth is the change was never compiled. Run
+  `npm run gulp compile-client` after every source edit, and confirm the change
+  reached `out/` before drawing any conclusion from the result. Note esbuild
+  strips comments, so verify against the compiled behaviour rather than a
+  marker comment.
+- CI suite lists are generated, not hand-maintained.
+  `build/hucode/test-suites.ts` resolves them and
+  `.github/workflows/hucode-ci.yml` calls it per runner. A new suite under
+  `src/vs/hucode/`, or any `hucode*.test.ts` anywhere, is picked up with no
+  workflow edit. Do not paste suite paths back into the workflow; a test
+  asserts there are none.
+- The resolved lists are committed to
+  `build/hucode/test-suites.snapshot.json` so a pull request still shows what
+  CI will run. Adding a suite changes that file — regenerate with
+  `npm run hucode:test-suites -- --write-snapshot` and commit it, or
+  `npm run hucode:check-test-suites` fails.
+- An upstream-named suite Hucode runs because it patched the subject cannot be
+  found by any rule. Those live in `UPSTREAM_SUITES` with a reason each.
+  Forgetting to add one is still invisible — that gap closes with H1's
+  provenance map, not before.
+- Runner assignment is not derivable from the layer alone. An explicit `--run`
+  argument bypasses the Node runner's layer exclusions, and two Electron-layer
+  suites (`hucodeLinuxUpdate.test.ts`, `hucodeOmniFileDialog.test.ts`) run
+  under `npm run test-node` on purpose; they are `NODE_RUNNER_OVERRIDES`.
+  Everything else in `browser`, `electron-browser`, `electron-main`, or
+  `electron-utility` goes to the Electron runner, and everything else again is
+  enumerated by the bare `npm run test-node` pass. Naming an already-enumerated
+  suite explicitly just runs it twice.
+- The Electron runner does accept a glob (`--runGlob`/`--glob`), but it takes a
+  single pattern, is mutually exclusive with `--run`, and matches compiled
+  `out/` paths — and a glob matching nothing fails silently. That is why the
+  list is computed in TypeScript and passed as repeated `--run=` arguments
+  rather than handed to the runner as a pattern.
+- Web Omni hosted-command forwarding has a bounded response timeout. Keep
+  interactive commands such as project and worktree renames in the web shell;
+  otherwise a slow Quick Input can time out and trigger a duplicate fallback.
+- Hosted-workbench focus changes can arrive while a Projects-sidebar click is
+  between pointerdown and click. Keep focus-only state updates from rebuilding
+  or revealing the tree, and defer passive tree reconciliation until the
+  primary-pointer interaction finishes so the clicked row cannot move.
+- Sidebar-origin unload suppression must survive that primary-pointer deferral.
+  Keep it tied to the exact unloaded hosted instance and promoted instance so a
+  later unrelated activation still reveals normally.
+- Serve-web project SSE snapshots must wait for the corresponding project-state
+  write generation, including hydration and background refresh. A disconnected
+  request may cancel queued work and active read-only Git commands, but once a
+  worktree create/remove starts, finish that irreversible mutation and its
+  state flush. If post-create discovery fails, return a stale record for the
+  created path while the normal refresh retry recovers authoritative metadata.
+  Once discovery commits a current worktree snapshot, any remaining watcher
+  recovery is service-owned and must outlive the initiating request.
+  Node's `IncomingMessage` `close` event also fires after normal request
+  completion; use request `aborted` or response `close` before
+  `writableFinished` to detect a real disconnect.
+  Server disposal must reject waiting work immediately but keep the project
+  manager and server-lifetime consumers alive until every admitted read and
+  mutation has settled; join both admission queues and dispose the manager
+  before releasing the final lease. A canceled read response can settle before
+  its admitted Git operation, so tests must join the read queue before teardown.
+  Route project-list GETs and initial SSE hydration through that same read
+  admission path. Operation leases end when the underlying work settles, while
+  response leases remain through response `finish`, premature `close`, or
+  `error`; long-lived SSE responses retain theirs until disconnect.
+  The shared `Limiter` and `Queue` retain canceled waiting factories, and their
+  disposal clears waiting work without settling its returned promises; do not
+  use them for request admission that must release canceled or disposed work.
+- `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
+  needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
+  `serve-web` therefore runs with Copilot Chat entirely absent, which silently
+  invalidated a runtime measurement that appeared to pass.
+- Keep Omni web shell registrations in `omniWeb.contribution.ts`, imported by
+  both `omni.web.main.ts` and `omniWebUserData.factory.ts`. The latter is the
+  default root entrypoint under server-side user-data storage; omitting shared
+  registrations leaves the page blank before the workbench renders.
+- The desktop Omni shell has its own service bootstrap in
+  `src/vs/hucode/electron-browser/omni.main.ts`. When upstream adds a required
+  service to `DesktopMain.initServices()`, mirror the registration there; an
+  omitted service can pass compilation and unit tests but fail when a
+  block-startup contribution is instantiated. Verify this boundary with the
+  Linux Omni smoke or a real desktop launch.
+- CSS imported by route-specific Hucode web entrypoints is flattened into the
+  shared stylesheet in minified server-web builds, even when a development
+  dynamic import never executes. Scope Omni-only selectors under
+  `.hucode-omni-workbench` and validate the bundled CSS rather than relying on
+  `npm run hucode:web` alone.
+- VS Code 1.136 Modern UI uses a 4px
+  `--modern-ui-floating-card-outer-margin` against window edges in both default
+  and compact density. Keep the Omni Projects cell's left and bottom CSS
+  margins, sash inset, and `ProjectsPart.layout()` widget dimensions tied to
+  that outer-gutter contract instead of duplicating or doubling spacing tokens.
+- VS Code 1.136 generates Electron declarations at
+  `.build/typings/electron.d.ts`, outside Hucode's `node_modules` archives.
+  Every CI path that skips `npm ci` on a cache hit must run
+  `node build/npm/electronTypes.ts` before TypeScript compilation.
+- Extension *enablement* state is per-browser (localStorage), so
+  enablement-dependent behaviour can only be measured in a browser holding the
+  real profile state. A control run from a different browser profile proves
+  nothing.
+- Keep the Omni shell on the application Default profile. Desktop-hosted
+  workbench configurations must resolve the ordinary workspace association
+  independently; copying the shell's `profiles.profile` into a child silently
+  makes every hosted workbench use the shell profile.
+- Hosted appearance publication must load Hucode's color registrations before
+  resolving snapshots. Otherwise standard VS Code colors project correctly
+  while `sessionsSidebar.*`, `sessionsPanel.*`, and other Hucode colors remain
+  on the shell profile. Desktop child configurations must also omit the Omni
+  shell's `partsSplash`; keep the native hosted view transparent until its own
+  appearance snapshot supplies the resolved background.
+- Serve-web profile IPC must explicitly revive workspace identifiers after URI
+  transformation because browser-originated URI components can lack `$mid`.
+  Clone profile `workspaces` arrays before `transformOutgoingURIs`; it mutates
+  nested containers and can otherwise replace the server's live `URI` objects.
+  Bootstrap profile associations must map workspace URIs to the remote scheme
+  alongside the profile resource URIs.
+- Native `IProjectManagerService` calls cross a generic `ProxyChannel`, which
+  does not support `CancellationToken` method arguments. Keep request tokens
+  web-only, or replace the generic proxy with a cancellation-aware channel
+  before adding them to the shared service contract.
+- `environmentService.isOmniWindow` and `isHostedOmniWorkspace` are **not
+  trusted** on web. `WorkspaceProvider.create` parses the `payload` query
+  parameter straight out of the page URL, so any page can set either flag.
+  They carry no trust on their own. A consumer is safe only because something
+  else does the real gating — either `isOmniShellWindow`, which comes from the
+  server-injected page configuration on web and the main-process window
+  configuration on desktop, or an independent check. `hostedOmniWorkspace.web`
+  is the case to learn from: it exposes a channel that runs arbitrary workbench
+  commands, and two of its three conditions are URL-settable. What protects it
+  is the third — a same-origin `MessagePort` handshake in
+  `hostedOmniWebConnection.ts`. Anything deciding what a window is *allowed* to
+  do needs one of those two, not the flags.
+- A trusted hosted-workbench `MessagePort` authenticates the connection, not
+  caller-supplied method arguments. Expose an explicit least-authority channel
+  facade, bind window and instance identity to the port server-side, and use a
+  closed hosted-action allowlist rather than the broad
+  `isHucodeOmniShellAction` namespace classifier. Serve-web supports only the
+  current typed hosted-shell protocol and capability set; after a server
+  update, require a full browser-page reload instead of retaining a legacy
+  hosted-shell method adapter. This does not change the independently
+  versioned hosted unload protocol.
+- Desktop hosted-shell port acquisition deliberately invalidates the previous
+  binding generation and connection before replacement setup. Keep public
+  calls bounded while acquisition retries in the background; a setup failure
+  stays fail-closed, and only subsequent calls may use a replacement
+  connection. Do not replay an operation whose delivery may be ambiguous or
+  preserve the stale connection as though it were still usable.
+- Electron `did-start-loading` includes subframe activity. Invalidate a hosted
+  shell binding only for a `did-start-navigation` event that is both main-frame
+  and cross-document; keep load events for renderer trust bookkeeping.
+- Desktop hosted-shell response timeouts close the renderer MessagePort. Keep
+  the main-side port-close listener bound to that connection generation so the
+  pending operation loses authority before reacquisition; a late close from an
+  old port must not invalidate its replacement.
+- Desktop terminal shell shutdown is retryable because the main service caches
+  one shared shutdown operation. If another call invalidates the renderer port,
+  reacquire and repeat only the shutdown call to rejoin that operation, within
+  one overall terminal budget; ordinary operations remain at-most-once.
+- Racing `Event.toPromise()` against a timeout does not dispose the event
+  subscription when the timeout wins. Bounded connection waiters must dispose
+  both the listener and timer explicitly.
+- Complete project-catalog reconciliation is shell authority. Hosted
+  workbenches may read combined state through `getWindowState`, but must not
+  submit a supposedly complete catalog over their connection facade.
+- Hosted navigation authorities also own last-active-worktree persistence.
+  Resolve the canonical project worktree server-side, record it only after an
+  accepted navigation, and keep the current hosted capability's self state
+  populated with its real `worktreePath`.
+- Web shell restoration can block on remote folder checks. Page shutdown must
+  cancel restoration without awaiting initialization, and restoration must
+  check cancellation after each asynchronous preflight before attaching an
+  iframe.
+- Serve-web live workbench ownership is tab-local. `HostedWorkspaceStateModel`
+  and `RetainedWorkbenchCatalog` deduplicate paths within one Omni tab using
+  the server's configured path case semantics, and open paths must re-check
+  the model after asynchronous preflight. Different tabs may host the same
+  path independently. This path-based comparison cannot collapse distinct
+  server-side symlink aliases. Do not add Web Locks, cross-tab messages, or
+  server-side leases unless the product contract changes.
+- The root `playwright-core` is a VS Code-pinned alpha while `@playwright/test`
+  resolves a separate stable `playwright-core`. Build smoke helpers shared by
+  desktop and serve-web must use `@playwright/test` consistently; mixing their
+  `Page`, `Frame`, or `Locator` types fails build typecheck despite matching APIs.
+- Shell controller ownership ends when its host fires `onDidClose`, even if a
+  later global window-destroy event also arrives. Release on both signals
+  idempotently so a closed host cannot retain controller state.
+- `IWindowsMainService.onDidOpenWindow` fires before a `CodeWindow` has loaded
+  its workspace configuration, and `onWillLoadWindow` can still be vetoed.
+  Seed regular-window path ownership from existing configurations, reconcile
+  it on `onDidSignalReadyWindow`, and release it on window destruction.
+- Electron exposes hosted `WebContentsView` workbenches as Playwright pages over
+  CDP. Identify them through
+  `window.vscode.context.resolveConfiguration()` — their URLs are identical.
+  To crash one in a smoke test, call the shell's enabled smoke driver with the
+  exact hosted instance ID. Desktop main gates that call behind
+  `--enable-smoke-test-driver` and uses `webContents.forcefullyCrashRenderer()`;
+  this avoids Chromium's experimental CDP `Page.crash`. The crashed page remains
+  in `context.pages()` until recovery destroys the crashed view.
+- Hosted unload and reload smoke commands can destroy their Playwright `Page`
+  or detach their `Frame` before Quick Input reports itself hidden. Mark only
+  those command calls with `surfaceMayClose`, then rely on the following exact
+  lifecycle assertion. Keep ordinary command completion strict so a renderer
+  crash still fails the smoke.
+- Linux Omni smoke profile cleanup can race late Chromium cache writes after
+  the process group exits. Keep bounded `fs.rm` retries for the temporary root;
+  an `ENOTEMPTY` after all lifecycle phases pass is cleanup noise, not a product
+  failure.
+- Editor copy and cut commands synchronously emit nested document clipboard
+  events. Local Omni clipboard fallback must keep those nested events inside the
+  per-window forwarding-disabled scope or it can cancel and re-forward itself.
+- A timed-out hosted clipboard request has ambiguous delivery. Treat copy and
+  cut as consumed after the request starts rather than retrying locally: this
+  preserves at-most-once behavior, with a documented risk that a genuinely lost
+  request leaves the operation unapplied.
+- Native terminal shutdown preparation can finish before other lifecycle vetoes
+  settle. Keep persistence suppression reversible until `onWillShutdown`,
+  invalidate late preparation completions on `onShutdownVeto` and
+  `onBeforeShutdownError`, and leave the web preflight side-effect free.
+- A hosted web unload commit is already irreversible from the shell's
+  perspective. Internal commit failures must reject so the shell takes its
+  remove-anyway path; `false` is reserved for an explicit protocol refusal
+  before the commit begins.
+- A late protocol-v1 hosted unload success means that legacy workbench already
+  shut down. Remove it only when the exact instance still uses the connection
+  captured by the timed-out request, so an old reply cannot remove a reloaded
+  child.
+- Web shell-wide shutdown is currently contract-only and called only by an
+  explicit host. Ordinary browser lifecycle shutdown cannot await it and uses
+  per-workbench hosted unload instead. Any future awaited shell-close path must
+  add admission guards that reject workbenches opened after its shutdown
+  snapshot.
+- Hosted-to-regular desktop transfer reserves the regular owner before calling
+  `windowsMainService.open()`. Keep that nested open marked as already admitted;
+  routing it through regular admission again deadlocks on its own reservation.
+- `IFileService.stat()` can propagate a provider-level `FileSystemProviderError`
+  instead of wrapping it in `FileOperationError`. Read-only migration readers
+  that distinguish absent resources must classify both through
+  `toFileOperationResult()`.
+- The setup UI renderer under `extensions/hucode-setup-ui/` is an asset-only
+  built-in extension with no `main`, `browser`, activation events, or
+  contributions. Core creates the webview and resolves
+  `<builtinExtensionsPath>/hucode-setup-ui/media`, so the import UI still loads
+  with `--disable-extensions`. Its wire protocol lives in
+  `src/vs/hucode/common/migration/editorMigrationSetupProtocol.ts` and is
+  mirrored byte-for-byte into `src/generated/` by
+  `build/hucode/setup-ui-protocol.ts`; edit the canonical file and run
+  `npm run hucode:sync-setup-protocol`, never the mirror.
+- Migration settings drafts omit matching values entirely. Count matches as
+  source settings minus decisions and policy exclusions, not source settings
+  minus planned imports: preserved conflicts and exclusions are not matches.
+  Do not reuse that arithmetic for keybindings, whose planner also deduplicates
+  source rows.
+- Lockfile validation re-resolves package records absent from the PR base. A
+  new package's valid lockfile can therefore fail after newer versions become
+  eligible. Refresh that package with the repository's Node/npm using
+  `npm update --package-lock-only --ignore-scripts`, inspect the dependency
+  changes, and rerun validation against the PR base before publishing.
+- A built-in extension that is not recognized as bundled goes through
+  `vsce.listFiles({ packageManager: Npm })`, which resolves every production
+  dependency into the package no matter what `.vscodeignore` says.
+  `build/lib/extensions.ts` only recognizes `esbuild.mts`/`esbuild.browser.mts`
+  (or a dotted `.esbuild.mts`) at the extension root, so a differently named
+  build script such as `esbuild.setup.mts` leaves the extension on the normal
+  path. `hucode-setup-ui` therefore declares no `dependencies` at all — the
+  renderer libraries are bundled into `media/index.js` and belong in
+  `devDependencies` — and `build/lib/test/hucodeSetupUiExtension.test.ts`
+  asserts the real `listFiles` result rather than the ignore file.
+- Tailwind v4's PostCSS plugin resolves automatic source detection from the
+  working directory, not from the CSS file. Because the package script and the
+  gulp media build run from different directories, the setup stylesheet must
+  use `@import "tailwindcss" source(none)` with explicit `@source` globs, or the
+  bundled CSS silently picks up unrelated repository files and changes size with
+  the caller.
+- React attaches an ancestor's ref *after* a descendant's layout effects, so a
+  child that virtualizes against a parent-owned scroll container must read that
+  ref from a passive effect and store it in state. Reading it during layout
+  leaves TanStack Virtual with no viewport and renders zero rows on first mount.
+- Keep the setup webview's `html`, `body`, and React `#root` height chain bounded.
+  An auto-height mount lets expanded details push the footer beyond the clipped
+  body instead of scrolling. Run `mise run test:setup-ui-layout` for real Chromium
+  coverage; the renderer's jsdom tests do not calculate layout.
+- The setup webview owns its color palettes; only the workbench's light/dark/
+  high-contrast mode selects one. Do not map `--vscode-*` colors to controls.
+  Keep explicit native scrollbar thumb colors and `scrollbar-color: auto` to
+  override the pre-page's theme-dependent scrollbar rules. Include the actual
+  pre-page CSS in renderer smoke tests; standalone CSS misses that layer.
+  For scrollbar screenshots and drag tests, launch Playwright Chromium with
+  `ignoreDefaultArgs: ['--hide-scrollbars']`; headless defaults hide the thumb
+  even when its computed colors are correct.
+- The setup UI stylesheet imports Tailwind with `source(none)` and explicit
+  `@source` globs. A new renderer directory under
+  `extensions/hucode-setup-ui/src/` needs its own `@source` line, or classes
+  used only there are silently absent from the bundle; jsdom tests do not
+  notice, only a real browser does.
+- `EditorMigrationSetupPresenter.dispatch()` is an exhaustive switch over every
+  protocol intent. Adding an onboarding-only intent fails `compile-client`
+  until the migration presenter lists it in its unreachable onboarding case.
+- `cd build && npm run typecheck` is the only checker covering
+  `build/hucode/*.ts`, and `npm run hucode:smoke:setup-ui-layout` is the only
+  runtime consumer of hand-built presentation snapshots. A protocol shape
+  change must be followed by both; `compile-client` and the unit suites stay
+  green while they are red.
+- `.build/electron` holds one binary named after the active `product.json`:
+  `code-oss` after a plain `npm run electron`, `hucode` after
+  `node build/hucode/run-with-mixin.js --quality stable -- npm run electron`.
+  `./scripts/test.sh` needs the former and `./scripts/hucode.sh` the latter, so
+  alternating between unit tests and a desktop run means rebuilding Electron
+  each time; the other name fails with "No such file or directory".
+- `npm run hucode:smoke:linux-omni` inherits the environment. Locally export
+  `ELECTRON_DISABLE_SANDBOX=1` alongside `VSCODE_SKIP_PRELAUNCH=1`, or the
+  launch aborts on `chrome-sandbox` ownership. Under xvfb, wrap it in
+  `dbus-run-session`.
+- Radix roving focus in the setup UI moves on a `setTimeout` and selects the
+  landing radio only while the arrow key is still held. Playwright's default
+  `press` releases instantly and looks like a broken list; use
+  `press('ArrowDown', { delay: 60 })` with a polled focus expectation.
+- Electron webviews are reachable over CDP as ordinary `page.frames()`
+  entries with `vscode-webview://` URLs; no out-of-process iframe handling is
+  needed to drive the setup UI in a desktop smoke.
+- `local/code-no-unexternalized-strings` and
+  `local/code-no-dangerous-type-assertions` apply repository-wide. JSX-heavy
+  packages need an explicit `eslint.config.js` block; the shared `**/*.test.ts`
+  relaxation does not match `.test.tsx`.
+- `npx shadcn` cannot `init` a package it detects as a "Manual" framework: it
+  skips dependency installation, the `utils` helper, and the theme CSS. Keep
+  `components.json` checked in by hand, verify it with `npx shadcn info`, and
+  add the peer dependencies yourself. `shadcn add` still works from there.
+
+- Desktop smoke isolation needs all three flags: `--user-data-dir`,
+  `--shared-data-dir`, and `--extensions-dir`. The shared application database
+  otherwise stays under `~/.hucode-shared` even with temporary user data.
+  Confirm its resolved path in the app log before interacting.
+- `getSingleFolderWorkspaceIdentifier()` requires an `fs.Stats` argument for
+  local `file:` URIs. Without it the function deliberately returns `undefined`,
+  because native folder IDs include filesystem identity. Read the stat before
+  resolving an onboarding folder association.
+- Desktop reload smokes must invoke `Developer: Reload Window`. Raw CDP
+  `Page.reload` bypasses the native reload path and can leave duplicate IPC
+  replies and broken setup-webview resource responses. Keep process-kill tests
+  inside an outer mixin wrapper so killing the app cannot strand the overlay.
+
+- `BaseStorageMain.init()` catches initialization failures and continues degraded
+  startup. Keep onboarding seed retries inside `ApplicationStorageMain.doInit()`:
+  retrying afterward bypasses telemetry and the generic first-process newness
+  bookkeeping. A failed seed must leave the newness marker unset for the next
+  launch; a successful seed must reach that bookkeeping exactly once.
