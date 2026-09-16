@@ -10,6 +10,10 @@ import ansiColors from 'ansi-colors';
 import crypto from 'crypto';
 import through2 from 'through2';
 import { Stream } from 'stream';
+import {
+	getGithubApiHeaders,
+	resolveGithubReleaseAssetLocation,
+} from './hucodeGithubFetch.ts';
 
 export interface IFetchOptions {
 	base?: string;
@@ -104,13 +108,7 @@ export async function fetchUrl(url: string, options: IFetchOptions, retries = 10
 	}
 }
 
-const ghApiHeaders: Record<string, string> = {
-	Accept: 'application/vnd.github.v3+json',
-	'User-Agent': 'VSCode Build',
-};
-if (process.env.GITHUB_TOKEN) {
-	ghApiHeaders.Authorization = 'Basic ' + Buffer.from(process.env.GITHUB_TOKEN).toString('base64');
-}
+const ghApiHeaders = getGithubApiHeaders();
 const ghDownloadHeaders = {
 	...ghApiHeaders,
 	Accept: 'application/octet-stream',
@@ -142,12 +140,16 @@ interface IGitHubRelease {
  */
 export function fetchGithub(repo: string, options: IGitHubAssetOptions): Stream {
 	const cleanRepo = repo.replace(/^\/|\/$/g, '');
-	// When `latest` is set, list all releases and pick the most recently published one (ignoring the
-	// requested version). Otherwise fetch the specific tagged release.
-	const releaseUrl = options.latest
-		? `/repos/${cleanRepo}/releases?per_page=100`
-		: `/repos/${cleanRepo}/releases/tags/v${options.version}`;
-	return fetchUrls(releaseUrl, {
+	const location = resolveGithubReleaseAssetLocation(cleanRepo, options);
+	if (location.kind === 'direct') {
+		return fetchUrls('', {
+			base: location.url,
+			verbose: options.verbose,
+			checksumSha256: options.checksumSha256,
+		});
+	}
+
+	return fetchUrls(location.path, {
 		base: 'https://api.github.com',
 		verbose: options.verbose,
 		nodeFetchOptions: { headers: ghApiHeaders }

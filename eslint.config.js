@@ -12,6 +12,10 @@ import tseslint from 'typescript-eslint';
 
 import stylistic from '@stylistic/eslint-plugin';
 import * as pluginLocal from './.eslint-plugin-local/index.ts';
+import {
+	copyrightHeaderEslintPattern,
+	copyrightHeaderEslintTemplate,
+} from './build/hucode/copyright-headers.ts';
 import * as pluginCopilotLocal from './extensions/copilot/.eslintplugin/index.ts';
 import pluginImport from 'eslint-plugin-import';
 import pluginJsdoc from 'eslint-plugin-jsdoc';
@@ -141,12 +145,10 @@ export default defineConfig(
 			'header/header': [
 				2,
 				'block',
-				[
-					'---------------------------------------------------------------------------------------------',
-					' *  Copyright (c) Microsoft Corporation. All rights reserved.',
-					' *  Licensed under the MIT License. See License.txt in the project root for license information.',
-					' *--------------------------------------------------------------------------------------------'
-				]
+				{
+					pattern: copyrightHeaderEslintPattern,
+					template: copyrightHeaderEslintTemplate,
+				}
 			]
 		},
 	},
@@ -1623,7 +1625,9 @@ export default defineConfig(
 						'yauzl',
 						'yazl',
 						'zlib',
-						'chrome-remote-interface'
+						'chrome-remote-interface',
+						'vs/hucode/common/**',
+						'vs/hucode/electron-main/**'
 					]
 				},
 				{
@@ -1952,6 +1956,22 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/~',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/workbench/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/sessions/~',
+						'vs/sessions/services/*/~',
+						'vs/hucode/~'
+					]
+				},
+				{
 					'target': 'src/vs/sessions/electron-browser/sessions.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -2051,6 +2071,23 @@ export default defineConfig(
 					]
 				},
 				{
+					'target': 'src/vs/hucode/omni.common.main.ts',
+					'layer': 'browser',
+					'restrictions': [
+						'vs/base/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/contrib/terminal/terminal.all.js'
+					]
+				},
+				{
 					'target': 'src/vs/workbench/workbench.desktop.main.ts',
 					'layer': 'electron-browser',
 					'restrictions': [
@@ -2064,7 +2101,28 @@ export default defineConfig(
 						'vs/workbench/api/~',
 						'vs/workbench/services/*/~',
 						'vs/workbench/contrib/*/~',
-						'vs/workbench/workbench.common.main.js'
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/electron-browser/omniWindowService.js',
+						'vs/hucode/browser/hostedOmniWorkspace.contribution.js'
+					]
+				},
+				{
+					'target': 'src/vs/hucode/omni.desktop.main.ts',
+					'layer': 'electron-browser',
+					'restrictions': [
+						'vs/base/*/~',
+						'vs/base/parts/*/~',
+						'vs/platform/*/~',
+						'vs/editor/~',
+						'vs/editor/contrib/*/~',
+						'vs/editor/editor.all.js',
+						'vs/workbench/~',
+						'vs/workbench/api/~',
+						'vs/workbench/services/*/~',
+						'vs/workbench/contrib/*/~',
+						'vs/workbench/workbench.common.main.js',
+						'vs/hucode/omni.common.main.js',
+						'vs/hucode/~'
 					]
 				},
 				{
@@ -2385,6 +2443,95 @@ export default defineConfig(
 						'test/componentFixtures/playwright/**',
 						'@playwright/*',
 						'*' // node modules
+					]
+				}
+			]
+		}
+	},
+	// Hucode editor source discovery is a read-only boundary. Keep mutation and
+	// process-launch capabilities out of its production modules.
+	{
+		files: [
+			'src/vs/hucode/node/migration/editorMigrationSource*.ts',
+			'src/vs/hucode/electron-main/migration/editorMigrationSource*.ts',
+		],
+		languageOptions: {
+			parser: tseslint.parser,
+		},
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					'paths': [
+						{
+							'name': 'child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'node:child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'fs/promises',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs/promises',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						}
+					]
+				}
+			]
+		}
+	},
+	// The native filesystem adapter owns the one capability source discovery
+	// needs: bounded read-only directory enumeration.
+	{
+		files: [
+			'src/vs/hucode/node/migration/editorMigrationSourceFileSystem.ts',
+		],
+		languageOptions: {
+			parser: tseslint.parser,
+		},
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					'paths': [
+						{
+							'name': 'child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'node:child_process',
+							'message': 'Editor source discovery must not launch editors or helper processes.'
+						},
+						{
+							'name': 'fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'node:fs',
+							'message': 'Use the read-only editor migration filesystem capability.'
+						},
+						{
+							'name': 'fs/promises',
+							'allowImportNames': ['opendir'],
+							'message': 'Only opendir is allowed for bounded read-only directory enumeration.'
+						},
+						{
+							'name': 'node:fs/promises',
+							'allowImportNames': ['opendir'],
+							'message': 'Only opendir is allowed for bounded read-only directory enumeration.'
+						}
 					]
 				}
 			]
@@ -2991,6 +3138,36 @@ export default defineConfig(
 				},
 			],
 		}
+	},
+	// hucode-setup-ui renderer.
+	//
+	// Every user-visible string in the setup UI is localized by core and arrives over the setup
+	// protocol, so this package has nothing to externalize. Its double-quoted strings are JSX
+	// attributes, Tailwind class lists, and `data-*` values, which the workbench externalization
+	// rule can only report as false positives.
+	{
+		files: [
+			'extensions/hucode-setup-ui/src/**/*.{ts,tsx}',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-unexternalized-strings': 'off',
+		},
+	},
+	// Renderer test support. `**/*.test.ts` already relaxes this rule; the renderer's suites and
+	// their fixtures are `.tsx` and live beside it.
+	{
+		files: [
+			'extensions/hucode-setup-ui/src/test/**/*.{ts,tsx}',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-dangerous-type-assertions': 'off',
+		},
 	},
 	// Forbid new JavaScript files - use TypeScript instead.
 	// The allowlist of pre-existing JS/CJS/MJS files lives in
