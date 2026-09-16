@@ -564,6 +564,7 @@ export class WebHucodeShellController extends Disposable
 	private globalRestoreAttempt: Promise<void> | undefined;
 	private initialGlobalCatalogLoading = false;
 	private deferredInitialCatalog: ProjectCatalogSnapshot | undefined;
+	private deferredRecoveryCatalog: ProjectCatalogSnapshot | undefined;
 	private pendingSessionOverlays: IWebHucodeShellPersistedState[
 		'workbenchOverlays'
 	];
@@ -2416,6 +2417,7 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 		if (this.globalRestoreAttempt) {
+			this.deferredRecoveryCatalog = catalog;
 			return;
 		}
 		const persisted = this.pendingGlobalRestore;
@@ -2430,7 +2432,14 @@ export class WebHucodeShellController extends Disposable
 			.catch(error => this.logService.warn(
 				`[hucode] Workbench catalog retry failed: ${String(error)}`
 			))
-			.finally(() => this.globalRestoreAttempt = undefined);
+			.finally(() => {
+				this.globalRestoreAttempt = undefined;
+				const deferred = this.deferredRecoveryCatalog;
+				this.deferredRecoveryCatalog = undefined;
+				if (deferred) {
+					this.handleGlobalCatalog(deferred);
+				}
+			});
 	}
 
 	private applyGlobalCatalog(catalog: ProjectCatalogSnapshot): void {
@@ -2470,11 +2479,13 @@ export class WebHucodeShellController extends Disposable
 				}
 				this.pendingWorkbenchAdoptions.delete(key);
 				pendingChanged = true;
-				const retained = this.retainedWorkbenches.getByUri(
-					URI.file(pending.worktreePath)
-				);
-				if (retained) {
-					this.retainedWorkbenches.dismiss(retained.id);
+				if (!this.getInstanceByPath(pending.worktreePath)) {
+					const retained = this.retainedWorkbenches.getByUri(
+						URI.file(pending.worktreePath)
+					);
+					if (retained) {
+						this.retainedWorkbenches.dismiss(retained.id);
+					}
 				}
 			}
 		}
