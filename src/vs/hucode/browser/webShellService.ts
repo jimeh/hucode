@@ -2411,13 +2411,13 @@ export class WebHucodeShellController extends Disposable
 			this.deferredInitialCatalog = catalog;
 			return;
 		}
+		if (this.globalRestoreAttempt) {
+			this.deferredRecoveryCatalog = catalog;
+			return;
+		}
 		if (!this.pendingGlobalRestore) {
 			this.applyGlobalCatalog(catalog);
 			this.retryPendingWorkbenchAdoptions();
-			return;
-		}
-		if (this.globalRestoreAttempt) {
-			this.deferredRecoveryCatalog = catalog;
 			return;
 		}
 		const persisted = this.pendingGlobalRestore;

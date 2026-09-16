@@ -302,7 +302,7 @@ suite('WebHucodeShellService', () => {
 				retainedWorkbenches: [{
 					id: 'legacy',
 					folderUri: URI.file(legacyPath).toJSON(),
-					desiredState: 'unloaded',
+					desiredState: 'loaded',
 					order: 0,
 				}],
 				residentWorkspaces: [],
@@ -317,7 +317,9 @@ suite('WebHucodeShellService', () => {
 					workbenchId: string;
 				}];
 			}>();
+			const restoreAvailability = new DeferredPromise<boolean>();
 			let importCalls = 0;
+			let restoreChecks = 0;
 			const recoveredCatalog: ProjectCatalogSnapshot = {
 				epoch: 'recovery-race',
 				revision: 1,
@@ -362,8 +364,13 @@ suite('WebHucodeShellService', () => {
 			const { service, browser } = createService(
 				new FakeBrowserAdapter(),
 				persistence,
-				'none',
-				undefined,
+				'all',
+				{
+					exists: async () => {
+						restoreChecks++;
+						return restoreAvailability.p;
+					},
+				},
 				undefined,
 				undefined,
 				manager
@@ -372,8 +379,6 @@ suite('WebHucodeShellService', () => {
 			await service.getWindowState(browser.windowId);
 			catalogs.fire(recoveredCatalog);
 			await waitFor(() => importCalls === 2, 'expected catalog recovery');
-			catalogs.fire(intermediateCatalog);
-			catalogs.fire(concurrentCatalog);
 			recoveryImport.complete({
 				catalog: recoveredCatalog,
 				outcomes: [{
@@ -382,6 +387,13 @@ suite('WebHucodeShellService', () => {
 					workbenchId: 'global-legacy',
 				}],
 			});
+			await waitFor(
+				() => restoreChecks === 1,
+				'expected workspace restoration to begin'
+			);
+			catalogs.fire(intermediateCatalog);
+			catalogs.fire(concurrentCatalog);
+			restoreAvailability.complete(true);
 
 			await waitFor(async () => {
 				const state = await service.getWindowState(browser.windowId);
