@@ -920,6 +920,31 @@ export class WebHucodeShellController extends Disposable
 		if (!canApply()) {
 			return this.getState();
 		}
+		if (!this.getInstanceByPath(worktreePath) &&
+			!this.retainedWorkbenches.getByUri(URI.file(worktreePath)) &&
+			!this.resolveProjectIdAgainstCatalog(worktreePath, projectId) &&
+			this.navigationProjectManager?.ensureWorkbench &&
+			this.navigationProjectManager.getCatalog) {
+			this.assertWorkbenchMigrationComplete();
+			const ensured = await this.navigationProjectManager.ensureWorkbench(
+				URI.file(worktreePath)
+			);
+			if (!canApply()) {
+				return this.getState();
+			}
+			if (ensured.kind === 'projectWorktree') {
+				worktreePath = ensured.worktree.path;
+				projectId = ensured.projectId;
+			} else {
+				worktreePath = ensured.workbench.folderUri.fsPath;
+			}
+			this.applyGlobalCatalog(
+				await this.navigationProjectManager.getCatalog()
+			);
+			if (!canApply()) {
+				return this.getState();
+			}
+		}
 		const existing = this.getInstanceByPath(worktreePath);
 		const projectCatalogGeneration =
 			this.projectCatalogSnapshot?.generation;

@@ -224,6 +224,96 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
+	test('ordinary folder opens persist globally and do not resurrect dismissed live rows',
+		async () => {
+			const folder = URI.file('/tmp/ordinary-folder');
+			const persistence = new SessionStorageWebHucodeShellPersistence(
+				new MemorySessionStorage()
+			);
+			const catalogs = disposables.add(new Emitter<ProjectCatalogSnapshot>());
+			let catalog: ProjectCatalogSnapshot = {
+				epoch: 'ordinary-open', revision: 0, projects: [], workbenches: [],
+			};
+			let ensureCalls = 0;
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				onDidChangeCatalog: catalogs.event,
+				getProjects: async () => catalog.projects,
+				getCatalog: async () => catalog,
+				importWorkbenches: async () => ({ catalog, outcomes: [] }),
+				ensureWorkbench: async uri => {
+					assert.strictEqual(uri.toString(), folder.toString());
+					ensureCalls++;
+					const workbench = { id: 'global-open', folderUri: folder, order: 0 };
+					catalog = { ...catalog, revision: 1, workbenches: [workbench] };
+					return { kind: 'workbench', created: true, workbench };
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(), persistence, 'active',
+				undefined, undefined, undefined, manager
+			);
+			const opened = await service.openWorkspace(browser.windowId, folder.fsPath);
+			assert.strictEqual(ensureCalls, 1);
+			assert.strictEqual(opened.retainedWorkbenches?.[0].id, 'global-open');
+			assert.strictEqual(persistence.load()?.workbenchOverlays?.[0].workbenchId, 'global-open');
+
+			const reloaded = createService(
+				new FakeBrowserAdapter(), persistence, 'active',
+				undefined, undefined, undefined, manager
+			);
+			const restored = await reloaded.service.getWindowState(reloaded.browser.windowId);
+			assert.strictEqual(restored.retainedWorkbenches?.[0].id, 'global-open');
+			assert.strictEqual(restored.instances[0].worktreePath, folder.fsPath);
+			assert.strictEqual(ensureCalls, 1);
+
+			catalog = { ...catalog, revision: 2, workbenches: [] };
+			catalogs.fire(catalog);
+			const refocused = await service.openAndFocusWorkspace(browser.windowId, folder.fsPath);
+			assert.strictEqual(ensureCalls, 1);
+			assert.strictEqual(refocused.retainedWorkbenches?.[0].sessionOnly, true);
+		}
+	);
+
+	test('ordinary folder opens use canonical project admission and reject write failures',
+		async () => {
+			const canonicalPath = '/tmp/canonical-project';
+			const project = navigationProjectRecord('canonical-project', canonicalPath);
+			let admitted = false;
+			const manager: IWebHucodeHostedNavigationProjectManager = {
+				getProjects: async () => admitted ? [project] : [],
+				getCatalog: async () => ({
+					epoch: 'project-open', revision: admitted ? 1 : 0,
+					projects: admitted ? [project] : [], workbenches: [],
+				}),
+				importWorkbenches: async () => ({
+					catalog: await manager.getCatalog!(), outcomes: [],
+				}),
+				ensureWorkbench: async uri => {
+					if (uri.fsPath === '/tmp/write-failure') {
+						throw new Error('catalog write failed');
+					}
+					admitted = true;
+					return { kind: 'projectWorktree', projectId: project.id, worktree: project.worktrees[0] };
+				},
+				setLastActiveWorktree: async () => { },
+			};
+			const { service, browser } = createService(
+				new FakeBrowserAdapter(), undefined, 'active',
+				undefined, undefined, undefined, manager
+			);
+			await assert.rejects(
+				service.openWorkspace(browser.windowId, '/tmp/write-failure'),
+				/catalog write failed/
+			);
+			assert.deepStrictEqual((await service.getWindowState(browser.windowId)).instances, []);
+			const opened = await service.openAndFocusWorkspace(browser.windowId, '/tmp/project-alias');
+			assert.strictEqual(opened.instances[0].worktreePath, canonicalPath);
+			assert.strictEqual(opened.instances[0].projectId, project.id);
+			assert.deepStrictEqual(opened.retainedWorkbenches, []);
+		}
+	);
+
 	test('catalog recovery preserves current activation and does not reopen closed residents',
 		async () => {
 			const legacyPath = '/tmp/recovered-legacy';
