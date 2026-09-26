@@ -64,8 +64,12 @@ human-facing guides rather than replacing them.
   with `npm run test-build-scripts`. The mixin tests share
   `.build/distro/mixin/stable/` and can expose partially written output.
 - `npm run hucode:compile` must build the client, built-in extension outputs,
-  and extension media. Using only `transpile-client` cleans `out/` but leaves
-  files like `extensions/git-base/out/extension.js` and `codicon.ttf` missing.
+  extension media, and Copilot. Using only `transpile-client` cleans `out/` but
+  leaves files like `extensions/git-base/out/extension.js` and `codicon.ttf`
+  missing. Copilot compiles outside the mixin wrapper, in parallel with the
+  gulp tasks in `hucode:compile-core`, because its bundle does not read
+  Hucode product data. Hucode CI unit and Omni smoke jobs call
+  `hucode:compile-core` directly and run without Copilot.
 - When launching `npm run hucode:run` from an integrated Hucode extension-host
   terminal, clear inherited Electron/VS Code process env such as
   `ELECTRON_RUN_AS_NODE` and `VSCODE_ESM_ENTRYPOINT`; otherwise the app binary
