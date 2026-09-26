@@ -160,7 +160,7 @@ suite('WebHucodeShellService', () => {
 			assert.strictEqual(state.workbenchCatalogHydrated, false);
 		});
 
-	test('preserves legacy persistence when SSE arrives before import fails',
+	test('keeps unavailable legacy migration read-only and preserves its persistence',
 		async () => {
 			const legacyState: IWebHucodeShellPersistedState = {
 				retainedWorkbenches: [{
@@ -210,6 +210,15 @@ suite('WebHucodeShellService', () => {
 			await waitFor(() => importCalls === 2, 'expected catalog retry');
 
 			assert.strictEqual(state.workbenchCatalogHydrated, false);
+			assert.deepStrictEqual(state.retainedWorkbenches, []);
+			await service.unloadRetainedWorkbench(browser.windowId, 'legacy');
+			await service.dismissRetainedWorkbench(browser.windowId, 'legacy');
+			await assert.rejects(service.retainAndOpenWorkbench(
+				browser.windowId, URI.file('/tmp/new-workbench').toJSON()
+			), /catalog reconnects/);
+			await assert.rejects(service.openWorkspace(
+				browser.windowId, '/tmp/legacy-retry'
+			), /catalog reconnects/);
 			assert.strictEqual(persistence.saveCalls, 0);
 			assert.deepStrictEqual(persistence.state, legacyState);
 		}

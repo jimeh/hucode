@@ -16,6 +16,7 @@ import {
 } from '../../base/common/lifecycle.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { URI, UriComponents } from '../../base/common/uri.js';
+import { localize } from '../../nls.js';
 import { Client as MessagePortClient } from
 	'../../base/parts/ipc/browser/ipc.mp.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
@@ -628,7 +629,10 @@ export class WebHucodeShellController extends Disposable
 		);
 		this.pendingSessionOverlays = persisted?.workbenchOverlays;
 		this.retainedWorkbenches = new RetainedWorkbenchCatalog(
-			persisted?.retainedWorkbenches,
+			this.navigationProjectManager?.getCatalog &&
+				this.navigationProjectManager.importWorkbenches
+				? undefined
+				: persisted?.retainedWorkbenches,
 			uri => this.toPathKey(uri.fsPath),
 			generateUuid
 		);
@@ -823,6 +827,9 @@ export class WebHucodeShellController extends Disposable
 		}
 		if (!projectId && this.navigationProjectManager?.ensureWorkbench &&
 			this.navigationProjectManager.getCatalog) {
+			if (this.pendingGlobalRestore) {
+				return HucodeHostedShellOperationOutcome.Rejected;
+			}
 			try {
 				const ensured = await this.navigationProjectManager.ensureWorkbench(
 					URI.file(worktreePath)
@@ -928,6 +935,7 @@ export class WebHucodeShellController extends Disposable
 			this.retainedWorkbenches.dismiss(retained.id);
 			retained = undefined;
 		} else if (!effectiveProjectId) {
+			this.assertWorkbenchMigrationComplete();
 			retained = this.retainedWorkbenches.retain(
 				URI.file(worktreePath),
 				'loaded'
@@ -1088,6 +1096,7 @@ export class WebHucodeShellController extends Disposable
 		if (windowId !== this.windowId) {
 			return this.getState();
 		}
+		this.assertWorkbenchMigrationComplete();
 		const folder = URI.revive(folderUri);
 		if (this.navigationProjectManager?.ensureWorkbench &&
 			this.navigationProjectManager.getCatalog) {
@@ -1104,6 +1113,13 @@ export class WebHucodeShellController extends Disposable
 			);
 		}
 		return this.openWorkspace(windowId, folder.fsPath);
+	}
+
+	private assertWorkbenchMigrationComplete(): void {
+		if (this.pendingGlobalRestore) {
+			throw new Error(localize('workbenchMigrationUnavailable',
+				"Saved workbenches are unavailable until their catalog reconnects."));
+		}
 	}
 
 	/** Gracefully unloads a ready iframe and leaves it dormant. */
@@ -1240,7 +1256,7 @@ export class WebHucodeShellController extends Disposable
 		await this.initialization;
 		if (windowId === this.windowId) {
 			const record = this.retainedWorkbenches.getById(workbenchId);
-			if (record?.sessionOnly) {
+			if (!record || record.sessionOnly) {
 				return this.getState();
 			}
 			if (this.navigationProjectManager?.renameWorkbench &&
@@ -2628,7 +2644,7 @@ export class WebHucodeShellController extends Disposable
 			await projectManager.ensureWorkbench(URI.file(worktreePath));
 			this.pendingWorkbenchAdoptions.delete(key);
 			if (projectManager.getCatalog) {
-				this.applyGlobalCatalog(await projectManager.getCatalog());
+				this.handleGlobalCatalog(await projectManager.getCatalog());
 			} else {
 				this.emitState();
 			}
@@ -3426,7 +3442,7 @@ export class WebHucodeShellController extends Disposable
 			this.hostedWorkspaces.projectsSidebarVisible,
 			hasLoadedHostedWorkspace(this.instancesById.values())
 		);
-		if (!this.shuttingDown &&
+		if (!this.shuttingDown && !this.pendingGlobalRestore &&
 			(!this.navigationProjectManager?.getCatalog ||
 				this.globalCatalogHydrated)) {
 			this.persistence.save({
