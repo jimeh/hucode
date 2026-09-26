@@ -26,8 +26,8 @@ as the required Hucode instruction set for work in this fork.
   - `npm run hucode:prepare`: generate the stable mixin overlay into
     `.build/distro/mixin/stable/`.
   - `npm run hucode:validate`: verify the Hucode mixin and generated output.
-  - `npm run hucode:compile`: build client, built-in extensions, and extension
-    media with Hucode product config.
+  - `npm run hucode:compile` (or `mise run build`): build client, built-in
+    extensions, extension media, and Copilot with Hucode product config.
   - `npm run hucode:watch`: run the incremental Hucode watch flow.
   - `npm run hucode:run`: launch the desktop app through the Hucode wrapper.
   - `npm run hucode:web`: launch the local serve-web development server
@@ -245,10 +245,13 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   The shared `Limiter` and `Queue` retain canceled waiting factories, and their
   disposal clears waiting work without settling its returned promises; do not
   use them for request admission that must release canceled or disposed work.
-- `npm run hucode:compile` does **not** build `extensions/copilot/dist`; that
-  needs `npm run compile-copilot` (CI has a separate "Copilot VSIX" job). A dev
-  `serve-web` therefore runs with Copilot Chat entirely absent, which silently
-  invalidated a runtime measurement that appeared to pass.
+- `npm run hucode:run` and `hucode:web` compile only when `out/` is missing,
+  so after a pull or baseline upgrade they launch stale output. Copilot reads
+  `extensions/copilot/package.json` at runtime and compares its setting
+  defaults with the compiled bundle; a stale `extensions/copilot/dist` fails
+  activation with "The default value for setting ... is different in
+  packageJson and in code". Rerun `npm run hucode:compile`, which builds
+  Copilot, or restart `hucode:watch`.
 - Keep Omni web shell registrations in `omniWeb.contribution.ts`, imported by
   both `omni.web.main.ts` and `omniWebUserData.factory.ts`. The latter is the
   default root entrypoint under server-side user-data storage; omitting shared

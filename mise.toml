@@ -36,6 +36,10 @@ else
 fi
 """
 
+[tasks.build]
+description = "Compile the client, built-in extensions, and Copilot with Hucode product data"
+run = "npm run hucode:compile"
+
 [tasks.treeboot]
 description = "Bootstrap the current worktree with treeboot"
 run = "treeboot"

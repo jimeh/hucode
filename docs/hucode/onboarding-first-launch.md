@@ -103,11 +103,11 @@ Focused suites cover admission and failed checkpoint retry, navigation and
 recovery, folder offers and conflicts, file persistence, startup suppression,
 modal serialization, and owner reservation before native view creation. The
 suite snapshot records their CI runner assignments. Linux desktop checks must
-use isolated user-data and source fixtures, build Copilot separately, and include
+use isolated user-data and source fixtures, build Copilot, and include
 whole-process termination after acknowledged checkpoints. Renderer termination
 alone leaves main storage alive and does not prove disk durability.
 
-Build with `npm run hucode:compile` and `npm run compile-copilot`, then run
+Build with `npm run hucode:compile`, then run
 `mise run test:onboarding-desktop`. On a headless Linux host, use
 `ELECTRON_DISABLE_SANDBOX=1 xvfb-run -a mise run test:onboarding-desktop`.
 The task prepares the Hucode Electron binary and requires bubblewrap for the

@@ -28,7 +28,7 @@ Hucode's release version is the overlay's `hucodeVersion`. The root package
 | --- | --- |
 | `npm run hucode:prepare` | Generate the stable mixin from the tracked overlay. |
 | `npm run hucode:validate` | Verify the source overlay and generated mixin. |
-| `npm run hucode:compile` | Compile the client, built-in extensions, and extension media with Hucode product data. |
+| `npm run hucode:compile` | Compile the client, built-in extensions, extension media, and Copilot with Hucode product data. Also available as `mise run build`. |
 | `npm run hucode:watch` | Run incremental compilation with Hucode product data. |
 | `npm run hucode:run` | Launch the desktop app from existing compiled output. |
 | `npm run hucode:web` | Launch the local serve-web server from existing compiled output. |
@@ -43,6 +43,12 @@ npm run hucode:run
 
 For an incremental development loop, keep `npm run hucode:watch` running and
 launch with `npm run hucode:run` or `npm run hucode:web` in another terminal.
+
+The launch commands compile only when `out/` is missing. After pulling or
+switching branches, rerun `npm run hucode:compile` or restart the watcher.
+Copilot reads its `package.json` at runtime and checks it against its compiled
+bundle, so a stale bundle fails activation with "The default value for setting
+... is different in packageJson and in code".
 
 ## Validation
 
