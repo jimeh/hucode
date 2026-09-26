@@ -45,6 +45,7 @@
 	"darwinAssetsCar": "resources/darwin/Assets.car",
 	"darwinProfileUUID": "48E87162-98D3-4215-B9B9-83798637DFE3",
 	"darwinProfilePayloadUUID": "5BE5D001-89C4-4F24-AD75-D608C4EA9EC6",
+	"linuxDesktopName": "dev.hucode.app",
 	"linuxIconName": "hucode",
 	"reportIssueUrl": "https://github.com/jimeh/hucode/issues/new",
 	"requestFeatureUrl": "https://github.com/jimeh/hucode/issues",
