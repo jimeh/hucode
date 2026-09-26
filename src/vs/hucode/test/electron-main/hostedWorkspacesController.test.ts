@@ -700,6 +700,30 @@ suite('ResidentHostedWorkspacesController', () => {
 		}
 	);
 
+	test('catalog hydration preserves legacy migration input after an import failure', async () => {
+		const loadedPath = createWorktree('legacy-import-loaded');
+		const unloadedPath = createWorktree('legacy-import-unloaded');
+		const { controller, window } = createController({
+			retainedWorkbenches: [{
+				id: 'legacy-loaded', folderUri: URI.file(loadedPath).toJSON(),
+				desiredState: 'loaded', order: 0,
+			}, {
+				id: 'legacy-unloaded', folderUri: URI.file(unloadedPath).toJSON(),
+				desiredState: 'unloaded', order: 1,
+			}],
+			restorePolicy: 'all',
+		});
+		await controller.ensureRestored();
+		const migrationInput = structuredClone(window.config?.omniRetainedWorkbenches);
+		assert.strictEqual(migrationInput?.length, 2);
+		controller.synchronizeGlobalWorkbenchCatalog({
+			epoch: 'retry', revision: 1, projects: [], workbenches: [],
+		});
+		assert.deepStrictEqual(window.config?.omniRetainedWorkbenches, migrationInput);
+		assert.deepStrictEqual(window.config?.omniWorkbenchOverlays, []);
+		assert.strictEqual(controller.getState().retainedWorkbenches?.[0].sessionOnly, true);
+	});
+
 	test('catalog admission gives an arbitrary folder a persisted global overlay', async () => {
 		const worktreePath = createWorktree('generic-global');
 		const { controller, window } = createController();

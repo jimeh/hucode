@@ -560,7 +560,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 							? {}
 							: { lastActiveAt: workbench.lastActiveAt }),
 					}));
-			this.window.config.omniRetainedWorkbenches = undefined;
+			// Only successful migration may clear the legacy snapshot. Catalog
+			// hydration can succeed after an import failure and does not prove
+			// these records were persisted globally.
 		} else {
 			// Preserve the legacy snapshot until the global catalog has hydrated.
 			// Startup migration consumes this value; clearing it early would lose
