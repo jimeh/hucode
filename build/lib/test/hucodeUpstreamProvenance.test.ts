@@ -257,6 +257,7 @@ suite('Hucode upstream provenance', () => {
 			surface => surface.upstream
 		);
 		const expectedPaths = [
+			'build/npm/preinstall.ts',
 			'src/vs/base/parts/storage/common/storage.ts',
 			'src/vs/code/electron-main/app.ts',
 			'src/vs/platform/state/node/state.ts',
@@ -291,6 +292,7 @@ suite('Hucode upstream provenance', () => {
 			'src/vs/workbench/services/storage/browser/storageService.ts',
 		].sort();
 		const expectedBaselineByPath = new Map<string, string>([
+			['build/npm/preinstall.ts', '1.139.1'],
 			['src/vs/base/parts/storage/common/storage.ts', '1.136.1'],
 			['src/vs/code/electron-main/app.ts', '1.139.0'],
 			['src/vs/platform/state/node/state.ts', '1.136.1'],

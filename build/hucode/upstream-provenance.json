@@ -2,6 +2,17 @@
 	"schemaVersion": 1,
 	"surfaces": [
 		{
+			"path": "build/npm/preinstall.ts",
+			"kind": "upstream-patch",
+			"reason": "Hucode accepts Visual Studio 2026, whose install directory is named 18, because GitHub's windows-11-arm runner label now provides it instead of Visual Studio 2022",
+			"upstream": {
+				"path": "build/npm/preinstall.ts",
+				"lastSyncedBaseline": "1.139.1",
+				"blob": "b0c2827e1fbb82fc8ae2353834a191e11d588055"
+			},
+			"testSuites": []
+		},
+		{
 			"path": "cli/src/commands/args.rs",
 			"kind": "upstream-patch",
 			"reason": "Hucode adds the typed serve-web user-data storage mode and defaults Hucode launches to server-backed storage",

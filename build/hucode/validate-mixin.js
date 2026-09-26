@@ -148,9 +148,14 @@ async function validateLinuxResources(generatedRoot) {
 
 	assert.match(appdata, /https:\/\/github\.com\/jimeh\/hucode/);
 	assert.match(appdata, /<id>dev\.hucode\.app<\/id>/);
+	assert.match(
+		appdata,
+		/<launchable type="desktop-id">dev\.hucode\.app\.desktop<\/launchable>/
+	);
 	assert.match(appdata, /Hucode provides a focused desktop environment/);
 	assert.match(desktop, /^Keywords=hucode;/m);
 	assert.match(desktop, /^Icon=@@ICON@@$/m);
+	assert.match(desktop, /^StartupWMClass=@@DESKTOP_NAME@@$/m);
 	assert.match(urlHandler, /^MimeType=x-scheme-handler\/@@URLPROTOCOL@@;$/m);
 	assert.match(control, /^Maintainer: Hucode Project <contact@jimeh\.me>$/m);
 	assert.match(control, /^Homepage: https:\/\/github\.com\/jimeh\/hucode$/m);
@@ -255,6 +260,7 @@ export async function validateMixin(quality = 'stable') {
 		sourceProduct.win32ContextMenu
 	);
 	assert.strictEqual(generated.embedderIdentifier, 'dev.hucode.app');
+	assert.strictEqual(generated.linuxDesktopName, 'dev.hucode.app');
 	assert.strictEqual(generated.linuxIconName, 'hucode');
 	assert.strictEqual(
 		generated.extensionsGallery.serviceUrl,

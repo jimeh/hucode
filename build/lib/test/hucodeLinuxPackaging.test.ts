@@ -246,6 +246,27 @@ suite('Hucode Linux packaging', () => {
 		));
 	});
 
+	test('installs the desktop files that upstream packaging generates', async () => {
+		const specPath = 'resources/linux/rpm/code.spec.template';
+		const upstreamSpec = await fs.readFile(
+			path.join(repoRoot, specPath),
+			'utf8'
+		);
+		const mixinSpec = (await readMixinResource(specPath)).toString('utf8');
+		const desktopResources = (spec: string) => new Set(
+			[...spec.matchAll(
+				/(?:applications|appdata)\/[^\s/]+\.(?:desktop|xml)/g
+			)].map(match => match[0])
+		);
+
+		const upstreamResources = desktopResources(upstreamSpec);
+		assert.ok(upstreamResources.size > 0);
+		assert.deepStrictEqual(
+			[...desktopResources(mixinSpec)].sort(),
+			[...upstreamResources].sort()
+		);
+	});
+
 	test('contains Hucode identity without package source management', async () => {
 		const contents = (
 			await Promise.all(linuxIdentityResourcePaths.map(readMixinResource))

@@ -9,7 +9,7 @@
 	<description>
 		<p>Hucode provides a focused desktop environment for collaborating with coding agents while retaining the editing and development tools expected from a modern code editor.</p>
 	</description>
-	<launchable type="desktop-id">hucode.desktop</launchable>
+	<launchable type="desktop-id">dev.hucode.app.desktop</launchable>
 	<developer id="dev.hucode">
 		<name>Hucode Project</name>
 	</developer>
