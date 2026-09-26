@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.88 - 2026-09-26
+
+### Bug Fixes
+
+- **release:** restore Linux RPM and Windows arm64 builds (#232)
+
 ## 0.0.87 - 2026-09-26
 
 ### Features
