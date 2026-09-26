@@ -9,11 +9,29 @@ import { Schemas } from '../../base/common/network.js';
 import { isLinux } from '../../base/common/platform.js';
 import { URI } from '../../base/common/uri.js';
 import { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
-import { ProjectRecord } from '../../platform/projectManager/common/projectManager.js';
+import { ProjectCatalogSnapshot, ProjectRecord } from '../../platform/projectManager/common/projectManager.js';
 import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
 import { INativeOpenFileRequest, IPath } from '../../platform/window/common/window.js';
 import { ICodeWindow } from '../../platform/window/electron-main/window.js';
 import { IHucodeShellMainService } from './omniWindow.js';
+
+/** Saves an arbitrary folder or resolves its existing project ownership before admission. */
+export async function ensureHucodeHostedFolderInCatalog(
+	projectManager: Pick<IProjectManagerMainService, 'ensureWorkbench' | 'getCatalogWithoutHydration'>,
+	folder: URI
+): Promise<{
+	readonly worktreePath: string;
+	readonly projectId?: string;
+	readonly catalog: ProjectCatalogSnapshot;
+}> {
+	const ensured = await projectManager.ensureWorkbench(folder);
+	return {
+		...(ensured.kind === 'projectWorktree'
+			? { worktreePath: ensured.worktree.path, projectId: ensured.projectId }
+			: { worktreePath: ensured.workbench.folderUri.fsPath }),
+		catalog: projectManager.getCatalogWithoutHydration(),
+	};
+}
 
 /** Native file payload retained while an Omni routing decision is pending. */
 export interface IHucodeFilesToOpen {

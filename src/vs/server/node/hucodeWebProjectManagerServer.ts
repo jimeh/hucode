@@ -853,7 +853,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 
 				if (req.method === 'DELETE' &&
 					relativePath.startsWith('workbenches/')) {
-					const workbenchId = decodeURIComponent(
+					const workbenchId = decodeWorkbenchId(
 						relativePath.substring('workbenches/'.length)
 					);
 					if (!workbenchId || workbenchId.includes('/')) {
@@ -1002,7 +1002,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 			const [encodedId, ...parts] = relativePath
 				.substring('workbenches/'.length)
 				.split('/');
-			const id = decodeURIComponent(encodedId);
+			const id = decodeWorkbenchId(encodedId);
 			const command = parts.join('/');
 			const catalog = await this.runDurableMutation(async () => {
 				switch (command) {
@@ -1220,7 +1220,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 							projectId,
 							readCreateWorktreeOptions(body),
 						),
-						projects: await service.getProjects(),
+						...await service.getCatalog(),
 					}), token);
 					return this.writeJson(res, 201, result);
 				}
@@ -1244,7 +1244,7 @@ export class HucodeWebProjectManagerServer extends Disposable {
 						);
 						return {
 							result,
-							projects: await service.getProjects(),
+							...await service.getCatalog(),
 						};
 					}, token);
 					return this.writeJson(res, 200, response);
@@ -1816,6 +1816,14 @@ export class HucodeWebProjectManagerServer extends Disposable {
 }
 
 class BadRequestError extends Error { }
+
+function decodeWorkbenchId(encodedId: string): string {
+	try {
+		return decodeURIComponent(encodedId);
+	} catch {
+		throw new BadRequestError('Invalid workbench ID encoding.');
+	}
+}
 
 class ProjectRequestAdmissionError extends Error {
 	constructor(

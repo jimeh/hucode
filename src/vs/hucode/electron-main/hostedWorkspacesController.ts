@@ -259,7 +259,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	];
 	private globalCatalogHydrated = false;
 	private globalWorkbenchIds = new Set<string>();
-	private readonly pendingWorkbenchAdoptions = new Set<string>();
+	private readonly pendingWorkbenchAdoptions = new Map<string, string>();
 	private restorePolicy: HucodeHostedWorkbenchRestorePolicy;
 
 	private bounds: IRectangle = { x: 0, y: 0, width: 0, height: 0 };
@@ -378,7 +378,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			if (!pending.worktreePath) {
 				continue;
 			}
-			this.pendingWorkbenchAdoptions.add(pending.worktreePath);
+			this.pendingWorkbenchAdoptions.set(
+				this.getPendingWorkbenchPathKey(pending.worktreePath),
+				pending.worktreePath
+			);
 			this.retainedWorkbenches.retain(
 				URI.file(pending.worktreePath),
 				pending.desiredState,
@@ -539,7 +542,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	}
 
 	private updateWindowRestoreState(): void {
-		if (this.shuttingDown || !this.window.config) {
+		if (this.shuttingDown || !this.restored || !this.window.config) {
 			return;
 		}
 
@@ -566,7 +569,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.retainedWorkbenches.all;
 		}
 		this.window.config.omniPendingWorkbenchAdoptions = Array.from(
-			this.pendingWorkbenchAdoptions,
+			this.pendingWorkbenchAdoptions.values(),
 			worktreePath => {
 				const retained = this.retainedWorkbenches.getByUri(
 					URI.file(worktreePath)
@@ -1628,10 +1631,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.authoritativeCatalog = catalog;
 		const workbenches = catalog.workbenches;
 		this.globalWorkbenchIds = new Set(workbenches.map(workbench => workbench.id));
-		const pendingPathKeys = new Set(Array.from(
-			this.pendingWorkbenchAdoptions,
-			worktreePath => getProjectManagerPathComparisonKey(worktreePath, isLinux)
-		));
+		const pendingPathKeys = new Set(this.pendingWorkbenchAdoptions.keys());
 		let changed = this.retainedWorkbenches.synchronizeGlobalRecords(
 			workbenches,
 			record => {
@@ -1698,7 +1698,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				'loaded',
 				instance.lastActiveAt
 			);
-			this.pendingWorkbenchAdoptions.add(instance.worktreePath);
+			this.pendingWorkbenchAdoptions.set(
+				this.getPendingWorkbenchPathKey(instance.worktreePath),
+				instance.worktreePath
+			);
 			instance.projectId = undefined;
 			changed = true;
 		}
@@ -1884,7 +1887,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			}
 			const worktreePath = URI.revive(record.folderUri).fsPath;
 			const pendingAdoption =
-				this.pendingWorkbenchAdoptions.delete(worktreePath);
+				this.pendingWorkbenchAdoptions.delete(
+					this.getPendingWorkbenchPathKey(worktreePath)
+				);
 			if (record.sessionOnly || pendingAdoption) {
 				this.retainedWorkbenches.dismiss(workbenchId);
 			} else {
@@ -1915,7 +1920,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				this.releaseInstanceOwnership(instance);
 			}
 			this.retainedWorkbenches.dismiss(workbenchId);
-			this.pendingWorkbenchAdoptions.delete(worktreePath);
+			this.pendingWorkbenchAdoptions.delete(
+				this.getPendingWorkbenchPathKey(worktreePath)
+			);
 			this.emitState();
 		});
 	}
@@ -2008,7 +2015,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				'loaded',
 				instance.lastActiveAt
 			);
-			this.pendingWorkbenchAdoptions.add(instance.worktreePath);
+			this.pendingWorkbenchAdoptions.set(
+				this.getPendingWorkbenchPathKey(instance.worktreePath),
+				instance.worktreePath
+			);
 			instance.projectId = undefined;
 			changed = true;
 		}
@@ -2826,14 +2836,27 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return true;
 	}
 
+	private getPendingWorkbenchPathKey(worktreePath: string): string {
+		return getProjectManagerPathComparisonKey(URI.file(worktreePath).fsPath, isLinux);
+	}
+
 	/** Returns project-removal paths awaiting durable global adoption. */
 	getPendingWorkbenchAdoptions(): readonly string[] {
-		return Array.from(this.pendingWorkbenchAdoptions);
+		return Array.from(this.pendingWorkbenchAdoptions.values());
+	}
+
+	/** Tests pending adoption using the server's path comparison semantics. */
+	hasPendingWorkbenchAdoption(worktreePath: string): boolean {
+		return this.pendingWorkbenchAdoptions.has(
+			this.getPendingWorkbenchPathKey(worktreePath)
+		);
 	}
 
 	/** Completes one pending adoption after the catalog authority accepts it. */
 	completePendingWorkbenchAdoption(worktreePath: string): void {
-		if (this.pendingWorkbenchAdoptions.delete(worktreePath)) {
+		if (this.pendingWorkbenchAdoptions.delete(
+			this.getPendingWorkbenchPathKey(worktreePath)
+		)) {
 			this.emitState();
 		}
 	}

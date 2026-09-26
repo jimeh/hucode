@@ -228,6 +228,12 @@ export class ProjectManagerMainService extends Disposable
 		return this.toCatalogSnapshot(projects);
 	}
 
+	/** Reads stored catalog state without waiting for Git discovery. */
+	getCatalogWithoutHydration(): ProjectCatalogSnapshot {
+		this.ensureStateLoaded();
+		return this.toCatalogSnapshot();
+	}
+
 	async ensureWorkbench(uri: URI): Promise<EnsureWorkbenchResult> {
 		this.ensureStateLoaded();
 		const result = this.ensureWorkbenchWithoutPublication(uri);
@@ -1234,11 +1240,12 @@ export class ProjectManagerMainService extends Disposable
 
 		// This check and insert are deliberately synchronous. Concurrent desktop
 		// callers therefore converge after any caller-side asynchronous preflight.
+		const normalizedId = preferredId?.trim();
 		const stored: StoredArbitraryWorkbenchRecord = {
-			id: preferredId?.trim() && !this.storedWorkbenches.some(
-				workbench => workbench.id === preferredId
+			id: normalizedId && !this.storedWorkbenches.some(
+				workbench => workbench.id === normalizedId
 			)
-				? preferredId
+				? normalizedId
 				: generateUuid(),
 			folderPath: uri.fsPath,
 			...(label?.trim() ? { label: label.trim() } : {}),

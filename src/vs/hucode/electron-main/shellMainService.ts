@@ -75,7 +75,7 @@ import {
 	IHucodeHostedRestoreCandidate,
 	ResidentHostedWorkspacesController,
 } from './hostedWorkspacesController.js';
-import { findHucodeProjectWorktreeByPath } from './omniWorkspaceOpen.js';
+import { ensureHucodeHostedFolderInCatalog, findHucodeProjectWorktreeByPath } from './omniWorkspaceOpen.js';
 import {
 	HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING,
 	HucodeHostedWorkbenchRestorePolicy,
@@ -942,6 +942,19 @@ export class HucodeShellMainService extends Disposable
 			for (let attempt = 0; attempt < 4; attempt++) {
 				const lookup = this.ownershipCoordinator.lookup(worktreePath);
 				if (lookup.kind === 'absent') {
+					if (!projectId) {
+						const target = await ensureHucodeHostedFolderInCatalog(
+							this.projectManagerMainService,
+							URI.file(worktreePath)
+						);
+						if (!canApply()) {
+							return { kind: 'superseded' };
+						}
+						projectId = target.projectId;
+						worktreePath = target.worktreePath;
+						this.globalCatalog = target.catalog;
+						this.synchronizeControllerCatalogs(this.globalCatalog);
+					}
 					const controller = this.getOrCreateController(windowId);
 					await controller.openAdmittedWorkspace(
 						worktreePath,
@@ -1202,15 +1215,10 @@ export class HucodeShellMainService extends Disposable
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
 		const folder = URI.revive(folderUri);
-		const ensured = await this.projectManagerMainService.ensureWorkbench(folder);
-		if (ensured.kind === 'projectWorktree') {
-			await this.routeWorkspaceOpen(windowId, ensured.worktree.path);
-			return this.withDesktopOwnershipState(windowId, controller.getState());
-		}
-		const catalog = await this.projectManagerMainService.getCatalog();
-		this.globalCatalog = catalog;
-		controller.synchronizeGlobalWorkbenchCatalog(catalog);
-		await this.routeWorkspaceOpen(windowId, ensured.workbench.folderUri.fsPath);
+		const target = await ensureHucodeHostedFolderInCatalog(this.projectManagerMainService, folder);
+		this.globalCatalog = target.catalog;
+		this.synchronizeControllerCatalogs(target.catalog);
+		await this.routeWorkspaceOpen(windowId, target.worktreePath, target.projectId);
 		return this.withDesktopOwnershipState(windowId, controller.getState());
 	}
 
@@ -1268,6 +1276,11 @@ export class HucodeShellMainService extends Disposable
 		label: string | undefined,
 	): Promise<IHucodeHostedWorkspaceState> {
 		const controller = this.getOrCreateController(windowId);
+		if (!this.globalCatalog?.workbenches.some(
+			workbench => workbench.id === workbenchId
+		)) {
+			return this.withDesktopOwnershipState(windowId, controller.getState());
+		}
 		if (label === undefined) {
 			await this.projectManagerMainService.resetWorkbenchLabel(workbenchId);
 		} else {
@@ -1795,7 +1808,7 @@ export class HucodeShellMainService extends Disposable
 		worktreePath: string
 	): Promise<void> {
 		const controller = this.controllers.get(windowId);
-		if (!controller?.getPendingWorkbenchAdoptions().includes(worktreePath)) {
+		if (!controller?.hasPendingWorkbenchAdoption(worktreePath)) {
 			this.clearPendingAdoptionRetry(windowId, worktreePath);
 			return;
 		}
@@ -1824,7 +1837,7 @@ export class HucodeShellMainService extends Disposable
 			this.synchronizeControllerCatalogs(catalog);
 		} catch (error) {
 			retry.running = false;
-			if (!controller.getPendingWorkbenchAdoptions().includes(worktreePath)) {
+			if (!controller.hasPendingWorkbenchAdoption(worktreePath)) {
 				this.pendingAdoptionRetries.delete(key);
 				return;
 			}
@@ -1966,7 +1979,7 @@ export class HucodeShellMainService extends Disposable
 			}
 		}
 		if (byPath.size === 0) {
-			return this.projectManagerMainService.getCatalog();
+			return this.projectManagerMainService.getCatalogWithoutHydration();
 		}
 		const candidates = Array.from(byPath.values());
 		const imported = await this.projectManagerMainService.importWorkbenches(

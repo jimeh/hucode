@@ -2815,7 +2815,7 @@ suite('ProjectManagerMainService', () => {
 		);
 		const imported = await service.importWorkbenches([
 			{
-				legacyId: 'legacy',
+				legacyId: ' legacy ',
 				folderUri: URI.file('/scratch/two'),
 				order: 1,
 			},
@@ -2837,6 +2837,22 @@ suite('ProjectManagerMainService', () => {
 				imported.catalog.workbenches[0].id,
 			]
 		);
+	});
+
+	test('reads saved catalog metadata without starting Git hydration', async () => {
+		const state = new TestStateService();
+		const git = new TestGitWorktreeService();
+		const initial = createService(state, git);
+		await initial.addProject(URI.file('/repo'));
+		await initial.ensureWorkbench(URI.file('/scratch'));
+		const reloadedGit = new TestGitWorktreeService();
+		const reloaded = createService(state, reloadedGit);
+		const catalog = reloaded.getCatalogWithoutHydration();
+		assert.deepStrictEqual({
+			projects: catalog.projects.length,
+			workbenches: catalog.workbenches.length,
+			discovery: reloadedGit.listWorktreesCalls,
+		}, { projects: 1, workbenches: 1, discovery: [] });
 	});
 
 	test('promotes a saved workbench after current project discovery', async () => {

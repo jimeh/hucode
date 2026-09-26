@@ -14,6 +14,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { IEnvironmentMainService } from '../../../platform/environment/electron-main/environmentMainService.js';
 import { IBrowserViewMainService } from '../../../platform/browserView/electron-main/browserViewMainService.js';
 import { NullLogService } from '../../../platform/log/common/log.js';
+import { ProjectCatalogSnapshot } from '../../../platform/projectManager/common/projectManager.js';
 import { IIPCObjectUrl, IProtocolMainService } from '../../../platform/protocol/electron-main/protocol.js';
 import {
 	IUserDataProfile,
@@ -50,6 +51,7 @@ import {
 	HucodeDesktopWorkbenchOwnershipCoordinator,
 	selectHucodeDesktopRestoreWinners,
 } from '../../electron-main/desktopWorkbenchOwnership.js';
+import { ensureHucodeHostedFolderInCatalog } from '../../electron-main/omniWorkspaceOpen.js';
 import {
 	IHostedWorkspaceContractState,
 	IHostedWorkspaceLifecycleContractAdapter,
@@ -654,8 +656,11 @@ suite('ResidentHostedWorkspacesController', () => {
 	test('waits for global catalog hydration before restoring overlays',
 		async () => {
 			const worktreePath = createWorktree('catalog-gated-overlay');
+			const projectPath = createWorktree('catalog-gated-project');
 			const catalogReady = new DeferredPromise<void>();
-			const { controller } = createController({
+			const { controller, window } = createController({
+				activeWorktreePath: projectPath,
+				restoreEntries: [{ projectId: 'project', worktreePath: projectPath, state: 'active' }],
 				retainedWorkbenches: [],
 				workbenchOverlays: [{
 					workbenchId: 'global-overlay',
@@ -672,22 +677,54 @@ suite('ResidentHostedWorkspacesController', () => {
 			controller.synchronizeGlobalWorkbenchCatalog({
 				epoch: 'test',
 				revision: 1,
-				projects: [],
+				projects: [{
+					id: 'project', label: 'Project', rootUri: URI.file(projectPath),
+					pinned: false, order: 0, worktreeState: 'current', worktrees: [],
+				}],
 				workbenches: [{
 					id: 'global-overlay',
 					folderUri: URI.file(worktreePath),
 					order: 0,
 				}],
 			});
+			assert.strictEqual(window.config?.omniActiveWorktreePath, projectPath);
+			assert.strictEqual(window.config?.omniResidentWorkspaces?.length, 1);
 			catalogReady.complete();
 			await restoring;
 
 			assert.deepStrictEqual(
-				controller.getState().instances.map(instance => instance.worktreePath),
-				[worktreePath]
+				controller.getState().instances.map(instance => instance.worktreePath).toSorted(),
+				[worktreePath, projectPath].toSorted()
 			);
+			assert.strictEqual(window.config?.omniActiveWorktreePath, projectPath);
 		}
 	);
+
+	test('catalog admission gives an arbitrary folder a persisted global overlay', async () => {
+		const worktreePath = createWorktree('generic-global');
+		const { controller, window } = createController();
+		let catalog: ProjectCatalogSnapshot = {
+			epoch: 'test', revision: 0, projects: [], workbenches: [],
+		};
+		const ensuredPaths: string[] = [];
+		const target = await ensureHucodeHostedFolderInCatalog({
+			ensureWorkbench: async folder => {
+				ensuredPaths.push(folder.fsPath);
+				const workbench = { id: 'global', folderUri: folder, order: 0 };
+				catalog = { ...catalog, revision: 1, workbenches: [workbench] };
+				return { kind: 'workbench', workbench, created: true };
+			},
+			getCatalogWithoutHydration: () => catalog,
+		}, URI.file(worktreePath));
+		controller.synchronizeGlobalWorkbenchCatalog(target.catalog);
+		await controller.openAdmittedWorkspace(target.worktreePath, target.projectId);
+		const state = controller.getState();
+		assert.deepStrictEqual({
+			ensuredPaths,
+			retainedIds: state.retainedWorkbenches?.map(record => record.id),
+			overlayIds: window.config?.omniWorkbenchOverlays?.map(record => record.workbenchId),
+		}, { ensuredPaths: [worktreePath], retainedIds: ['global'], overlayIds: ['global'] });
+	});
 
 	test('onboarding association runs under the owner reservation before profile configuration', async () => {
 		const worktreePath = createWorktree('onboarding-profile');
@@ -2208,6 +2245,22 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 		}
 	);
+
+	test('unloading a pending adoption removes its URI-normalized path', async () => {
+		const originalPath = 'C:/scratch/pending';
+		const { controller } = createController({
+			pendingWorkbenchAdoptions: [{ worktreePath: originalPath, desiredState: 'unloaded' }],
+		});
+		controller.synchronizeGlobalWorkbenchCatalog({
+			epoch: 'test', revision: 0, projects: [], workbenches: [],
+		});
+		const record = controller.getState().retainedWorkbenches?.[0];
+		assert.ok(record);
+		assert.ok(controller.hasPendingWorkbenchAdoption(URI.revive(record.folderUri).fsPath));
+		await controller.unloadRetainedWorkbench(record.id);
+		assert.deepStrictEqual(controller.getPendingWorkbenchAdoptions(), []);
+		assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
+	});
 
 	test('preserves pending adoption lifecycle through initial catalog sync', () => {
 		const worktreePath = createWorktree('pending-adoption-reload');

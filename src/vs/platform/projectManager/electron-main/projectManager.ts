@@ -5,7 +5,8 @@
 
 import { refineServiceDecorator } from '../../instantiation/common/instantiation.js';
 import {
-	IProjectManagerService
+	IProjectManagerService,
+	ProjectCatalogSnapshot
 } from '../common/projectManager.js';
 
 export const IProjectManagerMainService = refineServiceDecorator<
@@ -14,4 +15,6 @@ export const IProjectManagerMainService = refineServiceDecorator<
 >(IProjectManagerService);
 
 export interface IProjectManagerMainService extends IProjectManagerService {
+	/** Reads stored catalog state without waiting for Git discovery. */
+	getCatalogWithoutHydration(): ProjectCatalogSnapshot;
 }

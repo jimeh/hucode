@@ -1911,8 +1911,9 @@ suite('ProjectSwitcherContribution', () => {
 				...hostedState(),
 				retainedWorkbenches: [
 					retainedRecord('a', '/a', 0),
-					retainedRecord('b', '/b', 1),
-					retainedRecord('c', '/c', 2),
+					{ ...retainedRecord('session', '/session', 1), sessionOnly: true },
+					retainedRecord('b', '/b', 2),
+					retainedRecord('c', '/c', 3),
 				],
 			},
 			moveRetainedWorkbench: async (id, beforeId) => {
@@ -1940,6 +1941,17 @@ suite('ProjectSwitcherContribution', () => {
 			{ id: 'c', beforeId: 'a' },
 			{ id: 'c', beforeId: 'b' },
 		]);
+		const session = retainedWorkbenchItem({ isSessionOnly: true });
+		assert.strictEqual(dragAndDrop.getDragURI(session), null);
+		for (const [dragged, dropped] of [[session, target], [source, session]]) {
+			assert.strictEqual(dragAndDrop.onDragOver(
+				new ElementsDragAndDropData([dragged]), dropped, 0,
+				ListViewTargetSector.BOTTOM, new DragEvent('dragover')
+			), false);
+			await dragAndDrop.drop(new ElementsDragAndDropData([dragged]),
+				dropped, 0, ListViewTargetSector.BOTTOM, new DragEvent('drop'));
+		}
+		assert.strictEqual(moves.length, 2);
 	});
 
 	test('prefers keyboard focus over stale tree selection', () => {

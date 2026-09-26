@@ -671,11 +671,16 @@ function readProjectEvent(event: Event): ProjectCatalogSnapshot | undefined {
 }
 
 function reviveCatalog(catalog: ProjectsResponse): ProjectCatalogSnapshot {
+	if (typeof catalog.epoch !== 'string' || !catalog.epoch ||
+		!Number.isSafeInteger(catalog.revision) || catalog.revision < 0 ||
+		!Array.isArray(catalog.projects) || !Array.isArray(catalog.workbenches)) {
+		throw new Error('Invalid project catalog response.');
+	}
 	return {
-		epoch: typeof catalog.epoch === 'string' ? catalog.epoch : 'legacy',
-		revision: Number.isSafeInteger(catalog.revision) ? catalog.revision : 0,
+		epoch: catalog.epoch,
+		revision: catalog.revision,
 		projects: catalog.projects.map(project => reviveProject(project)),
-		workbenches: (catalog.workbenches ?? []).map(workbench => ({
+		workbenches: catalog.workbenches.map(workbench => ({
 			...workbench,
 			folderUri: URI.revive(workbench.folderUri),
 		})),

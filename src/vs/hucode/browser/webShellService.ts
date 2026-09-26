@@ -2421,12 +2421,24 @@ export class WebHucodeShellController extends Disposable
 			return;
 		}
 		const persisted = this.pendingGlobalRestore;
+		const restoredResidentPaths = new Set(persisted.residentWorkspaces.map(
+			resident => this.toPathKey(resident.worktreePath)
+		));
 		this.globalRestoreAttempt = Promise.resolve()
 			.then(() => this.loadOrImportGlobalCatalog(persisted))
 			.then(async imported => {
 				this.applyGlobalCatalog(imported.catalog);
 				this.pendingGlobalRestore = undefined;
-				await this.restorePersistedWorkbenches(imported.persisted);
+				await this.restorePersistedWorkbenches(imported.persisted ? {
+					...imported.persisted,
+					// Residents were handled during startup. Only newly promoted
+					// legacy workbenches remain eligible on this recovery pass.
+					residentWorkspaces: imported.persisted.residentWorkspaces.filter(
+						resident => !restoredResidentPaths.has(
+							this.toPathKey(resident.worktreePath)
+						)
+					),
+				} : undefined, true, true);
 				this.applyGlobalCatalog(imported.catalog);
 			})
 			.catch(error => this.logService.warn(
@@ -2642,11 +2654,13 @@ export class WebHucodeShellController extends Disposable
 
 	private async restorePersistedWorkbenches(
 		persisted: IWebHucodeShellPersistedState | undefined,
-		includeRetained = true
+		includeRetained = true,
+		preserveCurrentActivation = false
 	): Promise<void> {
 		if (!persisted || this.initializationCancelled) {
 			return;
 		}
+		const activationIntent = this.activationIntentGeneration;
 		const retainedCandidates = (includeRetained
 			? this.retainedWorkbenches.all
 			: [])
@@ -2709,10 +2723,11 @@ export class WebHucodeShellController extends Disposable
 				activeInstance = instance;
 			}
 		}
-		if (activeInstance) {
+		if (activeInstance && (!preserveCurrentActivation ||
+			(!this.getActiveInstance() &&
+				activationIntent === this.activationIntentGeneration))) {
 			this.activateInstance(activeInstance);
-		}
-		if (!activeInstance) {
+		} else {
 			this.emitState();
 		}
 	}

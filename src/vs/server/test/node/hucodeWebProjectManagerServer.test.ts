@@ -60,6 +60,9 @@ interface ProjectResponseBody {
 
 interface ProjectsResponseBody {
 	readonly projects: readonly unknown[];
+	readonly epoch: string;
+	readonly revision: number;
+	readonly workbenches: readonly { readonly id: string }[];
 }
 
 interface ErrorResponseBody {
@@ -310,6 +313,21 @@ suite('HucodeWebProjectManagerServer', function () {
 			label: 'Scratch',
 			remaining: 0,
 		});
+	});
+
+	test('rejects malformed workbench ID encoding on mutation routes', async () => {
+		const server = createServer(serverDataPath, disposables, servers);
+		for (const [method, suffix] of [
+			['DELETE', 'workbenches/%ZZ'],
+			['POST', 'workbenches/%ZZ/label'],
+		]) {
+			const response = await handle(server, method,
+				`${HUCODE_WEB_PROJECTS_API_PATH}/${suffix}`, { label: 'Scratch' });
+			assert.deepStrictEqual(response, {
+				statusCode: 400,
+				body: { error: 'Invalid workbench ID encoding.' },
+			});
+		}
 	});
 
 	test('moves one global workbench through the relative move route',
@@ -905,7 +923,10 @@ suite('HucodeWebProjectManagerServer', function () {
 				{ rootPath: projectPath }
 			);
 			const worktreePath = join(serverDataPath, 'feature-worktree');
-			await handle(
+			await handle(server, 'POST', `${HUCODE_WEB_PROJECTS_API_PATH}/workbenches/ensure`, {
+				folderPath: join(serverDataPath, 'scratch'),
+			});
+			const created = await handle<ProjectsResponseBody>(
 				server,
 				'POST',
 				`${HUCODE_WEB_PROJECTS_API_PATH}/` +
@@ -917,6 +938,10 @@ suite('HucodeWebProjectManagerServer', function () {
 					},
 				}
 			);
+			assert.strictEqual(created.statusCode, 201);
+			assert.strictEqual(typeof created.body.epoch, 'string');
+			assert.ok(Number.isSafeInteger(created.body.revision));
+			assert.strictEqual(created.body.workbenches.length, 1);
 			await fs.writeFile(join(worktreePath, 'untracked.txt'), 'dirty');
 			const route = `${HUCODE_WEB_PROJECTS_API_PATH}/` +
 				`${added.body.project.id}/worktrees`;
@@ -975,7 +1000,7 @@ suite('HucodeWebProjectManagerServer', function () {
 			});
 			assert.ok(await fs.stat(worktreePath));
 
-			const forced = await handle<{
+			const forced = await handle<ProjectsResponseBody & {
 				readonly result: { readonly removed: boolean };
 			}>(
 				server,
@@ -991,6 +1016,9 @@ suite('HucodeWebProjectManagerServer', function () {
 				}
 			);
 			assert.deepStrictEqual(forced.body.result, { removed: true });
+			assert.strictEqual(forced.body.epoch, created.body.epoch);
+			assert.ok(forced.body.revision > created.body.revision);
+			assert.deepStrictEqual(forced.body.workbenches, created.body.workbenches);
 			await assert.rejects(fs.stat(worktreePath), { code: 'ENOENT' });
 		}
 	);

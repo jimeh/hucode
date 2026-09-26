@@ -891,7 +891,7 @@ export class ProjectSwitcherDragAndDrop
 			return item.worktreePath;
 		}
 		if (isRetainedWorkbenchItem(item)) {
-			return item.worktreePath;
+			return item.isSessionOnly ? null : item.worktreePath;
 		}
 		if (isOmniSectionItem(item)) {
 			return `hucode-omni-section:///${item.sectionKind}`;
@@ -946,7 +946,8 @@ export class ProjectSwitcherDragAndDrop
 			);
 		}
 		if (isRetainedWorkbenchItem(source)) {
-			if (!target || !isRetainedWorkbenchItem(target) ||
+			if (source.isSessionOnly || !target || !isRetainedWorkbenchItem(target) ||
+				target.isSessionOnly ||
 				target.retainedWorkbenchId === source.retainedWorkbenchId
 			) {
 				return false;
@@ -1153,18 +1154,22 @@ export class ProjectSwitcherDragAndDrop
 		target: ProjectSwitcherItem | undefined,
 		targetSector: ListViewTargetSector | undefined
 	): Promise<void> {
-		if (!target || !isRetainedWorkbenchItem(target) ||
+		if (source.isSessionOnly || !target || !isRetainedWorkbenchItem(target) ||
+			target.isSessionOnly ||
 			target.retainedWorkbenchId === source.retainedWorkbenchId
 		) {
 			return;
 		}
 		const state = await this.shellService.getState();
 		const orderedIds = (state.retainedWorkbenches ?? [])
+			.filter(record => !record.sessionOnly)
 			.toSorted((a, b) => a.order - b.order)
 			.map(record => record.id)
 			.filter(id => id !== source.retainedWorkbenchId);
 		const targetIndex = orderedIds.indexOf(target.retainedWorkbenchId);
-		if (targetIndex < 0) {
+		if (targetIndex < 0 || !state.retainedWorkbenches?.some(record =>
+			record.id === source.retainedWorkbenchId && !record.sessionOnly
+		)) {
 			return;
 		}
 		const insertionIndex = targetIndex +

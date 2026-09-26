@@ -215,11 +215,13 @@ suite('WebHucodeShellService', () => {
 		}
 	);
 
-	test('restores each workspace once when catalog recovery follows startup',
+	test('catalog recovery preserves current activation and does not reopen closed residents',
 		async () => {
 			const legacyPath = '/tmp/recovered-legacy';
 			const residentPath = '/tmp/recovered-resident';
+			const replacementPath = '/tmp/current-project';
 			const persistence = new FakePersistence({
+				activeWorktreePath: residentPath,
 				retainedWorkbenches: [{
 					id: 'legacy',
 					folderUri: URI.file(legacyPath).toJSON(),
@@ -237,7 +239,10 @@ suite('WebHucodeShellService', () => {
 			const recoveredCatalog: ProjectCatalogSnapshot = {
 				epoch: 'recovery',
 				revision: 1,
-				projects: [],
+				projects: [
+					navigationProjectRecord('resident-project', residentPath),
+					navigationProjectRecord('current-project', replacementPath),
+				],
 				workbenches: [{
 					id: 'global-legacy',
 					folderUri: URI.file(legacyPath),
@@ -263,7 +268,7 @@ suite('WebHucodeShellService', () => {
 				},
 				setLastActiveWorktree: async () => { },
 			};
-			const { service, browser } = createService(
+			const { service, browser, surface } = createService(
 				new FakeBrowserAdapter(),
 				persistence,
 				'all',
@@ -277,19 +282,24 @@ suite('WebHucodeShellService', () => {
 				initial.instances.map(instance => instance.worktreePath),
 				[residentPath]
 			);
+			await service.openWorkspace(browser.windowId, replacementPath, 'current-project');
+			await service.closeWorkspace(browser.windowId, initial.instances[0].instanceId);
 
 			recover = true;
 			catalogs.fire(recoveredCatalog);
 			await waitFor(
 				() => persistence.state?.retainedWorkbenches[0]?.id ===
-					'global-legacy',
+					'global-legacy' && surface.querySelectorAll('iframe').length === 2,
 				'expected migration recovery'
 			);
 			const recovered = await service.getWindowState(browser.windowId);
 			assert.deepStrictEqual(
 				recovered.instances.map(instance => instance.worktreePath).toSorted(),
-				[legacyPath, residentPath].toSorted()
+				[legacyPath, replacementPath].toSorted()
 			);
+			assert.strictEqual(recovered.instances.find(instance =>
+				instance.instanceId === recovered.activeInstanceId)?.worktreePath,
+				replacementPath);
 		}
 	);
 
