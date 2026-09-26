@@ -4,6 +4,11 @@ All notable changes to Hucode are documented in this file.
 
 ## 0.0.88 - 2026-09-26
 
+### Features
+
+- **deps:** upgrade VS Code baseline to 1.139.1
+- **deps:** upgrade VS Code baseline to 1.139.0
+
 ### Bug Fixes
 
 - **release:** restore Linux RPM and Windows arm64 builds (#232)
