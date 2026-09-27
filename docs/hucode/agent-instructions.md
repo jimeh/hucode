@@ -46,6 +46,11 @@ human-facing guides rather than replacing them.
 - Keep `builtInExtensionsSource` set to `github` in the Hucode product mixin.
   Upstream pins built-in extension checksums to its GitHub release artifacts;
   OpenVSX remains the gallery for user-installed extensions.
+- Proposed API access for non-built-in extensions comes from Microsoft's
+  `extensionEnabledApiProposals` allowlist, tracked in
+  `build/hucode/extension-api-proposals.json` and merged by `hucode:prepare`.
+  Do not define that key in the mixin `product.json`. Re-sync the file for each
+  VS Code baseline; `hucode:validate` rejects a file from another release.
 
 ## Local Workflow
 

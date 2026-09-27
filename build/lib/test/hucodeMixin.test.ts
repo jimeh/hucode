@@ -9,7 +9,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { prepareMixin } from '../../hucode/prepare-mixin.js';
-import { validateMixin } from '../../hucode/validate-mixin.js';
+import { assertExtensionApiProposalsParity, validateMixin } from '../../hucode/validate-mixin.js';
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -66,6 +66,10 @@ suite('Hucode mixin', () => {
 			'GitHub.copilot-chat'
 		);
 		assert.ok(generated.trustedExtensionAuthAccess);
+		// Without an allowlist entry, stable builds strip the extension's declared API proposals.
+		assert.ok(
+			generated.extensionEnabledApiProposals['GitHub.vscode-pull-request-github']?.length
+		);
 
 		const webManifest = await readJson(
 			path.join(
@@ -84,6 +88,15 @@ suite('Hucode mixin', () => {
 				name: 'Hucode',
 				short_name: 'Hucode'
 			}
+		);
+	});
+
+	test('rejects a proposed-API allowlist synced from a different VS Code release', () => {
+		const proposals = { source: { version: '1.139.1' } };
+		assertExtensionApiProposalsParity(proposals, '1.139.1');
+		assert.throws(
+			() => assertExtensionApiProposalsParity(proposals, '1.140.0'),
+			/synced from VS Code 1\.139\.1, but the upstream baseline is 1\.140\.0/
 		);
 	});
 });

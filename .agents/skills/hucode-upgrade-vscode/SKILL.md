@@ -526,6 +526,28 @@ git cherry-pick -x <upstream-fix-sha>
 Keep the backport as a standalone `(cherry picked from ...)` commit so the
 next upgrade can recognize and drop it once the fix arrives with the baseline.
 
+### Extension API Proposal Parity
+
+Built `stable` products strip the declared API proposals of any non-built-in
+extension that `product.json#extensionEnabledApiProposals` does not list. Code
+OSS ships no list, so Hucode copies Microsoft's into
+`build/hucode/extension-api-proposals.json`, and `hucode:prepare` merges it
+into the generated product. A stale list breaks Microsoft extensions installed
+from OpenVSX, such as GitHub Pull Requests, as soon as they adopt a proposal
+the old list lacks. Re-sync it from the Microsoft release matching the new
+baseline. The server archive carries the same map as the desktop app and is
+platform-independent:
+
+```sh
+curl -fsSL "https://update.code.visualstudio.com/<new-version>/server-linux-x64/stable" | \
+  tar -xzO vscode-server-linux-x64/product.json > /tmp/vscode-product.json
+npm run hucode:sync-extension-api-proposals -- --product /tmp/vscode-product.json
+```
+
+The sync rejects a product whose `version` differs from root `package.json`,
+and `hucode:validate` fails until the file's recorded `source.version` matches
+the baseline. Commit the refreshed file with the upgrade.
+
 For Hucode mixin validation:
 
 ```sh

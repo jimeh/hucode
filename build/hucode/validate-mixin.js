@@ -117,6 +117,24 @@ export function assertNoUpstreamIdentity(contents, label) {
 	assertPatternsAbsent(contents, upstreamIdentityPatterns, label);
 }
 
+/**
+ * Asserts that the tracked proposed-API allowlist was synced from the Microsoft VS Code release
+ * matching the upstream baseline, so a baseline upgrade cannot silently keep a stale allowlist.
+ *
+ * @param {{ source?: { version?: string } }} extensionApiProposals
+ * @param {string} upstreamVersion
+ */
+export function assertExtensionApiProposalsParity(
+	extensionApiProposals,
+	upstreamVersion
+) {
+	assert.strictEqual(
+		extensionApiProposals.source?.version,
+		upstreamVersion,
+		`build/hucode/extension-api-proposals.json was synced from VS Code ${extensionApiProposals.source?.version}, but the upstream baseline is ${upstreamVersion}. Run \`npm run hucode:sync-extension-api-proposals -- --product <Microsoft VS Code ${upstreamVersion} product.json>\`.`
+	);
+}
+
 async function validateLinuxResources(generatedRoot) {
 	for (const relativePath of linuxResources) {
 		await assertFileExists(
@@ -214,6 +232,10 @@ export async function validateMixin(quality = 'stable') {
 	const sourceProduct = await readJson(
 		path.join(repoRoot, 'build', 'hucode', 'mixin', quality, 'product.json')
 	);
+	const upstreamPackage = await readJson(path.join(repoRoot, 'package.json'));
+	const extensionApiProposals = await readJson(
+		path.join(repoRoot, 'build', 'hucode', 'extension-api-proposals.json')
+	);
 	const generatedRoot = path.dirname(generatedPath);
 	const generatedWebManifest = await readJson(
 		path.join(generatedRoot, 'resources', 'server', 'manifest.json')
@@ -282,6 +304,14 @@ export async function validateMixin(quality = 'stable') {
 		'GitHub.copilot-chat'
 	);
 	assert.ok(generated.trustedExtensionAuthAccess);
+	assertExtensionApiProposalsParity(
+		extensionApiProposals,
+		upstreamPackage.version
+	);
+	assert.deepStrictEqual(
+		generated.extensionEnabledApiProposals,
+		extensionApiProposals.extensionEnabledApiProposals
+	);
 	assert.strictEqual(rootProduct.nameShort, 'Code - OSS');
 	assert.strictEqual(rootProduct.applicationName, 'code-oss');
 	assert.strictEqual(rootProduct.dataFolderName, '.vscode-oss');
