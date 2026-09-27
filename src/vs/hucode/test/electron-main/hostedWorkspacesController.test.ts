@@ -4206,6 +4206,53 @@ suite('ResidentHostedWorkspacesController', () => {
 			});
 		});
 
+	test('an earlier-started capture cannot replace a newer placeholder',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const webContents = viewFactory.views[0].rawWebContents;
+			const older = new DeferredPromise<TestCapturedImage>();
+			const newer = new DeferredPromise<TestCapturedImage>();
+			webContents.capturePageQueue.push(older.p, newer.p);
+
+			const shellCapture = controller.captureWorkspaceScreenshot();
+			now += 100;
+			const occlusion = controller.setWorkspaceOverlayOcclusion(true);
+			newer.complete(capturedImage('newer'));
+			await timeout(0);
+			older.complete(capturedImage('older'));
+			await Promise.all([shellCapture, occlusion]);
+			const placeholder = await controller.captureWorkspaceScreenshot();
+
+			assert.strictEqual(placeholder?.toString(), 'newer');
+		});
+
+	test('placeholder age counts from when its capture started',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const webContents = viewFactory.views[0].rawWebContents;
+			const slow = new DeferredPromise<TestCapturedImage>();
+			webContents.capturePageQueue.push(slow.p);
+
+			const shellCapture = controller.captureWorkspaceScreenshot();
+			now += 900;
+			slow.complete(capturedImage('slow'));
+			await shellCapture;
+			now += 200;
+			await controller.setWorkspaceOverlayOcclusion(true);
+
+			assert.strictEqual(webContents.captureCalls.length, 2);
+		});
+
 	test('overlay occlusion hides the workspace after in-flight captures',
 		async () => {
 			const alpha = createWorktree('alpha');

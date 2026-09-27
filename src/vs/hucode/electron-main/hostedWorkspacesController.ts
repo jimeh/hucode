@@ -3375,6 +3375,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return undefined;
 		}
 
+		const startedAt = this.now();
 		const capture = webContents.capturePage(rect, { stayHidden: true });
 		this.pendingCaptures.add(capture);
 		try {
@@ -3385,17 +3386,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
 			// Only full-view captures at the shell's placeholder quality may
 			// become the placeholder. An occlusion that stopped waiting
-			// abandoned this capture; a late result must not replace the
-			// placeholder taken after it.
+			// abandoned this capture, and a capture that started earlier than
+			// the current placeholder's must not replace it. Placeholder age
+			// counts from when its capture started.
+			const current = this.occlusionPlaceholder;
 			if (
 				!rect &&
 				quality ===
 				ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY &&
-				this.pendingCaptures.has(capture)
+				this.pendingCaptures.has(capture) &&
+				(
+					current?.instanceId !== instance.instanceId ||
+					current.capturedAt <= startedAt
+				)
 			) {
 				this.occlusionPlaceholder = {
 					instanceId: instance.instanceId,
-					capturedAt: this.now(),
+					capturedAt: startedAt,
 					screenshot,
 				};
 			}
