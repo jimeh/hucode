@@ -5,9 +5,12 @@
 
 import assert from 'assert';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { DeferredPromise } from '../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
+import { runWithFakedTimers } from
+	'../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../../base/test/common/utils.js';
 import { Parts } from
@@ -925,6 +928,81 @@ suite('Omni Parts', () => {
 		});
 	});
 
+	test('OmniHostPart captures the placeholder only when an overlay occludes',
+		() => runWithFakedTimers({ useFakeTimers: true }, async () => {
+			let overlapping = false;
+			const captures: number[] = [];
+			const occlusions: boolean[] = [];
+			const surface = mainWindow.document.createElement('div');
+			surface.getBoundingClientRect = () => ({
+				x: 250, y: 0, left: 250, top: 0, right: 900, bottom: 700,
+				width: 650, height: 700, toJSON: () => undefined,
+			});
+			const host = prototypeHost(OmniHostPart.prototype, {
+				surface,
+				screenshot: mainWindow.document.createElement('div'),
+				screenshotImage: mainWindow.document.createElement('img'),
+				screenshotCaptureInFlight: undefined,
+				hasScreenshot: false,
+				overlayOccluded: false,
+				mainOverlayOccluded: false,
+				overlayOcclusionToken: 0,
+				activeInstanceId: 'active',
+				state: {
+					projectsSidebarVisible: true,
+					projectSwitcherCanGoBack: false,
+					projectSwitcherCanGoForward: false,
+					activeInstanceId: 'active',
+					instances: [hostedInstance('active', 'active')],
+				},
+				layoutService: { isVisible: () => true },
+				overlayManager: {
+					getOverlappingOverlays: () => overlapping ? [{}] : [],
+				},
+				shellService: {
+					supportsWorkspaceScreenshotOverlay: true,
+					layoutWorkspace: async () => undefined,
+					captureWorkspaceScreenshot: async () => {
+						captures.push(Date.now());
+						return VSBuffer.fromString('jpeg');
+					},
+					setWorkspaceOverlayOcclusion: async (occluded: boolean) => {
+						occlusions.push(occluded);
+					},
+				},
+				layoutScreenshot: () => undefined,
+			});
+			const layoutHostedWorkspace = Reflect.get(
+				OmniHostPart.prototype,
+				'layoutHostedWorkspace'
+			) as (this: object) => Promise<void>;
+			const updateOverlayOcclusion = Reflect.get(
+				OmniHostPart.prototype,
+				'updateOverlayOcclusion'
+			) as (this: object) => Promise<void>;
+
+			await layoutHostedWorkspace.call(host);
+			await timeout(5000);
+			const idleCaptures = captures.length;
+
+			overlapping = true;
+			await updateOverlayOcclusion.call(host);
+			await new Promise<void>(resolve =>
+				mainWindow.requestAnimationFrame(() => resolve())
+			);
+			await timeout(5000);
+
+			assert.deepStrictEqual({
+				idleCaptures,
+				overlayCaptures: captures.length - idleCaptures,
+				occlusions,
+			}, {
+				idleCaptures: 0,
+				overlayCaptures: 1,
+				occlusions: [true],
+			});
+		}));
+
 	test('OmniHostPart lays out the hosted workspace in window coordinates', async () => {
 		const layouts: Array<{
 			windowId: number;
@@ -962,7 +1040,6 @@ suite('Omni Parts', () => {
 			layoutScreenshot: (left: number, width: number, height: number) =>
 				screenshots.push({ left, width, height }),
 			updateOverlayOcclusion: () => Promise.resolve(),
-			updateScreenshotRefresh: () => undefined,
 		});
 		const layoutHostedWorkspace = Reflect.get(
 			OmniHostPart.prototype,
@@ -1027,7 +1104,6 @@ suite('Omni Parts', () => {
 			},
 			layoutScreenshot: () => undefined,
 			updateOverlayOcclusion: () => Promise.resolve(),
-			updateScreenshotRefresh: () => undefined,
 		});
 		const layoutHostedWorkspace = Reflect.get(
 			OmniHostPart.prototype,

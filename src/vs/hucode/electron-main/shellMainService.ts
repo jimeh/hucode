@@ -1567,7 +1567,7 @@ export class HucodeShellMainService extends Disposable
 		windowId: number,
 		occluded: boolean
 	): Promise<void> {
-		this.getOrCreateController(windowId)
+		await this.getOrCreateController(windowId)
 			.setWorkspaceOverlayOcclusion(occluded);
 	}
 

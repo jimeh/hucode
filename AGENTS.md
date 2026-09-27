@@ -378,6 +378,15 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   `--enable-smoke-test-driver` and uses `webContents.forcefullyCrashRenderer()`;
   this avoids Chromium's experimental CDP `Page.crash`. The crashed page remains
   in `context.pages()` until recovery destroys the crashed view.
+- Hosted workbench views disable background throttling, so Electron never
+  marks their render widget hidden. A `capturePage()` released while the view
+  is hidden or detached lets Chromium evict its frame once the saved-frame
+  budget (at most 5, counting the shell and every loaded hosted view) is full.
+  The reattached view then shows only its native background until a resize.
+  Capture hosted views only while attached and visible, let in-flight captures
+  settle before occluding, and do not poll captures. To inspect the budget in
+  a running app, record a `disabled-by-default-memory-infra` trace through
+  `contentTracing` and read the `frame_evictor` dump.
 - Hosted unload and reload smoke commands can destroy their Playwright `Page`
   or detach their `Frame` before Quick Input reports itself hidden. Mark only
   those command calls with `surfaceMayClose`, then rely on the following exact

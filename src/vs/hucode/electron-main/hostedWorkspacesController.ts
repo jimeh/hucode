@@ -6,6 +6,7 @@
 import electron from 'electron';
 import { Stats, statSync } from 'fs';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
+import { raceTimeout } from '../../base/common/async.js';
 import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
@@ -117,6 +118,11 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly beforeUnloadTimeoutMs?: number;
 	readonly willUnloadTimeoutMs?: number;
 	readonly readyTimeoutMs?: number;
+	/**
+	 * Upper bound for waiting on in-flight hosted captures before overlay
+	 * occlusion hides the active view.
+	 */
+	readonly overlayCaptureSettleTimeoutMs?: number;
 	readonly createInstanceId?: () => string;
 	readonly now?: () => number;
 	readonly shouldRestoreCandidate?: (
@@ -222,6 +228,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private static readonly BEFORE_UNLOAD_TIMEOUT_MS = 5000;
 	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
 	private static readonly READY_TIMEOUT_MS = 30000;
+	private static readonly OVERLAY_CAPTURE_SETTLE_TIMEOUT_MS = 500;
 
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedWorkspaceState>());
@@ -247,7 +254,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private lifecycleGeneration = 0;
 	private restorePromise: Promise<void> | undefined;
 	private oneTimeListenerTokenGenerator = 0;
+	/** Whether the active view is currently hidden for a shell overlay. */
 	private overlayOccluded = false;
+	/**
+	 * Whether a shell overlay has asked to occlude the active view. This leads
+	 * {@link overlayOccluded} while in-flight captures settle.
+	 */
+	private overlayOcclusionRequested = false;
+	private overlayOcclusionGeneration = 0;
+	private readonly pendingCaptures = new Set<Promise<unknown>>();
+	private readonly overlayCaptureSettleTimeoutMs: number;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
 	private readonly traceRestoreToStdout: boolean;
@@ -309,6 +325,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.readyTimeoutMs =
 			options.readyTimeoutMs ??
 			ResidentHostedWorkspacesController.READY_TIMEOUT_MS;
+		this.overlayCaptureSettleTimeoutMs =
+			options.overlayCaptureSettleTimeoutMs ??
+			ResidentHostedWorkspacesController.OVERLAY_CAPTURE_SETTLE_TIMEOUT_MS;
 		this.createInstanceId = options.createInstanceId ?? generateUuid;
 		this.now = options.now ?? Date.now;
 		this.shouldRestoreCandidate = options.shouldRestoreCandidate ??
@@ -873,7 +892,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (requireActiveVisible && (
 			this.activeInstanceId !== instance.instanceId ||
 			!instance.visible ||
-			this.overlayOccluded
+			this.overlayOcclusionRequested
 		)) {
 			return undefined;
 		}
@@ -3253,16 +3272,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		rect?: IRectangle,
 		quality: number = 80
 	): Promise<VSBuffer | undefined> {
-		const webContents = this.getActiveInstance()?.view?.webContents;
-		if (!webContents || webContents.isDestroyed()) {
+		const instance = this.getActiveInstance();
+		if (!instance) {
 			return undefined;
 		}
 
 		try {
-			const image = await webContents.capturePage(rect, {
-				stayHidden: true
-			});
-			return VSBuffer.wrap(image.toJPEG(quality));
+			return await this.captureInstance(instance, rect, quality);
 		} catch (error) {
 			this.logService.warn(
 				'[HucodeShellMainService] Failed to capture hosted ' +
@@ -3277,20 +3293,21 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		rect?: IRectangle,
 		quality: number = 80
 	): Promise<VSBuffer | undefined> {
-		const webContents = this.getBoundHostedShellInstance(binding, true)
-			?.view?.webContents;
-		if (!webContents || webContents.isDestroyed()) {
+		const instance = this.getBoundHostedShellInstance(binding, true);
+		if (!instance) {
 			return undefined;
 		}
 
 		try {
-			const image = await webContents.capturePage(rect, {
-				stayHidden: true,
-			});
+			const screenshot = await this.captureInstance(
+				instance,
+				rect,
+				quality
+			);
 			if (!this.getBoundHostedShellInstance(binding, true)) {
 				return undefined;
 			}
-			return VSBuffer.wrap(image.toJPEG(quality));
+			return screenshot;
 		} catch (error) {
 			this.logService.warn(
 				'[HucodeShellMainService] Failed to capture bound hosted ' +
@@ -3300,7 +3317,63 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 	}
 
-	setWorkspaceOverlayOcclusion(occluded: boolean): void {
+	/**
+	 * Captures a hosted view only while it is attached, visible, and not about
+	 * to be occluded. Hosted views disable background throttling, so a capture
+	 * released after the view is hidden can let Chromium evict its frame, and
+	 * the reattached view then stays blank until a resize.
+	 */
+	private async captureInstance(
+		instance: IHostedWorkbenchInstance,
+		rect: IRectangle | undefined,
+		quality: number
+	): Promise<VSBuffer | undefined> {
+		const webContents = this.getLiveWebContents(instance);
+		if (
+			!webContents ||
+			this.overlayOcclusionRequested ||
+			!instance.attached ||
+			!this.isViewActuallyVisible(instance)
+		) {
+			return undefined;
+		}
+
+		const capture = webContents.capturePage(rect, { stayHidden: true });
+		this.pendingCaptures.add(capture);
+		try {
+			const image = await capture;
+			return VSBuffer.wrap(image.toJPEG(quality));
+		} finally {
+			this.pendingCaptures.delete(capture);
+		}
+	}
+
+	/**
+	 * Hides or restores the active hosted view for a shell overlay. Hiding
+	 * first lets in-flight captures settle, within a bound, so no capture is
+	 * released after the view is hidden.
+	 */
+	async setWorkspaceOverlayOcclusion(occluded: boolean): Promise<void> {
+		this.overlayOcclusionRequested = occluded;
+		const generation = ++this.overlayOcclusionGeneration;
+		if (occluded && this.pendingCaptures.size > 0) {
+			await raceTimeout(
+				Promise.allSettled(this.pendingCaptures),
+				this.overlayCaptureSettleTimeoutMs,
+				() => this.logService.warn(
+					'[HucodeShellMainService] Hosted workspace capture did ' +
+					'not settle before overlay occlusion'
+				)
+			);
+			if (generation !== this.overlayOcclusionGeneration) {
+				return;
+			}
+		}
+
+		this.applyWorkspaceOverlayOcclusion(occluded);
+	}
+
+	private applyWorkspaceOverlayOcclusion(occluded: boolean): void {
 		const wasOccluded = this.overlayOccluded;
 		if (wasOccluded === occluded) {
 			this.reconcileViewVisibility('overlay:unchanged');

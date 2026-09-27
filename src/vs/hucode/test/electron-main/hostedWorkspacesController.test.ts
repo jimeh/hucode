@@ -77,6 +77,8 @@ class TestWebContents extends EventEmitter {
 	readonly forcefullyCrashRendererCalls: number[] = [];
 	readonly devToolsCalls: number[] = [];
 	readonly invalidateCalls: number[] = [];
+	readonly captureCalls: number[] = [];
+	capturePageResult: Promise<{ toJPEG(quality: number): Buffer }> | undefined;
 	loadUrlError: Error | undefined = undefined;
 	loadUrlPromise: Promise<void> | undefined;
 	autoBeforeUnloadReply = true;
@@ -204,7 +206,8 @@ class TestWebContents extends EventEmitter {
 	}
 
 	async capturePage(): Promise<{ toJPEG(quality: number): Buffer }> {
-		return { toJPEG: () => Buffer.from('test') };
+		this.captureCalls.push(Date.now());
+		return this.capturePageResult ?? { toJPEG: () => Buffer.from('test') };
 	}
 
 	asElectronWebContents(): Electron.WebContents {
@@ -460,6 +463,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly deferDestroyedEvents?: boolean[];
 		readonly beforeUnloadTimeoutMs?: number;
 		readonly readyTimeoutMs?: number;
+		readonly overlayCaptureSettleTimeoutMs?: number;
 		readonly restorePolicy?: 'active' | 'all' | 'none';
 		readonly willUnloadTimeoutMs?: number;
 		readonly windowId?: number;
@@ -593,6 +597,8 @@ suite('ResidentHostedWorkspacesController', () => {
 				willUnloadTimeoutMs:
 					options.willUnloadTimeoutMs ?? 100,
 				readyTimeoutMs: options.readyTimeoutMs ?? 100,
+				overlayCaptureSettleTimeoutMs:
+					options.overlayCaptureSettleTimeoutMs,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
 				shouldRestoreCandidate: options.shouldRestoreCandidate,
@@ -3955,6 +3961,150 @@ suite('ResidentHostedWorkspacesController', () => {
 				view.rawWebContents.invalidateCalls.length,
 				invalidateCallsBefore + 1
 			);
+		});
+
+	test('workspace screenshots are refused while overlay occlusion applies',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const webContents = viewFactory.views[0].rawWebContents;
+
+			const visible = await controller.captureWorkspaceScreenshot();
+			await controller.setWorkspaceOverlayOcclusion(true);
+			const occluded = await controller.captureWorkspaceScreenshot();
+			const callsWhileOccluded = webContents.captureCalls.length;
+			await controller.setWorkspaceOverlayOcclusion(false);
+			const restored = await controller.captureWorkspaceScreenshot();
+
+			assert.deepStrictEqual({
+				visible: visible?.toString(),
+				occluded,
+				callsWhileOccluded,
+				restored: restored?.toString(),
+				totalCalls: webContents.captureCalls.length,
+			}, {
+				visible: 'test',
+				occluded: undefined,
+				callsWhileOccluded: 1,
+				restored: 'test',
+				totalCalls: 2,
+			});
+		});
+
+	test('overlay occlusion hides the workspace after in-flight captures',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory, window } = createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const view = viewFactory.views[0];
+			const capture = new DeferredPromise<{
+				toJPEG(quality: number): Buffer;
+			}>();
+			view.rawWebContents.capturePageResult = capture.p;
+			const removedBefore = browserWindow.contentView.removed.length;
+
+			const screenshot = controller.captureWorkspaceScreenshot();
+			const occlusion = controller.setWorkspaceOverlayOcclusion(true);
+			const hiddenWhileCapturing =
+				browserWindow.contentView.removed.length > removedBefore;
+			const whilePending = controller.captureWorkspaceScreenshot();
+
+			capture.complete({ toJPEG: () => Buffer.from('pending') });
+			await occlusion;
+
+			assert.deepStrictEqual({
+				hiddenWhileCapturing,
+				refusedWhilePending: (await whilePending)?.toString(),
+				screenshot: (await screenshot)?.toString(),
+				removed: browserWindow.contentView.removed.length -
+					removedBefore,
+				lastVisible: view.visibleCalls.at(-1),
+				captureCalls: view.rawWebContents.captureCalls.length,
+			}, {
+				hiddenWhileCapturing: false,
+				refusedWhilePending: undefined,
+				screenshot: 'pending',
+				removed: 1,
+				lastVisible: false,
+				captureCalls: 1,
+			});
+		});
+
+	test('overlay occlusion stops waiting for a capture that never settles',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, logService, viewFactory, window } =
+				createController({ overlayCaptureSettleTimeoutMs: 10 });
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const view = viewFactory.views[0];
+			view.rawWebContents.capturePageResult = new DeferredPromise<{
+				toJPEG(quality: number): Buffer;
+			}>().p;
+			const removedBefore = browserWindow.contentView.removed.length;
+
+			void controller.captureWorkspaceScreenshot();
+			await controller.setWorkspaceOverlayOcclusion(true);
+
+			assert.deepStrictEqual({
+				removed: browserWindow.contentView.removed.length -
+					removedBefore,
+				lastVisible: view.visibleCalls.at(-1),
+				warned: logService.warnings.some(warning =>
+					warning.includes('did not settle before overlay occlusion')
+				),
+			}, {
+				removed: 1,
+				lastVisible: false,
+				warned: true,
+			});
+		});
+
+	test('overlay clear cancels an occlusion still waiting on a capture',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory, window } = createController();
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const view = viewFactory.views[0];
+			const capture = new DeferredPromise<{
+				toJPEG(quality: number): Buffer;
+			}>();
+			view.rawWebContents.capturePageResult = capture.p;
+			const removedBefore = browserWindow.contentView.removed.length;
+
+			const screenshot = controller.captureWorkspaceScreenshot();
+			const occlusion = controller.setWorkspaceOverlayOcclusion(true);
+			await controller.setWorkspaceOverlayOcclusion(false);
+			capture.complete({ toJPEG: () => Buffer.from('pending') });
+			await Promise.all([screenshot, occlusion]);
+
+			assert.deepStrictEqual({
+				removed: browserWindow.contentView.removed.length -
+					removedBefore,
+				lastVisible: view.visibleCalls.at(-1),
+				attached: browserWindow.contentView.children.includes(
+					view as unknown as IHostedWorkbenchView
+				),
+			}, {
+				removed: 0,
+				lastVisible: true,
+				attached: true,
+			});
 		});
 
 	test('closing active workspace under overlay keeps MRU hidden until clear',
