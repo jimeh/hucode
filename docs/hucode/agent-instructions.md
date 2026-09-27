@@ -53,7 +53,8 @@ human-facing guides rather than replacing them.
   VS Code baseline; `hucode:validate` rejects a file from another release.
   A listed extension gets exactly its listed proposals, even in source runs or
   with `--enable-proposed-api`, so a proposal it adopts after the synced
-  release stays blocked until the next sync.
+  release stays blocked until the next sync. Only extension development mode
+  also grants the extra valid proposals the extension declares.
 
 ## Local Workflow
 
