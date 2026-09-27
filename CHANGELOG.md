@@ -2,6 +2,12 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.89 - 2026-09-27
+
+### Bug Fixes
+
+- **extensions:** restore proposed API access for Microsoft extensions (#234)
+
 ## 0.0.88 - 2026-09-26
 
 ### Features
