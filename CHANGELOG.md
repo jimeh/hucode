@@ -2,6 +2,16 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.90 - 2026-09-27
+
+### Features
+
+- **omni:** persist arbitrary workbenches globally (#231)
+
+### Bug Fixes
+
+- **omni:** keep workbenches visible after shell overlays close (#235)
+
 ## 0.0.89 - 2026-09-27
 
 ### Bug Fixes
