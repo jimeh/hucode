@@ -4219,8 +4219,9 @@ suite('ResidentHostedWorkspacesController', () => {
 			const newer = new DeferredPromise<TestCapturedImage>();
 			webContents.capturePageQueue.push(older.p, newer.p);
 
+			// Both captures start in the same millisecond; start order alone
+			// decides which one is newer.
 			const shellCapture = controller.captureWorkspaceScreenshot();
-			now += 100;
 			const occlusion = controller.setWorkspaceOverlayOcclusion(true);
 			newer.complete(capturedImage('newer'));
 			await timeout(0);
@@ -4229,6 +4230,45 @@ suite('ResidentHostedWorkspacesController', () => {
 			const placeholder = await controller.captureWorkspaceScreenshot();
 
 			assert.strictEqual(placeholder?.toString(), 'newer');
+		});
+
+	test('a capture of a no longer active workbench cannot become placeholder',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const bravo = createWorktree('bravo');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const alphaContents = viewFactory.views[0].rawWebContents;
+			const bravoContents = viewFactory.views[1].rawWebContents;
+			bravoContents.capturePageResult =
+				Promise.resolve(capturedImage('bravo'));
+			await controller.captureWorkspaceScreenshot();
+
+			// Alpha's capture starts after Bravo's placeholder but completes
+			// once Bravo is active again.
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			const alphaCapture = new DeferredPromise<TestCapturedImage>();
+			alphaContents.capturePageQueue.push(alphaCapture.p);
+			const alphaScreenshot = controller.captureWorkspaceScreenshot();
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			alphaCapture.complete(capturedImage('alpha'));
+			await alphaScreenshot;
+
+			await controller.setWorkspaceOverlayOcclusion(true);
+			const placeholder = await controller.captureWorkspaceScreenshot();
+
+			assert.deepStrictEqual({
+				placeholder: placeholder?.toString(),
+				bravoCaptures: bravoContents.captureCalls.length,
+			}, {
+				placeholder: 'bravo',
+				bravoCaptures: 1,
+			});
 		});
 
 	test('placeholder age counts from when its capture started',

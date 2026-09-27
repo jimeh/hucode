@@ -136,6 +136,9 @@ export interface IResidentHostedWorkspacesControllerOptions {
 /** Full-view capture served as the shell placeholder while occluded. */
 interface IOcclusionPlaceholder {
 	readonly instanceId: string;
+	/** Orders placeholder captures; later captures win. */
+	readonly sequence: number;
+	/** When the capture started; used for freshness. */
 	readonly capturedAt: number;
 	readonly screenshot: VSBuffer;
 }
@@ -274,6 +277,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private overlayOcclusionGeneration = 0;
 	private readonly pendingCaptures = new Set<Promise<unknown>>();
 	private occlusionPlaceholder: IOcclusionPlaceholder | undefined;
+	private captureSequence = 0;
 	private readonly overlayCaptureSettleTimeoutMs: number;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
@@ -3375,6 +3379,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return undefined;
 		}
 
+		const sequence = ++this.captureSequence;
 		const startedAt = this.now();
 		const capture = webContents.capturePage(rect, { stayHidden: true });
 		this.pendingCaptures.add(capture);
@@ -3384,24 +3389,23 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				return undefined;
 			}
 			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
-			// Only full-view captures at the shell's placeholder quality may
-			// become the placeholder. An occlusion that stopped waiting
-			// abandoned this capture, and a capture that started earlier than
-			// the current placeholder's must not replace it. Placeholder age
-			// counts from when its capture started.
+			// Only a full-view capture of the still-active workbench at the
+			// shell's placeholder quality may become the placeholder. An
+			// occlusion that stopped waiting abandoned this capture, and a
+			// capture that started before the current placeholder's must not
+			// replace it. Placeholder age counts from when its capture started.
 			const current = this.occlusionPlaceholder;
 			if (
 				!rect &&
 				quality ===
 				ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY &&
 				this.pendingCaptures.has(capture) &&
-				(
-					current?.instanceId !== instance.instanceId ||
-					current.capturedAt <= startedAt
-				)
+				instance.instanceId === this.activeInstanceId &&
+				(!current || current.sequence < sequence)
 			) {
 				this.occlusionPlaceholder = {
 					instanceId: instance.instanceId,
+					sequence,
 					capturedAt: startedAt,
 					screenshot,
 				};
