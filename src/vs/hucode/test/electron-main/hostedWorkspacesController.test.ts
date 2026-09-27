@@ -4323,11 +4323,17 @@ suite('ResidentHostedWorkspacesController', () => {
 				timedOut: logService.warnings.some(warning =>
 					warning.includes('capture timed out')
 				),
+				// The timed-out capture stays pending, so occlusion still
+				// waits for it before hiding the view.
+				waitedForCapture: logService.warnings.some(warning =>
+					warning.includes('did not settle before overlay occlusion')
+				),
 				removed: browserWindow.contentView.removed.length -
 					removedBefore,
 			}, {
 				screenshot: undefined,
 				timedOut: true,
+				waitedForCapture: true,
 				removed: 1,
 			});
 		});

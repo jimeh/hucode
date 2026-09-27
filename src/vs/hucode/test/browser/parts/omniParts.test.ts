@@ -953,15 +953,18 @@ suite('Omni Parts', () => {
 		Reflect.set(host, 'activeInstanceId', 'bravo');
 		const bravo = refreshScreenshot.call(host);
 		captures[0].complete(VSBuffer.fromString('alpha'));
+		const alphaResult = await alpha;
+		// The older capture finishing must not clear bravo's pending slot.
+		const bravoShared = refreshScreenshot.call(host);
 		captures[1].complete(VSBuffer.fromString('bravo'));
 
 		assert.deepStrictEqual({
-			results: await Promise.all([alpha, bravo]),
+			results: [alphaResult, ...await Promise.all([bravo, bravoShared])],
 			captureCount,
 			shown,
 			inFlight: Reflect.get(host, 'screenshotCaptureInFlight'),
 		}, {
-			results: [false, true],
+			results: [false, true, true],
 			captureCount: 2,
 			shown: ['bravo'],
 			inFlight: undefined,
