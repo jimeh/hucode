@@ -627,11 +627,13 @@ export class OmniHostPart extends Part {
 			return;
 		}
 
-		const hasScreenshot = await this.refreshScreenshot();
+		// Occlude even without a placeholder: a shell overlay left under the
+		// native hosted view is unusable, while a missing placeholder only
+		// shows the host background.
+		await this.refreshScreenshot();
 		if (
 			token !== this.overlayOcclusionToken
 			|| activeInstanceId !== this.activeInstanceId
-			|| !hasScreenshot
 			|| !this.hasOverlappingShellOverlay()
 		) {
 			return;

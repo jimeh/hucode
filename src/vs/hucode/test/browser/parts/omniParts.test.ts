@@ -870,6 +870,31 @@ suite('Omni Parts', () => {
 		});
 	});
 
+	test('OmniHostPart occludes the workspace even when capture fails', async () => {
+		const screenshotReady = new DeferredPromise<boolean>();
+		const transitions: string[] = [];
+		const host = createOcclusionHost(screenshotReady, transitions);
+		const updateOcclusion = Reflect.get(
+			OmniHostPart.prototype,
+			'updateOverlayOcclusion'
+		) as (this: object) => Promise<void>;
+
+		const update = updateOcclusion.call(host);
+		screenshotReady.complete(false);
+		await update;
+		await new Promise<void>(resolve =>
+			mainWindow.requestAnimationFrame(() => resolve())
+		);
+
+		assert.deepStrictEqual({
+			overlayOccluded: Reflect.get(host, 'overlayOccluded'),
+			transitions,
+		}, {
+			overlayOccluded: true,
+			transitions: ['show-screenshot', 'occlude-workspace'],
+		});
+	});
+
 	test('OmniHostPart shares an in-flight screenshot capture', async () => {
 		const capture = new DeferredPromise<boolean>();
 		let captureCount = 0;

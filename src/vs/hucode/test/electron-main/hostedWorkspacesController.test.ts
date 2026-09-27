@@ -88,6 +88,7 @@ class TestWebContents extends EventEmitter {
 	readonly invalidateCalls: number[] = [];
 	readonly captureCalls: number[] = [];
 	capturePageResult: Promise<TestCapturedImage> | undefined;
+	readonly capturePageQueue: Promise<TestCapturedImage>[] = [];
 	capturePageError: Error | undefined;
 	loadUrlError: Error | undefined = undefined;
 	loadUrlPromise: Promise<void> | undefined;
@@ -220,7 +221,9 @@ class TestWebContents extends EventEmitter {
 		if (this.capturePageError) {
 			throw this.capturePageError;
 		}
-		return this.capturePageResult ?? capturedImage('test');
+		return this.capturePageQueue.shift() ??
+			this.capturePageResult ??
+			capturedImage('test');
 	}
 
 	asElectronWebContents(): Electron.WebContents {
@@ -4144,6 +4147,62 @@ suite('ResidentHostedWorkspacesController', () => {
 			}, {
 				placeholder: 'test',
 				captureCalls: 2,
+			});
+		});
+
+	test('a late capture at another quality cannot replace the placeholder',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const webContents = viewFactory.views[0].rawWebContents;
+			const selfCapture = new DeferredPromise<TestCapturedImage>();
+			const placeholderCapture = new DeferredPromise<TestCapturedImage>();
+			webContents.capturePageQueue.push(
+				selfCapture.p,
+				placeholderCapture.p
+			);
+
+			const self = controller.captureHostedShellSelfScreenshot(
+				binding,
+				undefined,
+				60
+			);
+			const occlusion = controller.setWorkspaceOverlayOcclusion(true);
+			placeholderCapture.complete(capturedImage('prepared'));
+			await timeout(0);
+			selfCapture.complete(capturedImage('self'));
+			await Promise.all([self, occlusion]);
+			const placeholder = await controller.captureWorkspaceScreenshot();
+
+			assert.strictEqual(placeholder?.toString(), 'prepared');
+		});
+
+	test('repeated occlusion keeps the placeholder of the hidden view',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const webContents = viewFactory.views[0].rawWebContents;
+
+			await controller.setWorkspaceOverlayOcclusion(true);
+			now += 2000;
+			await controller.setWorkspaceOverlayOcclusion(true);
+			const placeholder = await controller.captureWorkspaceScreenshot();
+
+			assert.deepStrictEqual({
+				placeholder: placeholder?.toString(),
+				captureCalls: webContents.captureCalls.length,
+			}, {
+				placeholder: 'test',
+				captureCalls: 1,
 			});
 		});
 

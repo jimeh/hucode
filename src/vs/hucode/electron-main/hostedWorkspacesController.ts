@@ -135,7 +135,6 @@ export interface IResidentHostedWorkspacesControllerOptions {
 /** Full-view capture served as the shell placeholder while occluded. */
 interface IOcclusionPlaceholder {
 	readonly instanceId: string;
-	readonly quality: number;
 	readonly capturedAt: number;
 	readonly screenshot: VSBuffer;
 }
@@ -3297,8 +3296,9 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (this.overlayOcclusionRequested) {
 			const placeholder = this.occlusionPlaceholder;
 			return !rect &&
-				placeholder?.instanceId === instance.instanceId &&
-				placeholder.quality === quality
+				quality ===
+				ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY &&
+				placeholder?.instanceId === instance.instanceId
 				? placeholder.screenshot
 				: undefined;
 		}
@@ -3373,12 +3373,18 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				return undefined;
 			}
 			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
-			// An occlusion that stopped waiting abandoned this capture; a late
-			// result must not replace the placeholder taken after it.
-			if (!rect && this.pendingCaptures.has(capture)) {
+			// Only full-view captures at the shell's placeholder quality may
+			// become the placeholder. An occlusion that stopped waiting
+			// abandoned this capture; a late result must not replace the
+			// placeholder taken after it.
+			if (
+				!rect &&
+				quality ===
+				ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY &&
+				this.pendingCaptures.has(capture)
+			) {
 				this.occlusionPlaceholder = {
 					instanceId: instance.instanceId,
-					quality,
 					capturedAt: this.now(),
 					screenshot,
 				};
@@ -3396,16 +3402,19 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	 */
 	private captureOcclusionPlaceholder(): void {
 		const instance = this.getActiveInstance();
-		if (!instance) {
+		// A view already hidden by occlusion cannot be recaptured, so keep the
+		// placeholder that is being served for it.
+		if (
+			!instance ||
+			!instance.attached ||
+			!this.isViewActuallyVisible(instance)
+		) {
 			return;
 		}
 
-		const quality =
-			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY;
 		const placeholder = this.occlusionPlaceholder;
 		if (
 			placeholder?.instanceId === instance.instanceId &&
-			placeholder.quality === quality &&
 			this.now() - placeholder.capturedAt <=
 			ResidentHostedWorkspacesController.OCCLUSION_PLACEHOLDER_MAX_AGE_MS
 		) {
@@ -3415,7 +3424,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		// Never fall back to an unsuitable placeholder if the replacement
 		// capture fails.
 		this.occlusionPlaceholder = undefined;
-		this.captureInstance(instance, undefined, quality, true).catch(error => this.logService.warn(
+		this.captureInstance(
+			instance,
+			undefined,
+			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY,
+			true
+		).catch(error => this.logService.warn(
 			'[HucodeShellMainService] Failed to capture hosted workspace ' +
 			`placeholder before overlay occlusion: ${error}`
 		));
