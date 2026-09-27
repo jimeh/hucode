@@ -927,6 +927,47 @@ suite('Omni Parts', () => {
 		});
 	});
 
+	test('OmniHostPart discards a capture for a workbench that is no longer active', async () => {
+		const captures = [
+			new DeferredPromise<VSBuffer>(),
+			new DeferredPromise<VSBuffer>(),
+		];
+		let captureCount = 0;
+		const shown: string[] = [];
+		const host = prototypeHost(OmniHostPart.prototype, {
+			activeInstanceId: 'alpha',
+			screenshotCaptureInFlight: undefined,
+			hasScreenshot: false,
+			hasVisibleHostedWorkspace: () => true,
+			shellService: {
+				captureWorkspaceScreenshot: () => captures[captureCount++].p,
+			},
+			setScreenshot: (buffer: VSBuffer) => shown.push(buffer.toString()),
+		});
+		const refreshScreenshot = Reflect.get(
+			OmniHostPart.prototype,
+			'refreshScreenshot'
+		) as (this: object) => Promise<boolean>;
+
+		const alpha = refreshScreenshot.call(host);
+		Reflect.set(host, 'activeInstanceId', 'bravo');
+		const bravo = refreshScreenshot.call(host);
+		captures[0].complete(VSBuffer.fromString('alpha'));
+		captures[1].complete(VSBuffer.fromString('bravo'));
+
+		assert.deepStrictEqual({
+			results: await Promise.all([alpha, bravo]),
+			captureCount,
+			shown,
+			inFlight: Reflect.get(host, 'screenshotCaptureInFlight'),
+		}, {
+			results: [false, true],
+			captureCount: 2,
+			shown: ['bravo'],
+			inFlight: undefined,
+		});
+	});
+
 	test('OmniHostPart drops the previous screenshot after capture failure', async () => {
 		const screenshotImage = mainWindow.document.createElement('img');
 		screenshotImage.src = 'data:image/jpeg;base64,AAAA';

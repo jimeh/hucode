@@ -119,8 +119,9 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly willUnloadTimeoutMs?: number;
 	readonly readyTimeoutMs?: number;
 	/**
-	 * Upper bound for waiting on in-flight hosted captures before overlay
-	 * occlusion hides the active view.
+	 * Upper bound for waiting on hosted captures: the shell's placeholder
+	 * request, and in-flight captures before overlay occlusion hides the
+	 * active view.
 	 */
 	readonly overlayCaptureSettleTimeoutMs?: number;
 	readonly createInstanceId?: () => string;
@@ -3304,7 +3305,16 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		try {
-			return await this.captureInstance(instance, rect, quality);
+			// Bounded so a hung capture cannot hold back the shell's occlusion
+			// request; the capture stays pending for the occlusion wait.
+			return await raceTimeout(
+				this.captureInstance(instance, rect, quality),
+				this.overlayCaptureSettleTimeoutMs,
+				() => this.logService.warn(
+					'[HucodeShellMainService] Hosted workspace capture timed ' +
+					'out'
+				)
+			);
 		} catch (error) {
 			this.logService.warn(
 				'[HucodeShellMainService] Failed to capture hosted ' +

@@ -87,7 +87,10 @@ export class OmniHostPart extends Part {
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private layoutScheduled = false;
-	private screenshotCaptureInFlight: Promise<boolean> | undefined;
+	private screenshotCaptureInFlight: {
+		readonly instanceId: string | undefined;
+		readonly result: Promise<boolean>;
+	} | undefined;
 	private hasScreenshot = false;
 	private overlayOccluded = false;
 	private mainOverlayOccluded = false;
@@ -501,19 +504,30 @@ export class OmniHostPart extends Part {
 			return this.hasScreenshot;
 		}
 
-		if (this.screenshotCaptureInFlight) {
-			return this.screenshotCaptureInFlight;
+		// Share an in-flight capture only with requests for the same workbench.
+		const instanceId = this.activeInstanceId;
+		const inFlight = this.screenshotCaptureInFlight;
+		if (inFlight && inFlight.instanceId === instanceId) {
+			return inFlight.result;
 		}
 
-		this.screenshotCaptureInFlight = this.doRefreshScreenshot();
+		const capture = {
+			instanceId,
+			result: this.doRefreshScreenshot(instanceId),
+		};
+		this.screenshotCaptureInFlight = capture;
 		try {
-			return await this.screenshotCaptureInFlight;
+			return await capture.result;
 		} finally {
-			this.screenshotCaptureInFlight = undefined;
+			if (this.screenshotCaptureInFlight === capture) {
+				this.screenshotCaptureInFlight = undefined;
+			}
 		}
 	}
 
-	private async doRefreshScreenshot(): Promise<boolean> {
+	private async doRefreshScreenshot(
+		instanceId: string | undefined
+	): Promise<boolean> {
 		let screenshot: VSBuffer | undefined;
 		try {
 			screenshot = await this.shellService.captureWorkspaceScreenshot(
@@ -522,6 +536,10 @@ export class OmniHostPart extends Part {
 			);
 		} catch {
 			screenshot = undefined;
+		}
+		if (instanceId !== this.activeInstanceId) {
+			// The capture shows a workbench that is no longer active.
+			return false;
 		}
 		if (!screenshot) {
 			// A previous screenshot may predate the current overlay; showing it

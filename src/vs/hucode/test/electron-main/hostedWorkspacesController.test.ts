@@ -4291,6 +4291,47 @@ suite('ResidentHostedWorkspacesController', () => {
 			});
 		});
 
+	test('a hung placeholder capture returns within the settle bound',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, logService, viewFactory, window } =
+				createController({ overlayCaptureSettleTimeoutMs: 10 });
+			const browserWindow = window.win as unknown as TestBrowserWindow;
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const view = viewFactory.views[0];
+			view.rawWebContents.capturePageResult =
+				new DeferredPromise<TestCapturedImage>().p;
+			const removedBefore = browserWindow.contentView.removed.length;
+
+			// The sentinel only wins when the bound is missing, turning that
+			// regression into an assertion failure instead of a test timeout.
+			let sentinel: ReturnType<typeof setTimeout> | undefined;
+			const screenshot = await Promise.race([
+				controller.captureWorkspaceScreenshot(),
+				new Promise<'still pending'>(resolve => {
+					sentinel = setTimeout(() => resolve('still pending'), 1000);
+				}),
+			]);
+			clearTimeout(sentinel);
+			await controller.setWorkspaceOverlayOcclusion(true);
+
+			assert.deepStrictEqual({
+				screenshot,
+				timedOut: logService.warnings.some(warning =>
+					warning.includes('capture timed out')
+				),
+				removed: browserWindow.contentView.removed.length -
+					removedBefore,
+			}, {
+				screenshot: undefined,
+				timedOut: true,
+				removed: 1,
+			});
+		});
+
 	test('overlay clear cancels an occlusion still waiting on a capture',
 		async () => {
 			const alpha = createWorktree('alpha');
