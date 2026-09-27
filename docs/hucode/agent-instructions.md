@@ -660,6 +660,17 @@ human-facing guides rather than replacing them.
   path as resident workspace hiding. When a hidden active hosted workbench is
   shown again, force a repaint so the restored `WebContentsView` does not stay
   blank after the screenshot overlay is removed.
+- A repaint does not recover a frame Chromium evicted while the hosted view
+  was detached. Hosted views disable background throttling, so Electron never
+  marks their render widget hidden, and the reattached view keeps only its
+  native background until a resize. A `capturePage()` released while the view
+  is hidden or detached unlocks its frame, and Chromium evicts it at once when
+  the saved-frame budget (at most 5, counting the shell and every loaded hosted
+  view) is full. Capture hosted views only while attached and visible, let
+  in-flight captures settle before occluding, and do not poll captures. To
+  inspect the budget in a running app, record a
+  `disabled-by-default-memory-infra` trace through `contentTracing` and read the
+  `frame_evictor` dump.
 - Detached hidden resident workbenches can still finish loading and report
   readiness, but multi-workbench startup may leave them in `loading` briefly.
   Treat `loading` as resident/switchable UI state, not as unloaded.

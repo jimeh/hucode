@@ -87,8 +87,10 @@ export class OmniHostPart extends Part {
 	private bodyHeight = 0;
 	private bodyWidth = 0;
 	private layoutScheduled = false;
-	private screenshotRefreshHandle: ReturnType<typeof setTimeout> | undefined;
-	private screenshotCaptureInFlight: Promise<boolean> | undefined;
+	private screenshotCaptureInFlight: {
+		readonly instanceId: string | undefined;
+		readonly result: Promise<boolean>;
+	} | undefined;
 	private hasScreenshot = false;
 	private overlayOccluded = false;
 	private mainOverlayOccluded = false;
@@ -145,10 +147,8 @@ export class OmniHostPart extends Part {
 		this._register(this.onDidVisibilityChange(visible => {
 			if (visible) {
 				this.scheduleHostedWorkspaceLayout();
-				this.updateScreenshotRefresh();
 				void this.updateOverlayOcclusion();
 			} else {
-				this.stopScreenshotRefresh();
 				this.clearOverlayOcclusion();
 			}
 		}));
@@ -239,7 +239,6 @@ export class OmniHostPart extends Part {
 	}
 
 	override dispose(): void {
-		this.stopScreenshotRefresh();
 		this.clearOverlayOcclusion();
 		this.clearScreenshot();
 		this.activeInstanceId = undefined;
@@ -338,7 +337,6 @@ export class OmniHostPart extends Part {
 			this.setHostEmpty(!hasLoadedWorkbench);
 			this.emptyState.classList.add('hidden');
 			this.surface.classList.remove('hidden');
-			this.updateScreenshotRefresh();
 			return;
 		}
 
@@ -346,7 +344,6 @@ export class OmniHostPart extends Part {
 		this.renderLandingState();
 		this.emptyState.classList.remove('hidden');
 		this.surface.classList.add('hidden');
-		this.stopScreenshotRefresh();
 		this.clearOverlayOcclusion();
 		this.clearScreenshot();
 	}
@@ -438,7 +435,6 @@ export class OmniHostPart extends Part {
 			height,
 		});
 		void this.updateOverlayOcclusion();
-		this.updateScreenshotRefresh();
 	}
 
 	private layoutScreenshot(
@@ -498,50 +494,40 @@ export class OmniHostPart extends Part {
 			&& this.layoutService.isVisible(Parts.HUCODE_OMNI_HOST_PART);
 	}
 
-	private updateScreenshotRefresh(): void {
-		if (
-			!this.shellService.supportsWorkspaceScreenshotOverlay
-			|| !this.hasVisibleHostedWorkspace()
-		) {
-			this.stopScreenshotRefresh();
-			return;
-		}
-
-		if (!this.screenshotRefreshHandle) {
-			this.screenshotRefreshHandle = setTimeout(() => {
-				this.screenshotRefreshHandle = undefined;
-				void this.refreshScreenshot().finally(() =>
-					this.updateScreenshotRefresh()
-				);
-			}, 1000);
-		}
-	}
-
-	private stopScreenshotRefresh(): void {
-		if (this.screenshotRefreshHandle) {
-			clearTimeout(this.screenshotRefreshHandle);
-			this.screenshotRefreshHandle = undefined;
-		}
-	}
-
+	/**
+	 * Captures the placeholder on demand, just before a shell overlay occludes
+	 * the hosted workspace. Once occlusion is requested, main returns the
+	 * capture it took before hiding the view rather than capturing it again.
+	 */
 	private async refreshScreenshot(): Promise<boolean> {
 		if (!this.hasVisibleHostedWorkspace()) {
 			return this.hasScreenshot;
 		}
 
-		if (this.screenshotCaptureInFlight) {
-			return this.screenshotCaptureInFlight;
+		// Share an in-flight capture only with requests for the same workbench.
+		const instanceId = this.activeInstanceId;
+		const inFlight = this.screenshotCaptureInFlight;
+		if (inFlight && inFlight.instanceId === instanceId) {
+			return inFlight.result;
 		}
 
-		this.screenshotCaptureInFlight = this.doRefreshScreenshot();
+		const capture = {
+			instanceId,
+			result: this.doRefreshScreenshot(instanceId),
+		};
+		this.screenshotCaptureInFlight = capture;
 		try {
-			return await this.screenshotCaptureInFlight;
+			return await capture.result;
 		} finally {
-			this.screenshotCaptureInFlight = undefined;
+			if (this.screenshotCaptureInFlight === capture) {
+				this.screenshotCaptureInFlight = undefined;
+			}
 		}
 	}
 
-	private async doRefreshScreenshot(): Promise<boolean> {
+	private async doRefreshScreenshot(
+		instanceId: string | undefined
+	): Promise<boolean> {
 		let screenshot: VSBuffer | undefined;
 		try {
 			screenshot = await this.shellService.captureWorkspaceScreenshot(
@@ -551,8 +537,15 @@ export class OmniHostPart extends Part {
 		} catch {
 			screenshot = undefined;
 		}
+		if (instanceId !== this.activeInstanceId) {
+			// The capture shows a workbench that is no longer active.
+			return false;
+		}
 		if (!screenshot) {
-			return this.hasScreenshot;
+			// A previous screenshot may predate the current overlay; showing it
+			// would present stale workbench content.
+			this.clearScreenshot();
+			return false;
 		}
 
 		this.setScreenshot(screenshot);
@@ -587,13 +580,14 @@ export class OmniHostPart extends Part {
 
 	private clearOverlayOcclusion(): void {
 		this.overlayOcclusionToken++;
+		// Each occlusion captures a fresh placeholder, so an older one must
+		// never be shown again.
+		this.clearScreenshot();
 		if (!this.overlayOccluded && !this.mainOverlayOccluded) {
-			this.updateScreenshotVisibility();
 			return;
 		}
 
 		this.overlayOccluded = false;
-		this.updateScreenshotVisibility();
 		this.setMainOverlayOcclusion(false);
 	}
 
@@ -651,11 +645,13 @@ export class OmniHostPart extends Part {
 			return;
 		}
 
-		const hasScreenshot = await this.refreshScreenshot();
+		// Occlude even without a placeholder: a shell overlay left under the
+		// native hosted view is unusable, while a missing placeholder only
+		// shows the host background.
+		await this.refreshScreenshot();
 		if (
 			token !== this.overlayOcclusionToken
 			|| activeInstanceId !== this.activeInstanceId
-			|| !hasScreenshot
 			|| !this.hasOverlappingShellOverlay()
 		) {
 			return;
