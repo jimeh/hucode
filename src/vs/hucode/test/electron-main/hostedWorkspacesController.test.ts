@@ -4271,6 +4271,34 @@ suite('ResidentHostedWorkspacesController', () => {
 			});
 		});
 
+	test('a capture pending when occlusion clears cannot restore a placeholder',
+		async () => {
+			const alpha = createWorktree('alpha');
+			const { controller, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			controller.layout({ x: 280, y: 0, width: 1000, height: 800 });
+			const webContents = viewFactory.views[0].rawWebContents;
+			const pending = new DeferredPromise<TestCapturedImage>();
+			webContents.capturePageQueue.push(pending.p);
+
+			const firstOcclusion = controller.setWorkspaceOverlayOcclusion(true);
+			await controller.setWorkspaceOverlayOcclusion(false);
+			pending.complete(capturedImage('before-clear'));
+			await firstOcclusion;
+			await controller.setWorkspaceOverlayOcclusion(true);
+			const placeholder = await controller.captureWorkspaceScreenshot();
+
+			assert.deepStrictEqual({
+				placeholder: placeholder?.toString(),
+				captureCalls: webContents.captureCalls.length,
+			}, {
+				placeholder: 'test',
+				captureCalls: 2,
+			});
+		});
+
 	test('placeholder age counts from when its capture started',
 		async () => {
 			const alpha = createWorktree('alpha');

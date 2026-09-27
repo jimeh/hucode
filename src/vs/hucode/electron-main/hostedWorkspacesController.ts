@@ -278,6 +278,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private readonly pendingCaptures = new Set<Promise<unknown>>();
 	private occlusionPlaceholder: IOcclusionPlaceholder | undefined;
 	private captureSequence = 0;
+	/** Advances whenever occlusion clears, invalidating older captures. */
+	private placeholderEpoch = 0;
 	private readonly overlayCaptureSettleTimeoutMs: number;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
@@ -3380,6 +3382,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		}
 
 		const sequence = ++this.captureSequence;
+		const epoch = this.placeholderEpoch;
 		const startedAt = this.now();
 		const capture = webContents.capturePage(rect, { stayHidden: true });
 		this.pendingCaptures.add(capture);
@@ -3391,7 +3394,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
 			// Only a full-view capture of the still-active workbench at the
 			// shell's placeholder quality may become the placeholder. An
-			// occlusion that stopped waiting abandoned this capture, and a
+			// occlusion that stopped waiting abandoned this capture, a capture
+			// that started before occlusion last cleared is stale, and a
 			// capture that started before the current placeholder's must not
 			// replace it. Placeholder age counts from when its capture started.
 			const current = this.occlusionPlaceholder;
@@ -3400,6 +3404,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				quality ===
 				ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY &&
 				this.pendingCaptures.has(capture) &&
+				epoch === this.placeholderEpoch &&
 				instance.instanceId === this.activeInstanceId &&
 				(!current || current.sequence < sequence)
 			) {
@@ -3466,6 +3471,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		const generation = ++this.overlayOcclusionGeneration;
 		if (!occluded) {
 			this.occlusionPlaceholder = undefined;
+			this.placeholderEpoch++;
 		} else {
 			this.captureOcclusionPlaceholder();
 		}
