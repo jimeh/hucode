@@ -891,7 +891,7 @@ export class ProjectSwitcherDragAndDrop
 			return item.worktreePath;
 		}
 		if (isRetainedWorkbenchItem(item)) {
-			return item.worktreePath;
+			return item.isSessionOnly ? null : item.worktreePath;
 		}
 		if (isOmniSectionItem(item)) {
 			return `hucode-omni-section:///${item.sectionKind}`;
@@ -946,7 +946,8 @@ export class ProjectSwitcherDragAndDrop
 			);
 		}
 		if (isRetainedWorkbenchItem(source)) {
-			if (!target || !isRetainedWorkbenchItem(target) ||
+			if (source.isSessionOnly || !target || !isRetainedWorkbenchItem(target) ||
+				target.isSessionOnly ||
 				target.retainedWorkbenchId === source.retainedWorkbenchId
 			) {
 				return false;
@@ -1153,27 +1154,29 @@ export class ProjectSwitcherDragAndDrop
 		target: ProjectSwitcherItem | undefined,
 		targetSector: ListViewTargetSector | undefined
 	): Promise<void> {
-		if (!target || !isRetainedWorkbenchItem(target) ||
+		if (source.isSessionOnly || !target || !isRetainedWorkbenchItem(target) ||
+			target.isSessionOnly ||
 			target.retainedWorkbenchId === source.retainedWorkbenchId
 		) {
 			return;
 		}
 		const state = await this.shellService.getState();
 		const orderedIds = (state.retainedWorkbenches ?? [])
+			.filter(record => !record.sessionOnly)
 			.toSorted((a, b) => a.order - b.order)
 			.map(record => record.id)
 			.filter(id => id !== source.retainedWorkbenchId);
 		const targetIndex = orderedIds.indexOf(target.retainedWorkbenchId);
-		if (targetIndex < 0) {
+		if (targetIndex < 0 || !state.retainedWorkbenches?.some(record =>
+			record.id === source.retainedWorkbenchId && !record.sessionOnly
+		)) {
 			return;
 		}
-		orderedIds.splice(
-			targetIndex + (isBeforeDropPosition(targetSector) ? 0 : 1),
-			0,
-			source.retainedWorkbenchId
-		);
-		await this.shellService.reorderRetainedWorkbenches(
-			orderedIds
+		const insertionIndex = targetIndex +
+			(isBeforeDropPosition(targetSector) ? 0 : 1);
+		await this.shellService.moveRetainedWorkbench(
+			source.retainedWorkbenchId,
+			orderedIds[insertionIndex]
 		);
 	}
 }
@@ -2221,15 +2224,15 @@ export class ProjectSwitcherWidget extends Disposable {
 				item.hostedWorkbenchState
 			);
 			return [
-				toAction({
+				...(!item.isSessionOnly ? [toAction({
 					id: RENAME_WORKBENCH_COMMAND_ID,
 					label: localize('renameWorkbench', 'Rename Workbench'),
 					run: () => this.commandService.executeCommand(
 						RENAME_WORKBENCH_COMMAND_ID,
 						handle
 					),
-				}),
-				...(item.hasCustomLabel
+				})] : []),
+				...(!item.isSessionOnly && item.hasCustomLabel
 					? [toAction({
 						id: RESET_WORKBENCH_LABEL_COMMAND_ID,
 						label: localize(
@@ -2933,7 +2936,7 @@ registerAction2(class extends Action2 {
 				.retainedWorkbenches?.find(candidate =>
 					candidate.id === workbenchId
 				);
-			if (!record) {
+			if (!record || record.sessionOnly) {
 				return;
 			}
 
@@ -2981,18 +2984,21 @@ registerAction2(class extends Action2 {
 		});
 	}
 
-	run(
+	async run(
 		accessor: ServicesAccessor,
 		handle: TreeViewItemHandleArg
-	): Promise<unknown> {
+	): Promise<void> {
 		const id = parseWorkbenchHandle(handle.$treeItemHandle);
-		return id
-			? accessor.get(IHucodeShellControllerService)
-				.setRetainedWorkbenchLabel(
-					id,
-					undefined
-				)
-			: Promise.resolve();
+		if (!id) {
+			return;
+		}
+		const shellService = accessor.get(IHucodeShellControllerService);
+		const record = (await shellService.getState()).retainedWorkbenches?.find(
+			candidate => candidate.id === id
+		);
+		if (!record?.sessionOnly) {
+			await shellService.setRetainedWorkbenchLabel(id, undefined);
+		}
 	}
 });
 

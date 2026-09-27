@@ -7,6 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import {
 	PROJECT_MANAGER_STORAGE_VERSION,
+	StoredArbitraryWorkbenchRecord,
 	StoredProjectManagerState,
 	StoredProjectRecord,
 	WorktreeRecord,
@@ -20,6 +21,7 @@ import {
 	filterStoredWorktreePath,
 	getProjectManagerPathComparisonKey,
 	loadStoredProjectManagerState,
+	loadStoredProjectManagerCatalogState,
 	projectManagerPathsEqual,
 	pruneStoredPinnedWorktreePaths,
 	pruneStoredWorktreeLabels,
@@ -107,6 +109,45 @@ suite('ProjectManagerState', () => {
 			version: PROJECT_MANAGER_STORAGE_VERSION + 1,
 			projects: [project()],
 		}), []);
+	});
+
+	test('loads, deduplicates, and compacts additive workbenches', () => {
+		const workbenches: StoredArbitraryWorkbenchRecord[] = [
+			{ id: 'second', folderPath: '/two', label: ' Two ', order: 9 },
+			{ id: 'first', folderPath: '/one', order: 1 },
+			{ id: 'duplicate-path', folderPath: '/ONE', order: 3 },
+			{ id: 'first', folderPath: '/other', order: 4 },
+		];
+		assert.deepStrictEqual(loadStoredProjectManagerCatalogState({
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [project()],
+			workbenches,
+		}, false), {
+			projects: [project()],
+			workbenches: [
+				{ id: 'first', folderPath: '/one', order: 0 },
+				{ id: 'second', folderPath: '/two', label: 'Two', order: 1 },
+			],
+			malformedWorkbenches: false,
+		});
+		assert.deepStrictEqual(loadStoredProjectManagerState({
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [project()],
+			workbenches,
+		}), [project()]);
+	});
+
+	test('isolates malformed optional workbenches from valid projects', () => {
+		const state = {
+			version: PROJECT_MANAGER_STORAGE_VERSION,
+			projects: [project()],
+			workbenches: [{ id: '', folderPath: '/bad', order: 0 }],
+		} as StoredProjectManagerState;
+		assert.deepStrictEqual(loadStoredProjectManagerCatalogState(state, true), {
+			projects: [project()],
+			workbenches: [],
+			malformedWorkbenches: true,
+		});
 	});
 
 	test('compares paths using platform sensitivity', () => {

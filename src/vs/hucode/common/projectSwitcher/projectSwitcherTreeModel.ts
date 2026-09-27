@@ -157,6 +157,7 @@ export interface ProjectSwitcherWorkbenchItem extends ProjectSwitcherBaseItem {
 	'this-omni' | 'another-omni' | 'regular';
 	readonly order: number;
 	readonly hasCustomLabel: boolean;
+	readonly isSessionOnly?: boolean;
 	readonly name: string;
 	readonly branch?: string;
 	readonly path: string;
@@ -591,6 +592,18 @@ export function buildProjectSwitcherTreeModel(
 		kind: 'section',
 		sectionKind: 'workbenches',
 		label: localize('workbenchesSection', 'Workbenches'),
+		...(options.hostedWorkspaceState.workbenchCatalogHydrated === false
+			? {
+				description: localize(
+					'workbenchCatalogUnavailableDescription',
+					'Unavailable'
+				),
+				tooltip: localize(
+					'workbenchCatalogUnavailableTooltip',
+					'Workbench catalog is unavailable. Hucode will retry.'
+				),
+			}
+			: {}),
 		contextValue: OMNI_SECTION_CONTEXT_VALUE,
 	};
 	const projectsSection: ProjectSwitcherSectionItem = {
@@ -671,15 +684,22 @@ function toRetainedWorkbenchElement(
 		desktopOwnershipLocation: desktopOwnership?.location,
 		order: record.order,
 		hasCustomLabel: !!record.label,
+		isSessionOnly: record.sessionOnly === true,
 		name: presentation.label,
 		branch,
 		path: presentation.pathLabel,
 		label: presentation.label,
 		description: branch ?? presentation.pathLabel,
-		tooltip: getOwnershipTooltip(
-			presentation.pathLabel,
-			desktopOwnership?.location
-		),
+		tooltip: record.sessionOnly
+			? localize(
+				'sessionOnlyWorkbenchTooltip',
+				'{0} (only open in this session)',
+				presentation.pathLabel
+			)
+			: getOwnershipTooltip(
+				presentation.pathLabel,
+				desktopOwnership?.location
+			),
 		contextValue: WORKBENCH_CONTEXT_VALUE,
 		themeIcon: state === 'missing' || state === 'crashed'
 			? Codicon.warning

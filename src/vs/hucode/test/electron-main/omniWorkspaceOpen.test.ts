@@ -12,7 +12,7 @@ import { ProjectRecord, WorktreeRecord } from '../../../platform/projectManager/
 import { IProjectManagerMainService } from '../../../platform/projectManager/electron-main/projectManager.js';
 import { ICodeWindow } from '../../../platform/window/electron-main/window.js';
 import { IHucodeShellMainService } from '../../electron-main/omniWindow.js';
-import { tryOpenFolderInHucodeHostedWorkspace } from '../../electron-main/omniWorkspaceOpen.js';
+import { ensureHucodeHostedFolderInCatalog, tryOpenFolderInHucodeHostedWorkspace } from '../../electron-main/omniWorkspaceOpen.js';
 
 suite('HucodeOmniWorkspaceOpen', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -51,6 +51,17 @@ suite('HucodeOmniWorkspaceOpen', () => {
 			errorHandler.setUnexpectedErrorHandler(originalHandler);
 		}
 	};
+
+	test('catalog admission preserves authoritative project-worktree identity', async () => {
+		const catalog = { epoch: 'test', revision: 1, projects: [], workbenches: [] };
+		const target = await ensureHucodeHostedFolderInCatalog({
+			ensureWorkbench: async () => ({
+				kind: 'projectWorktree', projectId: 'project', worktree: worktree('/canonical'),
+			}),
+			getCatalogWithoutHydration: () => catalog,
+		}, URI.file('/requested'));
+		assert.deepStrictEqual(target, { projectId: 'project', worktreePath: '/canonical', catalog });
+	});
 
 	test('ignores non-file folders before loading services', async () => {
 		const accessor = {

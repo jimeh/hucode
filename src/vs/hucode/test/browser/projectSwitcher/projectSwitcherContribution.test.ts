@@ -473,15 +473,14 @@ suite('ProjectSwitcherContribution', () => {
 		]);
 	});
 
-	test('keeps complete project catalog reconciliation in the shell',
+	test('reads shell state without renderer catalog reconciliation',
 		async () => {
 			const calls: string[] = [];
-			const reconciled = hostedState('reconciled');
+			const shellState = hostedState('shell-state');
 			const shellService = {
-				async reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-				) {
-					calls.push('reconcile');
-					return reconciled;
+				async getState() {
+					calls.push('getState');
+					return shellState;
 				},
 			} as unknown as IHucodeShellControllerService;
 
@@ -519,9 +518,9 @@ suite('ProjectSwitcherContribution', () => {
 				fromShell: fromShell?.activeInstanceId,
 				fromUntrustedWindow,
 			}, {
-				calls: ['reconcile'],
+				calls: ['getState'],
 				fromHosted: undefined,
-				fromShell: 'reconciled',
+				fromShell: 'shell-state',
 				fromUntrustedWindow: undefined,
 			});
 		});
@@ -1891,7 +1890,7 @@ suite('ProjectSwitcherContribution', () => {
 	});
 
 	test('splices a retained workbench around its target ordering', async () => {
-		const reorderings: string[][] = [];
+		const moves: { id: string; beforeId: string | undefined }[] = [];
 		const source = retainedWorkbenchItem({
 			id: 'workbench:c',
 			handle: 'workbench:c',
@@ -1912,12 +1911,13 @@ suite('ProjectSwitcherContribution', () => {
 				...hostedState(),
 				retainedWorkbenches: [
 					retainedRecord('a', '/a', 0),
-					retainedRecord('b', '/b', 1),
-					retainedRecord('c', '/c', 2),
+					{ ...retainedRecord('session', '/session', 1), sessionOnly: true },
+					retainedRecord('b', '/b', 2),
+					retainedRecord('c', '/c', 3),
 				],
 			},
-			reorderRetainedWorkbenches: async ids => {
-				reorderings.push([...ids]);
+			moveRetainedWorkbench: async (id, beforeId) => {
+				moves.push({ id, beforeId });
 			},
 		});
 
@@ -1937,10 +1937,21 @@ suite('ProjectSwitcherContribution', () => {
 			new DragEvent('drop')
 		);
 
-		assert.deepStrictEqual(reorderings, [
-			['c', 'a', 'b'],
-			['a', 'c', 'b'],
+		assert.deepStrictEqual(moves, [
+			{ id: 'c', beforeId: 'a' },
+			{ id: 'c', beforeId: 'b' },
 		]);
+		const session = retainedWorkbenchItem({ isSessionOnly: true });
+		assert.strictEqual(dragAndDrop.getDragURI(session), null);
+		for (const [dragged, dropped] of [[session, target], [source, session]]) {
+			assert.strictEqual(dragAndDrop.onDragOver(
+				new ElementsDragAndDropData([dragged]), dropped, 0,
+				ListViewTargetSector.BOTTOM, new DragEvent('dragover')
+			), false);
+			await dragAndDrop.drop(new ElementsDragAndDropData([dragged]),
+				dropped, 0, ListViewTargetSector.BOTTOM, new DragEvent('drop'));
+		}
+		assert.strictEqual(moves.length, 2);
 	});
 
 	test('prefers keyboard focus over stale tree selection', () => {
@@ -3337,8 +3348,9 @@ function createDragAndDrop(options: {
 	readonly error?: (value: unknown) => void;
 	readonly projects?: readonly ProjectRecord[];
 	readonly windowState?: IHucodeHostedWorkspaceState;
-	readonly reorderRetainedWorkbenches?: (
-		ids: readonly string[]
+	readonly moveRetainedWorkbench?: (
+		id: string,
+		beforeId?: string
 	) => Promise<void>;
 } = {}): ProjectSwitcherDragAndDrop {
 	return new ProjectSwitcherDragAndDrop(
@@ -3356,8 +3368,8 @@ function createDragAndDrop(options: {
 		{
 			getState: async () =>
 				options.windowState ?? hostedState(),
-			reorderRetainedWorkbenches:
-				options.reorderRetainedWorkbenches ??
+			moveRetainedWorkbench:
+				options.moveRetainedWorkbench ??
 				(async () => undefined),
 		} as unknown as IHucodeShellControllerService
 	);

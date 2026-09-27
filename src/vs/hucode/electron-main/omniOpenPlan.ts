@@ -17,6 +17,10 @@ export interface IHucodeOmniWindowPath {
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly omniWorkbenchOverlays?:
+	INativeWindowConfiguration['omniWorkbenchOverlays'];
+	readonly omniPendingWorkbenchAdoptions?:
+	INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 }
 
 /**
@@ -60,6 +64,10 @@ export interface IHucodeOmniBrowserWindowOptions
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly omniWorkbenchOverlays?:
+	INativeWindowConfiguration['omniWorkbenchOverlays'];
+	readonly omniPendingWorkbenchAdoptions?:
+	INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 }
 
 /**
@@ -72,6 +80,10 @@ export interface IHucodeOmniWindowState {
 	INativeWindowConfiguration['omniResidentWorkspaces'];
 	readonly omniRetainedWorkbenches?:
 	INativeWindowConfiguration['omniRetainedWorkbenches'];
+	readonly omniWorkbenchOverlays?:
+	INativeWindowConfiguration['omniWorkbenchOverlays'];
+	readonly omniPendingWorkbenchAdoptions?:
+	INativeWindowConfiguration['omniPendingWorkbenchAdoptions'];
 }
 
 /**
@@ -191,6 +203,9 @@ export function getHucodeOmniPathFromWindowState(
 		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
 		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
 		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
+		omniWorkbenchOverlays: windowState.omniWorkbenchOverlays,
+		omniPendingWorkbenchAdoptions:
+			windowState.omniPendingWorkbenchAdoptions,
 	});
 }
 
@@ -252,6 +267,9 @@ export function getHucodeOmniBrowserWindowOptions(
 		omniActiveWorktreePath: omniWindow.omniActiveWorktreePath,
 		omniResidentWorkspaces: omniWindow.omniResidentWorkspaces,
 		omniRetainedWorkbenches: omniWindow.omniRetainedWorkbenches,
+		omniWorkbenchOverlays: omniWindow.omniWorkbenchOverlays,
+		omniPendingWorkbenchAdoptions:
+			omniWindow.omniPendingWorkbenchAdoptions,
 	};
 }
 
@@ -299,5 +317,7 @@ function getHucodeOmniWindowRestoreKey(
 		active: omniWindow.omniActiveWorktreePath,
 		resident: omniWindow.omniResidentWorkspaces ?? [],
 		retained: omniWindow.omniRetainedWorkbenches ?? [],
+		overlays: omniWindow.omniWorkbenchOverlays ?? [],
+		pendingAdoptions: omniWindow.omniPendingWorkbenchAdoptions ?? [],
 	});
 }

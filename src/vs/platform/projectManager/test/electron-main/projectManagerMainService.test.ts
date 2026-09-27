@@ -2735,6 +2735,146 @@ suite('ProjectManagerMainService', () => {
 		));
 	}
 
+	test('shares global workbenches and keeps ensure idempotent', async () => {
+		const stateService = new TestStateService();
+		const service = createService(stateService, new TestGitWorktreeService());
+		const events: number[] = [];
+		disposables.add(service.onDidChangeCatalog(catalog =>
+			events.push(catalog.workbenches.length)
+		));
+
+		const [first, second] = await Promise.all([
+			service.ensureWorkbench(URI.file('/scratch')),
+			service.ensureWorkbench(URI.file('/scratch')),
+		]);
+		assert.strictEqual(first.kind, 'workbench');
+		assert.strictEqual(second.kind, 'workbench');
+		assert.deepStrictEqual({
+			firstId: first.kind === 'workbench' ? first.workbench.id : undefined,
+			secondId: second.kind === 'workbench' ? second.workbench.id : undefined,
+			created: [
+				first.kind === 'workbench' && first.created,
+				second.kind === 'workbench' && second.created,
+			],
+			catalogSize: (await service.getCatalog()).workbenches.length,
+			events,
+		}, {
+			firstId: second.kind === 'workbench' ? second.workbench.id : undefined,
+			secondId: second.kind === 'workbench' ? second.workbench.id : undefined,
+			created: [true, false],
+			catalogSize: 1,
+			events: [1],
+		});
+	});
+
+	test('moves one workbench atomically and rejects an unknown target',
+		async () => {
+			const service = createService(
+				new TestStateService(),
+				new TestGitWorktreeService()
+			);
+			const first = await service.ensureWorkbench(URI.file('/scratch/first'));
+			const second = await service.ensureWorkbench(URI.file('/scratch/second'));
+			const third = await service.ensureWorkbench(URI.file('/scratch/third'));
+			assert.strictEqual(first.kind, 'workbench');
+			assert.strictEqual(second.kind, 'workbench');
+			assert.strictEqual(third.kind, 'workbench');
+			if (first.kind !== 'workbench' || second.kind !== 'workbench' ||
+				third.kind !== 'workbench') {
+				return;
+			}
+
+			await service.moveWorkbench(
+				third.workbench.id,
+				first.workbench.id
+			);
+			const movedIds = (await service.getCatalog()).workbenches.map(
+				workbench => workbench.id
+			);
+			await assert.rejects(
+				service.moveWorkbench(first.workbench.id, 'unknown'),
+				/Unknown workbench/
+			);
+
+			assert.deepStrictEqual(movedIds, [
+				third.workbench.id,
+				first.workbench.id,
+				second.workbench.id,
+			]);
+			assert.deepStrictEqual(
+				(await service.getCatalog()).workbenches.map(workbench => workbench.id),
+				movedIds
+			);
+		}
+	);
+
+	test('imports stable legacy IDs and remaps duplicate IDs', async () => {
+		const service = createService(
+			new TestStateService(),
+			new TestGitWorktreeService()
+		);
+		const imported = await service.importWorkbenches([
+			{
+				legacyId: ' legacy ',
+				folderUri: URI.file('/scratch/two'),
+				order: 1,
+			},
+			{
+				legacyId: 'legacy',
+				folderUri: URI.file('/scratch/one'),
+				order: 0,
+			},
+		]);
+
+		assert.strictEqual(imported.catalog.workbenches[0].id, 'legacy');
+		assert.notStrictEqual(imported.catalog.workbenches[1].id, 'legacy');
+		assert.deepStrictEqual(
+			imported.outcomes.map(outcome => outcome.kind === 'workbench'
+				? outcome.workbenchId
+				: undefined),
+			[
+				imported.catalog.workbenches[1].id,
+				imported.catalog.workbenches[0].id,
+			]
+		);
+	});
+
+	test('reads saved catalog metadata without starting Git hydration', async () => {
+		const state = new TestStateService();
+		const git = new TestGitWorktreeService();
+		const initial = createService(state, git);
+		await initial.addProject(URI.file('/repo'));
+		await initial.ensureWorkbench(URI.file('/scratch'));
+		const reloadedGit = new TestGitWorktreeService();
+		const reloaded = createService(state, reloadedGit);
+		const catalog = reloaded.getCatalogWithoutHydration();
+		assert.deepStrictEqual({
+			projects: catalog.projects.length,
+			workbenches: catalog.workbenches.length,
+			discovery: reloadedGit.listWorktreesCalls,
+		}, { projects: 1, workbenches: 1, discovery: [] });
+	});
+
+	test('promotes a saved workbench after current project discovery', async () => {
+		const stateService = new TestStateService();
+		const git = new TestGitWorktreeService();
+		git.resolvedRoots.set('/repo', '/repo');
+		git.worktrees.set('/repo', [createMainWorktree('/repo')]);
+		const service = createService(stateService, git);
+
+		await service.ensureWorkbench(URI.file('/repo'));
+		await service.addProject(URI.file('/repo'));
+		const catalog = await service.getCatalog();
+
+		assert.deepStrictEqual({
+			projects: catalog.projects.map(project => project.rootUri.fsPath),
+			workbenches: catalog.workbenches,
+		}, {
+			projects: ['/repo'],
+			workbenches: [],
+		});
+	});
+
 	test('uses the shared repository observer for projects and arbitrary targets',
 		async () => {
 			const stateService = new TestStateService();

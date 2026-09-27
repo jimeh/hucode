@@ -295,7 +295,7 @@ function getRetainedWorkbenchPicks(
 export async function getOmniHostedWorkspaceState(
 	environmentService: IWorkbenchEnvironmentService,
 	shellService: IHucodeShellControllerService | undefined,
-	projects: readonly ProjectRecord[]
+	_projects: readonly ProjectRecord[]
 ): Promise<IHucodeHostedWorkspaceState | undefined> {
 	if (environmentService.isHostedOmniWorkspace) {
 		return undefined;
@@ -306,14 +306,7 @@ export async function getOmniHostedWorkspaceState(
 	if (!shellService) {
 		throw new Error(omniShellControllerUnavailable);
 	}
-	return shellService.reconcileRetainedWorkbenchesWithCompleteProjectCatalog(
-		projects.map(project => ({
-			projectId: project.id,
-			folderUris: project.worktrees.map(worktree =>
-				URI.file(worktree.path).toJSON()
-			),
-		}))
-	);
+	return shellService.getState();
 }
 
 export function getCombinedSwitchWorkbenchPicks(

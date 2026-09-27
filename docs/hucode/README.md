@@ -71,6 +71,8 @@ decision history. They describe the state and assumptions at the time they
 were written; the guides above are the source of truth for current behavior.
 
 - [Omni Workbenches and Projects Plan](archive/omni-workbenches-plan.md)
+- [Global Arbitrary Workbench Catalog
+  Plan](archive/global-arbitrary-workbench-catalog-plan.md)
 - [Serve-Web Omni Plan](archive/serve-web-omni-plan.html)
 - [Serve-Web Omni Self-Review](archive/serve-web-omni-self-review.md)
 - [Release Build Size Analysis](archive/release-build-size-analysis.md)

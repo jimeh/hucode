@@ -34,6 +34,7 @@ suite('WebProjectManagerService', () => {
 			calls.push({ input, init });
 			return new Response(JSON.stringify({
 				project: rawProject('/repo'),
+				...rawCatalog(),
 				projects: [rawProject('/repo')],
 			}), { status: 201 });
 		};
@@ -58,9 +59,54 @@ suite('WebProjectManagerService', () => {
 			.rootUri.fsPath, '/repo');
 	});
 
+	test('rejects incomplete catalog mutations without retiring the current epoch', async () => {
+		let body: object = rawCatalog();
+		const service = disposables.add(createService(async () =>
+			new Response(JSON.stringify(body))
+		));
+		await service.getCatalog();
+		body = { projects: [], result: { removed: true } };
+		await assert.rejects(service.removeWorktree('project', '/feature', {
+			force: false, expectedStatusFingerprint: 'clean',
+		}),
+			/Invalid project catalog response/);
+		body = { ...rawCatalog(), revision: 2, projects: [rawProject('/updated')] };
+		const catalog = await service.getCatalog();
+		assert.deepStrictEqual({
+			epoch: catalog.epoch,
+			revision: catalog.revision,
+			root: catalog.projects[0]?.rootUri.fsPath,
+		}, { epoch: 'test', revision: 2, root: '/updated' });
+	});
+
+	test('posts one relative workbench move', async () => {
+		const calls: { input: RequestInfo | URL; init?: RequestInit }[] = [];
+		const service = disposables.add(createService(async (input, init) => {
+			calls.push({ input, init });
+			return new Response(JSON.stringify({
+				epoch: 'move',
+				revision: 1,
+				projects: [],
+				workbenches: [],
+			}));
+		}));
+
+		await service.moveWorkbench('source/id', 'target/id');
+
+		assert.strictEqual(
+			calls[0].input.toString(),
+			'/api/projects/workbenches/source%2Fid/move'
+		);
+		assert.strictEqual(calls[0].init?.method, 'POST');
+		assert.deepStrictEqual(JSON.parse(calls[0].init?.body as string), {
+			beforeWorkbenchId: 'target/id',
+		});
+	});
+
 	test('preserves worktree freshness through JSON responses', async () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
 			new Response(JSON.stringify({
+				...rawCatalog(),
 				projects: [rawProject('/repo', 'stale')],
 			}));
 		const service = disposables.add(createService(fakeFetch));
@@ -76,10 +122,12 @@ suite('WebProjectManagerService', () => {
 			if (input.toString() === '/api/projects' && init?.method === 'POST') {
 				return new Response(JSON.stringify({
 					project: rawProject('/added'),
+					...rawCatalog(),
 					projects: [rawProject('/added')],
 				}), { status: 201 });
 			}
 			return new Response(JSON.stringify({
+				...rawCatalog(),
 				projects: [rawProject('/repo')],
 			}));
 		};
@@ -117,6 +165,7 @@ suite('WebProjectManagerService', () => {
 				}
 				return new Response(JSON.stringify({
 					result: { removed: true },
+					...rawCatalog(),
 					projects: [rawProject('/repo')],
 				}));
 			};
@@ -262,7 +311,7 @@ suite('WebProjectManagerService', () => {
 
 	test('emits revived project updates from server-sent events', () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
-			new Response(JSON.stringify({ projects: [] }));
+			new Response(JSON.stringify(rawCatalog()));
 		const service = disposables.add(createService(fakeFetch));
 		const events: (readonly { rootUri: URI }[])[] = [];
 		disposables.add(service.onDidChangeProjects(projects =>
@@ -277,7 +326,7 @@ suite('WebProjectManagerService', () => {
 		FakeEventSource.instances[0].emit(
 			'projects',
 			new MessageEvent('projects', {
-				data: JSON.stringify({ projects: [rawProject('/repo')] }),
+				data: JSON.stringify({ ...rawCatalog(), projects: [rawProject('/repo')] }),
 			})
 		);
 
@@ -292,6 +341,7 @@ suite('WebProjectManagerService', () => {
 			'projects',
 			new MessageEvent('projects', {
 				data: JSON.stringify({
+					...rawCatalog(),
 					projects: [rawProject('/repo', 'unavailable')],
 				}),
 			})
@@ -300,6 +350,73 @@ suite('WebProjectManagerService', () => {
 			(events[1][0] as { worktreeState?: string }).worktreeState,
 			'unavailable'
 		);
+	});
+
+	test('ignores a late HTTP catalog older than the newest SSE revision', async () => {
+		const response = new DeferredPromise<Response>();
+		const service = disposables.add(createService(() => response.p));
+		const events: number[] = [];
+		disposables.add(service.onDidChangeCatalog(catalog =>
+			events.push(catalog.revision)
+		));
+		const pending = service.getCatalog();
+
+		FakeEventSource.instances[0].emit(
+			'projects',
+			new MessageEvent('projects', {
+				data: JSON.stringify({
+					epoch: 'server-a',
+					revision: 2,
+					projects: [rawProject('/new')],
+					workbenches: [],
+				}),
+			})
+		);
+		response.complete(new Response(JSON.stringify({
+			epoch: 'server-a',
+			revision: 1,
+			projects: [rawProject('/old')],
+			workbenches: [],
+		})));
+
+		const catalog = await pending;
+		assert.deepStrictEqual({
+			revision: catalog.revision,
+			root: catalog.projects[0].rootUri.fsPath,
+			events,
+		}, {
+			revision: 2,
+			root: '/new',
+			events: [2],
+		});
+	});
+
+	test('accepts a lower revision from a new server epoch', () => {
+		const service = disposables.add(createService(async () =>
+			new Response(JSON.stringify(rawCatalog()))
+		));
+		const events: string[] = [];
+		disposables.add(service.onDidChangeCatalog(catalog =>
+			events.push(`${catalog.epoch}:${catalog.revision}`)
+		));
+
+		for (const catalog of [
+			{ epoch: 'server-a', revision: 8 },
+			{ epoch: 'server-b', revision: 0 },
+		]) {
+			FakeEventSource.instances[0].emit(
+				'projects',
+				new MessageEvent('projects', {
+					data: JSON.stringify({
+						...catalog,
+						projects: [],
+						workbenches: [],
+					}),
+				})
+			);
+		}
+
+		assert.deepStrictEqual(events, ['server-a:8', 'server-b:0']);
 	});
 
 	test('starts exactly one project stream for Git-monitor targets', async () => {
@@ -539,7 +656,7 @@ suite('WebProjectManagerService', () => {
 
 	test('closes project events when disposed', () => {
 		const fakeFetch: WebProjectManagerFetch = async () =>
-			new Response(JSON.stringify({ projects: [] }));
+			new Response(JSON.stringify(rawCatalog()));
 		const service = disposables.add(createService(fakeFetch));
 		disposables.add(service.onDidChangeProjects(() => undefined));
 		const source = FakeEventSource.instances[0];
@@ -557,6 +674,10 @@ suite('WebProjectManagerService', () => {
 		);
 	}
 });
+
+function rawCatalog() {
+	return { epoch: 'test', revision: 0, projects: [], workbenches: [] };
+}
 
 function rawProject(
 	path: string,
