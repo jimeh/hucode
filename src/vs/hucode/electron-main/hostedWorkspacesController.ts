@@ -132,6 +132,14 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly ipc?: IHostedWorkspaceIpcMain;
 }
 
+/** Full-view capture served as the shell placeholder while occluded. */
+interface IOcclusionPlaceholder {
+	readonly instanceId: string;
+	readonly quality: number;
+	readonly capturedAt: number;
+	readonly screenshot: VSBuffer;
+}
+
 export interface IHucodeHostedRestoreCandidate {
 	readonly path: string;
 	readonly stableInstanceId: string;
@@ -229,6 +237,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
 	private static readonly READY_TIMEOUT_MS = 30000;
 	private static readonly OVERLAY_CAPTURE_SETTLE_TIMEOUT_MS = 500;
+	private static readonly OCCLUSION_PLACEHOLDER_MAX_AGE_MS = 1000;
+	private static readonly WORKSPACE_SCREENSHOT_QUALITY = 80;
 
 	private readonly _onDidChangeState =
 		this._register(new Emitter<IHucodeHostedWorkspaceState>());
@@ -263,6 +273,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private overlayOcclusionRequested = false;
 	private overlayOcclusionGeneration = 0;
 	private readonly pendingCaptures = new Set<Promise<unknown>>();
+	private occlusionPlaceholder: IOcclusionPlaceholder | undefined;
 	private readonly overlayCaptureSettleTimeoutMs: number;
 	private lastFocusedSurface: OmniFocusedSurface = 'shell';
 	private windowFocusRestoreSurface: OmniFocusedSurface | undefined;
@@ -3268,13 +3279,28 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		return true;
 	}
 
+	/**
+	 * Captures the active hosted view for the shell placeholder. While overlay
+	 * occlusion is requested, returns the full-view capture taken before the
+	 * view was hidden instead of capturing the hidden view.
+	 */
 	async captureWorkspaceScreenshot(
 		rect?: IRectangle,
-		quality: number = 80
+		quality: number =
+			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY
 	): Promise<VSBuffer | undefined> {
 		const instance = this.getActiveInstance();
 		if (!instance) {
 			return undefined;
+		}
+
+		if (this.overlayOcclusionRequested) {
+			const placeholder = this.occlusionPlaceholder;
+			return !rect &&
+				placeholder?.instanceId === instance.instanceId &&
+				placeholder.quality === quality
+				? placeholder.screenshot
+				: undefined;
 		}
 
 		try {
@@ -3326,12 +3352,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private async captureInstance(
 		instance: IHostedWorkbenchInstance,
 		rect: IRectangle | undefined,
-		quality: number
+		quality: number,
+		forOcclusionPlaceholder = false
 	): Promise<VSBuffer | undefined> {
 		const webContents = this.getLiveWebContents(instance);
 		if (
 			!webContents ||
-			this.overlayOcclusionRequested ||
+			(this.overlayOcclusionRequested && !forOcclusionPlaceholder) ||
 			!instance.attached ||
 			!this.isViewActuallyVisible(instance)
 		) {
@@ -3342,10 +3369,50 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.pendingCaptures.add(capture);
 		try {
 			const image = await capture;
-			return VSBuffer.wrap(image.toJPEG(quality));
+			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
+			if (!rect) {
+				this.occlusionPlaceholder = {
+					instanceId: instance.instanceId,
+					quality,
+					capturedAt: this.now(),
+					screenshot,
+				};
+			}
+			return screenshot;
 		} finally {
 			this.pendingCaptures.delete(capture);
 		}
+	}
+
+	/**
+	 * Starts a placeholder capture of the still-visible active view unless a
+	 * recent one exists. Occlusion requested without a preceding shell capture,
+	 * such as around a contribution's Quick Input, otherwise has no placeholder.
+	 */
+	private captureOcclusionPlaceholder(): void {
+		const instance = this.getActiveInstance();
+		if (!instance) {
+			return;
+		}
+
+		const placeholder = this.occlusionPlaceholder;
+		if (
+			placeholder?.instanceId === instance.instanceId &&
+			this.now() - placeholder.capturedAt <=
+			ResidentHostedWorkspacesController.OCCLUSION_PLACEHOLDER_MAX_AGE_MS
+		) {
+			return;
+		}
+
+		this.captureInstance(
+			instance,
+			undefined,
+			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY,
+			true
+		).catch(error => this.logService.warn(
+			'[HucodeShellMainService] Failed to capture hosted workspace ' +
+			`placeholder before overlay occlusion: ${error}`
+		));
 	}
 
 	/**
@@ -3356,16 +3423,33 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	async setWorkspaceOverlayOcclusion(occluded: boolean): Promise<void> {
 		this.overlayOcclusionRequested = occluded;
 		const generation = ++this.overlayOcclusionGeneration;
+		if (!occluded) {
+			this.occlusionPlaceholder = undefined;
+		} else {
+			this.captureOcclusionPlaceholder();
+		}
+
 		if (occluded && this.pendingCaptures.size > 0) {
-			await raceTimeout(
-				Promise.allSettled(this.pendingCaptures),
+			const pending = Array.from(this.pendingCaptures);
+			const settled = await raceTimeout(
+				Promise.allSettled(pending).then(() => true),
 				this.overlayCaptureSettleTimeoutMs,
 				() => this.logService.warn(
 					'[HucodeShellMainService] Hosted workspace capture did ' +
 					'not settle before overlay occlusion'
 				)
 			);
-			if (generation !== this.overlayOcclusionGeneration) {
+			if (!settled) {
+				// Abandon captures that outlived the bound so later occlusions
+				// do not wait on them again.
+				for (const capture of pending) {
+					this.pendingCaptures.delete(capture);
+				}
+			}
+			if (
+				generation !== this.overlayOcclusionGeneration ||
+				this._store.isDisposed
+			) {
 				return;
 			}
 		}

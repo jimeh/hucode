@@ -493,8 +493,8 @@ export class OmniHostPart extends Part {
 
 	/**
 	 * Captures the placeholder on demand, just before a shell overlay occludes
-	 * the hosted workspace. Never capture while occluded: the hosted view is
-	 * hidden then, and main refuses the request.
+	 * the hosted workspace. Once occlusion is requested, main returns the
+	 * capture it took before hiding the view rather than capturing it again.
 	 */
 	private async refreshScreenshot(): Promise<boolean> {
 		if (!this.hasVisibleHostedWorkspace()) {
@@ -559,13 +559,14 @@ export class OmniHostPart extends Part {
 
 	private clearOverlayOcclusion(): void {
 		this.overlayOcclusionToken++;
+		// Each occlusion captures a fresh placeholder, so an older one must
+		// never be shown again.
+		this.clearScreenshot();
 		if (!this.overlayOccluded && !this.mainOverlayOccluded) {
-			this.updateScreenshotVisibility();
 			return;
 		}
 
 		this.overlayOccluded = false;
-		this.updateScreenshotVisibility();
 		this.setMainOverlayOcclusion(false);
 	}
 

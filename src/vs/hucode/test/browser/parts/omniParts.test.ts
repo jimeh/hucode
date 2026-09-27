@@ -1003,6 +1003,45 @@ suite('Omni Parts', () => {
 			});
 		}));
 
+	test('OmniHostPart drops its placeholder when occlusion clears', () => {
+		const screenshot = mainWindow.document.createElement('div');
+		const screenshotImage = mainWindow.document.createElement('img');
+		screenshotImage.src = 'data:image/jpeg;base64,AAAA';
+		screenshot.classList.add('visible');
+		const occlusions: boolean[] = [];
+		const host = prototypeHost(OmniHostPart.prototype, {
+			screenshot,
+			screenshotImage,
+			hasScreenshot: true,
+			overlayOccluded: true,
+			mainOverlayOccluded: true,
+			overlayOcclusionToken: 0,
+			shellService: {
+				setWorkspaceOverlayOcclusion: async (occluded: boolean) => {
+					occlusions.push(occluded);
+				},
+			},
+		});
+		const clearOverlayOcclusion = Reflect.get(
+			OmniHostPart.prototype,
+			'clearOverlayOcclusion'
+		) as (this: object) => void;
+
+		clearOverlayOcclusion.call(host);
+
+		assert.deepStrictEqual({
+			hasScreenshot: Reflect.get(host, 'hasScreenshot'),
+			src: screenshotImage.hasAttribute('src'),
+			visible: screenshot.classList.contains('visible'),
+			occlusions,
+		}, {
+			hasScreenshot: false,
+			src: false,
+			visible: false,
+			occlusions: [false],
+		});
+	});
+
 	test('OmniHostPart lays out the hosted workspace in window coordinates', async () => {
 		const layouts: Array<{
 			windowId: number;
