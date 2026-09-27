@@ -524,7 +524,10 @@ export class OmniHostPart extends Part {
 			screenshot = undefined;
 		}
 		if (!screenshot) {
-			return this.hasScreenshot;
+			// A previous screenshot may predate the current overlay; showing it
+			// would present stale workbench content.
+			this.clearScreenshot();
+			return false;
 		}
 
 		this.setScreenshot(screenshot);

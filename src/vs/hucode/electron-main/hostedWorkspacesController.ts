@@ -3369,8 +3369,13 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.pendingCaptures.add(capture);
 		try {
 			const image = await capture;
+			if (image.isEmpty()) {
+				return undefined;
+			}
 			const screenshot = VSBuffer.wrap(image.toJPEG(quality));
-			if (!rect) {
+			// An occlusion that stopped waiting abandoned this capture; a late
+			// result must not replace the placeholder taken after it.
+			if (!rect && this.pendingCaptures.has(capture)) {
 				this.occlusionPlaceholder = {
 					instanceId: instance.instanceId,
 					quality,
@@ -3395,21 +3400,22 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			return;
 		}
 
+		const quality =
+			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY;
 		const placeholder = this.occlusionPlaceholder;
 		if (
 			placeholder?.instanceId === instance.instanceId &&
+			placeholder.quality === quality &&
 			this.now() - placeholder.capturedAt <=
 			ResidentHostedWorkspacesController.OCCLUSION_PLACEHOLDER_MAX_AGE_MS
 		) {
 			return;
 		}
 
-		this.captureInstance(
-			instance,
-			undefined,
-			ResidentHostedWorkspacesController.WORKSPACE_SCREENSHOT_QUALITY,
-			true
-		).catch(error => this.logService.warn(
+		// Never fall back to an unsuitable placeholder if the replacement
+		// capture fails.
+		this.occlusionPlaceholder = undefined;
+		this.captureInstance(instance, undefined, quality, true).catch(error => this.logService.warn(
 			'[HucodeShellMainService] Failed to capture hosted workspace ' +
 			`placeholder before overlay occlusion: ${error}`
 		));

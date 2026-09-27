@@ -902,17 +902,19 @@ suite('Omni Parts', () => {
 		});
 	});
 
-	test('OmniHostPart preserves the previous screenshot after capture failure', async () => {
-		let setCount = 0;
+	test('OmniHostPart drops the previous screenshot after capture failure', async () => {
+		const screenshotImage = mainWindow.document.createElement('img');
+		screenshotImage.src = 'data:image/jpeg;base64,AAAA';
 		const host = prototypeHost(OmniHostPart.prototype, {
-			windowId: 7,
 			hasScreenshot: true,
+			overlayOccluded: false,
+			screenshot: mainWindow.document.createElement('div'),
+			screenshotImage,
 			shellService: {
 				captureWorkspaceScreenshot: async () => {
 					throw new Error('capture failed');
 				},
 			},
-			setScreenshot: () => setCount++,
 		});
 		const refresh = Reflect.get(
 			OmniHostPart.prototype,
@@ -921,10 +923,12 @@ suite('Omni Parts', () => {
 
 		assert.deepStrictEqual({
 			result: await refresh.call(host),
-			setCount,
+			hasScreenshot: Reflect.get(host, 'hasScreenshot'),
+			src: screenshotImage.hasAttribute('src'),
 		}, {
-			result: true,
-			setCount: 0,
+			result: false,
+			hasScreenshot: false,
+			src: false,
 		});
 	});
 
