@@ -23,3 +23,12 @@ export function assertNoUpstreamIdentity(
 	contents: string,
 	label: string
 ): void;
+
+/**
+ * Asserts that the proposed-API allowlist was synced from the Microsoft VS Code
+ * release matching the upstream baseline.
+ */
+export function assertExtensionApiProposalsParity(
+	extensionApiProposals: { source?: { version?: string } },
+	upstreamVersion: string
+): void;

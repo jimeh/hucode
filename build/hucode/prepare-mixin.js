@@ -15,6 +15,15 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 
 const supportedQualities = new Set(['stable']);
 
+// Microsoft's proposed-API allowlist, synced by extension-api-proposals.ts. It lives outside the
+// mixin directory because upstream mixin-quality copies every file there into the repo root.
+const extensionApiProposalsPath = path.join(
+	repoRoot,
+	'build',
+	'hucode',
+	'extension-api-proposals.json'
+);
+
 const requiredRootKeys = [
 	'nameShort',
 	'nameLong',
@@ -175,11 +184,22 @@ export async function prepareMixin(quality = 'stable') {
 	const rootProductPath = path.join(repoRoot, 'product.json');
 	const outputProductPath = path.join(outputRoot, 'product.json');
 
-	const sourceProduct = await readJson(sourceProductPath);
+	const overlayProduct = await readJson(sourceProductPath);
 	const rootProduct = await readJson(rootProductPath);
+	const extensionApiProposals = await readJson(extensionApiProposalsPath);
 
 	assertKeys(rootProduct, requiredRootKeys, 'root product.json');
-	assertKeys(sourceProduct, requiredOverlayKeys, 'Hucode mixin product.json');
+	assertKeys(overlayProduct, requiredOverlayKeys, 'Hucode mixin product.json');
+	assert.ok(
+		!Object.hasOwn(overlayProduct, 'extensionEnabledApiProposals'),
+		'Hucode mixin product.json must not define extensionEnabledApiProposals; sync build/hucode/extension-api-proposals.json instead.'
+	);
+
+	const sourceProduct = {
+		...overlayProduct,
+		extensionEnabledApiProposals:
+			extensionApiProposals.extensionEnabledApiProposals
+	};
 
 	await fs.rm(outputRoot, { recursive: true, force: true });
 	await copyDir(sourceRoot, outputRoot);
@@ -226,6 +246,11 @@ export async function prepareMixin(quality = 'stable') {
 		assert.ok(
 			mixedProduct.trustedExtensionAuthAccess,
 			'Merged product.json lost trustedExtensionAuthAccess.'
+		);
+		assert.deepStrictEqual(
+			mixedProduct.extensionEnabledApiProposals,
+			sourceProduct.extensionEnabledApiProposals,
+			'Merged product.json lost extensionEnabledApiProposals.'
 		);
 
 		await writeJson(outputProductPath, mixedProduct);
