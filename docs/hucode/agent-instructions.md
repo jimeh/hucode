@@ -51,6 +51,9 @@ human-facing guides rather than replacing them.
   `build/hucode/extension-api-proposals.json` and merged by `hucode:prepare`.
   Do not define that key in the mixin `product.json`. Re-sync the file for each
   VS Code baseline; `hucode:validate` rejects a file from another release.
+  A listed extension gets exactly its listed proposals, even in source runs or
+  with `--enable-proposed-api`, so a proposal it adopts after the synced
+  release stays blocked until the next sync.
 
 ## Local Workflow
 
