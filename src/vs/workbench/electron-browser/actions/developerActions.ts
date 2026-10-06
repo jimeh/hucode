@@ -19,6 +19,7 @@ import { getActiveWindow } from '../../../base/browser/dom.js';
 import { IProgressService, ProgressLocation } from '../../../platform/progress/common/progress.js';
 import { IDialogService } from '../../../platform/dialogs/common/dialogs.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../services/statusbar/browser/statusbar.js';
+import { hucodeToggleHostedWorkspaceDevTools } from '../hucodeHostedDevTools.js';
 
 export class ToggleDevToolsAction extends Action2 {
 
@@ -43,9 +44,13 @@ export class ToggleDevToolsAction extends Action2 {
 	}
 
 	async run(accessor: ServicesAccessor): Promise<void> {
+		const targetWindowId = getActiveWindow().vscodeWindowId;
 		const nativeHostService = accessor.get(INativeHostService);
+		if (await hucodeToggleHostedWorkspaceDevTools(accessor, targetWindowId)) {
+			return;
+		}
 
-		return nativeHostService.toggleDevTools({ targetWindowId: getActiveWindow().vscodeWindowId });
+		return nativeHostService.toggleDevTools({ targetWindowId });
 	}
 }
 

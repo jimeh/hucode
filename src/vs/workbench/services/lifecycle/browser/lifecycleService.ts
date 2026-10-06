@@ -105,7 +105,70 @@ export class BrowserLifecycleService extends AbstractLifecycleService {
 		this.doShutdown();
 	}
 
+	/**
+	 * Hucode: runs the veto-capable half of a shutdown on its own and reports
+	 * the collected veto. No lifecycle-service state changes, so an attempt
+	 * that is vetoed or abandoned leaves the workbench usable and this service
+	 * able to shut down later. `onBeforeShutdown` fires exactly once per call;
+	 * a caller that decides to go ahead continues with {@link commitShutdown},
+	 * which never fires it again.
+	 *
+	 * Its listeners do run, however, and not all of them are idempotent or
+	 * conditional on the shutdown actually happening — the same is true of the
+	 * `beforeunload` path this shares, but an abandoned preparation is not a
+	 * no-op for the workbench as a whole.
+	 *
+	 * Hosted Omni workbenches are unloaded by a shell that only knows whether
+	 * the workbench is really going away after it has seen the veto answer, so
+	 * the two halves of {@link doShutdown} have to be callable separately.
+	 */
+	async prepareShutdown(): Promise<boolean> {
+		this.logService.info('[lifecycle] prepareShutdown triggered');
+
+		// Ensure UI state is persisted
+		await this.storageService.flush(WillSaveStateReason.SHUTDOWN);
+
+		return this.fireBeforeShutdown(true);
+	}
+
+	/**
+	 * Hucode: completes an unload that {@link prepareShutdown} reported no
+	 * veto for. This is the irreversible half: it fires `onWillShutdown` and
+	 * then `onDidShutdown` and cannot be undone.
+	 */
+	async commitShutdown(): Promise<void> {
+		this.logService.info('[lifecycle] commitShutdown triggered');
+
+		// A committed shutdown renders our unload
+		// event handlers disabled, so dispose them.
+		this.beforeUnloadListener?.dispose();
+		this.unloadListener?.dispose();
+
+		// Ensure UI state is persisted
+		await this.storageService.flush(WillSaveStateReason.SHUTDOWN);
+
+		this.onUnload();
+	}
+
 	private doShutdown(vetoShutdown?: () => void): void {
+		const veto = this.fireBeforeShutdown(typeof vetoShutdown === 'function');
+
+		// Veto: handle if provided
+		if (veto && typeof vetoShutdown === 'function') {
+			return vetoShutdown();
+		}
+
+		// No veto, continue to shutdown
+		return this.onUnload();
+	}
+
+	/**
+	 * Hucode: split out of {@link doShutdown} so the veto-capable half can run
+	 * without the `onUnload` commit that used to follow it unconditionally.
+	 * `collectVeto` keeps the "veto handling disabled" behaviour callers of
+	 * {@link shutdown} rely on: their vetoes are computed and dropped.
+	 */
+	private fireBeforeShutdown(collectVeto: boolean): boolean {
 		const logService = this.logService;
 
 		// Optimistically trigger a UI state flush
@@ -118,7 +181,7 @@ export class BrowserLifecycleService extends AbstractLifecycleService {
 		let veto = false;
 
 		function handleVeto(vetoResult: boolean | Promise<boolean>, id: string) {
-			if (typeof vetoShutdown !== 'function') {
+			if (!collectVeto) {
 				return; // veto handling disabled
 			}
 
@@ -146,13 +209,7 @@ export class BrowserLifecycleService extends AbstractLifecycleService {
 			}
 		});
 
-		// Veto: handle if provided
-		if (veto && typeof vetoShutdown === 'function') {
-			return vetoShutdown();
-		}
-
-		// No veto, continue to shutdown
-		return this.onUnload();
+		return veto;
 	}
 
 	private onUnload(): void {
