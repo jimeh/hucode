@@ -1,0 +1,12 @@
+node_modules/**
+src/**
+scripts/**
+test/**
+components.json
+esbuild.setup.mts
+tsconfig.json
+vitest.config.ts
+pnpm-lock.yaml
+pnpm-workspace.yaml
+.gitignore
+**/*.tsbuildinfo

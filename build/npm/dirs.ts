@@ -35,13 +35,15 @@ export const workspaceMembers = [
  * product build bundles, so the layout of their `node_modules` doesn't ship; its `.pnpmfile.mjs`
  * builds native modules for Electron like the workspace. `extensions/copilot` keeps its own
  * `node_modules` because its build scripts and runtime code use paths inside it; it builds native
- * modules for Electron like the workspace.
+ * modules for Electron like the workspace. Hucode's `extensions/hucode-setup-ui` keeps its renderer
+ * toolchain out of the built-in extensions' `node_modules`; it has no native modules.
  */
 export const separateRoots = [
 	'build',
 	'remote',
 	'extensions',
 	'extensions/copilot',
+	'extensions/hucode-setup-ui',
 ];
 
 /**

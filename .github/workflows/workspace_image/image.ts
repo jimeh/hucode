@@ -64,6 +64,7 @@ export const NATIVE_BUILD_INPUTS: { readonly files: readonly string[]; readonly 
 		'remote/pnpm-workspace.yaml',
 		'extensions/pnpm-workspace.yaml',
 		'extensions/copilot/pnpm-workspace.yaml',
+		'extensions/hucode-setup-ui/pnpm-workspace.yaml',
 	],
 	packageJsonFields: {
 		'package.json': ['nativeBuild', 'packageManager'],
