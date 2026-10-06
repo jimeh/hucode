@@ -12,6 +12,8 @@ import { load } from 'js-yaml';
 import { detectChanges } from '../../../.github/actions/detect-changes/detect.ts';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
+// Hucode: upstream's PR workflows are carried unchanged but disabled.
+const prWorkflowDirectory = '.github/workflows.disabled';
 const coreTestOutputs = ['unit-tests', 'browser-integration', 'product-tests'];
 
 interface IWorkflowJob {
@@ -62,7 +64,7 @@ async function detectCoreTests(...filenames: string[]): Promise<string[]> {
 }
 
 function loadWorkflow(file = 'pr.yml'): { readonly jobs: Record<string, IWorkflowJob> } {
-	return load(readFileSync(path.join(repositoryRoot, '.github/workflows', file), 'utf8')) as { readonly jobs: Record<string, IWorkflowJob> };
+	return load(readFileSync(path.join(repositoryRoot, prWorkflowDirectory, file), 'utf8')) as { readonly jobs: Record<string, IWorkflowJob> };
 }
 
 /** Names of the built-in extensions whose files the core tests import or read by repository path. */

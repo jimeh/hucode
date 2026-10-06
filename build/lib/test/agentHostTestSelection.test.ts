@@ -14,6 +14,8 @@ import { detectAgentHostE2EChanges } from '../../../.github/actions/detect-agent
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
 const profilePath = path.join(repositoryRoot, 'src/vs/platform/agentHost/test/node/agentHostTestProfile.ts');
+// Hucode: upstream's PR workflows are carried unchanged but disabled.
+const prWorkflowDirectory = '.github/workflows.disabled';
 
 async function detect(files: readonly { filename: string; previous_filename?: string }[], expectedCount = files.length, failure?: Error) {
 	const outputs: Record<string, string> = {};
@@ -129,7 +131,7 @@ suite('Agent Host PR test selection', () => {
 		const action = load(readFileSync(path.join(repositoryRoot, '.github/actions/detect-agent-host-e2e-changes/action.yml'), 'utf8')) as {
 			outputs: Record<string, { value: string }>;
 		};
-		const pr = load(readFileSync(path.join(repositoryRoot, '.github/workflows/pr.yml'), 'utf8')) as { jobs: Record<string, IJob> };
+		const pr = load(readFileSync(path.join(repositoryRoot, `${prWorkflowDirectory}/pr.yml`), 'utf8')) as { jobs: Record<string, IJob> };
 		const changes = pr.jobs.changes;
 		const detection = changes.steps?.find(step => step.uses === './.github/actions/detect-agent-host-e2e-changes');
 		const checkout = changes.steps?.find(step => step.uses?.startsWith('actions/checkout@'));
@@ -159,7 +161,7 @@ suite('Agent Host PR test selection', () => {
 			};
 		});
 		const platforms = ['linux', 'darwin', 'win32'].map(platform => {
-			const workflow = load(readFileSync(path.join(repositoryRoot, `.github/workflows/pr-${platform}-test.yml`), 'utf8')) as {
+			const workflow = load(readFileSync(path.join(repositoryRoot, `${prWorkflowDirectory}/pr-${platform}-test.yml`), 'utf8')) as {
 				on: { workflow_call: { inputs: Record<string, { default?: unknown }> } };
 				jobs: Record<string, { steps: IStep[] }>;
 			};
@@ -306,7 +308,7 @@ suite('Agent Host PR test selection', () => {
 			.sort();
 		// The Check ripple step of pr.yml tells the Agent Host E2E suites that the test plan selects from the
 		// other integration tests with a regular expression.
-		const pr = load(readFileSync(path.join(repositoryRoot, '.github/workflows/pr.yml'), 'utf8')) as { jobs: Record<string, { steps?: { id?: string; env?: Record<string, string> }[] }> };
+		const pr = load(readFileSync(path.join(repositoryRoot, `${prWorkflowDirectory}/pr.yml`), 'utf8')) as { jobs: Record<string, { steps?: { id?: string; env?: Record<string, string> }[] }> };
 		const plannedPattern = new RegExp(pr.jobs.changes.steps?.find(step => step.id === 'ripple')?.env?.AGENT_HOST_E2E ?? '$^');
 		const plannedAsAgentHostE2E = readdirSync(path.join(repositoryRoot, 'src'), { recursive: true, encoding: 'utf8' })
 			.map(file => path.posix.join('src', file.split(path.sep).join('/')))
@@ -351,7 +353,7 @@ suite('Agent Host PR test selection', () => {
 			.map(file => path.posix.join(directory, file.split(path.sep).join('/')));
 		// The extension host tests do not run any Agent Host E2E entrypoints.
 		const unitRun = /test-(integration|agent-host-e2e)\.(sh|bat)\b(?![^\n]*--(run|runGlob|suite|only-extension-host-tests)\b)/;
-		const pairs = [...pipelineFiles('.github/workflows'), ...pipelineFiles('build/azure-pipelines')].sort().flatMap(file => {
+		const pairs = [...pipelineFiles('.github/workflows'), ...pipelineFiles(prWorkflowDirectory), ...pipelineFiles('build/azure-pipelines')].sort().flatMap(file => {
 			const steps = commandSteps(load(readFileSync(path.join(repositoryRoot, file), 'utf8')));
 			const integration = steps.filter(step => unitRun.test(step.command) && step.command.includes('test-integration.'));
 			const agentHost = steps.filter(step => unitRun.test(step.command) && step.command.includes('test-agent-host-e2e.'));
@@ -372,9 +374,9 @@ suite('Agent Host PR test selection', () => {
 			}];
 		});
 		assert.deepStrictEqual(pairs, [
-			'.github/workflows/pr-darwin-test.yml',
-			'.github/workflows/pr-linux-test.yml',
-			'.github/workflows/pr-win32-test.yml',
+			`${prWorkflowDirectory}/pr-darwin-test.yml`,
+			`${prWorkflowDirectory}/pr-linux-test.yml`,
+			`${prWorkflowDirectory}/pr-win32-test.yml`,
 			'build/azure-pipelines/darwin/product-smoke-flaky-darwin.yml',
 			'build/azure-pipelines/darwin/steps/product-build-darwin-test.yml',
 			'build/azure-pipelines/linux/product-smoke-flaky-linux.yml',

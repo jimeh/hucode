@@ -11,6 +11,8 @@ import { FAILSAFE_SCHEMA, load } from 'js-yaml';
 import { cacheWarmingJobs, detectMissingCaches, getCaches, type ICacheWarmingJob } from '../../../.github/actions/detect-missing-caches/detect.ts';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
+// Hucode: upstream's PR workflows are carried unchanged but disabled.
+const prWorkflowDirectory = '.github/workflows.disabled';
 
 interface IStep {
 	readonly uses?: string;
@@ -52,7 +54,7 @@ const runners: Record<string, { platform: string; arch: string; os: ICacheWarmin
 
 suite('Detect missing caches', () => {
 	test('the jobs match pr-node-modules.yml', () => {
-		const workflow = loadYaml<{ jobs: Record<string, IJob> }>('.github/workflows/pr-node-modules.yml');
+		const workflow = loadYaml<{ jobs: Record<string, IJob> }>(`${prWorkflowDirectory}/pr-node-modules.yml`);
 		const jobs: Record<string, ICacheWarmingJob> = {};
 		const gates: Record<string, string | undefined> = {};
 		for (const [name, job] of Object.entries(workflow.jobs)) {
@@ -90,7 +92,7 @@ suite('Detect missing caches', () => {
 	test('the action and the caches job forward an output for each job', () => {
 		// The runner only loads the action when the workflow runs on main, so parse it here.
 		const action = loadYaml<{ outputs: Record<string, { value: string }> }>('.github/actions/detect-missing-caches/action.yml');
-		const workflow = loadYaml<{ jobs: { caches: { outputs: Record<string, string> } } }>('.github/workflows/pr-node-modules.yml');
+		const workflow = loadYaml<{ jobs: { caches: { outputs: Record<string, string> } } }>(`${prWorkflowDirectory}/pr-node-modules.yml`);
 		const expected = Object.fromEntries(Object.keys(cacheWarmingJobs).map(name => [name, `\${{ steps.detect.outputs.${name} }}`]));
 		assert.deepStrictEqual({
 			action: Object.fromEntries(Object.entries(action.outputs).map(([name, output]) => [name, output.value])),
@@ -105,7 +107,7 @@ suite('Detect missing caches', () => {
 			.filter(step => step.uses?.startsWith('actions/cache'))
 			.map(step => ({ key: step.with?.key, path: step.with?.path, enableCrossOsArchive: step.with?.enableCrossOsArchive }));
 		const commands = (steps: readonly IStep[], pattern: RegExp) => steps.flatMap(step => step.run?.split('\n').filter(line => pattern.test(line)).map(line => line.trim()) ?? []);
-		const compile = loadYaml<{ jobs: Record<string, IJob> }>('.github/workflows/pr-node-modules.yml').jobs.compile.steps;
+		const compile = loadYaml<{ jobs: Record<string, IJob> }>(`${prWorkflowDirectory}/pr-node-modules.yml`).jobs.compile.steps;
 		assert.deepStrictEqual({
 			nodeModules: [...caches(loadActionSteps('restore-node-modules')), ...caches(loadActionSteps('save-node-modules')), ...commands(loadActionSteps('restore-node-modules'), /computeNodeModulesCacheKey/)],
 			electron: [...caches(loadActionSteps('setup-electron')), ...commands(loadActionSteps('setup-electron'), /ELECTRON_CACHE_PATH=|\$cacheRoot =/)],
