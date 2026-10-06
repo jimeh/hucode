@@ -14,6 +14,8 @@ import { detectAgentHostE2EChanges } from '../../../.github/actions/detect-agent
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
 const profilePath = path.join(repositoryRoot, 'src/vs/platform/agentHost/test/node/agentHostTestProfile.ts');
+// Hucode: upstream's PR workflows are carried unchanged but disabled.
+const prWorkflowDirectory = '.github/workflows.disabled';
 
 async function detect(files: readonly { filename: string; previous_filename?: string }[], expectedCount = files.length, failure?: Error) {
 	const outputs: Record<string, string> = {};
@@ -128,7 +130,7 @@ suite('Agent Host PR test selection', () => {
 			outputs: Record<string, { value: string }>;
 		};
 		const environments = ['linux', 'darwin', 'win32'].map(platform => {
-			const workflow = load(readFileSync(path.join(repositoryRoot, `.github/workflows/pr-${platform}-test.yml`), 'utf8')) as {
+			const workflow = load(readFileSync(path.join(repositoryRoot, `${prWorkflowDirectory}/pr-${platform}-test.yml`), 'utf8')) as {
 				jobs: Record<string, { steps: { id?: string; name?: string; if?: string; run?: string; env?: Record<string, string> }[] }>;
 			};
 			const steps = Object.values(workflow.jobs).flatMap(job => job.steps);
@@ -233,7 +235,7 @@ suite('Agent Host PR test selection', () => {
 			.filter(file => /\.ya?ml$/.test(file))
 			.map(file => path.posix.join(directory, file.split(path.sep).join('/')));
 		const unitRun = /test-(integration|agent-host-e2e)\.(sh|bat)\b(?![^\n]*--(run|runGlob|suite)\b)/;
-		const pairs = [...pipelineFiles('.github/workflows'), ...pipelineFiles('build/azure-pipelines')].sort().flatMap(file => {
+		const pairs = [...pipelineFiles('.github/workflows'), ...pipelineFiles(prWorkflowDirectory), ...pipelineFiles('build/azure-pipelines')].sort().flatMap(file => {
 			const steps = commandSteps(load(readFileSync(path.join(repositoryRoot, file), 'utf8')));
 			const integration = steps.filter(step => unitRun.test(step.command) && step.command.includes('test-integration.'));
 			const agentHost = steps.filter(step => unitRun.test(step.command) && step.command.includes('test-agent-host-e2e.'));
@@ -253,9 +255,9 @@ suite('Agent Host PR test selection', () => {
 			}];
 		});
 		assert.deepStrictEqual(pairs, [
-			'.github/workflows/pr-darwin-test.yml',
-			'.github/workflows/pr-linux-test.yml',
-			'.github/workflows/pr-win32-test.yml',
+			`${prWorkflowDirectory}/pr-darwin-test.yml`,
+			`${prWorkflowDirectory}/pr-linux-test.yml`,
+			`${prWorkflowDirectory}/pr-win32-test.yml`,
 			'build/azure-pipelines/darwin/product-smoke-flaky-darwin.yml',
 			'build/azure-pipelines/darwin/steps/product-build-darwin-test.yml',
 			'build/azure-pipelines/linux/product-smoke-flaky-linux.yml',

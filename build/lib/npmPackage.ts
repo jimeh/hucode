@@ -21,7 +21,8 @@ interface NpmPackageLock {
 type NpmPackError = NodeJS.ErrnoException & Partial<SpawnSyncReturns<string | Buffer>>;
 
 export interface EnsureNpmPackageOptions {
-	packPackage?: (packageName: string, version: string, tempDir: string) => string;
+	/** Replaces `npm pack`; receives the npm arguments the real command would use. */
+	packPackage?: (packageName: string, version: string, tempDir: string, npmArgs: readonly string[]) => string;
 	/** Delay between transient npm pack failures, in milliseconds. Defaults to 1000. */
 	retryDelay?: number;
 }
@@ -45,7 +46,7 @@ export function ensureNpmPackage(packageName: string, nodeModulesRoot = 'node_mo
 
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-npm-package-'));
 	try {
-		const tarballPath = packNpmPackage(packageName, lockPackage.version, tempDir, options);
+		const tarballPath = packNpmPackage(packageName, lockPackage.version, tempDir, lockPackage.integrity, options);
 		verifyNpmIntegrity(tarballPath, lockPackage.integrity);
 
 		fs.mkdirSync(packageDir, { recursive: true });
@@ -70,7 +71,7 @@ export function ensureNpmPackage(packageName: string, nodeModulesRoot = 'node_mo
 export function materializeNpmPackageVersion(packageName: string, version: string, targetDir: string, expectedIntegrity: string | undefined, options: EnsureNpmPackageOptions = {}): void {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-npm-package-'));
 	try {
-		const tarballPath = packNpmPackage(packageName, version, tempDir, options);
+		const tarballPath = packNpmPackage(packageName, version, tempDir, expectedIntegrity, options);
 		verifyNpmIntegrity(tarballPath, expectedIntegrity);
 
 		fs.rmSync(targetDir, { recursive: true, force: true });
@@ -86,15 +87,22 @@ export function materializeNpmPackageVersion(packageName: string, version: strin
 }
 
 /** Retries only the pack operation, never integrity verification or extraction. */
-function packNpmPackage(packageName: string, version: string, tempDir: string, options: EnsureNpmPackageOptions): string {
+function packNpmPackage(packageName: string, version: string, tempDir: string, integrity: string | undefined, options: EnsureNpmPackageOptions): string {
 	const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 	const args = ['pack', `${packageName}@${version}`, '--pack-destination', tempDir, '--loglevel=error'];
+	if (getSha512Integrity(integrity)) {
+		// Hucode: npm ci installs lockfile pins regardless of the repository
+		// min-release-age, but npm pack re-resolves through registry metadata and
+		// rejects a pin still inside that window. The tarball is verified against
+		// the lockfile sha512, so the age gate adds nothing for it.
+		args.push('--min-release-age=0');
+	}
 	const attempts = 3;
 
 	for (let attempt = 1; ; attempt++) {
 		try {
 			if (options.packPackage) {
-				return options.packPackage(packageName, version, tempDir);
+				return options.packPackage(packageName, version, tempDir, args);
 			}
 			execFileSync(npm, args, { stdio: 'pipe', shell: process.platform === 'win32' });
 			break;
@@ -162,12 +170,12 @@ function readNpmPackageLock(lockFilePath: string): NpmPackageLock {
 	}
 }
 
-function verifyNpmIntegrity(tarballPath: string, integrity: string | undefined): void {
-	if (!integrity) {
-		return;
-	}
+function getSha512Integrity(integrity: string | undefined): string | undefined {
+	return integrity?.split(/\s+/).find(entry => entry.startsWith('sha512-'));
+}
 
-	const sha512Integrity = integrity.split(/\s+/).find(entry => entry.startsWith('sha512-'));
+function verifyNpmIntegrity(tarballPath: string, integrity: string | undefined): void {
+	const sha512Integrity = getSha512Integrity(integrity);
 	if (!sha512Integrity) {
 		return;
 	}

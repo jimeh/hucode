@@ -61,3 +61,8 @@
 # Vendored third-party libraries
 src/vs/base/common/lit-html/**
 src/vs/base/common/signals-core/**
+
+# Generated shadcn component source and the tracked protocol mirror
+extensions/hucode-setup-ui/src/vendor/shadcn/**
+extensions/hucode-setup-ui/src/generated/**
+extensions/hucode-setup-ui/media/**
