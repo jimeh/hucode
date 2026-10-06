@@ -291,6 +291,18 @@ export const IDialogService = createDecorator<IDialogService>('dialogService');
 
 export interface ICustomDialogOptions {
 	readonly buttonDetails?: string[];
+	/**
+	 * Enables or disables each button by its original dialog button index.
+	 */
+	readonly buttonEnabled?: readonly boolean[];
+	/**
+	 * Focuses the button with this original dialog button index.
+	 */
+	readonly buttonFocus?: number;
+	/**
+	 * Orders buttons visually by their original dialog button indices.
+	 */
+	readonly buttonOrder?: readonly number[];
 	readonly markdownDetails?: ICustomDialogMarkdown[];
 	readonly classes?: string[];
 	readonly icon?: ThemeIcon;
