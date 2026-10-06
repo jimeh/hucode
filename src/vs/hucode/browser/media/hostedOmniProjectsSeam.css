@@ -1,0 +1,23 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* In compact density the hosted workbench paints the seam it shares with the
+ * Omni Projects card on its leading part. Upstream treats the status bar as
+ * window chrome and leaves its leading edge bare, so the seam stops short of
+ * the window bottom. Continue it down the status bar while the Projects card
+ * is visible. It is painted as a background so the status bar items keep
+ * their position. */
+.monaco-workbench.floating-panels.modern-ui-compact.hucode-omni-projects-visible .part.statusbar {
+	background-image: linear-gradient(var(--vscode-surface-border, var(--vscode-widget-border, transparent)), var(--vscode-surface-border, var(--vscode-widget-border, transparent)));
+	background-position: top left;
+	background-size: var(--vscode-strokeThickness, 1px) 100%;
+	background-repeat: no-repeat;
+}
+
+/* A visible activity bar normally leads the hosted workbench and paints the
+ * seam in its own border color. */
+.monaco-workbench.floating-panels.modern-ui-compact.hucode-omni-projects-visible:not(.noactivitybar) .part.statusbar {
+	background-image: linear-gradient(var(--vscode-modernActivityBar-border, var(--vscode-surface-border, var(--vscode-widget-border, transparent))), var(--vscode-modernActivityBar-border, var(--vscode-surface-border, var(--vscode-widget-border, transparent))));
+}
