@@ -5,15 +5,23 @@
 
 import electron from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { isMacintosh } from '../../../base/common/platform.js';
+import { isLinux, isMacintosh } from '../../../base/common/platform.js';
+import { isEqual } from '../../../base/common/extpath.js';
 import { extUriBiasedIgnorePathCase } from '../../../base/common/resources.js';
 import { URI } from '../../../base/common/uri.js';
 import { IConfigurationService } from '../../configuration/common/configuration.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
 import { IStateService } from '../../state/node/state.js';
-import { INativeWindowConfiguration, IWindowSettings } from '../../window/common/window.js';
-import { IWindowsMainService } from './windows.js';
+import {
+	INativeWindowConfiguration,
+	IOmniRetainedWorkbench,
+	IOmniPendingWorkbenchAdoption,
+	IOmniWorkbenchSessionEntry,
+	IOmniWorkspaceRestoreEntry,
+	IWindowSettings,
+} from '../../window/common/window.js';
+import { IHucodeOmniMigrationWindowState, IHucodeOmniWindowMigrationResult, IWindowsMainService } from './windows.js';
 import { defaultWindowState, ICodeWindow, IWindowState as IWindowUIState, WindowMode } from '../../window/electron-main/window.js';
 import { isSingleFolderWorkspaceIdentifier, isWorkspaceIdentifier, IWorkspaceIdentifier } from '../../workspace/common/workspace.js';
 
@@ -23,6 +31,12 @@ export interface IWindowState {
 	folderUri?: URI;
 	backupPath?: string;
 	remoteAuthority?: string;
+	windowKind?: 'workbench' | 'omni';
+	omniActiveWorktreePath?: string;
+	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+	omniWorkbenchOverlays?: readonly IOmniWorkbenchSessionEntry[];
+	omniPendingWorkbenchAdoptions?: readonly IOmniPendingWorkbenchAdoption[];
 	uiState: IWindowUIState;
 }
 
@@ -47,7 +61,158 @@ interface ISerializedWindowState {
 	readonly folder?: string;
 	readonly backupPath?: string;
 	readonly remoteAuthority?: string;
+	readonly windowKind?: 'workbench' | 'omni';
+	readonly omniActiveWorktreePath?: string;
+	readonly omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	readonly omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+	readonly omniWorkbenchOverlays?: readonly IOmniWorkbenchSessionEntry[];
+	readonly omniPendingWorkbenchAdoptions?: readonly IOmniPendingWorkbenchAdoption[];
 	readonly uiState: IWindowUIState;
+}
+
+/** Enumerates every persisted Omni source, including windows not restored. */
+export function getHucodeOmniMigrationWindowStates(
+	state: IWindowsState
+): readonly IHucodeOmniMigrationWindowState[] {
+	return hucodeWindowStateEntries(state).map(([sourceId, windowState]) => ({
+		sourceId,
+		retainedWorkbenches: windowState.omniRetainedWorkbenches ?? [],
+		residentWorkspaces: windowState.omniResidentWorkspaces ?? [],
+		workbenchOverlays: windowState.omniWorkbenchOverlays ?? [],
+	}));
+}
+
+/** Rewrites legacy global metadata into per-window lifecycle overlays. */
+export function applyHucodeOmniWorkbenchMigration(
+	state: IWindowsState,
+	results: readonly IHucodeOmniWindowMigrationResult[]
+): void {
+	const resultBySource = new Map(results.map(result => [
+		result.sourceId,
+		result,
+	]));
+	for (const [sourceId, windowState] of hucodeWindowStateEntries(state)) {
+		const result = resultBySource.get(sourceId);
+		if (!result) {
+			continue;
+		}
+		applyHucodeOmniWorkbenchMigrationToWindowState(windowState, result);
+	}
+}
+
+/** Rewrites one persisted or live Omni configuration after global import. */
+export function applyHucodeOmniWorkbenchMigrationToWindowState(
+	windowState: {
+		omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+		omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+		omniWorkbenchOverlays?: readonly IOmniWorkbenchSessionEntry[];
+	},
+	result: IHucodeOmniWindowMigrationResult
+): void {
+	const overlays = new Map<string, IOmniWorkbenchSessionEntry>();
+	for (const overlay of windowState.omniWorkbenchOverlays ?? []) {
+		const workbenchId =
+			result.workbenchIdsByLegacyId[overlay.workbenchId] ??
+			overlay.workbenchId;
+		overlays.set(workbenchId, { ...overlay, workbenchId });
+	}
+	for (const retained of windowState.omniRetainedWorkbenches ?? []) {
+		const folderPath = URI.revive(retained.folderUri).fsPath;
+		const workbenchId = findMigrationPathValue(
+			result.workbenchIdsByPath,
+			folderPath
+		);
+		if (workbenchId) {
+			overlays.set(workbenchId, {
+				workbenchId,
+				desiredState: retained.desiredState,
+				...(retained.lastActiveAt === undefined
+					? {}
+					: { lastActiveAt: retained.lastActiveAt }),
+			});
+		}
+	}
+	const residents = (
+		windowState.omniResidentWorkspaces ?? []
+	).flatMap(resident => {
+		if (resident.projectId) {
+			return [resident];
+		}
+		const projectId = findMigrationPathValue(
+			result.projectIdsByPath,
+			resident.worktreePath
+		);
+		if (projectId) {
+			return [{ ...resident, projectId }];
+		}
+		const workbenchId = findMigrationPathValue(
+			result.workbenchIdsByPath,
+			resident.worktreePath
+		);
+		if (workbenchId) {
+			overlays.set(workbenchId, {
+				workbenchId,
+				desiredState: 'loaded',
+				...(resident.lastActiveAt === undefined
+					? {}
+					: { lastActiveAt: resident.lastActiveAt }),
+			});
+			return [];
+		}
+		return [resident];
+	});
+	windowState.omniWorkbenchOverlays = Array.from(overlays.values());
+	for (const retained of windowState.omniRetainedWorkbenches ?? []) {
+		if (retained.desiredState !== 'loaded') {
+			continue;
+		}
+		const worktreePath = URI.revive(retained.folderUri).fsPath;
+		const projectId = findMigrationPathValue(
+			result.projectIdsByPath,
+			worktreePath
+		);
+		if (!projectId) {
+			continue;
+		}
+		const index = residents.findIndex(resident =>
+			isEqual(resident.worktreePath, worktreePath, !isLinux)
+		);
+		const existing = index < 0 ? undefined : residents[index];
+		const migrated: IOmniWorkspaceRestoreEntry = {
+			...existing,
+			projectId,
+			worktreePath,
+			state: existing?.state ?? 'loaded',
+			lastActiveAt: retained.lastActiveAt ?? existing?.lastActiveAt,
+		};
+		if (index < 0) {
+			residents.push(migrated);
+		} else {
+			residents[index] = migrated;
+		}
+	}
+	windowState.omniRetainedWorkbenches = undefined;
+	windowState.omniResidentWorkspaces = residents;
+}
+
+function hucodeWindowStateEntries(
+	state: IWindowsState
+): [string, IWindowState][] {
+	return [
+		...(state.lastActiveWindow
+			? [['lastActiveWindow', state.lastActiveWindow] as [string, IWindowState]]
+			: []),
+		...(state.lastPluginDevelopmentHostWindow
+			? [['lastPluginDevelopmentHostWindow', state.lastPluginDevelopmentHostWindow] as [string, IWindowState]]
+			: []),
+		...state.openedWindows.map((windowState, index) => [
+			`openedWindows:${index}`,
+			windowState,
+		] as [string, IWindowState]),
+	].filter(([, windowState]) => windowState.windowKind === 'omni' ||
+		(windowState.omniRetainedWorkbenches?.length ?? 0) > 0 ||
+		(windowState.omniWorkbenchOverlays?.length ?? 0) > 0 ||
+		(windowState.omniResidentWorkspaces?.length ?? 0) > 0);
 }
 
 export class WindowsStateHandler extends Disposable {
@@ -60,6 +225,20 @@ export class WindowsStateHandler extends Disposable {
 	private lastClosedState: IWindowState | undefined = undefined;
 
 	private shuttingDown = false;
+
+	getHucodeOmniMigrationWindowStates(): readonly IHucodeOmniMigrationWindowState[] {
+		return getHucodeOmniMigrationWindowStates(this._state);
+	}
+
+	applyHucodeOmniWorkbenchMigration(
+		results: readonly IHucodeOmniWindowMigrationResult[]
+	): void {
+		applyHucodeOmniWorkbenchMigration(this._state, results);
+		this.stateService.setItem(
+			WindowsStateHandler.windowsStateStorageKey,
+			getWindowsStateStoreData(this._state)
+		);
+	}
 
 	constructor(
 		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
@@ -263,6 +442,13 @@ export class WindowsStateHandler extends Disposable {
 			folderUri: isSingleFolderWorkspaceIdentifier(window.openedWorkspace) ? window.openedWorkspace.uri : undefined,
 			backupPath: window.backupPath,
 			remoteAuthority: window.remoteAuthority,
+			windowKind: window.isOmniWindow ? 'omni' : 'workbench',
+			omniActiveWorktreePath: window.config?.omniActiveWorktreePath,
+			omniResidentWorkspaces: window.config?.omniResidentWorkspaces,
+			omniRetainedWorkbenches: window.config?.omniRetainedWorkbenches,
+			omniWorkbenchOverlays: window.config?.omniWorkbenchOverlays,
+			omniPendingWorkbenchAdoptions:
+				window.config?.omniPendingWorkbenchAdoptions,
 			uiState: window.serializeWindowState()
 		};
 	}
@@ -457,6 +643,31 @@ function restoreWindowState(windowState: ISerializedWindowState): IWindowState {
 		result.remoteAuthority = windowState.remoteAuthority;
 	}
 
+	if (windowState.windowKind) {
+		result.windowKind = windowState.windowKind;
+	}
+
+	if (windowState.omniActiveWorktreePath) {
+		result.omniActiveWorktreePath = windowState.omniActiveWorktreePath;
+	}
+
+	if (Array.isArray(windowState.omniResidentWorkspaces)) {
+		result.omniResidentWorkspaces =
+			windowState.omniResidentWorkspaces;
+	}
+
+	if (Array.isArray(windowState.omniRetainedWorkbenches)) {
+		result.omniRetainedWorkbenches =
+			windowState.omniRetainedWorkbenches;
+	}
+	if (Array.isArray(windowState.omniWorkbenchOverlays)) {
+		result.omniWorkbenchOverlays = windowState.omniWorkbenchOverlays;
+	}
+	if (Array.isArray(windowState.omniPendingWorkbenchAdoptions)) {
+		result.omniPendingWorkbenchAdoptions =
+			windowState.omniPendingWorkbenchAdoptions;
+	}
+
 	if (windowState.folder) {
 		result.folderUri = URI.parse(windowState.folder);
 	}
@@ -482,6 +693,22 @@ function serializeWindowState(windowState: IWindowState): ISerializedWindowState
 		folder: windowState.folderUri?.toString(),
 		backupPath: windowState.backupPath,
 		remoteAuthority: windowState.remoteAuthority,
+		windowKind: windowState.windowKind,
+		omniActiveWorktreePath: windowState.omniActiveWorktreePath,
+		omniResidentWorkspaces: windowState.omniResidentWorkspaces,
+		omniRetainedWorkbenches: windowState.omniRetainedWorkbenches,
+		omniWorkbenchOverlays: windowState.omniWorkbenchOverlays,
+		omniPendingWorkbenchAdoptions:
+			windowState.omniPendingWorkbenchAdoptions,
 		uiState: windowState.uiState
 	};
+}
+
+function findMigrationPathValue(
+	record: Readonly<Record<string, string>>,
+	worktreePath: string
+): string | undefined {
+	return Object.entries(record).find(([candidate]) =>
+		isEqual(candidate, worktreePath, !isLinux)
+	)?.[1];
 }
