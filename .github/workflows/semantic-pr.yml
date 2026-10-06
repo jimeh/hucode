@@ -1,0 +1,67 @@
+name: Semantic PR
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+
+permissions:
+  pull-requests: write
+
+jobs:
+  pr-title:
+    name: PR Title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate PR title
+        id: lint_pr_title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: PR title subject must not start with an uppercase letter.
+
+      - name: Comment on PR title failure
+        if: always() && steps.lint_pr_title.outputs.error_message != null
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-title-lint-error
+          message: |
+            Hucode PR titles must follow the Conventional Commits format.
+
+            Examples:
+
+            ```text
+            feat(release): publish macOS GitHub releases
+            fix(omni): avoid duplicate fallback windows
+            chore(ci): fix release upload filtering
+            build(release)!: change artifact naming
+            ```
+
+            Details:
+
+            ```text
+            ${{ steps.lint_pr_title.outputs.error_message }}
+            ```
+
+      - name: Delete resolved PR title comment
+        if: steps.lint_pr_title.outputs.error_message == null
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-title-lint-error
+          delete: true
