@@ -83,7 +83,7 @@ Please include the following with each issue:
 **Note:** Setup and running under Windows Subsystem for Linux (WSL) is supported by following the [VS Code setup instructions](https://github.com/microsoft/vscode/wiki/Selfhosting-on-Windows-WSL).
 
 ### Testing
-If you hit errors while running tests, ensure that you are using the correct Node version and that git lfs is properly installed (run `git lfs pull` to validate).
+If you hit errors while running tests, ensure that you are using the correct Node version.
 
 There are unit tests which run in Node.JS:
 
@@ -99,7 +99,9 @@ npm run test:extension
 
 Finally, there are **simulation tests**. These tests reach out to Copilot API endpoints, invoke LLMs and require expensive computations to run. Each test runs 10 times, to accommodate for the stochastic nature of LLMs themselves. The results of all runs of all tests are snapshotted in the baseline file, [`test/simulation/baseline.json`](test/simulation/baseline.json), which encodes the quality of the test suite at any given point in time.
 
-Because LLM results are both random and costly, they are cached within the repo in `test/simulation/cache`. This means rerunning the simulation tests and benefiting from the cache will make the test run be both faster as well as deterministic.
+Because LLM results are both random and costly, upstream VS Code caches them
+within the repo in `test/simulation/cache`. Hucode does not carry that cache in
+Git, so simulation tests require an externally supplied cache.
 
 You can run the simulation tests with:
 
@@ -107,7 +109,9 @@ You can run the simulation tests with:
 npm run simulate
 ```
 
-Keep in mind that PRs will fail unless the cache is populated. Running the command above will populate the cache by creating new cache layers in `test/simulation/cache/layers`. This cache population must be done by VS Code team members. If a community member submits a PR with new cache layer(s), the PR will fail and a VS Code team member must delete the layer(s) and recreate them within their dev box.
+Keep in mind that upstream PRs fail unless the cache is populated. Running the
+command above will populate the cache by creating new cache layers in
+`test/simulation/cache/layers`.
 
 You can ensure the cache is populated with:
 
