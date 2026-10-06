@@ -26,6 +26,15 @@ const workbenchPromise = new DeferredPromise<IWorkbench>();
  * @param options for setting up the workbench
  */
 export function create(domElement: HTMLElement, options: IWorkbenchConstructionOptions): IDisposable {
+	return createWithBrowserMain(domElement, options, BrowserMain);
+}
+
+/** Creates the workbench with an embedder-provided BrowserMain construction seam. */
+export function createWithBrowserMain(
+	domElement: HTMLElement,
+	options: IWorkbenchConstructionOptions,
+	BrowserMainConstructor: new (domElement: HTMLElement, options: IWorkbenchConstructionOptions) => BrowserMain,
+): IDisposable {
 
 	// Mark start of workbench
 	mark('code/didLoadWorkbenchMain');
@@ -59,7 +68,7 @@ export function create(domElement: HTMLElement, options: IWorkbenchConstructionO
 
 	// Startup workbench and resolve waiters
 	let instantiatedWorkbench: IWorkbench | undefined = undefined;
-	new BrowserMain(domElement, options).open().then(workbench => {
+	new BrowserMainConstructor(domElement, options).open().then(workbench => {
 		instantiatedWorkbench = workbench;
 		workbenchPromise.complete(workbench);
 	});

@@ -59,6 +59,7 @@ import { ConfigurationManager } from './debugConfigurationManager.js';
 import { DebugMemoryFileSystemProvider } from './debugMemory.js';
 import { DebugSession } from './debugSession.js';
 import { DebugTaskRunner, TaskRunResult } from './debugTaskRunner.js';
+import { registerDebugMemoryEditorShutdown } from './hucodeDebugMemoryShutdown.js';
 
 export class DebugService implements IDebugService {
 	declare readonly _serviceBrand: undefined;
@@ -140,7 +141,6 @@ export class DebugService implements IDebugService {
 		this.taskRunner = this.instantiationService.createInstance(DebugTaskRunner);
 
 		this.disposables.add(this.fileService.onDidFilesChange(e => this.onFileChanges(e)));
-		this.disposables.add(this.lifecycleService.onWillShutdown(this.dispose, this));
 
 		this.disposables.add(this.extensionHostDebugService.onAttachSession(event => {
 			const session = this.model.getSession(event.sessionId, true);
@@ -196,14 +196,11 @@ export class DebugService implements IDebugService {
 			});
 		}));
 
-		this.disposables.add(this.lifecycleService.onBeforeShutdown(() => {
-			for (const editor of editorService.editors) {
-				// Editors will not be valid on window reload, so close them.
-				if (editor.resource?.scheme === DEBUG_MEMORY_SCHEME) {
-					editor.dispose();
-				}
-			}
-		}));
+		this.disposables.add(registerDebugMemoryEditorShutdown(
+			this.lifecycleService,
+			editorService,
+			() => this.dispose()
+		));
 
 		this.disposables.add(extensionService.onWillStop(evt => {
 			evt.veto(
