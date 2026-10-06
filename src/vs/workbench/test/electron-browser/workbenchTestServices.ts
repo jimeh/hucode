@@ -105,7 +105,9 @@ export class TestNativeHostService implements INativeHostService {
 		throw new Error('Method not implemented.');
 	}
 
-	async openAgentsWindow(_options?: { folderUri?: UriComponents; sessionResource?: UriComponents }): Promise<void> { }
+	async openAgentsWindow(_options?: { folderUri?: UriComponents; initialQuery?: string; sessionResource?: UriComponents; preferredSessionType?: { providerId?: string; sessionTypeId: string } }): Promise<void> { }
+
+	async openOmniWindow(): Promise<void> { }
 
 	readonly onDidChangeAgentHostEditorState = Event.None;
 	async getAgentHostEditorState(): Promise<IAgentHostEditorState> { return { revision: 0, editorSessionCount: 0, sessions: [], lastShown: undefined, lastCopilotHarnessIntroductionSessionCount: undefined, invitation: undefined }; }
