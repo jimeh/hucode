@@ -29,6 +29,7 @@ export const dirs = [
 	'extensions/grunt',
 	'extensions/gulp',
 	'extensions/html-language-features',
+	'extensions/hucode-setup-ui',
 	'extensions/html-language-features/server',
 	'extensions/ipynb',
 	'extensions/jake',
