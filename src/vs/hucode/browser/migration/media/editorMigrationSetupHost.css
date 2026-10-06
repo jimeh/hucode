@@ -1,0 +1,53 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * Framing only. The setup UI's appearance lives inside the webview, which owns its own palette
+ * and never reads workbench theme variables. These rules cover the pane container and the
+ * core-owned status surface shown when renderer assets cannot load.
+ */
+
+.hucode-editor-migration-editor,
+.hucode-setup-webview-host {
+	width: 100%;
+	height: 100%;
+	position: relative;
+	overflow: hidden;
+}
+
+.hucode-setup-webview-host > .webview,
+.hucode-setup-webview-host > iframe {
+	width: 100%;
+	height: 100%;
+	border: none;
+}
+
+.hucode-setup-webview-status {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	align-items: flex-start;
+	max-width: 560px;
+	padding: 24px;
+	color: var(--vscode-foreground);
+}
+
+.hucode-setup-webview-status > div {
+	display: flex;
+	gap: 8px;
+}
+
+.hucode-setup-webview-status button {
+	padding: 4px 12px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	cursor: pointer;
+}
+
+.hucode-setup-webview-status button:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
