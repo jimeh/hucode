@@ -44,6 +44,9 @@ export function isStorageItemsChangeEvent(thing: unknown): thing is IStorageItem
 
 export interface IStorageDatabase {
 
+	/** Reports whether the actual connection uses memory, including fallback after an open failure. */
+	isInMemory?(): Promise<boolean>;
+
 	readonly onDidChangeItemsExternal: Event<IStorageItemsChangeEvent>;
 
 	getItems(): Promise<Map<string, string>>;
@@ -96,6 +99,9 @@ export interface IStorage extends IDisposable {
 	getObject<T extends object>(key: string, fallbackValue?: T): T | undefined;
 
 	set(key: string, value: StorageValue, external?: boolean): Promise<void>;
+
+	/** Writes even a cached value and rejects unless a persistent database acknowledges it. */
+	setWithAcknowledgement?(key: string, value: string): Promise<void>;
 	delete(key: string, external?: boolean): Promise<void>;
 
 	flush(delay?: number): Promise<void>;
@@ -259,6 +265,31 @@ export class Storage extends Disposable implements IStorage {
 		}
 
 		return parse(value);
+	}
+
+	private isClosing(): boolean {
+		return this.state === StorageState.Closed || this.pendingClose !== undefined;
+	}
+
+	async setWithAcknowledgement(key: string, value: string): Promise<void> {
+		if (!this.database.isInMemory || await this.database.isInMemory()) {
+			throw new Error('Persistent storage is unavailable.');
+		}
+		if (this.isClosing()) {
+			throw new Error('Storage is closing.');
+		}
+		await this.flush(0);
+		if (this.isClosing()) {
+			throw new Error('Storage is closing.');
+		}
+		// This path has one authority per key. Publish only an accepted database write;
+		// failures leave the cached value unchanged and the same-value retry writes again.
+		await this.database.updateItems({ insert: new Map([[key, value]]) });
+		if ((await this.database.getItems()).get(key) !== value) {
+			throw new Error('Storage did not persist the checkpoint.');
+		}
+		this.cache.set(key, value);
+		this._onDidChangeStorage.fire({ key, external: false });
 	}
 
 	async set(key: string, value: string | boolean | number | null | undefined | object, external = false): Promise<void> {

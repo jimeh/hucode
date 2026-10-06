@@ -25,5 +25,8 @@ export interface IStateService extends IStateReadService {
 
 	removeItem(key: string): void;
 
+	/** Persists buffered state and verifies this key against the backing file. */
+	flushWithAcknowledgement?(key: string, matches?: (persisted: unknown) => boolean): Promise<void>;
+
 	close(): Promise<void>;
 }
