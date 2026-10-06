@@ -335,6 +335,7 @@ export interface ICommonNativeHostService {
 	openWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void>;
 
 	openAgentsWindow(options?: IOpenAgentsWindowOptions): Promise<void>;
+	openOmniWindow(): Promise<void>;
 
 	/**
 	 * Asks the Agents window to show the Agents Launcher, opening the Agents window first when none is open. An open Agents

@@ -226,6 +226,7 @@ export function getBrowserViewRemoteFile(uri: URI): { readonly scheme: string; r
 
 export interface IBrowserViewBounds {
 	windowId: number;
+	hostedWebContentsId?: number;
 	x: number;
 	y: number;
 	width: number;
@@ -310,6 +311,8 @@ export function matchesBrowserViewAudience(candidate: IBrowserViewAudience, patt
 export interface IBrowserViewHost {
 	readonly windowId: number;
 	readonly sessionId?: string;
+	/** Hosted Omni workbench webContents ID that owns this view, if any. */
+	readonly hostedWebContentsId?: number;
 }
 
 export const enum BrowserViewPresentation {

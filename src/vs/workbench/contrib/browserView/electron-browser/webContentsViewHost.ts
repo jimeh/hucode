@@ -17,7 +17,7 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { BrowserDimOverlaySettingId, IBrowserViewModel } from '../common/browserView.js';
-import { BrowserOverlayManager, BrowserOverlayType } from './overlayManager.js';
+import { BrowserOverlayManager, BrowserOverlayType } from '../browser/overlayManager.js';
 
 const originalHtmlElementFocus = HTMLElement.prototype.focus;
 
