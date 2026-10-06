@@ -41,6 +41,15 @@ import { ipcBrowserViewChannelName } from '../../platform/browserView/common/bro
 import { ipcBrowserViewGroupChannelName } from '../../platform/browserView/common/browserViewGroup.js';
 import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/browserView/electron-main/browserViewMainService.js';
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
+import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import {
+	getProjectSwitcherGitConsumerId,
+	PROJECT_MANAGER_CHANNEL_NAME,
+} from '../../platform/projectManager/common/projectManager.js';
+import { IHucodeShellMainService } from '../../hucode/electron-main/omniWindow.js';
+import { HucodeShellMainService } from '../../hucode/electron-main/shellMainService.js';
+import { EDITOR_MIGRATION_SOURCE_CHANNEL_NAME } from '../../hucode/common/migration/editorMigrationSource.js';
+import { createEditorMigrationSourceChannel } from '../../hucode/electron-main/migration/editorMigrationSourceChannel.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { isLaunchedFromCli } from '../../platform/environment/node/argvHelper.js';
@@ -223,6 +232,7 @@ export class CodeApplication extends Disposable {
 	private windowsMainService: IWindowsMainService | undefined;
 	private auxiliaryWindowsMainService: IAuxiliaryWindowsMainService | undefined;
 	private nativeHostMainService: INativeHostMainService | undefined;
+	private hucodeShellMainService: IHucodeShellMainService | undefined;
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -397,6 +407,14 @@ export class CodeApplication extends Disposable {
 				}
 			}
 
+			const webContentsId = details.webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
+			}
+
 			return false;
 		};
 
@@ -417,6 +435,14 @@ export class CodeApplication extends Disposable {
 						return true;
 					}
 				}
+			}
+
+			const webContentsId = details.webContentsId;
+			if (this.hucodeShellMainService?.isTrustedHostedWorkspaceRequest(
+				frame.processId,
+				webContentsId
+			)) {
+				return true;
 			}
 
 			return false;
@@ -779,6 +805,11 @@ export class CodeApplication extends Disposable {
 		// Transient profiles handler
 		this._register(appInstantiationService.createInstance(UserDataProfilesHandler));
 
+		if (this.productService.hucodeVersion && !this.environmentMainService.extensionTestsLocationURI) {
+			const applicationStorage = appInstantiationService.invokeFunction(accessor => accessor.get(IStorageMainService).applicationStorage);
+			await applicationStorage.init();
+		}
+
 		// Init Channels
 		mark('code/willInitChannels');
 		appInstantiationService.invokeFunction(accessor => this.initChannels(accessor, mainProcessElectronServer, sharedProcessClient));
@@ -842,6 +873,7 @@ export class CodeApplication extends Disposable {
 
 	private async setupProtocolUrlHandlers(accessor: ServicesAccessor, mainProcessElectronServer: ElectronIPCServer): Promise<IInitialProtocolUrls | undefined> {
 		const windowsMainService = this.windowsMainService = accessor.get(IWindowsMainService);
+		this.hucodeShellMainService = accessor.get(IHucodeShellMainService);
 		const urlService = accessor.get(IURLService);
 		const nativeHostMainService = this.nativeHostMainService = accessor.get(INativeHostMainService);
 		const dialogMainService = accessor.get(IDialogMainService);
@@ -1242,6 +1274,7 @@ export class CodeApplication extends Disposable {
 		// Windows
 		services.set(IWindowsMainService, new SyncDescriptor(WindowsMainService, [machineId, sqmId, devDeviceId, this.userEnv], false));
 		services.set(IAuxiliaryWindowsMainService, new SyncDescriptor(AuxiliaryWindowsMainService, undefined, false));
+		services.set(IHucodeShellMainService, new SyncDescriptor(HucodeShellMainService, undefined, false));
 
 		// Dialogs
 		const dialogMainService = new DialogMainService(this.logService, this.productService);
@@ -1405,6 +1438,14 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel(LOCAL_FILE_SYSTEM_CHANNEL_NAME, fileSystemProviderChannel);
 		sharedProcessClient.then(client => client.registerChannel(LOCAL_FILE_SYSTEM_CHANNEL_NAME, fileSystemProviderChannel));
 
+		// Hucode editor migration sources (desktop only, read only)
+		const editorMigrationSource = createEditorMigrationSourceChannel(diskFileSystemProvider);
+		disposables.add(editorMigrationSource.service);
+		mainProcessElectronServer.registerChannel(
+			EDITOR_MIGRATION_SOURCE_CHANNEL_NAME,
+			editorMigrationSource.channel
+		);
+
 		// User Data Profiles
 		const userDataProfilesService = ProxyChannel.fromService(accessor.get(IUserDataProfilesMainService), disposables);
 		mainProcessElectronServer.registerChannel('userDataProfiles', userDataProfilesService);
@@ -1441,6 +1482,27 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel);
 		sharedProcessClient.then(client => client.registerChannel(ipcBrowserViewGroupChannelName, browserViewGroupChannel));
 
+		// Hucode Project Manager
+		const projectManagerService = accessor.get(IProjectManagerMainService);
+		const projectManagerChannel = ProxyChannel.fromService(
+			projectManagerService,
+			disposables
+		);
+		mainProcessElectronServer.registerChannel(
+			PROJECT_MANAGER_CHANNEL_NAME,
+			projectManagerChannel
+		);
+		disposables.add(accessor.get(IWindowsMainService).onDidDestroyWindow(
+			window => {
+				void projectManagerService.clearGitWorktreeTargets(
+					getProjectSwitcherGitConsumerId(window.id)
+				).catch(error => this.logService.warn(
+					`[Hucode Projects] Failed to clear destroyed window Git ` +
+					`monitor: ${error}`
+				));
+			}
+		));
+
 		// Signing
 		const signChannel = ProxyChannel.fromService(accessor.get(ISignService), disposables);
 		mainProcessElectronServer.registerChannel('sign', signChannel);
@@ -1453,8 +1515,11 @@ export class CodeApplication extends Disposable {
 		this.nativeHostMainService = accessor.get(INativeHostMainService);
 		const nativeHostChannel = ProxyChannel.fromService(this.nativeHostMainService, disposables, {
 			unbufferedEvents: [
-				// This event has main-process consumers but no IPC consumer, so its buffer would never drain.
+				// These events have main-process consumers but may have no IPC consumer, so their buffers would never drain.
 				'onDidBlurMainWindow',
+				'onDidFocusMainWindow',
+				'onDidBlurMainOrAuxiliaryWindow',
+				'onDidFocusMainOrAuxiliaryWindow',
 				// GPU subscribers read current state explicitly; do not replay obsolete capabilities.
 				'onDidChangeGPUCompositing'
 			]

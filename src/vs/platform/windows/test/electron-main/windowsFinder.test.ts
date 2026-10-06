@@ -53,6 +53,7 @@ suite('WindowsFinder', () => {
 			iconPath?: URI | undefined;
 			isExtensionDevelopmentHost = false;
 			isExtensionTestHost = false;
+			isOmniWindow = false;
 			lastFocusTime = options.lastFocusTime;
 			isFullScreen = false;
 			isReady = true;
