@@ -47,6 +47,7 @@ import { DeferredPromise, raceTimeout } from '../../../../base/common/async.js';
 import { AgentNetworkDomainSettingId } from '../../../../platform/networkFilter/common/settings.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { localize } from '../../../../nls.js';
+import { getHostedBrowserViewWebContentsId, ownsBrowserView } from '../common/browserViewOwnership.js';
 
 export const BrowserMaxHistoryEntriesSettingId = 'workbench.browser.maxHistoryEntries';
 export const BrowserRemoteProxyEnabledSettingId = 'workbench.browser.enableRemoteProxy';
@@ -187,7 +188,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 			if (event.type === 'snapshot') {
 				try {
 					for (const [index, info] of event.views.entries()) {
-						if (info.presentation === BrowserViewPresentation.Listed) {
+						if (info.presentation === BrowserViewPresentation.Listed && ownsBrowserView(info, this._mainWindowId, this.environmentService)) {
 							this._createModel(reviveBrowserViewInfo(info, screenshots[index]));
 						}
 					}
@@ -199,7 +200,7 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 			}
 			if (event.type === 'created') {
 				const e = event.data;
-				if (e.info.presentation === BrowserViewPresentation.Unlisted) {
+				if (e.info.presentation === BrowserViewPresentation.Unlisted || !ownsBrowserView(e.info, this._mainWindowId, this.environmentService)) {
 					return;
 				}
 				this._createModel(reviveBrowserViewInfo(e.info, screenshots[0]), e.initialUrl ?? this._known.get(e.info.id)?.url);
@@ -389,7 +390,10 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 			throw new CancellationError();
 		}
 		const info = await this._browserViewService.getOrCreateBrowserView(generateUuid(), {
-			host: { windowId: this._mainWindowId },
+			host: {
+				windowId: this._mainWindowId,
+				hostedWebContentsId: getHostedBrowserViewWebContentsId(this.environmentService)
+			},
 			owner: { type: 'user' },
 			presentation: BrowserViewPresentation.Unlisted,
 			session: { scope: BrowserViewStorageScope.Ephemeral },
@@ -423,7 +427,8 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 					id,
 					{
 						host: {
-							windowId: this._mainWindowId
+							windowId: this._mainWindowId,
+							hostedWebContentsId: getHostedBrowserViewWebContentsId(this.environmentService)
 						},
 						owner: createOptions?.owner ?? { type: 'user' },
 						associatedResource,

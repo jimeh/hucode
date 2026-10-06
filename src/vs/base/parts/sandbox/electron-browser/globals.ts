@@ -98,6 +98,12 @@ export interface IpcMessagePort {
 	 * via `e.ports[0]`.
 	 */
 	acquire(responseChannel: string, nonce: string): void;
+
+	/**
+	 * Stops waiting for one previously acquired response without affecting
+	 * other requests sharing the same IPC channel.
+	 */
+	cancel(responseChannel: string, nonce: string): void;
 }
 
 export interface ISandboxContext {
