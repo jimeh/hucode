@@ -187,6 +187,7 @@ import '../workbench/contrib/editTelemetry/browser/editTelemetry.contribution.js
 
 // Chat
 import '../workbench/contrib/chat/browser/chat.shared.contribution.js';
+import '../workbench/contrib/chat/browser/agentSessions/agentSessions.contribution.js';
 import '../workbench/contrib/mcp/browser/mcp.contribution.js';
 import '../workbench/contrib/chat/browser/chatSessions/chatSessions.contribution.js';
 import '../workbench/contrib/chat/browser/contextContrib/chatContext.contribution.js';
