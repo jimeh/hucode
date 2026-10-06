@@ -44,6 +44,7 @@ import { Schemas } from '../../../../base/common/network.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
 import { dirname } from '../../../../base/common/resources.js';
 import { asWebviewUri } from '../../webview/common/webview.js';
+import { getHucodeReleaseNotesMarkdownUrl } from '../../../../platform/product/common/hucodeProductVersion.js';
 import { IAccessibilityService } from '../../../../platform/accessibility/common/accessibility.js';
 import { AccessibilityVerbositySettingId } from '../../accessibility/browser/accessibilityConfiguration.js';
 import { AccessibilityCommandId } from '../../accessibility/common/accessibilityCommands.js';
@@ -140,12 +141,19 @@ export class ReleaseNotesManager extends Disposable {
 		});
 	}
 
-	private async getBase(useCurrentFile: boolean) {
+	private async getBase(useCurrentFile: boolean, version: string) {
 		if (useCurrentFile) {
 			const currentFileUri = this._codeEditorService.getActiveCodeEditor()?.getModel()?.uri;
 			if (currentFileUri) {
 				return dirname(currentFileUri);
 			}
+		}
+		const releaseNotesUrl = getHucodeReleaseNotesMarkdownUrl(
+			this._productService,
+			version
+		);
+		if (releaseNotesUrl) {
+			return dirname(URI.parse(releaseNotesUrl));
 		}
 		return URI.parse('https://code.visualstudio.com/raw');
 	}
@@ -178,7 +186,7 @@ export class ReleaseNotesManager extends Disposable {
 			telemetry.metadata.notesRevision = releaseNotes.revision;
 			telemetry.failureStage = 'render';
 		}
-		const base = await this.getBase(useCurrentFile);
+		const base = await this.getBase(useCurrentFile, version);
 		if (request !== this._showRequest || this._store.isDisposed) {
 			return false;
 		}
@@ -188,7 +196,7 @@ export class ReleaseNotesManager extends Disposable {
 		const codeBlocks: IReleaseNotesCodeBlock[] = [];
 		let html: string;
 		try {
-			html = await this.renderBody({ text: releaseNotes.text, base, mediaBaseUrl: useCurrentFile ? undefined : 'https://code.visualstudio.com/assets/updates/' }, tryouts, codeBlocks, telemetry);
+			html = await this.renderBody({ text: releaseNotes.text, base, mediaBaseUrl: useCurrentFile || getHucodeReleaseNotesMarkdownUrl(this._productService, version) ? undefined : 'https://code.visualstudio.com/assets/updates/' }, tryouts, codeBlocks, telemetry);
 		} catch (error) {
 			if (this._pendingDocument.value === tryouts) {
 				this._pendingDocument.clear();
@@ -363,14 +371,21 @@ export class ReleaseNotesManager extends Disposable {
 	}
 
 	private async loadReleaseNotes(version: string, useCurrentFile: boolean): Promise<{ text: string; revision: string }> {
-		const match = /^(\d+\.\d+)\./.exec(version);
-		if (!match) {
-			throw new Error('not found');
+		let url: string | undefined;
+		if (!useCurrentFile) {
+			url = getHucodeReleaseNotesMarkdownUrl(this._productService, version);
+			if (!url) {
+				const match = /^(\d+\.\d+)\./.exec(version);
+				if (!match) {
+					throw new Error('not found');
+				}
+
+				const versionLabel = match[1].replace(/\./g, '_');
+				const baseUrl = 'https://code.visualstudio.com/raw';
+				url = `${baseUrl}/v${versionLabel}.md`;
+			}
 		}
 
-		const versionLabel = match[1].replace(/\./g, '_');
-		const baseUrl = 'https://code.visualstudio.com/raw';
-		const url = `${baseUrl}/v${versionLabel}.md`;
 		const unassigned = nls.localize('unassigned', "unassigned");
 
 		const escapeMdHtml = (text: string): string => {
@@ -428,7 +443,7 @@ export class ReleaseNotesManager extends Disposable {
 					const file = this._codeEditorService.getActiveCodeEditor()?.getModel()?.getValue();
 					text = file ? file.substring(file.indexOf('#')) : undefined;
 				} else {
-					text = await asTextOrError(await this._requestService.request({ url, callSite: 'releaseNotesEditor.fetchReleaseNotes' }, CancellationToken.None));
+					text = await asTextOrError(await this._requestService.request({ url: url!, callSite: 'releaseNotesEditor.fetchReleaseNotes' }, CancellationToken.None));
 				}
 			} catch {
 				throw new Error('Failed to fetch release notes');
