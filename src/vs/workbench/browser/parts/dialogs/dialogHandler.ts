@@ -132,7 +132,22 @@ export class BrowserDialogHandler extends AbstractDialogHandler {
 				icon: customOptions?.icon,
 				alignment: customOptions?.alignment === 'vertical' ? DialogContentsAlignment.Vertical : DialogContentsAlignment.Horizontal,
 				disableCloseAction: customOptions?.disableCloseAction,
-				buttonOptions: customOptions?.buttonDetails?.map(detail => ({ sublabel: detail })),
+				buttonFocus: customOptions?.buttonFocus,
+				buttonOrder: customOptions?.buttonOrder,
+				buttonOptions: buttons?.map((_button, index) => {
+					const sublabel = customOptions?.buttonDetails?.[index];
+					const enabled = customOptions?.buttonEnabled?.[index];
+					if (sublabel === undefined && enabled === undefined) {
+						return undefined;
+					}
+
+					return {
+						sublabel,
+						styleButton: enabled === undefined
+							? undefined
+							: button => button.enabled = enabled,
+					};
+				}),
 				checkboxLabel: checkbox?.label,
 				checkboxChecked: checkbox?.checked,
 				inputs
