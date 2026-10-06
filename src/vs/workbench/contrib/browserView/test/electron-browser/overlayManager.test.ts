@@ -7,7 +7,7 @@ import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { BrowserOverlayManager, BrowserOverlayType } from '../../electron-browser/overlayManager.js';
+import { BrowserOverlayManager, BrowserOverlayType } from '../../browser/overlayManager.js';
 
 suite('BrowserOverlayManager', () => {
 

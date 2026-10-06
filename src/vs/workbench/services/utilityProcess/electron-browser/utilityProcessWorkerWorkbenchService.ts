@@ -13,6 +13,8 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { acquirePort } from '../../../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { IOnDidTerminateUtilityrocessWorkerProcess, ipcUtilityProcessWorkerChannelName, IUtilityProcessWorkerProcess, IUtilityProcessWorkerService } from '../../../../platform/utilityProcess/common/utilityProcessWorkerService.js';
 import { Barrier, timeout } from '../../../../base/common/async.js';
+import { IRendererReplyTarget } from '../../../../platform/window/common/window.js';
+import { hucodeGetRendererReplyTargetLabel } from '../../../../platform/window/common/hucodeRendererReplyTarget.js';
 
 export const IUtilityProcessWorkerWorkbenchService = createDecorator<IUtilityProcessWorkerWorkbenchService>('utilityProcessWorkerWorkbenchService');
 
@@ -86,7 +88,7 @@ export class UtilityProcessWorkerWorkbenchService extends Disposable implements 
 	private readonly restoredBarrier = new Barrier();
 
 	constructor(
-		readonly windowId: number,
+		private readonly replyTarget: IRendererReplyTarget,
 		@ILogService private readonly logService: ILogService,
 		@IMainProcessService private readonly mainProcessService: IMainProcessService
 	) {
@@ -112,7 +114,11 @@ export class UtilityProcessWorkerWorkbenchService extends Disposable implements 
 		// to create a new process from a worker
 		const onDidTerminate = this.utilityProcessWorkerService.createWorker({
 			process,
-			reply: { windowId: this.windowId, channel: responseChannel, nonce }
+			reply: {
+				target: this.replyTarget,
+				channel: responseChannel,
+				nonce
+			}
 		});
 
 		// Dispose worker upon disposal via utility process service
@@ -122,12 +128,18 @@ export class UtilityProcessWorkerWorkbenchService extends Disposable implements 
 
 			this.utilityProcessWorkerService.disposeWorker({
 				process,
-				reply: { windowId: this.windowId }
+				reply: { target: this.replyTarget }
 			});
 		}));
 
 		const port = await portPromise;
-		const client = disposables.add(new MessagePortClient(port, `window:${this.windowId},module:${process.moduleId}`));
+		const client = disposables.add(
+			new MessagePortClient(
+				port,
+				`${hucodeGetRendererReplyTargetLabel(this.replyTarget)},` +
+				`module:${process.moduleId}`
+			)
+		);
 		this.logService.trace('Renderer->UtilityProcess#createWorkerChannel: connection established');
 
 		onDidTerminate.then(({ reason }) => {

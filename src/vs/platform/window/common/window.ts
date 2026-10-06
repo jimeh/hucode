@@ -36,6 +36,55 @@ export interface IRectangle extends IPoint {
 	readonly height: number;
 }
 
+export interface IWindowRendererReplyTarget {
+	readonly kind: 'window';
+	readonly windowId: number;
+}
+
+export interface IWebContentsRendererReplyTarget {
+	readonly kind: 'webContents';
+	readonly webContentsId: number;
+	readonly ownerWindowId: number;
+}
+
+export type IRendererReplyTarget =
+	| IWindowRendererReplyTarget
+	| IWebContentsRendererReplyTarget;
+
+export interface IOmniWorkspaceRestoreEntry {
+	readonly projectId?: string;
+	readonly worktreePath: string;
+	readonly lastActiveAt?: number;
+	readonly state?: 'active' | 'loaded';
+}
+
+/** Persisted arbitrary folder workbench owned by an Omni window. */
+export interface IOmniRetainedWorkbench {
+	readonly id: string;
+	readonly folderUri: UriComponents;
+	readonly label?: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly folderStatus?: 'missing';
+	readonly order: number;
+	readonly lastActiveAt?: number;
+	/** Live in this session after its durable global record was removed. */
+	readonly sessionOnly?: boolean;
+}
+
+/** Per-Omni-session lifecycle state for one globally saved workbench. */
+export interface IOmniWorkbenchSessionEntry {
+	readonly workbenchId: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly lastActiveAt?: number;
+}
+
+/** Retryable project-removal adoption retained by one Omni session. */
+export interface IOmniPendingWorkbenchAdoption {
+	readonly worktreePath: string;
+	readonly desiredState: 'loaded' | 'unloaded';
+	readonly lastActiveAt?: number;
+}
+
 export interface IBaseOpenWindowsOptions {
 
 	/**
@@ -478,12 +527,14 @@ export interface INativeOpenFileRequest extends IOpenFileRequest {
 
 export interface INativeRunActionInWindowRequest {
 	readonly id: string;
-	readonly from: 'menu' | 'touchbar' | 'mouse' | 'systemWideKeybinding';
+	readonly from: 'menu' | 'touchbar' | 'mouse' | 'systemWideKeybinding' | 'keybinding';
 	readonly args?: unknown[];
+	readonly hucodeForwardedFromOmniShell?: boolean;
 }
 
 export interface INativeRunKeybindingInWindowRequest {
 	readonly userSettingsLabel: string;
+	readonly hucodeForwardedFromOmniShell?: boolean;
 }
 
 export interface IColorScheme {
@@ -551,6 +602,15 @@ export interface INativeWindowConfiguration extends IWindowConfiguration, Native
 	policiesData?: IStringDictionary<{ definition: PolicyDefinition; value: PolicyValue }>;
 
 	isSessionsWindow?: boolean;
+	isOmniWindow?: boolean;
+	isHostedOmniWorkspace?: boolean;
+	hostedWebContentsId?: number;
+	hostedInstanceId?: string;
+	omniActiveWorktreePath?: string;
+	omniResidentWorkspaces?: readonly IOmniWorkspaceRestoreEntry[];
+	omniRetainedWorkbenches?: readonly IOmniRetainedWorkbench[];
+	omniWorkbenchOverlays?: readonly IOmniWorkbenchSessionEntry[];
+	omniPendingWorkbenchAdoptions?: readonly IOmniPendingWorkbenchAdoption[];
 }
 
 /**
