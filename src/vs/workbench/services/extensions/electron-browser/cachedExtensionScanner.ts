@@ -18,6 +18,10 @@ import { getErrorMessage } from '../../../../base/common/errors.js';
 import { IWorkbenchExtensionManagementService } from '../../extensionManagement/common/extensionManagement.js';
 import { toExtensionDescription } from '../common/extensions.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
+import {
+	hucodeShouldKeepOnlyUserThemeExtensions,
+	hucodeShouldKeepScannedUserExtension,
+} from '../common/hucodeExtensionEnablementPolicy.js';
 
 export class CachedExtensionScanner {
 
@@ -71,6 +75,15 @@ export class CachedExtensionScanner {
 			let scannedUserExtensions: IScannedExtension[] = [];
 			if (result[1].status === 'fulfilled') {
 				scannedUserExtensions = result[1].value;
+				if (this.hucodeShouldKeepOnlyUserThemeExtensions()) {
+					scannedUserExtensions = scannedUserExtensions.filter(
+						extension => hucodeShouldKeepScannedUserExtension(
+							extension,
+							this._environmentService.hucodeExtensionEnablementPolicy,
+							this._environmentService.remoteAuthority
+						)
+					);
+				}
 			} else {
 				hasErrors = true;
 				this._logService.error(`Error scanning user extensions:`, getErrorMessage(result[1].reason));
@@ -135,6 +148,12 @@ export class CachedExtensionScanner {
 			this._logService.error(err);
 			return [];
 		}
+	}
+
+	private hucodeShouldKeepOnlyUserThemeExtensions(): boolean {
+		return hucodeShouldKeepOnlyUserThemeExtensions(
+			this._environmentService.hucodeExtensionEnablementPolicy
+		);
 	}
 
 }
