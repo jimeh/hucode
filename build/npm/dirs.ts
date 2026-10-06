@@ -91,11 +91,13 @@ export const layoutRoots = [
  * the root postinstall installs after the workspace, in this order. They build native modules for a
  * different runtime than the workspace (see the `nativeBuild` field of their `package.json`, and
  * their `.pnpmfile.mjs`): `build` for the Node.js that runs the build scripts, `remote` for the
- * Node.js of the server.
+ * Node.js of the server. Hucode's `extensions/hucode-setup-ui` keeps its renderer toolchain out of
+ * the main workspace, whose hoisting split its test dependencies; it has no native modules.
  */
 export const separateRoots = [
 	'build',
 	'remote',
+	'extensions/hucode-setup-ui',
 ];
 
 /**
