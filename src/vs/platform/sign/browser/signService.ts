@@ -58,6 +58,10 @@ export class SignService extends AbstractSignService implements ISignService {
 
 	@memoize
 	private async vsda(): Promise<typeof vsda_web> {
+		if (!this.productService.serverLicense?.length) {
+			throw new Error('No server license configured');
+		}
+
 		const checkInterval = new WindowIntervalTimer();
 		let [wasm] = await Promise.all([
 			this.getWasmBytes(),

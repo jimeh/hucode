@@ -552,14 +552,19 @@ class NativeExtensionHostFactory implements IExtensionHostFactory {
 		private readonly _extensionScanner: CachedExtensionScanner,
 		private readonly _getExtensionRegistrySnapshotWhenReady: () => Promise<ExtensionDescriptionRegistrySnapshot>,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
-		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
+		@IWorkbenchEnvironmentService
+		private readonly _environmentService: IWorkbenchEnvironmentService,
 		@IWorkbenchExtensionEnablementService private readonly _extensionEnablementService: IWorkbenchExtensionEnablementService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,
 		@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 		@ILogService private readonly _logService: ILogService,
 	) {
-		this._webWorkerExtHostEnablement = determineLocalWebWorkerExtHostEnablement(environmentService, configurationService);
+		this._webWorkerExtHostEnablement =
+			determineLocalWebWorkerExtHostEnablement(
+				this._environmentService,
+				configurationService
+			);
 	}
 
 	public createExtensionHost(runningLocations: ExtensionRunningLocationTracker, runningLocation: ExtensionRunningLocation, isInitialStart: boolean): IExtensionHost | null {

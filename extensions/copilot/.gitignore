@@ -30,8 +30,10 @@ l10n/
 # vitest --coverage
 coverage/
 
-# Base cache database (GC mode)
+# Simulation cache databases
+test/simulation/cache/base.sqlite
 test/simulation/cache/_base.sqlite
+test/simulation/cache/layers/*.sqlite
 
 test/aml/out
 
