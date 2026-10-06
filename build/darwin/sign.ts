@@ -31,20 +31,35 @@ function getEntitlementsForFile(filePath: string): string {
 	return path.join(baseDir, 'azure-pipelines', 'darwin', 'app-entitlements.plist');
 }
 
-function getKeychainPath(tempDir: string): string {
-	return path.join(tempDir, 'buildagent.keychain');
+function shouldIgnoreSigningFile(filePath: string): boolean {
+	// WebAssembly payloads can look binary to osx-sign, but they are not Mach-O
+	// code and cannot be signed by codesign.
+	return path.extname(filePath) === '.wasm';
+}
+
+/**
+ * Resolves the signing keychain: an explicit `CODESIGN_KEYCHAIN`, else the
+ * build agent's temporary keychain, else none so `codesign` searches the
+ * default keychain list.
+ */
+function getKeychainPath(): string | undefined {
+	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
+	return process.env['CODESIGN_KEYCHAIN'] ??
+		(tempDir ? path.join(tempDir, 'buildagent.keychain') : undefined);
 }
 
 /**
  * Usage descriptions shown by macOS when the app requests access to protected resources.
  */
-const infoPlistUsageDescriptions: Record<string, string> = {
-	NSAppleEventsUsageDescription: 'An application in Visual Studio Code wants to use AppleScript.',
-	NSMicrophoneUsageDescription: 'An application in Visual Studio Code wants to use the Microphone.',
-	NSCameraUsageDescription: 'An application in Visual Studio Code wants to use the Camera.',
-	NSAudioCaptureUsageDescription: 'An application in Visual Studio Code wants to use Audio Capture.',
-	NSLocalNetworkUsageDescription: 'The app uses your local network for DNS resolution and to connect to locally running services.',
-};
+function getInfoPlistUsageDescriptions(applicationName: string): Record<string, string> {
+	return {
+		NSAppleEventsUsageDescription: `An application in ${applicationName} wants to use AppleScript.`,
+		NSMicrophoneUsageDescription: `An application in ${applicationName} wants to use the Microphone.`,
+		NSCameraUsageDescription: `An application in ${applicationName} wants to use the Camera.`,
+		NSAudioCaptureUsageDescription: `An application in ${applicationName} wants to use Audio Capture.`,
+		NSLocalNetworkUsageDescription: 'The app uses your local network for DNS resolution and to connect to locally running services.',
+	};
+}
 
 /**
  * `codesign` errors caused by short-lived problems on the build agent (keychain access)
@@ -80,16 +95,12 @@ export async function retryOnTransientSignError<T>(fn: () => Promise<T>, maxAtte
 }
 
 async function main(buildDir?: string): Promise<void> {
-	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
 	const identity = process.env['CODESIGN_IDENTITY'];
+	const keychain = getKeychainPath();
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
-	}
-
-	if (!tempDir) {
-		throw new Error('$AGENT_TEMPDIRECTORY not set');
 	}
 
 	if (!arch) {
@@ -107,18 +118,19 @@ async function main(buildDir?: string): Promise<void> {
 			entitlements: getEntitlementsForFile(filePath),
 			hardenedRuntime: true,
 		}),
+		ignore: shouldIgnoreSigningFile,
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
-		keychain: getKeychainPath(tempDir),
 		version: getElectronVersion(),
 		identity,
+		...(keychain ? { keychain } : {}),
 	};
 
 	// Only overwrite plist entries for x64 and arm64 builds,
 	// universal will get its copy from the x64 build.
 	if (arch !== 'universal') {
 		// `-replace` adds missing keys and overwrites existing ones, so signing the same app again does not fail
-		for (const [key, value] of Object.entries(infoPlistUsageDescriptions)) {
+		for (const [key, value] of Object.entries(getInfoPlistUsageDescriptions(product.nameLong))) {
 			await spawn('plutil', ['-replace', key, '-string', value, infoPlistPath]);
 		}
 	}
@@ -127,19 +139,19 @@ async function main(buildDir?: string): Promise<void> {
 }
 
 async function printKeychainDiagnostics(): Promise<void> {
-	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
-	if (!tempDir) {
+	const keychain = getKeychainPath();
+	if (!keychain) {
 		return;
 	}
 
-	const keychain = getKeychainPath(tempDir);
+	// Report only the identity count; identity names and keychain contents stay out of build logs.
 	try {
 		const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
-		console.error(`Available identities:\n${identities}`);
-		const dump = await spawn('security', ['dump-keychain', keychain]);
-		console.error(`Keychain dump:\n${dump}`);
+		const match = /(\d+) valid identities found/.exec(identities);
+		const count = match?.[1] ?? 'unknown';
+		console.error(`Available codesigning identities: ${count}`);
 	} catch (err) {
-		console.error('Failed to collect keychain diagnostics:', err);
+		console.error('Failed to inspect codesigning identities:', err);
 	}
 }
 

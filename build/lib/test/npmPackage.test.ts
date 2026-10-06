@@ -78,6 +78,39 @@ suite('npmPackage', () => {
 				});
 			});
 
+			test('bypasses the npm release-age gate when a sha512 integrity verifies the tarball', t => {
+				const fixture = createFixture(t, fromLockfile);
+				let npmArgs: readonly string[] = [];
+
+				fixture.materialize({
+					packPackage: (_name, _version, _tempDir, args) => {
+						npmArgs = args;
+						return fixture.tarball;
+					}
+				});
+
+				assert.deepStrictEqual(npmArgs.filter(arg => arg.startsWith('--min-release-age')), ['--min-release-age=0']);
+			});
+
+			for (const { label, integrity } of [
+				{ label: 'no integrity', integrity: '' },
+				{ label: 'a sha1-only integrity', integrity: 'sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+			]) {
+				test(`keeps the npm release-age gate with ${label}`, t => {
+					const fixture = createFixture(t, fromLockfile);
+					let npmArgs: readonly string[] = [];
+
+					fixture.materialize({
+						packPackage: (_name, _version, _tempDir, args) => {
+							npmArgs = args;
+							return fixture.tarball;
+						}
+					}, integrity);
+
+					assert.deepStrictEqual(npmArgs.filter(arg => arg.startsWith('--min-release-age')), []);
+				});
+			}
+
 			test('preserves private staging permissions when retrying', { skip: process.platform === 'win32' }, t => {
 				const fixture = createFixture(t, fromLockfile);
 				const permissions: number[] = [];
@@ -127,7 +160,7 @@ suite('npmPackage', () => {
 							message: error.message,
 							cause: error.cause instanceof Error ? error.cause.cause : undefined,
 						}, {
-							message: `[${helper}] Failed to materialize ${packageName}@${version}: ${npm} pack ${packageName}@${version} --pack-destination ${stagingDir} --loglevel=error failed (attempt 3/3):\npack failure 3\nexit status: 17\nstdout:\nnpm output\nstderr:\n${npmLogPrefix} code ${code}\nrequest failed`,
+							message: `[${helper}] Failed to materialize ${packageName}@${version}: ${npm} pack ${packageName}@${version} --pack-destination ${stagingDir} --loglevel=error --min-release-age=0 failed (attempt 3/3):\npack failure 3\nexit status: 17\nstdout:\nnpm output\nstderr:\n${npmLogPrefix} code ${code}\nrequest failed`,
 							cause: packError,
 						});
 						return true;

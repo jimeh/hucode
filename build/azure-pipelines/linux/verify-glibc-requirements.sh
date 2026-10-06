@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 TRIPLE="x86_64-linux-gnu"
 if [ "$VSCODE_ARCH" == "arm64" ]; then
@@ -9,12 +9,44 @@ elif [ "$VSCODE_ARCH" == "armhf" ]; then
   TRIPLE="arm-rpi-linux-gnueabihf"
 fi
 
+OBJDUMP="${OBJDUMP:-$VSCODE_SYSROOT_DIR/$TRIPLE/$TRIPLE/bin/objdump}"
+
 # Get all files with .node extension from server folder
-files=$(find $SEARCH_PATH -name "*.node" -not -path "*prebuilds*" -not -path "*extensions/node_modules/@parcel/watcher*" -o -type f -executable -name "node")
+files_file="$(mktemp)"
+trap 'rm -f "$files_file"' EXIT
+if ! find "$SEARCH_PATH" \
+  \( \
+    \( \
+      -type f \
+      -name "*.node" \
+      -not -path "*prebuilds*" \
+      -not -path "*extensions/node_modules/@parcel/watcher*" \
+    \) \
+    -o \( -type f -executable -name "node" \) \
+  \) \
+  -print0 > "$files_file"; then
+  echo "Error: Failed to discover runtime files in $SEARCH_PATH" >&2
+  exit 1
+fi
+mapfile -d '' -t files < "$files_file"
+rm -f "$files_file"
+trap - EXIT
 
-echo "Verifying requirements for files: $files"
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "Error: No runtime files found in $SEARCH_PATH" >&2
+  exit 1
+fi
 
-for file in $files; do
+echo "Verifying requirements for files: ${files[*]}"
+
+for file in "${files[@]}"; do
+  description="$(file -b "$file")"
+  if [[ "$description" != ELF\ * ]]; then
+    echo "Skipping non-ELF runtime file: $file ($description)"
+    continue
+  fi
+
+  symbols="$("$OBJDUMP" -T "$file")"
   glibc_version="$EXPECTED_GLIBC_VERSION"
   glibcxx_version="$EXPECTED_GLIBCXX_VERSION"
   while IFS= read -r line; do
@@ -31,7 +63,7 @@ for file in $files; do
         glibcxx_version=$version
       fi
     fi
-  done < <("$VSCODE_SYSROOT_DIR/$TRIPLE/$TRIPLE/bin/objdump" -T "$file")
+  done <<< "$symbols"
 
   if [[ "$glibc_version" != "$EXPECTED_GLIBC_VERSION" ]]; then
     echo "Error: File $file has dependency on GLIBC > $EXPECTED_GLIBC_VERSION, found $glibc_version"
@@ -39,5 +71,6 @@ for file in $files; do
   fi
   if [[ "$glibcxx_version" != "$EXPECTED_GLIBCXX_VERSION" ]]; then
     echo "Error: File $file has dependency on GLIBCXX > $EXPECTED_GLIBCXX_VERSION, found $glibcxx_version"
+    exit 1
   fi
 done

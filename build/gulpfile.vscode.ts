@@ -23,6 +23,7 @@ import * as i18n from './lib/i18n.ts';
 import { getProductionDependencies } from './lib/dependencies.ts';
 import { config } from './lib/electron.ts';
 import { createAsar } from './lib/asar.ts';
+import { patchDarwinInfoPlistVersion } from './lib/darwinProductVersion.ts';
 import minimist from 'minimist';
 import { compileNonNativeExtensionsBuildTask, compileNativeExtensionsBuildTask, compileAllExtensionsBuildTask, compileExtensionMediaBuildTask, cleanExtensionsBuildTask, compileCopilotExtensionBuildTask } from './gulpfile.extensions.ts';
 import { checkApiProposalNamesTask, copyCodiconsTask } from './lib/compilation.ts';
@@ -35,7 +36,8 @@ import globCallback from 'glob';
 import rceditCallback from 'rcedit';
 import { spawnTsgo } from './lib/tsgo.ts';
 import { runEsbuildTranspile, runEsbuildBundle, getBootstrapEntryPointsForTarget } from './lib/esbuild.ts';
-import { generateNodeCompileCache, shouldGenerateNodeCompileCache } from './lib/nodeCompileCache.ts';
+import { generateNodeCompileCache } from './lib/nodeCompileCache.ts';
+import { shouldGenerateHucodeNodeCompileCache } from './lib/hucodeNodeCompileCache.ts';
 
 
 const glob = promisify(globCallback);
@@ -152,7 +154,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			'vs/sessions/sessions.desktop.main.js',
 			'vs/sessions/sessions.desktop.main.css',
 			'vs/sessions/electron-browser/sessions.html',
-			'vs/sessions/electron-browser/sessions.js'
+			'vs/sessions/electron-browser/sessions.js',
+			'vs/hucode/omni.desktop.main.js',
+			'vs/hucode/omni.desktop.main.css',
+			'vs/hucode/electron-browser/omni.html',
+			'vs/hucode/electron-browser/omni.js'
 		]);
 
 		const src = gulp.src(out + '/**', { base: '.' })
@@ -378,6 +384,15 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				...(platform === 'darwin' ? ['!**/Contents/Applications', '!**/Contents/Applications/**'] : []),
 				...(platform === 'win32' ? ['!**/electron_proxy.exe'] : []),
 			], { dot: true }));
+
+		if (platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[
+					`${product.nameLong}.app/Contents/Info.plist`
+				]
+			));
+		}
 
 		if (platform === 'linux') {
 			result = es.merge(result, gulp.src('resources/completions/bash/code', { base: '.' })
@@ -612,7 +627,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 		if (platform === 'win32') {
 			packageTasks.push(patchWin32DependenciesTask(destinationFolderName));
 		}
-		if (shouldGenerateNodeCompileCache(platform, arch, product)) {
+		if (shouldGenerateHucodeNodeCompileCache(platform, arch, product)) {
 			packageTasks.push(generateNodeCompileCacheTask(platform, destinationFolderName));
 		}
 
