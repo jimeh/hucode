@@ -8,6 +8,16 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export const IClipboardService = createDecorator<IClipboardService>('clipboardService');
 
+/**
+ * Returns whether a clipboard type targets the default system clipboard.
+ * An empty type is treated as omitted for compatibility.
+ */
+export function isDefaultClipboardType(
+	type: string | undefined
+): type is undefined | '' | 'clipboard' {
+	return !type || type === 'clipboard';
+}
+
 export interface IClipboardService {
 
 	readonly _serviceBrand: undefined;
@@ -18,12 +28,14 @@ export interface IClipboardService {
 	triggerPaste(targetWindowId: number): Promise<void> | undefined;
 
 	/**
-	 * Writes text to the system clipboard.
+	 * Writes text to a clipboard. Omitting `type` or passing `clipboard` targets
+	 * the default system clipboard. Other types are implementation-specific.
 	 */
 	writeText(text: string, type?: string): Promise<void>;
 
 	/**
-	 * Reads the content of the clipboard in plain text
+	 * Reads text from a clipboard. Omitting `type` or passing `clipboard` targets
+	 * the default system clipboard. Other types are implementation-specific.
 	 */
 	readText(type?: string): Promise<string>;
 

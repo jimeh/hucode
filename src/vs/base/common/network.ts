@@ -77,6 +77,9 @@ export namespace Schemas {
 
 	export const vscodeTerminal = 'vscode-terminal';
 
+	/** Scheme used for transient debug memory editor resources. */
+	export const vscodeDebugMemory = 'vscode-debug-memory';
+
 	/** Scheme used for the image carousel editor. */
 	export const vscodeImageCarousel = 'vscode-image-carousel';
 

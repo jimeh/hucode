@@ -3211,6 +3211,25 @@ export default defineConfig(
 			],
 		}
 	},
+	// Hucode tests that predate `local/code-no-timeout-polling-loop`. They poll
+	// a bounded number of event-loop turns where no completion signal exists.
+	// Remove a file once it awaits a signal instead.
+	{
+		files: [
+			'src/vs/hucode/test/browser/projectSwitcher/createProjectWorktreeRouting.test.ts',
+			'src/vs/hucode/test/browser/webShellService.test.ts',
+			'src/vs/hucode/test/electron-main/desktopWorkbenchOwnership.test.ts',
+			'src/vs/hucode/test/electron-main/hostedWorkspacesController.test.ts',
+			'src/vs/platform/projectManager/test/electron-main/projectManagerMainService.test.ts',
+			'src/vs/server/test/node/hucodeWebProjectManagerServer.test.ts',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-timeout-polling-loop': 'off',
+		},
+	},
 	// hucode-setup-ui renderer.
 	//
 	// Every user-visible string in the setup UI is localized by core and arrives over the setup
