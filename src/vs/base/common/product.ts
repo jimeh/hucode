@@ -98,6 +98,8 @@ export interface IDictationRuntimeProductConfig {
 
 export interface IProductConfiguration {
 	readonly version: string;
+	readonly hucodeVersion?: string;
+	readonly hucodeReleaseNotesUrlTemplate?: string;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;
@@ -152,6 +154,7 @@ export interface IProductConfiguration {
 		readonly nlsBaseUrl: string;
 		readonly accessSKUs?: string[];
 		readonly accessScopes?: string[];
+		readonly openVsxSignatureVerificationHosts?: string[];
 	};
 
 	readonly agentSdks?: { readonly [packageId: string]: IAgentSdkProductConfig };
