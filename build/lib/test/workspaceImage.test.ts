@@ -16,6 +16,7 @@ import { findLinksToRoot } from '../../azure-pipelines/common/workspaceImage.ts'
 import { distroRoots } from '../../npm/dirs.ts';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
+const prWorkflowDirectory = '.github/workflows.disabled';
 
 function readRepositoryFile(file: string): Buffer {
 	return readFileSync(path.join(repositoryRoot, file));
@@ -30,7 +31,7 @@ interface IStep {
 }
 
 function loadSteps(workflow: string, job: string): readonly IStep[] {
-	const { jobs } = load(readRepositoryFile(`.github/workflows/${workflow}`).toString(), { schema: FAILSAFE_SCHEMA }) as { jobs: Record<string, { steps: IStep[] }> };
+	const { jobs } = load(readRepositoryFile(`${prWorkflowDirectory}/${workflow}`).toString(), { schema: FAILSAFE_SCHEMA }) as { jobs: Record<string, { steps: IStep[] }> };
 	return jobs[job].steps;
 }
 

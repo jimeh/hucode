@@ -105,6 +105,7 @@ const desktopWorkerEntryPoints = [
 const desktopEntryPoints = [
 	desktopWorkbenchEntryPoint,
 	'vs/sessions/sessions.desktop.main',
+	'vs/hucode/omni.desktop.main',
 	'vs/workbench/contrib/debug/node/telemetryApp',
 	'vs/platform/files/node/watcher/watcherMain',
 	'vs/platform/localTranscription/node/localTranscriptionMain',
@@ -119,6 +120,7 @@ const codeEntryPoints = [
 	'vs/code/electron-utility/sharedProcess/sharedProcessMain',
 	'vs/code/electron-browser/workbench/workbench',
 	'vs/sessions/electron-browser/sessions',
+	'vs/hucode/electron-browser/omni',
 ];
 
 // Additional web-only entry points (CDN build only, not in server-web)
@@ -194,6 +196,8 @@ function getCssBundleEntryPointsForTarget(target: BuildTarget): Set<string> {
 				'vs/code/electron-browser/workbench/workbench',
 				'vs/sessions/sessions.desktop.main',
 				'vs/sessions/electron-browser/sessions',
+				'vs/hucode/omni.desktop.main',
+				'vs/hucode/electron-browser/omni',
 			]);
 		case 'server':
 			return new Set(); // Server has no UI

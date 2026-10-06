@@ -12,6 +12,7 @@ import * as util from './util.ts';
 import { getElectronVersion } from './electronVersion.ts';
 import { getVersion } from './getVersion.ts';
 import { downloadFeedPackage } from './azureFeed.ts';
+import { patchDarwinInfoPlistVersion } from './darwinProductVersion.ts';
 import electron from '@vscode/gulp-electron';
 
 type DarwinDocumentSuffix = 'document' | 'script' | 'file' | 'source code';
@@ -114,6 +115,57 @@ const { electronVersion, msBuildId } = getElectronVersion();
 // validated against the feed's `SHASUMS256.txt`.
 const electronFeed: string | undefined = product.electronArtifactFeed;
 
+/**
+ * Resolves an Electron release asset to a response body.
+ */
+export type ElectronAssetResolver = (request: {
+	readonly url: string;
+	readonly fileName: string;
+}) => Promise<Response>;
+
+/**
+ * Creates a cache-only resolver for an Electron artifact populated by the
+ * release workflow's prefetch step.
+ */
+export function createPrefetchedElectronAssetResolver(
+	enabled: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	if (!enabled) {
+		return undefined;
+	}
+
+	return async ({ fileName }) => {
+		if (fileName !== 'SHASUMS256.txt') {
+			throw new Error(
+				`${fileName} is not present or valid in the Electron ` +
+					'prefetch cache'
+			);
+		}
+
+		const checksums = await fs.promises.readFile(checksumFile, 'utf8');
+		return new Response(checksums, {
+			status: 200,
+			headers: {
+				'Content-Length': String(Buffer.byteLength(checksums)),
+			},
+		});
+	};
+}
+
+/**
+ * Selects the Azure feed resolver when present, otherwise the release
+ * workflow's cache-only prefetch resolver when enabled.
+ */
+export function selectElectronAssetResolver(
+	electronFeedResolver: ElectronAssetResolver | undefined,
+	prefetched: boolean,
+	checksumFile: string
+): ElectronAssetResolver | undefined {
+	return electronFeedResolver ??
+		createPrefetchedElectronAssetResolver(prefetched, checksumFile);
+}
+
 // Maps the artifact file name `@vscode/gulp-electron` requests to the matching
 // universal package name in the feed, or `undefined` when it is not mirrored.
 function feedPackageName(fileName: string): string | undefined {
@@ -140,7 +192,7 @@ const githubAssetResolver = async ({ url, fileName }: { url: string; fileName: s
 	return fetch(url);
 };
 
-const electronAssetResolver = electronFeed
+const electronFeedAssetResolver = electronFeed
 	? async ({ fileName }: { url: string; fileName: string }): Promise<Response> => {
 		const name = feedPackageName(fileName);
 		if (!name) {
@@ -152,7 +204,12 @@ const electronAssetResolver = electronFeed
 		const body = Readable.toWeb(fs.createReadStream(filePath)) as ReadableStream<Uint8Array>;
 		return new Response(body, { status: 200, headers: { 'Content-Length': String(size) } });
 	}
-	: githubAssetResolver;
+	: undefined;
+const electronAssetResolver = selectElectronAssetResolver(
+	electronFeedAssetResolver,
+	process.env['HUCODE_ELECTRON_PREFETCHED'] === '1',
+	electronChecksumFile
+) ?? githubAssetResolver;
 
 export const config = {
 	version: electronVersion,
@@ -161,6 +218,7 @@ export const config = {
 	copyright: 'Copyright (C) 2026 Microsoft. All rights reserved',
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
+	darwinAssetsCar: product.darwinAssetsCar,
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
 	darwinApplicationCategoryType: 'public.app-category.developer-tools',
 	darwinHelpBookFolder: 'VS Code HelpBook',
@@ -270,9 +328,18 @@ function getElectron(arch: string): () => NodeJS.ReadWriteStream {
 			keepDefaultApp: true
 		};
 
-		return vfs.src('package.json')
+		let result: NodeJS.ReadWriteStream = vfs.src('package.json')
 			.pipe(jsonEditor({ name: product.nameShort }))
-			.pipe(electron(electronOpts))
+			.pipe(electron(electronOpts));
+
+		if (process.platform === 'darwin') {
+			result = result.pipe(patchDarwinInfoPlistVersion(
+				(product as { hucodeVersion?: string }).hucodeVersion,
+				[`${product.nameLong}.app/Contents/Info.plist`]
+			));
+		}
+
+		return result
 			.pipe(filter(['**', '!**/app/package.json']))
 			.pipe(vfs.dest('.build/electron'));
 	};
