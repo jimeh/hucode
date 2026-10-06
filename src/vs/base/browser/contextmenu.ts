@@ -43,6 +43,7 @@ export interface IContextMenuDelegate {
 	closeAnimation?: IContextViewCloseAnimation;
 	actionRunner?: IActionRunner;
 	skipTelemetry?: boolean;
+	forceNative?: boolean;
 	/**
 	 * `true` focuses the first enabled action; `false` or `undefined` leaves the menu without a selection.
 	 * A number selects a zero-based index in {@link getActions}, counting separators and each submenu as one item; non-integer or out-of-range indices are ignored.

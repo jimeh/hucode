@@ -19,7 +19,10 @@ const rootPath = sw.location.pathname.replace(/\/service-worker.js$/, '');
 const searchParams = new URL(location.toString()).searchParams;
 
 const remoteAuthority = searchParams.get('remoteAuthority');
-const shouldLimitHostResourceResponseBodies = searchParams.get('platform') === 'electron';
+// Hucode: Extend VS Code #326272's limit to serve-web. See jimeh/hucode#83
+// and microsoft/vscode#319468.
+const shouldLimitHostResourceResponseBodies = searchParams.get('platform') === 'electron'
+	|| searchParams.get('platform') === 'browser';
 
 /**
  * Origin used for resources

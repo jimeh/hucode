@@ -13,8 +13,10 @@ import { ILogService, NullLogService } from '../../../platform/log/common/log.js
 import product from '../../../platform/product/common/product.js';
 import { IProductService } from '../../../platform/product/common/productService.js';
 import { IRequestService } from '../../../platform/request/common/request.js';
+import { IHucodeWebUserDataServer } from '../../node/hucodeWebUserDataServer.js';
 import { NoneServerConnectionToken } from '../../node/serverConnectionToken.js';
-import { IServerEnvironmentService } from '../../node/serverEnvironmentService.js';
+import { IServerLifetimeService } from '../../node/serverLifetimeService.js';
+import { IServerEnvironmentService, ServerParsedArgs } from '../../node/serverEnvironmentService.js';
 import { WebClientServer } from '../../node/webClientServer.js';
 
 interface TestResponse extends Writable {
@@ -29,13 +31,16 @@ suite('WebClientServer manifest', () => {
 
 	function createServer(basePath: string): WebClientServer {
 		const instantiationService = disposables.add(new TestInstantiationService());
-		instantiationService.stub(IServerEnvironmentService, { isBuilt: false });
+		// Hucode: the server also reads its Omni and user-data arguments and owns their request handlers.
+		instantiationService.stub(IServerEnvironmentService, { isBuilt: false, args: {} as ServerParsedArgs, userDataPath: '' });
+		instantiationService.stub(IServerLifetimeService, {});
+		instantiationService.stub(IHucodeWebUserDataServer, { handle: async () => false });
 		instantiationService.stub(ILogService, new NullLogService());
 		instantiationService.stub(IRequestService, {});
 		instantiationService.stub(IProductService, { _serviceBrand: undefined, ...product });
 		instantiationService.stub(ICSSDevelopmentService, { isEnabled: false });
 
-		return instantiationService.createInstance(WebClientServer, new NoneServerConnectionToken(), basePath, '/oss-dev');
+		return disposables.add(instantiationService.createInstance(WebClientServer, new NoneServerConnectionToken(), basePath, '/oss-dev'));
 	}
 
 	function createResponse(): TestResponse {

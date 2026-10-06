@@ -37,6 +37,8 @@ export const TemporaryWorkspaceContext = new RawContextKey<boolean>('temporaryWo
 
 export const IsSessionsWindowContext = new RawContextKey<boolean>('isSessionsWindow', false, localize('isSessionsWindow', "Whether the current window is a agent sessions window."));
 export const IsPhoneLayoutContext = new RawContextKey<boolean>('sessionsIsPhoneLayout', false, localize('sessionsIsPhoneLayout', "Whether the current layout is the phone layout"));
+export const IsOmniWindowContext = new RawContextKey<boolean>('isOmniWindow', false, localize('isOmniWindow', "Whether the current window is a Hucode Omni-window."));
+export const IsHostedOmniWorkspaceContext = new RawContextKey<boolean>('isHostedOmniWorkspace', false, localize('isHostedOmniWorkspace', "Whether the current window is a hosted Hucode Omni workspace."));
 
 export const HasWebFileSystemAccess = new RawContextKey<boolean>('hasWebFileSystemAccess', false, true); // Support for FileSystemAccess web APIs (https://wicg.github.io/file-system-access)
 
