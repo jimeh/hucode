@@ -1,0 +1,33 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "./dist/",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"paths": {
+			"@/*": [
+				"./*"
+			]
+		},
+		"lib": [
+			"ES2024",
+			"DOM",
+			"DOM.Iterable"
+		],
+		"types": [
+			"node"
+		],
+		"typeRoots": [
+			"../node_modules/@types",
+			"../../node_modules/@types"
+		]
+	},
+	"include": [
+		"**/*.ts",
+		"**/*.tsx"
+	]
+}
