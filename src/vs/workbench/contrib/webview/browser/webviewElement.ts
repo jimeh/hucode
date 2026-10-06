@@ -865,7 +865,9 @@ export class WebviewElement extends Disposable implements IWebviewElement, Webvi
 									onEnd: () => close()
 								}, token);
 							},
-							cancel: this.platform === 'electron' ? () => {
+							// Hucode: Extend VS Code #326272's stream cancellation to
+							// serve-web too. See jimeh/hucode#83 and microsoft/vscode#319468.
+							cancel: this.platform === 'electron' || this.platform === 'browser' ? () => {
 								// Let the file stream finish cancellation so its end/error listeners can clean up.
 								cts.cancel();
 								close();

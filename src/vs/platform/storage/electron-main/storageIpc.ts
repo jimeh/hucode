@@ -3,8 +3,9 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Promises } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { revive } from '../../../base/common/marshalling.js';
 import { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { ILogService } from '../../log/common/log.js';
@@ -22,6 +23,11 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 	private readonly onDidChangeApplicationSharedStorageEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
 
 	private readonly mapProfileToOnDidChangeProfileStorageEmitter = new Map<string /* profile ID */, Emitter<ISerializableItemsChangeEvent>>();
+	private readonly mapWorkspaceToOnDidChangeWorkspaceStorageEmitter = new Map<string /* workspace ID */, {
+		readonly storage: IStorageMain;
+		readonly emitter: Emitter<ISerializableItemsChangeEvent>;
+		readonly disposables: DisposableStore;
+	}>();
 
 	constructor(
 		private readonly logService: ILogService,
@@ -29,18 +35,24 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 	) {
 		super();
 
-		this.registerStorageChangeListeners(storageMainService.applicationStorage, this.onDidChangeApplicationStorageEmitter);
-		this.registerStorageChangeListeners(storageMainService.applicationSharedStorage, this.onDidChangeApplicationSharedStorageEmitter);
+		this._register(this.registerStorageChangeListeners(storageMainService.applicationStorage, this.onDidChangeApplicationStorageEmitter));
+		this._register(this.registerStorageChangeListeners(storageMainService.applicationSharedStorage, this.onDidChangeApplicationSharedStorageEmitter));
+		this._register(toDisposable(() => {
+			for (const entry of this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.values()) {
+				entry.disposables.dispose();
+			}
+			this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.clear();
+		}));
 	}
 
 	//#region Storage Change Events
 
-	private registerStorageChangeListeners(storage: IStorageMain, emitter: Emitter<ISerializableItemsChangeEvent>): void {
+	private registerStorageChangeListeners(storage: IStorageMain, emitter: Emitter<ISerializableItemsChangeEvent>): IDisposable {
 
 		// Listen for changes in provided storage to send to listeners
 		// that are listening. Use a debouncer to reduce IPC traffic.
 
-		this._register(Event.debounce(storage.onDidChangeStorage, (prev: IStorageChangeEvent[] | undefined, cur: IStorageChangeEvent) => {
+		return Event.debounce(storage.onDidChangeStorage, (prev: IStorageChangeEvent[] | undefined, cur: IStorageChangeEvent) => {
 			if (!prev) {
 				prev = [cur];
 			} else {
@@ -52,7 +64,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 			if (events.length) {
 				emitter.fire(this.serializeStorageChangeEvents(events, storage));
 			}
-		}));
+		});
 	}
 
 	private serializeStorageChangeEvents(events: IStorageChangeEvent[], storage: IStorageMain): ISerializableItemsChangeEvent {
@@ -78,6 +90,32 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 		switch (event) {
 			case 'onDidChangeStorage': {
 				const profile = arg.profile ? revive<IUserDataProfile>(arg.profile) : undefined;
+				const workspace = reviveIdentifier(arg.workspace);
+
+				if (workspace) {
+					const storage = this.storageMainService.workspaceStorage(workspace);
+					let entry = this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id);
+					if (entry?.storage !== storage) {
+						entry?.disposables.dispose();
+						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.delete(workspace.id);
+						entry = undefined;
+					}
+					if (!entry) {
+						const emitter = new Emitter<ISerializableItemsChangeEvent>();
+						const disposables = new DisposableStore();
+						entry = { storage, emitter, disposables };
+						this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.set(workspace.id, entry);
+						disposables.add(emitter);
+						disposables.add(this.registerStorageChangeListeners(storage, emitter));
+						disposables.add(Event.once(storage.onDidCloseStorage)(() => {
+							if (this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.get(workspace.id) === entry) {
+								this.mapWorkspaceToOnDidChangeWorkspaceStorageEmitter.delete(workspace.id);
+							}
+							disposables.dispose();
+						}));
+					}
+					return entry.emitter.event;
+				}
 
 				// Without profile: application or application-shared scope
 				if (!profile) {
@@ -92,7 +130,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 				let profileStorageChangeEmitter = this.mapProfileToOnDidChangeProfileStorageEmitter.get(profile.id);
 				if (!profileStorageChangeEmitter) {
 					profileStorageChangeEmitter = this._register(new Emitter<ISerializableItemsChangeEvent>());
-					this.registerStorageChangeListeners(this.storageMainService.profileStorage(profile), profileStorageChangeEmitter);
+					this._register(this.registerStorageChangeListeners(this.storageMainService.profileStorage(profile), profileStorageChangeEmitter));
 					this.mapProfileToOnDidChangeProfileStorageEmitter.set(profile.id, profileStorageChangeEmitter);
 				}
 
@@ -135,14 +173,19 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 
 			case 'updateItems': {
 				const items: ISerializableUpdateRequest = arg;
+				const writePromises: Promise<void>[] = [];
 
 				if (items.insert) {
 					for (const [key, value] of items.insert) {
-						storage.set(key, value);
+						writePromises.push(storage.set(key, value));
 					}
 				}
 
-				items.delete?.forEach(key => storage.delete(key));
+				items.delete?.forEach(key => {
+					writePromises.push(storage.delete(key));
+				});
+
+				await Promises.settled(writePromises);
 
 				break;
 			}
@@ -155,7 +198,7 @@ export class StorageDatabaseChannel extends Disposable implements IServerChannel
 					return result;
 				}
 
-				storage.set(request.key, request.newValue);
+				await storage.set(request.key, request.newValue);
 				const result: ISerializableCompareAndSwapResult = { swapped: true, currentValue: request.newValue };
 				return result;
 			}
