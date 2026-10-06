@@ -1,0 +1,913 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Hucode contributors. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { suite, test } from 'node:test';
+import {
+	assertLinuxOmniLifecycleObservation,
+	buildLinuxOmniSmokeArguments,
+	classifyLinuxOmniTargets,
+	crashWorkbenchThroughSmokeDriver,
+	createLinuxOmniLifecycleExpectations,
+	describeLinuxOmniProcesses,
+	createLinuxOmniLaunchEnvironment,
+	createLinuxOmniSmokeFixture,
+	formatLinuxOmniUnexpectedExit,
+	getLinuxOmniLaunchAttemptDeadline,
+	linuxOmniLifecyclePhases,
+	parseLinuxOmniSmokeOptions,
+	removeLinuxOmniTemporaryRoot,
+	resolveLinuxOmniExecutable,
+	runLinuxOmniBoundedProbe,
+	summarizeLinuxOmniRenderers,
+} from '../../hucode/linux-omni-smoke.ts';
+import {
+	hostedWorkbenchSmokeCommands,
+	waitForHostedWorkbenchSmokeCommandCompletion,
+} from
+	'../../hucode/omni-hosted-command-smoke.ts';
+
+suite('Hucode Linux Omni lifecycle smoke', () => {
+	test('shares the hosted command contract with the serve-web smoke', () => {
+		assert.deepStrictEqual(hostedWorkbenchSmokeCommands, {
+			switchWorkbench: 'Switch Workbench...',
+			previousLoaded: 'Switch to Previous Loaded Workbench',
+			nextLoaded: 'Switch to Next Loaded Workbench',
+			lastActive: 'Switch to Last Active Workbench',
+			quickSwitchLoaded: 'Quick Switch Loaded Workbench',
+			unloadCurrent: 'Omni-Window: Unload Current Worktree',
+			toggleProjectsSidebar: 'Omni-Window: Toggle Projects Sidebar',
+			webHostedFocusProjects: 'Omni-Window: Focus Projects',
+			webHostedFocusWorkbench: 'Omni-Window: Focus Workbench',
+			reloadDesktop: 'Reload Hosted Workbench',
+			reloadWeb: 'Omni-Window: Reload Workbench',
+		});
+	});
+
+	test('accepts expected hosted surface closure after command dispatch',
+		async () => {
+			const closedError = new Error(
+				'locator.waitFor: Target page, context or browser has been closed'
+			);
+			const widget = {
+				async waitFor(options: { readonly state: string }): Promise<void> {
+					assert.strictEqual(options.state, 'hidden');
+					throw closedError;
+				},
+			};
+			const surface = {
+				isClosed: () => true,
+			};
+
+			await assert.doesNotReject(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				)
+			);
+		}
+	);
+
+	test('accepts expected hosted frame detachment after command dispatch',
+		async () => {
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw new Error('locator.waitFor: Frame was detached');
+				},
+			};
+			const surface = {
+				isDetached: () => true,
+			};
+
+			await assert.doesNotReject(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				)
+			);
+		}
+	);
+
+	test('rejects command completion errors while the hosted surface remains',
+		async () => {
+			const completionError = new Error('Quick Input did not hide');
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw completionError;
+				},
+			};
+			const surface = {
+				isClosed: () => false,
+			};
+
+			await assert.rejects(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					true
+				),
+				completionError
+			);
+		}
+	);
+
+	test('rejects unexpected hosted surface closure after command dispatch',
+		async () => {
+			const closedError = new Error('Target page has been closed');
+			const widget = {
+				async waitFor(): Promise<void> {
+					throw closedError;
+				},
+			};
+			const surface = {
+				isClosed: () => true,
+			};
+
+			await assert.rejects(
+				waitForHostedWorkbenchSmokeCommandCompletion(
+					widget as never,
+					surface as never,
+					1_000,
+					false
+				),
+				closedError
+			);
+		}
+	);
+
+	test('ignores exhausted ENOTEMPTY while removing the temporary profile',
+		async () => {
+			let observedOptions: unknown;
+			const cleanupError = Object.assign(new Error('directory not empty'), {
+				code: 'ENOTEMPTY',
+			});
+
+			await assert.doesNotReject(
+				removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke',
+					async (_temporaryRoot, options) => {
+						observedOptions = options;
+						throw cleanupError;
+					}
+				)
+			);
+			assert.deepStrictEqual(observedOptions, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		}
+	);
+
+	test('propagates other temporary profile cleanup errors', async () => {
+		const cleanupError = Object.assign(new Error('permission denied'), {
+			code: 'EACCES',
+		});
+
+		await assert.rejects(
+			removeLinuxOmniTemporaryRoot('/tmp/hucode-smoke', async () => {
+				throw cleanupError;
+			}),
+			cleanupError
+		);
+	});
+
+	test('parses a caller-supplied packaged application path', () => {
+		assert.deepStrictEqual(
+			parseLinuxOmniSmokeOptions([
+				'--app',
+				'/tmp/VSCode-linux-x64',
+				'--timeout-ms',
+				'30000',
+			]),
+			{
+				executablePath: '/tmp/VSCode-linux-x64',
+				timeoutMs: 30_000,
+			}
+		);
+		assert.deepStrictEqual(
+			parseLinuxOmniSmokeOptions(['--executable', '/tmp/hucode']),
+			{
+				executablePath: '/tmp/hucode',
+				timeoutMs: 300_000,
+			}
+		);
+	});
+
+	test('rejects missing and malformed command-line options', () => {
+		assert.throws(
+			() => parseLinuxOmniSmokeOptions([]),
+			/Pass --executable/
+		);
+		assert.throws(
+			() => parseLinuxOmniSmokeOptions(['--app']),
+			/--app requires a path/
+		);
+		assert.throws(
+			() => parseLinuxOmniSmokeOptions(['--app', '/tmp/app', '--timeout-ms', '0']),
+			/Invalid --timeout-ms value: 0/
+		);
+		assert.throws(
+			() => parseLinuxOmniSmokeOptions(['--app', '/tmp/app', '--timeout-ms', 'soon']),
+			/Invalid --timeout-ms value: soon/
+		);
+		assert.throws(
+			() => parseLinuxOmniSmokeOptions(['--wat']),
+			/Unknown argument: --wat/
+		);
+	});
+
+	test('reports a missing packaged executable', async () => {
+		await assert.rejects(
+			resolveLinuxOmniExecutable('/definitely/missing/hucode'),
+			/ENOENT/
+		);
+	});
+
+	test('builds an isolated profile launch with CDP enabled', () => {
+		assert.deepStrictEqual(
+			buildLinuxOmniSmokeArguments('/tmp/user-data', '/tmp/extensions', 9222),
+			[
+				'--user-data-dir=/tmp/user-data',
+				'--shared-data-dir=/tmp/user-data/shared',
+				'--extensions-dir=/tmp/extensions',
+				'--remote-debugging-port=9222',
+				'--disable-extensions',
+				'--disable-workspace-trust',
+				'--skip-release-notes',
+				'--skip-welcome',
+				'--password-store=basic',
+				'--enable-smoke-test-driver',
+			]
+		);
+	});
+
+	test('sanitizes inherited launch state without rerunning prelaunch', () => {
+		assert.deepStrictEqual(createLinuxOmniLaunchEnvironment({
+			ELECTRON_RUN_AS_NODE: '1',
+			PATH: '/usr/bin',
+			VSCODE_ESM_ENTRYPOINT: 'out/main.js',
+			VSCODE_SKIP_PRELAUNCH: '0',
+		}), {
+			PATH: '/usr/bin',
+			VSCODE_SKIP_PRELAUNCH: '1',
+		});
+	});
+
+	test('formats the deterministic two-workbench lifecycle fixture', () => {
+		const fixture = createLinuxOmniSmokeFixture(
+			'/tmp/smoke/Alpha',
+			'/tmp/smoke/Bravo'
+		);
+
+		assert.deepStrictEqual(fixture.settings, {
+			'window.restoreWindows': 'one',
+			'window.confirmBeforeClose': 'never',
+			'hucode.omni.restoreHostedWorkbenches': 'active',
+		});
+		assert.deepStrictEqual(fixture.storage, {
+			windowsState: {
+				lastActiveWindow: {
+					windowKind: 'omni',
+					omniActiveWorktreePath: '/tmp/smoke/Alpha',
+					omniRetainedWorkbenches: [
+						{
+							id: 'smoke-alpha',
+							folderUri: {
+								scheme: 'file',
+								path: '/tmp/smoke/Alpha',
+							},
+							label: 'Alpha',
+							desiredState: 'loaded',
+							order: 0,
+							lastActiveAt: 2,
+						},
+						{
+							id: 'smoke-bravo',
+							folderUri: {
+								scheme: 'file',
+								path: '/tmp/smoke/Bravo',
+							},
+							label: 'Bravo',
+							desiredState: 'loaded',
+							order: 1,
+							lastActiveAt: 1,
+						},
+					],
+					uiState: {
+						width: 1200,
+						height: 800,
+						mode: 0,
+					},
+				},
+				openedWindows: [],
+			},
+		});
+	});
+
+	test('classifies shell and hosted targets by resolved configuration', () => {
+		assert.deepStrictEqual(
+			classifyLinuxOmniTargets([
+				{
+					url: 'devtools://devtools/bundled/inspector.html',
+				},
+				{
+					url: 'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+					configuration: {
+						isOmniWindow: true,
+					},
+				},
+				{
+					url: 'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+					configuration: {
+						isOmniWindow: true,
+						isHostedOmniWorkspace: true,
+						hostedInstanceId: 'alpha-instance',
+						workspace: {
+							uri: {
+								scheme: 'file',
+								path: '/tmp/smoke/Alpha',
+							},
+						},
+					},
+				},
+			], ['/tmp/smoke/Alpha', '/tmp/smoke/Bravo']),
+			{
+				shellUrl:
+					'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+				workbenches: [{
+					url: 'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+					worktreePath: '/tmp/smoke/Alpha',
+					hostedInstanceId: 'alpha-instance',
+				}],
+				crashedRendererUrls: [],
+			}
+		);
+	});
+
+	test('rejects ambiguous, invalid, and unclassified application targets', () => {
+		const shell = {
+			url: 'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+			configuration: { isOmniWindow: true },
+		};
+		const alpha = {
+			url: 'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+			configuration: {
+				isOmniWindow: true,
+				isHostedOmniWorkspace: true,
+				hostedInstanceId: 'alpha-instance',
+				workspace: {
+					uri: { scheme: 'file', path: '/tmp/smoke/Alpha' },
+				},
+			},
+		};
+
+		assert.throws(
+			() => classifyLinuxOmniTargets(
+				[shell, { ...shell, url: `${shell.url}?duplicate` }],
+				['/tmp/smoke/Alpha']
+			),
+			/Expected exactly one Omni shell target, observed 2/
+		);
+		assert.throws(
+			() => classifyLinuxOmniTargets(
+				[
+					shell,
+					alpha,
+					{
+						...alpha,
+						url: `${alpha.url}?duplicate`,
+						configuration: {
+							...alpha.configuration,
+							hostedInstanceId: 'alpha-instance-2',
+						},
+					},
+				],
+				['/tmp/smoke/Alpha']
+			),
+			/Expected at most one live hosted target/
+		);
+		assert.throws(
+			() => classifyLinuxOmniTargets(
+				[alpha, {
+					...alpha,
+					url: `${alpha.url}?duplicate`,
+					configuration: {
+						...alpha.configuration,
+						hostedInstanceId: 'alpha-instance-2',
+					},
+				}],
+				['/tmp/smoke/Alpha']
+			),
+			/Expected exactly one Omni shell target, observed 0/
+		);
+		assert.throws(
+			() => classifyLinuxOmniTargets([
+				shell,
+				{
+					url: alpha.url,
+					configuration: {
+						...alpha.configuration,
+						hostedInstanceId: '',
+					},
+				},
+			], ['/tmp/smoke/Alpha']),
+			/invalid hosted target/
+		);
+		assert.throws(
+			() => classifyLinuxOmniTargets([
+				shell,
+				{
+					url: 'about:blank',
+					configurationError: 'execution context unavailable',
+				},
+			], ['/tmp/smoke/Alpha']),
+			/Unclassified application target/
+		);
+	});
+
+	test('tolerates a previously crashed target without counting it twice', () => {
+		const shell = {
+			url: 'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+			configuration: { isOmniWindow: true },
+		};
+		const result = classifyLinuxOmniTargets([
+			shell,
+			{
+				url: 'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+				crashed: true,
+			},
+			{
+				url: 'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+				configuration: {
+					isOmniWindow: true,
+					isHostedOmniWorkspace: true,
+					hostedInstanceId: 'replacement',
+					workspace: {
+						uri: { scheme: 'file', path: '/tmp/smoke/Bravo' },
+					},
+				},
+			},
+		], ['/tmp/smoke/Bravo']);
+
+		assert.deepStrictEqual(result.crashedRendererUrls, [
+			'vscode-file://vscode-app/vs/code/electron-browser/workbench/workbench.html',
+		]);
+		assert.strictEqual(result.workbenches[0].hostedInstanceId, 'replacement');
+	});
+
+	test('validates every named lifecycle phase with exact rows and targets', () => {
+		assert.deepStrictEqual(linuxOmniLifecyclePhases, [
+			'initial restore',
+			'switch to Bravo',
+			'switch to Alpha',
+			'hosted reload Alpha',
+			'hosted full picker to Bravo',
+			'hosted previous loaded to Alpha',
+			'hosted next loaded to Bravo',
+			'hosted last active to Alpha',
+			'hosted quick switch to Bravo',
+			'hosted unload Bravo',
+			'last unload',
+			'restore Alpha after last unload',
+			'restore Bravo after hosted unload',
+			'suspend Bravo',
+			'restore Bravo',
+			'crash Bravo',
+			'recover Bravo',
+			'quit',
+			'relaunch restore',
+		]);
+		const expectations = createLinuxOmniLifecycleExpectations(
+			'/tmp/smoke/Alpha',
+			'/tmp/smoke/Bravo'
+		);
+		assert.deepStrictEqual(expectations['hosted reload Alpha'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'loaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha', '/tmp/smoke/Bravo'],
+			crashedRendererCount: 0,
+		});
+		assert.deepStrictEqual(expectations['hosted unload Bravo'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 0,
+		});
+		assert.deepStrictEqual(expectations['last unload'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'unloaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: [],
+			crashedRendererCount: 0,
+		});
+		assert.deepStrictEqual(
+			expectations['restore Alpha after last unload'],
+			{
+				rows: [
+					{
+						label: 'Alpha',
+						state: 'active',
+						active: true,
+						ariaDescription: '/tmp/smoke/Alpha',
+					},
+					{
+						label: 'Bravo',
+						state: 'unloaded',
+						active: false,
+						ariaDescription: '/tmp/smoke/Bravo',
+					},
+				],
+				targetPaths: ['/tmp/smoke/Alpha'],
+				crashedRendererCount: 0,
+			}
+		);
+		assert.deepStrictEqual(expectations['crash Bravo'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'loaded',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'crashed',
+					active: true,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 1,
+		});
+		assert.strictEqual(
+			expectations['recover Bravo']?.crashedRendererCount,
+			0
+		);
+		assert.deepStrictEqual(expectations['relaunch restore'], {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'dormant',
+					active: false,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'active',
+					active: true,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Bravo'],
+			crashedRendererCount: 0,
+		});
+
+		const expected = {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active' as const,
+					active: true,
+					ariaDescription: '/tmp/smoke/Alpha',
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant' as const,
+					active: false,
+					ariaDescription: '/tmp/smoke/Bravo',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			crashedRendererCount: 0,
+		};
+		const valid = {
+			rows: [
+				{
+					label: 'Alpha',
+					state: 'active' as const,
+					active: true,
+					ariaLabel: 'Alpha, /tmp/smoke/Alpha, Active',
+				},
+				{
+					label: 'Bravo',
+					state: 'dormant' as const,
+					active: false,
+					ariaLabel: 'Bravo, /tmp/smoke/Bravo, Dormant',
+				},
+			],
+			targetPaths: ['/tmp/smoke/Alpha'],
+			shellResponsive: true,
+			crashedRendererCount: 0,
+		};
+
+		assert.doesNotThrow(() => assertLinuxOmniLifecycleObservation(
+			'initial restore',
+			valid,
+			expected
+		));
+
+		for (const [name, observation] of [
+			['wrong active flag', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, active: false }
+					: row),
+			}],
+			['unresponsive shell', {
+				...valid,
+				shellResponsive: false,
+			}],
+			['missing ARIA', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, ariaLabel: undefined }
+					: row),
+			}],
+			['malformed ARIA', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? { ...row, ariaLabel: 'Alpha, Active' }
+					: row),
+			}],
+			['wrong ARIA description', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Alpha'
+					? {
+						...row,
+						ariaLabel:
+							'Alpha, /tmp/smoke/Wrong, Active',
+					}
+					: row),
+			}],
+			['wrong state', {
+				...valid,
+				rows: valid.rows.map(row => row.label === 'Bravo'
+					? { ...row, state: 'loaded' as const }
+					: row),
+			}],
+			['wrong target', {
+				...valid,
+				targetPaths: ['/tmp/smoke/Bravo'],
+			}],
+			['wrong crashed renderer count', {
+				...valid,
+				crashedRendererCount: 1,
+			}],
+		] as const) {
+			assert.throws(
+				() => assertLinuxOmniLifecycleObservation(
+					'initial restore',
+					observation,
+					expected
+				),
+				new RegExp(`initial restore.*observed`),
+				name
+			);
+		}
+	});
+
+	test('bounds a never-resolving renderer probe by the phase deadline',
+		async () => {
+			await assert.rejects(
+				runLinuxOmniBoundedProbe(
+					Date.now() + 10,
+					'initial restore configuration probe',
+					() => new Promise<never>(() => undefined)
+				),
+				/Timed out during initial restore configuration probe/
+			);
+		}
+	);
+
+	test('targets the exact hosted instance through the smoke driver',
+		async () => {
+			const calls: string[] = [];
+			const page = {
+				async evaluate(
+					callback: (instanceId: string) => Promise<void>,
+					instanceId: string
+				): Promise<void> {
+					const targetGlobal = globalThis as unknown as {
+						__hucodeOmniSmokeTestDriver?: {
+							crashWorkspace(id: string): Promise<void>;
+						};
+					};
+					targetGlobal.__hucodeOmniSmokeTestDriver = {
+						async crashWorkspace(id): Promise<void> {
+							calls.push(id);
+						},
+					};
+					try {
+						await callback(instanceId);
+					} finally {
+						delete targetGlobal.__hucodeOmniSmokeTestDriver;
+					}
+				},
+			};
+
+			await crashWorkbenchThroughSmokeDriver(
+				page as never,
+				'bravo-instance',
+				Date.now() + 500
+			);
+			assert.deepStrictEqual(calls, ['bravo-instance']);
+		}
+	);
+
+	test('reports a timed-out smoke-driver call with diagnostics',
+		{ timeout: 500 },
+		async () => {
+			const page = {
+				evaluate(): Promise<never> {
+					return new Promise(() => undefined);
+				},
+			};
+
+			await assert.rejects(
+				crashWorkbenchThroughSmokeDriver(
+					page as never,
+					'bravo-instance',
+					Date.now() + 50,
+					async () => 'Projects rows: [{"label":"Bravo","state":"loaded"}]'
+				),
+				error => {
+					const message = (error as Error).message;
+					assert.match(
+						message,
+						/Timed out during crash Bravo smoke-driver call/
+					);
+					assert.match(message, /Projects rows: .*"state":"loaded"/);
+					return true;
+				}
+			);
+		}
+	);
+
+	test('reports failed smoke-driver diagnostics', async () => {
+		const page = {
+			evaluate(): Promise<never> {
+				return new Promise(() => undefined);
+			},
+		};
+
+		await assert.rejects(
+			crashWorkbenchThroughSmokeDriver(
+				page as never,
+				'bravo-instance',
+				Date.now() + 20,
+				async () => {
+					throw new Error('ps unavailable');
+				}
+			),
+			error => {
+				const message = (error as Error).message;
+				assert.match(
+					message,
+					/Timed out during crash Bravo smoke-driver call/
+				);
+				assert.match(message, /crash diagnostics failed: Error: ps unavailable/);
+				return true;
+			}
+		);
+	});
+
+	test('lists only the packaged application processes', async () => {
+		const listing = await describeLinuxOmniProcesses(
+			'/opt/VSCode-linux-x64/hucode',
+			async (file, args) => {
+				assert.strictEqual(file, 'ps');
+				assert.deepStrictEqual(args, ['-eo', 'pid,ppid,stat,etimes,args']);
+				return [
+					'    PID    PPID STAT ELAPSED COMMAND',
+					'      1       0 Ss       900 /sbin/init',
+					'   4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+					'   4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+					'',
+				].join('\n');
+			}
+		);
+		assert.strictEqual(
+			listing,
+			[
+				'Application processes:',
+				'4242    4200 Sl        30 /opt/VSCode-linux-x64/hucode --type=zygote',
+				'4300    4242 D         12 /opt/VSCode-linux-x64/hucode --type=renderer',
+			].join('\n')
+		);
+		assert.strictEqual(
+			await describeLinuxOmniProcesses('/opt/other', async () => 'PID\n'),
+			'Application processes:\n<none>'
+		);
+	});
+
+	test('formats phase-specific unexpected-exit diagnostics', () => {
+		assert.strictEqual(
+			formatLinuxOmniUnexpectedExit('relaunch restore', 7, null),
+			'Packaged application exited during relaunch restore ' +
+				'(code=7, signal=null)'
+		);
+		assert.strictEqual(
+			formatLinuxOmniUnexpectedExit('quit', 0, null),
+			'Packaged application exited during quit (code=0, signal=null)'
+		);
+	});
+
+	test('distinguishes Omni from regular application renderers', () => {
+		assert.deepStrictEqual(
+			summarizeLinuxOmniRenderers([
+				'devtools://devtools/bundled/inspector.html',
+				'chrome-devtools://devtools/bundled/inspector.html',
+				'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+				'vscode-file://vscode-app/vs/code/electron-browser/' +
+					'workbench/workbench.html',
+			]),
+			{
+				rendererUrls: [
+					'devtools://devtools/bundled/inspector.html',
+					'chrome-devtools://devtools/bundled/inspector.html',
+					'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+					'vscode-file://vscode-app/vs/code/electron-browser/' +
+						'workbench/workbench.html',
+				],
+				applicationRendererCount: 2,
+				omniRendererCount: 1,
+			}
+		);
+	});
+
+	test('counts blank and error pages as fallback renderers', () => {
+		assert.deepStrictEqual(
+			summarizeLinuxOmniRenderers([
+				'devtools://devtools/bundled/inspector.html',
+				'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+				'about:blank',
+				'chrome-error://chromewebdata/',
+			]),
+			{
+				rendererUrls: [
+					'devtools://devtools/bundled/inspector.html',
+					'vscode-file://vscode-app/vs/hucode/electron-browser/omni.html',
+					'about:blank',
+					'chrome-error://chromewebdata/',
+				],
+				applicationRendererCount: 3,
+				omniRendererCount: 1,
+			}
+		);
+	});
+
+	test('shares the remaining timeout across CDP launch attempts', () => {
+		assert.strictEqual(
+			getLinuxOmniLaunchAttemptDeadline(46_000, 1_000, 3),
+			16_000
+		);
+		assert.strictEqual(
+			getLinuxOmniLaunchAttemptDeadline(46_000, 31_000, 1),
+			46_000
+		);
+	});
+
+});

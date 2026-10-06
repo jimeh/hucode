@@ -1,0 +1,14 @@
+Package: @@NAME@@
+Version: @@VERSION@@
+Section: devel
+Depends: @@DEPENDS@@
+Recommends: @@RECOMMENDS@@
+Priority: optional
+Architecture: @@ARCHITECTURE@@
+Maintainer: Hucode Project <contact@jimeh.me>
+Homepage: https://github.com/jimeh/hucode
+Installed-Size: @@INSTALLEDSIZE@@
+Description: A code editor built for working with coding agents.
+ Hucode provides a focused desktop environment for collaborating with coding
+ agents while retaining the editing and development tools expected from a
+ modern code editor.
