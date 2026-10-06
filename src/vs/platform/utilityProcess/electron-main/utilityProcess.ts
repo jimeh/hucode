@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { BrowserWindow, Details, MessageChannelMain, app, utilityProcess, UtilityProcess as ElectronUtilityProcess } from 'electron';
+import { type BrowserWindow, type Details, MessageChannelMain, app, utilityProcess, type WebContents, UtilityProcess as ElectronUtilityProcess } from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { ILogService } from '../../log/common/log.js';
@@ -18,6 +18,17 @@ import { removeDangerousEnvVariables } from '../../../base/common/processes.js';
 import { deepClone } from '../../../base/common/objects.js';
 import { isWindows } from '../../../base/common/platform.js';
 import { isUNCAccessRestrictionsDisabled, getUNCHostAllowlist } from '../../../base/node/unc.js';
+import { IRendererReplyTarget } from '../../window/common/window.js';
+import { hucodeGetRendererReplyTargetLabel } from '../../window/common/hucodeRendererReplyTarget.js';
+import { hucodeResolveRendererReplyTarget } from '../../window/electron-main/hucodeRendererReplyTarget.js';
+import { UtilityProcessCrashRegistry } from './utilityProcessCrashRegistry.js';
+
+const utilityProcessCrashRegistry = new UtilityProcessCrashRegistry(listener =>
+	app.on('child-process-gone', listener));
+
+export function getUtilityProcessCrashHandlerCount(): number {
+	return utilityProcessCrashRegistry.size;
+}
 
 export interface IUtilityProcessConfiguration {
 
@@ -88,7 +99,7 @@ export interface IWindowUtilityProcessConfiguration extends IUtilityProcessConfi
 
 	// --- message port response related
 
-	readonly responseWindowId: number;
+	readonly responseTarget: IRendererReplyTarget;
 	readonly responseChannel: string;
 	readonly responseNonce: string;
 
@@ -112,7 +123,8 @@ export interface IWindowUtilityProcessConfiguration extends IUtilityProcessConfi
 function isWindowUtilityProcessConfiguration(config: IUtilityProcessConfiguration): config is IWindowUtilityProcessConfiguration {
 	const candidate = config as IWindowUtilityProcessConfiguration;
 
-	return typeof candidate.responseWindowId === 'number';
+	return typeof candidate.responseTarget === 'object' &&
+		!!candidate.responseTarget;
 }
 
 interface IUtilityProcessExitBaseEvent {
@@ -182,6 +194,7 @@ export class UtilityProcess extends Disposable {
 	private process: ElectronUtilityProcess | undefined = undefined;
 	private processPid: number | undefined = undefined;
 	private configuration: IUtilityProcessConfiguration | undefined = undefined;
+	private serviceName: string | undefined = undefined;
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
@@ -242,7 +255,7 @@ export class UtilityProcess extends Disposable {
 
 		this.configuration = configuration;
 
-		const serviceName = `${this.configuration.type}-${this.id}`;
+		const serviceName = this.serviceName = `${this.configuration.type}-${this.id}`;
 		const modulePath = FileAccess.asFileUri('bootstrap-fork.js').fsPath;
 		const args = this.configuration.args ?? [];
 		const execArgv = [...(this.configuration.execArgv ?? [])];
@@ -267,8 +280,10 @@ export class UtilityProcess extends Disposable {
 			stdio
 		});
 
+		utilityProcessCrashRegistry.register(serviceName, this);
+
 		// Register to events
-		this.registerListeners(this.process, this.configuration, serviceName);
+		this.registerListeners(this.process, this.configuration);
 
 		return true;
 	}
@@ -301,7 +316,7 @@ export class UtilityProcess extends Disposable {
 		return env;
 	}
 
-	private registerListeners(process: ElectronUtilityProcess, configuration: IUtilityProcessConfiguration, serviceName: string): void {
+	private registerListeners(process: ElectronUtilityProcess, configuration: IUtilityProcessConfiguration): void {
 
 		// Stdout
 		if (process.stdout) {
@@ -323,7 +338,14 @@ export class UtilityProcess extends Disposable {
 			this.processPid = process.pid;
 
 			if (typeof process.pid === 'number') {
-				UtilityProcess.all.set(process.pid, { pid: process.pid, name: isWindowUtilityProcessConfiguration(configuration) ? `${configuration.name} [${configuration.responseWindowId}]` : configuration.name });
+				UtilityProcess.all.set(process.pid, {
+					pid: process.pid,
+					name: isWindowUtilityProcessConfiguration(configuration)
+						? `${configuration.name} [` +
+						hucodeGetRendererReplyTargetLabel(configuration.responseTarget) +
+						`]`
+						: configuration.name
+				});
 			}
 
 			this.log('successfully created', Severity.Info);
@@ -341,37 +363,43 @@ export class UtilityProcess extends Disposable {
 			this.onDidExitOrCrashOrKill();
 		}));
 
-		// Child process gone
-		this._register(Event.fromNodeEventEmitter<{ details: Details }>(app, 'child-process-gone', (event, details) => ({ event, details }))(({ details }) => {
-			if (details.type === 'Utility' && details.name === serviceName) {
-				this.log(`crashed with code ${details.exitCode} and reason '${details.reason}'`, Severity.Error);
+	}
 
-				// Telemetry
-				type UtilityProcessCrashClassification = {
-					type: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'The type of utility process to understand the origin of the crash better.' };
-					reason: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'The reason of the utility process crash to understand the nature of the crash better.' };
-					code: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'The exit code of the utility process to understand the nature of the crash better' };
-					owner: 'bpasero';
-					comment: 'Provides insight into reasons the utility process crashed.';
-				};
-				type UtilityProcessCrashEvent = {
-					type: string;
-					reason: string;
-					code: number;
-				};
-				this.telemetryService.publicLog2<UtilityProcessCrashEvent, UtilityProcessCrashClassification>('utilityprocesscrash', {
-					type: configuration.type,
-					reason: details.reason,
-					code: details.exitCode
-				});
+	handleUtilityProcessCrash(details: Details): void {
+		if (!this.process || !this.configuration ||
+			this.serviceName !== details.name) {
+			return;
+		}
 
-				// Event
-				this._onCrash.fire({ pid: this.processPid!, code: details.exitCode, reason: details.reason });
+		this.log(`crashed with code ${details.exitCode} and reason '${details.reason}'`, Severity.Error);
 
-				// Cleanup
-				this.onDidExitOrCrashOrKill();
-			}
-		}));
+		// Telemetry
+		type UtilityProcessCrashClassification = {
+			type: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'The type of utility process to understand the origin of the crash better.' };
+			reason: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'The reason of the utility process crash to understand the nature of the crash better.' };
+			code: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; isMeasurement: true; comment: 'The exit code of the utility process to understand the nature of the crash better' };
+			owner: 'bpasero';
+			comment: 'Provides insight into reasons the utility process crashed.';
+		};
+		type UtilityProcessCrashEvent = {
+			type: string;
+			reason: string;
+			code: number;
+		};
+		this.telemetryService.publicLog2<UtilityProcessCrashEvent, UtilityProcessCrashClassification>('utilityprocesscrash', {
+			type: this.configuration.type,
+			reason: details.reason,
+			code: details.exitCode
+		});
+
+		// Event
+		const pid = this.processPid ?? this.process.pid;
+		if (typeof pid === 'number') {
+			this._onCrash.fire({ pid, code: details.exitCode, reason: details.reason });
+		}
+
+		// Cleanup
+		this.onDidExitOrCrashOrKill();
 	}
 
 	once(message: unknown, callback: () => void): void {
@@ -440,11 +468,20 @@ export class UtilityProcess extends Disposable {
 	}
 
 	private onDidExitOrCrashOrKill(): void {
+		if (!this.process && typeof this.processPid !== 'number') {
+			return;
+		}
+
 		if (typeof this.processPid === 'number') {
 			UtilityProcess.all.delete(this.processPid);
 		}
+		if (this.serviceName) {
+			utilityProcessCrashRegistry.unregister(this.serviceName);
+			this.serviceName = undefined;
+		}
 
 		this.process = undefined;
+		this.processPid = undefined;
 	}
 
 	async waitForExit(maxWaitTimeMs: number): Promise<void> {
@@ -460,6 +497,7 @@ export class UtilityProcess extends Disposable {
 			this.kill();
 		}
 	}
+
 }
 
 export class WindowUtilityProcess extends UtilityProcess {
@@ -474,11 +512,14 @@ export class WindowUtilityProcess extends UtilityProcess {
 	}
 
 	override start(configuration: IWindowUtilityProcessConfiguration): boolean {
-		const responseWindow = this.windowsMainService.getWindowById(configuration.responseWindowId);
-		if (!responseWindow?.win || responseWindow.win.isDestroyed() || responseWindow.win.webContents.isDestroyed()) {
+		const resolvedTarget = hucodeResolveRendererReplyTarget(
+			this.windowsMainService,
+			configuration.responseTarget
+		);
+		if (!resolvedTarget) {
 			this.log('Refusing to start utility process because requesting window cannot be found or is destroyed...', Severity.Error);
 
-			return true;
+			return false;
 		}
 
 		// Start utility process
@@ -488,16 +529,28 @@ export class WindowUtilityProcess extends UtilityProcess {
 		}
 
 		// Register to window events
-		this.registerWindowListeners(responseWindow.win, configuration);
+		this.registerWindowListeners(
+			resolvedTarget.targetWindow,
+			configuration,
+			resolvedTarget.targetContents
+		);
 
 		// Establish & exchange message ports
 		const windowPort = this.connect(configuration.payload);
-		responseWindow.win.webContents.postMessage(configuration.responseChannel, configuration.responseNonce, [windowPort]);
+		resolvedTarget.targetContents.postMessage(
+			configuration.responseChannel,
+			configuration.responseNonce,
+			[windowPort]
+		);
 
 		return true;
 	}
 
-	private registerWindowListeners(window: BrowserWindow, configuration: IWindowUtilityProcessConfiguration): void {
+	private registerWindowListeners(
+		window: BrowserWindow,
+		configuration: IWindowUtilityProcessConfiguration,
+		targetContents: WebContents
+	): void {
 
 		// If the lifecycle of the utility process is bound to the window,
 		// we terminate the process if the window closes or changes.
@@ -511,6 +564,10 @@ export class WindowUtilityProcess extends UtilityProcess {
 				: () => this.kill();
 			this._register(Event.filter(this.lifecycleMainService.onWillLoadWindow, e => e.window.win === window)(terminate));
 			this._register(Event.fromNodeEventEmitter(window, 'closed')(terminate));
+			this._register(Event.fromNodeEventEmitter(
+				targetContents,
+				'destroyed'
+			)(terminate));
 		}
 	}
 }

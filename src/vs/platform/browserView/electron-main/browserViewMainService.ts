@@ -30,6 +30,7 @@ import { ILogService } from '../../log/common/log.js';
 import { IAgentNetworkFilterService } from '../../networkFilter/common/networkFilterService.js';
 import { formatBrowserViewAccessibility } from './browserViewAccessibility.js';
 import { ISandboxNetworkRestrictions } from '../../sandbox/common/sandboxSettingsResolutionHelper.js';
+import { BrowserViewHostedWebContents } from './browserViewHostedWebContents.js';
 
 export const IBrowserViewMainService = createDecorator<IBrowserViewMainService>('browserViewMainService');
 
@@ -48,6 +49,15 @@ export interface IBrowserViewMainService extends IBrowserViewService {
 
 	/** Validate that a storage scope can be exposed to an agent. */
 	validateAgentStorageScope(storageScope: BrowserViewStorageScope): void;
+
+	setHostedWebContentsVisible(hostedWebContentsId: number, visible: boolean): void;
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void;
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void;
 }
 
 export class BrowserViewMainService extends Disposable implements IBrowserViewMainService {
@@ -70,6 +80,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	 */
 	private readonly _windowConfigurations = new Map<number, IBrowserViewWindowConfiguration>();
 	private readonly _windowCloseSubscriptions = this._register(new DisposableMap<number>());
+	private readonly hostedWebContents = new BrowserViewHostedWebContents();
 
 	private readonly _onDidCreateBrowserView = this._register(new Emitter<IBrowserViewCreatedEvent>());
 	readonly onDidCreateBrowserView: Event<IBrowserViewCreatedEvent> = this._onDidCreateBrowserView.event;
@@ -242,11 +253,46 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 	}
 
 	async layout(id: string, bounds: IBrowserViewBounds): Promise<void> {
-		return this._getBrowserView(id).layout(bounds);
+		return this._getBrowserView(id).layout(
+			bounds,
+			this.hostedWebContents.isVisible(bounds.hostedWebContentsId)
+		);
 	}
 
 	async setVisible(id: string, visible: boolean): Promise<void> {
 		return this._getBrowserView(id).setVisible(visible);
+	}
+
+	setHostedWebContentsVisible(
+		hostedWebContentsId: number,
+		visible: boolean
+	): void {
+		this.hostedWebContents.setVisible(
+			hostedWebContentsId,
+			visible,
+			this.browserViews.values()
+		);
+	}
+
+	bringHostedBrowserViewsToFront(hostedWebContentsId: number): void {
+		this.hostedWebContents.bringToFront(
+			hostedWebContentsId,
+			this.browserViews.values()
+		);
+	}
+
+	/**
+	 * Destroys all browser views owned by the given hosted Omni workbench.
+	 */
+	destroyBrowserViewsForHostedWebContents(hostedWebContentsId: number): void {
+		this.hostedWebContents.delete(hostedWebContentsId);
+		const viewIds = this.hostedWebContents.getOwnedViewIds(
+			hostedWebContentsId,
+			this.browserViews
+		);
+		for (const id of viewIds) {
+			this.browserViews.deleteAndDispose(id);
+		}
 	}
 
 	async loadURL(id: string, url: string): Promise<void> {
@@ -747,7 +793,7 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 			click: () => webContents.inspectElement(params.x, params.y)
 		}));
 
-		const viewBounds = view.getWebContentsView().getBounds();
+		const viewBounds = view.getWindowRelativeBounds();
 		menu.popup({
 			window: win,
 			x: viewBounds.x + params.x,
