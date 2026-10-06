@@ -295,6 +295,7 @@ export interface ICommonNativeHostService {
 	openWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void>;
 
 	openAgentsWindow(options?: IOpenAgentsWindowOptions): Promise<void>;
+	openOmniWindow(): Promise<void>;
 
 	getAgentHostEditorState(legacyEditorSessionCount: number): Promise<IAgentHostEditorState>;
 	updateAgentHostEditorState(update: AgentHostEditorUpdate): Promise<void>;
