@@ -1,0 +1,146 @@
+{
+	"fill": {
+		"automatic-gradient": "extended-gray:1.00000,1.00000"
+	},
+	"groups": [
+		{
+			"hidden": false,
+			"layers": [
+				{
+					"fill-specializations": [
+						{
+							"appearance": "tinted",
+							"value": {
+								"solid": "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+							}
+						}
+					],
+					"image-name": "thick-accent.svg",
+					"name": "thick-accent",
+					"opacity-specializations": [
+						{
+							"appearance": "tinted",
+							"value": 0.5
+						}
+					]
+				},
+				{
+					"fill-specializations": [
+						{
+							"appearance": "dark",
+							"value": {
+								"solid": "srgb:0.96863,0.95686,0.94510,1.00000"
+							}
+						},
+						{
+							"appearance": "tinted",
+							"value": {
+								"solid": "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+							}
+						}
+					],
+					"glass-specializations": [
+						{
+							"appearance": "dark",
+							"value": true
+						}
+					],
+					"image-name": "thick-halo.svg",
+					"name": "thick-halo",
+					"opacity-specializations": [
+						{
+							"appearance": "tinted",
+							"value": 1
+						}
+					]
+				}
+			],
+			"position-specializations": [
+				{
+					"idiom": "watchOS",
+					"value": {
+						"scale": 1,
+						"translation-in-points": [
+							0,
+							0
+						]
+					}
+				}
+			],
+			"shadow": {
+				"kind": "neutral",
+				"opacity": 0.5
+			},
+			"specular-specializations": [
+				{
+					"value": false
+				},
+				{
+					"appearance": "tinted",
+					"value": true
+				}
+			],
+			"translucency-specializations": [
+				{
+					"value": {
+						"enabled": false,
+						"value": 0.5
+					}
+				},
+				{
+					"appearance": "dark",
+					"value": {
+						"enabled": false,
+						"value": 0.5
+					}
+				}
+			]
+		},
+		{
+			"hidden": true,
+			"layers": [
+				{
+					"image-name": "normal-accent.svg",
+					"name": "normal-accent"
+				},
+				{
+					"fill-specializations": [
+						{
+							"appearance": "dark",
+							"value": {
+								"solid": "srgb:0.96863,0.95686,0.94510,1.00000"
+							}
+						}
+					],
+					"image-name": "normal-halo.svg",
+					"name": "normal-halo"
+				}
+			],
+			"shadow": {
+				"kind": "neutral",
+				"opacity": 0.5
+			},
+			"translucency-specializations": [
+				{
+					"value": {
+						"enabled": false,
+						"value": 0.5
+					}
+				},
+				{
+					"appearance": "dark",
+					"value": {
+						"enabled": false,
+						"value": 0.5
+					}
+				}
+			]
+		}
+	],
+	"supported-platforms": {
+		"circles": [
+			"watchOS"
+		],
+		"squares": "shared"
+	}
+}

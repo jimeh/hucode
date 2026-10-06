@@ -31,6 +31,12 @@ function getEntitlementsForFile(filePath: string): string {
 	return path.join(baseDir, 'azure-pipelines', 'darwin', 'app-entitlements.plist');
 }
 
+function shouldIgnoreSigningFile(filePath: string): boolean {
+	// WebAssembly payloads can look binary to osx-sign, but they are not Mach-O
+	// code and cannot be signed by codesign.
+	return path.extname(filePath) === '.wasm';
+}
+
 async function retrySignOnKeychainError<T>(fn: () => Promise<T>, maxRetries: number = 3): Promise<T> {
 	let lastError: Error | undefined;
 
@@ -64,13 +70,12 @@ async function main(buildDir?: string): Promise<void> {
 	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
 	const identity = process.env['CODESIGN_IDENTITY'];
+	const keychain = process.env['CODESIGN_KEYCHAIN'] ??
+		(tempDir ? path.join(tempDir, 'buildagent.keychain') : undefined);
+	const applicationName = product.nameLong;
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
-	}
-
-	if (!tempDir) {
-		throw new Error('$AGENT_TEMPDIRECTORY not set');
 	}
 
 	const appRoot = path.join(buildDir, `VSCode-darwin-${arch}`);
@@ -84,11 +89,12 @@ async function main(buildDir?: string): Promise<void> {
 			entitlements: getEntitlementsForFile(filePath),
 			hardenedRuntime: true,
 		}),
+		ignore: shouldIgnoreSigningFile,
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
-		keychain: path.join(tempDir, 'buildagent.keychain'),
 		version: getElectronVersion(),
 		identity,
+		...(keychain ? { keychain } : {}),
 	};
 
 	// Only overwrite plist entries for x64 and arm64 builds,
@@ -98,28 +104,28 @@ async function main(buildDir?: string): Promise<void> {
 			'-insert',
 			'NSAppleEventsUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use AppleScript.',
+			`An application in ${applicationName} wants to use AppleScript.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSMicrophoneUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use the Microphone.',
+			`An application in ${applicationName} wants to use the Microphone.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSCameraUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use the Camera.',
+			`An application in ${applicationName} wants to use the Camera.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
 			'-replace',
 			'NSAudioCaptureUsageDescription',
 			'-string',
-			'An application in Visual Studio Code wants to use Audio Capture.',
+			`An application in ${applicationName} wants to use Audio Capture.`,
 			`${infoPlistPath}`
 		]);
 		await spawn('plutil', [
@@ -137,13 +143,19 @@ async function main(buildDir?: string): Promise<void> {
 if (import.meta.main) {
 	main(process.argv[2]).catch(async err => {
 		console.error(err);
-		const tempDir = process.env['AGENT_TEMPDIRECTORY'];
-		if (tempDir) {
-			const keychain = path.join(tempDir, 'buildagent.keychain');
-			const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
-			console.error(`Available identities:\n${identities}`);
-			const dump = await spawn('security', ['dump-keychain', keychain]);
-			console.error(`Keychain dump:\n${dump}`);
+		const keychain = process.env['CODESIGN_KEYCHAIN'] ??
+			(process.env['AGENT_TEMPDIRECTORY']
+				? path.join(process.env['AGENT_TEMPDIRECTORY'], 'buildagent.keychain')
+				: undefined);
+		if (keychain) {
+			try {
+				const identities = await spawn('security', ['find-identity', '-p', 'codesigning', '-v', keychain]);
+				const match = /(\d+) valid identities found/.exec(identities);
+				const count = match?.[1] ?? 'unknown';
+				console.error(`Available codesigning identities: ${count}`);
+			} catch (probeError) {
+				console.error('Failed to inspect codesigning identities:', probeError);
+			}
 		}
 		process.exit(1);
 	});
