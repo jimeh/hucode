@@ -122,7 +122,7 @@ export class FileStorage extends Disposable {
 		return this.flushDelayer.trigger(() => this.doSave());
 	}
 
-	private async doSave(): Promise<void> {
+	private async doSave(force = false): Promise<void> {
 		if (!this.initializing) {
 			return; // if we never initialized, we should not save our state
 		}
@@ -132,7 +132,7 @@ export class FileStorage extends Disposable {
 
 		// Return early if the database has not changed
 		const serializedDatabase = JSON.stringify(this.storage, null, 4);
-		if (serializedDatabase === this.lastSavedStorageContents) {
+		if (!force && serializedDatabase === this.lastSavedStorageContents) {
 			return;
 		}
 
@@ -142,6 +142,23 @@ export class FileStorage extends Disposable {
 			this.lastSavedStorageContents = serializedDatabase;
 		} catch (error) {
 			this.logService.error(error);
+		}
+	}
+
+	/** Flushes through the existing queue and verifies the requested key without trusting its cache. */
+	async flushWithAcknowledgement(key: string, matches?: (persisted: unknown) => boolean): Promise<void> {
+		if (!this.initializing || this.closing) {
+			throw new Error('Persistent state is unavailable.');
+		}
+		await this.initializing;
+		if (this.closing) {
+			throw new Error('Persistent state is closing.');
+		}
+		const expected = JSON.stringify(this.storage[key]);
+		await this.flushDelayer.trigger(() => this.doSave(true), 0);
+		const persisted = JSON.parse((await this.fileService.readFile(this.storagePath)).value.toString()) as StorageDatabase;
+		if (matches ? !matches(persisted[key]) : JSON.stringify(persisted[key]) !== expected) {
+			throw new Error('State did not persist the requested change.');
 		}
 	}
 
@@ -196,6 +213,11 @@ export class StateService extends StateReadonlyService implements IStateService 
 
 	removeItem(key: string): void {
 		this.fileStorage.removeItem(key);
+	}
+
+	/** Verifies one state key after its queued disk write. */
+	flushWithAcknowledgement(key: string, matches?: (persisted: unknown) => boolean): Promise<void> {
+		return this.fileStorage.flushWithAcknowledgement(key, matches);
 	}
 
 	close(): Promise<void> {
