@@ -26,20 +26,41 @@ suite('Hucode hosted profile switching', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('reloads a hosted web workbench without a second confirmation', async () => {
-		assert.deepStrictEqual(await switchHostedProfile(true), {
-			currentProfileId: 'selected',
-			confirmationCount: 0,
-		});
+		assert.deepStrictEqual(
+			await switchHostedProfile(withHucodeHostedShellCachedAvailability(
+				{} as IHucodeHostedShellService,
+				() => true
+			)),
+			{
+				currentProfileId: 'selected',
+				confirmationCount: 0,
+			}
+		);
 	});
 
 	test('keeps confirmation for unauthenticated hosted URL flags', async () => {
-		assert.deepStrictEqual(await switchHostedProfile(false), {
-			currentProfileId: 'selected',
-			confirmationCount: 1,
-		});
+		assert.deepStrictEqual(
+			await switchHostedProfile({} as IHucodeHostedShellService),
+			{
+				currentProfileId: 'selected',
+				confirmationCount: 1,
+			}
+		);
 	});
 
-	async function switchHostedProfile(authenticated: boolean): Promise<{
+	test('keeps confirmation with the default no-connection service', async () => {
+		assert.deepStrictEqual(
+			await switchHostedProfile(new UnavailableHucodeHostedShellService()),
+			{
+				currentProfileId: 'selected',
+				confirmationCount: 1,
+			}
+		);
+	});
+
+	async function switchHostedProfile(
+		hostedShellService: IHucodeHostedShellService
+	): Promise<{
 		readonly currentProfileId: string;
 		readonly confirmationCount: number;
 	}> {
@@ -86,12 +107,7 @@ suite('Hucode hosted profile switching', () => {
 				isHostedOmniWorkspace: true,
 				hostedInstanceId: 'instance-1',
 			} as never,
-			authenticated
-				? withHucodeHostedShellCachedAvailability(
-					{} as IHucodeHostedShellService,
-					() => true
-				)
-				: new UnavailableHucodeHostedShellService(),
+			hostedShellService,
 			{} as never,
 			{} as never,
 			{ getValue: () => undefined } as never,
