@@ -14,6 +14,8 @@ import {
 	IServerChannel,
 	ProxyChannel,
 } from '../../../base/parts/ipc/common/ipc.js';
+import { InstantiationType, registerSingleton } from
+	'../../instantiation/common/extensions.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { HucodeHostedShellAction, isHucodeHostedShellAction } from
 	'./hucodeHostedShellActions.js';
@@ -461,6 +463,93 @@ export interface IHucodeHostedShellService {
 		quality?: number
 	): Promise<VSBuffer | undefined>;
 }
+
+/**
+ * No-connection implementation for windows that are not hosted workbenches.
+ *
+ * It grants no shell capability: state stays
+ * {@link HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE}, every operation reports
+ * `Unavailable`, and both availability helpers report `false`.
+ */
+export class UnavailableHucodeHostedShellService
+	implements IHucodeHostedShellService {
+
+	declare readonly _serviceBrand: undefined;
+
+	readonly onDidChangeState: Event<IHucodeHostedShellState> = Event.None;
+
+	constructor() {
+		withHucodeHostedShellCachedAvailability(this, () => false);
+	}
+
+	async getState(): Promise<IHucodeHostedShellState> {
+		return HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE;
+	}
+
+	async getNavigationSnapshot(): Promise<
+		IHucodeHostedNavigationSnapshot | undefined
+	> {
+		return undefined;
+	}
+
+	async notifyReady(): Promise<IHucodeHostedReadyResult> {
+		return { outcome: HucodeHostedShellOperationOutcome.Unavailable };
+	}
+
+	publishAppearance(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	closeSelf(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	reopenSelfInNormalWindow(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	reloadSelf(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	focusSelf(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	focusShell(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	requestShellAction(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	navigateToFolder(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	triggerPasteInSelf(): Promise<HucodeHostedShellOperationOutcome> {
+		return this.unavailable();
+	}
+
+	async captureSelfScreenshot(): Promise<VSBuffer | undefined> {
+		return undefined;
+	}
+
+	private async unavailable(): Promise<HucodeHostedShellOperationOutcome> {
+		return HucodeHostedShellOperationOutcome.Unavailable;
+	}
+}
+
+// Shared workbench services inject the hosted capability in every window kind,
+// so the decorator always resolves to this default. It is registered here, in
+// the module every implementation imports, so that a hosted implementation
+// always registers later and replaces it.
+registerSingleton(
+	IHucodeHostedShellService,
+	UnavailableHucodeHostedShellService,
+	InstantiationType.Delayed
+);
 
 /**
  * Negotiates the atomic version 1 capability independently from unload

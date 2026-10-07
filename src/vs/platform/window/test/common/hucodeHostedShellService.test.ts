@@ -10,19 +10,27 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { getSingletonServiceDescriptors } from '../../../instantiation/common/extensions.js';
+import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
+import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import {
 	createBoundHucodeHostedShellFacade,
 	createHucodeHostedShellClient,
 	createHucodeHostedShellServerChannel,
+	hasHucodeHostedShellConnection,
 	HUCODE_HOSTED_SHELL_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_CORE_CAPABILITIES,
 	HUCODE_HOSTED_SHELL_PROTOCOL_VERSION,
 	HUCODE_HOSTED_SHELL_REMOTE_MEMBERS,
+	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
 	HucodeHostedShellOperationOutcome,
 	IHucodeHostedShellAuthorityState,
 	IHucodeHostedShellBinding,
 	IHucodeHostedShellDelegate,
+	IHucodeHostedShellService,
+	isHucodeHostedShellServiceAvailable,
 	negotiateHucodeHostedShellCapabilities,
+	UnavailableHucodeHostedShellService,
 } from '../../common/hucodeHostedShellService.js';
 import {
 	HUCODE_HOSTED_SHELL_ACTIONS,
@@ -31,7 +39,7 @@ import {
 
 suite('HucodeHostedShellService', () => {
 
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('exposes an exact, versioned hosted capability surface', () => {
 		assert.strictEqual(HUCODE_HOSTED_SHELL_PROTOCOL_VERSION, 1);
@@ -592,4 +600,64 @@ suite('HucodeHostedShellService', () => {
 			HucodeHostedShellOperationOutcome.Unsupported
 		);
 	});
+
+	test('registers a no-connection default before any implementation', () => {
+		const registrations = getSingletonServiceDescriptors().filter(
+			([id]) => id === IHucodeHostedShellService
+		);
+
+		// The workbench applies registrations in order, so a later hosted
+		// implementation replaces the default only while the default stays first.
+		assert.strictEqual(
+			registrations[0]?.[1].ctor,
+			UnavailableHucodeHostedShellService
+		);
+		assert.strictEqual(registrations.filter(([, descriptor]) =>
+			descriptor.ctor === UnavailableHucodeHostedShellService).length, 1);
+	});
+
+	test('default registration resolves and grants no shell capability',
+		async () => {
+			const registration = getSingletonServiceDescriptors().find(
+				([id]) => id === IHucodeHostedShellService
+			);
+			assert.ok(registration, 'IHucodeHostedShellService is not registered');
+			const instantiationService = disposables.add(new InstantiationService(
+				new ServiceCollection(registration),
+				true
+			));
+			const shell = instantiationService.invokeFunction(accessor =>
+				accessor.get(IHucodeHostedShellService));
+
+			assert.strictEqual(hasHucodeHostedShellConnection(shell), false);
+			assert.strictEqual(isHucodeHostedShellServiceAvailable(shell), false);
+			assert.deepStrictEqual(
+				await shell.getState(),
+				HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE
+			);
+			assert.deepStrictEqual(await shell.notifyReady(), {
+				outcome: HucodeHostedShellOperationOutcome.Unavailable,
+			});
+			assert.deepStrictEqual(await Promise.all([
+				shell.publishAppearance?.({
+					colorScheme: 'dark',
+					workbenchBackground: '#000000',
+					colors: {},
+					modernUI: false,
+					modernUIUppercaseViewHeaders: false,
+				}),
+				shell.closeSelf(),
+				shell.reopenSelfInNormalWindow(),
+				shell.reloadSelf(),
+				shell.focusSelf(),
+				shell.focusShell(),
+				shell.requestShellAction(HucodeHostedShellAction.AddProject),
+				shell.navigateToFolder({
+					folderUri: URI.file('/workspace').toJSON(),
+				}),
+				shell.triggerPasteInSelf(),
+			]), new Array(9).fill(HucodeHostedShellOperationOutcome.Unavailable));
+			assert.strictEqual(await shell.getNavigationSnapshot?.(), undefined);
+			assert.strictEqual(await shell.captureSelfScreenshot(), undefined);
+		});
 });

@@ -16,6 +16,7 @@ import {
 } from '../../../platform/userDataProfile/common/userDataProfile.js';
 import {
 	IHucodeHostedShellService,
+	UnavailableHucodeHostedShellService,
 	withHucodeHostedShellCachedAvailability,
 } from '../../../platform/window/common/hucodeHostedShellService.js';
 import { UserDataProfileManagementService } from
@@ -90,7 +91,7 @@ suite('Hucode hosted profile switching', () => {
 					{} as IHucodeHostedShellService,
 					() => true
 				)
-				: {} as IHucodeHostedShellService,
+				: new UnavailableHucodeHostedShellService(),
 			{} as never,
 			{} as never,
 			{ getValue: () => undefined } as never,

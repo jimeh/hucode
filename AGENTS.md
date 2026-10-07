@@ -256,6 +256,18 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   both `omni.web.main.ts` and `omniWebUserData.factory.ts`. The latter is the
   default root entrypoint under server-side user-data storage; omitting shared
   registrations leaves the page blank before the workbench renders.
+- The web Omni shell page and the regular `/workbench` page both run on the
+  services registered by `workbench.web.main.ts`. `workbench.ts` imports that
+  bundle statically, then `hucodeWebWorkbenchEntrypoint.ts` adds the shell or
+  hosted entrypoint with a dynamic import. A Hucode service injected by shared
+  workbench code must therefore resolve in every window kind, not only where
+  its real implementation loads. `IHucodeHostedShellService` does this with a
+  no-connection default registered beside its decorator. Implementations
+  import that module, so they always register later and replace the default.
+- An unregistered service dependency does not stop workbench startup. Each
+  affected contribution logs `depends on <id> which is NOT registered` and the
+  page continues without those features, so lifecycle assertions stay green.
+  The serve-web smoke fails on that console message for this reason.
 - The desktop Omni shell has its own service bootstrap in
   `src/vs/hucode/electron-browser/omni.main.ts`. When upstream adds a required
   service to `DesktopMain.initServices()`, mirror the registration there; an
