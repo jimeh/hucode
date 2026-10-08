@@ -32,6 +32,8 @@ const timeoutMs = 180_000;
 const pollIntervalMs = 100;
 const maximumLogLength = 64 * 1024;
 const omniWorkbenchSelector = '.monaco-workbench.hucode-omni-workbench';
+const serviceRegistrationErrorPattern =
+	/depends on \S+ which is NOT registered|depends on UNKNOWN service/;
 const smokeArtifactRoot = path.join(
 	'.build',
 	'hucode-smoke-artifacts'
@@ -443,6 +445,7 @@ export async function runWebServerUserDataSmoke(): Promise<void> {
 
 		page = secondTabPage;
 		targetInventory = await formatWebTargetInventory(page);
+		assertNoServiceRegistrationErrors(consoleErrors);
 
 		console.log(
 			`Hucode server user-data Omni smoke passed: observed GET ` +
@@ -1031,6 +1034,25 @@ async function withDeadline<T>(
 
 function delay(milliseconds: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+/**
+ * Fails when a page logged a dependency the instantiation service could not
+ * resolve. The workbench catches these per contribution and keeps running, so
+ * no lifecycle assertion notices the features that never started.
+ */
+function assertNoServiceRegistrationErrors(
+	consoleErrors: readonly string[]
+): void {
+	const failures = consoleErrors.filter(message =>
+		serviceRegistrationErrorPattern.test(message));
+	if (failures.length) {
+		throw new Error(
+			`Expected every injected service to be registered, observed ` +
+			`${failures.length} instantiation failure(s):\n` +
+			failures.map(message => message.split('\n', 1)[0]).join('\n')
+		);
+	}
 }
 
 function formatDiagnostics(label: string, messages: readonly string[]): string {

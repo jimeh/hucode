@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../base/common/buffer.js';
-import { Emitter, Event } from '../../base/common/event.js';
+import { Emitter } from '../../base/common/event.js';
 import { Disposable, DisposableStore, MutableDisposable } from
 	'../../base/common/lifecycle.js';
 import { InstantiationType, registerSingleton } from
@@ -21,6 +21,7 @@ import {
 	IHucodeHostedShellService,
 	IHucodeHostedShellState,
 	negotiateHucodeHostedShellCapabilities,
+	UnavailableHucodeHostedShellService,
 	withHucodeHostedShellCachedAvailability,
 } from '../../platform/window/common/hucodeHostedShellService.js';
 import { IRectangle } from '../../platform/window/common/window.js';
@@ -102,7 +103,7 @@ export class HostedOmniWebShellService extends Disposable
 			? createHucodeHostedShellClient(connection.ipcClient.getChannel(
 				HUCODE_HOSTED_SHELL_CHANNEL
 			), capabilities)
-			: createUnavailableHostedShellClient();
+			: new UnavailableHucodeHostedShellService();
 		this.available = !!capabilities;
 		this.shell = shell;
 		const disposables = new DisposableStore();
@@ -206,31 +207,6 @@ export class HostedOmniWebShellService extends Disposable
 			run
 		);
 	}
-}
-
-function createUnavailableHostedShellClient(): IHucodeHostedShellService {
-	const unavailable = () => Promise.resolve(
-		HucodeHostedShellOperationOutcome.Unavailable
-	);
-	return {
-		_serviceBrand: undefined,
-		onDidChangeState: Event.None,
-		getState: async () => HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
-		getNavigationSnapshot: async () => undefined,
-		notifyReady: async () => ({
-			outcome: HucodeHostedShellOperationOutcome.Unavailable,
-		}),
-		publishAppearance: unavailable,
-		closeSelf: unavailable,
-		reopenSelfInNormalWindow: unavailable,
-		reloadSelf: unavailable,
-		focusSelf: unavailable,
-		focusShell: unavailable,
-		requestShellAction: unavailable,
-		navigateToFolder: unavailable,
-		triggerPasteInSelf: unavailable,
-		captureSelfScreenshot: async () => undefined,
-	};
 }
 
 registerSingleton(
