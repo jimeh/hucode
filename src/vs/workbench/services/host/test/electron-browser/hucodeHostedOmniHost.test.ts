@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { errorHandler } from '../../../../../base/common/errors.js';
 import { Emitter } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FocusMode, INativeHostService } from '../../../../../platform/native/common/native.js';
@@ -327,5 +328,28 @@ suite('HucodeHostedOmniHost', () => {
 			),
 		], [undefined, undefined, undefined]);
 		assert.strictEqual(shell.focusRequests.length, 2);
+	});
+
+	test('a failed hosted focus request does not fail its caller', async () => {
+		const shell = createShellService();
+		const failure = new Error('connection closed');
+		shell.service.focusSelf = async () => {
+			throw failure;
+		};
+		const originalHandler = errorHandler.getUnexpectedErrorHandler();
+		const errors: unknown[] = [];
+		errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+		try {
+			await focusHucodeHostedOmniWorkbench(
+				environment({ isHostedOmniWorkspace: true }),
+				shell.service,
+				true,
+				FocusMode.Force
+			);
+		} finally {
+			errorHandler.setUnexpectedErrorHandler(originalHandler);
+		}
+
+		assert.deepStrictEqual(errors, [failure]);
 	});
 });

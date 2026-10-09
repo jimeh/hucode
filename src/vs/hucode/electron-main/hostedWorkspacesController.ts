@@ -3334,7 +3334,12 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		if (!instance?.view || instance.view.webContents.isDestroyed()) {
 			return false;
 		}
-		this.activateInstance(instance);
+		// A workbench that is already showing only needs the keyboard.
+		// Activating it again would supersede its own in-flight close and
+		// any pending open of another workbench.
+		if (instance.instanceId !== this.activeInstanceId || !instance.visible) {
+			this.activateInstance(instance);
+		}
 		this.lastFocusedSurface = 'workspace';
 		this.focusOwnerWindow(options?.force === true);
 		this.bringInstanceToFront(instance);
@@ -3360,8 +3365,10 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			win.restore();
 		}
 		// The window's focus event restores the surface recorded when it
-		// blurred, which would hand the keyboard back to the shell.
-		if (this.windowFocusRestoreSurface) {
+		// blurred, or else the last focused one. On Windows and Linux the
+		// shell takes focus just before that event, so either would hand
+		// the keyboard back to the shell.
+		if (!win.isFocused()) {
 			this.windowFocusRestoreSurface = 'workspace';
 		}
 		win.focus();

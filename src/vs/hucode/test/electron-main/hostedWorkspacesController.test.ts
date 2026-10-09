@@ -401,7 +401,7 @@ class TestBrowserWindow extends EventEmitter {
 
 	minimized = false;
 	focusCalls = 0;
-	private focused = true;
+	focused = true;
 
 	isMinimized(): boolean {
 		return this.minimized;
@@ -411,6 +411,10 @@ class TestBrowserWindow extends EventEmitter {
 		this.minimized = false;
 	}
 
+	isFocused(): boolean {
+		return this.focused;
+	}
+
 	blur(): void {
 		this.focused = false;
 		this.emit('blur');
@@ -418,10 +422,20 @@ class TestBrowserWindow extends EventEmitter {
 
 	focus(): void {
 		this.focusCalls++;
-		if (!this.focused) {
-			this.focused = true;
-			this.emit('focus');
+	}
+
+	/**
+	 * Grants a requested focus the way Windows and Linux deliver it: later
+	 * than the request, with the window's own contents focused before the
+	 * event.
+	 */
+	grantFocus(): void {
+		if (this.focused) {
+			return;
 		}
+		this.focused = true;
+		this.webContents.focus();
+		this.emit('focus');
 	}
 }
 
@@ -6031,26 +6045,73 @@ suite('ResidentHostedWorkspacesController', () => {
 			shellWebContents.focus();
 			ownerWindow.blur();
 			ownerWindow.minimized = true;
-			focused.length = 0;
 
 			assert.strictEqual(controller.focusHostedShellSelf(binding), true);
+			ownerWindow.grantFocus();
 			assert.deepStrictEqual({
-				focused: [...new Set(focused)],
+				focused: focused.at(-1),
 				focusCalls: ownerWindow.focusCalls,
 				minimized: ownerWindow.minimized,
 				applicationActivations,
 			}, {
-				focused: ['workspace'],
+				focused: 'workspace',
 				focusCalls: 1,
 				minimized: false,
 				applicationActivations: 0,
 			});
 
+			// A window that never held focus has no blur on record.
+			shellWebContents.focus();
+			ownerWindow.focused = false;
+
 			assert.strictEqual(
 				controller.focusHostedShellSelf(binding, { force: true }),
 				true
 			);
-			assert.strictEqual(applicationActivations, 1);
+			ownerWindow.grantFocus();
+			assert.deepStrictEqual({
+				focused: focused.at(-1),
+				applicationActivations,
+			}, {
+				focused: 'workspace',
+				applicationActivations: 1,
+			});
+		});
+
+	test('bound focus from the showing workbench does not interrupt its close',
+		async () => {
+			const alpha = createWorktree('alpha-focus-during-close');
+			const { controller, ipcMain, viewFactory } = createController();
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			const willUnload = new DeferredPromise<{ replyChannel: string }>();
+			hostedWebContents.sendHook = (channel, request) => {
+				if (channel === 'vscode:onBeforeUnload') {
+					const { okChannel } = request as { okChannel: string };
+					setTimeout(() => ipcMain.emitReply(okChannel), 0);
+				}
+				if (channel === 'vscode:onWillUnload') {
+					willUnload.complete(request as { replyChannel: string });
+				}
+				return true;
+			};
+
+			const closing = controller.closeWorkspace('instance-1');
+			const willUnloadRequest = await willUnload.p;
+			assert.strictEqual(controller.focusHostedShellSelf(binding), true);
+			ipcMain.emitReply(willUnloadRequest.replyChannel);
+			await closing;
+
+			assert.deepStrictEqual({
+				instances: controller.getState().instances.length,
+				reloadCalls: hostedWebContents.reloadCalls.length,
+			}, {
+				instances: 0,
+				reloadCalls: 0,
+			});
 		});
 
 	test('bound paste, screenshot, focus, and action never retarget',
