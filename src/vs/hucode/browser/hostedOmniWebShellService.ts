@@ -165,8 +165,8 @@ export class HostedOmniWebShellService extends Disposable
 		return this.runOperation(shell => shell.reloadSelf());
 	}
 
-	focusSelf() {
-		return this.runOperation(shell => shell.focusSelf());
+	focusSelf(options?: Parameters<IHucodeHostedShellService['focusSelf']>[0]) {
+		return this.runOperation(shell => shell.focusSelf(options));
 	}
 
 	focusShell() {

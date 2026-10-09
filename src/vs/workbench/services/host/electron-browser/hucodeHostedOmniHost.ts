@@ -9,7 +9,7 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
-import { INativeHostService } from '../../../../platform/native/common/native.js';
+import { FocusMode, INativeHostService } from '../../../../platform/native/common/native.js';
 import { NativeHostService } from '../../../../platform/native/common/nativeHostService.js';
 import { IRectangle } from '../../../../platform/window/common/window.js';
 import {
@@ -184,6 +184,33 @@ export class HucodeHostedOmniFocusTracker extends Disposable {
 			this._onDidChangeFocus.fire();
 		}
 	}
+}
+
+/**
+ * Focuses the calling hosted Omni workbench in place of its owning window.
+ *
+ * Focusing that window natively hands the keyboard to the Omni shell, which
+ * is the window's own workbench. Returns `undefined` when the native window
+ * focus applies unchanged: outside a hosted workbench, for another window such
+ * as an auxiliary one, and for {@link FocusMode.Notify}, which moves no focus.
+ */
+export function focusHucodeHostedOmniWorkbench(
+	environmentService: IWorkbenchEnvironmentService,
+	hostedShellService: IHucodeHostedShellService,
+	targetsOwnerWindow: boolean,
+	mode: FocusMode | undefined
+): Promise<void> | undefined {
+	if (
+		!environmentService.isHostedOmniWorkspace ||
+		!targetsOwnerWindow ||
+		mode === FocusMode.Notify
+	) {
+		return undefined;
+	}
+
+	// Focus is best effort for the callers, which go on to run their action.
+	return hostedShellService.focusSelf({ force: mode === FocusMode.Force })
+		.then(() => undefined, onUnexpectedError);
 }
 
 /**

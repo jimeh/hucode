@@ -347,6 +347,17 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   stays fail-closed, and only subsequent calls may use a replacement
   connection. Do not replay an operation whose delivery may be ambiguous or
   preserve the stale connection as though it were still usable.
+- `CodeWindow.focus()` always ends by focusing the window's own `webContents`,
+  which for an Omni window is the shell. A hosted workbench therefore must not
+  focus its owning window through `nativeHostService.focusWindow`:
+  `IHostService.focus()` routes that case through the bound `focusSelf`
+  capability, which raises the window and lands on the calling view. Upstream
+  calls `hostService.focus(window, { mode: Force })` before every native
+  context-menu action, so a misroute moves the keyboard to Projects after each
+  one, and a rename input opened by the action never receives typing.
+  Upstream callers that reach `nativeHostService.focusWindow` directly are
+  not rerouted: `handleURL` in the native `urlService.ts`, and in
+  `windowActions.ts` the "Switch Window" pick and "Switch to Main Window".
 - Electron `did-start-loading` includes subframe activity. Invalidate a hosted
   shell binding only for a `did-start-navigation` event that is both main-frame
   and cross-document; keep load events for renderer trust bookkeeping.
@@ -398,6 +409,12 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   `--enable-smoke-test-driver` and uses `webContents.forcefullyCrashRenderer()`;
   this avoids Chromium's experimental CDP `Page.crash`. The crashed page remains
   in `context.pages()` until recovery destroys the crashed view.
+- Playwright enables focus emulation on every page it attaches to, so
+  `document.hasFocus()` reports `true` in the shell and each hosted workbench
+  at once. To observe which surface really holds the keyboard, disable it per
+  page with `Emulation.setFocusEmulationEnabled` over a CDP session, or launch
+  with `--inspect=<port>` and read `webContents.isFocused()` in the main
+  process through `Runtime.evaluate` with `includeCommandLineAPI`.
 - Hosted unload and reload smoke commands can destroy their Playwright `Page`
   or detach their `Frame` before Quick Input reports itself hidden. Mark only
   those command calls with `surfaceMayClose`, then rely on the following exact

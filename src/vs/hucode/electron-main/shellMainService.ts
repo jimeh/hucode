@@ -553,8 +553,8 @@ export class HucodeShellMainService extends Disposable
 				this.reopenHostedShellSelf(controller, current),
 			reloadSelf: async current =>
 				controller.reloadHostedShellSelf(current),
-			focusSelf: async current =>
-				controller.focusHostedShellSelf(current),
+			focusSelf: async (current, options) =>
+				controller.focusHostedShellSelf(current, options),
 			focusShell: async current =>
 				controller.focusShellFromHosted(current),
 			requestShellAction: async (current, action) =>

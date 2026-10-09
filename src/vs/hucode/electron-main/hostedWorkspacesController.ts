@@ -11,7 +11,7 @@ import { VSBuffer } from '../../base/common/buffer.js';
 import { Emitter } from '../../base/common/event.js';
 import { Disposable, toDisposable } from '../../base/common/lifecycle.js';
 import { FileAccess } from '../../base/common/network.js';
-import { isLinux } from '../../base/common/platform.js';
+import { isLinux, isMacintosh } from '../../base/common/platform.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
 import { IEnvironmentMainService } from
@@ -45,6 +45,7 @@ import {
 } from '../../platform/window/common/hucodeHostedShellActions.js';
 import {
 	HucodeHostedShellOperationOutcome,
+	IHucodeHostedFocusSelfOptions,
 	IHucodeHostedNavigationRequest,
 	IHucodeHostedAppearanceSnapshot,
 	IHucodeHostedShellAuthorityState,
@@ -134,6 +135,8 @@ export interface IResidentHostedWorkspacesControllerOptions {
 	readonly beforeRestore?: () => Promise<void>;
 	readonly viewFactory?: IHostedWorkbenchViewFactory;
 	readonly ipc?: IHostedWorkspaceIpcMain;
+	/** Brings an inactive application forward for a forced hosted focus. */
+	readonly activateApplication?: () => void;
 }
 
 /** Full-view capture served as the shell placeholder while occluded. */
@@ -238,6 +241,14 @@ const defaultHostedWorkbenchViewFactory: IHostedWorkbenchViewFactory = {
 	}
 };
 
+function defaultActivateApplication(): void {
+	// Only macOS lets a window run an action while its application is
+	// inactive; elsewhere focusing the window is enough.
+	if (isMacintosh) {
+		electron.app.focus({ steal: true });
+	}
+}
+
 export class ResidentHostedWorkspacesController extends Disposable {
 	private static readonly BEFORE_UNLOAD_TIMEOUT_MS = 5000;
 	private static readonly WILL_UNLOAD_TIMEOUT_MS = 15000;
@@ -308,6 +319,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	private readonly beforeRestore: () => Promise<void>;
 	private readonly viewFactory: IHostedWorkbenchViewFactory;
 	private readonly ipc: IHostedWorkspaceIpcMain;
+	private readonly activateApplication: () => void;
 
 	constructor(
 		private readonly protocolMainService: IProtocolMainService,
@@ -392,6 +404,8 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		this.viewFactory = options.viewFactory ??
 			defaultHostedWorkbenchViewFactory;
 		this.ipc = options.ipc ?? validatedIpcMain;
+		this.activateApplication = options.activateApplication ??
+			defaultActivateApplication;
 
 		const shellWebContents = this.window.win?.webContents;
 		if (shellWebContents) {
@@ -3312,16 +3326,52 @@ export class ResidentHostedWorkspacesController extends Disposable {
 		activeInstance.view.webContents.focus();
 	}
 
-	focusHostedShellSelf(binding: IHucodeHostedShellBinding): boolean {
+	focusHostedShellSelf(
+		binding: IHucodeHostedShellBinding,
+		options?: IHucodeHostedFocusSelfOptions
+	): boolean {
 		const instance = this.getBoundHostedShellInstance(binding);
 		if (!instance?.view || instance.view.webContents.isDestroyed()) {
 			return false;
 		}
-		this.activateInstance(instance);
+		// A workbench that is already showing only needs the keyboard.
+		// Activating it again would supersede its own in-flight close and
+		// any pending open of another workbench.
+		if (instance.instanceId !== this.activeInstanceId || !instance.visible) {
+			this.activateInstance(instance);
+		}
 		this.lastFocusedSurface = 'workspace';
+		this.focusOwnerWindow(options?.force === true);
 		this.bringInstanceToFront(instance);
 		instance.view.webContents.focus();
 		return true;
+	}
+
+	/**
+	 * Raises the owning window without choosing which of its views takes
+	 * keyboard focus. `ICodeWindow.focus()` cannot be used for a hosted
+	 * workbench because it always ends on the shell renderer.
+	 */
+	private focusOwnerWindow(force: boolean): void {
+		const win = this.window.win;
+		if (!win) {
+			return;
+		}
+
+		if (force) {
+			this.activateApplication();
+		}
+		if (win.isMinimized()) {
+			win.restore();
+		}
+		// The window's focus event restores the surface recorded when it
+		// blurred, or else the last focused one. On Windows and Linux the
+		// shell takes focus just before that event, so either would hand
+		// the keyboard back to the shell.
+		if (!win.isFocused()) {
+			this.windowFocusRestoreSurface = 'workspace';
+		}
+		win.focus();
 	}
 
 	focusShell(): void {

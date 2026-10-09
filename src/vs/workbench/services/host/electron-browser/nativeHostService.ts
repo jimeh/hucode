@@ -25,7 +25,7 @@ import { IHucodeHostedShellService } from '../../../../platform/window/common/hu
 import { IHucodeShellControllerService } from
 	'../../../../platform/window/common/hucodeShellControllerService.js';
 import { tryOpenHucodeOmniWindow } from './hucodeOmniOpen.js';
-import { createHucodeWorkbenchNativeHostService, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from './hucodeHostedOmniHost.js';
+import { createHucodeWorkbenchNativeHostService, focusHucodeHostedOmniWorkbench, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from './hucodeHostedOmniHost.js';
 
 // @ts-expect-error: interface is implemented via proxy
 class WorkbenchNativeHostService implements INativeHostService {
@@ -240,6 +240,16 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	//#region Lifecycle
 
 	focus(targetWindow: Window, options?: { mode?: FocusMode }): Promise<void> {
+		const hucodeFocus = focusHucodeHostedOmniWorkbench(
+			this.environmentService,
+			this.hucodeHostedShellService,
+			getWindowId(targetWindow) === this.nativeHostService.windowId,
+			options?.mode
+		);
+		if (hucodeFocus) {
+			return hucodeFocus;
+		}
+
 		return this.nativeHostService.focusWindow({
 			mode: options?.mode,
 			targetWindowId: getWindowId(targetWindow)

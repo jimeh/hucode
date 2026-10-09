@@ -197,7 +197,9 @@ export class DesktopHostedShellServiceAdapter extends Disposable
 		return this.runOperation(shell => shell.reopenSelfInNormalWindow());
 	}
 	reloadSelf() { return this.runOperation(shell => shell.reloadSelf()); }
-	focusSelf() { return this.runOperation(shell => shell.focusSelf()); }
+	focusSelf(options?: Parameters<IHucodeHostedShellService['focusSelf']>[0]) {
+		return this.runOperation(shell => shell.focusSelf(options));
+	}
 	focusShell() { return this.runOperation(shell => shell.focusShell()); }
 	requestShellAction(action: Parameters<
 		IHucodeHostedShellService['requestShellAction']

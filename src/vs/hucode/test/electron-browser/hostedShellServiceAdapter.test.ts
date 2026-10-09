@@ -71,7 +71,10 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				reopenSelfInNormalWindow: async () =>
 					HucodeHostedShellOperationOutcome.Accepted,
 				reloadSelf: async () => HucodeHostedShellOperationOutcome.Accepted,
-				focusSelf: async () => HucodeHostedShellOperationOutcome.Accepted,
+				focusSelf: async options => {
+					calls.push(`focus:${options?.force}`);
+					return HucodeHostedShellOperationOutcome.Accepted;
+				},
 				focusShell: async () => HucodeHostedShellOperationOutcome.Accepted,
 				requestShellAction: async action => {
 					calls.push(`action:${action}`);
@@ -138,10 +141,15 @@ suite('DesktopHostedShellServiceAdapter', () => {
 				(await adapter.captureSelfScreenshot())?.toString(),
 				'self'
 			);
+			assert.strictEqual(
+				await adapter.focusSelf({ force: true }),
+				HucodeHostedShellOperationOutcome.Accepted
+			);
 			assert.deepStrictEqual(calls, [
 				'appearance',
 				'action:addProject',
 				'paste',
+				'focus:true',
 			]);
 		});
 
