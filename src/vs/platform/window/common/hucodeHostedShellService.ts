@@ -384,6 +384,15 @@ export interface IHucodeHostedShellAuthorityState {
 	readonly navigationSnapshot?: IHucodeHostedNavigationSnapshot;
 }
 
+/** Options for a hosted workbench that asks for keyboard focus. */
+export interface IHucodeHostedFocusSelfOptions {
+	/**
+	 * Also activates the application when it is inactive, as a native menu
+	 * can run an action there. Without it only the owning window is raised.
+	 */
+	readonly force?: boolean;
+}
+
 /**
  * Platform delegate invoked only with the facade's captured binding.
  * Side-effecting implementations must re-check that binding at their commit
@@ -407,7 +416,10 @@ export interface IHucodeHostedShellDelegate {
 		binding: IHucodeHostedShellBinding
 	): Promise<boolean>;
 	reloadSelf(binding: IHucodeHostedShellBinding): Promise<boolean>;
-	focusSelf(binding: IHucodeHostedShellBinding): Promise<boolean>;
+	focusSelf(
+		binding: IHucodeHostedShellBinding,
+		options?: IHucodeHostedFocusSelfOptions
+	): Promise<boolean>;
 	focusShell(binding: IHucodeHostedShellBinding): Promise<boolean>;
 	requestShellAction(
 		binding: IHucodeHostedShellBinding,
@@ -449,7 +461,9 @@ export interface IHucodeHostedShellService {
 	closeSelf(): Promise<HucodeHostedShellOperationOutcome>;
 	reopenSelfInNormalWindow(): Promise<HucodeHostedShellOperationOutcome>;
 	reloadSelf(): Promise<HucodeHostedShellOperationOutcome>;
-	focusSelf(): Promise<HucodeHostedShellOperationOutcome>;
+	focusSelf(
+		options?: IHucodeHostedFocusSelfOptions
+	): Promise<HucodeHostedShellOperationOutcome>;
 	focusShell(): Promise<HucodeHostedShellOperationOutcome>;
 	requestShellAction(
 		action: HucodeHostedShellAction
@@ -677,7 +691,10 @@ export function createBoundHucodeHostedShellFacade(
 			() => delegate.reopenSelfInNormalWindow(binding)
 		),
 		reloadSelf: () => runCurrent(() => delegate.reloadSelf(binding)),
-		focusSelf: () => runCurrent(() => delegate.focusSelf(binding)),
+		focusSelf: options => runCurrent(() => delegate.focusSelf(
+			binding,
+			{ force: options?.force === true }
+		)),
 		focusShell: () => runCurrent(
 			() => delegate.focusShell(binding),
 			true
@@ -746,7 +763,7 @@ export function createHucodeHostedShellClient(
 		closeSelf: () => remote.closeSelf(),
 		reopenSelfInNormalWindow: () => remote.reopenSelfInNormalWindow(),
 		reloadSelf: () => remote.reloadSelf(),
-		focusSelf: () => remote.focusSelf(),
+		focusSelf: options => remote.focusSelf(options),
 		focusShell: () => remote.focusShell(),
 		requestShellAction: action => remote.requestShellAction(action),
 		navigateToFolder: request => remote.navigateToFolder(request),

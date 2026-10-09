@@ -398,6 +398,31 @@ class TestBrowserWindow extends EventEmitter {
 	getZoomFactor(): number {
 		return 1;
 	}
+
+	minimized = false;
+	focusCalls = 0;
+	private focused = true;
+
+	isMinimized(): boolean {
+		return this.minimized;
+	}
+
+	restore(): void {
+		this.minimized = false;
+	}
+
+	blur(): void {
+		this.focused = false;
+		this.emit('blur');
+	}
+
+	focus(): void {
+		this.focusCalls++;
+		if (!this.focused) {
+			this.focused = true;
+			this.emit('focus');
+		}
+	}
 }
 
 class TestBrowserViewMainService {
@@ -497,6 +522,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly shouldRestoreCandidate?: IResidentHostedWorkspacesControllerOptions[
 		'shouldRestoreCandidate'];
 		readonly beforeRestore?: () => Promise<void>;
+		readonly activateApplication?: () => void;
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -629,6 +655,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				beforeRestore: options.beforeRestore,
 				viewFactory,
 				ipc: ipcMain,
+				activateApplication: options.activateApplication,
 			}
 		));
 
@@ -5976,6 +6003,55 @@ suite('ResidentHostedWorkspacesController', () => {
 			['#00000000', '#000000']
 		);
 	});
+
+	test('bound focus raises the owner window and keeps focus off the shell',
+		async () => {
+			const alpha = createWorktree('alpha');
+			let applicationActivations = 0;
+			const { controller, viewFactory, window } = createController({
+				activateApplication: () => applicationActivations++,
+			});
+			const ownerWindow = window.win as unknown as TestBrowserWindow;
+			const shellWebContents = window.win!.webContents as unknown as
+				TestWebContents;
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			const binding = controller.acquireHostedShellBinding(1)!;
+			const focused: string[] = [];
+			shellWebContents.on('focus', () => focused.push('shell'));
+			viewFactory.views[0].rawWebContents.on(
+				'focus',
+				() => focused.push('workspace')
+			);
+
+			// The window blurs while the shell holds the keyboard, so its
+			// next focus event would restore the shell.
+			viewFactory.views[0].rawWebContents.blur();
+			shellWebContents.focus();
+			ownerWindow.blur();
+			ownerWindow.minimized = true;
+			focused.length = 0;
+
+			assert.strictEqual(controller.focusHostedShellSelf(binding), true);
+			assert.deepStrictEqual({
+				focused: [...new Set(focused)],
+				focusCalls: ownerWindow.focusCalls,
+				minimized: ownerWindow.minimized,
+				applicationActivations,
+			}, {
+				focused: ['workspace'],
+				focusCalls: 1,
+				minimized: false,
+				applicationActivations: 0,
+			});
+
+			assert.strictEqual(
+				controller.focusHostedShellSelf(binding, { force: true }),
+				true
+			);
+			assert.strictEqual(applicationActivations, 1);
+		});
 
 	test('bound paste, screenshot, focus, and action never retarget',
 		async () => {

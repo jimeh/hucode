@@ -333,6 +333,55 @@ suite('HucodeHostedShellService', () => {
 		]);
 	});
 
+	test('reduces caller-supplied focus options to a boolean', async () => {
+		const binding: IHucodeHostedShellBinding = {
+			windowId: 1,
+			instanceId: 'self',
+			connectionGeneration: 1,
+		};
+		const received: unknown[] = [];
+		const facade = createBoundHucodeHostedShellFacade(binding, {
+			onDidChangeState: Event.None,
+			getState: async () => ({
+				connectionGeneration: 1,
+				disposed: false,
+				projectsSidebarVisible: true,
+				projectSwitcherCanGoBack: false,
+				projectSwitcherCanGoForward: false,
+				instances: [{
+					instanceId: 'self',
+					state: 'loaded',
+					visible: false,
+				}],
+			}),
+			notifyReady: async () => undefined,
+			closeSelf: async () => true,
+			reopenSelfInNormalWindow: async () => true,
+			reloadSelf: async () => true,
+			focusSelf: async (_current, options) => {
+				received.push(options);
+				return true;
+			},
+			focusShell: async () => true,
+			requestShellAction: async () => true,
+			navigateToFolder: async () =>
+				HucodeHostedShellOperationOutcome.Accepted,
+			triggerPasteInSelf: async () => true,
+			captureSelfScreenshot: async () => undefined,
+		});
+
+		await facade.focusSelf();
+		await facade.focusSelf({ force: true });
+		await facade.focusSelf(
+			{ force: 'yes', extra: 1 } as unknown as { force: boolean }
+		);
+
+		assert.deepStrictEqual(
+			received,
+			[{ force: false }, { force: true }, { force: false }]
+		);
+	});
+
 	test('filters sibling-only state events from the bound projection', () => {
 		const emitter = new Emitter<IHucodeHostedShellAuthorityState>();
 		const binding: IHucodeHostedShellBinding = {

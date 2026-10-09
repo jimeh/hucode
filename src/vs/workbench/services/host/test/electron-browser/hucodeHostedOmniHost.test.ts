@@ -8,7 +8,7 @@ import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { INativeHostService } from '../../../../../platform/native/common/native.js';
+import { FocusMode, INativeHostService } from '../../../../../platform/native/common/native.js';
 import { IRectangle } from '../../../../../platform/window/common/window.js';
 import {
 	HUCODE_UNAVAILABLE_HOSTED_SHELL_STATE,
@@ -17,7 +17,7 @@ import {
 	IHucodeHostedShellState,
 } from '../../../../../platform/window/common/hucodeHostedShellService.js';
 import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
-import { getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from '../../electron-browser/hucodeHostedOmniHost.js';
+import { focusHucodeHostedOmniWorkbench, getHucodeHostedOmniScreenshot, HucodeHostedOmniFocusTracker } from '../../electron-browser/hucodeHostedOmniHost.js';
 
 suite('HucodeHostedOmniHost', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
@@ -70,6 +70,9 @@ suite('HucodeHostedOmniHost', () => {
 			new Emitter<IHucodeHostedShellState>()
 		);
 		const screenshots: { rect?: IRectangle }[] = [];
+		const focusRequests: Parameters<
+			IHucodeHostedShellService['focusSelf']
+		>[0][] = [];
 		const unavailable = async () =>
 			HucodeHostedShellOperationOutcome.Unavailable;
 		let getState = async () => state;
@@ -86,7 +89,10 @@ suite('HucodeHostedOmniHost', () => {
 			closeSelf: unavailable,
 			reopenSelfInNormalWindow: unavailable,
 			reloadSelf: unavailable,
-			focusSelf: unavailable,
+			async focusSelf(options) {
+				focusRequests.push(options);
+				return HucodeHostedShellOperationOutcome.Accepted;
+			},
 			focusShell: unavailable,
 			requestShellAction: unavailable,
 			navigateToFolder: unavailable,
@@ -103,6 +109,7 @@ suite('HucodeHostedOmniHost', () => {
 			service,
 			stateEmitter,
 			screenshots,
+			focusRequests,
 			setState(nextState: IHucodeHostedShellState): void {
 				state = nextState;
 			},
@@ -274,5 +281,51 @@ suite('HucodeHostedOmniHost', () => {
 			),
 			undefined
 		);
+	});
+
+	test('focuses the hosted workbench in place of its owner window', async () => {
+		const shell = createShellService();
+		const hosted = environment({ isHostedOmniWorkspace: true });
+
+		await focusHucodeHostedOmniWorkbench(
+			hosted,
+			shell.service,
+			true,
+			undefined
+		);
+		await focusHucodeHostedOmniWorkbench(
+			hosted,
+			shell.service,
+			true,
+			FocusMode.Force
+		);
+		assert.deepStrictEqual(
+			shell.focusRequests,
+			[{ force: false }, { force: true }]
+		);
+
+		// These keep the native window focus: a regular workbench, another
+		// window such as an auxiliary one, and a notification-only request.
+		assert.deepStrictEqual([
+			focusHucodeHostedOmniWorkbench(
+				environment({}),
+				shell.service,
+				true,
+				FocusMode.Force
+			),
+			focusHucodeHostedOmniWorkbench(
+				hosted,
+				shell.service,
+				false,
+				FocusMode.Force
+			),
+			focusHucodeHostedOmniWorkbench(
+				hosted,
+				shell.service,
+				true,
+				FocusMode.Notify
+			),
+		], [undefined, undefined, undefined]);
+		assert.strictEqual(shell.focusRequests.length, 2);
 	});
 });
