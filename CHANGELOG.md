@@ -2,6 +2,13 @@
 
 All notable changes to Hucode are documented in this file.
 
+## 0.0.92 - 2026-10-09
+
+### Bug Fixes
+
+- **omni:** keep focus in the hosted workbench after context menu actions (#237)
+- **web:** restore profile commands in serve-web shell and regular workbenches (#236)
+
 ## 0.0.91 - 2026-10-07
 
 ### Features
