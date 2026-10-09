@@ -354,10 +354,10 @@ dependencies, and initializes or updates the worktree-local CodeGraph index.
   capability, which raises the window and lands on the calling view. Upstream
   calls `hostService.focus(window, { mode: Force })` before every native
   context-menu action, so a misroute moves the keyboard to Projects after each
-  one, and a rename input opened by the action never receives typing. Two
-  upstream callers still reach `nativeHostService.focusWindow` directly and
-  are not rerouted: `handleURL` in the native `urlService.ts` and the
-  "Switch to Main Window" action.
+  one, and a rename input opened by the action never receives typing.
+  Upstream callers that reach `nativeHostService.focusWindow` directly are
+  not rerouted: `handleURL` in the native `urlService.ts`, and in
+  `windowActions.ts` the "Switch Window" pick and "Switch to Main Window".
 - Electron `did-start-loading` includes subframe activity. Invalidate a hosted
   shell binding only for a `did-start-navigation` event that is both main-frame
   and cross-document; keep load events for renderer trust bookkeeping.
