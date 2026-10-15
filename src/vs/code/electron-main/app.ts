@@ -42,6 +42,7 @@ import { ipcBrowserViewGroupChannelName } from '../../platform/browserView/commo
 import { BrowserViewMainService, IBrowserViewMainService } from '../../platform/browserView/electron-main/browserViewMainService.js';
 import { BrowserViewGroupMainService, IBrowserViewGroupMainService } from '../../platform/browserView/electron-main/browserViewGroupMainService.js';
 import { IProjectManagerMainService } from '../../platform/projectManager/electron-main/projectManager.js';
+import { createProjectManagerChannel } from '../../platform/projectManager/common/projectManagerChannel.js';
 import {
 	getProjectSwitcherGitConsumerId,
 	PROJECT_MANAGER_CHANNEL_NAME,
@@ -1484,7 +1485,7 @@ export class CodeApplication extends Disposable {
 
 		// Hucode Project Manager
 		const projectManagerService = accessor.get(IProjectManagerMainService);
-		const projectManagerChannel = ProxyChannel.fromService(
+		const projectManagerChannel = createProjectManagerChannel(
 			projectManagerService,
 			disposables
 		);
