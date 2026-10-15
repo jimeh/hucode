@@ -118,18 +118,21 @@ import {
 import { bindEditorMigrationWriterLease, EditorMigrationWriterLeaseAuthority } from './migration/editorMigrationWriterLease.js';
 import {
 	admitHucodeRegularWorkbench,
-	canonicalizeDesktopWorkbenchPath,
-	createHucodeDesktopRestoreCandidates,
 	createHucodeDesktopOwnershipState,
+	getHucodeDesktopRestoreArbitrationPaths,
+	getHucodeDesktopWorkbenchPathOf,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
 	HucodeRegularWindowOwnershipLifetimes,
+	HucodeRegularWindowOwnershipReconciler,
 	type HucodeDesktopWorkbenchRouteOutcome,
 	type HucodeDesktopWorkbenchTransferRecoveryOutcome,
+	type IHucodeDesktopRestoreArbitrationSource,
 	type IHucodeDesktopWorkbenchOwnership,
 	type HucodeRegularWorkbenchAdmissionOutcome,
 	type HucodeRegularWorkbenchOpenAttempt,
-	selectHucodeDesktopRestoreWinners,
-	projectHucodeDesktopRetainedRestoreWorkbenches,
+	resolveHucodeDesktopWorkbenchPath,
+	resolveHucodeDesktopWorkbenchPaths,
+	selectHucodeDesktopRestoreCandidates,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 } from './desktopWorkbenchOwnership.js';
@@ -183,6 +186,8 @@ export class HucodeShellMainService extends Disposable
 		HucodeDesktopWorkbenchOwnershipCoordinator;
 	private readonly regularWindowOwnershipLifetimes:
 		HucodeRegularWindowOwnershipLifetimes;
+	private readonly regularWindowOwnershipReconciler:
+		HucodeRegularWindowOwnershipReconciler<ICodeWindow>;
 	private regularAdmissionId = 0;
 	private ownershipBroadcastPending = false;
 	private readonly onboarding: OnboardingMain;
@@ -225,6 +230,27 @@ export class HucodeShellMainService extends Disposable
 		this.regularWindowOwnershipLifetimes = this._register(
 			new HucodeRegularWindowOwnershipLifetimes(
 				this.ownershipCoordinator
+			)
+		);
+		this.regularWindowOwnershipReconciler = this._register(
+			new HucodeRegularWindowOwnershipReconciler<ICodeWindow>(
+				this.ownershipCoordinator,
+				{
+					getWorkspacePath: window => {
+						const workspace = window.openedWorkspace;
+						const resource = isSingleFolderWorkspaceIdentifier(workspace)
+							? workspace.uri
+							: workspace?.configPath;
+						return resource?.scheme === 'file'
+							? resource.fsPath
+							: undefined;
+					},
+					isCurrent: window =>
+						this.windowsMainService.getWindowById(window.id) ===
+						window &&
+						!!window.win &&
+						!window.win.isDestroyed(),
+				}
 			)
 		);
 
@@ -303,26 +329,20 @@ export class HucodeShellMainService extends Disposable
 		));
 	}
 
+	/** Reconciles one window's regular ownership in the background. */
 	private reconcileRegularWindowOwnership(window: ICodeWindow): void {
-		if (window.isOmniWindow) {
-			return;
-		}
-		const workspace = window.openedWorkspace;
-		const resource = isSingleFolderWorkspaceIdentifier(workspace)
-			? workspace.uri
-			: workspace?.configPath;
-		const claims = resource?.scheme === 'file'
-			? [{
-				path: resource.fsPath,
-				owner: {
-					kind: 'regular' as const,
-					windowId: window.id,
-				},
-			}]
-			: [];
-		this.ownershipCoordinator.reconcile(
-			owner => owner.kind === 'regular' && owner.windowId === window.id,
-			claims
+		this.regularWindowOwnershipReconciler.reconcile(window).catch(error =>
+			this.logService.warn(
+				'[HucodeShellMainService] Failed to reconcile regular window ' +
+				`ownership for window ${window.id}: ${error}`
+			)
+		);
+	}
+
+	/** Reconciles every window, resolving first and applying in one turn. */
+	private reconcileAllRegularWindowOwnership(): Promise<void> {
+		return this.regularWindowOwnershipReconciler.reconcileAll(
+			this.windowsMainService.getWindows()
 		);
 	}
 
@@ -345,9 +365,10 @@ export class HucodeShellMainService extends Disposable
 			>;
 		}
 	): Promise<HucodeRegularWorkbenchAdmissionOutcome<ICodeWindow>> {
-		for (const window of this.windowsMainService.getWindows()) {
-			this.reconcileRegularWindowOwnership(window);
-		}
+		const [, path] = await Promise.all([
+			this.reconcileAllRegularWindowOwnership(),
+			resolveHucodeDesktopWorkbenchPath(workbenchPath),
+		]);
 		for (const window of this.windowsMainService.getWindows()
 			.filter(candidate => candidate.isOmniWindow)) {
 			await this.getOrCreateController(window.id).ensureRestored();
@@ -358,7 +379,7 @@ export class HucodeShellMainService extends Disposable
 		};
 		return admitHucodeRegularWorkbench({
 			coordinator: this.ownershipCoordinator,
-			path: workbenchPath,
+			path,
 			pendingOwner,
 			openRegularWindow: request.openRegularWindow,
 			resolveCurrent: ownership => this.resolveRegularAdmissionOwner(
@@ -873,9 +894,10 @@ export class HucodeShellMainService extends Disposable
 		worktreePath: string,
 		excludedWindowId?: number
 	): Promise<IHucodeHostedWorkspaceOwner | undefined> {
-		for (const window of this.windowsMainService.getWindows()) {
-			this.reconcileRegularWindowOwnership(window);
-		}
+		const [, path] = await Promise.all([
+			this.reconcileAllRegularWindowOwnership(),
+			resolveHucodeDesktopWorkbenchPath(worktreePath),
+		]);
 		const omniWindows = this.windowsMainService.getWindows()
 			.filter(window => window.isOmniWindow)
 			.toSorted((a, b) => b.lastFocusTime - a.lastFocusTime);
@@ -884,7 +906,7 @@ export class HucodeShellMainService extends Disposable
 			await controller.ensureRestored();
 		}
 
-		const lookup = this.ownershipCoordinator.lookup(worktreePath);
+		const lookup = this.ownershipCoordinator.lookup(path);
 		if (lookup.kind === 'absent' ||
 			lookup.ownership.owner.kind !== 'hosted' ||
 			lookup.ownership.owner.windowId === excludedWindowId) {
@@ -928,9 +950,10 @@ export class HucodeShellMainService extends Disposable
 		beforeCreate?: () => Promise<void>
 	): Promise<HucodeDesktopWorkbenchRouteOutcome> {
 		try {
-			for (const candidate of this.windowsMainService.getWindows()) {
-				this.reconcileRegularWindowOwnership(candidate);
-			}
+			let [, path] = await Promise.all([
+				this.reconcileAllRegularWindowOwnership(),
+				resolveHucodeDesktopWorkbenchPath(worktreePath),
+			]);
 			for (const window of this.windowsMainService.getWindows()
 				.filter(candidate => candidate.isOmniWindow)) {
 				await this.getOrCreateController(window.id).ensureRestored();
@@ -940,7 +963,7 @@ export class HucodeShellMainService extends Disposable
 			}
 
 			for (let attempt = 0; attempt < 4; attempt++) {
-				const lookup = this.ownershipCoordinator.lookup(worktreePath);
+				const lookup = this.ownershipCoordinator.lookup(path);
 				if (lookup.kind === 'absent') {
 					if (!projectId) {
 						const target = await ensureHucodeHostedFolderInCatalog(
@@ -951,7 +974,17 @@ export class HucodeShellMainService extends Disposable
 							return { kind: 'superseded' };
 						}
 						projectId = target.projectId;
-						worktreePath = target.worktreePath;
+						if (target.worktreePath !== worktreePath) {
+							// The catalog can canonicalize the folder; key
+							// ownership by the path that is actually opened.
+							worktreePath = target.worktreePath;
+							path = await resolveHucodeDesktopWorkbenchPath(
+								worktreePath
+							);
+							if (!canApply()) {
+								return { kind: 'superseded' };
+							}
+						}
 						this.globalCatalog = target.catalog;
 						this.synchronizeControllerCatalogs(this.globalCatalog);
 					}
@@ -966,7 +999,7 @@ export class HucodeShellMainService extends Disposable
 					if (!canApply()) {
 						return { kind: 'superseded' };
 					}
-					const opened = this.ownershipCoordinator.lookup(worktreePath);
+					const opened = this.ownershipCoordinator.lookup(path);
 					if (opened.kind === 'absent') {
 						return { kind: 'failed' };
 					}
@@ -983,7 +1016,7 @@ export class HucodeShellMainService extends Disposable
 				if (lookup.ownership.phase === 'reserved' ||
 					lookup.ownership.phase === 'transferring') {
 					const pending = this.ownershipCoordinator.reserve(
-						worktreePath,
+						path,
 						{
 							kind: 'hosted',
 							windowId,
@@ -1038,7 +1071,7 @@ export class HucodeShellMainService extends Disposable
 				if (!canApply()) {
 					return { kind: 'superseded' };
 				}
-				const current = this.ownershipCoordinator.lookup(worktreePath);
+				const current = this.ownershipCoordinator.lookup(path);
 				if (current.kind === 'current-owner' &&
 					current.ownership.owner.kind === 'hosted' &&
 					current.ownership.owner.windowId === owner.windowId) {
@@ -1100,10 +1133,11 @@ export class HucodeShellMainService extends Disposable
 	}
 
 	async focusNormalWindowByPath(worktreePath: string): Promise<boolean> {
-		for (const candidate of this.windowsMainService.getWindows()) {
-			this.reconcileRegularWindowOwnership(candidate);
-		}
-		const lookup = this.ownershipCoordinator.lookup(worktreePath);
+		const [, path] = await Promise.all([
+			this.reconcileAllRegularWindowOwnership(),
+			resolveHucodeDesktopWorkbenchPath(worktreePath),
+		]);
+		const lookup = this.ownershipCoordinator.lookup(path);
 		const owner = lookup.kind === 'current-owner' &&
 			lookup.ownership.owner.kind === 'regular'
 			? lookup.ownership.owner
@@ -1124,17 +1158,20 @@ export class HucodeShellMainService extends Disposable
 	}
 
 	private async inspectOnboardingTarget(worktreePath: string, profileId?: string): Promise<HucodeOnboardingTarget> {
-		const canonical = canonicalizeDesktopWorkbenchPath(worktreePath);
+		const [, path] = await Promise.all([
+			this.reconcileAllRegularWindowOwnership(),
+			resolveHucodeDesktopWorkbenchPath(worktreePath),
+		]);
+		const canonical = path.canonicalPath;
 		const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
 		for (const window of this.windowsMainService.getWindows()) {
-			this.reconcileRegularWindowOwnership(window);
 			if (window.isOmniWindow) { await this.getOrCreateController(window.id).ensureRestored(); }
 		}
 		const associated = this.userDataProfilesMainService.getProfileForWorkspace(workspace);
 		const imported = this.userDataProfilesMainService.profiles.find(profile => profile.id === profileId && !profile.isDefault && !profile.isTransient && !profile.isAgentsWindowProfile);
 		return {
 			worktreePath: canonical,
-			alreadyOpen: this.ownershipCoordinator.lookup(canonical).kind !== 'absent',
+			alreadyOpen: this.ownershipCoordinator.lookup(path).kind !== 'absent',
 			associatedProfileId: associated?.id,
 			associatedProfileName: associated?.name,
 			importedProfile: imported ? { id: imported.id, name: imported.name } : undefined,
@@ -1145,7 +1182,9 @@ export class HucodeShellMainService extends Disposable
 		let associationSaved = false;
 		let conflict = false;
 		let created = false;
-		const canonical = canonicalizeDesktopWorkbenchPath(request.worktreePath);
+		const canonical = (
+			await resolveHucodeDesktopWorkbenchPath(request.worktreePath)
+		).canonicalPath;
 		const beforeCreate = createOnboardingAssociationCommit(async () => {
 			const workspace = await resolveOnboardingWorkspaceIdentifier(canonical);
 			const saved = await this.userDataProfilesMainService.setProfileForWorkspaceWithAcknowledgement(workspace, request.profileId, request.expectedProfileId);
@@ -1429,7 +1468,9 @@ export class HucodeShellMainService extends Disposable
 		if (!instance) {
 			return false;
 		}
-		const lookup = this.ownershipCoordinator.lookup(instance.worktreePath);
+		const lookup = this.ownershipCoordinator.lookup(
+			await resolveHucodeDesktopWorkbenchPath(instance.worktreePath)
+		);
 		if (lookup.kind !== 'current-owner' ||
 			lookup.ownership.owner.kind !== 'hosted' ||
 			lookup.ownership.owner.instanceId !== instanceId) {
@@ -1539,7 +1580,7 @@ export class HucodeShellMainService extends Disposable
 			projectId
 		);
 		const current = this.ownershipCoordinator.lookup(
-			previousOwnership.canonicalPath
+			getHucodeDesktopWorkbenchPathOf(previousOwnership)
 		);
 		if (current.kind !== 'current-owner') {
 			return { kind: 'failed' };
@@ -1775,8 +1816,8 @@ export class HucodeShellMainService extends Disposable
 						HucodeHostedWorkbenchRestorePolicy
 					>(HUCODE_OMNI_RESTORE_HOSTED_WORKBENCHES_SETTING) ??
 						'active',
-					shouldRestoreCandidate: candidate =>
-						this.isRestoreCandidateWinner(windowId, candidate),
+					selectRestoreCandidates: candidates =>
+						this.selectRestoreCandidateWinners(windowId, candidates),
 					beforeRestore: () => this.desktopWorkbenchMigrationSettled.p,
 				}
 			);
@@ -2053,71 +2094,63 @@ export class HucodeShellMainService extends Disposable
 		}
 	}
 
-	private isRestoreCandidateWinner(
+	/**
+	 * Decides which of one window's restore candidates win cross-window
+	 * arbitration. Resolves every path the arbitration reads once, then
+	 * decides the whole batch synchronously.
+	 */
+	private async selectRestoreCandidateWinners(
 		windowId: number,
-		candidate: IHucodeHostedRestoreCandidate
-	): boolean {
-		const pathsEqual = (left: string, right: string) =>
-			isEqual(left, right, !isLinux);
-		const globalWorkbenches = (this.globalCatalog?.workbenches ?? []).map(
-			workbench => ({
-				id: workbench.id,
-				path: URI.revive(workbench.folderUri).fsPath,
-			})
-		);
-		const windows = this.windowsMainService.getWindows();
-		const candidates = windows
-			.filter(window => window.isOmniWindow)
-			.flatMap(window => createHucodeDesktopRestoreCandidates({
-				windowId: window.id,
-				windowLastFocusTime: window.lastFocusTime,
-				activeWorktreePath: window.config?.omniActiveWorktreePath,
-				residentWorkspaces: (
-					window.config?.omniResidentWorkspaces ?? []
-				).map(entry => ({
-					path: entry.worktreePath,
-					projectId: entry.projectId,
-					lastActiveAt: entry.lastActiveAt,
+		candidates: readonly IHucodeHostedRestoreCandidate[]
+	): Promise<readonly boolean[]> {
+		const source: IHucodeDesktopRestoreArbitrationSource = {
+			globalWorkbenches: (this.globalCatalog?.workbenches ?? []).map(
+				workbench => ({
+					id: workbench.id,
+					path: URI.revive(workbench.folderUri).fsPath,
+				})
+			),
+			windows: this.windowsMainService.getWindows()
+				.filter(window => window.isOmniWindow)
+				.map(window => ({
+					windowId: window.id,
+					windowLastFocusTime: window.lastFocusTime,
+					activeWorktreePath: window.config?.omniActiveWorktreePath,
+					residentWorkspaces: (
+						window.config?.omniResidentWorkspaces ?? []
+					).map(entry => ({
+						path: entry.worktreePath,
+						projectId: entry.projectId,
+						lastActiveAt: entry.lastActiveAt,
+					})),
+					retainedWorkbenches: (
+						window.config?.omniRetainedWorkbenches ?? []
+					).map(record => ({
+						path: URI.revive(record.folderUri).fsPath,
+						id: record.id,
+						desiredState: record.desiredState,
+						lastActiveAt: record.lastActiveAt,
+					})),
+					overlays: window.config?.omniWorkbenchOverlays ?? [],
+					pendingAdoptions: (
+						window.config?.omniPendingWorkbenchAdoptions ?? []
+					).map(pending => ({
+						path: pending.worktreePath,
+						desiredState: pending.desiredState,
+						lastActiveAt: pending.lastActiveAt,
+					})),
 				})),
-				retainedWorkbenches:
-					projectHucodeDesktopRetainedRestoreWorkbenches({
-						globalWorkbenches,
-						overlays: window.config?.omniWorkbenchOverlays ?? [],
-						legacyRetainedWorkbenches: (
-							window.config?.omniRetainedWorkbenches ?? []
-						).map(record => ({
-							path: URI.revive(record.folderUri).fsPath,
-							id: record.id,
-							desiredState: record.desiredState,
-							lastActiveAt: record.lastActiveAt,
-						})),
-						pendingAdoptions: (
-							window.config?.omniPendingWorkbenchAdoptions ?? []
-						).map(pending => ({
-							path: pending.worktreePath,
-							desiredState: pending.desiredState,
-							lastActiveAt: pending.lastActiveAt,
-						})),
-					}, pathsEqual),
-			}, pathsEqual));
-		const winner = Array.from(
-			selectHucodeDesktopRestoreWinners(candidates).values()
-		).find(entry => isEqual(
-			canonicalizeDesktopWorkbenchPath(entry.path),
-			canonicalizeDesktopWorkbenchPath(candidate.path),
-			!isLinux
-		));
-		if (winner?.windowId !== windowId) {
-			return false;
-		}
-		if (winner.stableInstanceId === candidate.stableInstanceId) {
-			return true;
-		}
-		return !!windows.find(window => window.id === windowId)?.config
-			?.omniPendingWorkbenchAdoptions?.some(pending =>
-				pending.desiredState === 'loaded' &&
-				pathsEqual(pending.worktreePath, candidate.path)
-			);
+		};
+		const resolvePath = await resolveHucodeDesktopWorkbenchPaths(
+			getHucodeDesktopRestoreArbitrationPaths(source, candidates)
+		);
+		return selectHucodeDesktopRestoreCandidates(
+			windowId,
+			candidates,
+			source,
+			resolvePath,
+			{ pathsEqual: (left, right) => isEqual(left, right, !isLinux) }
+		);
 	}
 
 	private trackTrust(

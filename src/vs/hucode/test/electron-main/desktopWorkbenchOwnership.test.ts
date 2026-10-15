@@ -4,7 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { promises as fs } from 'fs';
+import { tmpdir } from 'os';
+import { DeferredPromise } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
+import { join } from '../../../base/common/path.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from
 	'../../../base/test/common/utils.js';
 import {
@@ -12,6 +16,7 @@ import {
 	HucodeDesktopWorkbenchOwnershipCoordinator,
 	HucodeRegularWindowLoadCoordinator,
 	HucodeRegularWindowOwnershipLifetimes,
+	HucodeRegularWindowOwnershipReconciler,
 	createHucodeDesktopRestoreCandidates,
 	createHucodeDesktopOwnershipState,
 	discardHucodeFailedRegularWindowTarget,
@@ -21,10 +26,14 @@ import {
 	shouldDiscardHucodeRegularWindowAfterOpenFailure,
 	shouldSettleHucodeNativeOpenWaitMarkerAfterAdmission,
 	shouldAwaitHucodeRegularWindowLoadCommit,
+	type HucodeCanonicalWorkbenchPath,
 	type HucodeDesktopWorkbenchOwner,
 	type IHucodeDesktopRestoreCandidate,
+	type IHucodeDesktopWorkbenchPath,
 	selectHucodeDesktopRestoreWinners,
 	projectHucodeDesktopRetainedRestoreWorkbenches,
+	resolveHucodeDesktopWorkbenchPath,
+	selectHucodeDesktopRestoreCandidates,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 	validateHucodeDesktopHostedOwnership,
 	waitForHucodeRegularWindowLoadCommit,
@@ -51,16 +60,26 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	});
 	const createCoordinator = (isCaseSensitive = true) =>
 		new HucodeDesktopWorkbenchOwnershipCoordinator({
-			canonicalizePath: path => path,
 			isCaseSensitive,
 			now: () => 100,
 		});
+	/** Builds a resolved path; the canonical key defaults to the display path. */
+	const target = (
+		displayPath: string,
+		canonicalPath = displayPath
+	): IHucodeDesktopWorkbenchPath => ({
+		displayPath,
+		canonicalPath: canonicalPath as HucodeCanonicalWorkbenchPath,
+	});
+	/** Resolves `/alias` to `/real`, standing in for a symlinked folder. */
+	const aliasTarget = (path: string) =>
+		target(path, path.replace('/alias', '/real'));
 
 	test('reserves, publishes, and reports a current owner', () => {
 		const coordinator = createCoordinator();
-		assert.deepStrictEqual(coordinator.lookup('/repo'), { kind: 'absent' });
+		assert.deepStrictEqual(coordinator.lookup(target('/repo')), { kind: 'absent' });
 
-		const reservation = coordinator.reserve('/repo', hosted(1, 'alpha'));
+		const reservation = coordinator.reserve(target('/repo'), hosted(1, 'alpha'));
 		assert.strictEqual(reservation.kind, 'reserved');
 		if (reservation.kind !== 'reserved') {
 			return;
@@ -69,15 +88,15 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			coordinator.publish(reservation.reservation).kind,
 			'published'
 		);
-		const current = coordinator.reserve('/repo', hosted(2, 'bravo'));
+		const current = coordinator.reserve(target('/repo'), hosted(2, 'bravo'));
 		assert.strictEqual(current.kind, 'current-owner');
 		assert.deepStrictEqual(current.ownership.owner, hosted(1, 'alpha'));
 	});
 
 	test('joins a concurrent reservation until it publishes', async () => {
 		const coordinator = createCoordinator();
-		const first = coordinator.reserve('/repo', hosted(1, 'alpha'));
-		const second = coordinator.reserve('/repo', hosted(2, 'bravo'));
+		const first = coordinator.reserve(target('/repo'), hosted(1, 'alpha'));
+		const second = coordinator.reserve(target('/repo'), hosted(2, 'bravo'));
 		assert.strictEqual(first.kind, 'reserved');
 		assert.strictEqual(second.kind, 'reserved-conflict');
 		if (first.kind !== 'reserved' ||
@@ -97,8 +116,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 	test('lets a waiter retry after failed creation releases', async () => {
 		const coordinator = createCoordinator();
-		const first = coordinator.reserve('/repo', hosted(1, 'alpha'));
-		const second = coordinator.reserve('/repo', hosted(2, 'bravo'));
+		const first = coordinator.reserve(target('/repo'), hosted(1, 'alpha'));
+		const second = coordinator.reserve(target('/repo'), hosted(2, 'bravo'));
 		if (first.kind !== 'reserved' ||
 			second.kind !== 'reserved-conflict') {
 			assert.fail('expected a reservation conflict');
@@ -108,7 +127,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		assert.deepStrictEqual(await second.settled, { kind: 'released' });
 		assert.strictEqual(
-			coordinator.reserve('/repo', hosted(2, 'bravo')).kind,
+			coordinator.reserve(target('/repo'), hosted(2, 'bravo')).kind,
 			'reserved'
 		);
 	});
@@ -116,7 +135,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('routes recovering ownership instead of waiting for recovery', async () => {
 		const coordinator = createCoordinator();
 		const seeded = coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'recovering'),
 		});
 		if (seeded.kind === 'conflict') {
@@ -124,7 +143,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		}
 		coordinator.markTransferring(seeded.token);
 		const hostedWaitingBeforeRecovery = coordinator.reserve(
-			'/repo',
+			target('/repo'),
 			hosted(2, 'waiting-before-recovery')
 		);
 		assert.strictEqual(
@@ -135,7 +154,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		const routing = admitHucodeRegularWorkbench({
 			coordinator,
-			path: '/repo',
+			path: target('/repo'),
 			pendingOwner: regular(-1),
 			resolveCurrent: async ownership => {
 				resolutions++;
@@ -155,7 +174,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		assert.strictEqual(resolutions, 0);
 		coordinator.markRecovering(seeded.token);
 		const hostedWaiting = coordinator.reserve(
-			'/repo',
+			target('/repo'),
 			hosted(2, 'waiting')
 		);
 		assert.strictEqual(hostedWaiting.kind, 'reserved-conflict');
@@ -193,8 +212,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		const initialDestroyed = new Emitter<void>();
 		const openedClosed = new Emitter<void>();
 		const openedDestroyed = new Emitter<void>();
-		coordinator.seed({ path: '/initial', owner: regular(1) });
-		coordinator.seed({ path: '/opened', owner: regular(2) });
+		coordinator.seed({ path: target('/initial'), owner: regular(1) });
+		coordinator.seed({ path: target('/opened'), owner: regular(2) });
 		lifetimes.add({
 			id: 1,
 			onDidClose: initialClosed.event,
@@ -212,14 +231,14 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		});
 
 		initialClosed.fire();
-		assert.deepStrictEqual(coordinator.lookup('/initial'), {
+		assert.deepStrictEqual(coordinator.lookup(target('/initial')), {
 			kind: 'absent',
 		});
-		assert.strictEqual(coordinator.lookup('/opened').kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(target('/opened')).kind, 'current-owner');
 		initialDestroyed.fire();
-		assert.strictEqual(coordinator.lookup('/opened').kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(target('/opened')).kind, 'current-owner');
 		openedDestroyed.fire();
-		assert.deepStrictEqual(coordinator.lookup('/opened'), {
+		assert.deepStrictEqual(coordinator.lookup(target('/opened')), {
 			kind: 'absent',
 		});
 
@@ -236,7 +255,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		const openGate = new Promise<void>(resolve => finishOpen = resolve);
 		const opening = admitHucodeRegularWorkbench({
 			coordinator,
-			path: '/repo',
+			path: target('/repo'),
 			pendingOwner: regular(-1),
 			resolveCurrent: async () => ({ kind: 'stale' }),
 			openRegularWindow: async () => {
@@ -249,7 +268,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				};
 			},
 		});
-		const pending = coordinator.lookup('/repo');
+		const pending = coordinator.lookup(target('/repo'));
 		assert.strictEqual(
 			pending.kind === 'current-owner' && pending.ownership.phase,
 			'reserved'
@@ -261,7 +280,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			filesDelivered: true,
 			payloadDisposition: 'delivered',
 		});
-		const owner = coordinator.lookup('/repo');
+		const owner = coordinator.lookup(target('/repo'));
 		assert.deepStrictEqual(
 			owner.kind === 'current-owner' && owner.ownership.owner,
 			regular(7)
@@ -275,7 +294,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				const failure = new Error('load failed');
 				const result = await admitHucodeRegularWorkbench({
 					coordinator,
-					path: '/repo',
+					path: target('/repo'),
 					pendingOwner: regular(-1),
 					resolveCurrent: async () => ({ kind: 'stale' }),
 					openRegularWindow: async () => kind === 'vetoed'
@@ -289,7 +308,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 						error: failure,
 						payloadDisposition: 'preserve',
 					});
-				assert.deepStrictEqual(coordinator.lookup('/repo'), {
+				assert.deepStrictEqual(coordinator.lookup(target('/repo')), {
 					kind: 'absent',
 				});
 			}
@@ -302,7 +321,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		const result = await admitHucodeRegularWorkbench({
 			coordinator,
-			path: '/repo',
+			path: target('/repo'),
 			pendingOwner: regular(-1),
 			resolveCurrent: async () => ({ kind: 'stale' }),
 			openRegularWindow: async () => { throw failure; },
@@ -313,20 +332,25 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			error: failure,
 			payloadDisposition: 'preserve',
 		});
-		assert.deepStrictEqual(coordinator.lookup('/repo'), {
+		assert.deepStrictEqual(coordinator.lookup(target('/repo')), {
 			kind: 'absent',
 		});
 	});
 
 	test('ownership tokens retain their original canonical key', () => {
-		let canonicalization = 0;
+		// The link resolved to one target at admission and was later
+		// retargeted; the token keeps the key it was admitted under.
 		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator({
-			canonicalizePath: () => canonicalization++ === 0
-				? '/canonical/first'
-				: '/canonical/replacement',
 			isCaseSensitive: true,
 		});
-		const reservation = coordinator.reserve('/link', regular(-1));
+		const reservation = coordinator.reserve(
+			target('/link', '/canonical/first'),
+			regular(-1)
+		);
+		assert.strictEqual(
+			coordinator.lookup(target('/link', '/canonical/replacement')).kind,
+			'absent'
+		);
 		assert.strictEqual(reservation.kind, 'reserved');
 		if (reservation.kind !== 'reserved') {
 			return;
@@ -343,11 +367,11 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			const coordinator = createCoordinator();
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async () => ({ kind: 'stale' }),
 				openRegularWindow: async () => {
-					const pending = coordinator.lookup('/repo');
+					const pending = coordinator.lookup(target('/repo'));
 					assert.strictEqual(pending.kind, 'current-owner');
 					if (pending.kind === 'current-owner') {
 						coordinator.release({
@@ -356,7 +380,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 							generation: pending.ownership.generation,
 						});
 					}
-					coordinator.seed({ path: '/repo', owner: regular(9) });
+					coordinator.seed({ path: target('/repo'), owner: regular(9) });
 					return {
 						kind: 'committed',
 						windowId: 7,
@@ -369,7 +393,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				kind: 'superseded',
 				payloadDisposition: 'consumed',
 			});
-			const owner = coordinator.lookup('/repo');
+			const owner = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
 				regular(9)
@@ -380,17 +404,16 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('routes an alias to its current owner and preserves delivery status',
 		async () => {
 			const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator({
-				canonicalizePath: path => path.replace('/alias', '/real'),
 				isCaseSensitive: true,
 			});
 			coordinator.seed({
-				path: '/real/repo',
+				path: aliasTarget('/real/repo'),
 				owner: hosted(2, 'hosted-instance'),
 			});
 			let opened = false;
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/alias/repo',
+				path: aliasTarget('/alias/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					assert.strictEqual(ownership.displayPath, '/real/repo');
@@ -422,13 +445,13 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			async () => {
 				const coordinator = createCoordinator();
 				coordinator.seed({
-					path: '/repo',
+					path: target('/repo'),
 					owner: hosted(2, 'missing'),
 				});
 				let resolutions = 0;
 				const result = await admitHucodeRegularWorkbench({
 					coordinator,
-					path: '/repo',
+					path: target('/repo'),
 					pendingOwner: regular(-1),
 					resolveCurrent: async ownership => {
 						resolutions++;
@@ -445,7 +468,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 				assert.strictEqual(resolutions, 1);
 				assert.strictEqual(result.kind, 'opened');
-				const owner = coordinator.lookup('/repo');
+				const owner = coordinator.lookup(target('/repo'));
 				assert.deepStrictEqual(
 					owner.kind === 'current-owner' && owner.ownership.owner,
 					regular(7)
@@ -458,7 +481,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const original = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(2, 'original'),
 			});
 			assert.notStrictEqual(original.kind, 'conflict');
@@ -469,14 +492,14 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			let opened = false;
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					if (firstResolution) {
 						firstResolution = false;
 						coordinator.release(original.token);
 						const replacement = coordinator.seed({
-							path: '/repo',
+							path: target('/repo'),
 							owner: hosted(3, 'replacement'),
 						});
 						assert.notStrictEqual(replacement.kind, 'conflict');
@@ -503,7 +526,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				payloadDisposition: 'preserve',
 			});
 			assert.strictEqual(opened, false);
-			const owner = coordinator.lookup('/repo');
+			const owner = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
 				hosted(3, 'replacement')
@@ -515,7 +538,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const seeded = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'alpha'),
 			});
 			if (seeded.kind === 'conflict') {
@@ -525,7 +548,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					resolutions++;
@@ -564,7 +587,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 			assert.strictEqual(resolutions, 2);
 			assert.strictEqual(result.kind, 'focused-hosted');
-			const current = coordinator.lookup('/repo');
+			const current = coordinator.lookup(target('/repo'));
 			assert.strictEqual(
 				current.kind === 'current-owner' && current.ownership.phase,
 				'recovering'
@@ -591,7 +614,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			let regularOpenCount = 0;
 			const opening = admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async () => ({
 					kind: 'focused-regular',
@@ -614,7 +637,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			});
 			const competing = admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-2),
 				resolveCurrent: async () => ({
 					kind: 'focused-regular',
@@ -632,7 +655,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				owner => owner.kind === 'regular' && owner.windowId === 7,
 				[]
 			);
-			const pending = coordinator.lookup('/repo');
+			const pending = coordinator.lookup(target('/repo'));
 			assert.strictEqual(
 				pending.kind === 'current-owner' && pending.ownership.phase,
 				'reserved'
@@ -641,10 +664,10 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			load.target = '/repo';
 			const readyReconciliation = coordinator.reconcile(
 				owner => owner.kind === 'regular' && owner.windowId === 7,
-				[{ path: '/repo', owner: regular(7) }]
+				[{ path: target('/repo'), owner: regular(7) }]
 			);
 			assert.strictEqual(readyReconciliation[0].kind, 'conflict');
-			const stillPending = coordinator.lookup('/repo');
+			const stillPending = coordinator.lookup(target('/repo'));
 			assert.strictEqual(
 				stillPending.kind === 'current-owner' &&
 				stillPending.ownership.phase,
@@ -694,7 +717,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			const open = (path: string, pendingWindowId: number) =>
 				admitHucodeRegularWorkbench({
 					coordinator,
-					path,
+					path: target(path),
 					pendingOwner: regular(pendingWindowId),
 					resolveCurrent: async () => ({ kind: 'stale' }),
 					openRegularWindow: () => loads.run(7, async () => {
@@ -735,7 +758,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			await alphaStarted;
 			assert.deepStrictEqual(starts, ['/alpha']);
 			for (const path of ['/alpha', '/bravo']) {
-				const ownership = coordinator.lookup(path);
+				const ownership = coordinator.lookup(target(path));
 				assert.strictEqual(
 					ownership.kind === 'current-owner' && ownership.ownership.phase,
 					'reserved'
@@ -748,10 +771,10 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			await bravoStarted;
 			assert.deepStrictEqual(starts, ['/alpha', '/bravo']);
 			assert.strictEqual(
-				coordinator.lookup('/alpha').kind,
+				coordinator.lookup(target('/alpha')).kind,
 				'current-owner'
 			);
-			const pendingBravo = coordinator.lookup('/bravo');
+			const pendingBravo = coordinator.lookup(target('/bravo'));
 			assert.strictEqual(
 				pendingBravo.kind === 'current-owner' &&
 				pendingBravo.ownership.phase,
@@ -761,14 +784,14 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			load.target = '/bravo';
 			coordinator.reconcile(
 				owner => owner.kind === 'regular' && owner.windowId === 7,
-				[{ path: '/bravo', owner: regular(7) }]
+				[{ path: target('/bravo'), owner: regular(7) }]
 			);
 			ready.fire();
 			assert.strictEqual((await bravo).kind, 'opened');
-			assert.deepStrictEqual(coordinator.lookup('/alpha'), {
+			assert.deepStrictEqual(coordinator.lookup(target('/alpha')), {
 				kind: 'absent',
 			});
-			const currentBravo = coordinator.lookup('/bravo');
+			const currentBravo = coordinator.lookup(target('/bravo'));
 			assert.deepStrictEqual(
 				currentBravo.kind === 'current-owner' &&
 				currentBravo.ownership.owner,
@@ -1101,12 +1124,12 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 	test('stale generations cannot release or publish replacements', () => {
 		const coordinator = createCoordinator();
-		const first = coordinator.reserve('/repo', hosted(1, 'alpha'));
+		const first = coordinator.reserve(target('/repo'), hosted(1, 'alpha'));
 		if (first.kind !== 'reserved') {
 			assert.fail('expected the initial reservation');
 		}
 		coordinator.release(first.reservation);
-		const replacement = coordinator.reserve('/repo', hosted(1, 'bravo'));
+		const replacement = coordinator.reserve(target('/repo'), hosted(1, 'bravo'));
 		if (replacement.kind !== 'reserved') {
 			assert.fail('expected the replacement reservation');
 		}
@@ -1120,7 +1143,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			coordinator.publish(first.reservation).kind,
 			'stale'
 		);
-		const current = coordinator.lookup('/repo');
+		const current = coordinator.lookup(target('/repo'));
 		assert.deepStrictEqual(
 			current.kind === 'current-owner' && current.ownership.owner,
 			hosted(1, 'bravo')
@@ -1130,33 +1153,32 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('uses configured platform path case semantics', () => {
 		const sensitive = createCoordinator(true);
 		const insensitive = createCoordinator(false);
-		const sensitiveReservation = sensitive.reserve('/Repo', regular(1));
-		const insensitiveReservation = insensitive.reserve('/Repo', regular(1));
+		const sensitiveReservation = sensitive.reserve(target('/Repo'), regular(1));
+		const insensitiveReservation = insensitive.reserve(target('/Repo'), regular(1));
 		assert.strictEqual(sensitiveReservation.kind, 'reserved');
 		assert.strictEqual(insensitiveReservation.kind, 'reserved');
 
 		assert.strictEqual(
-			sensitive.reserve('/repo', regular(2)).kind,
+			sensitive.reserve(target('/repo'), regular(2)).kind,
 			'reserved'
 		);
 		assert.strictEqual(
-			insensitive.reserve('/repo', regular(2)).kind,
+			insensitive.reserve(target('/repo'), regular(2)).kind,
 			'reserved-conflict'
 		);
 	});
 
 	test('uses canonical paths as the ownership key', () => {
 		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator({
-			canonicalizePath: path => path.replace('/alias', '/real'),
 			isCaseSensitive: true,
 		});
 
 		const owner = coordinator.seed({
-			path: '/real/repo',
+			path: aliasTarget('/real/repo'),
 			owner: regular(1),
 		});
 		assert.notStrictEqual(owner.kind, 'conflict');
-		const aliasLookup = coordinator.lookup('/alias/repo');
+		const aliasLookup = coordinator.lookup(aliasTarget('/alias/repo'));
 		assert.strictEqual(aliasLookup.kind, 'current-owner');
 		assert.strictEqual(
 			aliasLookup.kind === 'current-owner' &&
@@ -1164,7 +1186,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			'/real/repo'
 		);
 		assert.strictEqual(
-			coordinator.reserve('/alias/repo', hosted(2, 'alpha')).kind,
+			coordinator.reserve(aliasTarget('/alias/repo'), hosted(2, 'alpha')).kind,
 			'current-owner'
 		);
 	});
@@ -1172,42 +1194,42 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('admits unrelated paths without waiting', () => {
 		const coordinator = createCoordinator();
 		assert.strictEqual(
-			coordinator.reserve('/alpha', hosted(1, 'alpha')).kind,
+			coordinator.reserve(target('/alpha'), hosted(1, 'alpha')).kind,
 			'reserved'
 		);
 		assert.strictEqual(
-			coordinator.reserve('/bravo', hosted(2, 'bravo')).kind,
+			coordinator.reserve(target('/bravo'), hosted(2, 'bravo')).kind,
 			'reserved'
 		);
 	});
 
 	test('seeds and reconciles regular and hosted owners', () => {
 		const coordinator = createCoordinator();
-		coordinator.seed({ path: '/regular', owner: regular(1) });
-		coordinator.seed({ path: '/hosted', owner: hosted(2, 'alpha') });
+		coordinator.seed({ path: target('/regular'), owner: regular(1) });
+		coordinator.seed({ path: target('/hosted'), owner: hosted(2, 'alpha') });
 
 		const results = coordinator.reconcile(
 			owner => owner.kind === 'regular' && owner.windowId === 1,
-			[{ path: '/replacement', owner: regular(1) }]
+			[{ path: target('/replacement'), owner: regular(1) }]
 		);
 
 		assert.strictEqual(results[0].kind, 'published');
-		assert.deepStrictEqual(coordinator.lookup('/regular'), {
+		assert.deepStrictEqual(coordinator.lookup(target('/regular')), {
 			kind: 'absent',
 		});
-		assert.strictEqual(coordinator.lookup('/replacement').kind, 'current-owner');
-		assert.strictEqual(coordinator.lookup('/hosted').kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(target('/replacement')).kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(target('/hosted')).kind, 'current-owner');
 
 		coordinator.releaseOwners(owner =>
 			owner.kind === 'hosted' && owner.windowId === 2
 		);
-		assert.deepStrictEqual(coordinator.lookup('/hosted'), { kind: 'absent' });
+		assert.deepStrictEqual(coordinator.lookup(target('/hosted')), { kind: 'absent' });
 	});
 
 	test('keeps a crashed hosted owner discoverable for recovery', () => {
 		const coordinator = createCoordinator();
 		coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'crashed-instance'),
 			phase: 'recovering',
 		});
@@ -1219,7 +1241,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			visible: false,
 			focused: false,
 		};
-		const lookup = coordinator.lookup('/repo');
+		const lookup = coordinator.lookup(target('/repo'));
 		assert.strictEqual(lookup.kind, 'current-owner');
 		if (lookup.kind !== 'current-owner') {
 			return;
@@ -1230,16 +1252,16 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			lookup.ownership,
 			[crashedInstance]
 		), crashedInstance);
-		assert.strictEqual(coordinator.lookup('/repo').kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(target('/repo')).kind, 'current-owner');
 	});
 
 	test('releases a hosted owner whose instance is absent', () => {
 		const coordinator = createCoordinator();
 		coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'missing-instance'),
 		});
-		const lookup = coordinator.lookup('/repo');
+		const lookup = coordinator.lookup(target('/repo'));
 		assert.strictEqual(lookup.kind, 'current-owner');
 		if (lookup.kind !== 'current-owner') {
 			return;
@@ -1250,14 +1272,14 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			lookup.ownership,
 			[]
 		), undefined);
-		assert.deepStrictEqual(coordinator.lookup('/repo'), { kind: 'absent' });
+		assert.deepStrictEqual(coordinator.lookup(target('/repo')), { kind: 'absent' });
 	});
 
 	test('missing hosted instance validation preserves a replacement generation',
 		() => {
 			const coordinator = createCoordinator();
 			const original = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'missing-instance'),
 			});
 			if (original.kind === 'conflict') {
@@ -1265,7 +1287,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			}
 			coordinator.release(original.token);
 			const replacement = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'replacement-instance'),
 			});
 			if (replacement.kind === 'conflict') {
@@ -1277,7 +1299,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				original.ownership,
 				[]
 			), undefined);
-			const current = coordinator.lookup('/repo');
+			const current = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				current.kind === 'current-owner' && current.ownership.owner,
 				hosted(1, 'replacement-instance')
@@ -1309,7 +1331,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			candidate('/window', 1),
 			candidate('/instance', 1, { stableInstanceId: 'bravo' }),
 			candidate('/instance', 1, { stableInstanceId: 'alpha' }),
-		], { canonicalizePath: path => path, isCaseSensitive: true });
+		], target, { isCaseSensitive: true });
 
 		assert.deepStrictEqual(
 			Array.from(winners.values(), winner => [
@@ -1355,7 +1377,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 						desiredState: 'unloaded',
 					},
 				],
-			});
+			}, target);
 
 			assert.deepStrictEqual(candidates.map(candidate => ({
 				path: candidate.path,
@@ -1393,6 +1415,8 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 	test('arbitrates migrated global overlays across Omni windows', () => {
 		const globalWorkbenches = [{ id: 'global', path: '/shared' }];
+		const lowercaseTarget = (path: string) =>
+			target(path, path.toLowerCase());
 		const pathsEqual = (left: string, right: string) =>
 			left.toLowerCase() === right.toLowerCase();
 		const project = (
@@ -1419,13 +1443,14 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 						path: '/shared',
 						desiredState: 'loaded',
 					}],
-				}, pathsEqual),
-		}, pathsEqual);
+				}, lowercaseTarget, pathsEqual),
+		}, lowercaseTarget, pathsEqual);
 		const candidates = [...project(1, 10), ...project(2, 20)];
-		const winners = selectHucodeDesktopRestoreWinners(candidates, {
-			canonicalizePath: path => path.toLowerCase(),
-			isCaseSensitive: true,
-		});
+		const winners = selectHucodeDesktopRestoreWinners(
+			candidates,
+			lowercaseTarget,
+			{ isCaseSensitive: true }
+		);
 
 		assert.deepStrictEqual(candidates.map(candidate => ({
 			windowId: candidate.windowId,
@@ -1451,7 +1476,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('transfers hosted ownership to the opened regular window', async () => {
 		const coordinator = createCoordinator();
 		const seeded = coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'alpha'),
 		});
 		assert.notStrictEqual(seeded.kind, 'conflict');
@@ -1478,7 +1503,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 		assert.strictEqual(result.kind, 'transferred');
 		assert.deepStrictEqual(calls, ['close', 'open']);
-		const current = coordinator.lookup('/repo');
+		const current = coordinator.lookup(target('/repo'));
 		assert.deepStrictEqual(
 			current.kind === 'current-owner' && current.ownership.owner,
 			regular(7)
@@ -1488,7 +1513,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('restores hosted ownership when transfer is vetoed', async () => {
 		const coordinator = createCoordinator();
 		const seeded = coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'alpha'),
 		});
 		if (seeded.kind === 'conflict') {
@@ -1508,7 +1533,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		});
 
 		assert.deepStrictEqual(result, { kind: 'vetoed' });
-		const current = coordinator.lookup('/repo');
+		const current = coordinator.lookup(target('/repo'));
 		assert.strictEqual(
 			current.kind === 'current-owner' && current.ownership.phase,
 			'live'
@@ -1518,7 +1543,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('close veto preserves a same-generation recovering owner', async () => {
 		const coordinator = createCoordinator();
 		const seeded = coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'alpha'),
 		});
 		if (seeded.kind === 'conflict') {
@@ -1541,7 +1566,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		});
 
 		assert.deepStrictEqual(result, { kind: 'superseded' });
-		const current = coordinator.lookup('/repo');
+		const current = coordinator.lookup(target('/repo'));
 		assert.strictEqual(
 			current.kind === 'current-owner' && current.ownership.phase,
 			'recovering'
@@ -1552,7 +1577,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const seeded = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'alpha'),
 			});
 			if (seeded.kind === 'conflict') {
@@ -1571,7 +1596,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 					openRegularWindow: async () => { throw failure; },
 					recoverHostedOwner: async () => {
 						const restored = coordinator.seed({
-							path: '/repo',
+							path: target('/repo'),
 							owner: hosted(1, 'recovered'),
 						});
 						assert.notStrictEqual(restored.kind, 'conflict');
@@ -1594,7 +1619,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				result.kind === 'failed' && result.recovery?.kind,
 				'restored'
 			);
-			const current = coordinator.lookup('/repo');
+			const current = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				current.kind === 'current-owner' && current.ownership.owner,
 				hosted(1, 'recovered')
@@ -1606,7 +1631,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const seeded = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'alpha'),
 			});
 			if (seeded.kind === 'conflict') {
@@ -1619,7 +1644,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				closeHostedOwner: async () => {
 					coordinator.release(seeded.token);
 					const replacement = coordinator.reserve(
-						'/repo',
+						target('/repo'),
 						hosted(2, 'bravo')
 					);
 					assert.strictEqual(replacement.kind, 'reserved');
@@ -1635,7 +1660,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			});
 
 			assert.deepStrictEqual(result, { kind: 'superseded' });
-			const current = coordinator.lookup('/repo');
+			const current = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				current.kind === 'current-owner' && current.ownership.owner,
 				hosted(2, 'bravo')
@@ -1647,7 +1672,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const seeded = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'alpha'),
 			});
 			if (seeded.kind === 'conflict') {
@@ -1661,7 +1686,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				closeHostedOwner: async () => {
 					coordinator.release(seeded.token);
 					coordinator.seed({
-						path: '/repo',
+						path: target('/repo'),
 						owner: hosted(2, 'bravo'),
 					});
 					throw closeFailure;
@@ -1675,7 +1700,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			});
 
 			assert.deepStrictEqual(result, { kind: 'superseded' });
-			const current = coordinator.lookup('/repo');
+			const current = coordinator.lookup(target('/repo'));
 			assert.deepStrictEqual(
 				current.kind === 'current-owner' && current.ownership.owner,
 				hosted(2, 'bravo')
@@ -1687,7 +1712,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 		async () => {
 			const coordinator = createCoordinator();
 			const seeded = coordinator.seed({
-				path: '/repo',
+				path: target('/repo'),
 				owner: hosted(1, 'alpha'),
 			});
 			if (seeded.kind === 'conflict') {
@@ -1702,7 +1727,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			};
 			const result = await admitHucodeRegularWorkbench({
 				coordinator,
-				path: '/repo',
+				path: target('/repo'),
 				pendingOwner: regular(-1),
 				resolveCurrent: async ownership => {
 					resolutions++;
@@ -1714,7 +1739,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 								closeHostedOwner: async () => {
 									coordinator.release(seeded.token);
 									coordinator.seed({
-										path: '/repo',
+										path: target('/repo'),
 										owner: hosted(2, 'replacement'),
 									});
 									return false;
@@ -1762,7 +1787,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 	test('failed transfer recovery cannot displace another owner', async () => {
 		const coordinator = createCoordinator();
 		const seeded = coordinator.seed({
-			path: '/repo',
+			path: target('/repo'),
 			owner: hosted(1, 'alpha'),
 		});
 		if (seeded.kind === 'conflict') {
@@ -1779,7 +1804,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			openRegularWindow: async () => { throw failure; },
 			recoverHostedOwner: async () => {
 				const replacement = coordinator.seed({
-					path: '/repo',
+					path: target('/repo'),
 					owner: hosted(2, 'replacement'),
 				});
 				assert.notStrictEqual(replacement.kind, 'conflict');
@@ -1797,7 +1822,7 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 			result.kind === 'failed' && result.recovery?.kind,
 			'superseded'
 		);
-		const current = coordinator.lookup('/repo');
+		const current = coordinator.lookup(target('/repo'));
 		assert.deepStrictEqual(
 			current.kind === 'current-owner' && current.ownership.owner,
 			hosted(2, 'replacement')
@@ -1806,10 +1831,10 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 
 	test('projects ownership into each Omni session without reservations', () => {
 		const coordinator = createCoordinator();
-		coordinator.seed({ path: '/here', owner: hosted(1, 'here') });
-		coordinator.seed({ path: '/elsewhere', owner: hosted(2, 'elsewhere') });
-		coordinator.seed({ path: '/regular', owner: regular(3) });
-		coordinator.reserve('/pending', regular(0));
+		coordinator.seed({ path: target('/here'), owner: hosted(1, 'here') });
+		coordinator.seed({ path: target('/elsewhere'), owner: hosted(2, 'elsewhere') });
+		coordinator.seed({ path: target('/regular'), owner: regular(3) });
+		coordinator.reserve(target('/pending'), regular(0));
 
 		assert.deepStrictEqual(
 			createHucodeDesktopOwnershipState(1, coordinator.snapshot()),
@@ -1833,5 +1858,229 @@ suite('HucodeDesktopWorkbenchOwnershipCoordinator', () => {
 				phase: 'live',
 			}]
 		);
+	});
+	suite('asynchronous path resolution', () => {
+		interface ITestRegularWindow {
+			readonly id: number;
+			readonly isOmniWindow?: boolean;
+			workspacePath: string | undefined;
+			current: boolean;
+		}
+
+		/** Parks every resolution until the test settles it. */
+		function createHeldResolver() {
+			const pending: {
+				readonly path: string;
+				readonly result: DeferredPromise<IHucodeDesktopWorkbenchPath>;
+			}[] = [];
+			return {
+				resolve: (path: string) => {
+					const result =
+						new DeferredPromise<IHucodeDesktopWorkbenchPath>();
+					pending.push({ path, result });
+					return result.p;
+				},
+				take(): { readonly path: string; settle(canonical: string): void } {
+					const next = pending.shift();
+					assert.ok(next, 'expected a pending resolution');
+					return {
+						path: next.path,
+						settle: canonical =>
+							next.result.complete(target(next.path, canonical)),
+					};
+				},
+			};
+		}
+
+		function createReconciler(
+			coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
+			resolvePath: (path: string) => Promise<IHucodeDesktopWorkbenchPath>
+		) {
+			return new HucodeRegularWindowOwnershipReconciler<ITestRegularWindow>(
+				coordinator,
+				{
+					getWorkspacePath: window => window.workspacePath,
+					isCurrent: window => window.current,
+					resolvePath,
+				}
+			);
+		}
+
+		test('a late reconcile after window destruction seeds nothing',
+			async () => {
+				const coordinator = createCoordinator();
+				const resolver = createHeldResolver();
+				const reconciler = createReconciler(coordinator, resolver.resolve);
+				const window: ITestRegularWindow = {
+					id: 7,
+					workspacePath: '/repo',
+					current: true,
+				};
+
+				const reconciling = reconciler.reconcile(window);
+				const resolution = resolver.take();
+				window.current = false;
+				resolution.settle('/repo');
+				await reconciling;
+
+				assert.deepStrictEqual(coordinator.snapshot(), []);
+				reconciler.dispose();
+			});
+
+		test('an older reconcile that resolves after a newer one is dropped',
+			async () => {
+				const coordinator = createCoordinator();
+				const resolver = createHeldResolver();
+				const reconciler = createReconciler(coordinator, resolver.resolve);
+				const window: ITestRegularWindow = {
+					id: 7,
+					workspacePath: '/link',
+					current: true,
+				};
+
+				const older = reconciler.reconcile(window);
+				const olderResolution = resolver.take();
+				const newer = reconciler.reconcile(window);
+				const newerResolution = resolver.take();
+				newerResolution.settle('/real/new');
+				await newer;
+				olderResolution.settle('/real/old');
+				await older;
+
+				assert.deepStrictEqual(
+					coordinator.snapshot().map(ownership => ({
+						canonicalPath: ownership.canonicalPath,
+						owner: ownership.owner,
+					})),
+					[{ canonicalPath: '/real/new', owner: regular(7) }]
+				);
+				reconciler.dispose();
+			});
+
+		test('reconciling all windows applies their claims together',
+			async () => {
+				const coordinator = createCoordinator();
+				const resolver = createHeldResolver();
+				const reconciler = createReconciler(coordinator, resolver.resolve);
+				const windows: ITestRegularWindow[] = [
+					{ id: 1, workspacePath: '/alpha', current: true },
+					{ id: 2, workspacePath: '/bravo', current: true },
+					{ id: 3, isOmniWindow: true, workspacePath: '/omni', current: true },
+				];
+
+				const reconciling = reconciler.reconcileAll(windows);
+				const alpha = resolver.take();
+				const bravo = resolver.take();
+				alpha.settle('/alpha');
+				await Promise.resolve();
+				assert.deepStrictEqual(coordinator.snapshot(), []);
+				bravo.settle('/bravo');
+				await reconciling;
+
+				assert.deepStrictEqual(
+					coordinator.snapshot().map(ownership => ownership.owner),
+					[regular(1), regular(2)]
+				);
+				reconciler.dispose();
+			});
+
+		test('two aliases resolved concurrently produce one owner', async () => {
+			const root = await fs.mkdtemp(join(tmpdir(), 'hucode-ownership-'));
+			try {
+				const realPath = join(root, 'real');
+				const aliasPath = join(root, 'alias');
+				await fs.mkdir(realPath);
+				await fs.symlink(realPath, aliasPath, 'dir');
+				const coordinator = createCoordinator(false);
+
+				const [real, alias] = await Promise.all([
+					resolveHucodeDesktopWorkbenchPath(realPath),
+					resolveHucodeDesktopWorkbenchPath(aliasPath),
+				]);
+				const first = coordinator.reserve(real, hosted(1, 'alpha'));
+				const second = coordinator.reserve(alias, hosted(2, 'bravo'));
+
+				assert.deepStrictEqual({
+					first: first.kind,
+					second: second.kind,
+					owners: coordinator.snapshot().map(ownership => ownership.owner),
+				}, {
+					first: 'reserved',
+					second: 'reserved-conflict',
+					owners: [hosted(1, 'alpha')],
+				});
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
+
+		test('restore-winner batch selection matches per-candidate arbitration for symlink aliases',
+			() => {
+				const pathsEqual = (left: string, right: string) => left === right;
+				const source = {
+					globalWorkbenches: [{ id: 'global', path: '/alias/scratch' }],
+					windows: [{
+						windowId: 1,
+						windowLastFocusTime: 10,
+						residentWorkspaces: [
+							{ path: '/alias/repo', projectId: 'project', lastActiveAt: 10 },
+							{ path: '/only-one', projectId: 'only', lastActiveAt: 5 },
+						],
+						retainedWorkbenches: [],
+						overlays: [{
+							workbenchId: 'global',
+							desiredState: 'loaded' as const,
+							lastActiveAt: 30,
+						}],
+						pendingAdoptions: [],
+					}, {
+						windowId: 2,
+						windowLastFocusTime: 20,
+						residentWorkspaces: [
+							{ path: '/real/repo', projectId: 'project', lastActiveAt: 20 },
+						],
+						retainedWorkbenches: [{
+							path: '/real/scratch',
+							id: 'legacy',
+							desiredState: 'loaded' as const,
+							lastActiveAt: 1,
+						}],
+						overlays: [],
+						pendingAdoptions: [{
+							path: '/real/adopted',
+							desiredState: 'loaded' as const,
+						}],
+					}],
+				};
+				const select = (
+					windowId: number,
+					candidates: readonly { path: string; stableInstanceId: string }[]
+				) => selectHucodeDesktopRestoreCandidates(
+					windowId,
+					candidates,
+					source,
+					aliasTarget,
+					{ pathsEqual, isCaseSensitive: true }
+				);
+
+				assert.deepStrictEqual({
+					first: select(1, [
+						{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
+						{ path: '/only-one', stableInstanceId: 'project:only:/only-one' },
+						{ path: '/alias/scratch', stableInstanceId: 'retained:global' },
+					]),
+					second: select(2, [
+						{ path: '/real/repo', stableInstanceId: 'project:project:/real/repo' },
+						{ path: '/alias/repo', stableInstanceId: 'project:project:/alias/repo' },
+						{ path: '/real/scratch', stableInstanceId: 'retained:legacy' },
+						{ path: '/real/adopted', stableInstanceId: 'retained:adopted' },
+					]),
+				}, {
+					// Aliases share one winner: the more recent window 2 resident.
+					first: [false, true, true],
+					// A non-winning ID still wins through a loaded pending adoption.
+					second: [true, false, false, true],
+				});
+			});
 	});
 });

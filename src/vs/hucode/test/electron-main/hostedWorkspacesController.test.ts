@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { EventEmitter } from 'events';
-import { mkdirSync, rmSync, Stats, statSync } from 'fs';
+import { mkdirSync, realpathSync, rmSync, Stats, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { basename, join } from '../../../base/common/path.js';
@@ -42,16 +42,33 @@ import {
 	IHostedWorkbenchView,
 	IHostedWorkbenchViewFactory,
 	IHostedWorkspaceIpcMain,
+	IHucodeHostedRestoreCandidate,
 	IResidentHostedWorkspacesControllerOptions,
 	isHostedWorkspaceFolderUnavailableError,
 	ResidentHostedWorkspacesController,
 } from '../../electron-main/hostedWorkspacesController.js';
 import {
 	createHucodeDesktopRestoreCandidates,
+	type HucodeCanonicalWorkbenchPath,
 	HucodeDesktopWorkbenchOwnershipCoordinator,
+	type IHucodeDesktopWorkbenchPath,
 	selectHucodeDesktopRestoreWinners,
 	transferHucodeDesktopWorkbenchToRegularWindow,
 } from '../../electron-main/desktopWorkbenchOwnership.js';
+
+/** Resolves an ownership key the way the controller does, synchronously. */
+function resolvedPath(path: string): IHucodeDesktopWorkbenchPath {
+	let canonicalPath: string;
+	try {
+		canonicalPath = realpathSync.native(path);
+	} catch {
+		canonicalPath = path;
+	}
+	return {
+		displayPath: path,
+		canonicalPath: canonicalPath as HucodeCanonicalWorkbenchPath,
+	};
+}
 import { ensureHucodeHostedFolderInCatalog } from '../../electron-main/omniWorkspaceOpen.js';
 import {
 	IHostedWorkspaceContractState,
@@ -590,8 +607,11 @@ suite('ResidentHostedWorkspacesController', () => {
 		readonly shellProfile?: IUserDataProfile;
 		readonly ownershipCoordinator?:
 		HucodeDesktopWorkbenchOwnershipCoordinator;
-		readonly shouldRestoreCandidate?: IResidentHostedWorkspacesControllerOptions[
-		'shouldRestoreCandidate'];
+		readonly shouldRestoreCandidate?: (
+			candidate: IHucodeHostedRestoreCandidate
+		) => boolean;
+		readonly resolvePath?: IResidentHostedWorkspacesControllerOptions[
+		'resolvePath'];
 		readonly beforeRestore?: () => Promise<void>;
 		readonly activateApplication?: () => void;
 		readonly stat?: IResidentHostedWorkspacesControllerOptions['stat'];
@@ -723,7 +743,11 @@ suite('ResidentHostedWorkspacesController', () => {
 					options.overlayCaptureSettleTimeoutMs,
 				createInstanceId: () => idQueue.shift() ?? 'extra-instance',
 				now: () => now,
-				shouldRestoreCandidate: options.shouldRestoreCandidate,
+				selectRestoreCandidates: options.shouldRestoreCandidate &&
+					(async candidates =>
+						candidates.map(options.shouldRestoreCandidate!)),
+				resolvePath: options.resolvePath ??
+					(async path => resolvedPath(path)),
 				beforeRestore: options.beforeRestore,
 				viewFactory,
 				ipc: ipcMain,
@@ -865,7 +889,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			fixture.workspaceProfileOverrides.set(URI.file(worktreePath).toString(), imported);
 		});
 		await entered.p;
-		assert.strictEqual(coordinator.lookup(worktreePath).kind, 'current-owner');
+		assert.strictEqual(coordinator.lookup(resolvedPath(worktreePath)).kind, 'current-owner');
 		assert.strictEqual(fixture.viewFactory.views.length, 0);
 		save.complete();
 		await opening;
@@ -877,7 +901,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		const coordinator = new HucodeDesktopWorkbenchOwnershipCoordinator();
 		const fixture = createController({ ownershipCoordinator: coordinator });
 		await assert.rejects(fixture.controller.openAdmittedWorkspace(worktreePath, undefined, () => true, () => true, async () => { throw new Error('profile save failed'); }), /profile save failed/);
-		assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+		assert.deepStrictEqual({ owner: coordinator.lookup(resolvedPath(worktreePath)).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
 	});
 
 	test('shutdown or supersession during onboarding persistence prevents late view creation', async () => {
@@ -894,7 +918,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			else { current = false; }
 			save.complete();
 			await opening;
-			assert.deepStrictEqual({ owner: coordinator.lookup(worktreePath).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
+			assert.deepStrictEqual({ owner: coordinator.lookup(resolvedPath(worktreePath)).kind, views: fixture.viewFactory.views.length }, { owner: 'absent', views: 0 });
 		}
 	});
 
@@ -1012,7 +1036,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			secondInstances: 0,
 			secondViews: 0,
 		});
-		const owner = ownershipCoordinator.lookup(worktreePath);
+		const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.strictEqual(owner.kind, 'current-owner');
 		assert.deepStrictEqual(
 			owner.kind === 'current-owner' && owner.ownership.owner,
@@ -1116,7 +1140,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const ownershipCoordinator =
 				new HucodeDesktopWorkbenchOwnershipCoordinator();
 			ownershipCoordinator.seed({
-				path: worktreePath,
+				path: resolvedPath(worktreePath),
 				owner: { kind: 'regular', windowId: 42 },
 			});
 			const fixture = createController({ ownershipCoordinator });
@@ -1217,7 +1241,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			first.viewFactory.views[0].rawWebContents.emit(
 				'render-process-gone'
 			);
-			const recovering = ownershipCoordinator.lookup(worktreePath);
+			const recovering = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.strictEqual(
 				recovering.kind === 'current-owner' &&
 				recovering.ownership.phase,
@@ -1235,7 +1259,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await first.controller.closeWorkspace('first-instance');
 			await secondOpen;
 
-			const owner = ownershipCoordinator.lookup(worktreePath);
+			const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.strictEqual(owner.kind, 'current-owner');
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
@@ -1264,7 +1288,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				windowId: 2,
 			});
 			await first.controller.openAdmittedWorkspace(worktreePath, 'project');
-			const lookup = ownershipCoordinator.lookup(worktreePath);
+			const lookup = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			if (lookup.kind !== 'current-owner') {
 				assert.fail('expected first hosted owner');
 			}
@@ -1292,7 +1316,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			await first.controller.closeWorkspace('first-instance');
 			await secondOpen;
 			assert.strictEqual(second.viewFactory.views.length, 1);
-			const owner = ownershipCoordinator.lookup(worktreePath);
+			const owner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.deepStrictEqual(
 				owner.kind === 'current-owner' && owner.ownership.owner,
 				{
@@ -1333,7 +1357,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		) {
 			await Promise.resolve();
 		}
-		const recoveryOwner = ownershipCoordinator.lookup(worktreePath);
+		const recoveryOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.deepStrictEqual(
 			recoveryOwner.kind === 'current-owner' &&
 			recoveryOwner.ownership.owner,
@@ -1398,7 +1422,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			fixture.controller.getState().instances[0].state,
 			'restore-pending'
 		);
-		const pendingOwner = ownershipCoordinator.lookup(worktreePath);
+		const pendingOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 		assert.strictEqual(
 			pendingOwner.kind === 'current-owner' &&
 			pendingOwner.ownership.phase,
@@ -1444,10 +1468,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			);
 			assert.strictEqual(second.viewFactory.views.length, 0);
 			assert.strictEqual(
-				ownershipCoordinator.lookup(worktreePath).kind,
+				ownershipCoordinator.lookup(resolvedPath(worktreePath)).kind,
 				'current-owner'
 			);
-			const dormantOwner = ownershipCoordinator.lookup(worktreePath);
+			const dormantOwner = ownershipCoordinator.lookup(resolvedPath(worktreePath));
 			assert.deepStrictEqual(
 				dormantOwner.kind === 'current-owner' &&
 				dormantOwner.ownership.owner,
@@ -1460,7 +1484,7 @@ suite('ResidentHostedWorkspacesController', () => {
 
 			first.controller.dispose();
 			assert.deepStrictEqual(
-				ownershipCoordinator.lookup(worktreePath),
+				ownershipCoordinator.lookup(resolvedPath(worktreePath)),
 				{ kind: 'absent' }
 			);
 		}
@@ -2015,10 +2039,12 @@ suite('ResidentHostedWorkspacesController', () => {
 					activeWorktreePath: scratch,
 					residentWorkspaces: [{ path: scratch }],
 					retainedWorkbenches: [],
-				})
+				}, resolvedPath)
 			);
-			const winner = selectHucodeDesktopRestoreWinners(candidates)
-				.values().next().value;
+			const winner = selectHucodeDesktopRestoreWinners(
+				candidates,
+				resolvedPath
+			).values().next().value;
 			assert.ok(winner);
 			const createRestoreFilter = (windowId: number) =>
 				(candidate: { path: string; stableInstanceId: string }) =>
@@ -3071,7 +3097,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		controller.notifyHostedWorkspaceReady('instance-2');
 
 		assert.strictEqual(viewFactory.views.length, 2);
-		const ownership = ownershipCoordinator.lookup(alpha);
+		const ownership = ownershipCoordinator.lookup(resolvedPath(alpha));
 		assert.deepStrictEqual(
 			ownership.kind === 'current-owner' && ownership.ownership.owner,
 			{ kind: 'hosted', windowId: 1, instanceId: 'instance-2' }
@@ -7219,7 +7245,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			coordinator: HucodeDesktopWorkbenchOwnershipCoordinator,
 			path: string
 		) {
-			const lookup = coordinator.lookup(path);
+			const lookup = coordinator.lookup(resolvedPath(path));
 			return lookup.kind === 'current-owner'
 				? {
 					phase: lookup.ownership.phase,
@@ -7283,7 +7309,7 @@ suite('ResidentHostedWorkspacesController', () => {
 						// Another window's admission must be routed to the live
 						// owner instead of waiting on an unresolved reservation.
 						laterAdmission: ownershipCoordinator.reserve(
-							target,
+							resolvedPath(target),
 							{ kind: 'regular', windowId: 42 }
 						).kind,
 					}, {
@@ -7327,7 +7353,7 @@ suite('ResidentHostedWorkspacesController', () => {
 				navigationStat.release();
 				await waitForViews(viewFactory, 2);
 				await controller.openAdmittedWorkspace(target);
-				const adopted = ownershipCoordinator.lookup(target);
+				const adopted = ownershipCoordinator.lookup(resolvedPath(target));
 				assert.ok(adopted.kind === 'current-owner' &&
 					adopted.ownership.phase === 'reserved');
 				const targetInstanceId = adopted.ownership.owner.kind === 'hosted'
@@ -7339,14 +7365,14 @@ suite('ResidentHostedWorkspacesController', () => {
 				// it settles, routes to a hosted owner the way routeWorkspaceOpen
 				// does.
 				const waiting = ownershipCoordinator.reserve(
-					target,
+					resolvedPath(target),
 					{ kind: 'regular', windowId: 42 }
 				);
 				assert.strictEqual(waiting.kind, 'reserved-conflict');
 				let rerouted: Promise<void> | undefined;
 				if (waiting.kind === 'reserved-conflict') {
 					void waiting.settled.then(() => {
-						const current = ownershipCoordinator.lookup(target);
+						const current = ownershipCoordinator.lookup(resolvedPath(target));
 						if (current.kind === 'current-owner' &&
 							current.ownership.owner.kind === 'hosted' &&
 							current.ownership.owner.windowId === 1) {
@@ -7898,6 +7924,98 @@ suite('ResidentHostedWorkspacesController', () => {
 				}, {
 					pending: { activeState: 'restore-pending', profile: undefined },
 					attachedProfile: 'first',
+				});
+			});
+	});
+	suite('asynchronous ownership paths', () => {
+		test('disposal during restore path resolution leaves no reservations',
+			async () => {
+				const alpha = createWorktree('restore-resolution-dispose-alpha');
+				const bravo = createWorktree('restore-resolution-dispose-bravo');
+				const resolutionGate = new DeferredPromise<void>();
+				const resolutionCalls: string[] = [];
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					restoreEntries: [
+						{ worktreePath: alpha, projectId: 'project-alpha' },
+						{ worktreePath: bravo, projectId: 'project-bravo' },
+					],
+					activeWorktreePath: alpha,
+					restorePolicy: 'all',
+					ownershipCoordinator,
+					resolvePath: async path => {
+						resolutionCalls.push(path);
+						await resolutionGate.p;
+						return resolvedPath(path);
+					},
+				});
+
+				const restoring = controller.ensureRestored();
+				for (let attempt = 0; attempt < 100 &&
+					resolutionCalls.length < 2; attempt++) {
+					await timeout(0);
+				}
+				assert.deepStrictEqual(resolutionCalls.toSorted(), [alpha, bravo]);
+				controller.dispose();
+				resolutionGate.complete();
+				await restoring;
+
+				assert.deepStrictEqual({
+					owners: ownershipCoordinator.snapshot(),
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+				}, { owners: [], instances: [], views: 0 });
+			});
+
+		test('suspend hands ownership from release to seed without an await',
+			async () => {
+				const alpha = createWorktree('suspend-handoff');
+				let watchRelease = false;
+				let intrusion:
+					| ReturnType<HucodeDesktopWorkbenchOwnershipCoordinator['reserve']>
+					| undefined;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator({
+						onDidChange: () => {
+							if (watchRelease &&
+								ownershipCoordinator.lookup(
+									resolvedPath(alpha)
+								).kind === 'absent') {
+								watchRelease = false;
+								// Another admission arriving on the next
+								// microtask after the release.
+								queueMicrotask(() => {
+									intrusion = ownershipCoordinator.reserve(
+										resolvedPath(alpha),
+										{ kind: 'regular', windowId: 99 }
+									);
+								});
+							}
+						},
+					});
+				const { controller } = createController({ ownershipCoordinator });
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				watchRelease = true;
+				await controller.suspendWorkspace('instance-1');
+				await timeout(0);
+
+				const owner = ownershipCoordinator.lookup(resolvedPath(alpha));
+				assert.deepStrictEqual({
+					intrusion: intrusion?.kind,
+					owner: owner.kind === 'current-owner'
+						? owner.ownership.owner
+						: undefined,
+					state: controller.getState().instances.map(instance => ({
+						instanceId: instance.instanceId,
+						state: instance.state,
+					})),
+				}, {
+					intrusion: 'current-owner',
+					owner: { kind: 'hosted', windowId: 1, instanceId: 'instance-2' },
+					state: [{ instanceId: 'instance-2', state: 'dormant' }],
 				});
 			});
 	});
