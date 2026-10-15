@@ -10,7 +10,7 @@ import * as fs from 'fs/promises';
 import type { ClientRequest } from 'http';
 import * as os from 'os';
 import { promisify } from 'util';
-import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout, timeout } from '../../../base/common/async.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { CancellationError } from '../../../base/common/errors.js';
 import { toDisposable } from '../../../base/common/lifecycle.js';
@@ -1092,6 +1092,42 @@ suite('HucodeWebProjectManagerServer', function () {
 				}
 			);
 			assert.deepStrictEqual(removed.body.result, { removed: true });
+		}
+	);
+
+	test('cancels a scheduled refresh quiet delay when the server is disposed',
+		async () => {
+			const server = createServer(serverDataPath, disposables, servers);
+			const added = await handle<ProjectResponseBody>(
+				server,
+				'POST',
+				HUCODE_WEB_PROJECTS_API_PATH,
+				{ rootPath: projectPath }
+			);
+			const service = (server as unknown as {
+				service: {
+					refreshDelay(
+						milliseconds: number,
+						token?: CancellationToken
+					): Promise<void>;
+					runScheduledProjectRefresh(projectId: string): Promise<void>;
+				};
+			}).service;
+			const quietDelayStarted =
+				new DeferredPromise<CancellationToken | undefined>();
+			service.refreshDelay = (_milliseconds, token) => {
+				void quietDelayStarted.complete(token);
+				return token ? timeout(60_000, token) : timeout(60_000);
+			};
+
+			const refresh = service.runScheduledProjectRefresh(
+				added.body.project.id
+			);
+			const token = await quietDelayStarted.p;
+			server.dispose();
+
+			assert.strictEqual(token?.isCancellationRequested, true);
+			await assert.rejects(refresh, CancellationError);
 		}
 	);
 
@@ -4087,6 +4123,47 @@ suite('HucodeWebProjectManagerServer', function () {
 				workbenches: [],
 				preserved: state,
 				clean: { version: 1, projects: state.projects },
+			});
+		}
+	);
+
+	test('flushes a first mutation\'s state recovery write before responding',
+		async () => {
+			const storagePath = join(serverDataPath, 'hucode', 'projects.json');
+			await fs.mkdir(join(serverDataPath, 'hucode'), { recursive: true });
+			// No projects, so Git hydration cannot queue a write of its own.
+			await fs.writeFile(storagePath, JSON.stringify({
+				version: 1,
+				projects: [],
+				workbenches: [{ id: '', folderPath: '/bad', order: 0 }],
+			}));
+			const fileSystem = new TestProjectStateFileSystem();
+			fileSystem.writeError = new Error('recovery write failed');
+			const server = createServer(
+				serverDataPath,
+				disposables,
+				servers,
+				fileSystem
+			);
+
+			// Deleting an unknown project writes nothing itself, so only the
+			// recovery write made while loading state can fail this response.
+			const response = await handle<ErrorResponseBody>(
+				server,
+				'DELETE',
+				`${HUCODE_WEB_PROJECTS_API_PATH}/unknown-project`
+			);
+			fileSystem.writeError = undefined;
+
+			assert.deepStrictEqual({
+				response,
+				preserved: await pathExists(`${storagePath}.corrupt`),
+			}, {
+				response: {
+					statusCode: 500,
+					body: { error: 'recovery write failed' },
+				},
+				preserved: true,
 			});
 		}
 	);

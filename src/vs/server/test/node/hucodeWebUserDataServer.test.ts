@@ -629,17 +629,36 @@ suite('HucodeWebUserDataServer', () => {
 		assert.deepStrictEqual(catalogAtResolution?.profiles.map(profile => profile.id), ['work']);
 	});
 
-	test('rejects a profile change whose catalog write fails', async () => {
+	test('rejects and reverts a profile change whose catalog write fails', async () => {
 		await invoke(server, 'POST', '/initialize-empty', {});
 		const channel = server.createProfilesChannel(() => DefaultURITransformer);
-		const temporaryPath = join(testHome, 'WebUser', 'profiles.json.tmp');
+		const catalogPath = join(testHome, 'WebUser', 'profiles.json');
+		const temporaryPath = `${catalogPath}.tmp`;
+		const events: DidChangeProfilesEvent[] = [];
+		const listener = channel.listen<DidChangeProfilesEvent>(null, 'onDidChangeProfiles')(event => events.push(event));
 		await fs.mkdir(temporaryPath);
 
 		await assert.rejects(
 			channel.call(null, 'createProfile', ['work', 'Work']),
 			error => (error as NodeJS.ErrnoException).code === 'EISDIR',
 		);
+		listener.dispose();
 		await fs.rm(temporaryPath, { recursive: true });
+
+		const ids = (profiles: readonly { id: string }[] | undefined) => profiles?.map(profile => profile.id);
+		assert.deepStrictEqual({
+			published: events.map(event => ({ added: ids(event.added), removed: ids(event.removed) })),
+			subscriberProfiles: ids(events.at(-1)?.all),
+			cachedProfiles: ids(server.profilesService!.profiles),
+			knownProfile: server.profilesService!.isKnownProfile('work'),
+			diskProfiles: ids(JSON.parse(await fs.readFile(catalogPath, 'utf8')).profiles),
+		}, {
+			published: [{ added: ['work'], removed: [] }, { added: [], removed: ['work'] }],
+			subscriberProfiles: ['__default__profile__'],
+			cachedProfiles: ['__default__profile__'],
+			knownProfile: false,
+			diskProfiles: [],
+		});
 	});
 
 	test('close waits for a pending catalog write and reports its failure', async () => {
@@ -655,6 +674,7 @@ suite('HucodeWebUserDataServer', () => {
 			error => error instanceof AggregateError &&
 				error.errors.some(cause => (cause as NodeJS.ErrnoException).code === 'EISDIR'),
 		);
+		assert.deepStrictEqual(server.profilesService!.profiles.map(profile => profile.id), ['__default__profile__']);
 		server.dispose();
 		await fs.rm(temporaryPath, { recursive: true });
 		server = createServer();

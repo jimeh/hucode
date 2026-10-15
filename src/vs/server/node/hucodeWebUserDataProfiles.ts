@@ -43,7 +43,9 @@ export interface StoredWebProfileCatalog {
  * electron-main `StateService`. The read hooks serve that cache, and the save
  * hooks update it synchronously and queue a serialized write of the latest
  * snapshot. Callers that trigger saves await {@link flushCatalogWrites} so a
- * failed write still rejects them.
+ * failed write still rejects them. A failed write also restores the cache to
+ * the catalog on disk and publishes the reverted profiles, so subscribers
+ * never keep a change that was not persisted.
  */
 export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	private readonly catalogPath: string;
@@ -52,6 +54,8 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 	private catalogGeneration = 0;
 	private catalogLoad: Promise<StoredWebProfileCatalog> | undefined;
 	private catalogLoadError: Error | undefined;
+	/** The catalog last read from or written to disk; failed writes revert to it. */
+	private persistedCatalog: StoredWebProfileCatalog | undefined;
 	private readonly catalogWrites = new Queue<void>();
 	private pendingCatalogWrites: Promise<void>[] = [];
 
@@ -98,12 +102,14 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 			catalog = await this.readCatalogFile();
 		} catch (error) {
 			this.catalog = undefined;
+			this.persistedCatalog = undefined;
 			this.catalogGeneration++;
 			this.catalogLoadError = error as Error;
 			this.init();
 			throw error;
 		}
 		this.setCatalog(catalog);
+		this.persistedCatalog = catalog;
 		this.init();
 	}
 
@@ -126,6 +132,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 						return this.loadCatalog();
 					}
 					this.setCatalog(catalog);
+					this.persistedCatalog = catalog;
 					this.init();
 					return catalog;
 				},
@@ -161,6 +168,8 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 
 	/**
 	 * Waits for every catalog write queued so far and rejects if one failed.
+	 * After a failure the cache reverts to the catalog on disk, and the
+	 * reverted profiles are published as a change.
 	 */
 	async flushCatalogWrites(): Promise<void> {
 		const writes = this.pendingCatalogWrites;
@@ -168,6 +177,7 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 		const results = await Promise.allSettled(writes);
 		const failure = results.find(result => result.status === 'rejected');
 		if (failure) {
+			this.restorePersistedCatalog();
 			throw failure.reason;
 		}
 	}
@@ -206,6 +216,30 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 		this.queueCatalogWrite();
 	}
 
+	private restorePersistedCatalog(): void {
+		if (this.catalog === this.persistedCatalog) {
+			return;
+		}
+		const previous = this.profiles;
+		if (this.persistedCatalog) {
+			this.setCatalog(this.persistedCatalog);
+		} else {
+			this.catalog = undefined;
+			this.catalogGeneration++;
+		}
+		this.init();
+		const current = this.profiles;
+		const added = current.filter(profile => !previous.some(candidate => candidate.id === profile.id));
+		const removed = previous.filter(profile => !current.some(candidate => candidate.id === profile.id));
+		const updated = current.filter(profile => {
+			const before = previous.find(candidate => candidate.id === profile.id);
+			return !!before && !isSameStoredProfile(before, profile);
+		});
+		if (added.length || removed.length || updated.length) {
+			this.triggerProfilesChanges(added, removed, updated);
+		}
+	}
+
 	private requireCatalog(): StoredWebProfileCatalog {
 		if (!this.catalog) {
 			throw this.catalogLoadError ?? new Error('Serve-web profile catalog is not loaded.');
@@ -240,9 +274,11 @@ export class HucodeWebUserDataProfilesService extends UserDataProfilesService {
 
 	/** Queues a write of the catalog as it is when the write starts. */
 	private queueCatalogWrite(): void {
-		const write = this.catalogWrites.queue(() =>
-			this.writeCatalogFile(this.catalog ?? { profiles: [], associations: {} })
-		);
+		const write = this.catalogWrites.queue(async () => {
+			const catalog = this.catalog ?? { profiles: [], associations: {} };
+			await this.writeCatalogFile(catalog);
+			this.persistedCatalog = catalog;
+		});
 		// Callers observe failures through flushCatalogWrites.
 		void write.catch(() => undefined);
 		this.pendingCatalogWrites.push(write);
@@ -395,6 +431,15 @@ export function validateWebProfileCatalog(value: unknown, source: 'stored' | 'mi
 		associations[key] = normalized;
 	}
 	return { profiles, associations };
+}
+
+/** Compares the persisted fields of two profiles, including workspace associations. */
+function isSameStoredProfile(a: IUserDataProfile, b: IUserDataProfile): boolean {
+	const workspaces = (profile: IUserDataProfile) => (profile.workspaces ?? []).map(workspace => workspace.toString()).sort();
+	return a.name === b.name &&
+		a.icon === b.icon &&
+		JSON.stringify(a.useDefaultFlags ?? {}) === JSON.stringify(b.useDefaultFlags ?? {}) &&
+		JSON.stringify(workspaces(a)) === JSON.stringify(workspaces(b));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -16,6 +16,9 @@ import {
 	NodeGitMetadataWatcherFileSystem,
 } from '../../node/gitWorktreeMonitor.js';
 
+const REAL_FS_DEADLINE_MS = 10_000;
+const REAL_FS_RECREATE_INTERVAL_MS = 1000;
+
 suite('NodeGitMetadataWatcher', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -72,6 +75,35 @@ suite('NodeGitMetadataWatcher', () => {
 			});
 		});
 
+		test('detects an appearance while an earlier probe is pending', async () => {
+			const fileSystem = new FakeWatcherFileSystem(['/repo']);
+			fileSystem.deferProbes = true;
+			let changes = 0;
+			disposables.add(new NodeGitMetadataWatcher(new NullLogService(), fileSystem)
+				.watch('/repo/.git', () => changes++));
+			fileSystem.takeProbe('/repo/.git').complete(false);
+			fileSystem.fire('/repo', 'rename', '.git');
+			const staleProbe = fileSystem.takeProbe('/repo/.git');
+
+			// The segment appears while the first event's probe is still pending.
+			fileSystem.add('/repo/.git');
+			fileSystem.fire('/repo', 'rename', '.git');
+			const currentProbe = fileSystem.takeProbe('/repo/.git');
+			staleProbe.complete(false);
+			await staleProbe.p;
+			const afterStaleProbe = { changes, activePaths: fileSystem.activePaths() };
+			currentProbe.complete(true);
+			await currentProbe.p;
+
+			assert.deepStrictEqual({
+				afterStaleProbe,
+				afterCurrentProbe: { changes, activePaths: fileSystem.activePaths() },
+			}, {
+				afterStaleProbe: { changes: 0, activePaths: ['/repo'] },
+				afterCurrentProbe: { changes: 1, activePaths: ['/repo/.git'] },
+			});
+		});
+
 		for (const kind of ['watch', 'watchEntry'] as const) {
 			test(`${kind} detects a path that appears before its ancestor watcher is installed`, async () => {
 				const missing = kind === 'watch' ? '/repo/.git' : '/repo/worktree';
@@ -108,7 +140,13 @@ suite('NodeGitMetadataWatcher', () => {
 		}
 	});
 
-	suite('real filesystem', () => {
+	// macOS FSEvents can drop events for a moment after a watcher starts,
+	// especially under load, so these tests recreate the path until the
+	// callback arrives. A dropped event delays the test instead of failing it;
+	// a watcher that never reports still fails at the deadline. The fake
+	// filesystem tests above are the proof of probe ordering and re-arming.
+	suite('real filesystem', function () {
+		this.timeout(REAL_FS_DEADLINE_MS + 5000);
 		let root: string;
 		let watchers: DisposableStore;
 
@@ -125,13 +163,14 @@ suite('NodeGitMetadataWatcher', () => {
 
 		test('reports a missing nested path once it appears', async () => {
 			const target = join(root, 'worktrees', 'feature');
-			const changed = new DeferredPromise<void>();
+			let changes = 0;
 			watchers.add(new NodeGitMetadataWatcher(new NullLogService())
-				.watch(target, () => changed.complete()));
+				.watch(target, () => changes++));
 
-			await fs.mkdir(target, { recursive: true });
-
-			assert.strictEqual(await raceTimeout(changed.p.then(() => true), 5000), true);
+			await recreateUntil(() => changes > 0, async () => {
+				await fs.rm(join(root, 'worktrees'), { recursive: true, force: true });
+				await fs.mkdir(target, { recursive: true });
+			});
 		});
 
 		test('reports entry membership once a missing parent appears', async () => {
@@ -140,11 +179,10 @@ suite('NodeGitMetadataWatcher', () => {
 			watchers.add(new NodeGitMetadataWatcher(new NullLogService())
 				.watchEntry(join(worktree, '.git'), () => changes++));
 
-			await fs.mkdir(worktree);
-			await waitFor(() => changes > 0, 5000);
-			const afterParent = changes;
-			await fs.mkdir(join(worktree, '.git'));
-			await waitFor(() => changes > afterParent, 5000);
+			await recreateUntil(() => changes > 0, async () => {
+				await fs.rm(worktree, { recursive: true, force: true });
+				await fs.mkdir(worktree);
+			});
 		});
 	});
 });
@@ -209,11 +247,21 @@ class FakeWatcherFileSystem implements NodeGitMetadataWatcherFileSystem {
 	}
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
+/**
+ * Runs `recreate` now and again after each quiet interval until `predicate`
+ * holds, failing once the deadline passes.
+ */
+async function recreateUntil(predicate: () => boolean, recreate: () => Promise<void>): Promise<void> {
+	const deadline = Date.now() + REAL_FS_DEADLINE_MS;
+	let nextRecreateAt = 0;
 	while (!predicate()) {
-		if (Date.now() >= deadline) {
+		const now = Date.now();
+		if (now >= deadline) {
 			throw new Error('Timed out waiting for a watcher callback.');
+		}
+		if (now >= nextRecreateAt) {
+			await recreate();
+			nextRecreateAt = Date.now() + REAL_FS_RECREATE_INTERVAL_MS;
 		}
 		await new Promise(resolve => setTimeout(resolve, 10));
 	}

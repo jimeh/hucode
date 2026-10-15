@@ -126,7 +126,10 @@ export interface ProjectManagerMainServiceOptions {
 	readonly now?: () => number;
 	readonly autoRefreshDebounceMs?: number;
 	readonly autoRefreshQuietMs?: number;
-	readonly refreshDelay?: (milliseconds: number) => Promise<void>;
+	readonly refreshDelay?: (
+		milliseconds: number,
+		token: CancellationToken
+	) => Promise<void>;
 	readonly retryDelay?: (
 		milliseconds: number,
 		token: CancellationToken
@@ -145,7 +148,12 @@ export class ProjectManagerMainService extends Disposable
 	private readonly gitWorktreeMonitor: GitWorktreeMonitor;
 	private readonly autoRefreshDebounceMs: number;
 	private readonly autoRefreshQuietMs: number;
-	private readonly refreshDelay: (milliseconds: number) => Promise<void>;
+	private readonly refreshDelay: (
+		milliseconds: number,
+		token: CancellationToken
+	) => Promise<void>;
+	/** Canceled on disposal so a scheduled refresh's quiet delay cannot outlive the service. */
+	private readonly lifetime = new CancellationTokenSource();
 	private readonly retryDelay: (
 		milliseconds: number,
 		token: CancellationToken
@@ -204,11 +212,13 @@ export class ProjectManagerMainService extends Disposable
 			PROJECT_AUTO_REFRESH_DEBOUNCE_MS;
 		this.autoRefreshQuietMs = options.autoRefreshQuietMs ??
 			PROJECT_AUTO_REFRESH_QUIET_MS;
-		this.refreshDelay = options.refreshDelay ?? timeout;
+		this.refreshDelay = options.refreshDelay ??
+			((milliseconds, token) => timeout(milliseconds, token));
 		this.retryDelay = options.retryDelay ??
 			((milliseconds, token) => timeout(milliseconds, token));
 		this.now = options.now ?? (() => Date.now());
 		this._register(toDisposable(() => {
+			this.lifetime.dispose(true);
 			for (const owner of this.projectRefreshOwners.values()) {
 				owner.source.dispose(true);
 			}
@@ -1164,10 +1174,14 @@ export class ProjectManagerMainService extends Disposable
 		}
 
 		delayer.trigger(() => this.runScheduledProjectRefresh(projectId))
-			.then(undefined, error => this.logService.warn(
-				`[ProjectManagerMainService] Failed to auto-refresh ` +
-				`${projectId}: ${error}`
-			));
+			.then(undefined, error => {
+				if (!isCancellationError(error)) {
+					this.logService.warn(
+						`[ProjectManagerMainService] Failed to auto-refresh ` +
+						`${projectId}: ${error}`
+					);
+				}
+			});
 	}
 
 	private async runScheduledProjectRefresh(projectId: string): Promise<void> {
@@ -1182,7 +1196,7 @@ export class ProjectManagerMainService extends Disposable
 		this.emitChange();
 
 		if (this.autoRefreshQuietMs > 0) {
-			await this.refreshDelay(this.autoRefreshQuietMs);
+			await this.refreshDelay(this.autoRefreshQuietMs, this.lifetime.token);
 		}
 	}
 
