@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { EventEmitter } from 'events';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, rmSync, Stats, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { basename, join } from '../../../base/common/path.js';
@@ -470,6 +470,62 @@ class TestBrowserViewMainService {
 	}
 }
 
+interface IHeldStatCall {
+	readonly path: string;
+	/** Settles with the folder's real stat at release time. */
+	release(): void;
+	/** Rejects with a file-system error code regardless of the folder. */
+	fail(code: string): void;
+}
+
+/** Stat double that parks selected calls until a test settles them. */
+class HeldStat {
+	private readonly holds = new Map<string, number>();
+	private readonly pending: IHeldStatCall[] = [];
+	readonly calls: string[] = [];
+
+	/** Parks the next `count` stat calls for a path. */
+	hold(path: string, count = 1): void {
+		this.holds.set(path, (this.holds.get(path) ?? 0) + count);
+	}
+
+	readonly stat = (path: string): Promise<Stats> => {
+		this.calls.push(path);
+		const remaining = this.holds.get(path) ?? 0;
+		if (!remaining) {
+			return (async () => statSync(path))();
+		}
+		this.holds.set(path, remaining - 1);
+		return new Promise<Stats>((resolve, reject) => {
+			this.pending.push({
+				path,
+				release: () => {
+					try {
+						resolve(statSync(path));
+					} catch (error) {
+						reject(error);
+					}
+				},
+				fail: code => reject(Object.assign(new Error(code), { code })),
+			});
+		});
+	};
+
+	/** Waits for the next parked call for a path. */
+	async next(path: string): Promise<IHeldStatCall> {
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const index = this.pending.findIndex(call => call.path === path);
+			if (index >= 0) {
+				return this.pending.splice(index, 1)[0];
+			}
+			await timeout(0);
+		}
+		throw new Error(
+			`No held stat for ${path}; calls: ${JSON.stringify(this.calls)}`
+		);
+	}
+}
+
 suite('ResidentHostedWorkspacesController', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let tempRoot: string;
@@ -537,6 +593,7 @@ suite('ResidentHostedWorkspacesController', () => {
 		'shouldRestoreCandidate'];
 		readonly beforeRestore?: () => Promise<void>;
 		readonly activateApplication?: () => void;
+		readonly stat?: IResidentHostedWorkspacesControllerOptions['stat'];
 	} = {}) {
 		const protocolMainService = new TestProtocolMainService();
 		const ipcMain = options.ipcMain ?? new TestHostedWorkspaceIpcMain();
@@ -670,6 +727,9 @@ suite('ResidentHostedWorkspacesController', () => {
 				viewFactory,
 				ipc: ipcMain,
 				activateApplication: options.activateApplication,
+				// Resolve stats within microtasks by default so tests that step
+				// through attach with `Promise.resolve()` stay deterministic.
+				stat: options.stat ?? (async path => statSync(path)),
 			}
 		));
 
@@ -907,7 +967,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			URI.file(worktreePath).toString(),
 			secondProfile
 		);
-		fixture.controller.reloadWorkspace();
+		await fixture.controller.reloadWorkspace();
 
 		const configuration = fixture.protocolMainService.objectUrls[0]
 			.value as INativeWindowConfiguration;
@@ -6230,7 +6290,7 @@ suite('ResidentHostedWorkspacesController', () => {
 			const authority = controller.getHostedShellAuthorityState(forged);
 			assert.strictEqual(authority.disposed, true);
 			assert.strictEqual(authority.connectionGeneration, -1);
-			assert.strictEqual(controller.reloadHostedShellSelf({
+			assert.strictEqual(await controller.reloadHostedShellSelf({
 				...forged,
 				connectionGeneration: authority.connectionGeneration,
 			}), false);
@@ -6260,7 +6320,10 @@ suite('ResidentHostedWorkspacesController', () => {
 			const stale = controller.acquireHostedShellBinding(1)!;
 			viewFactory.views[0].rawWebContents.startNavigation(false, true);
 
-			assert.strictEqual(controller.reloadHostedShellSelf(stale), false);
+			assert.strictEqual(
+				await controller.reloadHostedShellSelf(stale),
+				false
+			);
 			assert.strictEqual(controller.focusHostedShellSelf(stale), false);
 			assert.strictEqual(
 				controller.triggerPasteInHostedShellSelf(stale),
@@ -6271,7 +6334,10 @@ suite('ResidentHostedWorkspacesController', () => {
 				URI.file(alpha).toString(),
 				secondProfile
 			);
-			assert.strictEqual(controller.reloadHostedShellSelf(current), true);
+			assert.strictEqual(
+				await controller.reloadHostedShellSelf(current),
+				true
+			);
 			assert.strictEqual(
 				viewFactory.views[0].rawWebContents.reloadCalls.length,
 				1
@@ -6815,4 +6881,506 @@ suite('ResidentHostedWorkspacesController', () => {
 				'loaded'
 			);
 		});
+	suite('asynchronous folder stats', () => {
+		function retainedRecord(id: string, path: string) {
+			return {
+				id,
+				folderUri: URI.file(path).toJSON(),
+				desiredState: 'loaded' as const,
+				order: 0,
+			};
+		}
+
+		function retainedStatus(controller: ResidentHostedWorkspacesController) {
+			return controller.getState().retainedWorkbenches?.map(record => ({
+				desiredState: record.desiredState,
+				folderStatus: record.folderStatus,
+			}));
+		}
+
+		/**
+		 * Drains the microtask queue. A released stat settles the controller's
+		 * continuation through microtasks only, so one macrotask turn is a
+		 * complete ordering boundary for it.
+		 */
+		function drainMicrotasks(): Promise<void> {
+			return timeout(0);
+		}
+
+		test('restore treats a folder removed during its stat as missing',
+			async () => {
+				const scratch = createWorktree('vanishing-restore');
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, protocolMainService, viewFactory } =
+					createController({
+						activeWorktreePath: scratch,
+						retainedWorkbenches: [
+							retainedRecord('vanishing', scratch),
+						],
+						ownershipCoordinator,
+						stat: heldStat.stat,
+					});
+
+				const restoring = controller.ensureRestored();
+				const statCall = await heldStat.next(scratch);
+				assert.deepStrictEqual({
+					states: controller.getState().instances.map(
+						instance => instance.state
+					),
+					owners: ownershipCoordinator.snapshot().length,
+				}, { states: ['restore-pending'], owners: 1 });
+				rmSync(scratch, { recursive: true, force: true });
+				statCall.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+					retained: retainedStatus(controller),
+				}, {
+					instances: [],
+					views: 0,
+					objectUrls: 0,
+					owners: [],
+					retained: [{ desiredState: 'unloaded', folderStatus: 'missing' }],
+				});
+			});
+
+		test('shutdown during an attach stat prevents reservation and view',
+			async () => {
+				const alpha = createWorktree('shutdown-during-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha);
+				let ownershipChanges = 0;
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator({
+						onDidChange: () => ownershipChanges++,
+					});
+				const { controller, protocolMainService, viewFactory } =
+					createController({ ownershipCoordinator, stat: heldStat.stat });
+
+				const open = controller.retainAndOpenAdmittedWorkbench(
+					URI.file(alpha)
+				);
+				const statCall = await heldStat.next(alpha);
+				const shutdown = controller.shutdownAllWorkspaces(UnloadReason.QUIT);
+				statCall.release();
+				await open;
+				await shutdown;
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances,
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+					ownershipChanges,
+					retained: retainedStatus(controller),
+				}, {
+					instances: [],
+					views: 0,
+					objectUrls: 0,
+					owners: [],
+					ownershipChanges: 0,
+					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+				});
+			});
+
+		test('disposal during an attach stat leaks no reservation or view',
+			async () => {
+				const alpha = createWorktree('dispose-during-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, protocolMainService, viewFactory } =
+					createController({ ownershipCoordinator, stat: heldStat.stat });
+
+				const open = controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				const statCall = await heldStat.next(alpha);
+				controller.dispose();
+				statCall.release();
+				await open;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					objectUrls: protocolMainService.objectUrls.length,
+					owners: ownershipCoordinator.snapshot(),
+				}, { views: 0, objectUrls: 0, owners: [] });
+			});
+
+		test('concurrent opens with held stats create one view and owner',
+			async () => {
+				const alpha = createWorktree('concurrent-held-stats');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha, 2);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+				});
+
+				const first = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const firstStat = await heldStat.next(alpha);
+				const second = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const secondStat = await heldStat.next(alpha);
+				firstStat.release();
+				secondStat.release();
+				await Promise.all([first, second]);
+
+				const owners = ownershipCoordinator.snapshot();
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					instances: controller.getState().instances.map(
+						instance => instance.instanceId
+					),
+					owners: owners.map(ownership => ownership.owner),
+				}, {
+					views: 1,
+					instances: ['instance-1'],
+					owners: [{
+						kind: 'hosted',
+						windowId: 1,
+						instanceId: 'instance-1',
+					}],
+				});
+			});
+
+		test('a late missing stat from an overlapping open keeps the live view',
+			async () => {
+				const alpha = createWorktree('overlapping-missing-stat');
+				const heldStat = new HeldStat();
+				heldStat.hold(alpha, 2);
+				const ownershipCoordinator =
+					new HucodeDesktopWorkbenchOwnershipCoordinator();
+				const { controller, viewFactory } = createController({
+					ownershipCoordinator,
+					stat: heldStat.stat,
+				});
+
+				const first = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const firstStat = await heldStat.next(alpha);
+				const second = controller.openAdmittedWorkspace(
+					alpha,
+					'project-alpha'
+				);
+				const secondStat = await heldStat.next(alpha);
+				firstStat.release();
+				await first;
+				assert.strictEqual(viewFactory.views.length, 1);
+				secondStat.fail('ENOENT');
+				await second;
+
+				assert.deepStrictEqual({
+					views: viewFactory.views.length,
+					closeCalls: viewFactory.views[0].rawWebContents
+						.closeCalls.length,
+					instances: controller.getState().instances.map(
+						instance => instance.instanceId
+					),
+					owners: ownershipCoordinator.snapshot().map(
+						ownership => ownership.owner.kind === 'hosted' &&
+							ownership.owner.instanceId
+					),
+				}, {
+					views: 1,
+					closeCalls: 0,
+					instances: ['instance-1'],
+					owners: ['instance-1'],
+				});
+			});
+
+		test('crash probe records a missing folder', async () => {
+			const scratch = createWorktree('crash-probe-missing');
+			const heldStat = new HeldStat();
+			const { controller, viewFactory } = createController({
+				ids: ['record', 'instance-1', 'instance-2'],
+				stat: heldStat.stat,
+			});
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			heldStat.hold(scratch);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+			const probe = await heldStat.next(scratch);
+			assert.deepStrictEqual(retainedStatus(controller), [
+				{ desiredState: 'unloaded', folderStatus: undefined },
+			]);
+			rmSync(scratch, { recursive: true, force: true });
+			probe.release();
+			await drainMicrotasks();
+
+			assert.deepStrictEqual(retainedStatus(controller), [
+				{ desiredState: 'unloaded', folderStatus: 'missing' },
+			]);
+		});
+
+		test('stale crash probe cannot mark a reopened folder missing',
+			async () => {
+				const scratch = createWorktree('crash-probe-reopened');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+
+				await controller.retainAndOpenAdmittedWorkbench(
+					URI.file(scratch)
+				);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(scratch);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				const probe = await heldStat.next(scratch);
+				rmSync(scratch, { recursive: true, force: true });
+				mkdirSync(scratch, { recursive: true });
+				await controller.openAdmittedWorkspace(scratch);
+				controller.notifyHostedWorkspaceReady('instance-2');
+				probe.fail('ENOENT');
+				await drainMicrotasks();
+
+				assert.deepStrictEqual({
+					instances: controller.getState().instances.map(instance => ({
+						instanceId: instance.instanceId,
+						state: instance.state,
+					})),
+					retained: retainedStatus(controller),
+				}, {
+					instances: [{ instanceId: 'instance-2', state: 'active' }],
+					retained: [{ desiredState: 'loaded', folderStatus: undefined }],
+				});
+			});
+
+		test('stale crash probe cannot mark a reopened and closed folder missing',
+			async () => {
+				const scratch = createWorktree('crash-probe-reopened-closed');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					ids: ['record', 'instance-1', 'instance-2'],
+					stat: heldStat.stat,
+				});
+
+				await controller.retainAndOpenAdmittedWorkbench(
+					URI.file(scratch)
+				);
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(scratch);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				const probe = await heldStat.next(scratch);
+				await controller.openAdmittedWorkspace(scratch);
+				controller.notifyHostedWorkspaceReady('instance-2');
+				assert.strictEqual(await controller.closeWorkspace(), true);
+				probe.fail('ENOENT');
+				await drainMicrotasks();
+
+				assert.deepStrictEqual(retainedStatus(controller), [
+					{ desiredState: 'unloaded', folderStatus: undefined },
+				]);
+			});
+
+		test('crash probe settling after dismissal is a no-op', async () => {
+			const scratch = createWorktree('crash-probe-dismissed');
+			const heldStat = new HeldStat();
+			const { controller, stateChanges, viewFactory } = createController({
+				ids: ['record', 'instance-1'],
+				stat: heldStat.stat,
+			});
+
+			await controller.retainAndOpenAdmittedWorkbench(URI.file(scratch));
+			controller.notifyHostedWorkspaceReady('instance-1');
+			heldStat.hold(scratch);
+			viewFactory.views[0].rawWebContents.emit('render-process-gone');
+			const probe = await heldStat.next(scratch);
+			const workbenchId = controller.getState().retainedWorkbenches![0].id;
+			await controller.dismissRetainedWorkbench(workbenchId);
+			assert.deepStrictEqual(controller.getState().retainedWorkbenches, []);
+			const stateChangeCount = stateChanges.length;
+			probe.fail('ENOENT');
+			await drainMicrotasks();
+
+			assert.deepStrictEqual({
+				retained: controller.getState().retainedWorkbenches,
+				stateChanges: stateChanges.length,
+			}, { retained: [], stateChanges: stateChangeCount });
+		});
+
+		test('hosted self reload abandons a refresh after navigation',
+			async () => {
+				const alpha = createWorktree('self-reload-navigation');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const secondProfile = createProfile('second');
+				const heldStat = new HeldStat();
+				const {
+					controller,
+					protocolMainService,
+					viewFactory,
+					workspaceProfileOverrides,
+				} = createController({
+					profiles: [defaultProfile, firstProfile, secondProfile],
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadHostedShellSelf(binding);
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.startNavigation(false, true);
+				workspaceProfileOverrides.set(
+					URI.file(alpha).toString(),
+					secondProfile
+				);
+				statCall.release();
+
+				assert.deepStrictEqual({
+					reloaded: await reloading,
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					profile: (protocolMainService.objectUrls[0]
+						.value as INativeWindowConfiguration).profiles.profile.id,
+				}, { reloaded: false, reloadCalls: 0, profile: 'first' });
+			});
+
+		test('workspace reload abandons a refresh after a renderer crash',
+			async () => {
+				const alpha = createWorktree('reload-crash');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.emit('render-process-gone');
+				statCall.release();
+				await reloading;
+
+				assert.deepStrictEqual({
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					state: controller.getState().instances[0].state,
+				}, { reloadCalls: 0, state: 'crashed' });
+			});
+
+		test('concurrent interrupted-unload reloads reload once', async () => {
+			const alpha = createWorktree('alpha-concurrent-interrupted');
+			const bravo = createWorktree('bravo-concurrent-interrupted');
+			const heldStat = new HeldStat();
+			const { controller, ipcMain, viewFactory } = createController({
+				beforeUnloadTimeoutMs: 5,
+				stat: heldStat.stat,
+			});
+
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			controller.notifyHostedWorkspaceReady('instance-1');
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			controller.notifyHostedWorkspaceReady('instance-2');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			const hostedWebContents = viewFactory.views[0].rawWebContents;
+			hostedWebContents.autoBeforeUnloadReply = false;
+			hostedWebContents.autoPreparationRollbackReply = false;
+
+			const closings = [
+				controller.closeWorkspace('instance-1'),
+				controller.closeWorkspace('instance-1'),
+			];
+			for (let attempt = 0; attempt < 100 &&
+				hostedWebContents.sent.length < 2; attempt++) {
+				await timeout(0);
+			}
+			const beforeUnloads = hostedWebContents.sent.map(
+				item => item.request as { okChannel: string }
+			);
+			assert.strictEqual(beforeUnloads.length, 2);
+			await controller.openAdmittedWorkspace(bravo, 'project-bravo');
+			await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+			heldStat.hold(alpha);
+			for (const beforeUnload of beforeUnloads) {
+				ipcMain.emitReply(beforeUnload.okChannel);
+			}
+			const statCall = await heldStat.next(alpha);
+			assert.strictEqual(await Promise.race(closings), false);
+			statCall.release();
+			assert.deepStrictEqual(await Promise.all(closings), [false, false]);
+
+			assert.deepStrictEqual({
+				reloadCalls: hostedWebContents.reloadCalls.length,
+				state: controller.getState().instances.find(instance =>
+					instance.instanceId === 'instance-1'
+				)?.state,
+			}, { reloadCalls: 1, state: 'loading' });
+		});
+
+		test('active profile query uses the attach-time workspace identity',
+			async () => {
+				const alpha = createWorktree('profile-after-delete');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const { controller } = createController({
+					profiles: [defaultProfile, firstProfile],
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				rmSync(alpha, { recursive: true, force: true });
+
+				assert.strictEqual(
+					controller.getActiveWorkspaceProfile()?.id,
+					'first'
+				);
+			});
+
+		test('active profile query is undefined before a restore attaches',
+			async () => {
+				const scratch = createWorktree('profile-restore-pending');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(scratch)]);
+				const heldStat = new HeldStat();
+				heldStat.hold(scratch);
+				const { controller } = createController({
+					activeWorktreePath: scratch,
+					retainedWorkbenches: [retainedRecord('pending', scratch)],
+					profiles: [defaultProfile, firstProfile],
+					stat: heldStat.stat,
+				});
+
+				const restoring = controller.ensureRestored();
+				const statCall = await heldStat.next(scratch);
+				const pending = {
+					activeState: controller.getState().instances.find(
+						instance => instance.instanceId ===
+							controller.getState().activeInstanceId
+					)?.state,
+					profile: controller.getActiveWorkspaceProfile()?.id,
+				};
+				statCall.release();
+				await restoring;
+
+				assert.deepStrictEqual({
+					pending,
+					attachedProfile: controller.getActiveWorkspaceProfile()?.id,
+				}, {
+					pending: { activeState: 'restore-pending', profile: undefined },
+					attachedProfile: 'first',
+				});
+			});
+	});
 });

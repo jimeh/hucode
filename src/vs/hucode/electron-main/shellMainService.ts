@@ -1613,7 +1613,7 @@ export class HucodeShellMainService extends Disposable
 	}
 
 	async reloadWorkspace(windowId: number): Promise<void> {
-		this.getOrCreateController(windowId).reloadWorkspace();
+		await this.getOrCreateController(windowId).reloadWorkspace();
 	}
 
 	async toggleWorkspaceDevTools(windowId: number): Promise<boolean> {
