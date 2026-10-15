@@ -189,6 +189,13 @@ interface IHostedWorkbenchInstance {
 	appearance?: IHucodeHostedAppearanceSnapshot;
 	lifecycleGeneration: number;
 	connectionGeneration: number;
+	/**
+	 * Advances on every main-frame, cross-document navigation, so a pending
+	 * configuration refresh can tell that its renderer moved to a newer
+	 * document. Unlike `connectionGeneration`, it does not advance when the
+	 * same document only acquires or releases its hosted-shell connection.
+	 */
+	documentGeneration: number;
 	appliedBounds?: IRectangle;
 	/**
 	 * Workspace identifier from the stat behind the latest hosted
@@ -1300,6 +1307,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				lastActiveAt: entry.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			if (!this.seedInstanceOwnership(instance)) {
@@ -1353,6 +1361,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					: entry.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			const reservation = this.ownershipCoordinator.reserve(
@@ -1546,6 +1555,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 						lastActiveAt: this.now(),
 						lifecycleGeneration: 0,
 						connectionGeneration: 0,
+						documentGeneration: 0,
 						ownership: reassigned.reservation,
 						disposed: false,
 					};
@@ -1928,6 +1938,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 				lastActiveAt: instance.lastActiveAt,
 				lifecycleGeneration: 0,
 				connectionGeneration: 0,
+				documentGeneration: 0,
 				disposed: false,
 			};
 			this.releaseInstanceOwnership(instance);
@@ -2348,6 +2359,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 					lastActiveAt: makeActive ? this.now() : undefined,
 					lifecycleGeneration: 0,
 					connectionGeneration: 0,
+					documentGeneration: 0,
 					disposed: false,
 				};
 
@@ -2424,6 +2436,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 								pendingSnapshot.lifecycleGeneration,
 							connectionGeneration:
 								pendingSnapshot.connectionGeneration,
+							documentGeneration: 0,
 							disposed: false,
 						};
 						const restoredOwnership = pendingSnapshot.state ===
@@ -2611,6 +2624,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			isMainFrame,
 		}) => {
 			if (isMainFrame && !isSameDocument) {
+				instance.documentGeneration++;
 				this.invalidateHostedShellBinding(instance);
 			}
 			this.trustView(instance);
@@ -3096,8 +3110,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			// renderer still holds an unconfirmed unload preparation.
 			webContents = await this.refreshHostedConfiguration(
 				instance,
-				() => ownsPath() && ownsClaim(),
-				false
+				() => ownsPath() && ownsClaim()
 			);
 		} finally {
 			if (!webContents && ownsClaim()) {
@@ -3731,21 +3744,20 @@ export class ResidentHostedWorkspacesController extends Disposable {
 	 * reload. Returns the web contents to reload, or `undefined` when the
 	 * folder is unavailable or the instance changed while the stat was
 	 * pending: it was disposed or replaced, its renderer or configuration
-	 * object changed, it crashed, or `canApply` no longer holds. Unless
-	 * `requireSameGeneration` is false, a lifecycle generation change such as
-	 * a reactivation also abandons the refresh.
+	 * object changed, it navigated to a newer document, it crashed, or
+	 * `canApply` no longer holds. A reactivation does not abandon the refresh;
+	 * the same document is still the one to reload.
 	 */
 	private async refreshHostedConfiguration(
 		instance: IHostedWorkbenchInstance,
-		canApply: () => boolean = () => true,
-		requireSameGeneration = true
+		canApply: () => boolean = () => true
 	): Promise<Electron.WebContents | undefined> {
 		const webContents = this.getLiveWebContents(instance);
 		const configObjectUrl = instance.configObjectUrl;
 		if (!webContents || !configObjectUrl) {
 			return undefined;
 		}
-		const lifecycleGeneration = instance.lifecycleGeneration;
+		const documentGeneration = instance.documentGeneration;
 		const crashedBeforeStat = instance.state === 'crashed';
 		const workspaceFolderStat = await this.getHostedWorkspaceFolderStat(
 			instance.worktreePath
@@ -3757,8 +3769,7 @@ export class ResidentHostedWorkspacesController extends Disposable {
 			this.instancesById.get(instance.instanceId) !== instance ||
 			this.getLiveWebContents(instance) !== webContents ||
 			instance.configObjectUrl !== configObjectUrl ||
-			(requireSameGeneration &&
-				instance.lifecycleGeneration !== lifecycleGeneration) ||
+			instance.documentGeneration !== documentGeneration ||
 			(!crashedBeforeStat && instance.state === 'crashed') ||
 			!canApply()
 		) {

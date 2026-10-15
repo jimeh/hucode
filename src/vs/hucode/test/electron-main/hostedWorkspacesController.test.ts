@@ -7684,6 +7684,169 @@ suite('ResidentHostedWorkspacesController', () => {
 			}, { reloadCalls: 1, state: 'loading' });
 		});
 
+		test('workspace reload abandons a refresh after a document navigation',
+			async () => {
+				const alpha = createWorktree('reload-navigation');
+				const defaultProfile = createProfile('default', [], true);
+				const firstProfile = createProfile('first', [URI.file(alpha)]);
+				const secondProfile = createProfile('second');
+				const heldStat = new HeldStat();
+				const {
+					controller,
+					protocolMainService,
+					viewFactory,
+					workspaceProfileOverrides,
+				} = createController({
+					profiles: [defaultProfile, firstProfile, secondProfile],
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				viewFactory.views[0].rawWebContents.startNavigation(false, true);
+				workspaceProfileOverrides.set(
+					URI.file(alpha).toString(),
+					secondProfile
+				);
+				statCall.release();
+				await reloading;
+
+				assert.deepStrictEqual({
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+					profile: (protocolMainService.objectUrls[0]
+						.value as INativeWindowConfiguration).profiles.profile.id,
+				}, { reloadCalls: 0, profile: 'first' });
+			});
+
+		test('interrupted-unload reload abandons a refresh after a document navigation and can retry',
+			async () => {
+				const alpha = createWorktree('interrupted-navigation');
+				const heldStat = new HeldStat();
+				const { controller, ipcMain, viewFactory } = createController({
+					beforeUnloadTimeoutMs: 5,
+					stat: heldStat.stat,
+				});
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const hostedWebContents = viewFactory.views[0].rawWebContents;
+				hostedWebContents.autoBeforeUnloadReply = false;
+				hostedWebContents.autoPreparationRollbackReply = false;
+				// A self-close superseded by a new connection, not by a
+				// reactivation, needs a reload in the same lifecycle generation.
+				const interruptSelfClose = async () => {
+					const binding = controller.acquireHostedShellBinding(1)!;
+					const sentBefore = hostedWebContents.sent.length;
+					const closing = controller.closeHostedShellSelf(binding);
+					for (let attempt = 0; attempt < 100 &&
+						hostedWebContents.sent.length <= sentBefore; attempt++) {
+						await timeout(0);
+					}
+					const beforeUnload = hostedWebContents.sent[sentBefore]
+						.request as { okChannel: string };
+					controller.acquireHostedShellBinding(1);
+					ipcMain.emitReply(beforeUnload.okChannel);
+					return closing;
+				};
+
+				heldStat.hold(alpha);
+				const firstClose = interruptSelfClose();
+				const statCall = await heldStat.next(alpha);
+				hostedWebContents.startNavigation(false, true);
+				statCall.release();
+				const abandoned = {
+					closed: await firstClose,
+					reloadCalls: hostedWebContents.reloadCalls.length,
+				};
+				const retried = {
+					closed: await interruptSelfClose(),
+					reloadCalls: hostedWebContents.reloadCalls.length,
+				};
+
+				assert.deepStrictEqual({ abandoned, retried }, {
+					abandoned: { closed: false, reloadCalls: 0 },
+					// The abandoned refresh reset its claim, so a later
+					// interruption in the same generation reloads.
+					retried: { closed: false, reloadCalls: 1 },
+				});
+			});
+
+		test('workspace reload survives a same-document shell reconnection',
+			async () => {
+				const alpha = createWorktree('reload-reconnection');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				// The same document drops and re-acquires its shell port.
+				controller.releaseHostedShellBinding(binding);
+				controller.acquireHostedShellBinding(1);
+				statCall.release();
+				await reloading;
+
+				assert.strictEqual(
+					viewFactory.views[0].rawWebContents.reloadCalls.length,
+					1
+				);
+			});
+
+		test('workspace reload survives a reactivation of the same workbench',
+			async () => {
+				const alpha = createWorktree('reload-reactivation');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				heldStat.hold(alpha);
+				const reloading = controller.reloadWorkspace();
+				const statCall = await heldStat.next(alpha);
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				statCall.release();
+				await reloading;
+
+				assert.strictEqual(
+					viewFactory.views[0].rawWebContents.reloadCalls.length,
+					1
+				);
+			});
+
+		test('hosted self reload survives a reactivation of the same workbench',
+			async () => {
+				const alpha = createWorktree('self-reload-reactivation');
+				const heldStat = new HeldStat();
+				const { controller, viewFactory } = createController({
+					stat: heldStat.stat,
+				});
+
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				controller.notifyHostedWorkspaceReady('instance-1');
+				const binding = controller.acquireHostedShellBinding(1)!;
+				heldStat.hold(alpha);
+				const reloading = controller.reloadHostedShellSelf(binding);
+				const statCall = await heldStat.next(alpha);
+				await controller.openAdmittedWorkspace(alpha, 'project-alpha');
+				statCall.release();
+
+				assert.deepStrictEqual({
+					reloaded: await reloading,
+					reloadCalls: viewFactory.views[0].rawWebContents
+						.reloadCalls.length,
+				}, { reloaded: true, reloadCalls: 1 });
+			});
+
 		test('active profile query uses the attach-time workspace identity',
 			async () => {
 				const alpha = createWorktree('profile-after-delete');
